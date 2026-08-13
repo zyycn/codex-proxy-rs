@@ -11,8 +11,8 @@ use crate::{
         provider_credentials::{
             AuthorizationStarted, CompleteAuthorization, CredentialDeletion,
             CredentialDeletionResult, CredentialImportCommit, CredentialImportResult,
-            CredentialListQuery, CredentialMutation, CredentialMutationResult, CredentialPage,
-            ImportCredentials, PrepareCredentialImport, ProviderQuotaRequest, StartAuthorization,
+            CredentialListQuery, CredentialMutationResult, CredentialPage, ImportCredentials,
+            PrepareCredentialImport, ProviderQuotaRequest, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -20,8 +20,8 @@ use crate::{
 
 use super::{
     commit_authorization, delete_credentials, map_provider_error, map_store_error,
-    pending_authorization, publish_committed, set_credential_enabled,
-    validate_authorization_commit, validate_prepared_import,
+    pending_authorization, publish_committed, validate_authorization_commit,
+    validate_prepared_import,
 };
 
 /// xAI 固定管理路由消费的服务。
@@ -39,14 +39,6 @@ pub trait XaiService: Send + Sync {
     async fn complete_authorization(
         &self,
         command: CompleteAuthorization,
-    ) -> Result<CredentialMutationResult, AdminError>;
-    async fn enable(
-        &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError>;
-    async fn disable(
-        &self,
-        command: CredentialMutation,
     ) -> Result<CredentialMutationResult, AdminError>;
     async fn delete(
         &self,
@@ -160,38 +152,6 @@ impl XaiService for DefaultXaiService {
             prepared,
             &context,
             "xAI authorization",
-        )
-        .await?;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        Ok(result)
-    }
-
-    async fn enable(
-        &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError> {
-        let result = set_credential_enabled(
-            self.accounts.as_ref(),
-            self.provider.as_ref(),
-            command,
-            true,
-            "xAI credential",
-        )
-        .await?;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        Ok(result)
-    }
-
-    async fn disable(
-        &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError> {
-        let result = set_credential_enabled(
-            self.accounts.as_ref(),
-            self.provider.as_ref(),
-            command,
-            false,
-            "xAI credential",
         )
         .await?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;

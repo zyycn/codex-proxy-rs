@@ -146,6 +146,7 @@ pub(crate) fn admin_account_record(
                 "persisted Provider kind is invalid",
             )
         })?,
+        groups: Vec::new(),
         name: summary.name,
         email: summary.email,
         upstream_user_id: summary.upstream_user_id,
@@ -157,6 +158,8 @@ pub(crate) fn admin_account_record(
         access_token_expires_at: summary.access_token_expires_at,
         next_refresh_at: summary.next_refresh_at,
         enabled: summary.enabled,
+        concurrency_limit: summary.concurrency_limit,
+        weight: summary.weight,
         credential_state: summary.credential_state,
         credential_observed_at: summary.credential_observed_at,
         quota: summary.quota,
@@ -184,6 +187,8 @@ pub(crate) fn prepared_account(
         access_token_expires_at: credential.access_token_expires_at,
         next_refresh_at: credential.next_refresh_at,
         enabled: credential.enabled,
+        concurrency_limit: None,
+        weight: AccountWeight::DEFAULT,
         credential_state: credential.credential_state,
         credential_observed_at: credential.credential_observed_at,
     })

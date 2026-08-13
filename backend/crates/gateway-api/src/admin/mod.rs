@@ -7,6 +7,7 @@ use axum::{
     response::Response,
 };
 
+pub mod account_groups;
 pub mod accounts;
 pub mod auth;
 pub mod backups;
@@ -29,6 +30,7 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .merge(account_groups::router::<S>())
         .merge(accounts::router::<S>())
         .merge(auth::router::<S>())
         .merge(backups::router::<S>())

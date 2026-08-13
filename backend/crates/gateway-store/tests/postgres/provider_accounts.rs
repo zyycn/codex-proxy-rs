@@ -6,8 +6,8 @@ use gateway_admin::{
         MutationActor, MutationContext, PageSize,
         accounts::{
             AccountListQuery, AccountSort, AccountSortField, AccountStatus,
-            AccountUsageWindowQuery, DeleteAccounts, SetAccountEnabled as AdminSetAccountEnabled,
-            SortDirection,
+            AccountUsageWindowQuery, BatchUpdateAccounts, DeleteAccounts, SortDirection,
+            UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{CredentialListQuery, CredentialListWindow, CredentialStateFilter},
@@ -21,14 +21,14 @@ use gateway_core::engine::credential::{
     QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
     QuotaWriteOutcome,
 };
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{AccountGroupId, ProviderKind};
 use gateway_store::{
     ConflictKind, JsonObject, Revision, StoreError,
     postgres::{
-        AdminAuditActorKind, AdminAuditEvent, DeleteProviderAccounts, ImportProviderAccounts,
-        NewProviderAccount, PgAdminAccountStore, PgProviderAccountRepository,
-        ProviderAccountAdminRepository, ProviderAccountAdminScope, ProviderAccountRepository,
-        ProviderCredentialUpdate, RotateProviderAccount, SetProviderAccountEnabled,
+        AdminAuditActorKind, AdminAuditEvent, BatchUpdateProviderAccountsAdmin,
+        DeleteProviderAccounts, ImportProviderAccounts, NewProviderAccount, PgAdminAccountStore,
+        PgProviderAccountRepository, ProviderAccountAdminRepository, ProviderAccountAdminScope,
+        ProviderAccountRepository, ProviderCredentialUpdate, RotateProviderAccount,
         UpdateProviderAccount,
     },
 };
@@ -392,6 +392,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             page: 1,
             page_size: PageSize::new(2).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: Some(AccountSort {
@@ -431,6 +432,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             page: 1,
             page_size: PageSize::new(2).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: Some(AccountSort {
@@ -454,6 +456,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             page: 1,
             page_size: PageSize::new(10).expect("page size"),
             provider_kind: Some(ProviderKind::new("openai").expect("Provider kind")),
+            group_filter: None,
             search: Some("ALPHA@EXAMPLE".to_owned()),
             status: Some(AccountStatus::Normal),
             sort: None,
@@ -470,6 +473,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             page: 1,
             page_size: PageSize::new(10).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: Some(AccountStatus::Error),
             sort: None,
@@ -725,17 +729,20 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         request_id: "request_terminal_mutation".to_owned(),
     };
 
-    let revision = store
-        .set_account_enabled(
-            AdminSetAccountEnabled {
+    let result = store
+        .update_account(
+            UpdateAccount {
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
+                concurrency_limit: None,
+                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
             },
             &context,
         )
         .await
         .expect("disable account atomically");
-    assert_eq!(revision.get(), 2);
+    assert_eq!(result.config_revision.get(), 2);
     let enabled: bool = sqlx::query_scalar(
         "select enabled from provider_accounts where id = 'acct_terminal_mutation'",
     )
@@ -768,10 +775,131 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     assert_eq!(
         audit_rows,
         vec![
-            ("disable".to_owned(), 2, vec!["enabled".to_owned()]),
+            (
+                "update".to_owned(),
+                2,
+                vec![
+                    "enabled".to_owned(),
+                    "concurrency_limit".to_owned(),
+                    "weight".to_owned(),
+                    "groups".to_owned(),
+                ],
+            ),
             ("delete".to_owned(), 3, Vec::new()),
         ]
     );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_everything() {
+    const GROUP_ID: &str = "grp_00000000000000000000000000000071";
+    let Some(database) = TestDatabase::create("provider_account_batch_update").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    for (account_id, upstream_user_id) in [
+        ("acct_batch_a", "user-batch-a"),
+        ("acct_batch_b", "user-batch-b"),
+    ] {
+        repository
+            .insert_provider_account(account(account_id, upstream_user_id))
+            .await
+            .expect("insert batch account");
+    }
+    sqlx::query(
+        "insert into account_groups (id, name, description, color, enabled, created_at, updated_at)
+         values ($1, 'Batch group', null, '#2563EBFF', true, now(), now())",
+    )
+    .bind(GROUP_ID)
+    .execute(&database.pool)
+    .await
+    .expect("insert batch account group");
+    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+    let account_ids = vec!["acct_batch_a".to_owned(), "acct_batch_b".to_owned()];
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "request_batch_update".to_owned(),
+    };
+
+    let result = store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                account_ids: account_ids.clone(),
+                enabled: false,
+                concurrency_limit: gateway_core::engine::credential::AccountConcurrencyLimit::new(
+                    7,
+                ),
+                weight: gateway_core::engine::credential::AccountWeight::new(25).expect("weight"),
+                group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
+            },
+            &context,
+        )
+        .await
+        .expect("batch update accounts");
+
+    assert_eq!(result.config_revision.get(), 2);
+    assert_eq!(result.account_ids.len(), 2);
+    let scheduling: Vec<(bool, Option<i64>, i16)> = sqlx::query_as(
+        "select enabled, concurrency_limit, weight
+         from provider_accounts where id = any($1::text[]) order by id",
+    )
+    .bind(&account_ids)
+    .fetch_all(&database.pool)
+    .await
+    .expect("load batch account state");
+    assert_eq!(scheduling, [(false, Some(7), 25), (false, Some(7), 25)]);
+    for account_id in &account_ids {
+        assert_eq!(
+            account_group_ids(&database.pool, account_id).await,
+            [GROUP_ID]
+        );
+    }
+    assert_eq!(audit_count(&database.pool, &context.request_id).await, 1);
+
+    let revision_before_failure = current_revision(&database.pool).await;
+    let audit_before_failure = audit_count(&database.pool, &context.request_id).await;
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                account_ids: account_ids.clone(),
+                enabled: true,
+                concurrency_limit: None,
+                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                group_ids: vec![
+                    AccountGroupId::new("grp_00000000000000000000000000000072")
+                        .expect("missing group ID"),
+                ],
+            },
+            &context,
+        )
+        .await
+        .expect_err("missing group must roll back the batch");
+
+    assert_eq!(
+        current_revision(&database.pool).await,
+        revision_before_failure
+    );
+    assert_eq!(
+        audit_count(&database.pool, &context.request_id).await,
+        audit_before_failure
+    );
+    let scheduling: Vec<(bool, Option<i64>, i16)> = sqlx::query_as(
+        "select enabled, concurrency_limit, weight
+         from provider_accounts where id = any($1::text[]) order by id",
+    )
+    .bind(&account_ids)
+    .fetch_all(&database.pool)
+    .await
+    .expect("load rolled back account state");
+    assert_eq!(scheduling, [(false, Some(7), 25), (false, Some(7), 25)]);
+    for account_id in &account_ids {
+        assert_eq!(
+            account_group_ids(&database.pool, account_id).await,
+            [GROUP_ID]
+        );
+    }
 
     database.close().await;
 }
@@ -916,6 +1044,8 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             access_token_expires_at: Some(Utc::now() + TimeDelta::minutes(5)),
             next_refresh_at: None,
             enabled: true,
+            concurrency_limit: None,
+            weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
             credential_state: CredentialState::Ready,
             credential_observed_at: Utc::now(),
         })
@@ -1190,10 +1320,12 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     assert_eq!(unchanged.4.as_deref(), Some("workspace-admin-rebound"));
 
     let revision = repository
-        .set_provider_account_enabled_admin(SetProviderAccountEnabled {
-            scope: scope.clone(),
-            account_id: "acct_admin_a".to_owned(),
+        .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            account_ids: vec!["acct_admin_a".to_owned()],
             enabled: false,
+            concurrency_limit: None,
+            weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+            group_ids: Vec::new(),
             audit: audit("audit_account_disable", "disable", "acct_admin_a"),
         })
         .await
@@ -1226,6 +1358,116 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         .await
         .expect("count provider account audits");
     assert_eq!(audit_count, 4);
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn provider_account_import_and_reauthorization_preserve_existing_memberships() {
+    const GROUP_ID: &str = "grp_00000000000000000000000000000091";
+    let Some(database) = TestDatabase::create("provider_account_group_assignment").await else {
+        return;
+    };
+    sqlx::query(
+        "insert into account_groups
+         (id, name, description, color, enabled, created_at, updated_at)
+         values ($1, 'Credential group', null, '#2563EBFF', true, now(), now())",
+    )
+    .bind(GROUP_ID)
+    .execute(&database.pool)
+    .await
+    .expect("seed account group");
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let scope = ProviderAccountAdminScope {
+        provider_kind: "openai".to_owned(),
+    };
+    let imported = repository
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![account("acct_grouped_import", "user-grouped-import")],
+            audit: audit("audit_grouped_import", "import", "acct_grouped_import"),
+        })
+        .await
+        .expect("import account without a group");
+    assert_eq!(imported.config_revision.get(), 2);
+    assert!(
+        account_group_ids(&database.pool, "acct_grouped_import")
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        audit_count(&database.pool, "request:audit_grouped_import").await,
+        1
+    );
+
+    sqlx::query(
+        "insert into account_group_accounts (account_group_id, provider_account_id, created_at)
+         values ($1, $2, now())",
+    )
+    .bind(GROUP_ID)
+    .bind("acct_grouped_import")
+    .execute(&database.pool)
+    .await
+    .expect("assign existing account group");
+    sqlx::query("update provider_accounts set concurrency_limit = 9, weight = 40 where id = $1")
+        .bind("acct_grouped_import")
+        .execute(&database.pool)
+        .await
+        .expect("set account scheduling before reimport");
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: scope.clone(),
+            accounts: vec![account("acct_reimport_candidate", "user-grouped-import")],
+            audit: audit("audit_grouped_reimport", "import", "acct_grouped_import"),
+        })
+        .await
+        .expect("reimport existing identity");
+    let scheduling: (Option<i64>, i16) =
+        sqlx::query_as("select concurrency_limit, weight from provider_accounts where id = $1")
+            .bind("acct_grouped_import")
+            .fetch_one(&database.pool)
+            .await
+            .expect("load preserved scheduling");
+    assert_eq!(scheduling, (Some(9), 40));
+    assert_eq!(
+        account_group_ids(&database.pool, "acct_grouped_import").await,
+        [GROUP_ID]
+    );
+
+    let revision_before_reauthorization = current_revision(&database.pool).await;
+    let reauthorized = repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope,
+            profile: profile("acct_grouped_import", "reauthorized"),
+            replacement_identity: None,
+            credential: credential_update("acct_grouped_import", 2, "reauthorized-secret"),
+            audit: audit(
+                "audit_clear_groups_reauthorize",
+                "reauthorize",
+                "acct_grouped_import",
+            ),
+        })
+        .await
+        .expect("reauthorization preserves groups atomically");
+    assert_eq!(
+        reauthorized.config_revision.get(),
+        u64::try_from(revision_before_reauthorization + 1).expect("revision")
+    );
+    assert_eq!(
+        account_group_ids(&database.pool, "acct_grouped_import").await,
+        [GROUP_ID]
+    );
+    assert_eq!(
+        audit_count(&database.pool, "request:audit_clear_groups_reauthorize").await,
+        1
+    );
+    let scheduling: (Option<i64>, i16) =
+        sqlx::query_as("select concurrency_limit, weight from provider_accounts where id = $1")
+            .bind("acct_grouped_import")
+            .fetch_one(&database.pool)
+            .await
+            .expect("load scheduling after reauthorization");
+    assert_eq!(scheduling, (Some(9), 40));
 
     database.close().await;
 }
@@ -1450,6 +1692,8 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
         next_refresh_at: None,
         enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
         credential_state: CredentialState::Ready,
         credential_observed_at: Utc::now(),
     }
@@ -1532,13 +1776,15 @@ async fn seed_model_request(
            upstream_status_code,
            input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens,
            total_tokens, cost_source, cost_amount, cost_currency,
-           started_at, deadline_at, completed_at
+           started_at, deadline_at, completed_at,
+           routing_scope, routing_group_refs, routing_group_names_snapshot
          ) values (
            $1, 'key-provider-account-test', 1, 'openai', 'responses', '/v1/responses',
            'http_sse', $4, $3, $2, $2, $4, 'http_sse', 1,
            'sent', $7 + interval '1 second', 'succeeded', 200, 200, $5, 0, 0, 0, 0,
            $5, 'provider_reported', $6::numeric, 'USD', $7,
-           $7 + interval '5 minutes', $7 + interval '1 second'
+           $7 + interval '5 minutes', $7 + interval '1 second',
+           'all', '{}'::text[], '[]'::jsonb
          )",
     )
     .bind(seed.request_id)
@@ -1566,6 +1812,25 @@ async fn account_count(pool: &sqlx::PgPool, account_id: &str) -> i64 {
         .fetch_one(pool)
         .await
         .expect("count provider account")
+}
+
+async fn account_group_ids(pool: &sqlx::PgPool, account_id: &str) -> Vec<String> {
+    sqlx::query_scalar(
+        "select account_group_id from account_group_accounts
+         where provider_account_id = $1 order by account_group_id",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .expect("load account groups")
+}
+
+async fn audit_count(pool: &sqlx::PgPool, request_id: &str) -> i64 {
+    sqlx::query_scalar("select count(*) from admin_audit_events where admin_request_id = $1")
+        .bind(request_id)
+        .fetch_one(pool)
+        .await
+        .expect("count audit events")
 }
 
 #[test]

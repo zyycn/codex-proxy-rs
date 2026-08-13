@@ -253,7 +253,8 @@ impl Provider for CodexProvider {
                 .as_ref()
                 .and_then(|state| state.turn_state.clone());
         }
-        let session_affinity_key = derive_codex_session_affinity_key(&upstream_request);
+        let session_affinity_key =
+            derive_codex_session_affinity_key(&upstream_request, context.client_api_key_ref());
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
         let transport = selected_transport(&upstream_request);

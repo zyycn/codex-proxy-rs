@@ -391,6 +391,8 @@ async fn select_grok_session(
         required_account.clone(),
         context.account_selection_policy(),
         context.deadline(),
+        Arc::clone(candidate.account_scope()),
+        context.client_api_key_ref().clone(),
     )
     .with_eligibility_policy(if context.is_diagnostic_required_account() {
         AccountEligibilityPolicy::BypassForDiagnostic

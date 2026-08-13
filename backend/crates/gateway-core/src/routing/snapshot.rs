@@ -11,7 +11,7 @@ use futures::{FutureExt as _, Stream, StreamExt as _, pin_mut, select_biased};
 use futures_timer::Delay;
 
 use crate::engine::CancellationToken;
-use crate::engine::credential::{AccountSelectionPolicy, RotationStrategy};
+use crate::engine::credential::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use crate::engine::provider::{ProviderCatalogGeneration, ProviderRegistry};
 use crate::error::RoutingError;
 use crate::health::{HealthProbe, HealthState};
@@ -24,8 +24,9 @@ use crate::task::{
 };
 
 use super::{
-    ConfigRevision, ModelCapabilities, ProviderCandidate, ProviderKind, ProviderModel,
-    PublicModelId, RoutingContext, RoutingPlan, UpstreamModelId,
+    AccountGroupId, ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,
+    ProviderCandidate, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    RoutingGroupSnapshot, RoutingPlan, RuntimeAccount, RuntimeAccountDirectory, UpstreamModelId,
 };
 
 const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(5);
@@ -66,7 +67,7 @@ impl SnapshotSettingsFacts {
 pub struct SnapshotClientPolicyFacts {
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
-    provider_kind: String,
+    group_ids: Vec<AccountGroupId>,
     limits: RateLimits,
 }
 
@@ -75,14 +76,63 @@ impl SnapshotClientPolicyFacts {
     pub fn new(
         key_id: ClientApiKeyId,
         plaintext_key: PlaintextClientApiKey,
-        provider_kind: impl Into<String>,
+        group_ids: Vec<AccountGroupId>,
         limits: RateLimits,
     ) -> Self {
         Self {
             key_id,
             plaintext_key,
-            provider_kind: provider_kind.into(),
+            group_ids,
             limits,
+        }
+    }
+}
+
+/// Store 读取到的账号分组事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotAccountGroupFacts {
+    id: AccountGroupId,
+    name: String,
+    enabled: bool,
+}
+
+impl SnapshotAccountGroupFacts {
+    #[must_use]
+    pub fn new(id: AccountGroupId, name: String, enabled: bool) -> Self {
+        Self { id, name, enabled }
+    }
+}
+
+/// Store 读取到的账号及其固有 Provider 事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotProviderAccountFacts {
+    account_id: ProviderAccountId,
+    provider_kind: String,
+}
+
+impl SnapshotProviderAccountFacts {
+    #[must_use]
+    pub fn new(account_id: ProviderAccountId, provider_kind: impl Into<String>) -> Self {
+        Self {
+            account_id,
+            provider_kind: provider_kind.into(),
+        }
+    }
+}
+
+/// Store 读取到的一条分组成员关系。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotAccountGroupMemberFacts {
+    group_id: AccountGroupId,
+    account_id: ProviderAccountId,
+}
+
+impl SnapshotAccountGroupMemberFacts {
+    #[must_use]
+    pub const fn new(group_id: AccountGroupId, account_id: ProviderAccountId) -> Self {
+        Self {
+            group_id,
+            account_id,
         }
     }
 }
@@ -94,6 +144,9 @@ pub struct SnapshotFacts {
     observed_current_revision: ConfigRevision,
     settings: SnapshotSettingsFacts,
     client_policies: Vec<SnapshotClientPolicyFacts>,
+    account_groups: Vec<SnapshotAccountGroupFacts>,
+    provider_accounts: Vec<SnapshotProviderAccountFacts>,
+    group_memberships: Vec<SnapshotAccountGroupMemberFacts>,
 }
 
 impl SnapshotFacts {
@@ -103,12 +156,18 @@ impl SnapshotFacts {
         observed_current_revision: ConfigRevision,
         settings: SnapshotSettingsFacts,
         client_policies: Vec<SnapshotClientPolicyFacts>,
+        account_groups: Vec<SnapshotAccountGroupFacts>,
+        provider_accounts: Vec<SnapshotProviderAccountFacts>,
+        group_memberships: Vec<SnapshotAccountGroupMemberFacts>,
     ) -> Self {
         Self {
             config_revision,
             observed_current_revision,
             settings,
             client_policies,
+            account_groups,
+            provider_accounts,
+            group_memberships,
         }
     }
 
@@ -223,13 +282,16 @@ async fn compile_runtime_snapshot(
     providers: &ProviderRegistry,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
     let provider_kinds = providers.provider_kinds().cloned().collect::<Vec<_>>();
+    let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
-    // 实时目录只提供公开模型与能力提示；查询失败时保留 Provider 透传语义。
+    // 目录查询失败表示未知；查询成功后，即使为空，也必须与“已知缺少模型”区分。
     let mut provider_models = Vec::new();
+    let mut known_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
         let Ok(models) = providers.query_model_capabilities(provider).await else {
             continue;
         };
+        known_provider_catalogs.insert(provider.clone());
         provider_models.extend(models.into_iter().map(|model| {
             let compiled = ProviderModel::new(
                 provider.clone(),
@@ -243,6 +305,56 @@ async fn compile_runtime_snapshot(
         }));
     }
 
+    let mut groups = BTreeMap::new();
+    for group in facts.account_groups {
+        if group.name.trim() != group.name
+            || group.name.is_empty()
+            || group.name.chars().count() > 100
+            || group.name.chars().any(char::is_control)
+            || groups.insert(group.id.clone(), group).is_some()
+        {
+            return Err(RuntimeSnapshotCompileError::InvalidData);
+        }
+    }
+
+    let mut account_groups = BTreeMap::<ProviderAccountId, BTreeSet<AccountGroupId>>::new();
+    let mut accounts = BTreeMap::new();
+    for account in facts.provider_accounts {
+        let provider_kind = ProviderKind::new(account.provider_kind)
+            .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
+        if !registered_providers.contains(&provider_kind)
+            || accounts
+                .insert(
+                    account.account_id.clone(),
+                    RuntimeAccount::new(provider_kind, BTreeSet::new()),
+                )
+                .is_some()
+        {
+            return Err(RuntimeSnapshotCompileError::InvalidData);
+        }
+        account_groups.insert(account.account_id, BTreeSet::new());
+    }
+    let mut memberships = BTreeSet::new();
+    for membership in facts.group_memberships {
+        if !groups.contains_key(&membership.group_id)
+            || !accounts.contains_key(&membership.account_id)
+            || !memberships.insert((membership.group_id.clone(), membership.account_id.clone()))
+        {
+            return Err(RuntimeSnapshotCompileError::InvalidData);
+        }
+        account_groups
+            .get_mut(&membership.account_id)
+            .ok_or(RuntimeSnapshotCompileError::InvalidData)?
+            .insert(membership.group_id);
+    }
+    for (account_id, group_ids) in account_groups {
+        let account = accounts
+            .get_mut(&account_id)
+            .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
+        *account = RuntimeAccount::new(account.provider_kind().clone(), group_ids);
+    }
+    let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
+
     let model_mappings = facts.settings.model_mappings;
     let rotation_strategy = RotationStrategy::parse(facts.settings.rotation_strategy.as_str())
         .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
@@ -252,21 +364,48 @@ async fn compile_runtime_snapshot(
             .ok_or(RuntimeSnapshotCompileError::InvalidData)?,
         Duration::from_millis(facts.settings.request_interval_ms),
     );
-    let client_policies = facts
-        .client_policies
-        .into_iter()
-        .map(|policy| {
-            let provider = ProviderKind::new(policy.provider_kind)
-                .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
-            Ok(ClientPolicy::new(
-                policy.key_id,
-                policy.plaintext_key,
-                provider,
-                true,
-                policy.limits,
-            ))
-        })
-        .collect::<Result<Vec<_>, RuntimeSnapshotCompileError>>()?;
+    let mut client_policies = Vec::with_capacity(facts.client_policies.len());
+    for policy in facts.client_policies {
+        let account_scope = if policy.group_ids.is_empty() {
+            FrozenAccountScope::new(
+                Arc::clone(&account_directory),
+                ClientRoutingScope::all_accounts(),
+            )
+        } else {
+            let mut seen = BTreeSet::new();
+            let mut bound_groups = Vec::with_capacity(policy.group_ids.len());
+            let mut enabled_group_ids = BTreeSet::new();
+            for group_id in policy.group_ids {
+                if !seen.insert(group_id.clone()) {
+                    return Err(RuntimeSnapshotCompileError::InvalidData);
+                }
+                let group = groups
+                    .get(&group_id)
+                    .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
+                bound_groups.push(RoutingGroupSnapshot::new(
+                    group.id.clone(),
+                    group.name.clone(),
+                ));
+                if group.enabled {
+                    enabled_group_ids.insert(group_id);
+                }
+            }
+            bound_groups.sort_by(|left, right| left.id().cmp(right.id()));
+            let provider_kinds = account_directory.providers_for_groups(&enabled_group_ids);
+            FrozenAccountScope::new(
+                Arc::clone(&account_directory),
+                ClientRoutingScope::restricted(bound_groups, enabled_group_ids, provider_kinds)
+                    .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?,
+            )
+        };
+        client_policies.push(ClientPolicy::new(
+            policy.key_id,
+            policy.plaintext_key,
+            Arc::new(account_scope),
+            true,
+            policy.limits,
+        ));
+    }
 
     RuntimeSnapshot::new(
         facts.config_revision,
@@ -276,7 +415,12 @@ async fn compile_runtime_snapshot(
         client_policies,
     )
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
-    .map(|snapshot| snapshot.with_model_mappings(model_mappings))
+    .map(|snapshot| {
+        snapshot
+            .with_model_mappings(model_mappings)
+            .with_account_directory(account_directory)
+            .with_known_provider_catalogs(known_provider_catalogs)
+    })
 }
 
 /// 数据面使用的不可变配置快照。
@@ -290,6 +434,8 @@ pub struct RuntimeSnapshot {
         Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, super::ModelPresentation>>>,
     model_mappings: Arc<BTreeMap<String, String>>,
     provider_catalog_generations: Arc<BTreeMap<ProviderKind, ProviderCatalogGeneration>>,
+    known_provider_catalogs: Arc<BTreeSet<ProviderKind>>,
+    account_directory: Arc<RuntimeAccountDirectory>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
 }
 
@@ -312,6 +458,7 @@ impl RuntimeSnapshot {
             }
         }
 
+        let mut known_provider_catalogs = BTreeSet::new();
         let mut model_map =
             BTreeMap::<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>::new();
         let mut presentation_map =
@@ -323,6 +470,7 @@ impl RuntimeSnapshot {
                 capabilities,
                 presentation,
             } = model;
+            known_provider_catalogs.insert(provider.clone());
             if !provider_set.contains(&provider) {
                 return Err(RoutingError::NotFound {
                     entity: "provider",
@@ -367,6 +515,8 @@ impl RuntimeSnapshot {
             provider_model_presentations: Arc::new(presentation_map),
             model_mappings: Arc::new(BTreeMap::new()),
             provider_catalog_generations: Arc::new(BTreeMap::new()),
+            known_provider_catalogs: Arc::new(known_provider_catalogs),
+            account_directory: Arc::new(RuntimeAccountDirectory::default()),
             client_policies: Arc::new(client_policy_map),
         })
     }
@@ -375,6 +525,26 @@ impl RuntimeSnapshot {
     pub fn with_model_mappings(mut self, mappings: BTreeMap<String, String>) -> Self {
         self.model_mappings = Arc::new(mappings);
         self
+    }
+
+    #[must_use]
+    pub fn with_account_directory(mut self, directory: Arc<RuntimeAccountDirectory>) -> Self {
+        self.account_directory = directory;
+        self
+    }
+
+    #[must_use]
+    fn with_known_provider_catalogs(mut self, providers: BTreeSet<ProviderKind>) -> Self {
+        self.known_provider_catalogs = Arc::new(providers);
+        self
+    }
+
+    #[must_use]
+    pub fn all_account_scope(&self) -> Arc<FrozenAccountScope> {
+        Arc::new(FrozenAccountScope::new(
+            Arc::clone(&self.account_directory),
+            ClientRoutingScope::all_accounts(),
+        ))
     }
 
     #[must_use]
@@ -459,8 +629,39 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 已取得目录时按目录与全局别名判断模型可用性；目录暂不可用时沿用旧版
-    /// fail-open 语义，把具体 wire 可接受性留给上游。
+    /// 合并冻结账号范围内实际存在 Provider 的公开模型。
+    #[must_use]
+    pub fn public_models_for_scope(&self, scope: &FrozenAccountScope) -> Vec<PublicModelId> {
+        scope
+            .provider_kinds()
+            .iter()
+            .flat_map(|provider| self.public_models_for_provider(provider))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// 合并冻结账号范围内实际存在 Provider 的公开模型画像。
+    #[must_use]
+    pub fn public_model_profiles_for_scope(
+        &self,
+        scope: &FrozenAccountScope,
+    ) -> Vec<super::PublicModelProfile> {
+        let mut profiles = BTreeMap::new();
+        for provider in scope.provider_kinds() {
+            for profile in self.public_model_profiles_for_provider(provider) {
+                profiles
+                    .entry(profile.model().clone())
+                    .or_insert_with(|| profile.presentation().clone());
+            }
+        }
+        profiles
+            .into_iter()
+            .map(|(model, presentation)| super::PublicModelProfile::new(model, presentation))
+            .collect()
+    }
+
+    /// 已取得目录时以映射后的上游模型为准；目录不可用时由 Provider 在发送前判定。
     #[must_use]
     pub fn contains_public_model_for_provider(
         &self,
@@ -470,15 +671,23 @@ impl RuntimeSnapshot {
         if !self.providers.contains(provider) {
             return false;
         }
-        if self.model_mappings.contains_key(public_model.as_str()) {
-            return true;
-        }
+        let upstream_model = self.mapped_model(public_model.as_str());
         match self.provider_models.get(provider) {
-            Some(models) if !models.is_empty() => models
-                .keys()
-                .any(|model| model.as_str() == public_model.as_str()),
-            Some(_) | None => true,
+            Some(models) => models.keys().any(|model| model.as_str() == upstream_model),
+            None => !self.known_provider_catalogs.contains(provider),
         }
+    }
+
+    #[must_use]
+    pub fn contains_public_model_for_scope(
+        &self,
+        public_model: &PublicModelId,
+        scope: &FrozenAccountScope,
+    ) -> bool {
+        scope
+            .provider_kinds()
+            .iter()
+            .any(|provider| self.contains_public_model_for_provider(public_model, provider))
     }
 
     #[must_use]
@@ -506,14 +715,26 @@ impl RuntimeSnapshot {
         &self,
         public_model: &PublicModelId,
         operation: &Operation,
+        account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
         let requirements = operation.capability_requirements();
         let mut candidates = Vec::new();
 
-        for provider in self.providers.iter() {
+        if context.required_provider.is_none() && account_scope.provider_kinds().is_empty() {
+            return Err(RoutingError::EmptyAccountScope);
+        }
+
+        let providers = context.required_provider.as_ref().map_or_else(
+            || account_scope.provider_kinds().clone(),
+            |provider| BTreeSet::from([provider.clone()]),
+        );
+        for provider in &providers {
+            if !self.providers.contains(provider) {
+                continue;
+            }
             if context
-                .provider_kind
+                .required_provider
                 .as_ref()
                 .is_some_and(|expected| expected != provider)
                 || context.blocked_providers.contains(provider)
@@ -539,12 +760,14 @@ impl RuntimeSnapshot {
                     };
                     emulated
                 }
+                None if self.known_provider_catalogs.contains(provider) => continue,
                 None => BTreeSet::new(),
             };
             candidates.push(ProviderCandidate {
                 provider: provider.clone(),
                 upstream_model,
                 emulated_features,
+                account_scope: Arc::clone(&account_scope),
             });
         }
 
@@ -561,6 +784,7 @@ impl RuntimeSnapshot {
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)
                 .expect("constant request attempt limit is non-zero"),
+            account_scope,
             candidates: Arc::from(candidates),
         })
     }

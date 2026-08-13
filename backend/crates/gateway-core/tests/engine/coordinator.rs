@@ -43,8 +43,9 @@ use gateway_core::operation::{
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
-    RoutingPlan, RuntimeSnapshot, UpstreamModelId,
+    AccountRoutingSnapshot, ClientRoutingScope, ConfigRevision, FrozenAccountScope,
+    ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingPlan,
+    RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 use serde_json::{Map, Value, json};
 
@@ -531,7 +532,32 @@ fn plan_with_policy(
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
         .with_upstream_feature_validation();
-    RuntimeSnapshot::new(
+    let directory = Arc::new(RuntimeAccountDirectory::new(
+        [
+            "acct_failed",
+            "acct_first",
+            "acct_image",
+            "acct_observation_mismatch",
+            "acct_observed",
+            "acct_one",
+            "acct_only",
+            "acct_other",
+            "acct_required",
+            "acct_second",
+            "acct_tool",
+            "acct_two",
+            "acct_wrong",
+        ]
+        .into_iter()
+        .map(|id| {
+            (
+                ProviderAccountId::new(id).expect("account"),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+            )
+        })
+        .collect(),
+    ));
+    let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
         account_selection_policy,
         vec![provider.clone()],
@@ -543,15 +569,21 @@ fn plan_with_policy(
         Vec::new(),
     )
     .expect("snapshot")
-    .plan(
-        &public_model,
-        operation,
-        &RoutingContext {
-            provider_kind: Some(provider),
-            ..RoutingContext::default()
-        },
-    )
-    .expect("routing plan")
+    .with_account_directory(Arc::clone(&directory));
+    snapshot
+        .plan(
+            &public_model,
+            operation,
+            Arc::new(FrozenAccountScope::new(
+                directory,
+                ClientRoutingScope::all_accounts(),
+            )),
+            &RoutingContext {
+                required_provider: Some(provider),
+                ..RoutingContext::default()
+            },
+        )
+        .expect("routing plan")
 }
 
 fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest {
@@ -561,6 +593,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         client_api_key_id: Some(client_key.clone()),
         client_api_key_ref: client_key,
         config_revision: ConfigRevision::new(1).expect("config revision"),
+        routing: AccountRoutingSnapshot::all(),
         protocol: "openai".to_owned(),
         operation: operation.kind(),
         endpoint: "responses".to_owned(),
@@ -1354,6 +1387,7 @@ fn authenticated_native_continuation_reaches_every_attempt_context() {
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-secret-id"),
         PreviousResponseId::new("provider-native-id"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
@@ -1411,6 +1445,7 @@ fn streaming_native_continuation_delivers_started_event_before_later_output() {
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-response"),
         PreviousResponseId::new("upstream-response"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
@@ -1487,6 +1522,7 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-secret-id"),
         PreviousResponseId::new("provider-native-id"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_one").expect("account"),
     );
@@ -1552,6 +1588,7 @@ fn unavailable_native_continuation_replays_with_the_configured_account_policy() 
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-response"),
         PreviousResponseId::new("upstream-response"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
         ProviderKind::new("openai").expect("provider"),
         original.clone(),
     );
@@ -2498,6 +2535,7 @@ fn native_continuation_explicit_429_is_not_retried() {
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-secret-id"),
         PreviousResponseId::new("provider-native-id"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_first").expect("account"),
     );

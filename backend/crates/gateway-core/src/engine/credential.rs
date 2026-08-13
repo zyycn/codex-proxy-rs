@@ -3,7 +3,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
@@ -35,6 +35,58 @@ impl ProviderAccountId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Per-account scheduling concurrency override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AccountConcurrencyLimit(NonZeroU32);
+
+impl AccountConcurrencyLimit {
+    #[must_use]
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+
+    #[must_use]
+    pub const fn into_non_zero(self) -> NonZeroU32 {
+        self.0
+    }
+}
+
+/// Relative scheduling priority for an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AccountWeight(NonZeroU16);
+
+impl AccountWeight {
+    pub const DEFAULT: Self = Self(NonZeroU16::MIN);
+    pub const MAX: u16 = 100;
+
+    #[must_use]
+    pub const fn new(value: u16) -> Option<Self> {
+        match NonZeroU16::new(value) {
+            Some(value) if value.get() <= Self::MAX => Some(Self(value)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0.get()
+    }
+}
+
+impl Default for AccountWeight {
+    fn default() -> Self {
+        Self::DEFAULT
     }
 }
 
@@ -619,6 +671,8 @@ pub struct ProviderAccount {
     authentication_kind: String,
     revision: CredentialRevision,
     enabled: bool,
+    concurrency_limit: Option<AccountConcurrencyLimit>,
+    weight: AccountWeight,
     credential_state: CredentialState,
     quota: QuotaState,
     last_error_reason: Option<AccountErrorReason>,
@@ -651,6 +705,8 @@ impl ProviderAccount {
             authentication_kind,
             revision,
             enabled: true,
+            concurrency_limit: None,
+            weight: AccountWeight::DEFAULT,
             credential_state: CredentialState::Unknown,
             quota: QuotaState::unknown(),
             last_error_reason: None,
@@ -692,6 +748,17 @@ impl ProviderAccount {
         self.quota = quota;
         self.last_error_reason = last_error_reason;
         self.last_error_message = last_error_message;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_scheduling(
+        mut self,
+        concurrency_limit: Option<AccountConcurrencyLimit>,
+        weight: AccountWeight,
+    ) -> Self {
+        self.concurrency_limit = concurrency_limit;
+        self.weight = weight;
         self
     }
 
@@ -778,6 +845,24 @@ impl ProviderAccount {
     #[must_use]
     pub const fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    #[must_use]
+    pub const fn concurrency_limit(&self) -> Option<AccountConcurrencyLimit> {
+        self.concurrency_limit
+    }
+
+    #[must_use]
+    pub const fn weight(&self) -> AccountWeight {
+        self.weight
+    }
+
+    #[must_use]
+    pub const fn effective_concurrency(&self, default: NonZeroU32) -> NonZeroU32 {
+        match self.concurrency_limit {
+            Some(limit) => limit.into_non_zero(),
+            None => default,
+        }
     }
 
     #[must_use]
@@ -1393,6 +1478,7 @@ pub struct AccountSelectionContext {
     pub preferred_account: Option<ProviderAccountId>,
     pub round_robin_cursor: u64,
     pub eligibility: AccountEligibilityPolicy,
+    pub account_scope: Option<std::sync::Arc<crate::routing::FrozenAccountScope>>,
 }
 
 /// 选择账号时是否执行本地调度资格投影。
@@ -1417,10 +1503,12 @@ impl AccountEligibilityPolicy {
 /// 候选账号未进入调度池的约束。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountSchedulingBlocker {
+    OutsideClientScope,
     LocalAvailability,
     Excluded,
     ConcurrencyLimit,
     RequestInterval,
+    LowerWeight,
 }
 
 /// 优先账号在本次选择中的处理结果。
@@ -1463,26 +1551,6 @@ impl AccountSelector {
         candidates: &'a [AccountCandidate],
         context: &AccountSelectionContext,
     ) -> Option<AccountSelection<'a>> {
-        let preferred = if let Some(preferred) = context.preferred_account.as_ref() {
-            match candidates
-                .iter()
-                .find(|candidate| candidate.account.id() == preferred)
-            {
-                Some(candidate) => match self.scheduling_blocker(candidate, context) {
-                    None => {
-                        return Some(AccountSelection {
-                            candidate,
-                            preferred: PreferredAccountSelection::Hit,
-                        });
-                    }
-                    Some(blocker) => PreferredAccountSelection::Blocked(blocker),
-                },
-                None => PreferredAccountSelection::Missing,
-            }
-        } else {
-            PreferredAccountSelection::NotRequested
-        };
-
         let mut eligible = candidates
             .iter()
             .filter(|candidate| self.scheduling_blocker(candidate, context).is_none())
@@ -1490,6 +1558,33 @@ impl AccountSelector {
         if eligible.is_empty() {
             return None;
         }
+        let highest_weight = eligible
+            .iter()
+            .map(|candidate| candidate.account.weight())
+            .max()?;
+        let preferred = if let Some(preferred) = context.preferred_account.as_ref() {
+            match candidates
+                .iter()
+                .find(|candidate| candidate.account.id() == preferred)
+            {
+                Some(candidate) => match self.scheduling_blocker(candidate, context) {
+                    Some(blocker) => PreferredAccountSelection::Blocked(blocker),
+                    None if candidate.account.weight() < highest_weight => {
+                        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::LowerWeight)
+                    }
+                    None => {
+                        return Some(AccountSelection {
+                            candidate,
+                            preferred: PreferredAccountSelection::Hit,
+                        });
+                    }
+                },
+                None => PreferredAccountSelection::Missing,
+            }
+        } else {
+            PreferredAccountSelection::NotRequested
+        };
+        eligible.retain(|candidate| candidate.account.weight() == highest_weight);
 
         let candidate = match context.policy.strategy() {
             RotationStrategy::QuotaResetPriority => {
@@ -1533,6 +1628,13 @@ impl AccountSelector {
         candidate: &AccountCandidate,
         context: &AccountSelectionContext,
     ) -> Option<AccountSchedulingBlocker> {
+        if context
+            .account_scope
+            .as_ref()
+            .is_some_and(|scope| !scope.allows(candidate.account.id()))
+        {
+            return Some(AccountSchedulingBlocker::OutsideClientScope);
+        }
         if !context.eligibility.bypasses_local_eligibility() {
             let status = candidate
                 .account
@@ -1545,7 +1647,12 @@ impl AccountSelector {
         if context.excluded_accounts.contains(candidate.account.id()) {
             return Some(AccountSchedulingBlocker::Excluded);
         }
-        if candidate.signals.in_flight >= context.policy.max_concurrent_per_account().get() {
+        if candidate.signals.in_flight
+            >= candidate
+                .account
+                .effective_concurrency(context.policy.max_concurrent_per_account())
+                .get()
+        {
             return Some(AccountSchedulingBlocker::ConcurrencyLimit);
         }
         if candidate

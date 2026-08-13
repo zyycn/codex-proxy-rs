@@ -665,6 +665,9 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model_id: "coding".to_owned(),
+        routing_scope: "all".to_owned(),
+        routing_group_refs: Vec::new(),
+        routing_group_names_snapshot: serde_json::json!([]),
         client_ip: None,
         user_agent: None,
         reasoning_effort: None,
@@ -756,8 +759,8 @@ async fn finalize_request(pool: &PgPool, id: &str, started_at: DateTime<Utc>) {
 
 async fn seed_api_key(pool: &PgPool, id: &str, name: &str, now: DateTime<Utc>) {
     sqlx::query(
-        "insert into client_api_keys (id, name, provider_kind, key, enabled, created_at, updated_at)
-         values ($1, $2, 'openai', 'sk_' || $3, true, $4, $4)",
+        "insert into client_api_keys (id, name, key, enabled, created_at, updated_at)
+         values ($1, $2, 'sk_' || $3, true, $4, $4)",
     )
     .bind(id)
     .bind(name)

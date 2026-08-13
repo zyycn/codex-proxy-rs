@@ -11,12 +11,15 @@ use chrono::{DateTime, TimeDelta, Utc};
 use gateway_admin::{
     model::{
         MutationContext, Revision as AdminRevision,
+        account_groups::AccountGroupRef,
         accounts::{
-            AccountCost, AccountListQuery as AdminAccountListQuery, AccountModelUsage, AccountPage,
-            AccountPageItem, AccountRecord, AccountRequestBucket, AccountSort as AdminAccountSort,
-            AccountSortField as AdminAccountSortField, AccountStatus as AdminAccountStatus,
-            AccountSummary, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
-            DeleteAccounts, SetAccountEnabled, SortDirection as AdminSortDirection,
+            AccountCost, AccountGroupFilter, AccountListQuery as AdminAccountListQuery,
+            AccountModelUsage, AccountPage, AccountPageItem, AccountRecord, AccountRequestBucket,
+            AccountSort as AdminAccountSort, AccountSortField as AdminAccountSortField,
+            AccountStatus as AdminAccountStatus, AccountSummary, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+            BatchUpdateAccounts, DeleteAccounts, SortDirection as AdminSortDirection,
+            UpdateAccount,
         },
         observability::{
             CostCoverage as AdminCostCoverage, DecimalAmount as AdminDecimalAmount, TimeRange,
@@ -34,16 +37,16 @@ use gateway_admin::{
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use gateway_core::engine::credential::{
-    AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision as CoreCredentialRevision, CredentialState, LoadedCredential,
-    NewProviderAccount as CoreNewProviderAccount, OpaqueProviderData, PlaintextCredential,
-    ProviderAccount as CoreProviderAccount, ProviderAccountId as CoreProviderAccountId,
-    ProviderAccountIdentity, ProviderAccountStore,
+    AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
+    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision as CoreCredentialRevision,
+    CredentialState, LoadedCredential, NewProviderAccount as CoreNewProviderAccount,
+    OpaqueProviderData, PlaintextCredential, ProviderAccount as CoreProviderAccount,
+    ProviderAccountId as CoreProviderAccountId, ProviderAccountIdentity, ProviderAccountStore,
     ProviderAccountUpdate as CoreProviderAccountUpdate, QuotaAccessChange, QuotaAccessState,
     QuotaEvidence, QuotaObservation, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{AccountGroupId, ProviderKind};
 
 use crate::{
     ConflictKind, JsonObject, Revision, StoreError, StoreResult, admin_revision, admin_store_error,

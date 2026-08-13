@@ -513,8 +513,10 @@ pub struct DashboardAccountUsage {
 /// Dashboard 当前账号池的可重建运行时槽位事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DashboardRuntimeSlots {
-    /// 与持久账号池指标相同谓词下可参与调度的账号数。
-    pub active_accounts: u64,
+    /// 继承运行参数默认并发上限的可调度账号数。
+    pub inherited_accounts: u64,
+    /// 已配置账号级并发上限的可调度账号槽位总数。
+    pub overridden_slots: u64,
     /// Redis 可用时的实时 in-flight 槽位总数；不可用时为 `None`。
     pub used_slots: Option<u64>,
 }
@@ -548,6 +550,9 @@ pub struct UsageRecord {
     pub id: String,
     pub client_api_key_ref: String,
     pub config_revision: u64,
+    pub routing_scope: String,
+    pub routing_group_refs: Vec<String>,
+    pub routing_group_names_snapshot: Vec<String>,
     pub protocol: String,
     pub operation: String,
     pub endpoint: String,

@@ -97,7 +97,7 @@ impl ClientKeyService for DefaultClientKeyService {
                     id,
                     name: command.name,
                     label: command.label,
-                    provider_kind: command.provider_kind,
+                    group_ids: command.group_ids,
                     limits: command.limits,
                     plaintext: plaintext.clone(),
                 },

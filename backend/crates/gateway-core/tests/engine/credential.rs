@@ -1,18 +1,21 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde_json::{Map, Value};
 
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountCandidate, AccountEligibilityPolicy, AccountFeedbackStats,
-    AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext,
-    AccountSelectionPolicy, AccountSelector, AccountStatus, CredentialCasUpdate,
-    CredentialRevision, CredentialState, OpaqueProviderData, PlaintextCredential,
-    PreferredAccountSelection, ProviderAccount, ProviderAccountId, ProviderAccountIdentity,
-    ProviderAccountUpdate, QuotaEvidence, QuotaState, RotationStrategy,
+    AccountAttemptFeedback, AccountCandidate, AccountConcurrencyLimit, AccountEligibilityPolicy,
+    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
+    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, AccountStatus, AccountWeight,
+    CredentialCasUpdate, CredentialRevision, CredentialState, OpaqueProviderData,
+    PlaintextCredential, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
+    ProviderAccountIdentity, ProviderAccountUpdate, QuotaEvidence, QuotaState, RotationStrategy,
 };
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{
+    ClientRoutingScope, FrozenAccountScope, ProviderKind, RuntimeAccount, RuntimeAccountDirectory,
+};
 
 fn account(id: &str) -> ProviderAccount {
     ProviderAccount::new(
@@ -48,6 +51,34 @@ fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandida
     }
 }
 
+fn weighted_candidate(id: &str, weight: u16, in_flight: u32) -> AccountCandidate {
+    let mut candidate = candidate(id, in_flight, None);
+    candidate.account = candidate.account.with_scheduling(
+        None,
+        AccountWeight::new(weight).expect("valid account weight"),
+    );
+    candidate
+}
+
+#[test]
+fn account_scheduling_should_default_and_resolve_concurrency_override() {
+    let default = NonZeroU32::new(12).expect("default concurrency");
+    let account = account("acct_scheduling_default");
+    assert_eq!(account.concurrency_limit(), None);
+    assert_eq!(account.weight(), AccountWeight::DEFAULT);
+    assert_eq!(account.effective_concurrency(default), default);
+
+    let limit = AccountConcurrencyLimit::new(7).expect("concurrency override");
+    let weight = AccountWeight::new(80).expect("weight");
+    let account = account.with_scheduling(Some(limit), weight);
+    assert_eq!(account.concurrency_limit(), Some(limit));
+    assert_eq!(account.weight(), weight);
+    assert_eq!(account.effective_concurrency(default).get(), 7);
+    assert!(AccountConcurrencyLimit::new(0).is_none());
+    assert!(AccountWeight::new(0).is_none());
+    assert!(AccountWeight::new(101).is_none());
+}
+
 fn context(strategy: RotationStrategy) -> AccountSelectionContext {
     AccountSelectionContext {
         policy: AccountSelectionPolicy::new(
@@ -60,6 +91,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         preferred_account: None,
         round_robin_cursor: 0,
         eligibility: AccountEligibilityPolicy::Enforce,
+        account_scope: None,
     }
 }
 
@@ -216,6 +248,35 @@ fn diagnostic_selection_bypasses_all_local_account_eligibility() {
 }
 
 #[test]
+fn selector_should_reject_a_preferred_account_outside_the_frozen_client_scope() {
+    let allowed = candidate("acct_allowed", 0, None);
+    let outside = candidate("acct_outside", 0, None);
+    let directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+        allowed.account.id().clone(),
+        RuntimeAccount::new(
+            ProviderKind::new("openai").expect("provider"),
+            BTreeSet::new(),
+        ),
+    )])));
+    let mut context = context(RotationStrategy::Sticky);
+    context.preferred_account = Some(outside.account.id().clone());
+    context.account_scope = Some(Arc::new(FrozenAccountScope::new(
+        directory,
+        ClientRoutingScope::all_accounts(),
+    )));
+
+    let candidates = [outside, allowed];
+    let selection = AccountSelector
+        .select(&candidates, &context)
+        .expect("allowed account should remain eligible");
+    assert_eq!(selection.candidate().account.id().as_str(), "acct_allowed");
+    assert_eq!(
+        selection.preferred(),
+        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::OutsideClientScope)
+    );
+}
+
+#[test]
 fn disabled_account_should_not_be_schedulable() {
     let account = account("acct_disabled").with_account_facts(
         false,
@@ -285,6 +346,70 @@ fn smart_selector_should_prefer_lower_inflight_count() {
         .expect("candidate available");
 
     assert_eq!(selected.candidate().account.id().as_str(), "acct_idle");
+}
+
+#[test]
+fn selector_should_prioritize_the_highest_weight_for_every_rotation_strategy() {
+    let candidates = vec![
+        weighted_candidate("acct_low_weight", 1, 0),
+        weighted_candidate("acct_high_weight", 100, 2),
+    ];
+
+    for strategy in [
+        RotationStrategy::Smart,
+        RotationStrategy::QuotaResetPriority,
+        RotationStrategy::RoundRobin,
+        RotationStrategy::Sticky,
+    ] {
+        let selected = AccountSelector
+            .select(&candidates, &context(strategy))
+            .expect("highest weight account should be eligible");
+        assert_eq!(
+            selected.candidate().account.id().as_str(),
+            "acct_high_weight",
+            "strategy {strategy:?} must select inside the highest weight tier"
+        );
+    }
+}
+
+#[test]
+fn selector_should_not_let_soft_affinity_bypass_a_higher_weight_account() {
+    let preferred = weighted_candidate("acct_preferred", 1, 0);
+    let preferred_id = preferred.account.id().clone();
+    let higher = weighted_candidate("acct_higher", 10, 0);
+    let mut selection = context(RotationStrategy::Smart);
+    selection.preferred_account = Some(preferred_id);
+    let candidates = [preferred, higher];
+
+    let selected = AccountSelector
+        .select(&candidates, &selection)
+        .expect("higher weight account should be eligible");
+
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_higher");
+    assert_eq!(
+        selected.preferred(),
+        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::LowerWeight)
+    );
+}
+
+#[test]
+fn selector_should_fall_back_when_a_higher_weight_account_reaches_its_override() {
+    let mut saturated = weighted_candidate("acct_high_weight", 100, 1);
+    saturated.account = saturated.account.with_scheduling(
+        Some(AccountConcurrencyLimit::new(1).expect("concurrency override")),
+        AccountWeight::new(100).expect("weight"),
+    );
+    let fallback = weighted_candidate("acct_low_weight", 1, 0);
+    let candidates = [saturated, fallback];
+
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("lower weight account should be used after saturation");
+
+    assert_eq!(
+        selected.candidate().account.id().as_str(),
+        "acct_low_weight"
+    );
 }
 
 #[test]

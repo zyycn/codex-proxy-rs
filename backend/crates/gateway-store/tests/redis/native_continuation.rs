@@ -1,8 +1,10 @@
 use gateway_core::engine::continuation::{
-    NativeContinuationPin, NativeContinuationPort, NativeContinuationScope, PreviousResponseId,
+    NativeContinuationPin, NativeContinuationPort, NativeContinuationScope,
+    NativeContinuationStoreErrorKind, PreviousResponseId,
 };
 use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::operation::ProviderSessionState;
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;
 use gateway_store::redis::RedisNativeContinuationRepository;
 use redis::aio::ConnectionManager;
@@ -30,6 +32,7 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
             NativeContinuationPin::new(
                 previous_response_id.clone(),
                 previous_response_id.clone(),
+                client_key("key_primary"),
                 ProviderKind::new("openai").expect("provider"),
                 ProviderAccountId::new("acct_primary").expect("account"),
             )
@@ -40,7 +43,7 @@ async fn native_continuation_round_trips_opaque_state_without_exposing_response_
         .expect("record continuation");
 
     let resolved = repository
-        .resolve(&previous_response_id)
+        .resolve(&client_key("key_primary"), &previous_response_id)
         .await
         .expect("resolve continuation")
         .expect("stored continuation");
@@ -79,7 +82,7 @@ async fn empty_opaque_continuation_is_a_store_miss_without_a_redis_record() {
 
     assert!(
         repository
-            .resolve(&response_id)
+            .resolve(&client_key("key_primary"), &response_id)
             .await
             .expect("resolve")
             .is_none()
@@ -88,6 +91,7 @@ async fn empty_opaque_continuation_is_a_store_miss_without_a_redis_record() {
         .record(NativeContinuationPin::new(
             response_id.clone(),
             response_id,
+            client_key("key_primary"),
             ProviderKind::new("openai").expect("provider"),
             ProviderAccountId::new("acct_primary").expect("account"),
         ))
@@ -104,6 +108,7 @@ async fn native_continuation_rejects_provider_state_for_a_different_provider() {
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp-mismatched-state"),
         PreviousResponseId::new("resp-upstream-handle"),
+        client_key("key_primary"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_primary").expect("account"),
     )
@@ -113,6 +118,35 @@ async fn native_continuation_rejects_provider_state_for_a_different_provider() {
 
     assert!(repository.record(pin).await.is_err());
     assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
+}
+
+#[tokio::test]
+async fn native_continuation_rejects_cross_client_reuse() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let response_id = PreviousResponseId::new("resp-client-owned");
+    repository
+        .record(NativeContinuationPin::new(
+            response_id.clone(),
+            response_id.clone(),
+            client_key("key_primary"),
+            ProviderKind::new("openai").expect("provider"),
+            ProviderAccountId::new("acct_primary").expect("account"),
+        ))
+        .await
+        .expect("record client-owned continuation");
+
+    let error = repository
+        .resolve(&client_key("key_secondary"), &response_id)
+        .await
+        .expect_err("another client must not reuse the continuation");
+    assert_eq!(
+        error.kind(),
+        NativeContinuationStoreErrorKind::OwnershipMismatch
+    );
+
+    delete_namespace_keys(&mut connection, &namespace).await;
 }
 
 #[tokio::test]
@@ -177,9 +211,14 @@ fn pin(response_id: &str) -> NativeContinuationPin {
     NativeContinuationPin::new(
         PreviousResponseId::new(response_id),
         PreviousResponseId::new(response_id),
+        client_key("key_primary"),
         ProviderKind::new("openai").expect("provider"),
         ProviderAccountId::new("acct_primary").expect("account"),
     )
+}
+
+fn client_key(id: &str) -> ClientApiKeyId {
+    ClientApiKeyId::new(id).expect("client API key id")
 }
 
 async fn namespace_keys(connection: &mut ConnectionManager, namespace: &str) -> Vec<String> {

@@ -23,7 +23,7 @@ fn client_key_requires_the_frozen_plaintext_format() {
         id: "key-1".to_owned(),
         name: "default".to_owned(),
         label: None,
-        provider_kind: "openai".to_owned(),
+        group_ids: Vec::new(),
         key: format!("sk_{}", "a".repeat(43)),
         max_concurrency: 0,
         requests_per_minute: 0,
@@ -44,9 +44,9 @@ async fn client_key_list_uses_safe_keyset_search_and_filtered_total() {
         );
         sqlx::query(
             "insert into client_api_keys (
-               id, name, label, provider_kind, key, enabled, max_concurrency, requests_per_minute,
+               id, name, label, key, enabled, max_concurrency, requests_per_minute,
                created_at, updated_at
-             ) values ($1, $2, $2, 'openai', $3, true, 0, 0,
+             ) values ($1, $2, $2, $3, true, 0, 0,
                        now() - ($4::bigint * interval '1 minute'), now())",
         )
         .bind(id)
@@ -186,9 +186,9 @@ async fn client_key_database_sort_is_stable_and_keeps_null_last_used_at_last() {
     {
         sqlx::query(
             "insert into client_api_keys (
-               id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
+               id, name, key, enabled, max_concurrency, requests_per_minute,
                last_used_at, created_at, updated_at
-             ) values ($1, $2, 'openai', $3, $4, 0, 0, $5::timestamptz, $6::timestamptz,
+             ) values ($1, $2, $3, $4, 0, 0, $5::timestamptz, $6::timestamptz,
                        $6::timestamptz)",
         )
         .bind(id)
@@ -272,9 +272,9 @@ async fn client_key_usage_touch_should_preserve_the_latest_observed_timestamp() 
     };
     sqlx::query(
         "insert into client_api_keys (
-           id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
+           id, name, key, enabled, max_concurrency, requests_per_minute,
            created_at, updated_at
-         ) values ('key_usage_touch', 'usage', 'openai', $1, true, 0, 0, now(), now())",
+         ) values ('key_usage_touch', 'usage', $1, true, 0, 0, now(), now())",
     )
     .bind(format!("sk_{}", "t".repeat(43)))
     .execute(&database.pool)
@@ -315,9 +315,9 @@ async fn dedicated_reveal_returns_plaintext_without_debug_exposure() {
     let plaintext = format!("sk_{}", "r".repeat(43));
     sqlx::query(
         "insert into client_api_keys (
-           id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
+           id, name, key, enabled, max_concurrency, requests_per_minute,
            created_at, updated_at
-         ) values ('key_reveal', 'reveal', 'openai', $1, true, 1, 2, now(), now())",
+         ) values ('key_reveal', 'reveal', $1, true, 1, 2, now(), now())",
     )
     .bind(&plaintext)
     .execute(&database.pool)
@@ -340,7 +340,7 @@ fn client_key_debug_redacts_plaintext() {
         id: "key-1".to_owned(),
         name: "default".to_owned(),
         label: None,
-        provider_kind: "openai".to_owned(),
+        group_ids: Vec::new(),
         key: secret.clone(),
         max_concurrency: 0,
         requests_per_minute: 0,

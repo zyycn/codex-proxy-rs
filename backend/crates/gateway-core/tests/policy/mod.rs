@@ -1,8 +1,17 @@
+use std::sync::Arc;
+
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{ClientRoutingScope, FrozenAccountScope, RuntimeAccountDirectory};
 
 fn plaintext(value: &str) -> PlaintextClientApiKey {
     PlaintextClientApiKey::new(value).expect("valid plaintext client key")
+}
+
+fn account_scope() -> Arc<FrozenAccountScope> {
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::default()),
+        ClientRoutingScope::all_accounts(),
+    ))
 }
 
 #[test]
@@ -10,7 +19,7 @@ fn disabled_client_key_should_be_denied() {
     let policy = ClientPolicy::new(
         ClientApiKeyId::new("key_disabled").expect("valid key ID"),
         plaintext("sk_disabled_secret"),
-        ProviderKind::new("openai").expect("valid provider"),
+        account_scope(),
         false,
         RateLimits::unlimited(),
     );
@@ -23,7 +32,7 @@ fn enabled_client_key_should_be_authorized() {
     let policy = ClientPolicy::new(
         ClientApiKeyId::new("key_enabled").expect("valid key ID"),
         plaintext("sk_enabled_secret"),
-        ProviderKind::new("openai").expect("valid provider"),
+        account_scope(),
         true,
         RateLimits::unlimited(),
     );

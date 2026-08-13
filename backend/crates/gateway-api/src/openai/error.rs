@@ -89,6 +89,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         | EngineError::ProviderMetadataMismatch
         | EngineError::ContinuationPinMismatch
         | EngineError::RequiredAccountMismatch
+        | EngineError::AccountOutsideClientScope
         | EngineError::DownstreamCommitRequired
         | EngineError::NoActiveAttempt
         | EngineError::InvalidDeliveryState => {

@@ -4,10 +4,12 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::routing::{
-    ConfigRevision,
+    AccountGroupId, ConfigRevision,
     snapshot::{
-        SnapshotClientPolicyFacts, SnapshotFacts, SnapshotSettingsFacts, SnapshotStoreError,
+        SnapshotAccountGroupFacts, SnapshotAccountGroupMemberFacts, SnapshotClientPolicyFacts,
+        SnapshotFacts, SnapshotProviderAccountFacts, SnapshotSettingsFacts, SnapshotStoreError,
         SnapshotStorePort,
     },
 };
@@ -41,6 +43,28 @@ pub struct RuntimeSnapshotData {
     pub observed_current_revision: Revision,
     pub settings: SnapshotRuntimeSettings,
     pub client_api_keys: Vec<ClientApiKeySnapshot>,
+    pub account_groups: Vec<SnapshotAccountGroupData>,
+    pub provider_accounts: Vec<SnapshotProviderAccountData>,
+    pub group_memberships: Vec<SnapshotGroupMembershipData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotAccountGroupData {
+    pub id: AccountGroupId,
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotProviderAccountData {
+    pub id: String,
+    pub provider_kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotGroupMembershipData {
+    pub group_id: AccountGroupId,
+    pub account_id: String,
 }
 
 #[async_trait]
@@ -77,6 +101,9 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
 
         let (config_revision, settings) = load_settings(&mut transaction).await?;
         let client_api_keys = load_client_keys(&mut transaction).await?;
+        let account_groups = load_account_groups(&mut transaction).await?;
+        let provider_accounts = load_provider_accounts(&mut transaction).await?;
+        let group_memberships = load_group_memberships(&mut transaction).await?;
         transaction
             .commit()
             .await
@@ -89,6 +116,9 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
             observed_current_revision,
             settings,
             client_api_keys,
+            account_groups,
+            provider_accounts,
+            group_memberships,
         })
     }
 
@@ -151,16 +181,44 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                     SnapshotClientPolicyFacts::new(
                         key.id,
                         key.plaintext_key,
-                        key.provider_kind,
+                        key.group_ids,
                         key.limits,
                     )
                 })
                 .collect();
+            let account_groups = data
+                .account_groups
+                .into_iter()
+                .map(|group| SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled))
+                .collect();
+            let provider_accounts = data
+                .provider_accounts
+                .into_iter()
+                .map(|account| {
+                    ProviderAccountId::new(account.id)
+                        .map(|id| SnapshotProviderAccountFacts::new(id, account.provider_kind))
+                        .map_err(|_| SnapshotStoreError::unavailable())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let group_memberships = data
+                .group_memberships
+                .into_iter()
+                .map(|membership| {
+                    ProviderAccountId::new(membership.account_id)
+                        .map(|account_id| {
+                            SnapshotAccountGroupMemberFacts::new(membership.group_id, account_id)
+                        })
+                        .map_err(|_| SnapshotStoreError::unavailable())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(SnapshotFacts::new(
                 config_revision,
                 observed_current_revision,
                 settings,
                 client_policies,
+                account_groups,
+                provider_accounts,
+                group_memberships,
             ))
         })
     }
@@ -224,15 +282,79 @@ async fn load_settings(
 async fn load_client_keys(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<ClientApiKeySnapshot>> {
-    let rows = sqlx::query_as::<_, (String, String, String, i64, i64)>(
-        "select id, key, provider_kind, max_concurrency, requests_per_minute
-         from client_api_keys where enabled order by id",
+    let rows = sqlx::query_as::<_, (String, String, Vec<String>, i64, i64)>(
+        "select k.id, k.key,
+                coalesce(array_agg(kg.account_group_id order by kg.account_group_id)
+                  filter (where kg.account_group_id is not null), '{}') as group_ids,
+                k.max_concurrency, k.requests_per_minute
+         from client_api_keys k
+         left join client_api_key_groups kg on kg.client_api_key_id = k.id
+         where k.enabled
+         group by k.id
+         order by k.id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot client policies"))?;
     rows.into_iter()
         .map(|row| ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4))
+        .collect()
+}
+
+async fn load_account_groups(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> StoreResult<Vec<SnapshotAccountGroupData>> {
+    let rows = sqlx::query_as::<_, (String, String, bool)>(
+        "select id, name, enabled from account_groups order by id",
+    )
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("load snapshot account groups"))?;
+    rows.into_iter()
+        .map(|(id, name, enabled)| {
+            Ok(SnapshotAccountGroupData {
+                id: AccountGroupId::new(id).map_err(|_| invalid("invalid account group id"))?,
+                name,
+                enabled,
+            })
+        })
+        .collect()
+}
+
+async fn load_provider_accounts(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> StoreResult<Vec<SnapshotProviderAccountData>> {
+    sqlx::query_as::<_, (String, String)>(
+        "select id, provider_kind from provider_accounts order by id",
+    )
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("load snapshot provider accounts"))
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(id, provider_kind)| SnapshotProviderAccountData { id, provider_kind })
+            .collect()
+    })
+}
+
+async fn load_group_memberships(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> StoreResult<Vec<SnapshotGroupMembershipData>> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "select account_group_id, provider_account_id
+         from account_group_accounts order by account_group_id, provider_account_id",
+    )
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("load snapshot group memberships"))?;
+    rows.into_iter()
+        .map(|(group_id, account_id)| {
+            Ok(SnapshotGroupMembershipData {
+                group_id: AccountGroupId::new(group_id)
+                    .map_err(|_| invalid("invalid membership group id"))?,
+                account_id,
+            })
+        })
         .collect()
 }
 

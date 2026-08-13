@@ -110,6 +110,7 @@ impl ProviderRuntimePolicyPort for MutableRuntimePolicy {
 impl ProviderLeasePort for TestRefreshLeases {
     fn load_state<'a>(
         &'a self,
+        _: &'a gateway_core::policy::ClientApiKeyId,
         _: &'a gateway_core::routing::ProviderKind,
         _: &'a [gateway_core::engine::credential::ProviderAccountId],
     ) -> futures::future::BoxFuture<

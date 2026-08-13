@@ -2,12 +2,14 @@ use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;
 
 fn pin() -> NativeContinuationPin {
     NativeContinuationPin::new(
         PreviousResponseId::new("response-private"),
         PreviousResponseId::new("upstream-private"),
+        ClientApiKeyId::new("key_client").expect("valid client key"),
         ProviderKind::new("openai").expect("valid provider"),
         ProviderAccountId::new("acct_codex").expect("valid account"),
     )
@@ -42,4 +44,9 @@ fn native_pin_should_reject_different_account() {
         &ProviderKind::new("openai").expect("valid provider"),
         &ProviderAccountId::new("acct_other").expect("valid account"),
     ));
+}
+
+#[test]
+fn native_pin_should_reject_different_client_api_key() {
+    assert!(!pin().matches_client(&ClientApiKeyId::new("key_other").expect("valid client key")));
 }

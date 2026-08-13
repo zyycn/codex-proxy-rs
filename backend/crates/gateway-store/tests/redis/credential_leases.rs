@@ -211,30 +211,41 @@ async fn scheduling_lease_ttl_and_cache_loss_rebuild_empty_runtime_signal() {
 }
 
 #[tokio::test]
-async fn scheduling_cursor_is_shared_across_gateway_processes() {
+async fn scheduling_cursor_is_shared_across_processes_and_isolated_by_client_and_provider() {
     let Some((repository, mut connection, namespace)) = repository().await else {
         return;
     };
     let peer = RedisCredentialLeaseRepository::new(connection.clone(), &namespace)
         .expect("peer repository");
 
+    let primary = gateway_core::policy::ClientApiKeyId::new("key_primary").expect("client key");
+    let secondary = gateway_core::policy::ClientApiKeyId::new("key_secondary").expect("client key");
+    let openai = gateway_core::routing::ProviderKind::new("openai").expect("provider");
+    let xai = gateway_core::routing::ProviderKind::new("xai").expect("provider");
+
     assert_eq!(
         repository
-            .advance_scheduling_cursor("route_openai_real")
+            .advance_scheduling_cursor(&primary, &openai)
             .await
             .expect("first cursor"),
         0
     );
     assert_eq!(
-        peer.advance_scheduling_cursor("route_openai_real")
+        peer.advance_scheduling_cursor(&primary, &openai)
             .await
             .expect("shared cursor"),
         1
     );
     assert_eq!(
-        peer.advance_scheduling_cursor("route_openai_backup")
+        peer.advance_scheduling_cursor(&secondary, &openai)
             .await
-            .expect("independent cursor"),
+            .expect("client-isolated cursor"),
+        0
+    );
+    assert_eq!(
+        peer.advance_scheduling_cursor(&primary, &xai)
+            .await
+            .expect("provider-isolated cursor"),
         0
     );
 
@@ -243,12 +254,13 @@ async fn scheduling_cursor_is_shared_across_gateway_processes() {
         .query_async::<Vec<String>>(&mut connection)
         .await
         .expect("list cursor keys");
-    assert_eq!(keys.len(), 2);
-    assert!(
-        keys.iter().all(|key| {
-            !key.contains("route_openai_real") && !key.contains("route_openai_backup")
-        })
-    );
+    assert_eq!(keys.len(), 3);
+    assert!(keys.iter().all(|key| {
+        !key.contains("key_primary")
+            && !key.contains("key_secondary")
+            && !key.contains("openai")
+            && !key.contains("xai")
+    }));
     redis::cmd("DEL")
         .arg(keys)
         .query_async::<i64>(&mut connection)

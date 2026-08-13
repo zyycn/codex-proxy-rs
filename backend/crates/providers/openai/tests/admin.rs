@@ -797,6 +797,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     AccountRecord {
         id: account.id().to_string(),
         provider_kind: account.provider().clone(),
+        groups: Vec::new(),
         name: account.name().to_owned(),
         email: account.email().map(str::to_owned),
         upstream_user_id: account.upstream_user_id().map(str::to_owned),
@@ -808,6 +809,8 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
+        concurrency_limit: account.concurrency_limit(),
+        weight: account.weight(),
         credential_state: account.credential_state(),
         credential_observed_at: now,
         quota: account.quota(),

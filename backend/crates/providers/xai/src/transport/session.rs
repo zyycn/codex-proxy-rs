@@ -2,13 +2,15 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
     AccountEligibilityPolicy, AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderResource;
-use gateway_core::routing::UpstreamModelId;
+use gateway_core::policy::ClientApiKeyId;
+use gateway_core::routing::{FrozenAccountScope, UpstreamModelId};
 use sha2::{Digest as _, Sha256};
 
 use crate::SecretValue;
@@ -213,6 +215,8 @@ pub struct GrokSessionSelection {
     eligibility: AccountEligibilityPolicy,
     affinity: Option<GrokSessionAffinityKey>,
     deadline: SystemTime,
+    account_scope: Arc<FrozenAccountScope>,
+    client_api_key_id: ClientApiKeyId,
 }
 
 impl GrokSessionSelection {
@@ -224,6 +228,8 @@ impl GrokSessionSelection {
         required_account: Option<ProviderAccountId>,
         account_selection_policy: AccountSelectionPolicy,
         deadline: SystemTime,
+        account_scope: Arc<FrozenAccountScope>,
+        client_api_key_id: ClientApiKeyId,
     ) -> Self {
         Self {
             upstream_model,
@@ -233,6 +239,8 @@ impl GrokSessionSelection {
             eligibility: AccountEligibilityPolicy::Enforce,
             affinity: None,
             deadline,
+            account_scope,
+            client_api_key_id,
         }
     }
 
@@ -292,6 +300,16 @@ impl GrokSessionSelection {
     #[must_use]
     pub const fn deadline(&self) -> SystemTime {
         self.deadline
+    }
+
+    #[must_use]
+    pub const fn account_scope(&self) -> &Arc<FrozenAccountScope> {
+        &self.account_scope
+    }
+
+    #[must_use]
+    pub const fn client_api_key_id(&self) -> &ClientApiKeyId {
+        &self.client_api_key_id
     }
 }
 

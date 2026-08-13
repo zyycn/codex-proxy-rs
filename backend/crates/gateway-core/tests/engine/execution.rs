@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -42,7 +42,8 @@ use gateway_core::operation::{GenerateRequest, Operation, OperationKind, Protoco
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RuntimeSnapshot,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, PublicModelId, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
     UpstreamModelId,
 };
 use serde_json::json;
@@ -283,7 +284,7 @@ fn slow_circuit_store_should_time_out_and_fail_open_during_request_start() {
 }
 
 #[test]
-fn stale_nonempty_catalog_should_not_block_a_new_model_during_request_start() {
+fn known_catalog_should_reject_a_model_that_the_provider_did_not_publish() {
     let service = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(start_snapshot()),
         Arc::new(TrackingExecutionStore::default()),
@@ -298,7 +299,7 @@ fn stale_nonempty_catalog_should_not_block_a_new_model_during_request_start() {
         .expect("authenticated client");
     let model = "gpt-future-not-in-catalog";
 
-    let started = block_on(service.start(StartExecution {
+    let result = block_on(service.start(StartExecution {
         client,
         public_model: PublicModelId::from_client_wire(model).expect("client model"),
         operation: start_operation_for_model(model),
@@ -311,10 +312,80 @@ fn stale_nonempty_catalog_should_not_block_a_new_model_during_request_start() {
             user_agent: None,
             previous_response_id: None,
         },
-    }))
-    .expect("stale model catalog must not reject the request");
+    }));
+    let Err(error) = result else {
+        panic!("a known provider catalog must be authoritative for model availability");
+    };
 
-    assert!(!started.session.is_finalized());
+    assert_eq!(error.kind(), GatewayErrorKind::NoAvailableProvider);
+}
+
+#[test]
+fn continuation_owned_by_another_client_api_key_should_fail_closed() {
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(RejectedContinuation::OwnershipMismatch),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service
+        .authenticate("sk_start_test")
+        .expect("authenticated client");
+
+    let result = block_on(service.start(StartExecution {
+        client,
+        public_model: PublicModelId::new("gpt-start").expect("public model"),
+        operation: start_operation(),
+        metadata: execution_metadata_with_continuation(),
+    }));
+    let Err(error) = result else {
+        panic!("cross-client continuation must be rejected");
+    };
+
+    assert_eq!(error.kind(), GatewayErrorKind::PolicyDenied);
+}
+
+#[test]
+fn invalid_continuation_record_should_not_be_forwarded_as_an_external_handle() {
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(RejectedContinuation::InvalidData),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service
+        .authenticate("sk_start_test")
+        .expect("authenticated client");
+
+    let result = block_on(service.start(StartExecution {
+        client,
+        public_model: PublicModelId::new("gpt-start").expect("public model"),
+        operation: start_operation(),
+        metadata: execution_metadata_with_continuation(),
+    }));
+    let Err(error) = result else {
+        panic!("invalid continuation state must be rejected");
+    };
+
+    assert_eq!(error.kind(), GatewayErrorKind::Internal);
+}
+
+fn execution_metadata_with_continuation() -> ExecutionRequestMetadata {
+    ExecutionRequestMetadata {
+        protocol: "openai".to_owned(),
+        endpoint: "/v1/responses".to_owned(),
+        transport: ClientTransport::HttpJson,
+        stream: false,
+        client_ip: None,
+        user_agent: None,
+        previous_response_id: Some(PreviousResponseId::new("response-private")),
+    }
 }
 
 #[derive(Default)]
@@ -526,6 +597,7 @@ struct UnusedContinuation;
 impl NativeContinuationPort for UnusedContinuation {
     fn resolve<'a>(
         &'a self,
+        _: &'a ClientApiKeyId,
         _: &'a PreviousResponseId,
     ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
         Box::pin(async { Ok(None) })
@@ -537,6 +609,43 @@ impl NativeContinuationPort for UnusedContinuation {
     ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
         Box::pin(async { Ok(()) })
     }
+}
+
+enum RejectedContinuation {
+    OwnershipMismatch,
+    InvalidData,
+}
+
+impl NativeContinuationPort for RejectedContinuation {
+    fn resolve<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        _: &'a PreviousResponseId,
+    ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
+        Box::pin(async move {
+            Err(match self {
+                Self::OwnershipMismatch => NativeContinuationStoreError::ownership_mismatch(),
+                Self::InvalidData => NativeContinuationStoreError::invalid_data("invalid record"),
+            })
+        })
+    }
+
+    fn record<'a>(
+        &'a self,
+        _: NativeContinuationPin,
+    ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn account_scope(provider: &ProviderKind, account_id: &str) -> Arc<FrozenAccountScope> {
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new(account_id).expect("account ID"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ))
 }
 
 fn probe_snapshot() -> RuntimeSnapshot {
@@ -575,7 +684,7 @@ fn client_snapshot() -> RuntimeSnapshot {
         vec![ClientPolicy::new(
             ClientApiKeyId::new("key_usage_test").expect("client API key ID"),
             PlaintextClientApiKey::new("sk_usage_test").expect("plaintext client API key"),
-            provider,
+            account_scope(&provider, "acct_usage"),
             true,
             RateLimits::unlimited(),
         )],
@@ -603,7 +712,7 @@ fn start_snapshot() -> RuntimeSnapshot {
         vec![ClientPolicy::new(
             ClientApiKeyId::new("key_start_test").expect("client API key ID"),
             PlaintextClientApiKey::new("sk_start_test").expect("plaintext client API key"),
-            provider,
+            account_scope(&provider, "acct_start"),
             true,
             RateLimits::unlimited(),
         )],

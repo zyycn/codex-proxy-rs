@@ -56,9 +56,9 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation>;
 
-    async fn set_provider_account_enabled_admin(
+    async fn batch_update_provider_accounts_admin(
         &self,
-        command: SetProviderAccountEnabled,
+        command: BatchUpdateProviderAccountsAdmin,
     ) -> StoreResult<Revision>;
 
     async fn delete_provider_accounts_admin(
@@ -99,7 +99,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -127,11 +127,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                id, provider_kind, name, email, upstream_user_id,
                upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-               credential_state, provider_quota_json,
+               concurrency_limit, weight, credential_state, provider_quota_json,
                credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-               $14, null, $15, null, null, now(), greatest(now(), $15)
+               $14, $15, $16, null, $17, null, null, now(), greatest(now(), $17)
              )",
         )
         .bind(account.id)
@@ -147,6 +147,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(account.access_token_expires_at)
         .bind(account.next_refresh_at)
         .bind(account.enabled)
+        .bind(account.concurrency_limit.map(|limit| i64::from(limit.get())))
+        .bind(i16::try_from(account.weight.get()).map_err(|_| invalid("invalid weight"))?)
         .bind(credential_state.as_str())
         .bind(account.credential_observed_at)
         .execute(&self.pool)
@@ -471,12 +473,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         finish_admin_transaction(transaction, result, "provider account admin rotation").await
     }
 
-    async fn set_provider_account_enabled_admin(
+    async fn batch_update_provider_accounts_admin(
         &self,
-        command: SetProviderAccountEnabled,
+        command: BatchUpdateProviderAccountsAdmin,
     ) -> StoreResult<Revision> {
-        command.scope.validate()?;
-        require_nonempty(ENTITY, "account_id", &command.account_id)?;
+        validate_batch_update_account_ids(&command.account_ids)?;
+        validate_batch_update_group_ids(&command.group_ids)?;
         let mut transaction = self
             .pool
             .begin()
@@ -484,11 +486,18 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             .map_err(|_| postgres_unavailable("begin provider account admin state change"))?;
         let result = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
-            set_provider_account_enabled_in_transaction(
+            update_provider_accounts_scheduling_in_transaction(
                 &mut transaction,
-                &command.scope,
-                &command.account_id,
+                &command.account_ids,
                 command.enabled,
+                command.concurrency_limit,
+                command.weight,
+            )
+            .await?;
+            replace_account_group_assignments_in_transaction(
+                &mut transaction,
+                &command.account_ids,
+                &command.group_ids,
             )
             .await?;
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
@@ -527,6 +536,53 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
     }
 }
 
+async fn replace_account_group_assignments_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    group_ids: &[AccountGroupId],
+) -> StoreResult<()> {
+    let group_ids = group_ids
+        .iter()
+        .map(|group_id| group_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    if !group_ids.is_empty() {
+        let known_group_count = sqlx::query_scalar::<_, i64>(
+            "select count(*)::bigint from account_groups where id = any($1::text[])",
+        )
+        .bind(&group_ids)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("validate account group assignment"))?;
+        if usize::try_from(known_group_count).ok() != Some(group_ids.len()) {
+            return Err(StoreError::NotFound {
+                entity: "account group",
+                id: "one or more group IDs".to_owned(),
+            });
+        }
+    }
+    sqlx::query("delete from account_group_accounts where provider_account_id = any($1::text[])")
+        .bind(account_ids)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("clear account group assignments"))?;
+    if group_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "insert into account_group_accounts
+         (account_group_id, provider_account_id, created_at)
+         select group_id, account_id, now()
+         from unnest($1::text[]) group_id
+         cross join unnest($2::text[]) account_id",
+    )
+    .bind(group_ids)
+    .bind(account_ids)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("assign accounts to groups"))?;
+    Ok(())
+}
+
 pub(crate) async fn upsert_provider_account_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     account: &NewProviderAccount,
@@ -542,11 +598,11 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-           credential_state, provider_quota_json,
+           concurrency_limit, weight, credential_state, provider_quota_json,
            credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
          ) values (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-           $14, null, $15, null, null, now(), greatest(now(), $15)
+           $14, $15, $16, null, $17, null, null, now(), greatest(now(), $17)
          )
          on conflict (
            provider_kind,
@@ -589,6 +645,8 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     .bind(account.access_token_expires_at)
     .bind(account.next_refresh_at)
     .bind(account.enabled)
+    .bind(account.concurrency_limit.map(|limit| i64::from(limit.get())))
+    .bind(i16::try_from(account.weight.get()).map_err(|_| invalid("invalid weight"))?)
     .bind(credential_state.as_str())
     .bind(account.credential_observed_at)
     .fetch_optional(&mut **transaction)
@@ -691,23 +749,37 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     Revision::new(to_u64(next)?)
 }
 
-pub(crate) async fn set_provider_account_enabled_in_transaction(
+pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
-    scope: &ProviderAccountAdminScope,
-    account_id: &str,
+    account_ids: &[String],
     enabled: bool,
+    concurrency_limit: Option<AccountConcurrencyLimit>,
+    weight: AccountWeight,
 ) -> StoreResult<()> {
-    let result = sqlx::query(
-        "update provider_accounts set enabled = $3, updated_at = now()
-         where id = $1 and provider_kind = $2",
+    let updated = sqlx::query_scalar::<_, String>(
+        "update provider_accounts
+         set enabled = $2, concurrency_limit = $3, weight = $4, updated_at = now()
+         where id = any($1::text[])
+         returning id",
     )
-    .bind(account_id)
-    .bind(&scope.provider_kind)
+    .bind(account_ids)
     .bind(enabled)
-    .execute(&mut **transaction)
+    .bind(concurrency_limit.map(|limit| i64::from(limit.get())))
+    .bind(i16::try_from(weight.get()).map_err(|_| invalid("invalid weight"))?)
+    .fetch_all(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("set provider account state in admin transaction"))?;
-    require_admin_account_changed(result.rows_affected(), account_id)
+    .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let expected = account_ids.iter().cloned().collect::<BTreeSet<_>>();
+    if updated == expected {
+        Ok(())
+    } else {
+        Err(StoreError::NotFound {
+            entity: ENTITY,
+            id: "one or more provider account IDs".to_owned(),
+        })
+    }
 }
 
 pub(crate) async fn delete_provider_accounts_in_transaction(
@@ -749,20 +821,6 @@ pub(crate) fn validate_credential_update(update: &ProviderCredentialUpdate) -> S
     Ok(())
 }
 
-pub(crate) fn require_admin_account_changed(
-    rows_affected: u64,
-    account_id: &str,
-) -> StoreResult<()> {
-    if rows_affected == 1 {
-        Ok(())
-    } else {
-        Err(StoreError::NotFound {
-            entity: ENTITY,
-            id: account_id.to_owned(),
-        })
-    }
-}
-
 pub(crate) fn validate_admin_account_ids(account_ids: &[String]) -> StoreResult<()> {
     if account_ids.is_empty() || account_ids.len() > MAX_ADMIN_IMPORT_BATCH {
         return Err(invalid(
@@ -775,6 +833,38 @@ pub(crate) fn validate_admin_account_ids(account_ids: &[String]) -> StoreResult<
         if !unique.insert(account_id.as_str()) {
             return Err(invalid("admin account selection contains duplicate IDs"));
         }
+    }
+    Ok(())
+}
+
+fn validate_batch_update_account_ids(account_ids: &[String]) -> StoreResult<()> {
+    const MAX_BATCH_UPDATE_ACCOUNTS: usize = 1000;
+    if account_ids.is_empty() || account_ids.len() > MAX_BATCH_UPDATE_ACCOUNTS {
+        return Err(invalid(
+            "account batch update must contain between 1 and 1000 IDs",
+        ));
+    }
+    let mut unique = BTreeSet::new();
+    for account_id in account_ids {
+        require_nonempty(ENTITY, "account_id", account_id)?;
+        if !unique.insert(account_id.as_str()) {
+            return Err(invalid("account batch update contains duplicate IDs"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_batch_update_group_ids(group_ids: &[AccountGroupId]) -> StoreResult<()> {
+    const MAX_BATCH_UPDATE_GROUPS: usize = 1000;
+    if group_ids.len() > MAX_BATCH_UPDATE_GROUPS {
+        return Err(invalid("account batch update contains too many group IDs"));
+    }
+    let mut unique = BTreeSet::new();
+    if group_ids
+        .iter()
+        .any(|group_id| !unique.insert(group_id.as_str()))
+    {
+        return Err(invalid("account batch update contains duplicate group IDs"));
     }
     Ok(())
 }

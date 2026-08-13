@@ -231,6 +231,111 @@ impl PgAdminAccountStore {
             credential_revision: Some(admin_revision(rotation.credential_revision)?),
         })
     }
+
+    async fn account_groups_by_account(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, Vec<AccountGroupRef>>> {
+        if account_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let rows = sqlx::query_as::<_, (String, String, String, String, bool)>(
+            "select m.provider_account_id, g.id, g.name, g.color, g.enabled
+             from account_group_accounts m
+             join account_groups g on g.id = m.account_group_id
+             where m.provider_account_id = any($1::text[])
+             order by m.provider_account_id, g.id",
+        )
+        .bind(account_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| {
+            admin_store_error(
+                ENTITY,
+                postgres_unavailable("load account group references"),
+            )
+        })?;
+        let mut groups = BTreeMap::<String, Vec<AccountGroupRef>>::new();
+        for (account_id, group_id, name, color, enabled) in rows {
+            let id = AccountGroupId::new(group_id).map_err(|_| {
+                AdminStoreError::new(
+                    AdminStoreErrorKind::Invalid,
+                    ENTITY,
+                    "persisted account group ID is invalid",
+                )
+            })?;
+            groups.entry(account_id).or_default().push(AccountGroupRef {
+                id,
+                name,
+                color: gateway_admin::model::account_groups::AccountGroupColor::parse(&color)
+                    .ok_or_else(|| {
+                        AdminStoreError::new(
+                            AdminStoreErrorKind::Invalid,
+                            ENTITY,
+                            "persisted account group color is invalid",
+                        )
+                    })?,
+                enabled,
+            });
+        }
+        Ok(groups)
+    }
+
+    async fn account_ids_matching_group(
+        &self,
+        filter: Option<&AccountGroupFilter>,
+    ) -> AdminStoreResult<Option<BTreeSet<String>>> {
+        let Some(filter) = filter else {
+            return Ok(None);
+        };
+        let rows = match filter {
+            AccountGroupFilter::Group(group_id) => {
+                let exists = sqlx::query_scalar::<_, bool>(
+                    "select exists(select 1 from account_groups where id = $1)",
+                )
+                .bind(group_id.as_str())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|_| {
+                    admin_store_error(
+                        ENTITY,
+                        postgres_unavailable("validate account group filter"),
+                    )
+                })?;
+                if !exists {
+                    return Err(admin_store_error(
+                        ENTITY,
+                        StoreError::NotFound {
+                            entity: "account group",
+                            id: group_id.as_str().to_owned(),
+                        },
+                    ));
+                }
+                sqlx::query_scalar::<_, String>(
+                    "select provider_account_id from account_group_accounts
+                     where account_group_id = $1",
+                )
+                .bind(group_id.as_str())
+                .fetch_all(&self.pool)
+                .await
+            }
+            AccountGroupFilter::Ungrouped => {
+                sqlx::query_scalar::<_, String>(
+                    "select a.id from provider_accounts a
+                     where not exists (
+                       select 1 from account_group_accounts m
+                       where m.provider_account_id = a.id
+                     )",
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+        .map_err(|_| {
+            admin_store_error(ENTITY, postgres_unavailable("load account group filter"))
+        })?;
+        Ok(Some(rows.into_iter().collect()))
+    }
 }
 
 #[async_trait]
@@ -252,18 +357,23 @@ impl AccountStore for PgAdminAccountStore {
         let rate_limited_until =
             load_rate_limited_until(self.cooldowns.as_deref(), &accounts, now.into()).await;
         let summary = admin_account_summary(&accounts, now, &rate_limited_until);
+        let group_matches = self
+            .account_ids_matching_group(query.group_filter.as_ref())
+            .await?;
         let mut items = accounts
             .into_iter()
             .filter_map(|account| {
                 let until = rate_limited_until.get(&account.id).copied();
                 let projection = account_status_projection(&account, now.into(), until);
-                account_matches_admin_query(&account, projection.status, &query).then_some(
-                    AdminAccountListItem {
-                        account,
-                        projection,
-                        usage: None,
-                    },
-                )
+                (account_matches_admin_query(&account, projection.status, &query)
+                    && group_matches
+                        .as_ref()
+                        .is_none_or(|matches| matches.contains(&account.id)))
+                .then_some(AdminAccountListItem {
+                    account,
+                    projection,
+                    usage: None,
+                })
             })
             .collect::<Vec<_>>();
 
@@ -298,9 +408,20 @@ impl AccountStore for PgAdminAccountStore {
             .into_iter()
             .skip(offset)
             .take(page_size)
+            .collect::<Vec<_>>();
+        let item_ids = items
+            .iter()
+            .map(|item| item.account.id.clone())
+            .collect::<Vec<_>>();
+        let mut groups_by_account = self.account_groups_by_account(&item_ids).await?;
+        let items = items
+            .into_iter()
             .map(|item| {
+                let account_id = item.account.id.clone();
+                let mut account = admin_account_record(item.account)?;
+                account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
                 Ok(AccountPageItem {
-                    account: admin_account_record(item.account)?,
+                    account,
                     projection: item.projection,
                 })
             })
@@ -332,8 +453,14 @@ impl AccountStore for PgAdminAccountStore {
         .get(account_id)
         .copied();
         let projection = account_status_projection(&record.summary, now.into(), rate_limited_until);
+        let account_id = record.summary.id.clone();
+        let mut groups = self
+            .account_groups_by_account(std::slice::from_ref(&account_id))
+            .await?;
+        let mut account = admin_account_record(record.summary)?;
+        account.groups = groups.remove(&account_id).unwrap_or_default();
         Ok(Some(AccountPageItem {
-            account: admin_account_record(record.summary)?,
+            account,
             projection,
         }))
     }
@@ -572,29 +699,99 @@ impl AccountStore for PgAdminAccountStore {
             .await
     }
 
-    async fn set_account_enabled(
+    async fn update_account(
         &self,
-        command: SetAccountEnabled,
+        command: UpdateAccount,
         context: &MutationContext,
-    ) -> AdminStoreResult<AdminRevision> {
-        let scope = self.required_scope(&command.account_id).await?;
-        let action = if command.enabled { "enable" } else { "disable" };
-        self.accounts
-            .set_provider_account_enabled_admin(SetProviderAccountEnabled {
-                scope,
-                account_id: command.account_id.clone(),
+    ) -> AdminStoreResult<AccountUpdateResult> {
+        let account_id = CoreProviderAccountId::new(command.account_id.clone()).map_err(|_| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                ENTITY,
+                "invalid provider account ID",
+            )
+        })?;
+        let config_revision = self
+            .accounts
+            .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                account_ids: vec![command.account_id.clone()],
                 enabled: command.enabled,
+                concurrency_limit: command.concurrency_limit,
+                weight: command.weight,
+                group_ids: command.group_ids,
                 audit: mutation_audit(
                     context,
-                    action,
+                    "update",
                     "provider_account",
                     &command.account_id,
-                    vec!["enabled".to_owned()],
+                    vec![
+                        "enabled".to_owned(),
+                        "concurrency_limit".to_owned(),
+                        "weight".to_owned(),
+                        "groups".to_owned(),
+                    ],
                 ),
             })
             .await
             .map_err(|error| admin_store_error(ENTITY, error))
-            .and_then(admin_revision)
+            .and_then(admin_revision)?;
+        Ok(AccountUpdateResult {
+            config_revision,
+            account_id,
+        })
+    }
+
+    async fn batch_update_accounts(
+        &self,
+        command: BatchUpdateAccounts,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountsUpdateResult> {
+        let account_ids = command
+            .account_ids
+            .iter()
+            .map(|id| {
+                CoreProviderAccountId::new(id.clone()).map_err(|_| {
+                    AdminStoreError::new(
+                        AdminStoreErrorKind::Invalid,
+                        ENTITY,
+                        "invalid provider account ID",
+                    )
+                })
+            })
+            .collect::<AdminStoreResult<Vec<_>>>()?;
+        let audit_target = if command.account_ids.len() == 1 {
+            command.account_ids[0].clone()
+        } else {
+            "provider_accounts".to_owned()
+        };
+        let config_revision = self
+            .accounts
+            .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                account_ids: command.account_ids,
+                enabled: command.enabled,
+                concurrency_limit: command.concurrency_limit,
+                weight: command.weight,
+                group_ids: command.group_ids,
+                audit: mutation_audit(
+                    context,
+                    "batch_update",
+                    "provider_account",
+                    &audit_target,
+                    vec![
+                        "enabled".to_owned(),
+                        "concurrency_limit".to_owned(),
+                        "weight".to_owned(),
+                        "groups".to_owned(),
+                    ],
+                ),
+            })
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+            .and_then(admin_revision)?;
+        Ok(AccountsUpdateResult {
+            config_revision,
+            account_ids,
+        })
     }
 
     async fn delete_accounts(

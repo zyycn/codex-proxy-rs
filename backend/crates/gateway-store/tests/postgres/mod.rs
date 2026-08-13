@@ -7,6 +7,7 @@ use sqlx::{
 };
 use uuid::Uuid;
 
+mod account_groups;
 mod admin_security_audit;
 mod admission_recovery;
 mod backup;
@@ -146,6 +147,29 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .fetch_one(&second)
     .await
     .expect("check removed raw response ID index");
+    let legacy_key_provider_column_exists = sqlx::query_scalar::<_, bool>(
+        "select exists (
+           select 1 from information_schema.columns
+           where table_schema = 'public'
+             and table_name = 'client_api_keys'
+             and column_name = 'provider_kind'
+         )",
+    )
+    .fetch_one(&second)
+    .await
+    .expect("check removed client key provider column");
+    let routing_history_columns = sqlx::query_scalar::<_, String>(
+        "select column_name from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'model_requests'
+           and column_name in (
+             'routing_scope', 'routing_group_refs', 'routing_group_names_snapshot'
+           )
+         order by column_name",
+    )
+    .fetch_all(&second)
+    .await
+    .expect("load routing history columns");
     second.close().await;
 
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -156,7 +180,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!(first_table_count, 10);
+    assert_eq!(first_table_count, 13);
     assert_eq!(
         migration_count,
         i64::try_from(TEST_MIGRATOR.iter().count())
@@ -164,6 +188,15 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     );
     assert_eq!(response_id_types, ["bytea", "bytea"]);
     assert!(!raw_response_id_index_exists);
+    assert!(!legacy_key_provider_column_exists);
+    assert_eq!(
+        routing_history_columns,
+        [
+            "routing_group_names_snapshot",
+            "routing_group_refs",
+            "routing_scope",
+        ]
+    );
 }
 
 #[test]

@@ -33,6 +33,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
     let mut actual = rust_files(&root.join("src"));
     actual.sort();
     let mut expected = vec![
+        "src/admin/account_groups.rs",
         "src/admin/accounts.rs",
         "src/admin/auth.rs",
         "src/admin/backups.rs",
@@ -73,6 +74,7 @@ fn test_tree_should_match_frozen_rust_mirror() {
     let mut actual = rust_files(&root.join("tests"));
     actual.sort();
     let mut expected = vec![
+        "tests/admin/account_groups.rs",
         "tests/admin/accounts.rs",
         "tests/admin/auth.rs",
         "tests/admin/client_keys.rs",

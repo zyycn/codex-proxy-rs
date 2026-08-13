@@ -4,16 +4,22 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountFeedbackStats, AccountRuntimeSignals, AccountSelectionPolicy,
-    CredentialCasOutcome, CredentialRevision, CredentialState, OpaqueProviderData,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaAccessState,
-    QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
+    AccountAttemptFeedback, AccountConcurrencyLimit, AccountFeedbackStats, AccountRuntimeSignals,
+    AccountSelectionPolicy, AccountWeight, CredentialCasOutcome, CredentialRevision,
+    CredentialState, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
+    ProviderAccountUpdate, QuotaAccessState, QuotaObservation, QuotaState, QuotaWriteOutcome,
+    RotationStrategy,
 };
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderSchedulingState, ProviderStoreError,
+    ProviderLeaseRequest, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
+    ProviderStoreError,
 };
-use gateway_core::routing::UpstreamModelId;
+use gateway_core::routing::{
+    ClientRoutingScope, FrozenAccountScope, RuntimeAccount, RuntimeAccountDirectory,
+    UpstreamModelId,
+};
 use provider_xai::{
     GrokAccountSessionSelector, GrokBillingRequest, GrokBillingTransport,
     GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
@@ -31,6 +37,7 @@ use crate::support::{
 struct SchedulingCoordinator {
     signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
     denied: Mutex<BTreeSet<ProviderAccountId>>,
+    requests: Mutex<Vec<ProviderSchedulingLeaseRequest>>,
 }
 
 struct UnavailableBillingTransport;
@@ -48,6 +55,7 @@ impl GrokBillingTransport for UnavailableBillingTransport {
 impl ProviderLeasePort for SchedulingCoordinator {
     fn load_state<'a>(
         &'a self,
+        _: &'a ClientApiKeyId,
         _: &'a gateway_core::routing::ProviderKind,
         _: &'a [ProviderAccountId],
     ) -> futures::future::BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
@@ -67,20 +75,19 @@ impl ProviderLeasePort for SchedulingCoordinator {
             let ProviderLeaseRequest::Scheduling(request) = request else {
                 panic!("expected scheduling lease request");
             };
-            Ok(
-                if self
-                    .denied
-                    .lock()
-                    .expect("denied")
-                    .contains(request.account_id())
-                {
-                    ProviderLeaseAcquisition::Busy {
-                        retry_after: Some(Duration::from_millis(25)),
-                    }
-                } else {
-                    ProviderLeaseAcquisition::Acquired(Box::new(()))
-                },
-            )
+            let denied = self
+                .denied
+                .lock()
+                .expect("denied")
+                .contains(request.account_id());
+            self.requests.lock().expect("requests").push(request);
+            Ok(if denied {
+                ProviderLeaseAcquisition::Busy {
+                    retry_after: Some(Duration::from_millis(25)),
+                }
+            } else {
+                ProviderLeaseAcquisition::Acquired(Box::new(()))
+            })
         })
     }
 }
@@ -141,6 +148,7 @@ impl SelectorFixture {
         let coordinator = Arc::new(SchedulingCoordinator {
             signals: Mutex::new(signals),
             denied: Mutex::new(BTreeSet::new()),
+            requests: Mutex::new(Vec::new()),
         });
         let cooldowns = Arc::new(MemoryCooldownPort::default());
         let catalog_cache: Arc<dyn GrokCredentialCatalogCache> = cache.clone();
@@ -210,6 +218,21 @@ impl SelectorFixture {
         required_account: Option<ProviderAccountId>,
         strategy: RotationStrategy,
     ) -> GrokSessionSelection {
+        let provider = gateway_core::routing::ProviderKind::new("xai").expect("provider");
+        let accounts = self
+            .coordinator
+            .signals
+            .lock()
+            .expect("signals")
+            .keys()
+            .cloned()
+            .map(|account_id| {
+                (
+                    account_id,
+                    RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         GrokSessionSelection::new(
             UpstreamModelId::new(upstream_model).expect("model"),
             excluded,
@@ -220,6 +243,11 @@ impl SelectorFixture {
                 Duration::ZERO,
             ),
             SystemTime::now() + Duration::from_secs(30),
+            Arc::new(FrozenAccountScope::new(
+                Arc::new(RuntimeAccountDirectory::new(accounts)),
+                ClientRoutingScope::all_accounts(),
+            )),
+            ClientApiKeyId::new("key_xai_selector").expect("client key"),
         )
     }
 
@@ -284,6 +312,26 @@ async fn required_account_overrides_smart_selection_without_fallback() {
             .await,
         Err(GrokSessionSelectorError::CapacityUnavailable { .. })
     ));
+}
+
+#[tokio::test]
+async fn selector_uses_the_account_concurrency_override_for_the_redis_lease() {
+    let fixture = SelectorFixture::new(&["concurrency-override"]).await;
+    let account = account_id("concurrency-override");
+    fixture.store.set_scheduling(
+        &account,
+        Some(AccountConcurrencyLimit::new(7).expect("concurrency override")),
+        AccountWeight::DEFAULT,
+    );
+
+    fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .expect("select account");
+
+    let requests = fixture.coordinator.requests.lock().expect("requests");
+    assert_eq!(requests[0].max_concurrent().get(), 7);
 }
 
 #[tokio::test]

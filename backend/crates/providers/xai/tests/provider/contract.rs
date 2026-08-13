@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,8 @@ use gateway_core::operation::{
     Feature, GenerateRequest, Operation, OperationKind, ProtocolPayload, ProviderSessionState,
 };
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
     RuntimeSnapshot, SupportLevel, UpstreamModelId,
 };
 use provider_xai::{
@@ -810,6 +811,13 @@ fn provider_request_with_operation(provider_kind: &str, operation: Operation) ->
             .with_feature(Feature::Tools, SupportLevel::Native)
             .with_feature(Feature::NativeContinuation, SupportLevel::Native),
     );
+    let account_scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            account_id("provider"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         selection_policy(),
@@ -822,6 +830,7 @@ fn provider_request_with_operation(provider_kind: &str, operation: Operation) ->
         .plan(
             &PublicModelId::new(MODEL).expect("model"),
             &operation,
+            account_scope,
             &RoutingContext::default(),
         )
         .expect("routing plan");
@@ -1858,6 +1867,7 @@ async fn native_previous_response_is_rejected_before_selection() {
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp_previous"),
         PreviousResponseId::new("resp_upstream_previous"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
         ProviderKind::new("openai").expect("provider"),
         account_id("provider"),
     );
@@ -1891,6 +1901,7 @@ async fn native_previous_response_pins_account_and_sends_upstream_handle() {
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp_previous"),
         PreviousResponseId::new("resp_upstream_previous"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -1936,6 +1947,7 @@ async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rot
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp_previous"),
         PreviousResponseId::new("resp_upstream_previous"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -2257,6 +2269,7 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp_gateway_first"),
         PreviousResponseId::new("resp_state"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -2381,6 +2394,7 @@ async fn replay_owner_should_reencode_custom_apply_patch_call_for_grok() {
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp_gateway_patch"),
         PreviousResponseId::new("resp_custom_patch"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );
@@ -2456,6 +2470,7 @@ async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
     let pin = NativeContinuationPin::new(
         PreviousResponseId::new("resp_gateway_first"),
         PreviousResponseId::new("resp_upstream_first"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
         ProviderKind::new("xai").expect("provider"),
         account_id("provider"),
     );

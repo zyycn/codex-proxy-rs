@@ -451,10 +451,12 @@ fn decoder_should_not_reject_large_bodies_using_catalog_context_limits() {
     .to_string();
     let decoded = decode_request(body.as_bytes()).expect("large request should decode");
 
-    let plan = super::snapshot("sk_context_test", "openai")
+    let snapshot = super::snapshot("sk_context_test", "openai");
+    let plan = snapshot
         .plan(
             &PublicModelId::new(decoded.metadata().public_model()).expect("public model"),
             decoded.operation(),
+            snapshot.all_account_scope(),
             &RoutingContext::default(),
         )
         .expect("large body must not be locally context-gated");

@@ -10,14 +10,14 @@ fn snapshot_client_policy_contains_only_common_limits() {
     let policy = ClientApiKeySnapshot {
         id: ClientApiKeyId::new("key-1").expect("client key ID"),
         plaintext_key: PlaintextClientApiKey::new("sk_snapshot_secret").expect("plaintext key"),
-        provider_kind: "openai".to_owned(),
+        group_ids: Vec::new(),
         limits: RateLimits {
             max_concurrency: 3,
             requests_per_minute: 60,
         },
     };
     assert_eq!(policy.limits.max_concurrency, 3);
-    assert_eq!(policy.provider_kind, "openai");
+    assert!(policy.group_ids.is_empty());
     assert!(!format!("{policy:?}").contains("sk_snapshot_secret"));
 }
 
@@ -29,9 +29,8 @@ async fn runtime_snapshot_loads_enabled_plaintext_key_without_debug_exposure() {
     let plaintext = format!("sk_{}", "s".repeat(43));
     sqlx::query(
         "insert into client_api_keys (
-           id, name, provider_kind, key, enabled, max_concurrency, requests_per_minute,
-           created_at, updated_at
-         ) values ('key_snapshot', 'snapshot', 'xai', $1, true, 2, 60, now(), now())",
+           id, name, key, enabled, max_concurrency, requests_per_minute, created_at, updated_at
+         ) values ('key_snapshot', 'snapshot', $1, true, 2, 60, now(), now())",
     )
     .bind(&plaintext)
     .execute(&database.pool)
@@ -42,7 +41,7 @@ async fn runtime_snapshot_loads_enabled_plaintext_key_without_debug_exposure() {
         .await
         .expect("load runtime snapshot");
     assert_eq!(snapshot.client_api_keys.len(), 1);
-    assert_eq!(snapshot.client_api_keys[0].provider_kind, "xai");
+    assert!(snapshot.client_api_keys[0].group_ids.is_empty());
     assert_eq!(
         snapshot.client_api_keys[0].plaintext_key.expose_for_auth(),
         plaintext

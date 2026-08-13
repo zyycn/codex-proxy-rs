@@ -126,12 +126,20 @@ impl ObservabilityService for DefaultObservabilityService {
         let health_timeline = health_timeline_at(&observation.trend, Utc::now());
         let wire_profiles = self.providers.dashboard_wire_profiles();
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
-        let active_accounts = runtime_slots
-            .as_ref()
-            .map_or(observation.provider_accounts.normal, |slots| {
-                slots.active_accounts
-            });
-        let total_slots = active_accounts.saturating_mul(max_concurrent_per_account);
+        let total_slots = runtime_slots.as_ref().map_or_else(
+            || {
+                observation
+                    .provider_accounts
+                    .normal
+                    .saturating_mul(max_concurrent_per_account)
+            },
+            |slots| {
+                slots
+                    .inherited_accounts
+                    .saturating_mul(max_concurrent_per_account)
+                    .saturating_add(slots.overridden_slots)
+            },
+        );
         let used_slots = runtime_slots.and_then(|slots| slots.used_slots);
         Ok(DashboardResult {
             capacity: DashboardCapacity {

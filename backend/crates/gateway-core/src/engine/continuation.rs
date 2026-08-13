@@ -9,6 +9,7 @@ use futures::future::BoxFuture;
 
 use crate::engine::credential::ProviderAccountId;
 use crate::operation::ProviderSessionState;
+use crate::policy::ClientApiKeyId;
 use crate::routing::ProviderKind;
 
 /// 客户端或 Provider 传递的 opaque response handle。
@@ -48,14 +49,15 @@ pub enum NativeContinuationScope {
 
 /// 从可丢失会话亲和存储恢复的 native previous-response pin。
 ///
-/// 该值不依赖调用方 API Key；它只阻止 native handle 与不透明 Provider state
-/// 被发送到错误的 Provider 或账号。
+/// 该值同时绑定调用方 API Key、Provider 与账号，阻止 native handle 和不透明
+/// Provider state 被跨租户或跨上游目标复用。
 #[derive(Clone, PartialEq)]
 pub struct NativeContinuationPin {
     /// 客户端提交、用于查找可丢失会话亲和记录的 response ID。
     previous_response_id: PreviousResponseId,
     /// Provider 原生 response handle。
     upstream_response_id: PreviousResponseId,
+    client_api_key_id: ClientApiKeyId,
     provider: ProviderKind,
     account: ProviderAccountId,
     scope: NativeContinuationScope,
@@ -67,12 +69,14 @@ impl NativeContinuationPin {
     pub const fn new(
         previous_response_id: PreviousResponseId,
         upstream_response_id: PreviousResponseId,
+        client_api_key_id: ClientApiKeyId,
         provider: ProviderKind,
         account: ProviderAccountId,
     ) -> Self {
         Self {
             previous_response_id,
             upstream_response_id,
+            client_api_key_id,
             provider,
             account,
             scope: NativeContinuationScope::ConnectionLocal,
@@ -103,6 +107,16 @@ impl NativeContinuationPin {
     #[must_use]
     pub const fn upstream_response_id(&self) -> &PreviousResponseId {
         &self.upstream_response_id
+    }
+
+    #[must_use]
+    pub const fn client_api_key_id(&self) -> &ClientApiKeyId {
+        &self.client_api_key_id
+    }
+
+    #[must_use]
+    pub fn matches_client(&self, client_api_key_id: &ClientApiKeyId) -> bool {
+        self.client_api_key_id == *client_api_key_id
     }
 
     #[must_use]
@@ -139,6 +153,7 @@ impl fmt::Debug for NativeContinuationPin {
             .debug_struct("NativeContinuationPin")
             .field("previous_response_id", &"<redacted>")
             .field("upstream_response_id", &"<redacted>")
+            .field("client_api_key_id", &self.client_api_key_id)
             .field("provider", &self.provider)
             .field("account", &self.account)
             .field("scope", &self.scope)
@@ -190,19 +205,55 @@ impl fmt::Debug for ContinuationBinding {
     }
 }
 
+/// Native continuation lookup 的稳定失败分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeContinuationStoreErrorKind {
+    /// Redis 等可丢失协调存储暂不可用；调用方可以按外部 continuation fail-open。
+    Unavailable,
+    /// 存储中的记录无法还原为可信 pin；不得将原始 handle 继续透传上游。
+    InvalidData,
+    /// 已存在的记录属于另一个客户端 API Key；必须 fail closed。
+    OwnershipMismatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("native continuation store is unavailable: {detail}")]
+#[error("native continuation store failed: {kind:?}: {detail}")]
 pub struct NativeContinuationStoreError {
+    kind: NativeContinuationStoreErrorKind,
     detail: String,
 }
 
 impl NativeContinuationStoreError {
-    /// 构造带可排查细节的亲和存储错误；`detail` 不应包含 response handle。
+    /// 构造可 fail-open 的协调存储不可用错误；`detail` 不应包含 response handle。
     #[must_use]
-    pub fn new(detail: impl Into<String>) -> Self {
+    pub fn unavailable(detail: impl Into<String>) -> Self {
         Self {
+            kind: NativeContinuationStoreErrorKind::Unavailable,
             detail: detail.into(),
         }
+    }
+
+    /// 构造必须 fail closed 的无效记录错误；`detail` 不应包含 response handle。
+    #[must_use]
+    pub fn invalid_data(detail: impl Into<String>) -> Self {
+        Self {
+            kind: NativeContinuationStoreErrorKind::InvalidData,
+            detail: detail.into(),
+        }
+    }
+
+    /// 构造不泄露记录归属细节的跨调用方错误。
+    #[must_use]
+    pub fn ownership_mismatch() -> Self {
+        Self {
+            kind: NativeContinuationStoreErrorKind::OwnershipMismatch,
+            detail: "continuation belongs to a different client API key".to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> NativeContinuationStoreErrorKind {
+        self.kind
     }
 
     #[must_use]
@@ -213,11 +264,12 @@ impl NativeContinuationStoreError {
 
 /// 可丢失的 previous-response 亲和存储端口。
 ///
-/// 亲和记录不按调用方 API Key 隔离：与旧版一样，response ID 是会话级 opaque
-/// handle；Redis 不可用或超时必须由调用方 fail-open。
+/// 亲和记录按调用方 API Key 隔离；Redis 不可用或超时必须由调用方 fail-open，
+/// 但命中其他 Key 的记录必须 fail closed。
 pub trait NativeContinuationPort: Send + Sync {
     fn resolve<'a>(
         &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
         previous_response_id: &'a PreviousResponseId,
     ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>>;
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -21,7 +21,8 @@ use gateway_core::event::GatewayEvent;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
     RuntimeSnapshot, UpstreamModelId,
 };
 use provider_openai::credential::{
@@ -252,6 +253,13 @@ fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest
     let provider = ProviderKind::new(provider_name).expect("provider");
     let upstream_model = UpstreamModelId::new("gpt-5.4").expect("upstream model");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
+    let account_scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_provider_contract").expect("account"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         account_policy(),
@@ -265,10 +273,65 @@ fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest
     )
     .expect("snapshot");
     let plan = snapshot
-        .plan(&public_model, &operation, &RoutingContext::default())
+        .plan(
+            &public_model,
+            &operation,
+            account_scope,
+            &RoutingContext::default(),
+        )
         .expect("routing plan");
 
     ProviderRequest::new(operation, plan.candidates()[0].clone())
+}
+
+fn contract_account_scope() -> Arc<FrozenAccountScope> {
+    let provider = ProviderKind::new("openai").expect("provider");
+    let accounts = [
+        "acct_affinity",
+        "acct_atomic_failure",
+        "acct_bare_atomic_failure",
+        "acct_bounded_replay_grace",
+        "acct_bounded_session_state",
+        "acct_capacity_busy",
+        "acct_client_history",
+        "acct_completed_affinity",
+        "acct_continuation_prefetch",
+        "acct_disabled_scheduling",
+        "acct_first_event_latency",
+        "acct_header_new",
+        "acct_header_old",
+        "acct_header_same",
+        "acct_http_sse_exhausted",
+        "acct_local_affinity",
+        "acct_metadata_new",
+        "acct_metadata_old",
+        "acct_prefetch_limit",
+        "acct_presentation",
+        "acct_provider_contract",
+        "acct_scope_new",
+        "acct_scope_old",
+        "acct_scope_same",
+        "acct_semantic_failure",
+        "acct_session_affinity",
+        "acct_subagent",
+        "acct_success_exhausted",
+        "acct_thread_spawn_affinity",
+        "acct_truncated_stream",
+        "acct_usage_limit_request_path",
+        "acct_websocket_close",
+    ]
+    .into_iter()
+    .map(|id| {
+        (
+            ProviderAccountId::new(id).expect("account"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )
+    })
+    .collect::<BTreeMap<_, _>>();
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(accounts)),
+        ClientRoutingScope::all_accounts(),
+    ))
 }
 
 fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
@@ -280,7 +343,8 @@ fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext 
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None),
+        AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None)
+            .with_account_scope(contract_account_scope()),
         None,
         cancellation,
     )
@@ -318,7 +382,8 @@ fn context_with_state_owner(request_id: &str, owner_account_id: &str) -> Attempt
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner)),
+        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner))
+            .with_account_scope(contract_account_scope()),
         None,
         CancellationToken::new(),
     )

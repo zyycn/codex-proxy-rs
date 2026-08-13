@@ -105,7 +105,7 @@ fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
     let valid = serde_json::from_value::<CreateClientKeyRequest>(json!({
         "name": "terminal key",
         "label": "production",
-        "providerKind": "openai",
+        "groupIds": [],
         "maxConcurrency": 2,
         "requestsPerMinute": 60
     }))
@@ -118,7 +118,7 @@ fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
         (
             json!({
                 "name": " ",
-                "providerKind": "openai",
+                "groupIds": [],
                 "maxConcurrency": 0,
                 "requestsPerMinute": 0
             }),
@@ -127,7 +127,7 @@ fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
         (
             json!({
                 "name": "key",
-                "providerKind": "openai",
+                "groupIds": [],
                 "maxConcurrency": u64::MAX,
                 "requestsPerMinute": 0
             }),
@@ -150,7 +150,7 @@ fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
             "id": "key_1",
             "expectedConfigRevision": 1,
             "name": "key",
-            "providerKind": "openai",
+            "groupIds": [],
             "maxConcurrency": 0,
             "requestsPerMinute": 0,
             "tokensPerMinute": 0
@@ -161,7 +161,7 @@ fn client_key_mutations_should_validate_text_limits_and_unknown_fields() {
         serde_json::from_value::<CreateClientKeyRequest>(json!({
             "expectedConfigRevision": 7,
             "name": "terminal key",
-            "providerKind": "openai",
+            "groupIds": [],
             "maxConcurrency": 2,
             "requestsPerMinute": 60
         }))
@@ -210,7 +210,10 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
         name: "visible".to_owned(),
         label: None,
-        provider_kind: gateway_core::routing::ProviderKind::new("openai").expect("Provider kind"),
+        groups: Vec::new(),
+        provider_kinds: vec![
+            gateway_core::routing::ProviderKind::new("openai").expect("Provider kind"),
+        ],
         prefix: "sk_visible12".to_owned(),
         enabled: true,
         limits: gateway_core::policy::RateLimits {
@@ -226,7 +229,11 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     assert!(list.get("configRevision").is_none());
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], "key_visible");
-    assert_eq!(list["items"][0]["providerKind"], "openai");
+    assert_eq!(
+        list["items"][0]["providerKinds"],
+        serde_json::json!(["openai"])
+    );
+    assert_eq!(list["items"][0]["routingScope"], "all");
     assert_eq!(list["items"][0]["maxConcurrency"], 2);
     assert_eq!(list["items"][0]["requestsPerMinute"], 60);
     assert!(list["items"][0].get("tokensPerMinute").is_none());

@@ -46,6 +46,10 @@ impl AccountSelection {
             Self::Diagnostic(account) => Some(account),
         }
     }
+
+    const fn is_diagnostic(&self) -> bool {
+        matches!(self, Self::Diagnostic(_))
+    }
 }
 
 impl<S: ?Sized> AttemptCoordinator<S>
@@ -126,6 +130,15 @@ where
             .map(ProviderAccountStateOwner::from_continuation);
         let continuation_attempt =
             initial_continuation_attempt(&operation, &plan, continuation.as_ref());
+        let candidate_index = continuation
+            .as_ref()
+            .and_then(ContinuationBinding::pinned)
+            .map_or(Ok(0), |pin| {
+                plan.candidates()
+                    .iter()
+                    .position(|candidate| candidate.provider() == pin.provider())
+                    .ok_or(EngineError::ContinuationPinMismatch)
+            })?;
         let image_generation_requested = operation.image_generation_requested();
         let mut session = ResponseExecutionSession {
             engine: Arc::clone(&self.engine),
@@ -149,6 +162,7 @@ where
             account_state_owner,
             cancellation,
             attempts: 0,
+            candidate_index,
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
             recovery_account: None,
@@ -225,6 +239,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     account_state_owner: Option<ProviderAccountStateOwner>,
     cancellation: CancellationToken,
     attempts: u32,
+    candidate_index: usize,
     excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
@@ -461,6 +476,7 @@ where
             NativeContinuationPin::new(
                 previous_response_id,
                 upstream_response_id,
+                self.client_api_key_ref.clone(),
                 provider,
                 account,
             )
@@ -565,7 +581,7 @@ where
         if self.attempts >= self.plan.max_attempts().get() {
             return Err(EngineError::EmptyRoutingPlan);
         }
-        let Some(candidate) = self.plan.candidates().first().cloned() else {
+        let Some(candidate) = self.plan.candidates().get(self.candidate_index).cloned() else {
             let error = GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
                 "no upstream Provider is available",
@@ -606,7 +622,8 @@ where
                 self.excluded_accounts.clone(),
                 pinned_account.clone(),
                 self.account_state_owner.clone(),
-            ),
+            )
+            .with_account_scope(Arc::clone(self.plan.account_scope())),
         }
         .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(|account| {
             self.credential_recovery_attempted_accounts
@@ -667,6 +684,20 @@ where
                         error.kind(),
                         ProviderErrorKind::AccountCapacityUnavailable
                             | ProviderErrorKind::NoEligibleAccount
+                            | ProviderErrorKind::ProviderInfrastructureUnavailable
+                    ) && error.send_state() == UpstreamSendState::NotSent
+                        && matches!(
+                            self.continuation_attempt,
+                            ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+                        )
+                        && self.advance_provider_candidate()
+                    {
+                        return Ok(Some(PullOutcome::AttemptDiscarded));
+                    }
+                    if matches!(
+                        error.kind(),
+                        ProviderErrorKind::AccountCapacityUnavailable
+                            | ProviderErrorKind::NoEligibleAccount
                     ) && let Some(last_failure) = self.last_retryable_failure.take()
                     {
                         let send_state = self.current_send_state();
@@ -716,6 +747,27 @@ where
         }
 
         let metadata = stream.metadata().clone();
+        if !self.account_selection.is_diagnostic()
+            && metadata
+                .provider_account_id()
+                .is_none_or(|account| !candidate.account_scope().allows(account))
+        {
+            let error = GatewayError::new(
+                GatewayErrorKind::Internal,
+                "provider selected an account outside the frozen client scope",
+            );
+            self.finish_failure(FailureFinalization {
+                outcome: ExecutionOutcome::Failed,
+                send_state: self.current_send_state(),
+                error,
+                upstream_status_code: None,
+                provider_error_code: None,
+                retry_after_ms: None,
+                provider_response_id: None,
+            })
+            .await?;
+            return Err(EngineError::AccountOutsideClientScope);
+        }
         if pinned_account
             .as_ref()
             .is_some_and(|required| metadata.provider_account_id() != Some(required))
@@ -817,6 +869,17 @@ where
             response_observation: None,
         });
         Ok(None)
+    }
+
+    fn advance_provider_candidate(&mut self) -> bool {
+        let Some(next) = self.candidate_index.checked_add(1) else {
+            return false;
+        };
+        if next >= self.plan.candidates().len() {
+            return false;
+        }
+        self.candidate_index = next;
+        true
     }
 
     async fn observe_event(&mut self, event: &GatewayEvent) {

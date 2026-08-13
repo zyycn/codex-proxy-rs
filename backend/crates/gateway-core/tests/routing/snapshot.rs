@@ -19,7 +19,8 @@ use gateway_core::operation::OperationKind;
 use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::{
     RuntimeSnapshotCompileError, RuntimeSnapshotCompiler, RuntimeSnapshotHandle,
-    RuntimeSnapshotPublisher, SnapshotClientPolicyFacts, SnapshotControl, SnapshotFacts,
+    RuntimeSnapshotPublisher, SnapshotAccountGroupFacts, SnapshotAccountGroupMemberFacts,
+    SnapshotClientPolicyFacts, SnapshotControl, SnapshotFacts, SnapshotProviderAccountFacts,
     SnapshotRevisionStream, SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
     SnapshotSubscriptionError, SnapshotSubscriptionPort, runtime_revision_needs_refresh,
 };
@@ -348,9 +349,12 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
         vec![SnapshotClientPolicyFacts::new(
             ClientApiKeyId::new("key_one").expect("key ID"),
             PlaintextClientApiKey::new("sk_test").expect("plaintext key"),
-            "alpha",
+            Vec::new(),
             RateLimits::unlimited(),
         )],
+        Vec::<SnapshotAccountGroupFacts>::new(),
+        Vec::<SnapshotProviderAccountFacts>::new(),
+        Vec::<SnapshotAccountGroupMemberFacts>::new(),
     )
 }
 

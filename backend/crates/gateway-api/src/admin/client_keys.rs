@@ -12,7 +12,7 @@ use gateway_admin::model::client_keys::{
 };
 use gateway_core::{
     policy::{ClientApiKeyId, RateLimits},
-    routing::ProviderKind,
+    routing::AccountGroupId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -137,7 +137,7 @@ impl ClientKeySort {
 pub struct CreateClientKeyRequest {
     name: String,
     label: Option<String>,
-    provider_kind: String,
+    group_ids: Vec<String>,
     max_concurrency: u64,
     requests_per_minute: u64,
 }
@@ -147,14 +147,13 @@ impl CreateClientKeyRequest {
     pub fn into_command(self) -> Result<CreateClientKey, WireValidationError> {
         validate_required_text(&self.name, "name")?;
         validate_optional_text(self.label.as_deref(), "label")?;
-        validate_provider_kind(&self.provider_kind)?;
+        let group_ids = validate_group_ids(self.group_ids)?;
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(CreateClientKey {
             name: self.name,
             label: self.label,
-            provider_kind: ProviderKind::new(self.provider_kind)
-                .map_err(|_| WireValidationError::new("providerKind"))?,
+            group_ids,
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
@@ -170,7 +169,7 @@ pub struct UpdateClientKeyRequest {
     id: String,
     name: String,
     label: Option<String>,
-    provider_kind: String,
+    group_ids: Vec<String>,
     max_concurrency: u64,
     requests_per_minute: u64,
 }
@@ -181,15 +180,14 @@ impl UpdateClientKeyRequest {
         validate_required_text(&self.id, "id")?;
         validate_required_text(&self.name, "name")?;
         validate_optional_text(self.label.as_deref(), "label")?;
-        validate_provider_kind(&self.provider_kind)?;
+        let group_ids = validate_group_ids(self.group_ids)?;
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(UpdateClientKey {
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
             name: self.name,
             label: self.label,
-            provider_kind: ProviderKind::new(self.provider_kind)
-                .map_err(|_| WireValidationError::new("providerKind"))?,
+            group_ids,
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
@@ -242,7 +240,9 @@ pub struct ClientKeyView {
     id: String,
     name: String,
     label: Option<String>,
-    provider_kind: String,
+    routing_scope: &'static str,
+    groups: Vec<ClientKeyGroupView>,
+    provider_kinds: Vec<String>,
     prefix: String,
     enabled: bool,
     max_concurrency: u64,
@@ -252,13 +252,42 @@ pub struct ClientKeyView {
     last_used_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientKeyGroupView {
+    id: String,
+    name: String,
+    color: String,
+    enabled: bool,
+}
+
 impl From<ClientKeyRecord> for ClientKeyView {
     fn from(record: ClientKeyRecord) -> Self {
+        let routing_scope = if record.groups.is_empty() {
+            "all"
+        } else {
+            "groups"
+        };
         Self {
             id: record.id.to_string(),
             name: record.name,
             label: record.label,
-            provider_kind: record.provider_kind.to_string(),
+            routing_scope,
+            groups: record
+                .groups
+                .into_iter()
+                .map(|group| ClientKeyGroupView {
+                    id: group.id.to_string(),
+                    name: group.name,
+                    color: group.color.as_str().to_owned(),
+                    enabled: group.enabled,
+                })
+                .collect(),
+            provider_kinds: record
+                .provider_kinds
+                .into_iter()
+                .map(|provider| provider.to_string())
+                .collect(),
             prefix: record.prefix,
             enabled: record.enabled,
             max_concurrency: record.limits.max_concurrency,
@@ -572,21 +601,20 @@ fn validate_required_text(value: &str, field: &'static str) -> Result<(), WireVa
     Ok(())
 }
 
-fn validate_provider_kind(value: &str) -> Result<(), WireValidationError> {
-    let valid = !value.is_empty()
-        && value.len() <= 64
-        && value.bytes().enumerate().all(|(index, byte)| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || (byte == b'-' && index > 0 && index + 1 < value.len())
-        })
-        && !value.starts_with('-')
-        && !value.ends_with('-');
-    if valid {
-        Ok(())
-    } else {
-        Err(WireValidationError::new("providerKind"))
+fn validate_group_ids(values: Vec<String>) -> Result<Vec<AccountGroupId>, WireValidationError> {
+    if values.len() > 1000
+        || values
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != values.len()
+    {
+        return Err(WireValidationError::new("groupIds"));
     }
+    values
+        .into_iter()
+        .map(|value| AccountGroupId::new(value).map_err(|_| WireValidationError::new("groupIds")))
+        .collect()
 }
 
 fn validate_optional_text(

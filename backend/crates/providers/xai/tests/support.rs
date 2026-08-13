@@ -8,10 +8,11 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, CredentialState, LoadedCredential, NewProviderAccount, PlaintextCredential,
-    ProviderAccount, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
-    QuotaAccessChange, QuotaObservation, QuotaState, QuotaWriteOutcome,
+    AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
+    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
+    LoadedCredential, NewProviderAccount, PlaintextCredential, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, ProviderAccountUpdate, QuotaAccessChange, QuotaObservation, QuotaState,
+    QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
@@ -211,6 +212,20 @@ impl MemoryProviderAccountStore {
         lock(&self.accounts)
             .get(id)
             .map(|stored| stored.account.clone())
+    }
+
+    pub fn set_scheduling(
+        &self,
+        id: &ProviderAccountId,
+        concurrency_limit: Option<AccountConcurrencyLimit>,
+        weight: AccountWeight,
+    ) {
+        let mut accounts = lock(&self.accounts);
+        let stored = accounts.get_mut(id).expect("seeded account");
+        stored.account = stored
+            .account
+            .clone()
+            .with_scheduling(concurrency_limit, weight);
     }
 
     pub fn last_error_message(&self, id: &ProviderAccountId) -> Option<String> {
@@ -543,6 +558,7 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
         replacement.last_error_reason,
         replacement.last_error_message,
     )
+    .with_scheduling(previous.concurrency_limit(), previous.weight())
     .with_refresh_schedule(replacement.has_refresh_token, replacement.next_refresh_at)
 }
 

@@ -7,11 +7,12 @@ use futures::Stream;
 
 use gateway_core::routing::ProviderKind;
 
-use super::{PageSize, Revision, observability::TimeRange};
+use super::{PageSize, Revision, account_groups::AccountGroupRef, observability::TimeRange};
 
 pub use gateway_core::engine::credential::{
-    AccountErrorReason, AccountStatus, AccountStatusFacts, AccountStatusProjection,
-    CredentialState, QuotaAccessState, QuotaEvidence, QuotaState, resolve_account_status,
+    AccountConcurrencyLimit, AccountErrorReason, AccountStatus, AccountStatusFacts,
+    AccountStatusProjection, AccountWeight, CredentialState, QuotaAccessState, QuotaEvidence,
+    QuotaState, resolve_account_status,
 };
 
 /// 账号列表排序字段。
@@ -45,9 +46,17 @@ pub struct AccountListQuery {
     pub page: u32,
     pub page_size: PageSize,
     pub provider_kind: Option<ProviderKind>,
+    pub group_filter: Option<AccountGroupFilter>,
     pub search: Option<String>,
     pub status: Option<AccountStatus>,
     pub sort: Option<AccountSort>,
+}
+
+/// Optional account membership filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountGroupFilter {
+    Group(gateway_core::routing::AccountGroupId),
+    Ungrouped,
 }
 
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
@@ -55,6 +64,7 @@ pub struct AccountListQuery {
 pub struct AccountRecord {
     pub id: String,
     pub provider_kind: ProviderKind,
+    pub groups: Vec<AccountGroupRef>,
     pub name: String,
     pub email: Option<String>,
     pub upstream_user_id: Option<String>,
@@ -66,6 +76,8 @@ pub struct AccountRecord {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
     pub quota: QuotaState,
@@ -180,11 +192,38 @@ pub struct AccountSummary {
     pub error: u64,
 }
 
-/// 账号启停写入命令。
+/// 账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SetAccountEnabled {
+pub struct UpdateAccount {
     pub account_id: String,
     pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
+    pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
+}
+
+/// 账号更新结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountUpdateResult {
+    pub config_revision: Revision,
+    pub account_id: gateway_core::engine::credential::ProviderAccountId,
+}
+
+/// 一批账号可编辑事实的一次性替换命令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchUpdateAccounts {
+    pub account_ids: Vec<String>,
+    pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
+    pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
+}
+
+/// 批量账号更新结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountsUpdateResult {
+    pub config_revision: Revision,
+    pub account_ids: Vec<gateway_core::engine::credential::ProviderAccountId>,
 }
 
 /// 账号批量删除命令。

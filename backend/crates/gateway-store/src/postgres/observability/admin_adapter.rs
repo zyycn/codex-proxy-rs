@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::*;
 
 use crate::postgres::{
-    PgProviderAccountRepository, ProviderAccountRepository, account_status_projection,
-    load_rate_limited_until,
+    PgProviderAccountRepository, ProviderAccountRepository, ProviderAccountSummary,
+    account_status_projection, load_rate_limited_until,
 };
 
 use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepository};
@@ -28,7 +28,7 @@ impl PgObservabilityRepository {
     async fn account_status_snapshot(
         &self,
         observed_at: DateTime<Utc>,
-    ) -> StoreResult<(ProviderAccountMetrics, Vec<String>)> {
+    ) -> StoreResult<(ProviderAccountMetrics, Vec<ProviderAccountSummary>)> {
         let accounts = PgProviderAccountRepository::new(self.pool.clone())
             .list_provider_accounts(None, true)
             .await?;
@@ -39,7 +39,7 @@ impl PgObservabilityRepository {
             total: u64::try_from(accounts.len()).unwrap_or(u64::MAX),
             ..ProviderAccountMetrics::default()
         };
-        let mut normal_account_ids = Vec::new();
+        let mut normal_accounts = Vec::new();
         for account in &accounts {
             let projection = account_status_projection(
                 account,
@@ -49,7 +49,7 @@ impl PgObservabilityRepository {
             match projection.status {
                 gateway_core::engine::credential::AccountStatus::Normal => {
                     metrics.normal = metrics.normal.saturating_add(1);
-                    normal_account_ids.push(account.id.clone());
+                    normal_accounts.push(account.clone());
                 }
                 gateway_core::engine::credential::AccountStatus::QuotaExhausted => {
                     metrics.quota_exhausted = metrics.quota_exhausted.saturating_add(1);
@@ -65,7 +65,7 @@ impl PgObservabilityRepository {
                 }
             }
         }
-        Ok((metrics, normal_account_ids))
+        Ok((metrics, normal_accounts))
     }
 }
 
@@ -230,21 +230,42 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         &self,
         observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<Option<admin_observability::DashboardRuntimeSlots>> {
-        let (_, normal_account_ids) = self
+        let (_, normal_accounts) = self
             .repository
             .account_status_snapshot(observed_at)
             .await
             .map_err(observability_error)?;
-        let active_accounts = u64::try_from(normal_account_ids.len())
-            .map_err(|_| observability_error(invalid("active account count overflows u64")))?;
-        if normal_account_ids.is_empty() {
+        let inherited_accounts = u64::try_from(
+            normal_accounts
+                .iter()
+                .filter(|account| account.concurrency_limit.is_none())
+                .count(),
+        )
+        .map_err(|_| observability_error(invalid("inherited account count overflows u64")))?;
+        let overridden_slots = normal_accounts.iter().fold(0_u64, |total, account| {
+            total.saturating_add(
+                account
+                    .concurrency_limit
+                    .map_or(0, |limit| u64::from(limit.get())),
+            )
+        });
+        if normal_accounts.is_empty() {
             return Ok(Some(admin_observability::DashboardRuntimeSlots {
-                active_accounts,
+                inherited_accounts,
+                overridden_slots,
                 used_slots: Some(0),
             }));
         }
+        let normal_account_ids = normal_accounts
+            .iter()
+            .map(|account| account.id.clone())
+            .collect::<Vec<_>>();
         let Some(runtime_signals) = &self.runtime_signals else {
-            return Ok(None);
+            return Ok(Some(admin_observability::DashboardRuntimeSlots {
+                inherited_accounts,
+                overridden_slots,
+                used_slots: None,
+            }));
         };
         let signals = match runtime_signals
             .credential_runtime_signals(&normal_account_ids)
@@ -253,7 +274,8 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             Ok(signals) => signals,
             Err(_) => {
                 return Ok(Some(admin_observability::DashboardRuntimeSlots {
-                    active_accounts,
+                    inherited_accounts,
+                    overridden_slots,
                     used_slots: None,
                 }));
             }
@@ -262,7 +284,8 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             total.saturating_add(u64::from(signal.in_flight))
         });
         Ok(Some(admin_observability::DashboardRuntimeSlots {
-            active_accounts,
+            inherited_accounts,
+            overridden_slots,
             used_slots: Some(used_slots),
         }))
     }

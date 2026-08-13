@@ -183,7 +183,8 @@ async fn dashboard_summary_should_project_rebuildable_runtime_slots() {
     let now = Utc::now();
     let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
     store.replace_runtime_slots(Some(DashboardRuntimeSlots {
-        active_accounts: 3,
+        inherited_accounts: 2,
+        overridden_slots: 5,
         used_slots: Some(2),
     }));
     let services = observability_services(store).await;
@@ -195,9 +196,9 @@ async fn dashboard_summary_should_project_rebuildable_runtime_slots() {
         .expect("dashboard summary")
         .capacity;
 
-    assert_eq!(capacity.total_slots, 3);
+    assert_eq!(capacity.total_slots, 7);
     assert_eq!(capacity.used_slots, Some(2));
-    assert_eq!(capacity.available_slots, Some(1));
+    assert_eq!(capacity.available_slots, Some(5));
 }
 
 #[tokio::test]
@@ -654,6 +655,9 @@ fn total_record(
         id: id.to_owned(),
         client_api_key_ref: "key_billing".to_owned(),
         config_revision: 1,
+        routing_scope: "all".to_owned(),
+        routing_group_refs: Vec::new(),
+        routing_group_names_snapshot: Vec::new(),
         protocol: "openai".to_owned(),
         operation: "generate".to_owned(),
         endpoint: "/v1/responses".to_owned(),

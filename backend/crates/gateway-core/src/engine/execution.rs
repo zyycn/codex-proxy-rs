@@ -15,7 +15,8 @@ use crate::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionPort, ClientAdmissionRejection, ClientAdmissionRequest,
 };
 use crate::engine::continuation::{
-    ContinuationBinding, NativeContinuationPin, NativeContinuationPort, PreviousResponseId,
+    ContinuationBinding, NativeContinuationPin, NativeContinuationPort,
+    NativeContinuationStoreErrorKind, PreviousResponseId,
 };
 use crate::engine::coordinator::ResponseExecutionSession;
 use crate::engine::probe::{
@@ -261,22 +262,32 @@ impl DefaultExecutionService {
             })?;
         let request_id = new_request_id()?;
         let routing_context = self
-            .route_context(request.client.policy.provider_kind())
+            .route_context(request.client.policy.account_scope().provider_kinds())
             .await?;
         let plan = request
             .client
             .snapshot
-            .plan(&request.public_model, &request.operation, &routing_context)
+            .plan(
+                &request.public_model,
+                &request.operation,
+                Arc::clone(request.client.policy.account_scope()),
+                &routing_context,
+            )
             .map_err(map_routing_error)?;
         let continuation = match request.metadata.previous_response_id.as_ref() {
             Some(previous) => {
-                let resolve = self.continuation.resolve(previous).fuse();
+                let resolve = self
+                    .continuation
+                    .resolve(request.client.policy.key_id(), previous)
+                    .fuse();
                 let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
                 pin_mut!(resolve, timeout);
                 let pin = select_biased! {
                     result = resolve => match result {
                         Ok(pin) => pin,
-                        Err(error) => {
+                        Err(error)
+                            if error.kind() == NativeContinuationStoreErrorKind::Unavailable =>
+                        {
                             tracing::debug!(
                                 request_id = request_id.as_str(),
                                 %error,
@@ -284,10 +295,53 @@ impl DefaultExecutionService {
                             );
                             None
                         }
+                        Err(error)
+                            if error.kind()
+                                == NativeContinuationStoreErrorKind::OwnershipMismatch =>
+                        {
+                            return Err(GatewayError::new(
+                                GatewayErrorKind::PolicyDenied,
+                                "continuation does not belong to this client API key",
+                            ));
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                request_id = request_id.as_str(),
+                                %error,
+                                "Continuation affinity 记录无效，已拒绝续接"
+                            );
+                            return Err(GatewayError::new(
+                                GatewayErrorKind::Internal,
+                                "continuation state is invalid",
+                            ));
+                        }
                     },
                     _ = timeout => None,
                 };
                 match pin {
+                    Some(pin) if !pin.matches_client(request.client.policy.key_id()) => {
+                        return Err(GatewayError::new(
+                            GatewayErrorKind::PolicyDenied,
+                            "continuation does not belong to this client API key",
+                        ));
+                    }
+                    Some(pin) if !request.client.policy.account_scope().allows(pin.account()) => {
+                        return Err(GatewayError::new(
+                            GatewayErrorKind::PolicyDenied,
+                            "continuation account is outside the client account scope",
+                        ));
+                    }
+                    Some(pin)
+                        if !plan
+                            .candidates()
+                            .iter()
+                            .any(|candidate| candidate.provider() == pin.provider()) =>
+                    {
+                        return Err(GatewayError::new(
+                            GatewayErrorKind::NoAvailableProvider,
+                            "continuation provider is not available",
+                        ));
+                    }
                     Some(pin) => {
                         attach_continuation_session_state(&mut request.operation, &pin);
                         ContinuationBinding::Pinned(pin)
@@ -360,14 +414,19 @@ impl DefaultExecutionService {
             client_api_key_id: request.client.policy.key_id().clone(),
             model_request_id: request_id.clone(),
         };
-        let observation = self
-            .providers
-            .request_observation(request.client.policy.provider_kind(), &request.operation);
+        let observation = plan
+            .candidates()
+            .first()
+            .map_or_else(Default::default, |candidate| {
+                self.providers
+                    .request_observation(candidate.provider(), &request.operation)
+            });
         let new_request = NewModelRequest {
             id: request_id.clone(),
             client_api_key_id: Some(request.client.policy.key_id().clone()),
             client_api_key_ref: request.client.policy.key_id().clone(),
             config_revision: plan.config_revision(),
+            routing: request.client.policy.account_scope().routing_snapshot(),
             protocol: request.metadata.protocol,
             operation: request.operation.kind(),
             endpoint: request.metadata.endpoint,
@@ -417,38 +476,42 @@ impl DefaultExecutionService {
 
     async fn route_context(
         &self,
-        provider_kind: &ProviderKind,
+        provider_kinds: &BTreeSet<ProviderKind>,
     ) -> Result<RoutingContext, GatewayError> {
-        let decision = self.circuits.decision(provider_kind).fuse();
-        let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
-        pin_mut!(decision, timeout);
-        let decision = select_biased! {
-            result = decision => Some(result),
-            _ = timeout => None,
-        };
-        let blocked_providers = match decision {
-            Some(Ok(ProviderCircuitDecision::Allow)) => BTreeSet::new(),
-            Some(Ok(ProviderCircuitDecision::BlockedUntil(_))) => {
-                BTreeSet::from([provider_kind.clone()])
+        let decisions = futures::future::join_all(provider_kinds.iter().map(|provider_kind| {
+            let circuits = Arc::clone(&self.circuits);
+            async move {
+                let decision = circuits.decision(provider_kind).fuse();
+                let timeout = Delay::new(COORDINATION_TIMEOUT).fuse();
+                pin_mut!(decision, timeout);
+                let decision = select_biased! {
+                    result = decision => Some(result),
+                    _ = timeout => None,
+                };
+                (provider_kind, decision)
             }
-            Some(Err(error)) => {
-                tracing::warn!(
+        }))
+        .await;
+        let mut blocked_providers = BTreeSet::new();
+        for (provider_kind, decision) in decisions {
+            match decision {
+                Some(Ok(ProviderCircuitDecision::BlockedUntil(_))) => {
+                    blocked_providers.insert(provider_kind.clone());
+                }
+                Some(Err(error)) => tracing::warn!(
                     provider = provider_kind.as_str(),
                     %error,
                     "Provider circuit 读取失败，按可重建协调状态 fail-open"
-                );
-                BTreeSet::new()
-            }
-            None => {
-                tracing::warn!(
+                ),
+                None => tracing::warn!(
                     provider = provider_kind.as_str(),
                     "Provider circuit 读取超时，按可重建协调状态 fail-open"
-                );
-                BTreeSet::new()
+                ),
+                Some(Ok(ProviderCircuitDecision::Allow)) => {}
             }
-        };
+        }
         Ok(RoutingContext {
-            provider_kind: Some(provider_kind.clone()),
+            required_provider: None,
             blocked_providers,
         })
     }
@@ -479,11 +542,16 @@ impl DefaultExecutionService {
                 GatewayError::new(GatewayErrorKind::Unsupported, "requested model is invalid")
             })?;
         let routing_context = RoutingContext {
-            provider_kind: Some(provider_kind),
+            required_provider: Some(provider_kind),
             ..RoutingContext::default()
         };
         let plan = snapshot
-            .plan(&public_model, &operation, &routing_context)
+            .plan(
+                &public_model,
+                &operation,
+                snapshot.all_account_scope(),
+                &routing_context,
+            )
             .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
         let deadline_at = started_at
@@ -499,6 +567,7 @@ impl DefaultExecutionService {
             client_api_key_id: None,
             client_api_key_ref: actor,
             config_revision: plan.config_revision(),
+            routing: crate::routing::AccountRoutingSnapshot::all(),
             protocol: "admin_connection_test".to_owned(),
             operation: operation.kind(),
             endpoint: "/api/admin/accounts/connection-test".to_owned(),
@@ -693,19 +762,19 @@ impl ExecutionService for DefaultExecutionService {
     fn public_models(&self, client: &AuthenticatedClient) -> Vec<PublicModelId> {
         client
             .snapshot
-            .public_models_for_provider(client.policy.provider_kind())
+            .public_models_for_scope(client.policy.account_scope())
     }
 
     fn public_model_profiles(&self, client: &AuthenticatedClient) -> Vec<PublicModelProfile> {
         client
             .snapshot
-            .public_model_profiles_for_provider(client.policy.provider_kind())
+            .public_model_profiles_for_scope(client.policy.account_scope())
     }
 
     fn contains_public_model(&self, client: &AuthenticatedClient, model: &PublicModelId) -> bool {
         client
             .snapshot
-            .contains_public_model_for_provider(model, client.policy.provider_kind())
+            .contains_public_model_for_scope(model, client.policy.account_scope())
     }
 
     fn start(
@@ -1006,7 +1075,8 @@ fn new_request_id() -> Result<ModelRequestId, GatewayError> {
 
 fn map_routing_error(error: crate::error::RoutingError) -> GatewayError {
     match error {
-        crate::error::RoutingError::NoCapableProvider { .. } => GatewayError::new(
+        crate::error::RoutingError::NoCapableProvider { .. }
+        | crate::error::RoutingError::EmptyAccountScope => GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
             "no provider can execute this request",
         ),

@@ -9,12 +9,14 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
-    AccountErrorReason, AccountRuntimeSignals, AccountStateChange, CredentialCasOutcome,
-    CredentialCasUpdate, CredentialRevision, CredentialState, LoadedCredential, NewProviderAccount,
-    OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-    ProviderAccountUpdate, QuotaAccessChange, QuotaObservation, QuotaState, QuotaWriteOutcome,
+    AccountConcurrencyLimit, AccountErrorReason, AccountRuntimeSignals, AccountStateChange,
+    AccountWeight, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
+    LoadedCredential, NewProviderAccount, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, ProviderAccountUpdate, QuotaAccessChange, QuotaObservation, QuotaState,
+    QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
     ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -68,6 +70,21 @@ impl MemoryAccountStore {
             .expect("account store lock")
             .get(&id)
             .map(|stored| stored.account.clone())
+    }
+
+    pub(crate) fn set_scheduling(
+        &self,
+        id: &str,
+        concurrency_limit: Option<AccountConcurrencyLimit>,
+        weight: AccountWeight,
+    ) {
+        let id = ProviderAccountId::new(id).expect("valid account ID");
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts.get_mut(&id).expect("seeded account");
+        stored.account = stored
+            .account
+            .clone()
+            .with_scheduling(concurrency_limit, weight);
     }
 
     pub(crate) fn quota_reads(&self) -> usize {
@@ -450,6 +467,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_reason,
         rebuild.last_error_message,
     )
+    .with_scheduling(current.concurrency_limit(), current.weight())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }
 
@@ -487,6 +505,7 @@ pub(crate) struct TestLeaseCoordinator {
 impl ProviderLeasePort for TestLeaseCoordinator {
     fn load_state<'a>(
         &'a self,
+        _client_api_key_id: &'a ClientApiKeyId,
         _provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {

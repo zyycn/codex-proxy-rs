@@ -9,6 +9,7 @@ use crate::transport::request::derive_conversation_anchor;
 
 pub(crate) fn derive_codex_session_affinity_key(
     request: &CodexResponsesRequest,
+    client_api_key_id: &ClientApiKeyId,
 ) -> Option<ProviderSessionAffinityKey> {
     let session_key = if let Some(conversation_id) = request
         .local_conversation_id
@@ -27,16 +28,25 @@ pub(crate) fn derive_codex_session_affinity_key(
     };
 
     let session_discriminator = request.subagent_kind();
-    session_key.and_then(|session_key| match session_discriminator.as_deref() {
-        None => Some(session_key),
-        Some(discriminator) => {
-            // 仅扩展原会话锚点的键空间；后续查找、绑定和调度仍使用同一套亲和逻辑。
-            opaque_affinity_key(
-                "subagent-session",
-                &format!("{discriminator}\0{}", session_key.expose_to_store()),
-            )
-        }
-    })
+    let session_key =
+        session_key.and_then(|session_key| match session_discriminator.as_deref() {
+            None => Some(session_key),
+            Some(discriminator) => {
+                // 仅扩展原会话锚点的键空间；后续查找、绑定和调度仍使用同一套亲和逻辑。
+                opaque_affinity_key(
+                    "subagent-session",
+                    &format!("{discriminator}\0{}", session_key.expose_to_store()),
+                )
+            }
+        })?;
+    opaque_affinity_key(
+        "client-session",
+        &format!(
+            "{}\0{}",
+            client_api_key_id.as_str(),
+            session_key.expose_to_store()
+        ),
+    )
 }
 
 fn opaque_affinity_key(domain: &str, value: &str) -> Option<ProviderSessionAffinityKey> {

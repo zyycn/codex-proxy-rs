@@ -6,10 +6,10 @@ use chrono::{DateTime, Utc};
 
 use gateway_core::{
     policy::{ClientApiKeyId, RateLimits},
-    routing::ProviderKind,
+    routing::{AccountGroupId, ProviderKind},
 };
 
-use super::{AdminModelError, Revision};
+use super::{AdminModelError, Revision, account_groups::AccountGroupRef};
 
 /// Client Key 列表保持旧 HTTP 合同允许的完整非零 `u16` 页大小。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -88,7 +88,8 @@ pub struct ClientKeyRecord {
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: ProviderKind,
+    pub groups: Vec<AccountGroupRef>,
+    pub provider_kinds: Vec<ProviderKind>,
     pub prefix: String,
     pub enabled: bool,
     pub limits: RateLimits,
@@ -143,7 +144,7 @@ impl fmt::Debug for ClientKeySecret {
 pub struct CreateClientKey {
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: ProviderKind,
+    pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
 }
 
@@ -153,7 +154,7 @@ pub struct NewClientKey {
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: ProviderKind,
+    pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
     pub plaintext: String,
 }
@@ -164,7 +165,7 @@ impl fmt::Debug for NewClientKey {
             .debug_struct("NewClientKey")
             .field("id", &self.id)
             .field("name", &self.name)
-            .field("provider_kind", &self.provider_kind)
+            .field("group_ids", &self.group_ids)
             .field("plaintext", &"[REDACTED]")
             .finish_non_exhaustive()
     }
@@ -176,7 +177,7 @@ pub struct UpdateClientKey {
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: ProviderKind,
+    pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
 }
 

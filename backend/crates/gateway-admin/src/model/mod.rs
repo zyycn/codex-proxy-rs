@@ -2,6 +2,7 @@
 
 use std::num::{NonZeroU16, NonZeroU64};
 
+pub mod account_groups;
 pub mod accounts;
 pub mod auth;
 pub mod backup;

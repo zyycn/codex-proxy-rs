@@ -89,9 +89,14 @@ impl GrokAccountSessionSelector {
             .list_accounts_for_provider()
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-        if !diagnostic {
-            self.quota.prepare_scheduling(&accounts).await;
-        }
+        let accounts = if diagnostic {
+            accounts
+        } else {
+            accounts
+                .into_iter()
+                .filter(|account| request.account_scope().allows(account.id()))
+                .collect()
+        };
         let catalog_eligible = if diagnostic {
             accounts
         } else {
@@ -128,6 +133,9 @@ impl GrokAccountSessionSelector {
         if catalog_eligible.is_empty() {
             return Err(GrokSessionSelectorError::NoEligibleSession);
         }
+        if !diagnostic {
+            self.quota.prepare_scheduling(&catalog_eligible).await;
+        }
 
         let account_ids = catalog_eligible
             .iter()
@@ -135,7 +143,11 @@ impl GrokAccountSessionSelector {
             .collect::<Vec<_>>();
         let scheduling = self
             .scheduling
-            .load_state(&self.provider_kind, &account_ids)
+            .load_state(
+                request.client_api_key_id(),
+                &self.provider_kind,
+                &account_ids,
+            )
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
         let runtime_cooldowns = if diagnostic {
@@ -179,6 +191,7 @@ impl GrokAccountSessionSelector {
             preferred_account: request.required_account().cloned().or(affinity_account),
             round_robin_cursor: scheduling.round_robin_cursor(),
             eligibility: request.eligibility(),
+            account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
         };
         let mut capacity_denied = false;
         let mut retry_after = None;
@@ -194,9 +207,11 @@ impl GrokAccountSessionSelector {
                         self.provider_kind.clone(),
                         selected_id.clone(),
                         selected_revision,
-                        request
-                            .account_selection_policy()
-                            .max_concurrent_per_account(),
+                        selected.account.effective_concurrency(
+                            request
+                                .account_selection_policy()
+                                .max_concurrent_per_account(),
+                        ),
                         request.account_selection_policy().request_interval(),
                         request.deadline(),
                     ),

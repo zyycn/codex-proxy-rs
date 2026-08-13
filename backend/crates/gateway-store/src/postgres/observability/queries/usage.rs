@@ -103,7 +103,9 @@ pub(crate) fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres
 }
 
 pub(crate) const USAGE_RECORD_SELECT: &str =
-    "select mr.id, mr.client_api_key_ref, mr.config_revision, mr.protocol, mr.operation,
+    "select mr.id, mr.client_api_key_ref, mr.config_revision,
+            mr.routing_scope, mr.routing_group_refs, mr.routing_group_names_snapshot,
+            mr.protocol, mr.operation,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,

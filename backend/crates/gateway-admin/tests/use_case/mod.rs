@@ -20,9 +20,14 @@ use gateway_admin::{
     AdminConfig, AdminServices, InitialAdminPassword,
     model::{
         MutationContext, Revision,
+        account_groups::{
+            AccountGroupListQuery, AccountGroupMembers, AccountGroupMutation, AccountGroupPage,
+            DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+        },
         accounts::{
-            AccountListQuery, AccountPage, AccountUsage, AccountUsageWindowQuery,
-            AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
+            AccountListQuery, AccountPage, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+            BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         auth::{AdminAuditEvent, AdminSession},
         client_keys::{
@@ -51,8 +56,8 @@ use gateway_admin::{
         backup::BackupStorePorts,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
-            AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult,
-            AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
+            AccountGroupStore, AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
+            AdminStoreResult, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -171,6 +176,7 @@ impl AdminHarness {
             },
             AdminStorePorts::new(
                 self.accounts,
+                Arc::new(UnavailableAccountGroupStore),
                 self.auth,
                 self.client_keys,
                 self.observability,
@@ -234,6 +240,57 @@ impl AuthStore for BootstrapAuthStore {
 }
 
 struct UnavailableStore;
+
+struct UnavailableAccountGroupStore;
+
+#[async_trait]
+impl AccountGroupStore for UnavailableAccountGroupStore {
+    async fn list_account_groups(
+        &self,
+        _: AccountGroupListQuery,
+    ) -> AdminStoreResult<AccountGroupPage> {
+        Err(unavailable("account groups"))
+    }
+
+    async fn account_group_members(
+        &self,
+        _: &gateway_core::routing::AccountGroupId,
+    ) -> AdminStoreResult<AccountGroupMembers> {
+        Err(unavailable("account group members"))
+    }
+
+    async fn create_account_group(
+        &self,
+        _: NewAccountGroup,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        Err(unavailable("account group create"))
+    }
+
+    async fn update_account_group(
+        &self,
+        _: UpdateAccountGroup,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        Err(unavailable("account group update"))
+    }
+
+    async fn set_account_group_enabled(
+        &self,
+        _: SetAccountGroupEnabled,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        Err(unavailable("account group state"))
+    }
+
+    async fn delete_account_group(
+        &self,
+        _: DeleteAccountGroup,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        Err(unavailable("account group delete"))
+    }
+}
 
 #[async_trait]
 impl AccountStore for UnavailableStore {
@@ -319,12 +376,20 @@ impl AccountStore for UnavailableStore {
         Err(unavailable("credential refresh"))
     }
 
-    async fn set_account_enabled(
+    async fn update_account(
         &self,
-        _: SetAccountEnabled,
+        _: UpdateAccount,
         _: &MutationContext,
-    ) -> AdminStoreResult<Revision> {
+    ) -> AdminStoreResult<AccountUpdateResult> {
         Err(unavailable("account enabled"))
+    }
+
+    async fn batch_update_accounts(
+        &self,
+        _: BatchUpdateAccounts,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountsUpdateResult> {
+        Err(unavailable("account batch update"))
     }
 
     async fn delete_accounts(

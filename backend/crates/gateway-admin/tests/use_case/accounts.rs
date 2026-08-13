@@ -22,8 +22,9 @@ use gateway_admin::{
         AdminError, MutationContext, Revision,
         accounts::{
             AccountConnectionTestEvent, AccountListQuery, AccountPage, AccountPageItem,
-            AccountRecord, AccountSummary, AccountUsage, AccountUsageWindowQuery,
-            AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
+            AccountRecord, AccountSummary, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+            BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -661,15 +662,36 @@ impl AccountStore for FakeAccountStore {
         Ok(rotation_result(command))
     }
 
-    async fn set_account_enabled(
+    async fn update_account(
         &self,
-        _: SetAccountEnabled,
+        command: UpdateAccount,
         context: &MutationContext,
-    ) -> AdminStoreResult<Revision> {
-        self.record("store.set_enabled");
+    ) -> AdminStoreResult<AccountUpdateResult> {
+        self.record("store.update_account");
         self.record_context(context);
         self.require_commit()?;
-        Ok(revision(2))
+        Ok(AccountUpdateResult {
+            config_revision: revision(2),
+            account_id: ProviderAccountId::new(command.account_id).expect("account ID"),
+        })
+    }
+
+    async fn batch_update_accounts(
+        &self,
+        command: BatchUpdateAccounts,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountsUpdateResult> {
+        self.record("store.batch_update_accounts");
+        self.record_context(context);
+        self.require_commit()?;
+        Ok(AccountsUpdateResult {
+            config_revision: revision(2),
+            account_ids: command
+                .account_ids
+                .into_iter()
+                .map(|id| ProviderAccountId::new(id).expect("account ID"))
+                .collect(),
+        })
     }
 
     async fn delete_accounts(
@@ -1002,6 +1024,122 @@ async fn accounts_refresh_should_keep_guard_through_store_commit() {
 }
 
 #[tokio::test]
+async fn accounts_update_should_commit_then_release_disabled_account_and_publish_facts() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider, store.clone()).await;
+
+    let result = services
+        .accounts()
+        .update(
+            &context("update-request"),
+            UpdateAccount {
+                account_id: "acct_test".to_owned(),
+                enabled: false,
+                concurrency_limit: None,
+                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect("update account");
+
+    assert_eq!(result.config_revision, revision(2));
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "store.update_account",
+            "provider.account_unavailable",
+            "provider.account_facts_changed",
+        ]
+    );
+    assert_eq!(store.audit_requests(), ["update-request"]);
+}
+
+#[tokio::test]
+async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    store.fail_next_commit();
+    let services = accounts_service(provider, store).await;
+
+    services
+        .accounts()
+        .update(
+            &context("update-failure"),
+            UpdateAccount {
+                account_id: "acct_test".to_owned(),
+                enabled: false,
+                concurrency_limit: None,
+                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("failed account update");
+
+    assert_eq!(
+        recorded(&events),
+        ["store.load_account", "store.update_account"]
+    );
+}
+
+#[tokio::test]
+async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
+    let events = events();
+    let openai = FakeProviderAdmin::new("openai", events.clone());
+    let xai = FakeProviderAdmin::new("xai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let mut openai_account = account_record("openai");
+    openai_account.id = "acct_openai".to_owned();
+    let mut xai_account = account_record("xai");
+    xai_account.id = "acct_xai".to_owned();
+    store.set_accounts(vec![openai_account, xai_account]);
+    let services = super::AdminHarness::new()
+        .accounts(store.clone())
+        .settings(Arc::new(StaticSettingsStore))
+        .provider(openai)
+        .provider(xai)
+        .probe(Arc::new(SuccessfulAccountProbe))
+        .build()
+        .await;
+
+    let result = services
+        .accounts()
+        .batch_update(
+            &context("batch-update-request"),
+            BatchUpdateAccounts {
+                account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
+                enabled: false,
+                concurrency_limit: None,
+                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect("batch update accounts");
+
+    assert_eq!(result.config_revision, revision(2));
+    assert_eq!(result.account_ids.len(), 2);
+    assert_eq!(store.audit_requests(), ["batch-update-request"]);
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "store.load_account",
+            "store.batch_update_accounts",
+            "provider.account_unavailable",
+            "provider.account_facts_changed",
+            "provider.account_unavailable",
+            "provider.account_facts_changed",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn accounts_list_should_return_complete_directory_semantics() {
     let provider = FakeProviderAdmin::new("openai", events());
     let store = FakeAccountStore::new("openai", events());
@@ -1012,6 +1150,7 @@ async fn accounts_list_should_return_complete_directory_semantics() {
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1073,6 +1212,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1115,6 +1255,7 @@ async fn accounts_list_should_prefer_credential_error_over_quota_exhaustion() {
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1143,6 +1284,7 @@ async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1187,6 +1329,7 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1231,6 +1374,7 @@ async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1281,6 +1425,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1366,6 +1511,7 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
             page: 1,
             page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
             provider_kind: None,
+            group_filter: None,
             search: None,
             status: None,
             sort: None,
@@ -1513,6 +1659,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
     AccountRecord {
         id: "acct_test".to_owned(),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),
+        groups: Vec::new(),
         name: "test account".to_owned(),
         email: Some("test@example.invalid".to_owned()),
         upstream_user_id: Some("upstream-user".to_owned()),
@@ -1524,6 +1671,8 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         access_token_expires_at: Some(now + TimeDelta::hours(1)),
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
         credential_state: CredentialState::Ready,
         credential_observed_at: now,
         quota: QuotaState::allowed(now.into()),

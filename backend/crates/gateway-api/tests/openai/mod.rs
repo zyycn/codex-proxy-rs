@@ -4,7 +4,7 @@ mod models;
 mod responses;
 mod router;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -18,7 +18,9 @@ use gateway_core::engine::admission::{
 use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
 };
-use gateway_core::engine::credential::{AccountSelectionPolicy, RotationStrategy};
+use gateway_core::engine::credential::{
+    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
+};
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientApiKeyUsageSink, DefaultExecutionService, ExecutionService,
     ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
@@ -34,8 +36,8 @@ use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLif
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ProviderKind, ProviderModel, RuntimeSnapshot,
-    UpstreamModelId,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 
 pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Router {
@@ -94,6 +96,10 @@ impl ClientApiKeyUsageSink for IgnoredClientApiKeyUsage {
 
 fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
+    let account_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+        ProviderAccountId::new("acct_api_test").expect("account ID"),
+        RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+    )])));
     let capabilities = ModelCapabilities::new(
         BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
         Some(16_000),
@@ -119,12 +125,16 @@ fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
         vec![ClientPolicy::new(
             ClientApiKeyId::new("key_api_test").expect("key ID"),
             PlaintextClientApiKey::new(plaintext).expect("plaintext key"),
-            provider,
+            Arc::new(FrozenAccountScope::new(
+                Arc::clone(&account_directory),
+                ClientRoutingScope::all_accounts(),
+            )),
             true,
             RateLimits::unlimited(),
         )],
     )
     .expect("runtime snapshot")
+    .with_account_directory(account_directory)
 }
 
 #[derive(Default)]
@@ -260,6 +270,7 @@ struct UnusedContinuation;
 impl NativeContinuationPort for UnusedContinuation {
     fn resolve<'a>(
         &'a self,
+        _: &'a ClientApiKeyId,
         _: &'a PreviousResponseId,
     ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>> {
         Box::pin(async { unreachable!("authentication fixture does not execute") })

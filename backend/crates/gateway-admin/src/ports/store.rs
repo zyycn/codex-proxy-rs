@@ -10,9 +10,14 @@ use chrono::{DateTime, Utc};
 use super::backup::BackupStorePorts;
 use crate::model::{
     MutationContext, Revision,
+    account_groups::{
+        AccountGroupListQuery, AccountGroupMembers, AccountGroupMutation, AccountGroupPage,
+        DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+    },
     accounts::{
-        AccountListQuery, AccountPage, AccountPageItem, AccountUsage, AccountUsageWindowQuery,
-        AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
+        AccountListQuery, AccountPage, AccountPageItem, AccountUpdateResult, AccountUsage,
+        AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+        BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
     },
     auth::{AdminAuditEvent, AdminSession},
     client_keys::{
@@ -138,11 +143,17 @@ pub trait AccountStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult>;
 
-    async fn set_account_enabled(
+    async fn update_account(
         &self,
-        command: SetAccountEnabled,
+        command: UpdateAccount,
         context: &MutationContext,
-    ) -> AdminStoreResult<Revision>;
+    ) -> AdminStoreResult<AccountUpdateResult>;
+
+    async fn batch_update_accounts(
+        &self,
+        command: BatchUpdateAccounts,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountsUpdateResult>;
 
     async fn delete_accounts(
         &self,
@@ -213,6 +224,44 @@ pub trait ClientKeyStore: Send + Sync {
         command: DeleteClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
+}
+
+/// Provider-neutral account group management and membership transactions.
+#[async_trait]
+pub trait AccountGroupStore: Send + Sync {
+    async fn list_account_groups(
+        &self,
+        query: AccountGroupListQuery,
+    ) -> AdminStoreResult<AccountGroupPage>;
+
+    async fn account_group_members(
+        &self,
+        id: &gateway_core::routing::AccountGroupId,
+    ) -> AdminStoreResult<AccountGroupMembers>;
+
+    async fn create_account_group(
+        &self,
+        command: NewAccountGroup,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation>;
+
+    async fn update_account_group(
+        &self,
+        command: UpdateAccountGroup,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation>;
+
+    async fn set_account_group_enabled(
+        &self,
+        command: SetAccountGroupEnabled,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation>;
+
+    async fn delete_account_group(
+        &self,
+        command: DeleteAccountGroup,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation>;
 }
 
 /// 用量、趋势、诊断与运维错误的只读能力。
@@ -302,6 +351,7 @@ pub trait SettingsStore: Send + Sync {
 #[derive(Clone)]
 pub struct AdminStorePorts {
     accounts: Arc<dyn AccountStore>,
+    account_groups: Arc<dyn AccountGroupStore>,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
@@ -313,6 +363,7 @@ impl AdminStorePorts {
     #[must_use]
     pub fn new(
         accounts: Arc<dyn AccountStore>,
+        account_groups: Arc<dyn AccountGroupStore>,
         auth: Arc<dyn AuthStore>,
         client_keys: Arc<dyn ClientKeyStore>,
         observability: Arc<dyn ObservabilityStore>,
@@ -321,6 +372,7 @@ impl AdminStorePorts {
     ) -> Self {
         Self {
             accounts,
+            account_groups,
             auth,
             client_keys,
             observability,
@@ -332,6 +384,11 @@ impl AdminStorePorts {
     #[must_use]
     pub fn accounts(&self) -> Arc<dyn AccountStore> {
         self.accounts.clone()
+    }
+
+    #[must_use]
+    pub fn account_groups(&self) -> Arc<dyn AccountGroupStore> {
+        self.account_groups.clone()
     }
 
     #[must_use]

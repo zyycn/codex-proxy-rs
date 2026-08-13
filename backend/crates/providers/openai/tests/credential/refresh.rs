@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{ProviderAccountId, ProviderAccountStore};
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
     ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
@@ -86,6 +87,7 @@ struct RefreshLeases;
 impl ProviderLeasePort for RefreshLeases {
     fn load_state<'a>(
         &'a self,
+        _: &'a ClientApiKeyId,
         _: &'a ProviderKind,
         _: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {

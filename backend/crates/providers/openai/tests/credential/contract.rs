@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -8,10 +8,11 @@ use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
-    AccountAttemptFeedback, AccountErrorReason, AccountFeedbackStats, AccountSelectionPolicy,
-    AccountStateChange, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState, QuotaEvidence,
-    QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
+    AccountAttemptFeedback, AccountConcurrencyLimit, AccountErrorReason, AccountFeedbackStats,
+    AccountSelectionPolicy, AccountStateChange, AccountWeight, CredentialState, OpaqueProviderData,
+    ProviderAccount, ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange,
+    QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState, QuotaWriteOutcome,
+    RotationStrategy,
 };
 use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
@@ -20,7 +21,9 @@ use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCooldownPort, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
 };
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{
+    ClientRoutingScope, FrozenAccountScope, ProviderKind, RuntimeAccount, RuntimeAccountDirectory,
+};
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
@@ -48,6 +51,34 @@ fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
     }));
 }
 
+fn contract_account_scope() -> Arc<FrozenAccountScope> {
+    let provider = ProviderKind::new("openai").expect("provider");
+    let accounts = [
+        "acct_available",
+        "acct_fallback",
+        "acct_fallback_signal",
+        "acct_first",
+        "acct_missing",
+        "acct_original",
+        "acct_original_signal",
+        "acct_other",
+        "acct_primary",
+        "acct_second",
+    ]
+    .into_iter()
+    .map(|id| {
+        (
+            ProviderAccountId::new(id).expect("account"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )
+    })
+    .collect::<BTreeMap<_, _>>();
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(accounts)),
+        ClientRoutingScope::all_accounts(),
+    ))
+}
+
 fn attempt(excluded_accounts: BTreeSet<ProviderAccountId>) -> AttemptContext {
     attempt_with_required(excluded_accounts, None)
 }
@@ -64,7 +95,8 @@ fn attempt_with_required(
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::new(excluded_accounts, required_account, None),
+        AccountAttemptContext::new(excluded_accounts, required_account, None)
+            .with_account_scope(contract_account_scope()),
         None,
         CancellationToken::new(),
     )
@@ -83,7 +115,8 @@ fn round_robin_attempt() -> AttemptContext {
             NonZeroU32::new(2).expect("concurrency"),
             Duration::ZERO,
         ),
-        AccountAttemptContext::new(BTreeSet::new(), None, None),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
         None,
         CancellationToken::new(),
     )
@@ -356,6 +389,32 @@ fn selector_uses_frozen_global_account_policy_for_lease() {
     assert_eq!(requests[0].max_concurrent().get(), 2);
     assert_eq!(requests[0].request_interval(), Duration::from_millis(10));
     assert_eq!(requests[0].deadline(), attempt.deadline());
+}
+
+#[test]
+fn selector_uses_the_account_concurrency_override_for_the_redis_lease() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    store.set_scheduling(
+        "acct_primary",
+        Some(AccountConcurrencyLimit::new(7).expect("concurrency override")),
+        AccountWeight::DEFAULT,
+    );
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, Arc::clone(&leases));
+    let attempt = attempt(BTreeSet::new());
+
+    block_on(selector.select(&SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url:
+            &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL"),
+        attempt: &attempt,
+        session_affinity_key: None,
+    }))
+    .expect("select account");
+
+    let requests = leases.requests.lock().expect("lease requests lock");
+    assert_eq!(requests[0].max_concurrent().get(), 7);
 }
 
 #[test]
@@ -1043,6 +1102,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordi
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-response"),
         PreviousResponseId::new("upstream-response"),
+        ClientApiKeyId::new("key_codex_contract").expect("client key id"),
         ProviderKind::new("openai").expect("provider"),
         original.id().clone(),
     );
@@ -1054,7 +1114,8 @@ fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordi
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::new(BTreeSet::new(), None, None),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
         Some(ContinuationBinding::Pinned(continuation)),
         CancellationToken::new(),
     );
@@ -1112,6 +1173,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
     let continuation = NativeContinuationPin::new(
         PreviousResponseId::new("previous-response"),
         PreviousResponseId::new("upstream-response"),
+        ClientApiKeyId::new("key_codex_contract").expect("client key id"),
         ProviderKind::new("openai").expect("provider"),
         original.id().clone(),
     );
@@ -1123,7 +1185,8 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::new(BTreeSet::new(), None, None),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
         Some(ContinuationBinding::Pinned(continuation)),
         CancellationToken::new(),
     );

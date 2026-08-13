@@ -14,6 +14,7 @@ use gateway_core::engine::{
     UpstreamSendState as CoreUpstreamSendState,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
+use gateway_core::routing::{AccountRoutingScopeKind, AccountRoutingSnapshot};
 
 use crate::{
     ConflictKind, DecimalAmount, StoreError, StoreResult, postgres_unavailable, require_nonempty,
@@ -83,6 +84,9 @@ pub struct NewModelRequest {
     pub client_api_key_id: Option<String>,
     pub client_api_key_ref: String,
     pub config_revision: u64,
+    pub routing_scope: String,
+    pub routing_group_refs: Vec<String>,
+    pub routing_group_names_snapshot: Value,
     pub protocol: String,
     pub operation: String,
     pub endpoint: String,
@@ -109,6 +113,11 @@ impl NewModelRequest {
         require_nonempty(ENTITY, "endpoint", &self.endpoint)?;
         require_nonempty(ENTITY, "client_transport", &self.client_transport)?;
         require_nonempty(ENTITY, "requested_model_id", &self.requested_model_id)?;
+        validate_routing_snapshot(
+            &self.routing_scope,
+            &self.routing_group_refs,
+            &self.routing_group_names_snapshot,
+        )?;
         if self.config_revision == 0 || self.started_at > self.deadline_at {
             return Err(invalid(
                 "revision and deadline violate the frozen constraints",
@@ -362,13 +371,15 @@ impl ModelRequestRepository for PgExecutionStore {
         sqlx::query(
             "insert into model_requests (
                id, client_api_key_id, client_api_key_ref, config_revision, protocol,
+               routing_scope, routing_group_refs, routing_group_names_snapshot,
                operation, endpoint, client_transport, requested_model_id,
                client_ip, user_agent, reasoning_effort,
                reasoning_preset, request_kind, subagent_kind, compact,
                image_generation_requested, started_at, deadline_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inet, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19
+               $1, $2, $3, $4, $5, $6, $7, $8,
+               $9, $10, $11, $12, $13::inet, $14, $15,
+               $16, $17, $18, $19, $20, $21, $22
              )",
         )
         .bind(request.id)
@@ -376,6 +387,9 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.client_api_key_ref)
         .bind(to_i64(request.config_revision, "config_revision")?)
         .bind(request.protocol)
+        .bind(request.routing_scope)
+        .bind(request.routing_group_refs)
+        .bind(sqlx::types::Json(request.routing_group_names_snapshot))
         .bind(request.operation)
         .bind(request.endpoint)
         .bind(request.client_transport)
@@ -409,6 +423,7 @@ impl ModelRequestRepository for PgExecutionStore {
         sqlx::query(
             "insert into model_requests (
                id, client_api_key_id, client_api_key_ref, config_revision, protocol,
+               routing_scope, routing_group_refs, routing_group_names_snapshot,
                operation, endpoint, client_transport, requested_model_id,
                client_ip, user_agent, reasoning_effort,
                reasoning_preset, request_kind, subagent_kind, compact,
@@ -419,13 +434,14 @@ impl ModelRequestRepository for PgExecutionStore {
                upstream_model_id, upstream_transport, http_version,
                attempt_count, upstream_send_state
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::inet, $11, $12,
-               $13, $14, $15, $16, $17, $18, $19,
-               $20, $21, $22,
-               (select name from provider_accounts where id = $21),
-               (select email from provider_accounts where id = $21),
-               (select authentication_kind from provider_accounts where id = $21),
-               $23, $24, $25, 1, 'not_sent'
+               $1, $2, $3, $4, $5, $6, $7, $8,
+               $9, $10, $11, $12, $13::inet, $14, $15,
+               $16, $17, $18, $19, $20, $21, $22,
+               $23, $24, $25,
+               (select name from provider_accounts where id = $24),
+               (select email from provider_accounts where id = $24),
+               (select authentication_kind from provider_accounts where id = $24),
+               $26, $27, $28, 1, 'not_sent'
              )",
         )
         .bind(request.id)
@@ -433,6 +449,9 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.client_api_key_ref)
         .bind(to_i64(request.config_revision, "config_revision")?)
         .bind(request.protocol)
+        .bind(request.routing_scope)
+        .bind(request.routing_group_refs)
+        .bind(sqlx::types::Json(request.routing_group_names_snapshot))
         .bind(request.operation)
         .bind(request.endpoint)
         .bind(request.client_transport)
@@ -1045,6 +1064,8 @@ fn core_store_error(error: StoreError) -> CoreStoreError {
 }
 
 fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
+    let (routing_scope, routing_group_refs, routing_group_names_snapshot) =
+        routing_snapshot_row(&request.routing);
     NewModelRequest {
         id: request.id.as_str().to_owned(),
         client_api_key_id: request
@@ -1053,6 +1074,9 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
             .map(|id| id.as_str().to_owned()),
         client_api_key_ref: request.client_api_key_ref.as_str().to_owned(),
         config_revision: request.config_revision.get(),
+        routing_scope,
+        routing_group_refs,
+        routing_group_names_snapshot,
         protocol: request.protocol,
         operation: request.operation.as_str().to_owned(),
         endpoint: request.endpoint,
@@ -1068,6 +1092,48 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         image_generation_requested: request.image_generation_requested,
         started_at: DateTime::<Utc>::from(request.started_at),
         deadline_at: DateTime::<Utc>::from(request.deadline_at),
+    }
+}
+
+fn routing_snapshot_row(snapshot: &AccountRoutingSnapshot) -> (String, Vec<String>, Value) {
+    let groups = snapshot.groups_snapshot();
+    (
+        snapshot.kind().as_str().to_owned(),
+        groups
+            .iter()
+            .map(|group| group.id().as_str().to_owned())
+            .collect(),
+        Value::Array(
+            groups
+                .iter()
+                .map(|group| Value::String(group.name().to_owned()))
+                .collect(),
+        ),
+    )
+}
+
+fn validate_routing_snapshot(scope: &str, refs: &[String], names: &Value) -> StoreResult<()> {
+    let Some(names) = names.as_array() else {
+        return Err(invalid("routing group names snapshot must be an array"));
+    };
+    let valid = match scope {
+        value if value == AccountRoutingScopeKind::All.as_str() => {
+            refs.is_empty() && names.is_empty()
+        }
+        value if value == AccountRoutingScopeKind::Groups.as_str() => {
+            !refs.is_empty()
+                && refs.len() == names.len()
+                && refs.iter().all(|id| !id.is_empty())
+                && names
+                    .iter()
+                    .all(|name| name.as_str().is_some_and(|name| !name.is_empty()))
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid("invalid routing scope snapshot"))
     }
 }
 

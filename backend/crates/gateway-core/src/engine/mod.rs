@@ -233,6 +233,7 @@ pub struct AccountAttemptContext {
     state_owner: Option<ProviderAccountStateOwner>,
     credential_recovery_attempted: bool,
     diagnostic_required_account: bool,
+    account_scope: Option<Arc<crate::routing::FrozenAccountScope>>,
 }
 
 impl AccountAttemptContext {
@@ -248,6 +249,7 @@ impl AccountAttemptContext {
             state_owner,
             credential_recovery_attempted: false,
             diagnostic_required_account: false,
+            account_scope: None,
         }
     }
 
@@ -266,7 +268,15 @@ impl AccountAttemptContext {
             state_owner,
             credential_recovery_attempted: false,
             diagnostic_required_account: true,
+            account_scope: None,
         }
+    }
+
+    /// 附着普通请求认证时冻结的账号范围。
+    #[must_use]
+    pub fn with_account_scope(mut self, scope: Arc<crate::routing::FrozenAccountScope>) -> Self {
+        self.account_scope = Some(scope);
+        self
     }
 
     /// 标记本请求已对即将选择的固定账号执行过一次凭据恢复。
@@ -300,6 +310,11 @@ impl AccountAttemptContext {
     #[must_use]
     pub const fn is_diagnostic_required_account(&self) -> bool {
         self.diagnostic_required_account
+    }
+
+    #[must_use]
+    pub const fn account_scope(&self) -> Option<&Arc<crate::routing::FrozenAccountScope>> {
+        self.account_scope.as_ref()
     }
 }
 
@@ -506,6 +521,12 @@ impl AttemptContext {
         self.account.is_diagnostic_required_account()
     }
 
+    /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`。
+    #[must_use]
+    pub const fn account_scope(&self) -> Option<&Arc<crate::routing::FrozenAccountScope>> {
+        self.account.account_scope()
+    }
+
     #[must_use]
     pub const fn continuation(&self) -> Option<&ContinuationBinding> {
         self.continuation.as_ref()
@@ -529,6 +550,7 @@ pub struct NewModelRequest {
     pub client_api_key_id: Option<ClientApiKeyId>,
     pub client_api_key_ref: ClientApiKeyId,
     pub config_revision: ConfigRevision,
+    pub routing: crate::routing::AccountRoutingSnapshot,
     pub protocol: String,
     pub operation: OperationKind,
     pub endpoint: String,
@@ -749,6 +771,8 @@ pub enum EngineError {
     ContinuationPinMismatch,
     #[error("provider did not use the account required by this execution")]
     RequiredAccountMismatch,
+    #[error("provider selected an account outside the frozen client scope")]
+    AccountOutsideClientScope,
     #[error("provider execution failed")]
     Provider(ProviderError),
     #[error("request was cancelled")]

@@ -5,8 +5,8 @@ use gateway_core::engine::credential::ProviderAccountId;
 use gateway_admin::{
     AdminServices,
     model::provider_credentials::{
-        AuthorizationMutationTarget, CompleteAuthorization, CredentialDeletion, CredentialMutation,
-        ImportCredentials, ProviderQuotaRequest, StartAuthorization,
+        AuthorizationMutationTarget, CompleteAuthorization, CredentialDeletion, ImportCredentials,
+        ProviderQuotaRequest, StartAuthorization,
     },
     ports::provider::ProviderAdminErrorKind,
 };
@@ -14,55 +14,6 @@ use gateway_admin::{
 use super::accounts::{
     FakeAccountStore, FakeProviderAdmin, context, document, events, recorded, revision,
 };
-
-#[tokio::test]
-async fn openai_enable_should_use_scoped_store_without_provider_mutation() {
-    let events = events();
-    let provider = FakeProviderAdmin::new("openai", events.clone());
-    let store = FakeAccountStore::new("openai", events.clone());
-    let services = service(provider, store.clone()).await;
-
-    services
-        .openai()
-        .enable(mutation("acct_test"))
-        .await
-        .expect("enable credential");
-
-    assert_eq!(
-        recorded(&events),
-        [
-            "store.credential_details",
-            "store.set_enabled",
-            "provider.account_facts_changed",
-        ]
-    );
-    assert_eq!(store.audit_requests(), ["request-openai"]);
-}
-
-#[tokio::test]
-async fn openai_disable_should_commit_then_release_provider_resources() {
-    let events = events();
-    let provider = FakeProviderAdmin::new("openai", events.clone());
-    let store = FakeAccountStore::new("openai", events.clone());
-    let services = service(provider, store.clone()).await;
-
-    services
-        .openai()
-        .disable(mutation("acct_test"))
-        .await
-        .expect("disable credential");
-
-    assert_eq!(
-        recorded(&events),
-        [
-            "store.credential_details",
-            "store.set_enabled",
-            "provider.account_unavailable",
-            "provider.account_facts_changed",
-        ]
-    );
-    assert_eq!(store.audit_requests(), ["request-openai"]);
-}
 
 #[tokio::test]
 async fn openai_delete_should_commit_then_release_provider_resources() {
@@ -87,26 +38,6 @@ async fn openai_delete_should_commit_then_release_provider_resources() {
         ]
     );
     assert_eq!(store.audit_requests(), ["request-openai"]);
-}
-
-#[tokio::test]
-async fn openai_disable_store_failure_should_not_release_provider_resources() {
-    let events = events();
-    let provider = FakeProviderAdmin::new("openai", events.clone());
-    let store = FakeAccountStore::new("openai", events.clone());
-    store.fail_next_commit();
-    let services = service(provider, store).await;
-
-    services
-        .openai()
-        .disable(mutation("acct_test"))
-        .await
-        .expect_err("failed Store transaction");
-
-    assert_eq!(
-        recorded(&events),
-        ["store.credential_details", "store.set_enabled"]
-    );
 }
 
 #[tokio::test]
@@ -448,13 +379,6 @@ async fn await_quota_requests(provider: &FakeProviderAdmin, expected: usize) {
         tokio::task::yield_now().await;
     }
     assert_eq!(provider.quota_requests().len(), expected);
-}
-
-fn mutation(account_id: &str) -> CredentialMutation {
-    CredentialMutation {
-        context: context("request-openai"),
-        account_id: ProviderAccountId::new(account_id).expect("account ID"),
-    }
 }
 
 fn deletion(account_id: &str) -> CredentialDeletion {

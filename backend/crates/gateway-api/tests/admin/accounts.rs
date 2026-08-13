@@ -70,6 +70,135 @@ mod query {
     }
 }
 
+mod batch_update {
+    use gateway_api::admin::accounts::{BatchUpdateAccountsRequest, UpdateAccountRequest};
+    use serde_json::json;
+
+    #[test]
+    fn batch_update_should_accept_complete_atomic_payload() {
+        let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds": ["acct_openai", "acct_xai"],
+            "enabled": false,
+            "concurrencyLimit": null,
+            "weight": 1,
+            "groupIds": ["grp_00000000000000000000000000000001"]
+        }))
+        .expect("deserialize batch update");
+
+        request.validate().expect("validate batch update");
+    }
+
+    #[test]
+    fn batch_update_should_reject_duplicate_or_invalid_account_ids() {
+        for account_ids in [
+            json!(["acct_same", "acct_same"]),
+            json!(["not-an-account"]),
+            json!([]),
+        ] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds": account_ids,
+                "enabled": true,
+                "concurrencyLimit": 8,
+                "weight": 100,
+                "groupIds": []
+            }))
+            .expect("deserialize invalid batch update");
+            assert_eq!(
+                request.validate().expect_err("reject account IDs").field(),
+                "accountIds"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_update_should_require_enabled_and_reject_unknown_fields() {
+        assert!(
+            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+            "accountIds": ["acct_test"],
+            "concurrencyLimit": null,
+            "weight": 1,
+            "groupIds": []
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                "accountIds": ["acct_test"],
+                "enabled": true,
+                "concurrencyLimit": null,
+                "weight": 1,
+                "groupIds": [],
+                "legacy": true
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn batch_update_should_reject_invalid_scheduling_bounds_and_missing_fields() {
+        for (concurrency_limit, weight, field) in [
+            (json!(0), json!(1), "concurrencyLimit"),
+            (json!(4294967296_u64), json!(1), "concurrencyLimit"),
+            (json!(null), json!(0), "weight"),
+            (json!(null), json!(101), "weight"),
+        ] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds": ["acct_test"],
+                "enabled": true,
+                "concurrencyLimit": concurrency_limit,
+                "weight": weight,
+                "groupIds": []
+            }))
+            .expect("deserialize invalid scheduling");
+            assert_eq!(
+                request.validate().expect_err("reject scheduling").field(),
+                field
+            );
+        }
+        assert!(
+            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                "accountIds": ["acct_test"],
+                "enabled": true,
+                "weight": 1,
+                "groupIds": []
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                "accountIds": ["acct_test"],
+                "enabled": true,
+                "concurrencyLimit": null,
+                "groupIds": []
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn single_update_should_require_the_same_complete_scheduling_contract() {
+        let request: UpdateAccountRequest = serde_json::from_value(json!({
+            "accountId": "acct_test",
+            "enabled": true,
+            "concurrencyLimit": 4294967295_u64,
+            "weight": 100,
+            "groupIds": []
+        }))
+        .expect("deserialize single update");
+        request.validate().expect("validate single update");
+
+        assert!(
+            serde_json::from_value::<UpdateAccountRequest>(json!({
+                "accountId": "acct_test",
+                "enabled": true,
+                "weight": 1,
+                "groupIds": []
+            }))
+            .is_err()
+        );
+    }
+}
+
 mod response {
     use gateway_api::admin::accounts::AccountUsageView;
     use gateway_api::admin::presenter::format_decimal_currency;
@@ -125,6 +254,7 @@ mod response {
 }
 
 mod actions {
+    use base64::Engine as _;
     use gateway_admin::model::{
         Revision,
         accounts::AccountConnectionTestEvent as DomainConnectionTestEvent,
@@ -136,7 +266,8 @@ mod actions {
         AccountActionRequest, AccountConnectionTestEvent, AccountDeletionData,
         AccountDeletionRequest, AccountExportData, AccountExportQuery, AccountIdQuery,
         AccountImportData, AccountImportRequest, AccountMutationData, AccountRefreshRequest,
-        AccountTestQuery, RotateAccountRequest, StartAccountAuthorizationRequest,
+        AccountTestQuery, CompleteAccountAuthorizationRequest, RotateAccountRequest,
+        StartAccountAuthorizationRequest,
     };
     use gateway_core::engine::credential::ProviderAccountId;
     use serde_json::json;
@@ -280,6 +411,35 @@ mod actions {
             }))
             .is_err()
         );
+        assert!(
+            serde_json::from_value::<AccountImportRequest>(json!({
+                "provider": "openai",
+                "data": {},
+                "groupIds": []
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oauth_complete_should_not_accept_group_assignment() {
+        let flow_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]);
+        let request: CompleteAccountAuthorizationRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "flowId": flow_id,
+            "callbackUrl": "http://localhost/callback?code=ok"
+        }))
+        .expect("decode OAuth completion");
+        assert!(request.validate().is_ok());
+        assert!(
+            serde_json::from_value::<CompleteAccountAuthorizationRequest>(json!({
+                "provider": "xai",
+                "flowId": "flow_test",
+                "callbackUrl": "http://localhost/callback?code=ok",
+                "groupIds": []
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -316,7 +476,7 @@ mod actions {
 
     #[test]
     fn account_import_response_should_emit_account_ids() {
-        let response = AccountImportData::from(CredentialImportResult {
+        let response = AccountImportData::from_result(CredentialImportResult {
             config_revision: Revision::new(8).expect("revision"),
             credential_ids: vec![ProviderAccountId::new("acct_imported").expect("account ID")],
         });

@@ -4,36 +4,11 @@ use gateway_core::engine::credential::ProviderAccountId;
 
 use gateway_admin::{
     AdminServices,
-    model::provider_credentials::{CredentialMutation, ImportCredentials, ProviderQuotaRequest},
+    model::provider_credentials::{ImportCredentials, ProviderQuotaRequest},
     ports::provider::ProviderAdminErrorKind,
 };
 
 use super::accounts::{FakeAccountStore, FakeProviderAdmin, context, document, events, recorded};
-
-#[tokio::test]
-async fn xai_disable_should_commit_then_notify_the_stateless_provider() {
-    let events = events();
-    let provider = FakeProviderAdmin::new("xai", events.clone());
-    let store = FakeAccountStore::new("xai", events.clone());
-    let services = service(provider.clone(), store.clone()).await;
-
-    services
-        .xai()
-        .disable(mutation("acct_test"))
-        .await
-        .expect("disable credential");
-
-    assert_eq!(
-        recorded(&events),
-        [
-            "store.credential_details",
-            "store.set_enabled",
-            "provider.account_unavailable",
-            "provider.account_facts_changed",
-        ]
-    );
-    assert_eq!(store.audit_requests(), ["request-xai"]);
-}
 
 #[tokio::test]
 async fn xai_import_should_prepare_before_atomic_store_commit() {
@@ -131,11 +106,4 @@ async fn service(provider: Arc<FakeProviderAdmin>, store: Arc<FakeAccountStore>)
         .accounts(store)
         .build()
         .await
-}
-
-fn mutation(account_id: &str) -> CredentialMutation {
-    CredentialMutation {
-        context: context("request-xai"),
-        account_id: ProviderAccountId::new(account_id).expect("account ID"),
-    }
 }

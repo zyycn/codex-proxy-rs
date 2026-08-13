@@ -29,6 +29,9 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model_id: "coding".to_owned(),
+        routing_scope: "all".to_owned(),
+        routing_group_refs: Vec::new(),
+        routing_group_names_snapshot: serde_json::json!([]),
         client_ip: None,
         user_agent: None,
         reasoning_effort: None,
@@ -76,6 +79,9 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model_id: "coding".to_owned(),
+        routing_scope: "all".to_owned(),
+        routing_group_refs: Vec::new(),
+        routing_group_names_snapshot: serde_json::json!([]),
         client_ip: None,
         user_agent: None,
         reasoning_effort: None,
@@ -150,6 +156,66 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
     .await
     .expect("load send state after retry");
     assert_eq!(send_state, "sent");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn model_request_persists_group_routing_snapshot_without_live_group_foreign_keys() {
+    let Some(database) = TestDatabase::create("execution_group_routing_history").await else {
+        return;
+    };
+    let repository = PgExecutionStore::new(database.pool.clone());
+    let started_at = Utc::now();
+    repository
+        .insert_model_request(NewModelRequest {
+            id: "req_group_history".to_owned(),
+            client_api_key_id: None,
+            client_api_key_ref: "key_group_history".to_owned(),
+            config_revision: 7,
+            routing_scope: "groups".to_owned(),
+            routing_group_refs: vec![
+                "grp_00000000000000000000000000000001".to_owned(),
+                "grp_00000000000000000000000000000002".to_owned(),
+            ],
+            routing_group_names_snapshot: serde_json::json!(["Production Pool", "Overflow Pool"]),
+            protocol: "openai".to_owned(),
+            operation: "responses".to_owned(),
+            endpoint: "/v1/responses".to_owned(),
+            client_transport: "http_sse".to_owned(),
+            requested_model_id: "coding".to_owned(),
+            client_ip: None,
+            user_agent: None,
+            reasoning_effort: None,
+            reasoning_preset: None,
+            request_kind: None,
+            subagent_kind: None,
+            compact: false,
+            image_generation_requested: false,
+            started_at,
+            deadline_at: started_at + Duration::seconds(30),
+        })
+        .await
+        .expect("insert grouped request history");
+
+    let stored: (String, Vec<String>, serde_json::Value) = sqlx::query_as(
+        "select routing_scope, routing_group_refs, routing_group_names_snapshot
+         from model_requests where id = 'req_group_history'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load grouped request history");
+    assert_eq!(stored.0, "groups");
+    assert_eq!(
+        stored.1,
+        [
+            "grp_00000000000000000000000000000001",
+            "grp_00000000000000000000000000000002",
+        ]
+    );
+    assert_eq!(
+        stored.2,
+        serde_json::json!(["Production Pool", "Overflow Pool"])
+    );
     database.close().await;
 }
 
@@ -483,9 +549,11 @@ async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx:
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
            client_transport, requested_model_id, provider_kind, provider_account_ref, cost_source,
-           started_at, deadline_at
+           started_at, deadline_at,
+           routing_scope, routing_group_refs, routing_group_names_snapshot
          ) values ($1, 'key_status', 1, 'openai_responses', 'generate', '/v1/responses',
-           'http_json', 'status-model', 'openai', 'acct_status', 'unavailable', now(), now() + interval '1 minute')",
+           'http_json', 'status-model', 'openai', 'acct_status', 'unavailable', now(), now() + interval '1 minute',
+           'all', '{}'::text[], '[]'::jsonb)",
     )
     .bind(id)
     .execute(pool)

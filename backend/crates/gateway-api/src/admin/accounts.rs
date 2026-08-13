@@ -18,9 +18,10 @@ use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
     AdminError as AdminServiceError, PageSize,
     accounts::{
-        AccountConnectionTestEvent as DomainConnectionTestEvent, AccountCost, AccountListQuery,
-        AccountModelUsage, AccountSort, AccountSortField, AccountStatus as DomainAccountStatus,
-        AccountUsage, SortDirection,
+        AccountConcurrencyLimit, AccountConnectionTestEvent as DomainConnectionTestEvent,
+        AccountCost, AccountGroupFilter, AccountListQuery, AccountModelUsage, AccountSort,
+        AccountSortField, AccountStatus as DomainAccountStatus, AccountUpdateResult, AccountUsage,
+        AccountWeight, AccountsUpdateResult, BatchUpdateAccounts, SortDirection, UpdateAccount,
     },
     provider_credentials::{
         AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
@@ -32,9 +33,9 @@ use gateway_admin::model::{
 };
 use gateway_core::{
     engine::credential::{OpaqueProviderData, ProviderAccountId},
-    routing::{ProviderKind, UpstreamModelId},
+    routing::{AccountGroupId, ProviderKind, UpstreamModelId},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 use super::presenter::{format_compact_number, format_decimal_currency, format_number};
@@ -54,6 +55,7 @@ const MAX_REFRESH_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 64 * 1024;
 const MAX_ACCOUNT_DELETE_BATCH: usize = 200;
+const MAX_ACCOUNT_GROUP_BATCH: usize = 1000;
 
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -62,10 +64,72 @@ pub struct ListQuery {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
     pub provider: Option<String>,
+    pub group_id: Option<String>,
     pub search: Option<String>,
     pub status: Option<String>,
     pub sort_by: Option<String>,
     pub sort_direction: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchUpdateAccountsRequest {
+    pub account_ids: Vec<String>,
+    pub enabled: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub concurrency_limit: Option<u64>,
+    pub weight: u64,
+    pub group_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchUpdatedAccountsData {
+    account_ids: Vec<String>,
+    config_revision: u64,
+}
+
+impl From<AccountsUpdateResult> for BatchUpdatedAccountsData {
+    fn from(result: AccountsUpdateResult) -> Self {
+        Self {
+            account_ids: result
+                .account_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            config_revision: result.config_revision.get(),
+        }
+    }
+}
+
+impl BatchUpdateAccountsRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        if self.account_ids.is_empty()
+            || self.account_ids.len() > MAX_ACCOUNT_GROUP_BATCH
+            || self
+                .account_ids
+                .iter()
+                .any(|id| require_account_id(id, "accountIds").is_err())
+            || self.account_ids.iter().collect::<BTreeSet<_>>().len() != self.account_ids.len()
+        {
+            return Err(WireValidationError::new("accountIds"));
+        }
+        validate_wire_group_ids(&self.group_ids)?;
+        parse_concurrency_limit(self.concurrency_limit)?;
+        parse_account_weight(self.weight)?;
+        Ok(())
+    }
+
+    fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
+        self.validate()?;
+        Ok(BatchUpdateAccounts {
+            account_ids: self.account_ids,
+            enabled: self.enabled,
+            concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
+            weight: parse_account_weight(self.weight)?,
+            group_ids: validate_wire_group_ids(&self.group_ids)?,
+        })
+    }
 }
 
 impl ListQuery {
@@ -80,6 +144,14 @@ impl ListQuery {
             return Err(WireValidationError::new("pageSize"));
         }
         let provider_kind = parse_provider(self.provider.as_deref().unwrap_or("all"))?;
+        let group_filter = match self.group_id.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some("ungrouped") => Some(AccountGroupFilter::Ungrouped),
+            Some(value) => Some(AccountGroupFilter::Group(
+                AccountGroupId::new(value.to_owned())
+                    .map_err(|_| WireValidationError::new("groupId"))?,
+            )),
+        };
         let search = self
             .search
             .map(|value| value.trim().to_owned())
@@ -112,6 +184,7 @@ impl ListQuery {
             )
             .map_err(|_| WireValidationError::new("pageSize"))?,
             provider_kind,
+            group_filter,
             search,
             status,
             sort,
@@ -177,6 +250,7 @@ pub struct AccountView {
     pub id: String,
     pub name: String,
     pub provider: String,
+    pub groups: Vec<AccountGroupRefView>,
     pub resource_ref: String,
     pub email: Option<String>,
     pub account_id: Option<String>,
@@ -191,6 +265,8 @@ pub struct AccountView {
     /// 最近一次失败的上游错误描述；仅错误状态存在。
     pub error_message: Option<String>,
     pub enabled: bool,
+    pub concurrency_limit: Option<u32>,
+    pub weight: u16,
     pub access_token_expires_at: Option<String>,
     pub access_token_expires_at_display: Option<String>,
     pub refresh_token_expires_at: Option<String>,
@@ -201,6 +277,15 @@ pub struct AccountView {
     pub updated_at_display: String,
     pub quota: AccountQuotaView,
     pub usage: AccountUsageView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountGroupRefView {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub enabled: bool,
 }
 
 /// Provider quota 安全视图。
@@ -682,31 +767,49 @@ impl CompleteAccountAuthorizationRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountMutationRequest {
-    pub provider: String,
+pub struct UpdateAccountRequest {
     pub account_id: String,
+    pub enabled: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub concurrency_limit: Option<u64>,
+    pub weight: u64,
+    pub group_ids: Vec<String>,
 }
 
-impl AccountMutationRequest {
+impl UpdateAccountRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
-        AccountProvider::parse(&self.provider)?;
-        require_account_id(&self.account_id, "accountId")
+        require_account_id(&self.account_id, "accountId")?;
+        parse_concurrency_limit(self.concurrency_limit)?;
+        parse_account_weight(self.weight)?;
+        validate_wire_group_ids(&self.group_ids)?;
+        Ok(())
     }
 
-    fn into_command(
-        self,
-        context: gateway_admin::model::MutationContext,
-    ) -> Result<(AccountProvider, CredentialMutation), WireValidationError> {
+    fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
-        let provider = AccountProvider::parse(&self.provider)?;
-        Ok((
-            provider,
-            CredentialMutation {
-                context,
-                account_id: ProviderAccountId::new(self.account_id)
-                    .map_err(|_| WireValidationError::new("accountId"))?,
-            },
-        ))
+        Ok(UpdateAccount {
+            account_id: self.account_id,
+            enabled: self.enabled,
+            concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
+            weight: parse_account_weight(self.weight)?,
+            group_ids: validate_wire_group_ids(&self.group_ids)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedAccountData {
+    pub account_id: String,
+    pub config_revision: u64,
+}
+
+impl From<AccountUpdateResult> for UpdatedAccountData {
+    fn from(result: AccountUpdateResult) -> Self {
+        Self {
+            account_id: result.account_id.to_string(),
+            config_revision: result.config_revision.get(),
+        }
     }
 }
 
@@ -810,8 +913,8 @@ pub struct AccountImportData {
     pub account_ids: Vec<String>,
 }
 
-impl From<CredentialImportResult> for AccountImportData {
-    fn from(result: CredentialImportResult) -> Self {
+impl AccountImportData {
+    pub fn from_result(result: CredentialImportResult) -> Self {
         let account_ids = result
             .credential_ids
             .into_iter()
@@ -888,6 +991,46 @@ fn require_account_id(value: &str, field: &'static str) -> Result<(), WireValida
     Ok(())
 }
 
+fn parse_concurrency_limit(
+    value: Option<u64>,
+) -> Result<Option<AccountConcurrencyLimit>, WireValidationError> {
+    value
+        .map(|value| {
+            u32::try_from(value)
+                .ok()
+                .and_then(AccountConcurrencyLimit::new)
+                .ok_or_else(|| WireValidationError::new("concurrencyLimit"))
+        })
+        .transpose()
+}
+
+fn deserialize_required_nullable<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<u64>::deserialize(deserializer)
+}
+
+fn parse_account_weight(value: u64) -> Result<AccountWeight, WireValidationError> {
+    u16::try_from(value)
+        .ok()
+        .and_then(AccountWeight::new)
+        .ok_or_else(|| WireValidationError::new("weight"))
+}
+
+fn validate_wire_group_ids(values: &[String]) -> Result<Vec<AccountGroupId>, WireValidationError> {
+    if values.len() > MAX_ACCOUNT_GROUP_BATCH
+        || values.iter().collect::<BTreeSet<_>>().len() != values.len()
+    {
+        return Err(WireValidationError::new("groupIds"));
+    }
+    values
+        .iter()
+        .cloned()
+        .map(|value| AccountGroupId::new(value).map_err(|_| WireValidationError::new("groupIds")))
+        .collect()
+}
+
 /// 构造统一账号管理路由。
 pub fn router<S>() -> Router<S>
 where
@@ -900,9 +1043,12 @@ where
         .route("/api/admin/accounts/import", post(import_accounts::<S>))
         .route("/api/admin/accounts/refresh", post(refresh_account::<S>))
         .route("/api/admin/accounts/rotate", post(rotate_account::<S>))
-        .route("/api/admin/accounts/enable", post(enable_account::<S>))
-        .route("/api/admin/accounts/disable", post(disable_account::<S>))
+        .route("/api/admin/accounts/update", post(update_account::<S>))
         .route("/api/admin/accounts/delete", post(delete_accounts::<S>))
+        .route(
+            "/api/admin/accounts/batch-update",
+            post(batch_update_accounts::<S>),
+        )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
             "/api/admin/accounts/quota/refresh",
@@ -925,6 +1071,27 @@ where
             "/api/admin/accounts/oauth/complete",
             post(complete_account_authorization::<S>),
         )
+}
+
+async fn batch_update_accounts<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<BatchUpdateAccountsRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .batch_update(&auth.context().mutation_context(), command)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(BatchUpdatedAccountsData::from(result)),
+    ))
 }
 
 async fn list_accounts<S>(
@@ -1016,7 +1183,7 @@ where
     .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::CREATED,
-        AdminEnvelope::ok(AccountImportData::from(result)),
+        AdminEnvelope::ok(AccountImportData::from_result(result)),
     ))
 }
 
@@ -1111,64 +1278,24 @@ where
     ))
 }
 
-async fn enable_account<S>(
+async fn update_account<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountMutationRequest>,
+    Json(request): Json<UpdateAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    mutate_account(auth, state, request, AccountMutationAction::Enable).await
-}
-
-async fn disable_account<S>(
-    auth: AdminAuth,
-    State(state): State<S>,
-    Json(request): Json<AccountMutationRequest>,
-) -> Result<impl IntoResponse, AdminError>
-where
-    S: AdminSessionState + Send + Sync,
-{
-    mutate_account(auth, state, request, AccountMutationAction::Disable).await
-}
-
-#[derive(Clone, Copy)]
-enum AccountMutationAction {
-    Enable,
-    Disable,
-}
-
-async fn mutate_account<S>(
-    auth: AdminAuth,
-    state: S,
-    request: AccountMutationRequest,
-    action: AccountMutationAction,
-) -> Result<impl IntoResponse, AdminError>
-where
-    S: AdminSessionState + Send + Sync,
-{
-    let (provider, command) = request
-        .into_command(auth.context().mutation_context())
-        .map_err(map_wire_error)?;
-    let result = match (provider, action) {
-        (AccountProvider::OpenAi, AccountMutationAction::Enable) => {
-            state.admin_services().openai().enable(command).await
-        }
-        (AccountProvider::OpenAi, AccountMutationAction::Disable) => {
-            state.admin_services().openai().disable(command).await
-        }
-        (AccountProvider::Xai, AccountMutationAction::Enable) => {
-            state.admin_services().xai().enable(command).await
-        }
-        (AccountProvider::Xai, AccountMutationAction::Disable) => {
-            state.admin_services().xai().disable(command).await
-        }
-    }
-    .map_err(map_service_error)?;
+    let command = request.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .update(&auth.context().mutation_context(), command)
+        .await
+        .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountMutationData::from(result)),
+        AdminEnvelope::ok(UpdatedAccountData::from(result)),
     ))
 }
 
@@ -1384,6 +1511,16 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
         id: account.id.clone(),
         name: account.name,
         provider: account.provider_kind.to_string(),
+        groups: account
+            .groups
+            .into_iter()
+            .map(|group| AccountGroupRefView {
+                id: group.id.to_string(),
+                name: group.name,
+                color: group.color.as_str().to_owned(),
+                enabled: group.enabled,
+            })
+            .collect(),
         resource_ref: account.id,
         email: account.email,
         account_id: account.upstream_account_id,
@@ -1398,6 +1535,8 @@ fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
             .map(|reason| reason.as_str().to_owned()),
         error_message: projection.error_message,
         enabled: account.enabled,
+        concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),
+        weight: account.weight.get(),
         access_token_expires_at: expires_at,
         access_token_expires_at_display: account
             .access_token_expires_at

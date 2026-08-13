@@ -1,7 +1,7 @@
 //! 明文 `client_api_keys` 的 PostgreSQL owner。
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     sync::{
         Arc, Mutex,
@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use gateway_admin::{
     model::{
         MutationContext,
+        account_groups::AccountGroupRef as AdminAccountGroupRef,
         client_keys::{
             ClientKeyCursor as AdminClientKeyCursor,
             ClientKeyCursorValue as AdminClientKeyCursorValue,
@@ -27,11 +28,12 @@ use gateway_admin::{
     },
     ports::store::{AdminStoreResult, ClientKeyStore},
 };
-use gateway_core::routing::ProviderKind;
 use gateway_core::{
     engine::execution::ClientApiKeyUsageSink,
     policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
+    routing::{AccountGroupId, ProviderKind},
 };
+use serde::Deserialize;
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::{
@@ -49,7 +51,7 @@ const CLIENT_API_KEY_LAST_USED_FLUSH_DELAY: Duration = Duration::from_secs(1);
 pub struct ClientApiKeySnapshot {
     pub id: ClientApiKeyId,
     pub plaintext_key: PlaintextClientApiKey,
-    pub provider_kind: String,
+    pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
 }
 
@@ -57,7 +59,7 @@ impl ClientApiKeySnapshot {
     pub(crate) fn from_persisted(
         id: String,
         key: String,
-        provider_kind: String,
+        group_ids: Vec<String>,
         max_concurrency: i64,
         requests_per_minute: i64,
     ) -> StoreResult<Self> {
@@ -65,7 +67,12 @@ impl ClientApiKeySnapshot {
             id: ClientApiKeyId::new(id).map_err(|_| invalid("persisted key ID is invalid"))?,
             plaintext_key: PlaintextClientApiKey::new(key)
                 .map_err(|_| invalid("persisted plaintext key is invalid"))?,
-            provider_kind,
+            group_ids: group_ids
+                .into_iter()
+                .map(|id| {
+                    AccountGroupId::new(id).map_err(|_| invalid("persisted group ID is invalid"))
+                })
+                .collect::<StoreResult<Vec<_>>>()?,
             limits: RateLimits {
                 max_concurrency: to_u64(max_concurrency)?,
                 requests_per_minute: to_u64(requests_per_minute)?,
@@ -78,7 +85,6 @@ impl ClientApiKeySnapshot {
 pub struct ClientApiKeySecret {
     pub id: String,
     pub key: String,
-    pub provider_kind: String,
     pub enabled: bool,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
@@ -100,7 +106,8 @@ pub struct ClientApiKeyRecord {
     pub id: String,
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: String,
+    pub groups: Vec<ClientApiKeyGroupRecord>,
+    pub provider_kinds: Vec<String>,
     pub prefix: String,
     pub enabled: bool,
     pub max_concurrency: u64,
@@ -108,6 +115,14 @@ pub struct ClientApiKeyRecord {
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ClientApiKeyGroupRecord {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -250,7 +265,7 @@ pub struct NewClientApiKey {
     pub id: String,
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: String,
+    pub group_ids: Vec<String>,
     pub key: String,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
@@ -271,20 +286,9 @@ impl NewClientApiKey {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "id", &self.id)?;
         require_nonempty(ENTITY, "name", &self.name)?;
-        require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
+        validate_group_ids(&self.group_ids)?;
         validate_key(&self.key)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateClientApiKey {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub provider_kind: String,
-    pub enabled: bool,
-    pub max_concurrency: u64,
-    pub requests_per_minute: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,7 +296,7 @@ pub struct UpdateClientApiKeyDetails {
     pub id: String,
     pub name: String,
     pub label: Option<String>,
-    pub provider_kind: String,
+    pub group_ids: Vec<String>,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
 }
@@ -301,7 +305,7 @@ impl UpdateClientApiKeyDetails {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "id", &self.id)?;
         require_nonempty(ENTITY, "name", &self.name)?;
-        require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
+        validate_group_ids(&self.group_ids)?;
         to_i64(self.max_concurrency)?;
         to_i64(self.requests_per_minute)?;
         Ok(())
@@ -316,7 +320,6 @@ pub trait ClientApiKeyRepository: Send + Sync {
     ) -> StoreResult<ClientApiKeyPage>;
     async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>>;
     async fn reveal_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeySecret>>;
-    async fn update_client_api_key(&self, key: UpdateClientApiKey) -> StoreResult<bool>;
     async fn touch_client_api_keys(
         &self,
         touched_at: &BTreeMap<String, DateTime<Utc>>,
@@ -344,9 +347,38 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         query.validate()?;
         let total = count_client_api_keys(&self.pool, query.search.as_deref()).await?;
         let mut statement = QueryBuilder::<Postgres>::new(
-            "select id, name, label, provider_kind, left(key, 10) as prefix, enabled, max_concurrency,
-                    requests_per_minute, last_used_at, created_at, updated_at
-             from client_api_keys where true",
+            "select k.id, k.name, k.label, left(k.key, 10) as prefix, k.enabled,
+                    k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
+                    k.updated_at,
+                    coalesce(groups.groups, '[]'::jsonb) as groups,
+                    case
+                      when groups.binding_count = 0 then coalesce(
+                        (select array_agg(distinct a.provider_kind order by a.provider_kind)
+                         from provider_accounts a),
+                        '{}'
+                      )
+                      else coalesce(groups.provider_kinds, '{}')
+                    end as provider_kinds
+             from client_api_keys k
+             left join lateral (
+               select
+                 (select count(*)::bigint
+                  from client_api_key_groups kg
+                  where kg.client_api_key_id = k.id) as binding_count,
+                 (select jsonb_agg(jsonb_build_object(
+                           'id', g.id, 'name', g.name, 'color', g.color, 'enabled', g.enabled
+                         ) order by g.id)
+                  from client_api_key_groups kg
+                  join account_groups g on g.id = kg.account_group_id
+                  where kg.client_api_key_id = k.id) as groups,
+                 (select array_agg(distinct a.provider_kind order by a.provider_kind)
+                  from client_api_key_groups kg
+                  join account_groups g on g.id = kg.account_group_id and g.enabled
+                  join account_group_accounts gm on gm.account_group_id = g.id
+                  join provider_accounts a on a.id = gm.provider_account_id
+                  where kg.client_api_key_id = k.id) as provider_kinds
+             ) groups on true
+             where true",
         );
         push_client_key_search(&mut statement, query.search.as_deref());
         if let Some(cursor) = &query.cursor {
@@ -356,12 +388,12 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         statement.push(" limit ");
         statement.push_bind(i64::from(query.page_size) + 1);
         let rows = statement
-            .build_query_as::<ClientRecordRow>()
+            .build()
             .fetch_all(&self.pool)
             .await
             .map_err(|_| postgres_unavailable("list client API keys"))?;
         let mut items = rows
-            .into_iter()
+            .iter()
             .map(client_record_from_row)
             .collect::<StoreResult<Vec<_>>>()?;
         let has_more = items.len() > usize::from(query.page_size);
@@ -384,8 +416,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
 
     async fn reveal_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeySecret>> {
         require_nonempty(ENTITY, "id", id)?;
-        sqlx::query_as::<_, (String, String, String, bool, i64, i64)>(
-            "select id, key, provider_kind, enabled, max_concurrency, requests_per_minute
+        sqlx::query_as::<_, (String, String, bool, i64, i64)>(
+            "select id, key, enabled, max_concurrency, requests_per_minute
              from client_api_keys where id = $1",
         )
         .bind(id)
@@ -398,39 +430,46 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
 
     async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>> {
         require_nonempty(ENTITY, "id", id)?;
-        sqlx::query_as::<_, ClientRecordRow>(
-            "select id, name, label, provider_kind, left(key, 10) as prefix, enabled, max_concurrency,
-                    requests_per_minute, last_used_at, created_at, updated_at
-             from client_api_keys where id = $1",
+        sqlx::query(
+            "select k.id, k.name, k.label, left(k.key, 10) as prefix, k.enabled,
+                    k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
+                    k.updated_at, coalesce(groups.groups, '[]'::jsonb) as groups,
+                    case
+                      when groups.binding_count = 0 then coalesce(
+                        (select array_agg(distinct a.provider_kind order by a.provider_kind)
+                         from provider_accounts a),
+                        '{}'
+                      )
+                      else coalesce(groups.provider_kinds, '{}')
+                    end as provider_kinds
+             from client_api_keys k
+             left join lateral (
+               select
+                 (select count(*)::bigint
+                  from client_api_key_groups kg
+                  where kg.client_api_key_id = k.id) as binding_count,
+                 (select jsonb_agg(jsonb_build_object(
+                           'id', g.id, 'name', g.name, 'color', g.color, 'enabled', g.enabled
+                         ) order by g.id)
+                  from client_api_key_groups kg
+                  join account_groups g on g.id = kg.account_group_id
+                  where kg.client_api_key_id = k.id) as groups,
+                 (select array_agg(distinct a.provider_kind order by a.provider_kind)
+                  from client_api_key_groups kg
+                  join account_groups g on g.id = kg.account_group_id and g.enabled
+                  join account_group_accounts gm on gm.account_group_id = g.id
+                  join provider_accounts a on a.id = gm.provider_account_id
+                  where kg.client_api_key_id = k.id) as provider_kinds
+             ) groups on true
+             where k.id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("get client API key"))?
+        .as_ref()
         .map(client_record_from_row)
         .transpose()
-    }
-
-    async fn update_client_api_key(&self, key: UpdateClientApiKey) -> StoreResult<bool> {
-        require_nonempty(ENTITY, "id", &key.id)?;
-        require_nonempty(ENTITY, "name", &key.name)?;
-        let result = sqlx::query(
-            "update client_api_keys
-             set name = $2, label = $3, provider_kind = $4, enabled = $5, max_concurrency = $6,
-                 requests_per_minute = $7, updated_at = now()
-             where id = $1",
-        )
-        .bind(key.id)
-        .bind(key.name)
-        .bind(key.label)
-        .bind(key.provider_kind)
-        .bind(key.enabled)
-        .bind(to_i64(key.max_concurrency)?)
-        .bind(to_i64(key.requests_per_minute)?)
-        .execute(&self.pool)
-        .await
-        .map_err(|_| postgres_unavailable("update client API key"))?;
-        Ok(result.rows_affected() == 1)
     }
 
     async fn touch_client_api_keys(
@@ -637,7 +676,11 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     id: id.as_str().to_owned(),
                     name: command.name,
                     label: command.label,
-                    provider_kind: command.provider_kind.as_str().to_owned(),
+                    group_ids: command
+                        .group_ids
+                        .iter()
+                        .map(|id| id.as_str().to_owned())
+                        .collect(),
                     key: command.plaintext,
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
@@ -650,7 +693,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     [
                         "name",
                         "label",
-                        "provider_kind",
+                        "group_ids",
                         "key",
                         "enabled",
                         "max_concurrency",
@@ -679,7 +722,11 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     id: id.as_str().to_owned(),
                     name: command.name,
                     label: command.label,
-                    provider_kind: command.provider_kind.as_str().to_owned(),
+                    group_ids: command
+                        .group_ids
+                        .iter()
+                        .map(|id| id.as_str().to_owned())
+                        .collect(),
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
                 },
@@ -691,7 +738,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                     [
                         "name",
                         "label",
-                        "provider_kind",
+                        "group_ids",
                         "max_concurrency",
                         "requests_per_minute",
                     ]
@@ -828,8 +875,30 @@ fn admin_client_key_record(record: ClientApiKeyRecord) -> AdminStoreResult<Admin
             .map_err(|_| admin_store_error(ENTITY, invalid("invalid client key id")))?,
         name: record.name,
         label: record.label,
-        provider_kind: ProviderKind::new(record.provider_kind)
-            .map_err(|_| admin_store_error(ENTITY, invalid("invalid provider kind")))?,
+        groups: record
+            .groups
+            .into_iter()
+            .map(|group| {
+                Ok(AdminAccountGroupRef {
+                    id: AccountGroupId::new(group.id)
+                        .map_err(|_| admin_store_error(ENTITY, invalid("invalid group id")))?,
+                    name: group.name,
+                    color: gateway_admin::model::account_groups::AccountGroupColor::parse(
+                        &group.color,
+                    )
+                    .ok_or_else(|| admin_store_error(ENTITY, invalid("invalid group color")))?,
+                    enabled: group.enabled,
+                })
+            })
+            .collect::<AdminStoreResult<Vec<_>>>()?,
+        provider_kinds: record
+            .provider_kinds
+            .into_iter()
+            .map(|provider| {
+                ProviderKind::new(provider)
+                    .map_err(|_| admin_store_error(ENTITY, invalid("invalid provider kind")))
+            })
+            .collect::<AdminStoreResult<Vec<_>>>()?,
         prefix: record.prefix,
         enabled: record.enabled,
         limits: RateLimits {
@@ -849,20 +918,20 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     key.validate()?;
     sqlx::query(
         "insert into client_api_keys (
-           id, name, label, provider_kind, key, enabled, max_concurrency, requests_per_minute,
+           id, name, label, key, enabled, max_concurrency, requests_per_minute,
            last_used_at, created_at, updated_at
-         ) values ($1, $2, $3, $4, $5, true, $6, $7, null, now(), now())",
+         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now())",
     )
     .bind(&key.id)
     .bind(&key.name)
     .bind(&key.label)
-    .bind(&key.provider_kind)
     .bind(&key.key)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
     .execute(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("insert client API key in transaction"))?;
+    replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await?;
     Ok(())
 }
 
@@ -873,20 +942,20 @@ pub(crate) async fn update_client_api_key_in_transaction(
     key.validate()?;
     let result = sqlx::query(
         "update client_api_keys
-         set name = $2, label = $3, provider_kind = $4, max_concurrency = $5,
-             requests_per_minute = $6, updated_at = now()
+         set name = $2, label = $3, max_concurrency = $4,
+             requests_per_minute = $5, updated_at = now()
          where id = $1",
     )
     .bind(&key.id)
     .bind(&key.name)
     .bind(&key.label)
-    .bind(&key.provider_kind)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
     .execute(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update client API key in transaction"))?;
-    require_changed(result.rows_affected(), &key.id)
+    require_changed(result.rows_affected(), &key.id)?;
+    replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await
 }
 
 pub(crate) async fn set_client_api_key_enabled_in_transaction(
@@ -929,6 +998,59 @@ fn require_changed(rows_affected: u64, id: &str) -> StoreResult<()> {
     }
 }
 
+async fn replace_client_api_key_groups_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    key_id: &str,
+    group_ids: &[String],
+) -> StoreResult<()> {
+    validate_group_ids(group_ids)?;
+    if !group_ids.is_empty() {
+        let count = sqlx::query_scalar::<_, i64>(
+            "select count(*)::bigint from account_groups where id = any($1::text[])",
+        )
+        .bind(group_ids)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("validate client API key groups"))?;
+        if usize::try_from(count).ok() != Some(group_ids.len()) {
+            return Err(StoreError::NotFound {
+                entity: "account group",
+                id: "client API key group selection".to_owned(),
+            });
+        }
+    }
+    sqlx::query("delete from client_api_key_groups where client_api_key_id = $1")
+        .bind(key_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("delete client API key groups"))?;
+    if !group_ids.is_empty() {
+        sqlx::query(
+            "insert into client_api_key_groups
+             (client_api_key_id, account_group_id, created_at)
+             select $1, group_id, now() from unnest($2::text[]) group_id",
+        )
+        .bind(key_id)
+        .bind(group_ids)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("insert client API key groups"))?;
+    }
+    Ok(())
+}
+
+fn validate_group_ids(group_ids: &[String]) -> StoreResult<()> {
+    if group_ids.len() > 1000
+        || group_ids.iter().collect::<BTreeSet<_>>().len() != group_ids.len()
+        || group_ids
+            .iter()
+            .any(|id| AccountGroupId::new(id.clone()).is_err())
+    {
+        return Err(invalid("group IDs are invalid or duplicated"));
+    }
+    Ok(())
+}
+
 fn validate_key(key: &str) -> StoreResult<()> {
     let valid = key.len() == KEY_LENGTH
         && key.starts_with("sk_")
@@ -945,45 +1067,53 @@ fn validate_key(key: &str) -> StoreResult<()> {
 }
 
 fn client_secret_from_row(
-    row: (String, String, String, bool, i64, i64),
+    row: (String, String, bool, i64, i64),
 ) -> StoreResult<ClientApiKeySecret> {
     Ok(ClientApiKeySecret {
         id: row.0,
         key: row.1,
-        provider_kind: row.2,
-        enabled: row.3,
-        max_concurrency: to_u64(row.4)?,
-        requests_per_minute: to_u64(row.5)?,
+        enabled: row.2,
+        max_concurrency: to_u64(row.3)?,
+        requests_per_minute: to_u64(row.4)?,
     })
 }
 
-type ClientRecordRow = (
-    String,
-    String,
-    Option<String>,
-    String,
-    String,
-    bool,
-    i64,
-    i64,
-    Option<DateTime<Utc>>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
-
-fn client_record_from_row(row: ClientRecordRow) -> StoreResult<ClientApiKeyRecord> {
+fn client_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClientApiKeyRecord> {
+    use sqlx::Row as _;
+    let groups: serde_json::Value = row
+        .try_get("groups")
+        .map_err(|_| invalid("invalid groups"))?;
     Ok(ClientApiKeyRecord {
-        id: row.0,
-        name: row.1,
-        label: row.2,
-        provider_kind: row.3,
-        prefix: row.4,
-        enabled: row.5,
-        max_concurrency: to_u64(row.6)?,
-        requests_per_minute: to_u64(row.7)?,
-        last_used_at: row.8,
-        created_at: row.9,
-        updated_at: row.10,
+        id: row.try_get("id").map_err(|_| invalid("invalid id"))?,
+        name: row.try_get("name").map_err(|_| invalid("invalid name"))?,
+        label: row.try_get("label").map_err(|_| invalid("invalid label"))?,
+        groups: serde_json::from_value(groups).map_err(|_| invalid("invalid groups"))?,
+        provider_kinds: row
+            .try_get("provider_kinds")
+            .map_err(|_| invalid("invalid provider kinds"))?,
+        prefix: row
+            .try_get("prefix")
+            .map_err(|_| invalid("invalid prefix"))?,
+        enabled: row
+            .try_get("enabled")
+            .map_err(|_| invalid("invalid enabled"))?,
+        max_concurrency: to_u64(
+            row.try_get("max_concurrency")
+                .map_err(|_| invalid("invalid max concurrency"))?,
+        )?,
+        requests_per_minute: to_u64(
+            row.try_get("requests_per_minute")
+                .map_err(|_| invalid("invalid requests per minute"))?,
+        )?,
+        last_used_at: row
+            .try_get("last_used_at")
+            .map_err(|_| invalid("invalid last used at"))?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|_| invalid("invalid created at"))?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|_| invalid("invalid updated at"))?,
     })
 }
 

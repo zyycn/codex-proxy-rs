@@ -1,11 +1,12 @@
 //! 下游 Client API Key 的准入策略。
 //!
-//! Client API Key 绑定一个 Provider 平台；模型名称不参与改写或 allowlist 判断。
+//! Client API Key 冻结账号分组权限；模型名称不参与权限判断。
 
 use std::fmt;
+use std::sync::Arc;
 
 use crate::error::{IdentifierError, PolicyError, validate_text};
-use crate::routing::ProviderKind;
+use crate::routing::FrozenAccountScope;
 
 /// `client_api_keys.id` 的核心值对象。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -88,7 +89,7 @@ impl RateLimits {
 pub struct ClientPolicy {
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
-    provider_kind: ProviderKind,
+    account_scope: Arc<FrozenAccountScope>,
     enabled: bool,
     limits: RateLimits,
 }
@@ -98,14 +99,14 @@ impl ClientPolicy {
     pub const fn new(
         key_id: ClientApiKeyId,
         plaintext_key: PlaintextClientApiKey,
-        provider_kind: ProviderKind,
+        account_scope: Arc<FrozenAccountScope>,
         enabled: bool,
         limits: RateLimits,
     ) -> Self {
         Self {
             key_id,
             plaintext_key,
-            provider_kind,
+            account_scope,
             enabled,
             limits,
         }
@@ -122,8 +123,8 @@ impl ClientPolicy {
     }
 
     #[must_use]
-    pub const fn provider_kind(&self) -> &ProviderKind {
-        &self.provider_kind
+    pub const fn account_scope(&self) -> &Arc<FrozenAccountScope> {
+        &self.account_scope
     }
 
     #[must_use]

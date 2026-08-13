@@ -13,6 +13,7 @@ use crate::engine::credential::{
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
 use crate::error::{IdentifierError, validate_text};
+use crate::policy::ClientApiKeyId;
 use crate::routing::{ProviderKind, UpstreamModelId};
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
@@ -170,6 +171,7 @@ pub enum ProviderLeaseRequest {
 pub trait ProviderLeasePort: Send + Sync {
     fn load_state<'a>(
         &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
         provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>>;

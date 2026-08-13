@@ -127,6 +127,7 @@ enum AffinityEscapeReason {
     QuotaExhausted,
     Cooldown,
     LeaseSaturated,
+    HigherPriority,
     PinnedAccount,
     SelectionInvariant,
 }
@@ -138,6 +139,7 @@ impl AffinityEscapeReason {
             Self::QuotaExhausted => "quota_exhausted",
             Self::Cooldown => "cooldown",
             Self::LeaseSaturated => "lease_saturated",
+            Self::HigherPriority => "higher_priority",
             Self::PinnedAccount => "pinned_account",
             Self::SelectionInvariant => "selection_invariant",
         }
@@ -195,8 +197,13 @@ impl AffinitySelection {
             PreferredAccountSelection::Blocked(AccountSchedulingBlocker::RequestInterval) => {
                 self.escape(AffinityEscapeReason::Cooldown);
             }
+            PreferredAccountSelection::Blocked(AccountSchedulingBlocker::LowerWeight) => {
+                self.escape(AffinityEscapeReason::HigherPriority);
+            }
             PreferredAccountSelection::Blocked(
-                AccountSchedulingBlocker::LocalAvailability | AccountSchedulingBlocker::Excluded,
+                AccountSchedulingBlocker::LocalAvailability
+                | AccountSchedulingBlocker::Excluded
+                | AccountSchedulingBlocker::OutsideClientScope,
             )
             | PreferredAccountSelection::Missing => {
                 self.escape(AffinityEscapeReason::HardUnavailable);
@@ -282,6 +289,11 @@ impl CodexCredentialSelector {
             .into_iter()
             .filter(|account| {
                 account.provider() == &self.provider_kind
+                    && (diagnostic
+                        || request
+                            .attempt
+                            .account_scope()
+                            .is_some_and(|scope| scope.allows(account.id())))
                     && (diagnostic || {
                         let observed_support = self
                             .catalog
@@ -310,7 +322,11 @@ impl CodexCredentialSelector {
             .collect::<Vec<_>>();
         let scheduling = self
             .leases
-            .load_state(&self.provider_kind, &account_ids)
+            .load_state(
+                request.attempt.client_api_key_ref(),
+                &self.provider_kind,
+                &account_ids,
+            )
             .await?;
         let round_robin_cursor = scheduling.round_robin_cursor();
         let candidates = accounts
@@ -411,6 +427,7 @@ impl CodexCredentialSelector {
                 } else {
                     AccountEligibilityPolicy::Enforce
                 },
+                account_scope: request.attempt.account_scope().cloned(),
             };
             let Some(selection) = AccountSelector.select(&candidates, &context) else {
                 return match shortest_retry {
@@ -436,7 +453,7 @@ impl CodexCredentialSelector {
                         self.provider_kind.clone(),
                         account.id().clone(),
                         account.revision(),
-                        policy.max_concurrent_per_account(),
+                        account.effective_concurrency(policy.max_concurrent_per_account()),
                         policy.request_interval(),
                         request.attempt.deadline(),
                     ),

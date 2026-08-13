@@ -436,6 +436,9 @@ pub(crate) fn admin_usage_record(
         id: record.id,
         client_api_key_ref: record.client_api_key_ref,
         config_revision: record.config_revision,
+        routing_scope: record.routing_scope,
+        routing_group_refs: record.routing_group_refs,
+        routing_group_names_snapshot: record.routing_group_names_snapshot,
         protocol: record.protocol,
         operation: record.operation,
         endpoint: record.endpoint,
@@ -655,6 +658,13 @@ pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<
         id: get(row, "id")?,
         client_api_key_ref: get(row, "client_api_key_ref")?,
         config_revision: unsigned(row, "config_revision")?,
+        routing_scope: get(row, "routing_scope")?,
+        routing_group_refs: get(row, "routing_group_refs")?,
+        routing_group_names_snapshot: get::<sqlx::types::Json<Vec<String>>>(
+            row,
+            "routing_group_names_snapshot",
+        )?
+        .0,
         protocol: get(row, "protocol")?,
         operation: get(row, "operation")?,
         endpoint: get(row, "endpoint")?,

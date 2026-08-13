@@ -1,6 +1,7 @@
 //! `provider_accounts` row 模型、解码与校验。
 
 use super::*;
+use gateway_core::routing::AccountGroupId;
 
 pub(crate) const ENTITY: &str = "provider account";
 pub(crate) const CREDENTIALS_MAX_BYTES: usize = 256 * 1024;
@@ -105,6 +106,8 @@ pub struct ProviderAccountSummary {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
     pub quota: QuotaState,
@@ -150,6 +153,8 @@ pub struct NewProviderAccount {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
 }
@@ -274,10 +279,12 @@ impl fmt::Debug for RotateProviderAccount {
 }
 
 #[derive(Debug, Clone)]
-pub struct SetProviderAccountEnabled {
-    pub scope: ProviderAccountAdminScope,
-    pub account_id: String,
+pub struct BatchUpdateProviderAccountsAdmin {
+    pub account_ids: Vec<String>,
     pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
+    pub group_ids: Vec<AccountGroupId>,
     pub audit: AdminAuditEvent,
 }
 
@@ -334,7 +341,7 @@ impl ProviderAccountStateUpdate {
 
 pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
@@ -342,7 +349,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, 
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
@@ -401,6 +408,7 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_reason,
         summary.last_error_message,
     )
+    .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_refresh_schedule(
         summary.has_refresh_token,
         summary.next_refresh_at.map(Into::into),
@@ -446,6 +454,18 @@ pub(crate) fn account_summary_from_row(
         quota_reset_at.map(Into::into),
     )
     .ok_or_else(|| invalid("invalid persisted quota fact"))?;
+    let concurrency_limit = get::<Option<i64>>(&row, "concurrency_limit")?
+        .map(|value| {
+            u32::try_from(value)
+                .ok()
+                .and_then(AccountConcurrencyLimit::new)
+                .ok_or_else(|| invalid("invalid concurrency_limit"))
+        })
+        .transpose()?;
+    let weight = u16::try_from(get::<i16>(&row, "weight")?)
+        .ok()
+        .and_then(AccountWeight::new)
+        .ok_or_else(|| invalid("invalid weight"))?;
     Ok(ProviderAccountSummary {
         id: get(&row, "id")?,
         provider_kind: get(&row, "provider_kind")?,
@@ -460,6 +480,8 @@ pub(crate) fn account_summary_from_row(
         access_token_expires_at: get(&row, "access_token_expires_at")?,
         next_refresh_at: get(&row, "next_refresh_at")?,
         enabled: get(&row, "enabled")?,
+        concurrency_limit,
+        weight,
         credential_state: parse_credential_state(&credential_state)?,
         credential_observed_at: get(&row, "credential_observed_at")?,
         quota,

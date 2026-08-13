@@ -18,7 +18,8 @@ use crate::{
         AdminError, MutationContext,
         accounts::{
             AccountConnectionTestEvent, AccountConnectionTestEventStream, AccountListQuery,
-            AccountPageItem, AccountUsageWindowQuery,
+            AccountPageItem, AccountUpdateResult, AccountUsageWindowQuery, AccountsUpdateResult,
+            BatchUpdateAccounts, UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -53,6 +54,18 @@ pub trait AccountsService: Send + Sync {
         context: &MutationContext,
         account_id: ProviderAccountId,
     ) -> Result<AccountRefreshResult, AdminError>;
+
+    async fn update(
+        &self,
+        context: &MutationContext,
+        command: UpdateAccount,
+    ) -> Result<AccountUpdateResult, AdminError>;
+
+    async fn batch_update(
+        &self,
+        context: &MutationContext,
+        command: BatchUpdateAccounts,
+    ) -> Result<AccountsUpdateResult, AdminError>;
 
     async fn quota(
         &self,
@@ -381,6 +394,76 @@ impl AccountsService for DefaultAccountsService {
             config_revision: result.config_revision,
             account,
         })
+    }
+
+    async fn update(
+        &self,
+        context: &MutationContext,
+        command: UpdateAccount,
+    ) -> Result<AccountUpdateResult, AdminError> {
+        let account_id = ProviderAccountId::new(command.account_id.clone())
+            .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
+        let (_, provider) = self.provider_for_account(&account_id).await?;
+        let enabled = command.enabled;
+        let result = self
+            .accounts
+            .update_account(command, context)
+            .await
+            .map_err(|error| map_store_error(error, "provider account"))?;
+        if !enabled {
+            provider.account_unavailable(&account_id).await;
+        }
+        provider
+            .account_facts_changed(std::slice::from_ref(&account_id))
+            .await;
+        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        Ok(result)
+    }
+
+    async fn batch_update(
+        &self,
+        context: &MutationContext,
+        command: BatchUpdateAccounts,
+    ) -> Result<AccountsUpdateResult, AdminError> {
+        let account_ids = command
+            .account_ids
+            .iter()
+            .map(|id| {
+                ProviderAccountId::new(id.clone())
+                    .map_err(|_| AdminError::invalid("Invalid provider account ID"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut providers = BTreeMap::<
+            ProviderKind,
+            (
+                Arc<dyn crate::ports::provider::ProviderAdmin>,
+                Vec<ProviderAccountId>,
+            ),
+        >::new();
+        for account_id in &account_ids {
+            let (item, provider) = self.provider_for_account(account_id).await?;
+            providers
+                .entry(item.account.provider_kind)
+                .or_insert_with(|| (provider, Vec::new()))
+                .1
+                .push(account_id.clone());
+        }
+        let enabled = command.enabled;
+        let result = self
+            .accounts
+            .batch_update_accounts(command, context)
+            .await
+            .map_err(|error| map_store_error(error, "provider accounts"))?;
+        for (provider, provider_ids) in providers.values() {
+            if !enabled {
+                for account_id in provider_ids {
+                    provider.account_unavailable(account_id).await;
+                }
+            }
+            provider.account_facts_changed(provider_ids).await;
+        }
+        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        Ok(result)
     }
 
     async fn quota(

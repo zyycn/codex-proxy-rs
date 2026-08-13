@@ -11,9 +11,9 @@ use crate::{
         provider_credentials::{
             AuthorizationStarted, CompleteAuthorization, CredentialDeletion,
             CredentialDeletionResult, CredentialDetails, CredentialImportCommit,
-            CredentialImportResult, CredentialListQuery, CredentialMutation,
-            CredentialMutationResult, CredentialPage, ImportCredentials, PrepareCredentialImport,
-            PrepareCredentialRotation, ProviderQuotaRequest, RotateCredential, StartAuthorization,
+            CredentialImportResult, CredentialListQuery, CredentialMutationResult, CredentialPage,
+            ImportCredentials, PrepareCredentialImport, PrepareCredentialRotation,
+            ProviderQuotaRequest, RotateCredential, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -22,8 +22,7 @@ use crate::{
 use super::{
     commit_authorization, commit_credential_rotation, delete_credentials, map_provider_error,
     map_store_error, pending_authorization, publish_committed, required_credential,
-    set_credential_enabled, validate_authorization_commit, validate_prepared_import,
-    validate_prepared_rotation,
+    validate_authorization_commit, validate_prepared_import, validate_prepared_rotation,
 };
 
 /// OpenAI 固定管理路由消费的服务。
@@ -49,14 +48,6 @@ pub trait OpenAiService: Send + Sync {
     async fn rotate(
         &self,
         command: RotateCredential,
-    ) -> Result<CredentialMutationResult, AdminError>;
-    async fn enable(
-        &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError>;
-    async fn disable(
-        &self,
-        command: CredentialMutation,
     ) -> Result<CredentialMutationResult, AdminError>;
     async fn delete(
         &self,
@@ -248,38 +239,6 @@ impl OpenAiService for DefaultOpenAiService {
         self.provider
             .account_facts_changed(std::slice::from_ref(&result.account_id))
             .await;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        Ok(result)
-    }
-
-    async fn enable(
-        &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError> {
-        let result = set_credential_enabled(
-            self.accounts.as_ref(),
-            self.provider.as_ref(),
-            command,
-            true,
-            "OpenAI credential",
-        )
-        .await?;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        Ok(result)
-    }
-
-    async fn disable(
-        &self,
-        command: CredentialMutation,
-    ) -> Result<CredentialMutationResult, AdminError> {
-        let result = set_credential_enabled(
-            self.accounts.as_ref(),
-            self.provider.as_ref(),
-            command,
-            false,
-            "OpenAI credential",
-        )
-        .await?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         Ok(result)
     }

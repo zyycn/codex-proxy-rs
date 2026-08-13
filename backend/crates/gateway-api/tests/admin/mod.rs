@@ -13,9 +13,16 @@ use gateway_admin::{
     AdminConfig, AdminServices, InitialAdminPassword,
     model::{
         MutationContext, Revision,
+        account_groups::{
+            AccountGroupAccountSummary, AccountGroupCapacity, AccountGroupColor,
+            AccountGroupListQuery, AccountGroupMember, AccountGroupMembers, AccountGroupMutation,
+            AccountGroupPage, AccountGroupRecord, AccountGroupUsage, DeleteAccountGroup,
+            NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+        },
         accounts::{
-            AccountListQuery, AccountPage, AccountPageItem, AccountUsage, AccountUsageWindowQuery,
-            AccountUsageWindowResult, DeleteAccounts, SetAccountEnabled,
+            AccountListQuery, AccountPage, AccountPageItem, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+            BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         auth::{AdminAuditEvent, AdminSession},
         client_keys::{
@@ -23,9 +30,9 @@ use gateway_admin::{
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
         observability::{
-            DashboardObservation, DiagnosticDimension, DiagnosticObservation, OpsError,
-            OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail, UsageFilter,
-            UsageOverview, UsagePage, UsageQuery, UsageRecord,
+            DashboardObservation, DecimalAmount, DiagnosticDimension, DiagnosticObservation,
+            OpsError, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail,
+            UsageFilter, UsageOverview, UsagePage, UsageQuery, UsageRecord,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -45,8 +52,8 @@ use gateway_admin::{
     ports::{
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
-            AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult,
-            AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
+            AccountGroupStore, AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
+            AdminStoreResult, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -66,6 +73,7 @@ use gateway_core::{
     },
 };
 
+mod account_groups;
 mod accounts;
 mod auth;
 mod client_keys;
@@ -96,6 +104,7 @@ impl AdminTestFixture {
         let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
         let settings = Arc::new(MemorySettingsStore::new(api_key));
         let client_keys = Arc::new(MemoryClientKeyStore);
+        let account_groups = Arc::new(MemoryAccountGroupStore::new());
         let usage_records = Arc::new(Mutex::new(Vec::new()));
         let usage_detail = Arc::new(Mutex::new(None));
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
@@ -112,6 +121,7 @@ impl AdminTestFixture {
         });
         let stores = AdminStorePorts::new(
             unused.clone(),
+            account_groups.clone(),
             auth.clone(),
             client_keys.clone(),
             unused,
@@ -345,6 +355,258 @@ impl SettingsStore for MemorySettingsStore {
 
 pub(super) struct MemoryClientKeyStore;
 
+pub(super) const PRIMARY_GROUP_ID: &str = "grp_11111111111111111111111111111111";
+pub(super) const SECONDARY_GROUP_ID: &str = "grp_22222222222222222222222222222222";
+
+struct MemoryAccountGroupState {
+    revision: Revision,
+    groups: BTreeMap<gateway_core::routing::AccountGroupId, AccountGroupRecord>,
+    members: BTreeMap<gateway_core::routing::AccountGroupId, Vec<AccountGroupMember>>,
+}
+
+pub(super) struct MemoryAccountGroupStore {
+    state: Mutex<MemoryAccountGroupState>,
+}
+
+impl MemoryAccountGroupStore {
+    fn new() -> Self {
+        let now = Utc::now();
+        let primary_id = group_id(PRIMARY_GROUP_ID);
+        let secondary_id = group_id(SECONDARY_GROUP_ID);
+        let openai = AccountGroupMember {
+            id: "acct_openai".to_owned(),
+            name: "OpenAI primary".to_owned(),
+            provider_kind: ProviderKind::new("openai").expect("provider kind"),
+            email: Some("openai@example.invalid".to_owned()),
+            enabled: true,
+        };
+        let xai = AccountGroupMember {
+            id: "acct_xai".to_owned(),
+            name: "xAI primary".to_owned(),
+            provider_kind: ProviderKind::new("xai").expect("provider kind"),
+            email: None,
+            enabled: false,
+        };
+        let groups = BTreeMap::from([
+            (
+                primary_id.clone(),
+                AccountGroupRecord {
+                    id: primary_id.clone(),
+                    name: "Alpha routing".to_owned(),
+                    description: Some("Primary traffic".to_owned()),
+                    color: group_color("#2563ebff"),
+                    enabled: true,
+                    member_count: 2,
+                    provider_counts: BTreeMap::from([
+                        ("openai".to_owned(), 1),
+                        ("xai".to_owned(), 1),
+                    ]),
+                    client_key_count: 2,
+                    account_summary: account_summary(1, 1, 2),
+                    capacity: capacity(Some(0), 1),
+                    usage: usage("1.25", "5.5"),
+                    created_at: now,
+                    updated_at: now,
+                },
+            ),
+            (
+                secondary_id.clone(),
+                AccountGroupRecord {
+                    id: secondary_id,
+                    name: "Beta routing".to_owned(),
+                    description: None,
+                    color: group_color("#64748B80"),
+                    enabled: false,
+                    member_count: 0,
+                    provider_counts: BTreeMap::new(),
+                    client_key_count: 0,
+                    account_summary: account_summary(0, 0, 0),
+                    capacity: capacity(Some(0), 0),
+                    usage: usage("0", "0"),
+                    created_at: now,
+                    updated_at: now,
+                },
+            ),
+        ]);
+        Self {
+            state: Mutex::new(MemoryAccountGroupState {
+                revision: Revision::new(7).expect("revision"),
+                groups,
+                members: BTreeMap::from([(primary_id, vec![openai, xai])]),
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl AccountGroupStore for MemoryAccountGroupStore {
+    async fn list_account_groups(
+        &self,
+        query: AccountGroupListQuery,
+    ) -> AdminStoreResult<AccountGroupPage> {
+        let state = self.state.lock().expect("account groups");
+        let search = query.search.as_ref().map(|value| value.to_lowercase());
+        let mut matching = state
+            .groups
+            .values()
+            .filter(|record| {
+                query
+                    .enabled
+                    .is_none_or(|enabled| record.enabled == enabled)
+            })
+            .filter(|record| {
+                search.as_ref().is_none_or(|search| {
+                    record.name.to_lowercase().contains(search)
+                        || record
+                            .description
+                            .as_ref()
+                            .is_some_and(|description| description.to_lowercase().contains(search))
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        matching.sort_by(|left, right| left.name.cmp(&right.name));
+        let total = matching.len() as u64;
+        let page_size = usize::from(query.page_size.get());
+        let offset = usize::try_from(query.page.saturating_sub(1))
+            .unwrap_or(usize::MAX)
+            .saturating_mul(page_size);
+        let items = matching.into_iter().skip(offset).take(page_size).collect();
+        Ok(AccountGroupPage {
+            config_revision: state.revision,
+            items,
+            total,
+            page: query.page,
+            page_size: query.page_size.get(),
+        })
+    }
+
+    async fn account_group_members(
+        &self,
+        id: &gateway_core::routing::AccountGroupId,
+    ) -> AdminStoreResult<AccountGroupMembers> {
+        let state = self.state.lock().expect("account groups");
+        if !state.groups.contains_key(id) {
+            return Err(not_found("account group"));
+        }
+        let items = state.members.get(id).cloned().unwrap_or_default();
+        Ok(AccountGroupMembers {
+            config_revision: state.revision,
+            id: id.clone(),
+            total: items.len() as u64,
+            items,
+        })
+    }
+
+    async fn create_account_group(
+        &self,
+        command: NewAccountGroup,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        let mut state = self.state.lock().expect("account groups");
+        let now = Utc::now();
+        let record = AccountGroupRecord {
+            id: command.id.clone(),
+            name: command.name,
+            description: command.description,
+            color: command.color,
+            enabled: true,
+            member_count: 0,
+            provider_counts: BTreeMap::new(),
+            client_key_count: 0,
+            account_summary: account_summary(0, 0, 0),
+            capacity: capacity(Some(0), 0),
+            usage: usage("0", "0"),
+            created_at: now,
+            updated_at: now,
+        };
+        state.groups.insert(command.id.clone(), record);
+        state.members.insert(command.id.clone(), Vec::new());
+        refresh_group_counts(&mut state, &command.id);
+        mutation(&mut state, command.id, true)
+    }
+
+    async fn update_account_group(
+        &self,
+        command: UpdateAccountGroup,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        let mut state = self.state.lock().expect("account groups");
+        let record = state
+            .groups
+            .get_mut(&command.id)
+            .ok_or_else(|| not_found("account group"))?;
+        record.name = command.name;
+        record.description = command.description;
+        record.color = command.color;
+        record.updated_at = Utc::now();
+        mutation(&mut state, command.id, true)
+    }
+
+    async fn set_account_group_enabled(
+        &self,
+        command: SetAccountGroupEnabled,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        let mut state = self.state.lock().expect("account groups");
+        let record = state
+            .groups
+            .get_mut(&command.id)
+            .ok_or_else(|| not_found("account group"))?;
+        record.enabled = command.enabled;
+        record.updated_at = Utc::now();
+        mutation(&mut state, command.id, true)
+    }
+
+    async fn delete_account_group(
+        &self,
+        command: DeleteAccountGroup,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountGroupMutation> {
+        let mut state = self.state.lock().expect("account groups");
+        if state.groups.remove(&command.id).is_none() {
+            return Err(not_found("account group"));
+        }
+        state.members.remove(&command.id);
+        mutation(&mut state, command.id, false)
+    }
+}
+
+fn group_id(value: &str) -> gateway_core::routing::AccountGroupId {
+    gateway_core::routing::AccountGroupId::new(value).expect("account group ID")
+}
+
+fn refresh_group_counts(
+    state: &mut MemoryAccountGroupState,
+    id: &gateway_core::routing::AccountGroupId,
+) {
+    let members = state.members.get(id).map(Vec::as_slice).unwrap_or_default();
+    let provider_counts = members.iter().fold(BTreeMap::new(), |mut counts, member| {
+        *counts
+            .entry(member.provider_kind.as_str().to_owned())
+            .or_insert(0) += 1;
+        counts
+    });
+    if let Some(record) = state.groups.get_mut(id) {
+        record.member_count = members.len() as u64;
+        record.provider_counts = provider_counts;
+        record.updated_at = Utc::now();
+    }
+}
+
+fn mutation(
+    state: &mut MemoryAccountGroupState,
+    id: gateway_core::routing::AccountGroupId,
+    include_record: bool,
+) -> AdminStoreResult<AccountGroupMutation> {
+    state.revision = next_revision(state.revision);
+    Ok(AccountGroupMutation {
+        config_revision: state.revision,
+        record: include_record.then(|| state.groups.get(&id).expect("group record").clone()),
+        id,
+    })
+}
+
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
@@ -366,7 +628,8 @@ impl ClientKeyStore for MemoryClientKeyStore {
                 id: id.clone(),
                 name: "revealed".to_owned(),
                 label: None,
-                provider_kind: ProviderKind::new("openai").expect("provider kind"),
+                groups: Vec::new(),
+                provider_kinds: vec![ProviderKind::new("openai").expect("provider kind")],
                 prefix: "sk_aaaaaaaaa".to_owned(),
                 enabled: true,
                 limits: RateLimits::unlimited(),
@@ -501,12 +764,20 @@ impl AccountStore for UnusedStore {
         Err(unavailable("credential refresh"))
     }
 
-    async fn set_account_enabled(
+    async fn update_account(
         &self,
-        _: SetAccountEnabled,
+        _: UpdateAccount,
         _: &MutationContext,
-    ) -> AdminStoreResult<Revision> {
+    ) -> AdminStoreResult<AccountUpdateResult> {
         Err(unavailable("account enabled"))
+    }
+
+    async fn batch_update_accounts(
+        &self,
+        _: BatchUpdateAccounts,
+        _: &MutationContext,
+    ) -> AdminStoreResult<AccountsUpdateResult> {
+        Err(unavailable("account batch update"))
     }
 
     async fn delete_accounts(
@@ -792,12 +1063,42 @@ fn next_revision(revision: Revision) -> Revision {
     Revision::new(revision.get().saturating_add(1)).expect("next revision")
 }
 
+fn account_summary(available: u64, limited: u64, total: u64) -> AccountGroupAccountSummary {
+    AccountGroupAccountSummary {
+        available,
+        limited,
+        total,
+    }
+}
+
+fn group_color(value: &str) -> AccountGroupColor {
+    AccountGroupColor::parse(value).expect("group color")
+}
+
+fn capacity(used_slots: Option<u64>, total_slots: u64) -> AccountGroupCapacity {
+    AccountGroupCapacity {
+        used_slots,
+        total_slots,
+    }
+}
+
+fn usage(today_usd: &str, total_usd: &str) -> AccountGroupUsage {
+    AccountGroupUsage {
+        today_usd: today_usd.parse::<DecimalAmount>().expect("today cost"),
+        total_usd: total_usd.parse::<DecimalAmount>().expect("total cost"),
+    }
+}
+
 fn unavailable(resource: &'static str) -> AdminStoreError {
     AdminStoreError::new(
         AdminStoreErrorKind::Unavailable,
         resource,
         "unused test port",
     )
+}
+
+fn not_found(resource: &'static str) -> AdminStoreError {
+    AdminStoreError::new(AdminStoreErrorKind::NotFound, resource, "not found")
 }
 
 fn unsupported_provider() -> ProviderAdminError {

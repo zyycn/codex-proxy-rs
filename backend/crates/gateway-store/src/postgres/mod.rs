@@ -7,6 +7,7 @@ use crate::{
     Revision, StoreBackend, StoreError, StorePoolConfig, StoreResult, postgres_unavailable,
 };
 
+mod account_groups;
 mod admin_security_audit;
 mod admission_recovery;
 mod backup;
@@ -20,6 +21,7 @@ mod retention;
 mod runtime_settings;
 mod snapshot;
 
+pub use account_groups::*;
 pub use admin_security_audit::*;
 pub use admission_recovery::*;
 pub use backup::*;
@@ -251,7 +253,7 @@ impl PgControlPlaneRepository {
     async fn apply_targeted_mutation(
         &self,
         mutation: ControlPlaneMutation,
-        audit: AdminAuditEvent,
+        mut audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
         let mut transaction = self
             .pool
@@ -262,9 +264,34 @@ impl PgControlPlaneRepository {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             match mutation {
                 ControlPlaneMutation::CreateClientApiKey(key) => {
+                    audit.changed_fields.push(if key.group_ids.is_empty() {
+                        "routing_scope:all".to_owned()
+                    } else {
+                        "routing_scope:groups".to_owned()
+                    });
                     insert_client_api_key_in_transaction(&mut transaction, &key).await?;
                 }
                 ControlPlaneMutation::UpdateClientApiKey(key) => {
+                    let previously_restricted = sqlx::query_scalar::<_, bool>(
+                        "select exists(
+                           select 1 from client_api_key_groups where client_api_key_id = $1
+                         )",
+                    )
+                    .bind(&key.id)
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .map_err(|_| {
+                        postgres_unavailable("load client API key routing scope for audit")
+                    })?;
+                    if previously_restricted && key.group_ids.is_empty() {
+                        audit
+                            .changed_fields
+                            .push("routing_scope:groups->all".to_owned());
+                    } else if !previously_restricted && !key.group_ids.is_empty() {
+                        audit
+                            .changed_fields
+                            .push("routing_scope:all->groups".to_owned());
+                    }
                     update_client_api_key_in_transaction(&mut transaction, &key).await?;
                 }
                 ControlPlaneMutation::SetClientApiKeyEnabled { id, enabled } => {

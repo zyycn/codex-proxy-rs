@@ -33,6 +33,9 @@ pub enum IdentifierError {
         /// 规定前缀。
         expected: &'static str,
     },
+    /// 标识不满足该领域值对象的固定格式。
+    #[error("identifier has an invalid format")]
+    InvalidFormat,
 }
 
 /// Operation 构造或校验失败。
@@ -67,6 +70,12 @@ pub enum RoutingError {
     /// 配置 revision 必须为正数。
     #[error("config revision must be greater than zero")]
     InvalidRevision,
+    /// Restricted scope 必须保留至少一个持久化分组 binding。
+    #[error("account routing scope is invalid")]
+    InvalidAccountScope,
+    /// Key 的账号范围中当前没有任何可参与路由的账号。
+    #[error("account routing scope is empty")]
+    EmptyAccountScope,
     /// 快照中存在重复实体。
     #[error("duplicate {entity} `{id}`")]
     DuplicateEntity {

@@ -1,5 +1,6 @@
 //! 管理控制面的用例实现。
 
+pub mod account_groups;
 pub mod accounts;
 pub mod auth;
 pub mod backup;
@@ -13,11 +14,11 @@ pub mod xai;
 use crate::{
     model::{
         AdminError, AdminErrorKind, MutationContext,
-        accounts::{DeleteAccounts, SetAccountEnabled},
+        accounts::DeleteAccounts,
         provider_credentials::{
             AuthorizationMutationTarget, CredentialDeletion, CredentialDeletionResult,
-            CredentialDetails, CredentialMutation, CredentialMutationResult,
-            CredentialRotationCommit, PendingAuthorizationMutation, PreparedAuthorizationCommit,
+            CredentialDetails, CredentialMutationResult, CredentialRotationCommit,
+            PendingAuthorizationMutation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialImport, PreparedCredentialRotation,
             StartAuthorization,
         },
@@ -278,44 +279,6 @@ async fn commit_credential_refresh(
             Err(map_store_error(error, resource))
         }
     }
-}
-
-async fn set_credential_enabled(
-    accounts: &dyn AccountStore,
-    provider: &dyn ProviderAdmin,
-    command: CredentialMutation,
-    enabled: bool,
-    resource: &'static str,
-) -> Result<CredentialMutationResult, AdminError> {
-    required_credential(
-        accounts,
-        provider.provider_kind(),
-        &command.account_id,
-        resource,
-    )
-    .await?;
-    let account_id = command.account_id;
-    let revision = accounts
-        .set_account_enabled(
-            SetAccountEnabled {
-                account_id: account_id.as_str().to_owned(),
-                enabled,
-            },
-            &command.context,
-        )
-        .await
-        .map_err(|error| map_store_error(error, resource))?;
-    if !enabled {
-        provider.account_unavailable(&account_id).await;
-    }
-    provider
-        .account_facts_changed(std::slice::from_ref(&account_id))
-        .await;
-    Ok(CredentialMutationResult {
-        config_revision: revision,
-        account_id,
-        credential_revision: None,
-    })
 }
 
 async fn delete_credentials(

@@ -90,6 +90,11 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             pool.clone(),
             Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
         )),
+        Arc::new(postgres::PgAccountGroupRepository::with_runtime_state(
+            pool.clone(),
+            credential_leases.clone(),
+            Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
+        )),
         Arc::new(AdminAuthStoreAdapter {
             security: postgres::PgAdminSecurityAuditRepository::new(pool.clone()),
             settings: postgres::PgRuntimeSettingsRepository::new(pool.clone()),
