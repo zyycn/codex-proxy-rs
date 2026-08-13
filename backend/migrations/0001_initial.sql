@@ -51,7 +51,6 @@ create table client_api_keys (
   id text primary key,
   name text not null,
   label text,
-  provider_kind text not null,
   key text not null unique,
   enabled boolean not null default true,
   max_concurrency bigint not null default 0,
@@ -61,9 +60,6 @@ create table client_api_keys (
   updated_at timestamptz not null,
   constraint client_api_keys_key_ck check (
     key ~ '^sk_[A-Za-z0-9_-]{43}$'
-  ),
-  constraint client_api_keys_provider_kind_ck check (
-    provider_kind ~ '^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
   ),
   constraint client_api_keys_limits_ck check (
     max_concurrency >= 0
@@ -120,7 +116,7 @@ create table provider_accounts (
   provider_kind text not null,
   name text not null,
   email text,
-  upstream_user_id text not null,
+  upstream_user_id text,
   upstream_account_id text,
   plan_type text,
   authentication_kind text not null,
@@ -130,14 +126,20 @@ create table provider_accounts (
   access_token_expires_at timestamptz,
   next_refresh_at timestamptz,
   enabled boolean not null default true,
-  availability text not null default 'unknown',
+  credential_state text not null default 'unknown',
   provider_quota_json jsonb,
-  quota_limit_reached boolean not null default false,
   last_error_message text,
-  availability_observed_at timestamptz not null,
+  credential_observed_at timestamptz not null,
   quota_observed_at timestamptz,
   created_at timestamptz not null,
   updated_at timestamptz not null,
+  quota_access_state text not null default 'unknown',
+  quota_evidence text,
+  quota_access_observed_at timestamptz,
+  quota_reset_at timestamptz,
+  last_error_reason text,
+  concurrency_limit bigint,
+  weight smallint not null default 1,
   constraint provider_accounts_revision_ck check (credential_revision > 0),
   constraint provider_accounts_authentication_kind_ck check (
     authentication_kind ~ '^[a-z][a-z0-9_]{0,63}$'
@@ -153,25 +155,61 @@ create table provider_accounts (
       and octet_length(provider_quota_json::text) <= 131072
     )
   ),
-  constraint provider_accounts_quota_observation_ck check (
-    (provider_quota_json is null) = (quota_observed_at is null)
-  ),
   constraint provider_accounts_refresh_ck check (
     has_refresh_token or next_refresh_at is null
   ),
-  constraint provider_accounts_availability_ck check (
-    availability in (
-      'unknown',
-      'ready',
-      'quota_exhausted',
-      'expired',
-      'banned',
-      'invalid'
+  constraint provider_accounts_credential_state_ck check (
+    credential_state in ('unknown', 'ready', 'expired', 'banned', 'invalid')
+  ),
+  constraint provider_accounts_quota_access_state_ck check (
+    quota_access_state in ('unknown', 'allowed', 'exhausted')
+  ),
+  constraint provider_accounts_quota_evidence_ck check (
+    quota_evidence is null
+    or quota_evidence in (
+      'provider_denied',
+      'account_limit_reached',
+      'usage_limit_reached',
+      'payment_required'
     )
+  ),
+  constraint provider_accounts_quota_fact_ck check (
+    (quota_access_state = 'unknown' and quota_evidence is null and quota_reset_at is null)
+    or (
+      quota_access_state = 'allowed'
+      and quota_evidence is null
+      and quota_access_observed_at is not null
+      and quota_reset_at is null
+    )
+    or (
+      quota_access_state = 'exhausted'
+      and quota_evidence is not null
+      and quota_access_observed_at is not null
+    )
+  ),
+  constraint provider_accounts_quota_observation_ck check (
+    (provider_quota_json is null) = (quota_observed_at is null)
+  ),
+  constraint provider_accounts_error_reason_ck check (
+    last_error_reason is null
+    or last_error_reason in (
+      'account_unverified',
+      'access_token_expired',
+      'credential_expired',
+      'credential_invalid',
+      'account_banned'
+    )
+  ),
+  constraint provider_accounts_concurrency_limit_ck check (
+    concurrency_limit is null or concurrency_limit between 1 and 4294967295
+  ),
+  constraint provider_accounts_weight_ck check (
+    weight between 1 and 100
   ),
   constraint provider_accounts_time_ck check (
     created_at <= updated_at
-    and availability_observed_at <= updated_at
+    and credential_observed_at <= updated_at
+    and (quota_access_observed_at is null or quota_access_observed_at <= updated_at)
     and (quota_observed_at is null or quota_observed_at <= updated_at)
   )
 );
@@ -184,8 +222,10 @@ create unique index provider_accounts_upstream_identity_uq
   );
 create index provider_accounts_runtime_idx
   on provider_accounts (provider_kind, enabled, id);
-create index provider_accounts_availability_idx
-  on provider_accounts (availability, id);
+create index provider_accounts_credential_state_idx
+  on provider_accounts (credential_state, id);
+create index provider_accounts_quota_access_idx
+  on provider_accounts (quota_access_state, quota_reset_at, id);
 create index provider_accounts_access_expiry_idx
   on provider_accounts (access_token_expires_at, id);
 create index provider_accounts_refresh_due_idx
@@ -194,6 +234,76 @@ create index provider_accounts_refresh_due_idx
 create index provider_accounts_email_idx
   on provider_accounts (provider_kind, lower(email))
   where email is not null;
+
+-- 与 Provider 无关的账号组，以及账号和客户端 API 密钥的组成员关系。
+create table account_groups (
+  id text primary key,
+  name text not null,
+  description text,
+  enabled boolean not null default true,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  color text not null,
+  constraint account_groups_id_ck check (
+    id ~ '^grp_[0-9a-f]{32}$'
+  ),
+  constraint account_groups_name_ck check (
+    char_length(btrim(name)) between 1 and 100
+    and name = btrim(name)
+    and name !~ '[[:cntrl:]]'
+  ),
+  constraint account_groups_description_ck check (
+    description is null or (
+      octet_length(description) <= 4096
+      and description !~ '[[:cntrl:]]'
+    )
+  ),
+  constraint account_groups_time_ck check (
+    created_at <= updated_at
+  ),
+  constraint account_groups_color_ck check (color ~ '^#[0-9A-F]{8}$')
+);
+
+create unique index account_groups_name_uq
+  on account_groups (lower(name));
+create index account_groups_list_idx
+  on account_groups (enabled, created_at desc, id desc);
+
+create table account_group_accounts (
+  account_group_id text not null,
+  provider_account_id text not null,
+  created_at timestamptz not null,
+  primary key (account_group_id, provider_account_id),
+  constraint account_group_accounts_group_fk foreign key (account_group_id)
+    references account_groups (id)
+    on update restrict
+    on delete cascade,
+  constraint account_group_accounts_account_fk foreign key (provider_account_id)
+    references provider_accounts (id)
+    on update restrict
+    on delete cascade
+);
+
+create index account_group_accounts_account_idx
+  on account_group_accounts (provider_account_id, account_group_id);
+
+create table client_api_key_groups (
+  client_api_key_id text not null,
+  account_group_id text not null,
+  created_at timestamptz not null,
+  primary key (client_api_key_id, account_group_id),
+  constraint client_api_key_groups_key_fk foreign key (client_api_key_id)
+    references client_api_keys (id)
+    on update restrict
+    on delete cascade,
+  constraint client_api_key_groups_group_fk foreign key (account_group_id)
+    references account_groups (id)
+    on update restrict
+    on delete restrict
+);
+
+create index client_api_key_groups_group_idx
+  on client_api_key_groups (account_group_id, client_api_key_id);
 
 -- 模型请求、上游尝试、用量、计费与结果。
 create table model_requests (
@@ -263,6 +373,9 @@ create table model_requests (
   started_at timestamptz not null,
   deadline_at timestamptz not null,
   completed_at timestamptz,
+  routing_scope text not null,
+  routing_group_refs text[] not null default '{}',
+  routing_group_names_snapshot jsonb not null default '[]'::jsonb,
   constraint model_requests_client_ref_ck check (
     client_api_key_id is null or client_api_key_id = client_api_key_ref
   ),
@@ -330,6 +443,26 @@ create table model_requests (
     or (
       octet_length(service_tier) between 1 and 64
       and service_tier !~ '[[:cntrl:]]'
+    )
+  ),
+  constraint model_requests_routing_scope_ck check (
+    routing_scope in ('legacy_provider', 'all', 'groups')
+  ),
+  constraint model_requests_routing_group_names_ck check (
+    jsonb_typeof(routing_group_names_snapshot) = 'array'
+    and (
+      (
+        routing_scope in ('legacy_provider', 'all')
+        and cardinality(routing_group_refs) = 0
+        and jsonb_array_length(routing_group_names_snapshot) = 0
+      )
+      or (
+        routing_scope = 'groups'
+        and cardinality(routing_group_refs) > 0
+        and array_position(routing_group_refs, null) is null
+        and jsonb_array_length(routing_group_names_snapshot)
+          = cardinality(routing_group_refs)
+      )
     )
   ),
   constraint model_requests_cost_ck check (
@@ -425,6 +558,8 @@ create index model_requests_running_deadline_idx
 create index model_requests_retention_idx
   on model_requests (completed_at)
   where outcome <> 'running';
+create index model_requests_routing_group_refs_idx
+  on model_requests using gin (routing_group_refs);
 
 -- 运行期警告与错误事件。
 create table ops_events (
