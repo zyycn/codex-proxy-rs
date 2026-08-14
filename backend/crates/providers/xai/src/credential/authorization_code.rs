@@ -197,6 +197,51 @@ impl PendingAuthorization {
             return Err(rejection.into());
         }
         let code = callback.code.ok_or(CallbackRejection::MissingCode)?;
+        self.accept_code(code)
+    }
+
+    /// 消费一次性流程，并接受管理员粘贴的完整回调 URL、回调 query 或裸授权码。
+    ///
+    /// 完整 URL 仍须精确匹配本流程的 redirect URI；query 输入仍须回传正确 state。
+    /// 裸授权码依赖已经绑定 owner 的一次性 flow 与 PKCE verifier，不降低 token 交换约束。
+    ///
+    /// # Errors
+    ///
+    /// URL、state 或授权码不满足当前一次性流程约束时返回回调拒绝错误。
+    pub fn accept_authorization_input(
+        self,
+        input: &str,
+    ) -> Result<AuthorizationCodeGrant, OAuthError> {
+        let input = input.trim();
+        if let Ok(mut callback_url) = Url::parse(input)
+            && matches!(callback_url.scheme(), "http" | "https")
+            && callback_url.has_host()
+        {
+            if callback_url.fragment().is_some() {
+                return Err(CallbackRejection::ProviderRejected.into());
+            }
+            let query = callback_url.query().unwrap_or_default().to_owned();
+            callback_url.set_query(None);
+            if &callback_url != self.redirect_uri.as_url() {
+                return Err(CallbackRejection::ProviderRejected.into());
+            }
+            let callback = AuthorizationCallback::parse(&query)?;
+            return self.accept_callback(callback);
+        }
+
+        if looks_like_callback_url(input) {
+            return Err(CallbackRejection::ProviderRejected.into());
+        }
+
+        if looks_like_callback_query(input) {
+            let callback = AuthorizationCallback::parse(input)?;
+            return self.accept_callback(callback);
+        }
+
+        self.accept_code(SecretValue::new(input.to_owned()))
+    }
+
+    fn accept_code(self, code: SecretValue) -> Result<AuthorizationCodeGrant, OAuthError> {
         if code.is_empty()
             || code.len() > MAX_CALLBACK_VALUE_BYTES
             || code.expose().chars().any(char::is_control)
@@ -211,6 +256,15 @@ impl PendingAuthorization {
             nonce: self.nonce,
         })
     }
+}
+
+fn looks_like_callback_url(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.starts_with("http:") || value.starts_with("https:") || value.starts_with("//")
+}
+
+fn looks_like_callback_query(value: &str) -> bool {
+    value.starts_with('?') || value.starts_with("code=")
 }
 
 #[derive(Serialize)]

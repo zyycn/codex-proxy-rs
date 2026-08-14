@@ -57,7 +57,6 @@ const SESSION_FIELDS: &[&str] = &[
     "conversationId",
 ];
 const PROTOCOL_CONTEXT_SESSION_FIELDS: &[&str] = &["conversation_id", "session_id", "thread_id"];
-const FOREIGN_CLIENT_METADATA_FIELDS: &[&str] = &["x-openai-subagent"];
 const MAX_SESSION_SEED_BYTES: usize = 1_024;
 const GROK_CACHE_ROUTE_TOOLS: &[&str] = &["web_search", "x_search"];
 /// Grok CLI 在历史条目上注入、Grok Build 无法反序列化的内部键；只在已知
@@ -229,7 +228,8 @@ impl GrokResponsesRequest {
             &body,
         );
         sanitize_account_identity(&mut body);
-        sanitize_foreign_client_metadata(&mut body);
+        sanitize_client_metadata(&mut body);
+        normalize_build_request(&mut body, upstream_model)?;
         let mut response_transform = normalize_responses_request(&mut body)?;
         response_transform.observe_client_cache_tools();
         if enable_cache_route {
@@ -336,16 +336,11 @@ fn sanitize_account_identity(body: &mut Map<String, Value>) {
     }
 }
 
-fn sanitize_foreign_client_metadata(body: &mut Map<String, Value>) {
-    let Some(Value::Object(metadata)) = body.get_mut("client_metadata") else {
-        return;
-    };
-    for field in FOREIGN_CLIENT_METADATA_FIELDS {
-        metadata.remove(*field);
-    }
-    if metadata.is_empty() {
-        body.remove("client_metadata");
-    }
+fn sanitize_client_metadata(body: &mut Map<String, Value>) {
+    // Codex 的 client_metadata 是本地 transport envelope，可能包含工作目录、仓库地址、
+    // installation/session 标识。会话亲和信息已在调用本函数前提取，整个 envelope 都不能
+    // 越过 Grok Build 边界。
+    body.remove("client_metadata");
 }
 
 fn enable_grok_prompt_cache_route(
@@ -652,6 +647,106 @@ fn normalize_responses_request(
     ToolNormalizer::new().normalize(body)
 }
 
+fn normalize_build_request(
+    body: &mut Map<String, Value>,
+    upstream_model: &str,
+) -> Result<(), GrokRequestEncodeError> {
+    apply_build_response_defaults(body)?;
+    normalize_build_reasoning_effort(body, upstream_model);
+    Ok(())
+}
+
+fn apply_build_response_defaults(
+    body: &mut Map<String, Value>,
+) -> Result<(), GrokRequestEncodeError> {
+    if body.get("store").is_none_or(Value::is_null) {
+        body.insert("store".to_owned(), Value::Bool(false));
+    }
+
+    let include = body
+        .entry("include".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if include.is_null() {
+        *include = Value::Array(Vec::new());
+    }
+    let include = include
+        .as_array_mut()
+        .ok_or(GrokRequestEncodeError::InvalidRequestField { field: "include" })?;
+    if include.iter().any(|value| !value.is_string()) {
+        return Err(GrokRequestEncodeError::InvalidRequestField { field: "include" });
+    }
+    if !include
+        .iter()
+        .any(|value| value.as_str() == Some("reasoning.encrypted_content"))
+    {
+        include.push(Value::String("reasoning.encrypted_content".to_owned()));
+    }
+    Ok(())
+}
+
+fn normalize_build_reasoning_effort(body: &mut Map<String, Value>, upstream_model: &str) {
+    let Some(reasoning) = body.get_mut("reasoning").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if is_grok_composer_model(upstream_model) {
+        if reasoning.remove("effort").is_none() {
+            return;
+        }
+        if reasoning.is_empty() {
+            body.remove("reasoning");
+        }
+        return;
+    }
+    let Some(effort) = reasoning
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+    else {
+        return;
+    };
+    if !matches!(effort.as_str(), "xhigh" | "max") {
+        return;
+    }
+    let normalized = if grok_model_supports_xhigh(upstream_model) {
+        "xhigh"
+    } else {
+        "high"
+    };
+    reasoning.insert("effort".to_owned(), Value::String(normalized.to_owned()));
+}
+
+fn grok_model_slug(model: &str) -> String {
+    let model = model.trim();
+    let slug = model.split_once('/').map_or(model, |(provider, slug)| {
+        if matches!(
+            provider.trim().to_ascii_lowercase().as_str(),
+            "build" | "web" | "console"
+        ) {
+            slug.trim()
+        } else {
+            model
+        }
+    });
+    slug.to_ascii_lowercase()
+}
+
+fn is_grok_composer_model(model: &str) -> bool {
+    grok_model_slug(model).starts_with("grok-composer-")
+}
+
+fn grok_model_supports_xhigh(model: &str) -> bool {
+    let slug = grok_model_slug(model);
+    ["grok-4.6", "grok-4.20-multi-agent-0309"]
+        .into_iter()
+        .any(|base| {
+            slug == base
+                || slug
+                    .strip_prefix(base)
+                    .is_some_and(|suffix| matches!(suffix, "-low" | "-medium" | "-high" | "-xhigh"))
+        })
+}
+
 fn normalize_response_format(value: Value) -> Result<Value, GrokRequestEncodeError> {
     let Some(format) = value.as_object() else {
         return Err(GrokRequestEncodeError::InvalidRequestNormalization);
@@ -699,6 +794,11 @@ fn patch_reasoning_text_types(body: &mut Map<String, Value>) {
 
 const MAX_BUILD_TOOL_ALIAS_LENGTH: usize = 128;
 const MAX_TOOL_SEARCH_DESCRIPTION_BYTES: usize = 16 << 10;
+const MAX_BUFFERED_FUNCTION_ARGUMENTS_BYTES: usize = 1 << 20;
+const MAX_TOTAL_BUFFERED_FUNCTION_ARGUMENTS_BYTES: usize = 4 << 20;
+const MAX_JSON_NUMBER_TEXT_BYTES: usize = 256;
+const MAX_EXACT_JSON_INTEGER_TEXT: &str = "9007199254740991";
+const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ToolKind {
@@ -740,7 +840,9 @@ impl ToolIdentity {
 #[derive(Debug, Clone)]
 struct StreamCallState {
     identity: ToolIdentity,
+    schema: Option<Value>,
     arguments: String,
+    passthrough: bool,
     last_delta: Option<Map<String, Value>>,
     added_payload: Option<Map<String, Value>>,
 }
@@ -748,6 +850,7 @@ struct StreamCallState {
 #[derive(Clone, Default)]
 pub(crate) struct GrokResponseTransform {
     aliases: BTreeMap<String, ToolIdentity>,
+    function_schemas: BTreeMap<String, Value>,
     visible_tools: Vec<Value>,
     legacy_local_shell: bool,
     filter_x_search: bool,
@@ -757,6 +860,8 @@ pub(crate) struct GrokResponseTransform {
     dropped_item_ids: BTreeSet<String>,
     stream_calls: BTreeMap<String, StreamCallState>,
     stream_keys: BTreeMap<String, String>,
+    stream_argument_bytes: usize,
+    stream_sequence_next: Option<u64>,
 }
 
 pub(crate) struct GrokTransformedWireEvent {
@@ -780,6 +885,7 @@ impl GrokResponseTransform {
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.aliases.is_empty()
+            && self.function_schemas.is_empty()
             && self.visible_tools.is_empty()
             && !self.legacy_local_shell
             && !self.filter_x_search
@@ -815,6 +921,29 @@ impl GrokResponseTransform {
         if kind == "x_search" {
             self.filter_x_search = true;
         }
+    }
+
+    pub(crate) fn resequence_stream_value(&mut self, value: &mut Value) {
+        let Some(payload) = value.as_object_mut() else {
+            return;
+        };
+        let Some(raw_sequence) = payload.get("sequence_number") else {
+            return;
+        };
+        if self.stream_sequence_next.is_none() {
+            let Some(sequence) = exact_nonnegative_sequence(raw_sequence) else {
+                return;
+            };
+            self.stream_sequence_next = Some(sequence);
+        }
+        let Some(next) = self.stream_sequence_next.as_mut() else {
+            return;
+        };
+        payload.insert(
+            "sequence_number".to_owned(),
+            Value::Number(serde_json::Number::from(*next)),
+        );
+        *next = next.saturating_add(1);
     }
 
     pub(crate) fn rewrite_stream_event(
@@ -853,18 +982,17 @@ impl GrokResponseTransform {
         if event_type == "response.function_call_arguments.delta"
             && let Some(primary) = self.stream_call_key(&value)
         {
+            let delta = value
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let state = self
                 .stream_calls
                 .get_mut(&primary)
                 .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
             match state.identity.kind {
                 ToolKind::Custom => {
-                    state.arguments.push_str(
-                        value
-                            .get("delta")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
-                    );
+                    state.arguments.push_str(delta);
                     state.last_delta = value.as_object().cloned().map(|mut payload| {
                         payload.remove("delta");
                         payload
@@ -872,6 +1000,47 @@ impl GrokResponseTransform {
                     return Ok(Vec::new());
                 }
                 ToolKind::ToolSearch | ToolKind::ApplyPatch => return Ok(Vec::new()),
+                ToolKind::Function if state.schema.is_some() => {
+                    let call_limit_exceeded = state.arguments.len().saturating_add(delta.len())
+                        > MAX_BUFFERED_FUNCTION_ARGUMENTS_BYTES;
+                    let total_limit_exceeded =
+                        self.stream_argument_bytes.saturating_add(delta.len())
+                            > MAX_TOTAL_BUFFERED_FUNCTION_ARGUMENTS_BYTES;
+                    if !state.passthrough && (call_limit_exceeded || total_limit_exceeded) {
+                        let buffered = std::mem::take(&mut state.arguments);
+                        self.stream_argument_bytes =
+                            self.stream_argument_bytes.saturating_sub(buffered.len());
+                        state.passthrough = true;
+                        state.last_delta = None;
+                        let mut output = Vec::with_capacity(2);
+                        if !buffered.is_empty() {
+                            let mut flushed = value.clone();
+                            flushed
+                                .as_object_mut()
+                                .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?
+                                .insert("delta".to_owned(), Value::String(buffered));
+                            output.push(GrokTransformedWireEvent {
+                                event_type: event_type.to_owned(),
+                                value: flushed,
+                            });
+                        }
+                        output.push(GrokTransformedWireEvent {
+                            event_type: event_type.to_owned(),
+                            value,
+                        });
+                        return Ok(output);
+                    }
+                    if !state.passthrough {
+                        state.arguments.push_str(delta);
+                        self.stream_argument_bytes =
+                            self.stream_argument_bytes.saturating_add(delta.len());
+                        state.last_delta = value.as_object().cloned().map(|mut payload| {
+                            payload.remove("delta");
+                            payload
+                        });
+                        return Ok(Vec::new());
+                    }
+                }
                 ToolKind::Function => {}
             }
         }
@@ -916,6 +1085,57 @@ impl GrokResponseTransform {
                         ),
                     });
                     if let Some(state) = self.stream_calls.get_mut(&primary) {
+                        state.arguments.clear();
+                        state.last_delta = None;
+                    }
+                    return Ok(output);
+                }
+                ToolKind::Function if state.schema.is_some() => {
+                    let schema = state
+                        .schema
+                        .clone()
+                        .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
+                    let passthrough = state.passthrough;
+                    let buffered = state.arguments.clone();
+                    let last_delta = state.last_delta.clone();
+                    let arguments = value
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .filter(|arguments| !arguments.is_empty())
+                        .unwrap_or(&buffered);
+                    let normalized = normalize_function_arguments(arguments, &schema)
+                        .unwrap_or_else(|| arguments.to_owned());
+                    if passthrough {
+                        value
+                            .as_object_mut()
+                            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?
+                            .insert("arguments".to_owned(), Value::String(normalized));
+                        return Ok(vec![GrokTransformedWireEvent {
+                            event_type: event_type.to_owned(),
+                            value,
+                        }]);
+                    }
+
+                    let mut output = Vec::with_capacity(2);
+                    if let Some(mut delta) = last_delta {
+                        delta.insert("delta".to_owned(), Value::String(normalized.clone()));
+                        output.push(GrokTransformedWireEvent {
+                            event_type: "response.function_call_arguments.delta".to_owned(),
+                            value: Value::Object(delta),
+                        });
+                    }
+                    value
+                        .as_object_mut()
+                        .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?
+                        .insert("arguments".to_owned(), Value::String(normalized));
+                    output.push(GrokTransformedWireEvent {
+                        event_type: event_type.to_owned(),
+                        value,
+                    });
+                    if let Some(state) = self.stream_calls.get_mut(&primary) {
+                        self.stream_argument_bytes = self
+                            .stream_argument_bytes
+                            .saturating_sub(state.arguments.len());
                         state.arguments.clear();
                         state.last_delta = None;
                     }
@@ -968,7 +1188,12 @@ impl GrokResponseTransform {
             primary.clone(),
             StreamCallState {
                 identity,
+                schema: self
+                    .function_schemas
+                    .get(string_field(item, "name"))
+                    .cloned(),
                 arguments: String::new(),
+                passthrough: false,
                 last_delta: None,
                 added_payload: None,
             },
@@ -997,7 +1222,9 @@ impl GrokResponseTransform {
             primary.clone(),
             StreamCallState {
                 identity,
+                schema: self.function_schemas.get(alias).cloned(),
                 arguments: String::new(),
+                passthrough: false,
                 last_delta: None,
                 added_payload: None,
             },
@@ -1015,7 +1242,11 @@ impl GrokResponseTransform {
 
     fn take_stream_call(&mut self, primary: &str) -> Option<StreamCallState> {
         self.stream_keys.retain(|_, owner| owner != primary);
-        self.stream_calls.remove(primary)
+        let state = self.stream_calls.remove(primary)?;
+        self.stream_argument_bytes = self
+            .stream_argument_bytes
+            .saturating_sub(state.arguments.len());
+        Some(state)
     }
 
     fn rewrite_response_value(&self, value: &mut Value) -> Result<(), GrokRequestEncodeError> {
@@ -1051,6 +1282,13 @@ impl GrokResponseTransform {
         };
         match identity.kind {
             ToolKind::Function => {
+                let alias = string_field(call, "name").to_owned();
+                if let Some(schema) = self.function_schemas.get(&alias)
+                    && let Some(arguments) = call.get("arguments").and_then(Value::as_str)
+                    && let Some(normalized) = normalize_function_arguments(arguments, schema)
+                {
+                    call.insert("arguments".to_owned(), Value::String(normalized));
+                }
                 call.insert("name".to_owned(), Value::String(identity.name.clone()));
                 if identity.namespace.is_empty() {
                     call.remove("namespace");
@@ -1389,6 +1627,7 @@ impl fmt::Debug for GrokResponseTransform {
         formatter
             .debug_struct("GrokResponseTransform")
             .field("alias_count", &self.aliases.len())
+            .field("function_schema_count", &self.function_schemas.len())
             .field("visible_tool_count", &self.visible_tools.len())
             .field("legacy_local_shell", &self.legacy_local_shell)
             .field("filter_x_search", &self.filter_x_search)
@@ -1615,12 +1854,19 @@ impl ToolNormalizer {
             return Ok(Vec::new());
         }
         let mut converted = without_defer_loading(tool);
+        let function_schema = tool
+            .get("parameters")
+            .filter(|schema| schema_contains_integer(schema, 0))
+            .cloned();
         if let Some(parameters) = converted.get("parameters").cloned()
             && let Some(normalized) = normalize_function_parameters_root(&parameters)?
         {
             converted.insert("parameters".to_owned(), normalized);
         }
         let alias = self.alias(ToolIdentity::new(ToolKind::Function, namespace, name));
+        if let Some(schema) = function_schema {
+            self.response.function_schemas.insert(alias.clone(), schema);
+        }
         converted.insert("name".to_owned(), Value::String(alias));
         Ok(vec![Value::Object(converted)])
     }
@@ -2947,6 +3193,258 @@ fn encode_function_arguments(value: Option<&Value>) -> Result<String, GrokReques
         Some(value) => serde_json::to_string(value)
             .map_err(|_| GrokRequestEncodeError::InvalidRequestNormalization),
     }
+}
+
+fn normalize_function_arguments(arguments: &str, schema: &Value) -> Option<String> {
+    if arguments.trim().is_empty() || !schema.is_object() {
+        return None;
+    }
+    let mut value = serde_json::from_str::<Value>(arguments).ok()?;
+    if !normalize_argument_value(&mut value, schema, schema, 0) {
+        return None;
+    }
+    serde_json::to_string(&value).ok()
+}
+
+fn normalize_argument_value(value: &mut Value, schema: &Value, root: &Value, depth: usize) -> bool {
+    if depth > 64 {
+        return false;
+    }
+    let Some(schema) = schema.as_object() else {
+        return false;
+    };
+    let mut changed = false;
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+        && let Some(resolved) = resolve_local_schema_value_ref(root, reference)
+    {
+        changed |= normalize_argument_value(value, resolved, root, depth + 1);
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(keyword).and_then(Value::as_array) {
+            for branch in branches {
+                changed |= normalize_argument_value(value, branch, root, depth + 1);
+            }
+        }
+    }
+    if schema_requires_integer(schema)
+        && let Value::Number(number) = value
+        && let Some(normalized) = normalize_integral_number(number)
+    {
+        *number = normalized;
+        return true;
+    }
+    match value {
+        Value::Object(object) => {
+            let properties = schema.get("properties").and_then(Value::as_object);
+            let additional = schema
+                .get("additionalProperties")
+                .filter(|value| value.is_object());
+            for (key, item) in object {
+                let property = properties
+                    .and_then(|properties| properties.get(key))
+                    .or(additional);
+                if let Some(property) = property {
+                    changed |= normalize_argument_value(item, property, root, depth + 1);
+                }
+            }
+        }
+        Value::Array(items) => {
+            let prefix = schema.get("prefixItems").and_then(Value::as_array);
+            let item_schema = schema.get("items").filter(|value| value.is_object());
+            for (index, item) in items.iter_mut().enumerate() {
+                let schema = prefix
+                    .and_then(|prefix| prefix.get(index))
+                    .filter(|value| value.is_object())
+                    .or(item_schema);
+                if let Some(schema) = schema {
+                    changed |= normalize_argument_value(item, schema, root, depth + 1);
+                }
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn schema_requires_integer(schema: &Map<String, Value>) -> bool {
+    match schema.get("type") {
+        Some(Value::String(kind)) => kind == "integer",
+        Some(Value::Array(kinds)) => {
+            let mut integer = false;
+            for kind in kinds.iter().filter_map(Value::as_str) {
+                if kind == "number" {
+                    return false;
+                }
+                integer |= kind == "integer";
+            }
+            integer
+        }
+        _ => false,
+    }
+}
+
+fn normalize_integral_number(number: &serde_json::Number) -> Option<serde_json::Number> {
+    let raw = number.to_string();
+    if raw.len() > MAX_JSON_NUMBER_TEXT_BYTES || !raw.contains(['.', 'e', 'E']) {
+        return None;
+    }
+    let (mantissa, exponent_text) = raw.find(['e', 'E']).map_or((raw.as_str(), ""), |index| {
+        (&raw[..index], &raw[index + 1..])
+    });
+    let (negative, mantissa) = mantissa
+        .strip_prefix('-')
+        .map_or((false, mantissa), |value| (true, value));
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let mut digits = format!("{whole}{fraction}")
+        .trim_start_matches('0')
+        .to_owned();
+    if digits.is_empty() {
+        return "0".parse().ok().filter(|_| raw != "0");
+    }
+    let exponent = parse_bounded_decimal_exponent(exponent_text)?;
+    let decimal_shift = exponent - i64::try_from(fraction.len()).ok()?;
+    if decimal_shift < 0 {
+        let fractional_digits = usize::try_from(-decimal_shift).ok()?;
+        if fractional_digits > digits.len()
+            || !digits[digits.len() - fractional_digits..]
+                .bytes()
+                .all(|byte| byte == b'0')
+        {
+            return None;
+        }
+        digits.truncate(digits.len() - fractional_digits);
+        let trimmed = digits.trim_start_matches('0');
+        if trimmed.is_empty() {
+            return "0".parse().ok();
+        }
+        digits = trimmed.to_owned();
+    } else if decimal_shift > 0 {
+        let shift = usize::try_from(decimal_shift).ok()?;
+        if shift
+            > MAX_EXACT_JSON_INTEGER_TEXT
+                .len()
+                .saturating_sub(digits.len())
+        {
+            return None;
+        }
+        digits.extend(std::iter::repeat_n('0', shift));
+    }
+    if digits.len() > MAX_EXACT_JSON_INTEGER_TEXT.len()
+        || (digits.len() == MAX_EXACT_JSON_INTEGER_TEXT.len()
+            && digits.as_str() > MAX_EXACT_JSON_INTEGER_TEXT)
+    {
+        return None;
+    }
+    let normalized = if negative {
+        format!("-{digits}")
+    } else {
+        digits
+    };
+    if normalized == raw {
+        None
+    } else {
+        normalized.parse().ok()
+    }
+}
+
+fn exact_nonnegative_sequence(value: &Value) -> Option<u64> {
+    let number = value.as_number()?;
+    let sequence = number
+        .as_u64()
+        .or_else(|| normalize_integral_number(number)?.as_u64())?;
+    (sequence <= MAX_EXACT_JSON_INTEGER).then_some(sequence)
+}
+
+fn parse_bounded_decimal_exponent(raw: &str) -> Option<i64> {
+    if raw.is_empty() {
+        return Some(0);
+    }
+    let (sign, digits) = if let Some(value) = raw.strip_prefix('+') {
+        (1_i64, value)
+    } else if let Some(value) = raw.strip_prefix('-') {
+        (-1_i64, value)
+    } else {
+        (1_i64, raw)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(0);
+    }
+    if digits.len() > 9 {
+        return None;
+    }
+    digits.parse::<i64>().ok().map(|value| sign * value)
+}
+
+fn resolve_local_schema_value_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
+    if reference == "#" {
+        return Some(root);
+    }
+    let pointer = reference.strip_prefix('#')?;
+    if !pointer.starts_with('/') {
+        return None;
+    }
+    root.pointer(pointer)
+}
+
+fn schema_contains_integer(schema: &Value, depth: usize) -> bool {
+    let mut visited = BTreeSet::new();
+    schema_contains_reachable_integer(schema, schema, &mut visited, depth)
+}
+
+fn schema_contains_reachable_integer(
+    schema: &Value,
+    root: &Value,
+    visited_refs: &mut BTreeSet<String>,
+    depth: usize,
+) -> bool {
+    if depth > 64 {
+        return false;
+    }
+    let Some(schema) = schema.as_object() else {
+        return false;
+    };
+    if schema_requires_integer(schema) {
+        return true;
+    }
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+        && visited_refs.insert(reference.to_owned())
+        && let Some(resolved) = resolve_local_schema_value_ref(root, reference)
+        && schema_contains_reachable_integer(resolved, root, visited_refs, depth + 1)
+    {
+        return true;
+    }
+    for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if schema
+            .get(keyword)
+            .and_then(Value::as_array)
+            .is_some_and(|branches| {
+                branches.iter().any(|branch| {
+                    schema_contains_reachable_integer(branch, root, visited_refs, depth + 1)
+                })
+            })
+        {
+            return true;
+        }
+    }
+    for keyword in ["items", "additionalProperties"] {
+        if schema.get(keyword).is_some_and(|child| {
+            schema_contains_reachable_integer(child, root, visited_refs, depth + 1)
+        }) {
+            return true;
+        }
+    }
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| {
+            properties.values().any(|property| {
+                schema_contains_reachable_integer(property, root, visited_refs, depth + 1)
+            })
+        })
 }
 
 fn encode_tool_output(value: Option<&Value>) -> Result<String, GrokRequestEncodeError> {

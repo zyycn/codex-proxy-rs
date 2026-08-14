@@ -120,9 +120,14 @@ const oauthPanelTitle = computed(() => {
 })
 
 const oauthPanelDescription = computed(() => {
-  if (props.reauthorizing)
-    return '生成新的授权链接，完成后粘贴回调地址更新账号凭据'
-  return '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入'
+  if (props.reauthorizing) {
+    return isXai.value
+      ? '生成新的授权链接，完成后粘贴回调地址、含 code 和 state 的查询字符串或授权码更新账号凭据'
+      : '生成新的授权链接，完成后粘贴回调地址更新账号凭据'
+  }
+  return isXai.value
+    ? '复制授权链接到浏览器打开，完成后粘贴回调地址、含 code 和 state 的查询字符串或授权码即可导入'
+    : '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入'
 })
 
 const canGenerateOauth = computed(() =>
@@ -145,13 +150,16 @@ const canSubmit = computed(() => {
 const description = computed<string | undefined>(() => {
   if (isChoosingProvider.value)
     return undefined
-  if (props.reauthorizing)
-    return '完成授权后粘贴回调地址，系统会更新账号凭据'
+  if (props.reauthorizing) {
+    return isXai.value
+      ? '完成授权后粘贴回调地址、含 code 和 state 的查询字符串或授权码，系统会更新账号凭据'
+      : '完成授权后粘贴回调地址，系统会更新账号凭据'
+  }
   if (isBatch.value)
     return '导入 CPR 多平台账号包，系统会按文档中的平台自动分流'
   if (isXai.value) {
     return mode.value === 'oauth'
-      ? '复制 xAI 授权链接，完成后粘贴回调地址，不使用 xAI API Key'
+      ? '复制 xAI 授权链接，完成后粘贴回调地址、含 code 和 state 的查询字符串或授权码，不使用 xAI API Key'
       : '导入 xAI 账号文件，已存在账号会更新'
   }
   if (mode.value === 'oauth')
@@ -275,12 +283,12 @@ async function copyText(value: string, successText: string) {
         </BaseForm>
 
         <BaseForm>
-          <BaseFormItem label="回调地址" required>
+          <BaseFormItem :label="isXai ? '回调地址或授权码' : '回调地址'" required>
             <BaseTextarea
               v-model="oauthCallback"
-              aria-label="回调地址"
+              :aria-label="isXai ? '回调地址或授权码' : '回调地址'"
               size="sm"
-              :placeholder="isXai ? 'http://127.0.0.1:56121/callback?code=...&state=...' : 'http://localhost:1455/auth/callback?code=...&state=...'"
+              :placeholder="isXai ? '粘贴完整回调地址、?code=...&state=... 或裸授权码' : 'http://localhost:1455/auth/callback?code=...&state=...'"
               :disabled="saving"
             />
           </BaseFormItem>

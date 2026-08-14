@@ -41,17 +41,16 @@ use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
 use sha2::{Digest as _, Sha256};
-use url::Url;
 use uuid::Uuid;
 
 use crate::XaiWireProfileState;
 use crate::credential::{
-    AuthorizationCallback, FailureClass, GrokAccountProfile, GrokCredentialAdmin,
-    GrokCredentialCatalogError, GrokCredentialCatalogService, GrokCredentialQuotaService,
-    GrokCredentialRefreshError, GrokCredentialRefreshService, GrokCredentialRepository,
-    GrokCredentialRepositoryError, GrokOAuthClient, GrokOAuthConfig, GrokOAuthImportCandidate,
-    GrokOAuthImportDocument, GrokOAuthImportMetadata, GrokOAuthImportTokens, GrokOAuthSecret,
-    GrokQuotaError, GrokQuotaPeriodKind, GrokQuotaSnapshot, OAuthError, PendingAuthorization,
+    FailureClass, GrokAccountProfile, GrokCredentialAdmin, GrokCredentialCatalogError,
+    GrokCredentialCatalogService, GrokCredentialQuotaService, GrokCredentialRefreshError,
+    GrokCredentialRefreshService, GrokCredentialRepository, GrokCredentialRepositoryError,
+    GrokOAuthClient, GrokOAuthConfig, GrokOAuthImportCandidate, GrokOAuthImportDocument,
+    GrokOAuthImportMetadata, GrokOAuthImportTokens, GrokOAuthSecret, GrokQuotaError,
+    GrokQuotaPeriodKind, GrokQuotaSnapshot, OAuthError, PendingAuthorization,
     PreparedGrokCredentialRotation, PreparedGrokCredentialRotationGuard, RedirectUriAllowlist,
     RotateManagedGrokCredential, SecretValue, VerifiedGrokAccount, VerifiedTokenSet,
 };
@@ -771,9 +770,8 @@ impl XaiAdminProvider {
             &SecretValue::new(stored.server_state),
         )
         .map_err(map_oauth_error)?;
-        let callback = callback(callback_url)?;
         let grant = authorization
-            .accept_callback(callback)
+            .accept_authorization_input(callback_url)
             .map_err(map_oauth_error)?;
         let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
         let tokens = self
@@ -1341,23 +1339,6 @@ fn decode_mutation(
         target,
         AuthorizationOwnerBinding::from_context(&context),
     ))
-}
-
-fn callback(value: &str) -> Result<AuthorizationCallback, ProviderAdminError> {
-    let mut callback =
-        Url::parse(value).map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
-    if callback.fragment().is_some() {
-        return Err(provider_error(ProviderAdminErrorKind::Invalid));
-    }
-    let query = callback.query().unwrap_or_default().to_owned();
-    callback.set_query(None);
-    let expected = Url::parse(crate::OFFICIAL_REDIRECT_URI)
-        .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
-    if callback != expected {
-        return Err(provider_error(ProviderAdminErrorKind::Invalid));
-    }
-    AuthorizationCallback::parse(&query)
-        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))
 }
 
 fn random_flow_id() -> Result<String, ProviderAdminError> {

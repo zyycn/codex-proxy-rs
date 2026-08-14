@@ -2,6 +2,7 @@ use gateway_core::error::ProviderError;
 use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
+use gateway_protocol::openai::sse::{encode_sse_event, encode_sse_event_with_metadata};
 use serde_json::Value;
 
 use provider_xai::{GrokCanonicalDecoder, GrokResponsesRequest, grok_billing_breakdown};
@@ -580,6 +581,274 @@ fn decoder_should_buffer_only_custom_arguments_until_the_done_event() {
 }
 
 #[test]
+fn decoder_should_normalize_schema_integer_arguments_and_resequence_split_events() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "wait",
+        "tools": [{
+            "type": "function",
+            "name": "wait",
+            "parameters": {
+                "$ref": "#/$defs/Args",
+                "$defs": {
+                    "Args": {
+                        "type": "object",
+                        "properties": {
+                            "timeout_ms": {"allOf": [{"type": "integer"}]},
+                            "fractional": {"type": "integer"},
+                            "unsafe": {"type": "integer"},
+                            "list": {
+                                "type": "array",
+                                "prefixItems": [{"type": "integer"}],
+                                "items": {"type": "number"}
+                            },
+                            "extra": {
+                                "type": "object",
+                                "additionalProperties": {"type": "integer"}
+                            }
+                        }
+                    },
+                    "Unused": {"type": "integer"}
+                }
+            }
+        }]
+    }));
+    let arguments = concat!(
+        "{\"timeout_ms\":60000.0,\"fractional\":1.5,",
+        "\"unsafe\":9007199254740992.0,\"list\":[2.0,3.0],",
+        "\"extra\":{\"retries\":4.0},\"untyped\":7.0}"
+    );
+    let body = [
+        encode_sse_event(
+            "response.created",
+            &serde_json::json!({
+                "type": "response.created",
+                "response": {"id": "resp_integer"}
+            })
+            .to_string(),
+        ),
+        encode_sse_event(
+            "response.output_item.added",
+            &serde_json::json!({
+                "type": "response.output_item.added",
+                "sequence_number": 40.0,
+                "output_index": 0,
+                "item": {
+                    "id": "item_wait",
+                    "type": "function_call",
+                    "call_id": "call_wait",
+                    "name": "wait"
+                }
+            })
+            .to_string(),
+        ),
+        encode_sse_event(
+            "",
+            &serde_json::json!({
+                "sequence_number": "invalid",
+                "future": true
+            })
+            .to_string(),
+        ),
+        encode_sse_event(
+            "response.function_call_arguments.delta",
+            &serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "sequence_number": 91,
+                "item_id": "item_wait",
+                "call_id": "call_wait",
+                "output_index": 0,
+                "delta": arguments
+            })
+            .to_string(),
+        ),
+        encode_sse_event_with_metadata(
+            "response.function_call_arguments.done",
+            &serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "sequence_number": 120,
+                "item_id": "item_wait",
+                "call_id": "call_wait",
+                "output_index": 0,
+                "arguments": arguments
+            })
+            .to_string(),
+            Some("evt_arguments_done"),
+            Some(250),
+        ),
+        encode_sse_event(
+            "response.output_item.done",
+            &serde_json::json!({
+                "type": "response.output_item.done",
+                "sequence_number": 200,
+                "output_index": 0,
+                "item": {
+                    "id": "item_wait",
+                    "type": "function_call",
+                    "call_id": "call_wait",
+                    "name": "wait",
+                    "arguments": arguments
+                }
+            })
+            .to_string(),
+        ),
+    ]
+    .concat();
+
+    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
+        .push(body.as_bytes())
+        .expect("integer argument stream");
+    let wire = wire_events(&events);
+    let sequences = wire
+        .iter()
+        .filter_map(|event| event.data().get("sequence_number")?.as_u64())
+        .collect::<Vec<_>>();
+
+    assert_eq!(sequences, vec![40, 41, 42, 43, 44]);
+    assert!(wire.iter().any(|event| {
+        event.event_type().is_none()
+            && event.data().get("future") == Some(&serde_json::json!(true))
+            && event.data().get("sequence_number") == Some(&serde_json::json!(41))
+    }));
+
+    let argument_events = wire
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type(),
+                Some(
+                    "response.function_call_arguments.delta"
+                        | "response.function_call_arguments.done"
+                        | "response.output_item.done"
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(argument_events.len(), 3);
+    for event in &argument_events {
+        let raw = event
+            .data()
+            .pointer(if event.event_type() == Some("response.output_item.done") {
+                "/item/arguments"
+            } else if event.event_type() == Some("response.function_call_arguments.delta") {
+                "/delta"
+            } else {
+                "/arguments"
+            })
+            .and_then(Value::as_str)
+            .expect("normalized arguments");
+        let normalized = serde_json::from_str::<Value>(raw).expect("argument JSON");
+        assert_eq!(
+            normalized.pointer("/timeout_ms"),
+            Some(&serde_json::json!(60000))
+        );
+        assert_eq!(
+            normalized.pointer("/fractional"),
+            Some(&serde_json::json!(1.5))
+        );
+        assert_eq!(
+            normalized.pointer("/unsafe"),
+            Some(&serde_json::json!(9007199254740992.0))
+        );
+        assert_eq!(normalized.pointer("/list/0"), Some(&serde_json::json!(2)));
+        assert_eq!(normalized.pointer("/list/1"), Some(&serde_json::json!(3.0)));
+        assert_eq!(
+            normalized.pointer("/extra/retries"),
+            Some(&serde_json::json!(4))
+        );
+        assert_eq!(
+            normalized.pointer("/untyped"),
+            Some(&serde_json::json!(7.0))
+        );
+    }
+    assert_eq!(argument_events[0].sse_id(), Some("evt_arguments_done"));
+    assert_eq!(argument_events[0].sse_retry(), Some(250));
+    assert_eq!(argument_events[1].sse_id(), None);
+    assert_eq!(argument_events[1].sse_retry(), None);
+}
+
+#[test]
+fn decoder_should_fail_open_after_the_function_argument_buffer_limit() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "wait",
+        "tools": [{
+            "type": "function",
+            "name": "wait",
+            "parameters": {
+                "type": "object",
+                "properties": {"timeout_ms": {"type": "integer"}}
+            }
+        }]
+    }));
+    let arguments = format!(
+        "{{\"timeout_ms\":1.0,\"padding\":\"{}\"}}",
+        "x".repeat((1 << 20) + 1)
+    );
+    let mut decoder = GrokCanonicalDecoder::for_request("grok-4.5", &request);
+    let added = encode_sse_event(
+        "response.output_item.added",
+        &serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": "item_large",
+                "type": "function_call",
+                "call_id": "call_large",
+                "name": "wait"
+            }
+        })
+        .to_string(),
+    );
+    decoder
+        .push(added.as_bytes())
+        .expect("large function item added");
+
+    let delta = encode_sse_event(
+        "response.function_call_arguments.delta",
+        &serde_json::json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "item_large",
+            "call_id": "call_large",
+            "output_index": 0,
+            "delta": arguments
+        })
+        .to_string(),
+    );
+    let delta = decoder
+        .push(delta.as_bytes())
+        .expect("oversized arguments should pass through");
+    let delta_wire = wire_events(&delta);
+    assert_eq!(delta_wire.len(), 1);
+    assert_eq!(
+        delta_wire[0].data().get("delta").and_then(Value::as_str),
+        Some(arguments.as_str())
+    );
+
+    let done = encode_sse_event(
+        "response.function_call_arguments.done",
+        &serde_json::json!({
+            "type": "response.function_call_arguments.done",
+            "item_id": "item_large",
+            "call_id": "call_large",
+            "output_index": 0,
+            "arguments": arguments
+        })
+        .to_string(),
+    );
+    let done = decoder
+        .push(done.as_bytes())
+        .expect("oversized arguments done");
+    let normalized = wire_events(&done)[0]
+        .data()
+        .get("arguments")
+        .and_then(Value::as_str)
+        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+        .expect("normalized final arguments");
+    assert_eq!(normalized.get("timeout_ms"), Some(&serde_json::json!(1)));
+}
+
+#[test]
 fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
     let body = concat!(
         "event: response.created\n",
@@ -612,6 +881,10 @@ fn decoder_should_preserve_unknown_events_as_openai_wire() {
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
         "event: xai.internal.trace\n",
         "data: {\"type\":\"xai.internal.trace\",\"secret\":\"must-not-reach-client\"}\n\n",
+        "event: response.doom_loop_check \n",
+        "data: {\"type\":\"response.backend_tool_call.started\",\"secret\":\"drop-header\"}\n\n",
+        "event: response.backend_tool_call.started\n",
+        "data: {\"type\":\"response.doom_loop_check\",\"secret\":\"drop-body\"}\n\n",
         "event: response.backend_tool_call.started\n",
         "id: evt_future\n",
         "retry: 1250\n",

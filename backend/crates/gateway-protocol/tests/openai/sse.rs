@@ -32,6 +32,50 @@ fn parser_should_preserve_multiline_data_id_and_retry() {
 }
 
 #[test]
+fn parser_should_ignore_a_leading_utf8_bom() {
+    let input = concat!(
+        "\u{feff}event: response.created\n",
+        "data: {\"type\":\"response.created\"}\n\n",
+    );
+
+    assert_eq!(
+        parse_sse_events(input).expect("SSE with BOM"),
+        vec![SseEvent {
+            event: Some("response.created".to_owned()),
+            data: "{\"type\":\"response.created\"}".to_owned(),
+            id: None,
+            retry: None,
+        }]
+    );
+}
+
+#[test]
+fn incremental_decoder_should_ignore_bom_only_at_the_stream_start() {
+    let mut decoder = SseEventDecoder::default();
+    let first = decoder
+        .push(
+            concat!(
+                "\u{feff}event: response.created\n",
+                "data: {\"type\":\"response.created\"}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("first SSE frame");
+    let second = decoder
+        .push(
+            concat!(
+                "\u{feff}event: response.completed\n",
+                "data: {\"type\":\"response.completed\"}\n\n",
+            )
+            .as_bytes(),
+        )
+        .expect("second SSE frame");
+
+    assert_eq!(first[0].event.as_deref(), Some("response.created"));
+    assert_eq!(second[0].event, None);
+}
+
+#[test]
 fn parser_should_ignore_done_control_frame() {
     assert!(
         parse_sse_events(DONE_SSE_FRAME)

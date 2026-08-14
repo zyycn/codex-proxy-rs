@@ -52,6 +52,10 @@ fn encoder_should_preserve_raw_images_hosted_tools_and_unknown_fields() {
     assert_eq!(body.pointer("/stream"), Some(&json!(true)));
     assert_eq!(body.pointer("/store"), Some(&json!(true)));
     assert_eq!(
+        body.pointer("/include"),
+        Some(&json!(["reasoning.encrypted_content"]))
+    );
+    assert_eq!(
         body.pointer("/input/0/content/1/detail"),
         Some(&json!("high"))
     );
@@ -71,25 +75,141 @@ fn encoder_should_preserve_raw_images_hosted_tools_and_unknown_fields() {
 }
 
 #[test]
-fn encoder_should_strip_openai_only_client_metadata_before_grok_build() {
+fn encoder_should_strip_all_client_metadata_before_grok_build() {
     let request = raw_request(json!({
         "model": "client-model",
         "input": "hello",
         "client_metadata": {
             "x-openai-subagent": "review",
             "application_tag": "preserve-me"
-        }
+        },
+        "metadata": {"application_tag": "keep-this"}
     }));
 
     let encoded = GrokResponsesRequest::encode(&request, "grok-routed", &client_key())
         .expect("sanitized request");
     let body = Value::Object(encoded.body().clone());
 
-    assert_eq!(body.pointer("/client_metadata/x-openai-subagent"), None);
+    assert_eq!(body.pointer("/client_metadata"), None);
     assert_eq!(
-        body.pointer("/client_metadata/application_tag"),
-        Some(&json!("preserve-me"))
+        body.pointer("/metadata/application_tag"),
+        Some(&json!("keep-this"))
     );
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "client_metadata": "opaque-local-envelope"
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-routed", &client_key())
+        .expect("scalar client metadata");
+    assert_eq!(encoded.body().get("client_metadata"), None);
+}
+
+#[test]
+fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "include": ["web_search_call.action.sources"],
+        "reasoning": {"effort": "XHIGH", "summary": "auto"}
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("normalized request");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(body.pointer("/store"), Some(&json!(false)));
+    assert_eq!(
+        body.pointer("/include"),
+        Some(&json!([
+            "web_search_call.action.sources",
+            "reasoning.encrypted_content"
+        ]))
+    );
+    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("high")));
+    assert_eq!(body.pointer("/reasoning/summary"), Some(&json!("auto")));
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "reasoning": {"effort": "max"}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "Build/grok-4.6-low", &client_key())
+        .expect("xhigh request");
+    assert_eq!(
+        Value::Object(encoded.body().clone()).pointer("/reasoning/effort"),
+        Some(&json!("xhigh"))
+    );
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "reasoning": {"effort": "high", "summary": "auto"}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
+        .expect("Composer request");
+    let body = Value::Object(encoded.body().clone());
+    assert_eq!(body.pointer("/reasoning/effort"), None);
+    assert_eq!(body.pointer("/reasoning/summary"), Some(&json!("auto")));
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "store": null,
+        "include": null,
+        "reasoning": {"effort": "max"}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
+        .expect("empty Composer reasoning");
+    let body = Value::Object(encoded.body().clone());
+    assert_eq!(body.pointer("/store"), Some(&json!(false)));
+    assert_eq!(
+        body.pointer("/include"),
+        Some(&json!(["reasoning.encrypted_content"]))
+    );
+    assert_eq!(body.pointer("/reasoning"), None);
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "reasoning": {}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
+        .expect("Composer reasoning without effort");
+    assert_eq!(
+        Value::Object(encoded.body().clone()).pointer("/reasoning"),
+        Some(&json!({}))
+    );
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "reasoning": {"effort": "max"}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "tenant/foo/grok-4.6", &client_key())
+        .expect("unknown provider prefix");
+    assert_eq!(
+        Value::Object(encoded.body().clone()).pointer("/reasoning/effort"),
+        Some(&json!("high"))
+    );
+}
+
+#[test]
+fn encoder_should_reject_non_string_build_include_values() {
+    for include in [json!("reasoning.encrypted_content"), json!([1])] {
+        let request = raw_request(json!({
+            "model": "client-model",
+            "input": "hello",
+            "include": include
+        }));
+        let error = GrokResponsesRequest::encode(&request, "grok-routed", &client_key())
+            .expect_err("invalid include");
+        assert!(matches!(
+            error,
+            GrokRequestEncodeError::InvalidRequestField { field: "include" }
+        ));
+    }
 }
 
 #[test]

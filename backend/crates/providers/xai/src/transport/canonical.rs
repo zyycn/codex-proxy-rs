@@ -198,6 +198,13 @@ impl GrokCanonicalDecoder {
     fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<ProviderEvent>, ProviderError> {
         let mut output = Vec::new();
         for event in events {
+            if event
+                .event
+                .as_deref()
+                .is_some_and(|event_type| event_type.trim() == "response.doom_loop_check")
+            {
+                continue;
+            }
             if event.data.trim() == "[DONE]" {
                 if !self.completed {
                     return Err(protocol_error_marker());
@@ -208,16 +215,27 @@ impl GrokCanonicalDecoder {
                 continue;
             };
             let body_type = value.get("type").and_then(Value::as_str);
+            if body_type == Some("response.doom_loop_check") {
+                continue;
+            }
             let Some(event_type) = body_type.or(event.event.as_deref()) else {
-                let wire = ProtocolWireEvent::json_with_sse_metadata(
-                    "openai",
-                    event.event,
-                    value,
-                    event.id,
-                    event.retry,
-                )
-                .map_err(|_| protocol_error_marker())?;
-                output.push(ProviderEvent::wire(wire));
+                let Ok(transformed) = self.response_transform.rewrite_stream_event("", value)
+                else {
+                    continue;
+                };
+                for (index, transformed) in transformed.into_iter().enumerate() {
+                    let mut value = transformed.into_value();
+                    self.response_transform.resequence_stream_value(&mut value);
+                    let wire = ProtocolWireEvent::json_with_sse_metadata(
+                        "openai",
+                        None,
+                        value,
+                        (index == 0).then(|| event.id.clone()).flatten(),
+                        (index == 0).then_some(event.retry).flatten(),
+                    )
+                    .map_err(|_| protocol_error_marker())?;
+                    output.push(ProviderEvent::wire(wire));
+                }
                 continue;
             };
             let event_type = event_type.to_owned();
@@ -238,7 +256,8 @@ impl GrokCanonicalDecoder {
                     transformed_type.as_str(),
                     "response.created" | "response.in_progress" | "response.failed" | "error"
                 );
-                let value = transformed.into_value();
+                let mut value = transformed.into_value();
+                self.response_transform.resequence_stream_value(&mut value);
                 let mut canonical = Vec::new();
                 // 终态事件（completed/incomplete）fail-closed：用量/计费校验失败即断流。
                 // 其余内容事件容忍字段校验失败——正常上游变体（空 delta、重复 index、
@@ -611,7 +630,8 @@ impl GrokCanonicalDecoder {
 }
 
 fn client_visible_event(event_type: &str) -> bool {
-    event_type == "error" || event_type.starts_with("response.")
+    event_type == "error"
+        || (event_type.starts_with("response.") && event_type != "response.doom_loop_check")
 }
 
 fn response_object(value: &Value) -> Option<&Value> {

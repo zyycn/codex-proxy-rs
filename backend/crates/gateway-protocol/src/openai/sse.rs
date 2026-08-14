@@ -70,7 +70,7 @@ pub const MAX_SSE_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 
 /// 用于处理任意分块边界的增量 SSE 解码器。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SseEventDecoder {
     pending: Vec<u8>,
     /// `pending` 中已确认不含帧分隔符的前缀长度。新数据到达时从该边界
@@ -79,6 +79,19 @@ pub struct SseEventDecoder {
     /// 超大未完成帧已开始直接交付；在遇到帧分隔符前只保留跨 chunk 扫描尾部，
     /// 不再尝试解析该帧。
     opaque_frame: bool,
+    /// 只有整个 SSE 流的第一条物理行允许携带 UTF-8 BOM。
+    stream_start: bool,
+}
+
+impl Default for SseEventDecoder {
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            scanned: 0,
+            opaque_frame: false,
+            stream_start: true,
+        }
+    }
 }
 
 impl SseEventDecoder {
@@ -115,7 +128,8 @@ impl SseEventDecoder {
         while let Some(end) = self.next_frame_end(consumed) {
             let frame = std::str::from_utf8(&self.pending[consumed..end])
                 .map_err(|error| SseError::ParseError(error.to_string()))?;
-            events.extend(parse_sse_events(frame)?);
+            events.extend(parse_sse_events_inner(frame, self.stream_start)?);
+            self.stream_start = false;
             consumed = end;
         }
 
@@ -149,9 +163,10 @@ impl SseEventDecoder {
             } else {
                 std::str::from_utf8(&raw)
                     .ok()
-                    .and_then(|frame| parse_sse_events(frame).ok())
+                    .and_then(|frame| parse_sse_events_inner(frame, self.stream_start).ok())
                     .unwrap_or_default()
             };
+            self.stream_start = false;
             frames.push(SseFrame::new(raw, events));
             consumed = end;
         }
@@ -173,7 +188,9 @@ impl SseEventDecoder {
         let pending = std::mem::take(&mut self.pending);
         let frame = std::str::from_utf8(&pending)
             .map_err(|error| SseError::ParseError(error.to_string()))?;
-        parse_sse_events(frame)
+        let events = parse_sse_events_inner(frame, self.stream_start)?;
+        self.stream_start = false;
+        Ok(events)
     }
 
     /// 在流结束时返回未带空行分隔符的最后一帧及其旁路解析结果。
@@ -191,9 +208,10 @@ impl SseEventDecoder {
         } else {
             std::str::from_utf8(&raw)
                 .ok()
-                .and_then(|frame| parse_sse_events(frame).ok())
+                .and_then(|frame| parse_sse_events_inner(frame, self.stream_start).ok())
                 .unwrap_or_default()
         };
+        self.stream_start = false;
         self.opaque_frame = false;
         vec![SseFrame::new(raw, events)]
     }
@@ -207,6 +225,7 @@ impl SseEventDecoder {
         let remaining = self.pending.split_off(end);
         let raw = std::mem::replace(&mut self.pending, remaining);
         frames.push(SseFrame::new(raw, Vec::new()));
+        self.stream_start = false;
         self.opaque_frame = false;
         self.scanned = 0;
         true
@@ -226,6 +245,7 @@ impl SseEventDecoder {
         let raw = std::mem::replace(&mut self.pending, tail);
         self.scanned = 0;
         frames.push(SseFrame::new(raw, Vec::new()));
+        self.stream_start = false;
     }
 }
 
@@ -351,12 +371,21 @@ impl EventBuilder {
 
 /// 解析 SSE 事件流。
 pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
+    parse_sse_events_inner(input, true)
+}
+
+fn parse_sse_events_inner(input: &str, strip_leading_bom: bool) -> Result<Vec<SseEvent>, SseError> {
     let mut events = Vec::new();
     let mut builder = EventBuilder::default();
     let mut saw_sse_syntax = false;
     let mut event_buffer_bytes = 0usize;
 
-    for raw_line in input.lines() {
+    for (index, raw_line) in input.lines().enumerate() {
+        let raw_line = if strip_leading_bom && index == 0 {
+            raw_line.strip_prefix('\u{feff}').unwrap_or(raw_line)
+        } else {
+            raw_line
+        };
         let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
         if line.is_empty() {
             event_buffer_bytes = 0;

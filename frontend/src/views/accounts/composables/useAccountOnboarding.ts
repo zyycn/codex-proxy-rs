@@ -98,8 +98,11 @@ export function useAccountOnboarding(options: {
           throw new Error('请先生成授权链接')
 
         const callbackUrl = createForm.value.oauthCallback.trim()
-        if (!callbackUrl)
-          throw new Error('请粘贴 OAuth 回调地址')
+        if (!callbackUrl) {
+          throw new Error(createForm.value.provider === 'xai'
+            ? '请粘贴 OAuth 回调地址、含 code 和 state 的查询字符串或授权码'
+            : '请粘贴 OAuth 回调地址')
+        }
         await completeAccountOAuth({
           provider: createForm.value.provider,
           flowId: createForm.value.oauthFlowId,
