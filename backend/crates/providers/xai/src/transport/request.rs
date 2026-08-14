@@ -3,7 +3,7 @@ use std::fmt;
 
 use gateway_core::operation::GenerateRequest;
 use gateway_core::policy::ClientApiKeyId;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
 use super::{GrokSessionAffinityKey, XAI_PROVIDER_NAME};
@@ -91,6 +91,11 @@ impl GrokResponsesRequest {
         self.reasoning_replay_session_id.as_deref()
     }
 
+    /// 返回经 sub2api 别名表归一化后的 xAI wire 模型。
+    pub(crate) fn upstream_model(&self) -> Option<&str> {
+        self.body.get("model").and_then(Value::as_str)
+    }
+
     pub(crate) fn has_previous_response_id(&self) -> bool {
         self.body
             .get("previous_response_id")
@@ -145,6 +150,14 @@ impl GrokResponsesRequest {
         self.body
             .insert("input".to_owned(), Value::Array(normalized));
         Ok(())
+    }
+
+    /// 为同账号的一次 xAI `invalid_encrypted_content` 恢复请求移除被拒绝的密文。
+    ///
+    /// 只在至少一个 reasoning item 含非空密文时改写；可读 summary/content、ID 与
+    /// 其他历史保持不变，剥离后只剩 `type` 的空壳一并删除。
+    pub(crate) fn strip_invalid_encrypted_reasoning(&mut self) -> bool {
+        strip_invalid_encrypted_reasoning_from_body(&mut self.body)
     }
 
     pub(crate) fn set_previous_response_id(&mut self, response_id: Option<String>) {
@@ -215,6 +228,7 @@ impl GrokResponsesRequest {
         if should_consume_terminal_compaction_trigger {
             consume_terminal_compaction_trigger(&mut body)?;
         }
+        let upstream_model = resolve_grok_text_responses_model_id(upstream_model);
         // 这些字段属于 Codex/OpenAI 侧请求控制，不是 xAI 上游协议字段。
         // OpenAI 透明路径会保留未知字段；这里只在 xAI adapter 内做最小剥离。
         body.remove("provider_options");
@@ -223,17 +237,17 @@ impl GrokResponsesRequest {
         let enable_cache_route = allow_cache_route && session_seed.is_some();
         let identity = resolve_session_identity(
             client_api_key_ref.as_str(),
-            upstream_model,
+            &upstream_model,
             session_seed.as_deref(),
             &body,
         );
         sanitize_account_identity(&mut body);
         sanitize_client_metadata(&mut body);
-        normalize_build_request(&mut body, upstream_model)?;
+        normalize_build_request(&mut body, &upstream_model)?;
         let mut response_transform = normalize_responses_request(&mut body)?;
         response_transform.observe_client_cache_tools();
         if enable_cache_route {
-            enable_grok_prompt_cache_route(&mut body, upstream_model, &mut response_transform);
+            enable_grok_prompt_cache_route(&mut body, &upstream_model, &mut response_transform);
         }
         let (session_id, affinity) = identity.map_or((None, None), |(session_id, affinity)| {
             (Some(session_id), Some(affinity))
@@ -251,7 +265,7 @@ impl GrokResponsesRequest {
                 body.remove("prompt_cache_key");
             }
         }
-        body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
+        body.insert("model".to_owned(), Value::String(upstream_model));
         body.insert("stream".to_owned(), Value::Bool(true));
         Ok(Self {
             body,
@@ -264,6 +278,33 @@ impl GrokResponsesRequest {
 
     pub(crate) fn to_json_bytes(&self) -> Result<Vec<u8>, GrokRequestEncodeError> {
         serde_json::to_vec(&self.body).map_err(|_| GrokRequestEncodeError::Serialization)
+    }
+}
+
+fn resolve_grok_text_responses_model_id(model: &str) -> String {
+    let stripped = strip_grok_provider_prefix(model);
+    let normalized = stripped.to_ascii_lowercase();
+    match normalized.as_str() {
+        "grok" | "grok-latest" | "grok-4.5" | "grok-4.5-latest" | "grok-build-latest" => {
+            "grok-4.5".to_owned()
+        }
+        "grok-4.6" | "grok-4.6-latest" => "grok-4.6".to_owned(),
+        "grok-4.3" | "grok-4.3-latest" => "grok-4.3".to_owned(),
+        "grok-3-mini"
+        | "grok-3-mini-fast"
+        | "grok-build-0.1"
+        | "grok-composer-2.5-fast"
+        | "grok-4.20-0309-reasoning"
+        | "grok-4.20-0309-non-reasoning"
+        | "grok-4.20-multi-agent-0309" => normalized,
+        "grok-build" => "grok-build-0.1".to_owned(),
+        "grok-composer" | "composer-2.5" => "grok-composer-2.5-fast".to_owned(),
+        "grok-4.20-reasoning" => "grok-4.20-0309-reasoning".to_owned(),
+        "grok-4.20-non-reasoning" => "grok-4.20-0309-non-reasoning".to_owned(),
+        "grok-4.20-multi-agent" | "grok-4.20-multi-agent-latest" => {
+            "grok-4.20-multi-agent-0309".to_owned()
+        }
+        _ => stripped.to_owned(),
     }
 }
 
@@ -372,7 +413,6 @@ fn enable_grok_prompt_cache_route(
         )]));
         response.mark_injected_cache_tool("x_search");
     }
-    append_x_search_to_allowed_tools(body);
 }
 
 fn is_cache_media_model(model: &str) -> bool {
@@ -380,24 +420,6 @@ fn is_cache_media_model(model: &str) -> bool {
     ["image", "imagine", "video"]
         .into_iter()
         .any(|marker| model.contains(marker))
-}
-
-fn append_x_search_to_allowed_tools(body: &mut Map<String, Value>) {
-    let Some(choice) = body.get_mut("tool_choice").and_then(Value::as_object_mut) else {
-        return;
-    };
-    if choice.get("type").and_then(Value::as_str) != Some("allowed_tools") {
-        return;
-    }
-    let Some(allowed) = choice.get_mut("tools").and_then(Value::as_array_mut) else {
-        return;
-    };
-    if !has_tool_type(allowed, "x_search") {
-        allowed.push(json_object([(
-            "type",
-            Value::String("x_search".to_owned()),
-        )]));
-    }
 }
 
 fn explicit_session_seed(request: &GenerateRequest, body: &Map<String, Value>) -> Option<String> {
@@ -653,6 +675,7 @@ fn normalize_build_request(
 ) -> Result<(), GrokRequestEncodeError> {
     apply_build_response_defaults(body)?;
     normalize_build_reasoning_effort(body, upstream_model);
+    sanitize_build_model_fields(body, upstream_model);
     Ok(())
 }
 
@@ -685,66 +708,152 @@ fn apply_build_response_defaults(
 }
 
 fn normalize_build_reasoning_effort(body: &mut Map<String, Value>, upstream_model: &str) {
-    let Some(reasoning) = body.get_mut("reasoning").and_then(Value::as_object_mut) else {
-        return;
-    };
-    if is_grok_composer_model(upstream_model) {
-        if reasoning.remove("effort").is_none() {
-            return;
+    let supports_effort = grok_model_supports_reasoning_effort(upstream_model);
+    if let Some(reasoning) = body.get_mut("reasoning").and_then(Value::as_object_mut) {
+        if let Some(effort) = reasoning.remove("effort")
+            && supports_effort
+            && let Some(effort) = normalize_grok_reasoning_effort_value(&effort)
+        {
+            reasoning.insert("effort".to_owned(), Value::String(effort.to_owned()));
         }
         if reasoning.is_empty() {
             body.remove("reasoning");
         }
-        return;
     }
-    let Some(effort) = reasoning
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-    else {
-        return;
-    };
-    if !matches!(effort.as_str(), "xhigh" | "max") {
-        return;
+
+    if let Some(effort) = body.remove("reasoning_effort")
+        && supports_effort
+        && let Some(effort) = normalize_grok_reasoning_effort_value(&effort)
+    {
+        body.insert(
+            "reasoning_effort".to_owned(),
+            Value::String(effort.to_owned()),
+        );
     }
-    let normalized = if grok_model_supports_xhigh(upstream_model) {
-        "xhigh"
-    } else {
-        "high"
-    };
-    reasoning.insert("effort".to_owned(), Value::String(normalized.to_owned()));
+
+    let camel_effort = body.remove("reasoningEffort");
+    if !body.contains_key("reasoning_effort")
+        && supports_effort
+        && let Some(effort) = camel_effort
+            .as_ref()
+            .and_then(normalize_grok_reasoning_effort_value)
+    {
+        body.insert(
+            "reasoning_effort".to_owned(),
+            Value::String(effort.to_owned()),
+        );
+    }
+
+    if is_grok_composer_model(upstream_model) {
+        body.remove("reasoning");
+        body.remove("reasoning_effort");
+        body.remove("reasoningEffort");
+    }
 }
 
-fn grok_model_slug(model: &str) -> String {
+fn normalize_grok_reasoning_effort_value(value: &Value) -> Option<&'static str> {
+    let normalized = value
+        .as_str()?
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|character| !matches!(character, '-' | '_' | ' '))
+        .collect::<String>();
+    match normalized.as_str() {
+        "none" => Some("none"),
+        "minimal" | "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" | "xhigh" | "extrahigh" | "max" | "ultra" => Some("high"),
+        _ => None,
+    }
+}
+
+fn strip_grok_provider_prefix(model: &str) -> &str {
     let model = model.trim();
-    let slug = model.split_once('/').map_or(model, |(provider, slug)| {
-        if matches!(
-            provider.trim().to_ascii_lowercase().as_str(),
-            "build" | "web" | "console"
-        ) {
-            slug.trim()
-        } else {
-            model
-        }
-    });
-    slug.to_ascii_lowercase()
+    let lower = model.to_ascii_lowercase();
+    ["xai/", "x-ai/", "grok/"]
+        .into_iter()
+        .find_map(|prefix| {
+            lower
+                .starts_with(prefix)
+                .then(|| model[prefix.len()..].trim())
+        })
+        .unwrap_or(model)
+}
+
+fn grok_model_last_slug(model: &str) -> String {
+    model
+        .trim()
+        .rsplit_once('/')
+        .map_or_else(|| model.trim(), |(_, slug)| slug.trim())
+        .to_ascii_lowercase()
 }
 
 fn is_grok_composer_model(model: &str) -> bool {
-    grok_model_slug(model).starts_with("grok-composer-")
+    matches!(
+        grok_model_last_slug(model).as_str(),
+        "grok-composer" | "grok-composer-2.5-fast" | "composer-2.5"
+    )
 }
 
-fn grok_model_supports_xhigh(model: &str) -> bool {
-    let slug = grok_model_slug(model);
-    ["grok-4.6", "grok-4.20-multi-agent-0309"]
-        .into_iter()
-        .any(|base| {
-            slug == base
-                || slug
-                    .strip_prefix(base)
-                    .is_some_and(|suffix| matches!(suffix, "-low" | "-medium" | "-high" | "-xhigh"))
-        })
+fn grok_model_supports_reasoning_effort(model: &str) -> bool {
+    matches!(
+        strip_grok_provider_prefix(model)
+            .to_ascii_lowercase()
+            .as_str(),
+        "grok-4.5"
+            | "grok-4.5-latest"
+            | "grok-4.6"
+            | "grok-4.6-latest"
+            | "grok-4.3"
+            | "grok-4.3-latest"
+            | "grok-3-mini"
+            | "grok-3-mini-fast"
+            | "grok-4.20-0309-reasoning"
+            | "grok-4.20-reasoning"
+            | "grok-4.20-multi-agent-0309"
+    )
+}
+
+fn sanitize_build_model_fields(body: &mut Map<String, Value>, upstream_model: &str) {
+    for field in ["prompt_cache_retention", "safety_identifier"] {
+        body.remove(field);
+    }
+    if upstream_model.trim().eq_ignore_ascii_case("grok-4.5") {
+        for field in [
+            "presence_penalty",
+            "presencePenalty",
+            "frequency_penalty",
+            "frequencyPenalty",
+            "stop",
+        ] {
+            body.remove(field);
+        }
+    }
+    if grok_model_last_slug(upstream_model).starts_with("grok-4.20") {
+        body.remove("logprobs");
+        body.remove("top_logprobs");
+    }
+    delete_json_field_recursive(body, "external_web_access");
+}
+
+fn delete_json_field_recursive(object: &mut Map<String, Value>, field: &str) {
+    object.remove(field);
+    for value in object.values_mut() {
+        delete_json_field_from_value(value, field);
+    }
+}
+
+fn delete_json_field_from_value(value: &mut Value, field: &str) {
+    match value {
+        Value::Object(child) => delete_json_field_recursive(child, field),
+        Value::Array(children) => {
+            for child in children {
+                delete_json_field_from_value(child, field);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn normalize_response_format(value: Value) -> Result<Value, GrokRequestEncodeError> {
@@ -1643,7 +1752,6 @@ struct ToolNormalizer {
     client_search_tool: Option<Map<String, Value>>,
     server_search_eager: bool,
     native_shell: bool,
-    web_search_disabled: bool,
 }
 
 struct NormalizedInputItems {
@@ -1667,7 +1775,6 @@ impl ToolNormalizer {
             client_search_tool: None,
             server_search_eager: false,
             native_shell: false,
-            web_search_disabled: false,
         }
     }
 
@@ -1684,7 +1791,6 @@ impl ToolNormalizer {
             client_search_tool: None,
             server_search_eager: false,
             native_shell: false,
-            web_search_disabled: false,
         }
     }
 
@@ -1820,12 +1926,12 @@ impl ToolNormalizer {
             "shell" => self.normalize_shell_tool(tool),
             "local_shell" => self.normalize_legacy_local_shell_tool(tool),
             "apply_patch" => self.normalize_apply_patch_tool(tool),
-            "x_search" | "image_generation" | "collections_search" | "file_search"
-            | "code_execution" | "code_interpreter" => {
-                Ok(vec![Value::Object(without_defer_loading(tool))])
-            }
-            "" | "computer_use_preview" => Err(GrokRequestEncodeError::InvalidRequestNormalization),
-            _ => Err(GrokRequestEncodeError::InvalidRequestNormalization),
+            "x_search" | "collections_search" | "file_search" | "code_execution"
+            | "code_interpreter" => Ok(vec![Value::Object(without_defer_loading(tool))]),
+            // sub2api 的 xAI Responses 适配层对未获 xAI 接受的工具做静默过滤，
+            // 并在过滤后同步收敛 tool_choice；不要把客户端可选扩展升级成整单 400。
+            "" | "computer_use_preview" | "image_generation" => Ok(Vec::new()),
+            _ => Ok(Vec::new()),
         }
     }
 
@@ -1858,10 +1964,21 @@ impl ToolNormalizer {
             .get("parameters")
             .filter(|schema| schema_contains_integer(schema, 0))
             .cloned();
-        if let Some(parameters) = converted.get("parameters").cloned()
-            && let Some(normalized) = normalize_function_parameters_root(&parameters)?
-        {
-            converted.insert("parameters".to_owned(), normalized);
+        match converted.get("parameters").cloned() {
+            None | Some(Value::Null) => {
+                converted.insert(
+                    "parameters".to_owned(),
+                    json_object([
+                        ("type", Value::String("object".to_owned())),
+                        ("properties", Value::Object(Map::new())),
+                    ]),
+                );
+            }
+            Some(parameters) => {
+                if let Some(normalized) = normalize_function_parameters_root(&parameters)? {
+                    converted.insert("parameters".to_owned(), normalized);
+                }
+            }
         }
         let alias = self.alias(ToolIdentity::new(ToolKind::Function, namespace, name));
         if let Some(schema) = function_schema {
@@ -2234,26 +2351,40 @@ fn short_tool_hash(value: &str) -> String {
 
 fn dedupe_normalized_tools(tools: Vec<Value>) -> Vec<Value> {
     let mut result = Vec::with_capacity(tools.len());
-    let mut positions = BTreeMap::new();
+    let mut seen = BTreeSet::new();
     for tool in tools {
-        let key = tool.as_object().map(|tool| {
-            let kind = string_field(tool, "type");
-            let name = ["name", "server_label"]
-                .into_iter()
-                .find_map(|field| tool.get(field).and_then(Value::as_str))
-                .unwrap_or_default();
-            format!("{kind}\0{name}")
-        });
-        if let Some(position) = key.as_ref().and_then(|key| positions.get(key)).copied() {
-            result[position] = tool;
-        } else {
-            if let Some(key) = key {
-                positions.insert(key, result.len());
-            }
+        if normalized_tool_dedupe_key(&tool).is_none_or(|key| seen.insert(key)) {
             result.push(tool);
         }
     }
     result
+}
+
+fn normalized_tool_dedupe_key(tool: &Value) -> Option<String> {
+    let object = tool.as_object()?;
+    let kind = string_field(object, "type").trim();
+    if !kind.is_empty() {
+        if let Some(name) = object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return Some(format!("type:{kind}\0name:{name}"));
+        }
+        if kind == "mcp"
+            && let Some(label) = object
+                .get("server_label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+        {
+            return Some(format!("type:mcp\0server_label:{label}"));
+        }
+    }
+    serde_json::to_string(tool)
+        .ok()
+        .map(|encoded| format!("json:{encoded}"))
 }
 
 impl ToolNormalizer {
@@ -2262,15 +2393,6 @@ impl ToolNormalizer {
         tool: &Map<String, Value>,
         kind: &str,
     ) -> Result<Vec<Value>, GrokRequestEncodeError> {
-        if let Some(external) = tool.get("external_web_access") {
-            let enabled = external
-                .as_bool()
-                .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-            if !enabled {
-                self.web_search_disabled = true;
-                return Ok(Vec::new());
-            }
-        }
         let filters = normalize_web_search_filters(tool)?;
         if let Some(content_types) = tool.get("search_content_types") {
             content_types
@@ -2440,13 +2562,6 @@ impl ToolNormalizer {
                 .ok_or(GrokRequestEncodeError::InvalidRequestNormalization);
         };
         let kind = string_field(&object, "type").to_owned();
-        if self.web_search_disabled
-            && normalize_hosted_tool_choice_kind(&kind) == Some("web_search")
-            && !has_tool_type(normalized_tools, "web_search")
-        {
-            payload.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
-            return Ok(());
-        }
         match kind.as_str() {
             "tool_search" => {
                 if self.client_search_tool.is_none() {
@@ -2497,113 +2612,23 @@ impl ToolNormalizer {
                 );
             }
             "allowed_tools" => {
-                self.normalize_allowed_tools_choice(payload, object, normalized_tools)?;
+                payload.remove("tool_choice");
             }
-            "function" => self.normalize_function_tool_choice(payload, object)?,
+            "function" => {
+                self.normalize_function_tool_choice(payload, object, normalized_tools)?;
+            }
             _ => {
                 if let Some(hosted_kind) = normalize_hosted_tool_choice_kind(&kind) {
                     let matching = tools_of_type(normalized_tools, hosted_kind);
                     if matching.is_empty() {
-                        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+                        payload.remove("tool_choice");
+                        return Ok(());
                     }
-                    if matching.len() != normalized_tools.len() {
-                        payload.insert("tools".to_owned(), Value::Array(matching));
-                    }
-                    payload.insert(
-                        "tool_choice".to_owned(),
-                        Value::String("required".to_owned()),
-                    );
+                    object.insert("type".to_owned(), Value::String(hosted_kind.to_owned()));
+                    payload.insert("tool_choice".to_owned(), Value::Object(object));
                 } else {
-                    return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+                    payload.remove("tool_choice");
                 }
-            }
-        }
-        Ok(())
-    }
-
-    fn normalize_allowed_tools_choice(
-        &self,
-        payload: &mut Map<String, Value>,
-        mut object: Map<String, Value>,
-        normalized_tools: &[Value],
-    ) -> Result<(), GrokRequestEncodeError> {
-        if !matches!(
-            object.get("mode").and_then(Value::as_str),
-            Some("auto" | "required")
-        ) {
-            return Err(GrokRequestEncodeError::InvalidRequestNormalization);
-        }
-        let allowed = object
-            .get_mut("tools")
-            .and_then(Value::as_array_mut)
-            .filter(|tools| !tools.is_empty())
-            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-        for allowed_tool in allowed {
-            self.normalize_allowed_tool_reference(allowed_tool, normalized_tools)?;
-        }
-        payload.insert("tool_choice".to_owned(), Value::Object(object));
-        Ok(())
-    }
-
-    fn normalize_allowed_tool_reference(
-        &self,
-        allowed_tool: &mut Value,
-        normalized_tools: &[Value],
-    ) -> Result<(), GrokRequestEncodeError> {
-        let object = allowed_tool
-            .as_object_mut()
-            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-        let kind = string_field(object, "type").trim().to_owned();
-        match kind.as_str() {
-            "function" => {
-                let choice = match object.get_mut("function") {
-                    Some(Value::Object(function)) => function,
-                    Some(_) => return Err(GrokRequestEncodeError::InvalidRequestNormalization),
-                    None => object,
-                };
-                rewrite_namespace_choice(choice, &self.identity_aliases)?;
-                let name = string_field(choice, "name").trim();
-                if name.is_empty() || !has_named_tool(normalized_tools, "function", name) {
-                    return Err(GrokRequestEncodeError::InvalidRequestNormalization);
-                }
-            }
-            "custom" => {
-                let identity = ToolIdentity::new(
-                    ToolKind::Custom,
-                    string_field(object, "namespace").trim(),
-                    string_field(object, "name").trim(),
-                );
-                let alias = self
-                    .identity_aliases
-                    .get(&identity)
-                    .cloned()
-                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-                object.insert("type".to_owned(), Value::String("function".to_owned()));
-                object.insert("name".to_owned(), Value::String(alias));
-                object.remove("namespace");
-            }
-            "apply_patch" | "tool_search" => {
-                let identity = if kind == "apply_patch" {
-                    ToolIdentity::new(ToolKind::ApplyPatch, "", "apply_patch")
-                } else {
-                    ToolIdentity::new(ToolKind::ToolSearch, "", "tool_search")
-                };
-                let alias = self
-                    .identity_aliases
-                    .get(&identity)
-                    .cloned()
-                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-                object.clear();
-                object.insert("type".to_owned(), Value::String("function".to_owned()));
-                object.insert("name".to_owned(), Value::String(alias));
-            }
-            _ => {
-                let hosted_kind = normalize_hosted_tool_choice_kind(&kind)
-                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-                if !has_tool_type(normalized_tools, hosted_kind) {
-                    return Err(GrokRequestEncodeError::InvalidRequestNormalization);
-                }
-                object.insert("type".to_owned(), Value::String(hosted_kind.to_owned()));
             }
         }
         Ok(())
@@ -2613,13 +2638,24 @@ impl ToolNormalizer {
         &self,
         payload: &mut Map<String, Value>,
         mut object: Map<String, Value>,
+        normalized_tools: &[Value],
     ) -> Result<(), GrokRequestEncodeError> {
         if let Some(Value::Object(function)) = object.get_mut("function") {
             rewrite_namespace_choice(function, &self.identity_aliases)?;
+            let name = string_field(function, "name").trim();
+            if !name.is_empty() && !has_named_tool(normalized_tools, "function", name) {
+                payload.remove("tool_choice");
+                return Ok(());
+            }
             payload.insert("tool_choice".to_owned(), Value::Object(object));
             return Ok(());
         }
         rewrite_namespace_choice(&mut object, &self.identity_aliases)?;
+        let name = string_field(&object, "name").trim();
+        if !name.is_empty() && !has_named_tool(normalized_tools, "function", name) {
+            payload.remove("tool_choice");
+            return Ok(());
+        }
         payload.insert("tool_choice".to_owned(), Value::Object(object));
         Ok(())
     }
@@ -2758,8 +2794,8 @@ impl ToolNormalizer {
                         item, item_type,
                     )));
                 }
-                "compaction" => {
-                    rewritten.push(Value::Object(normalize_compaction_input(item)?));
+                "compaction" | "compaction_summary" => {
+                    rewritten.extend(normalize_compaction_input(item)?);
                 }
                 "tool_search_call" => {
                     rewritten.push(Value::Object(self.normalize_tool_search_call(item)?));
@@ -2799,8 +2835,7 @@ impl ToolNormalizer {
                     return Err(GrokRequestEncodeError::InvalidRequestNormalization);
                 }
                 "additional_tools" => {
-                    let (marker, tools, visible) = self.normalize_additional_tools_input(item)?;
-                    rewritten.push(marker);
+                    let (tools, visible) = self.normalize_additional_tools_input(item)?;
                     loaded_tools.extend(tools);
                     visible_tools.extend(visible);
                 }
@@ -3129,36 +3164,16 @@ impl ToolNormalizer {
     fn normalize_additional_tools_input(
         &mut self,
         item: &Map<String, Value>,
-    ) -> Result<(Value, Vec<Value>, Vec<Value>), GrokRequestEncodeError> {
+    ) -> Result<(Vec<Value>, Vec<Value>), GrokRequestEncodeError> {
         let tools = item
             .get("tools")
             .and_then(Value::as_array)
             .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
         let mut normalized = Vec::new();
-        let mut names = Vec::new();
         for raw_tool in tools {
             normalized.extend(self.normalize_tool(raw_tool, "", false, true)?);
-            if let Some(tool) = raw_tool.as_object()
-                && let Some(name) = ["name", "server_label", "type"]
-                    .into_iter()
-                    .find_map(|field| tool.get(field).and_then(Value::as_str))
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-            {
-                names.push(name.to_owned());
-            }
         }
-        let mut message =
-            "Additional tools become available at this point in the conversation.".to_owned();
-        if !names.is_empty() {
-            message.push_str("\nTools: ");
-            message.push_str(&names.join(", "));
-        }
-        Ok((
-            Value::Object(boundary_message(&message)),
-            normalized,
-            tools.clone(),
-        ))
+        Ok((normalized, tools.clone()))
     }
 }
 
@@ -3485,14 +3500,6 @@ fn sanitize_reasoning_input(item: &Map<String, Value>) -> Map<String, Value> {
     // Grok CLI 会在 summary/content 条目上注入 phase 等内部键。
     strip_grok_internal_entry_keys(&mut converted, &["summary", "content"]);
     converted.insert("type".to_owned(), Value::String("reasoning".to_owned()));
-    if converted
-        .get("encrypted_content")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
-        && !converted.contains_key("summary")
-    {
-        converted.insert("summary".to_owned(), Value::Array(Vec::new()));
-    }
     if has_portable_reasoning_content(&converted) {
         converted
     } else {
@@ -3504,23 +3511,107 @@ fn sanitize_reasoning_input(item: &Map<String, Value>) -> Map<String, Value> {
 
 fn normalize_compaction_input(
     item: &Map<String, Value>,
-) -> Result<Map<String, Value>, GrokRequestEncodeError> {
-    let summary = required_trimmed_string(item, "encrypted_content")?;
-    let continuation = format!(
-        "This session is being continued from a previous conversation that ran out of context. \
-         The summary below covers the earlier portion of the conversation.\n\n{summary}"
-    );
-    Ok(Map::from_iter([
+) -> Result<Vec<Value>, GrokRequestEncodeError> {
+    let encrypted = item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let has_sub2api_shape = item.contains_key("summary")
+        || item.contains_key("id")
+        || item.contains_key("status")
+        || string_field(item, "type").trim() == "compaction_summary";
+
+    // 旧版 adapter 曾将明文摘要直接写入 encrypted_content，且不带
+    // id/status/summary。仅对这一可识别的历史形态保留明文恢复；新形态严格按
+    // sub2api 回放为 xAI reasoning 密文 + 可见 conversation summary。
+    if !has_sub2api_shape {
+        let Some(summary) = encrypted else {
+            return Ok(Vec::new());
+        };
+        let continuation = format!(
+            "This session is being continued from a previous conversation that ran out of context. \
+             The summary below covers the earlier portion of the conversation.\n\n{summary}"
+        );
+        return Ok(vec![Value::Object(compaction_summary_message(
+            &continuation,
+        ))]);
+    }
+
+    let mut converted = Vec::with_capacity(2);
+    if let Some(encrypted) = encrypted {
+        converted.push(json!({
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": encrypted,
+        }));
+    }
+    if let Some(summary) = compact_summary_text(item.get("summary")) {
+        converted.push(Value::Object(compaction_summary_message(&format!(
+            "<conversation_summary>\n{summary}\n</conversation_summary>"
+        ))));
+    }
+    Ok(converted)
+}
+
+fn compact_summary_text(value: Option<&Value>) -> Option<String> {
+    let text = value?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn compaction_summary_message(text: &str) -> Map<String, Value> {
+    Map::from_iter([
         ("type".to_owned(), Value::String("message".to_owned())),
         ("role".to_owned(), Value::String("user".to_owned())),
         (
             "content".to_owned(),
             Value::Array(vec![json_object([
                 ("type", Value::String("input_text".to_owned())),
-                ("text", Value::String(continuation)),
+                ("text", Value::String(text.to_owned())),
             ])]),
         ),
-    ]))
+    ])
+}
+
+pub(super) fn strip_invalid_encrypted_reasoning_from_body(body: &mut Map<String, Value>) -> bool {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let has_encrypted_reasoning = input.iter().any(|item| {
+        item.as_object().is_some_and(|item| {
+            string_field(item, "type").trim() == "reasoning"
+                && item
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
+    });
+    if !has_encrypted_reasoning {
+        return false;
+    }
+
+    input.retain_mut(|item| {
+        let Some(item) = item.as_object_mut() else {
+            return true;
+        };
+        if string_field(item, "type").trim() != "reasoning" {
+            return true;
+        }
+        item.remove("encrypted_content");
+        if item.get("content").is_some_and(Value::is_null) {
+            item.remove("content");
+        }
+        item.len() > 1
+    });
+    true
 }
 
 fn has_portable_reasoning_content(item: &Map<String, Value>) -> bool {

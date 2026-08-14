@@ -913,6 +913,32 @@ fn decoder_should_preserve_unknown_events_as_openai_wire() {
 }
 
 #[test]
+fn decoder_should_rewrite_grok_ping_frames_as_sse_comments() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ping\"}}\n\n",
+        "event: ping\n",
+        "data: {\"type\":\"ping\",\"x-opencode-type\":\"inference-cost\",\"cost\":2.75}\n\n",
+        "event: ping\n",
+        "data: {not-json}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ping\",\"status\":\"completed\"}}\n\n",
+    );
+
+    let events = GrokCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("ping-filtered response");
+    let wire = wire_events(&events);
+    let ping_comments = wire
+        .iter()
+        .filter(|event| event.raw_sse_frame().map(AsRef::as_ref) == Some(b": ping\n\n".as_slice()))
+        .count();
+
+    assert_eq!(ping_comments, 2);
+    assert!(wire.iter().all(|event| event.event_type() != Some("ping")));
+}
+
+#[test]
 fn decoder_should_preserve_image_and_hosted_tool_items_without_inventing_facts() {
     let body = concat!(
         "event: response.created\n",

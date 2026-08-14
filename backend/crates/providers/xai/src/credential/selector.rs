@@ -26,12 +26,17 @@ use crate::{
     SelectedGrokSession,
 };
 
-const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
+const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(2 * 60);
 const MAX_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 const STREAM_INTERRUPTION_COOLDOWN: Duration = Duration::from_secs(30);
-const UNAUTHORIZED_COOLDOWN: Duration = Duration::from_secs(60);
+const UNAUTHORIZED_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+const ACCESS_DENIED_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+const PAYMENT_REQUIRED_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+const MODEL_CAPACITY_COOLDOWN: Duration = Duration::from_secs(3 * 60);
+const EMPTY_UPSTREAM_COOLDOWN: Duration = Duration::from_secs(4 * 60);
+const UPSTREAM_UNAVAILABLE_COOLDOWN: Duration = Duration::from_secs(2 * 60);
 const MODEL_ACCESS_DENIED_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-const MODEL_QUOTA_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+const MODEL_QUOTA_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 const MAX_MODEL_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -479,7 +484,7 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                 // 不持久化 QuotaExhausted（结构化 QuotaExhausted/FreeQuotaExhausted 走上面）。
                 GrokCredentialFailure::PaymentRequired { retry_after } => {
                     let retry_after = retry_after
-                        .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN)
+                        .unwrap_or(PAYMENT_REQUIRED_COOLDOWN)
                         .min(MAX_RATE_LIMIT_COOLDOWN);
                     self.record_runtime_cooldown(session, retry_after).await;
                 }
@@ -505,6 +510,31 @@ impl GrokSessionSelector for GrokAccountSessionSelector {
                         MAX_MODEL_COOLDOWN,
                     );
                     self.record_model_runtime_cooldown(session, upstream_model, retry_after)
+                        .await;
+                }
+                GrokCredentialFailure::AccessDenied => {
+                    self.record_runtime_cooldown(session, ACCESS_DENIED_COOLDOWN)
+                        .await;
+                }
+                GrokCredentialFailure::ModelCapacity { upstream_model } => {
+                    if upstream_model.as_str().contains("multi-agent") {
+                        self.record_model_runtime_cooldown(
+                            session,
+                            upstream_model,
+                            MODEL_CAPACITY_COOLDOWN,
+                        )
+                        .await;
+                    } else {
+                        self.record_runtime_cooldown(session, MODEL_CAPACITY_COOLDOWN)
+                            .await;
+                    }
+                }
+                GrokCredentialFailure::EmptyUpstream => {
+                    self.record_runtime_cooldown(session, EMPTY_UPSTREAM_COOLDOWN)
+                        .await;
+                }
+                GrokCredentialFailure::UpstreamUnavailable => {
+                    self.record_runtime_cooldown(session, UPSTREAM_UNAVAILABLE_COOLDOWN)
                         .await;
                 }
                 GrokCredentialFailure::RateLimited { retry_after } => {

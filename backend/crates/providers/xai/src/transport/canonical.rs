@@ -23,6 +23,7 @@ use super::{classify_grok_quota_failure, scrub_account_fingerprints};
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
 const LONG_CONTEXT_THRESHOLD: u64 = 200_000;
+const GROK_PING_SSE_COMMENT: &[u8] = b": ping\n\n";
 
 #[derive(Clone, Copy)]
 struct TokenRates {
@@ -211,7 +212,26 @@ impl GrokCanonicalDecoder {
                 }
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+            let parsed = serde_json::from_str::<Value>(&event.data);
+            if event
+                .event
+                .as_deref()
+                .is_some_and(|event_type| event_type.trim() == "ping")
+                && parsed
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("type").and_then(Value::as_str))
+                    .is_none_or(|event_type| event_type == "ping")
+            {
+                let wire = ProtocolWireEvent::raw_sse(
+                    "openai",
+                    bytes::Bytes::from_static(GROK_PING_SSE_COMMENT),
+                )
+                .map_err(|_| protocol_error_marker())?;
+                output.push(ProviderEvent::wire(wire));
+                continue;
+            }
+            let Ok(value) = parsed else {
                 continue;
             };
             let body_type = value.get("type").and_then(Value::as_str);

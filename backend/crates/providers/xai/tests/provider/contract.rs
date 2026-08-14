@@ -42,7 +42,7 @@ use provider_xai::{
     GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture,
     SecretValue, SelectedGrokSession,
 };
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 
 use crate::support::{
     MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, seed_input,
@@ -208,6 +208,8 @@ fn compaction_sse(summary: &str, reasoning: Option<&str>) -> Vec<u8> {
             "event: response.created\n",
             "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\"}}}}\n\n",
             "{reasoning}",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"reason_compaction\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"encrypted_content\":\"grok-compaction-ciphertext\"}}}}\n\n",
             "event: response.content_part.added\n",
             "data: {{\"type\":\"response.content_part.added\",\"output_index\":1,\"content_index\":0,\"part\":{{\"type\":\"output_text\"}}}}\n\n",
             "event: response.output_text.delta\n",
@@ -221,7 +223,53 @@ fn compaction_sse(summary: &str, reasoning: Option<&str>) -> Vec<u8> {
     .into_bytes()
 }
 
+fn terminal_only_compaction_sse(summary: &str) -> Vec<u8> {
+    let summary = serde_json::to_string(summary).expect("summary JSON string");
+    format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\"}}}}\n\n",
+            "event: response.completed\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\",\"status\":\"completed\",\"output\":[{{\"id\":\"reason_compaction\",\"type\":\"reasoning\",\"status\":\"completed\",\"encrypted_content\":\"grok-compaction-ciphertext\"}},{{\"id\":\"msg_compaction\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":{summary}}}]}}],\"usage\":{{\"input_tokens\":100,\"output_tokens\":20,\"total_tokens\":120}}}}}}\n\n",
+        ),
+        summary = summary,
+    )
+    .into_bytes()
+}
+
+fn incomplete_compaction_sse(summary: &str) -> Vec<u8> {
+    let summary = serde_json::to_string(summary).expect("summary JSON string");
+    format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\"}}}}\n\n",
+            "event: response.incomplete\n",
+            "data: {{\"type\":\"response.incomplete\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\",\"status\":\"incomplete\",\"incomplete_details\":{{\"reason\":\"max_output_tokens\"}},\"output_text\":{summary},\"output\":[{{\"id\":\"reason_compaction\",\"type\":\"reasoning\",\"status\":\"completed\",\"encrypted_content\":\"grok-compaction-ciphertext\"}},{{\"id\":\"msg_compaction\",\"type\":\"message\",\"status\":\"incomplete\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":{summary}}}]}}],\"usage\":{{\"input_tokens\":100,\"output_tokens\":20,\"total_tokens\":120}}}}}}\n\n",
+        ),
+        summary = summary,
+    )
+    .into_bytes()
+}
+
 fn compaction_sse_without_terminal(summary: &str) -> Vec<u8> {
+    let summary = serde_json::to_string(summary).expect("summary JSON string");
+    format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\"}}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"reason_compaction\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"encrypted_content\":\"grok-compaction-ciphertext\"}}}}\n\n",
+            "event: response.content_part.added\n",
+            "data: {{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{{\"type\":\"output_text\"}}}}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {{\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":{summary}}}\n\n",
+        ),
+        summary = summary,
+    )
+    .into_bytes()
+}
+
+fn compaction_sse_without_encrypted_content(summary: &str) -> Vec<u8> {
     let summary = serde_json::to_string(summary).expect("summary JSON string");
     format!(
         concat!(
@@ -231,6 +279,8 @@ fn compaction_sse_without_terminal(summary: &str) -> Vec<u8> {
             "data: {{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{{\"type\":\"output_text\"}}}}\n\n",
             "event: response.output_text.delta\n",
             "data: {{\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":{summary}}}\n\n",
+            "event: response.completed\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_compaction\",\"model\":\"grok-4.5\",\"status\":\"completed\"}}}}\n\n",
         ),
         summary = summary,
     )
@@ -260,6 +310,7 @@ struct StubSelector {
     feedback: Mutex<Vec<GrokCredentialFailure>>,
     error: Mutex<Option<GrokSessionSelectorError>>,
     required_accounts: Mutex<Vec<Option<gateway_core::engine::credential::ProviderAccountId>>>,
+    upstream_models: Mutex<Vec<String>>,
 }
 
 impl StubSelector {
@@ -269,6 +320,7 @@ impl StubSelector {
             feedback: Mutex::new(Vec::new()),
             error: Mutex::new(None),
             required_accounts: Mutex::new(Vec::new()),
+            upstream_models: Mutex::new(Vec::new()),
         })
     }
 
@@ -278,6 +330,7 @@ impl StubSelector {
             feedback: Mutex::new(Vec::new()),
             error: Mutex::new(Some(error)),
             required_accounts: Mutex::new(Vec::new()),
+            upstream_models: Mutex::new(Vec::new()),
         })
     }
 }
@@ -285,6 +338,10 @@ impl StubSelector {
 impl GrokSessionSelector for StubSelector {
     fn select(&self, request: GrokSessionSelection) -> GrokSessionSelectorFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.upstream_models
+            .lock()
+            .expect("upstream models")
+            .push(request.upstream_model().as_str().to_owned());
         let error = self.error.lock().expect("selector error").take();
         let required_account = request.required_account().cloned();
         self.required_accounts
@@ -630,6 +687,70 @@ async fn mapped_transport_error(
     next_provider_error(&mut stream).await
 }
 
+#[tokio::test]
+async fn invalid_encrypted_reasoning_retries_once_on_the_same_account_without_ciphertext() {
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::Error(
+            GrokInferenceTransportError::new(
+                GrokInferenceTransportErrorKind::InvalidRequest,
+                UpstreamSendState::Sent,
+            )
+            .with_status(400)
+            .with_upstream_code(OpaqueUpstreamValue::new("reasoning_decode_failed")),
+        ),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("client-model")),
+                (
+                    "input".to_owned(),
+                    json!([
+                        {
+                            "type": "reasoning",
+                            "id": "reason_stale",
+                            "summary": [{"type": "summary_text", "text": "keep summary"}],
+                            "content": null,
+                            "encrypted_content": "stale-ciphertext"
+                        },
+                        {"type": "message", "role": "user", "content": "continue"}
+                    ]),
+                ),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    ));
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", operation),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("retrying stream");
+    while let Some(event) = stream.next().await {
+        event.expect("recovered response");
+    }
+
+    let requests = transport.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    let first: serde_json::Value = serde_json::from_slice(requests[0].body()).expect("first body");
+    let second: serde_json::Value = serde_json::from_slice(requests[1].body()).expect("retry body");
+    assert_eq!(
+        first.pointer("/input/0/encrypted_content"),
+        Some(&json!("stale-ciphertext"))
+    );
+    assert_eq!(second.pointer("/input/0/encrypted_content"), None);
+    assert_eq!(second.pointer("/input/0/content"), None);
+    assert_eq!(
+        second.pointer("/input/0/summary/0/text"),
+        Some(&json!("keep summary"))
+    );
+    assert_eq!(requests[0].binding(), requests[1].binding());
+}
+
 async fn next_provider_error(
     stream: &mut gateway_core::engine::provider::ProviderStream,
 ) -> ProviderError {
@@ -803,10 +924,18 @@ fn provider_request(provider_kind: &str) -> ProviderRequest {
 }
 
 fn provider_request_with_operation(provider_kind: &str, operation: Operation) -> ProviderRequest {
+    provider_request_with_upstream_model(provider_kind, MODEL, operation)
+}
+
+fn provider_request_with_upstream_model(
+    provider_kind: &str,
+    upstream_model: &str,
+    operation: Operation,
+) -> ProviderRequest {
     let provider = ProviderKind::new(provider_kind).expect("provider");
     let provider_model = ProviderModel::new(
         provider.clone(),
-        UpstreamModelId::new(MODEL).expect("model"),
+        UpstreamModelId::new(upstream_model).expect("model"),
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(131_072))
             .with_feature(Feature::Tools, SupportLevel::Native)
             .with_feature(Feature::NativeContinuation, SupportLevel::Native),
@@ -828,7 +957,7 @@ fn provider_request_with_operation(provider_kind: &str, operation: Operation) ->
     .expect("snapshot");
     let plan = snapshot
         .plan(
-            &PublicModelId::new(MODEL).expect("model"),
+            &PublicModelId::new(upstream_model).expect("model"),
             &operation,
             account_scope,
             &RoutingContext::default(),
@@ -902,6 +1031,31 @@ async fn execute_successfully(provider: &GrokBuildProvider, operation: Operation
         .expect("provider stream");
     let events = stream.by_ref().collect::<Vec<_>>().await;
     assert!(events.iter().all(Result::is_ok));
+}
+
+#[tokio::test]
+async fn model_alias_should_be_canonical_before_account_selection() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let mut stream = provider
+        .execute(
+            provider_request_with_upstream_model("xai", "grok-4.6-latest", operation()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("provider event");
+    }
+
+    assert_eq!(
+        selector
+            .upstream_models
+            .lock()
+            .expect("upstream models")
+            .as_slice(),
+        ["grok-4.6"]
+    );
 }
 
 #[tokio::test]
@@ -1126,6 +1280,145 @@ async fn compaction_stream_should_emit_openai_wire_and_keep_only_accounting_cano
 }
 
 #[tokio::test]
+async fn compaction_should_use_terminal_output_when_upstream_omits_text_deltas() {
+    let summary = valid_compaction_summary("terminal-only summary");
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(
+        terminal_only_compaction_sse(&summary),
+    )]);
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", compaction_operation()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("compaction stream");
+    let events = stream.by_ref().collect::<Vec<_>>().await;
+    let compact_item = events
+        .iter()
+        .map(|event| event.as_ref().expect("successful compaction event"))
+        .filter_map(|event| event.wire_event())
+        .find(|wire| wire.event_type() == Some("response.output_item.done"))
+        .and_then(|wire| wire.data().get("item"))
+        .expect("compaction output item");
+
+    assert_eq!(
+        compact_item.pointer("/summary/0/text"),
+        Some(&Value::String(summary))
+    );
+}
+
+#[tokio::test]
+async fn compaction_should_complete_incomplete_upstream_when_ciphertext_is_present() {
+    let summary = valid_compaction_summary("incomplete upstream summary");
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(
+        incomplete_compaction_sse(&summary),
+    )]);
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", compaction_operation()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("compaction stream");
+    let events = stream.by_ref().collect::<Vec<_>>().await;
+    let terminal = events
+        .iter()
+        .map(|event| event.as_ref().expect("successful compaction event"))
+        .filter_map(|event| event.wire_event())
+        .find(|wire| wire.event_type() == Some("response.completed"))
+        .expect("completed compaction response");
+    let response = terminal
+        .data()
+        .get("response")
+        .expect("terminal response object");
+
+    assert_eq!(
+        terminal.data().get("type"),
+        Some(&json!("response.completed"))
+    );
+    assert_eq!(response.get("status"), Some(&json!("completed")));
+    assert_eq!(response.get("incomplete_details"), Some(&Value::Null));
+    assert!(
+        !response
+            .as_object()
+            .expect("response object")
+            .contains_key("output_text")
+    );
+    assert_eq!(
+        response.pointer("/output/0/encrypted_content"),
+        Some(&json!("grok-compaction-ciphertext"))
+    );
+}
+
+#[tokio::test]
+async fn compaction_invalid_encrypted_reasoning_should_retry_once_on_the_same_account() {
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::Error(
+            GrokInferenceTransportError::new(
+                GrokInferenceTransportErrorKind::InvalidRequest,
+                UpstreamSendState::Sent,
+            )
+            .with_status(400)
+            .with_upstream_code(OpaqueUpstreamValue::new("reasoning_decode_failed")),
+        ),
+        InferenceMode::SuccessBody(compaction_sse(
+            &valid_compaction_summary("recovered compaction"),
+            None,
+        )),
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        object(json!({
+            "model": "client-model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "keep summary"}],
+                    "content": null,
+                    "encrypted_content": "stale-compaction-ciphertext"
+                },
+                {"type": "message", "role": "user", "content": "history"},
+                {"type": "compaction_trigger"}
+            ],
+            "stream": true
+        })),
+    )
+    .expect("OpenAI payload");
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation(
+                "xai",
+                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+            ),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("retrying compaction stream");
+    while let Some(event) = stream.next().await {
+        event.expect("recovered compaction response");
+    }
+
+    let requests = transport.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    let first: serde_json::Value = serde_json::from_slice(requests[0].body()).expect("first body");
+    let second: serde_json::Value = serde_json::from_slice(requests[1].body()).expect("retry body");
+    assert_eq!(
+        first.pointer("/input/0/encrypted_content"),
+        Some(&json!("stale-compaction-ciphertext"))
+    );
+    assert_eq!(second.pointer("/input/0/encrypted_content"), None);
+    assert_eq!(second.pointer("/input/0/content"), None);
+    assert_eq!(
+        second.pointer("/input/0/summary/0/text"),
+        Some(&json!("keep summary"))
+    );
+    assert_eq!(requests[0].binding(), requests[1].binding());
+}
+
+#[tokio::test]
 async fn compaction_should_pin_recorded_account_and_forward_session_headers() {
     let state = ProviderSessionState::new(
         "xai",
@@ -1180,7 +1473,7 @@ async fn compaction_should_pin_recorded_account_and_forward_session_headers() {
 }
 
 #[tokio::test]
-async fn compaction_should_accept_summary_when_upstream_stream_ends_without_terminal() {
+async fn compaction_should_reject_upstream_stream_that_ends_without_terminal() {
     let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(
         compaction_sse_without_terminal(&valid_compaction_summary("usable eof summary")),
     )]);
@@ -1192,32 +1485,10 @@ async fn compaction_should_accept_summary_when_upstream_stream_ends_without_term
         )
         .await
         .expect("compaction stream");
-    let events = stream
-        .by_ref()
-        .map(|event| event.expect("successful compaction event"))
-        .collect::<Vec<_>>()
-        .await;
-    let facts = events
-        .iter()
-        .flat_map(|event| event.canonical_facts())
-        .collect::<Vec<_>>();
-    let wire_types = events
-        .iter()
-        .filter_map(|event| event.wire_event().and_then(|wire| wire.event_type()))
-        .collect::<Vec<_>>();
+    let error = next_provider_error(&mut stream).await;
 
-    assert!(matches!(
-        facts.as_slice(),
-        [GatewayEvent::Started(_), GatewayEvent::Completed(_)]
-    ));
-    assert_eq!(
-        wire_types,
-        [
-            "response.created",
-            "response.output_item.done",
-            "response.completed"
-        ]
-    );
+    assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+    assert!(error.allows_pre_delivery_retry());
 }
 
 #[tokio::test]
@@ -1236,21 +1507,34 @@ async fn compaction_wire_should_exclude_reasoning_from_summary_content() {
         .await
         .expect("compaction stream");
     let events = stream.by_ref().collect::<Vec<_>>().await;
-    let summary = events
+    let item = events
         .iter()
         .map(|event| event.as_ref().expect("successful compaction event"))
         .filter_map(|event| event.wire_event())
         .find(|wire| wire.event_type() == Some("response.output_item.done"))
-        .and_then(|wire| wire.data().pointer("/item/encrypted_content"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(|wire| wire.data().get("item"))
         .expect("compaction output wire");
+    let summary = item
+        .pointer("/summary/0/text")
+        .and_then(serde_json::Value::as_str)
+        .expect("visible compaction summary");
 
     assert!(summary.contains("continuation marker"));
     assert!(!summary.contains("private reasoning"));
+    assert_eq!(
+        item.get("encrypted_content"),
+        Some(&json!("grok-compaction-ciphertext"))
+    );
+    assert_eq!(item.get("status"), Some(&json!("completed")));
+    assert!(
+        item.get("id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id.starts_with("cmp_"))
+    );
 }
 
 #[tokio::test]
-async fn compaction_stream_should_reject_degenerate_summary_before_commit() {
+async fn compaction_stream_should_accept_short_summary_like_sub2api() {
     let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(compaction_sse(
         "<summary>too short</summary>",
         None,
@@ -1264,12 +1548,77 @@ async fn compaction_stream_should_reject_degenerate_summary_before_commit() {
         .await
         .expect("compaction stream");
 
+    let events = stream
+        .by_ref()
+        .map(|event| event.expect("successful compaction event"))
+        .collect::<Vec<_>>()
+        .await;
+    let item = events
+        .iter()
+        .filter_map(|event| event.wire_event())
+        .find(|wire| wire.event_type() == Some("response.output_item.done"))
+        .and_then(|wire| wire.data().get("item"))
+        .expect("compaction item");
+
+    assert_eq!(
+        item.pointer("/summary/0/text"),
+        Some(&json!("<summary>too short</summary>"))
+    );
+    assert_eq!(
+        item.get("encrypted_content"),
+        Some(&json!("grok-compaction-ciphertext"))
+    );
+}
+
+#[tokio::test]
+async fn compaction_stream_should_allow_ciphertext_without_visible_summary() {
+    let transport =
+        StubInferenceTransport::sequence([InferenceMode::SuccessBody(compaction_sse("   ", None))]);
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", compaction_operation()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("compaction stream");
+    let events = stream
+        .by_ref()
+        .map(|event| event.expect("successful compaction event"))
+        .collect::<Vec<_>>()
+        .await;
+    let item = events
+        .iter()
+        .filter_map(|event| event.wire_event())
+        .find(|wire| wire.event_type() == Some("response.output_item.done"))
+        .and_then(|wire| wire.data().get("item"))
+        .expect("compaction item");
+
+    assert_eq!(item.get("summary"), None);
+    assert_eq!(
+        item.get("encrypted_content"),
+        Some(&json!("grok-compaction-ciphertext"))
+    );
+}
+
+#[tokio::test]
+async fn compaction_stream_should_require_real_reasoning_ciphertext_before_commit() {
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(
+        compaction_sse_without_encrypted_content(&valid_compaction_summary("visible summary")),
+    )]);
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", compaction_operation()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("compaction stream");
+
     let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-    assert!(!error.replay_is_safe());
     assert!(error.allows_pre_delivery_retry());
-    assert!(!error.retries_same_account());
 }
 
 #[tokio::test]
@@ -1701,7 +2050,7 @@ async fn explicit_http_408_does_not_mark_provider_error_replay_safe() {
 }
 
 #[tokio::test]
-async fn generic_http_403_does_not_mutate_or_switch_credential() {
+async fn generic_http_403_cools_account_and_allows_next_account_replay() {
     let selector = StubSelector::success();
     let transport = StubInferenceTransport::error(
         GrokInferenceTransportError::new(
@@ -1721,14 +2070,17 @@ async fn generic_http_403_does_not_mutate_or_switch_credential() {
     let error = next_provider_error(&mut stream).await;
 
     assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
-    assert!(!error.replay_is_safe());
+    assert!(error.replay_is_safe());
     assert_eq!(selector.calls.load(Ordering::SeqCst), 1);
     assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
-    assert!(selector.feedback.lock().expect("feedback").is_empty());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::AccessDenied]
+    );
 }
 
 #[tokio::test]
-async fn generic_http_500_does_not_mark_provider_error_replay_safe() {
+async fn generic_http_500_allows_next_account_replay() {
     let error = mapped_transport_error(
         GrokInferenceTransportError::new(
             GrokInferenceTransportErrorKind::Unavailable,
@@ -1740,7 +2092,64 @@ async fn generic_http_500_does_not_mark_provider_error_replay_safe() {
     .await;
 
     assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+    assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn rate_limit_wording_on_http_400_stays_request_scoped() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::InvalidRequest,
+            UpstreamSendState::Sent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("rate_limit")),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
     assert!(!error.replay_is_safe());
+    assert!(selector.feedback.lock().expect("feedback").is_empty());
+}
+
+#[tokio::test]
+async fn model_capacity_on_http_400_cools_scope_and_allows_replay() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("model_capacity")),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelCapacity {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+        }]
+    );
 }
 
 #[tokio::test]

@@ -75,7 +75,8 @@ const RESPONSE_NOT_FOUND_CODE: &str = "not_found";
 
 /// 官方 Grok Build Provider；会话选择与 HTTP SSE transport 均由外部注入。
 ///
-/// 每次调用只选择一个 OAuth 会话，只准备一次可见的上游 POST。重试、凭据轮换、
+/// 每次调用只选择一个 OAuth 会话。仅当 xAI 明确拒绝历史 reasoning 密文时，
+/// 允许在同账号、同凭据、同会话绑定上剥离密文后有界重试一次。凭据轮换、
 /// endpoint fallback 以及公开 xAI API key 推理都不在该 adapter 内。
 pub struct GrokBuildProvider {
     selector: Arc<dyn GrokSessionSelector>,
@@ -202,6 +203,13 @@ impl GrokBuildProvider {
             context.client_api_key_ref(),
         )
         .map_err(map_request_error)?;
+        let wire_upstream_model = UpstreamModelId::new(
+            upstream_request
+                .upstream_model()
+                .ok_or_else(protocol_not_sent)?
+                .to_owned(),
+        )
+        .map_err(|_| protocol_not_sent())?;
         let request_input = upstream_request.input_items();
         if let Some(previous) = previous_session.as_ref() {
             upstream_request.inherit_session(previous.session_id.as_deref());
@@ -209,6 +217,7 @@ impl GrokBuildProvider {
         let selected = select_grok_session(
             self.selector.as_ref(),
             candidate,
+            &wire_upstream_model,
             &context,
             continuation_account,
             upstream_request.affinity().cloned(),
@@ -237,7 +246,7 @@ impl GrokBuildProvider {
             .or(inherited_replay_session_id)
             .and_then(|session_id| {
                 self.reasoning_replay.key(
-                    candidate.upstream_model().as_str(),
+                    wire_upstream_model.as_str(),
                     session_id,
                     selected.account_id().as_str(),
                 )
@@ -278,7 +287,7 @@ impl GrokBuildProvider {
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 responses_url: self.responses_url.clone(),
                 request: upstream_request,
-                upstream_model: candidate.upstream_model().clone(),
+                upstream_model: wire_upstream_model,
                 context,
                 session: Arc::clone(&selected),
                 output_started_at,
@@ -323,6 +332,13 @@ impl GrokBuildProvider {
             context.client_api_key_ref(),
         )
         .map_err(map_request_error)?;
+        let wire_upstream_model = UpstreamModelId::new(
+            upstream_request
+                .upstream_model()
+                .ok_or_else(protocol_not_sent)?
+                .to_owned(),
+        )
+        .map_err(|_| protocol_not_sent())?;
         let explicit_replay_session_id = upstream_request
             .reasoning_replay_session_id()
             .map(str::to_owned);
@@ -333,6 +349,7 @@ impl GrokBuildProvider {
             select_grok_session(
                 self.selector.as_ref(),
                 candidate,
+                &wire_upstream_model,
                 &context,
                 operation_account,
                 upstream_request.affinity().cloned(),
@@ -344,7 +361,7 @@ impl GrokBuildProvider {
             .or(inherited_session_id.as_deref())
             .and_then(|session_id| {
                 self.reasoning_replay.key(
-                    candidate.upstream_model().as_str(),
+                    wire_upstream_model.as_str(),
                     session_id,
                     selected.account_id().as_str(),
                 )
@@ -360,7 +377,7 @@ impl GrokBuildProvider {
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 responses_url: self.responses_url.clone(),
                 request: upstream_request,
-                upstream_model: candidate.upstream_model().clone(),
+                upstream_model: wire_upstream_model,
                 upstream_session_id,
                 context,
                 session: Arc::clone(&selected),
@@ -380,13 +397,14 @@ impl GrokBuildProvider {
 async fn select_grok_session(
     selector: &dyn GrokSessionSelector,
     candidate: &ProviderCandidate,
+    wire_upstream_model: &UpstreamModelId,
     context: &AttemptContext,
     operation_account: Option<ProviderAccountId>,
     affinity: Option<GrokSessionAffinityKey>,
 ) -> Result<SelectedGrokSession, ProviderError> {
     let required_account = context.required_account().cloned().or(operation_account);
     let selection = GrokSessionSelection::new(
-        candidate.upstream_model().clone(),
+        wire_upstream_model.clone(),
         context.excluded_accounts().clone(),
         required_account.clone(),
         context.account_selection_policy(),
@@ -941,81 +959,6 @@ struct AcceptedGrokInference {
     observation: ProviderResponseObservation,
 }
 
-struct GrokInferenceStartFailure {
-    observation: Option<ProviderResponseObservation>,
-    error: ProviderError,
-}
-
-async fn start_grok_inference(
-    selector: &dyn GrokSessionSelector,
-    transport: &dyn GrokInferenceTransport,
-    credential_recovery: &dyn GrokCredentialRecovery,
-    request: GrokInferenceRequest,
-    upstream_model: &UpstreamModelId,
-    context: &AttemptContext,
-    session: &SelectedGrokSession,
-) -> Result<AcceptedGrokInference, GrokInferenceStartFailure> {
-    if context.cancellation().is_cancelled() {
-        return Err(GrokInferenceStartFailure {
-            observation: None,
-            error: provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent),
-        });
-    }
-    let Some(handshake_deadline) = remaining(context.deadline()) else {
-        return Err(GrokInferenceStartFailure {
-            observation: None,
-            error: provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent),
-        });
-    };
-    let cancellation = context.cancellation().clone();
-    let boundary = tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
-        _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
-        response = transport.execute(request) => InferenceBoundary::Response(response),
-    };
-    let response = match boundary {
-        InferenceBoundary::Cancelled => {
-            return Err(GrokInferenceStartFailure {
-                observation: None,
-                error: provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::Ambiguous),
-            });
-        }
-        InferenceBoundary::Deadline => {
-            return Err(GrokInferenceStartFailure {
-                observation: None,
-                error: provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Ambiguous),
-            });
-        }
-        InferenceBoundary::Response(Ok(response)) => response,
-        InferenceBoundary::Response(Err(error)) => {
-            let observation = xai_error_observation(&error).ok();
-            let credential_failure = transport_credential_failure(&error, upstream_model);
-            let error =
-                map_continuation_failure(context, map_transport_error_for_context(error, context));
-            let error = recover_or_record_failure(
-                selector,
-                credential_recovery,
-                session,
-                error,
-                credential_failure,
-                context.credential_recovery_attempted(),
-            )
-            .await;
-            return Err(GrokInferenceStartFailure { observation, error });
-        }
-    };
-    let observation =
-        xai_response_observation(&response).map_err(|error| GrokInferenceStartFailure {
-            observation: None,
-            error,
-        })?;
-    Ok(AcceptedGrokInference {
-        response,
-        observation,
-    })
-}
-
 async fn next_grok_chunk(
     body: &mut GrokInferenceChunkStream,
     selector: &dyn GrokSessionSelector,
@@ -1063,7 +1006,7 @@ fn cold_compaction_http_sse_stream(
         wire_profile,
         credential_recovery,
         responses_url,
-        request,
+        mut request,
         upstream_model,
         upstream_session_id,
         context,
@@ -1081,31 +1024,89 @@ fn cold_compaction_http_sse_stream(
             None,
             &upstream_model,
         );
-        let body = request.to_json_bytes().map_err(map_request_error)?;
-        let inference_request = GrokInferenceRequest::new(
-            responses_url,
-            headers,
-            body,
-            session.binding().clone(),
-        );
-        let accepted = match start_grok_inference(
-            selector.as_ref(),
-            transport.as_ref(),
-            credential_recovery.as_ref(),
-            inference_request,
-            &upstream_model,
-            &context,
-            &session,
-        )
-        .await
-        {
-            Ok(accepted) => accepted,
-            Err(failure) => {
-                if let Some(observation) = failure.observation {
-                    yield ProviderEvent::observation(observation);
-                }
-                Err(mark_transient_compaction_failure(failure.error))?;
+        let mut invalid_encrypted_content_retried = false;
+        let accepted = loop {
+            if context.cancellation().is_cancelled() {
+                Err(provider_error(
+                    ProviderErrorKind::Cancelled,
+                    UpstreamSendState::NotSent,
+                ))?;
                 return;
+            }
+            let body = request.to_json_bytes().map_err(map_request_error)?;
+            let inference_request = GrokInferenceRequest::new(
+                responses_url.clone(),
+                headers.clone(),
+                body,
+                session.binding().clone(),
+            );
+            let Some(handshake_deadline) = remaining(context.deadline()) else {
+                Err(mark_transient_compaction_failure(provider_error(
+                    ProviderErrorKind::Timeout,
+                    UpstreamSendState::NotSent,
+                )))?;
+                return;
+            };
+            let cancellation = context.cancellation().clone();
+            let boundary = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
+                _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
+                response = transport.execute(inference_request) => InferenceBoundary::Response(response),
+            };
+            match boundary {
+                InferenceBoundary::Cancelled => {
+                    Err(provider_error(
+                        ProviderErrorKind::Cancelled,
+                        UpstreamSendState::Ambiguous,
+                    ))?;
+                    return;
+                }
+                InferenceBoundary::Deadline => {
+                    Err(mark_transient_compaction_failure(provider_error(
+                        ProviderErrorKind::Timeout,
+                        UpstreamSendState::Ambiguous,
+                    )))?;
+                    return;
+                }
+                InferenceBoundary::Response(Ok(response)) => {
+                    let observation = xai_response_observation(&response)
+                        .map_err(mark_transient_compaction_failure)?;
+                    break AcceptedGrokInference {
+                        response,
+                        observation,
+                    };
+                }
+                InferenceBoundary::Response(Err(error)) => {
+                    if !invalid_encrypted_content_retried
+                        && is_invalid_encrypted_content_failure(&error)
+                        && request.strip_invalid_encrypted_reasoning()
+                    {
+                        invalid_encrypted_content_retried = true;
+                        continue;
+                    }
+                    let observation = xai_error_observation(&error).ok();
+                    let credential_failure =
+                        transport_credential_failure(&error, &upstream_model);
+                    let error = map_continuation_failure(
+                        &context,
+                        map_transport_error_for_context(error, &context),
+                    );
+                    let error = recover_or_record_failure(
+                        selector.as_ref(),
+                        credential_recovery.as_ref(),
+                        &session,
+                        error,
+                        credential_failure,
+                        context.credential_recovery_attempted(),
+                    )
+                    .await;
+                    if let Some(observation) = observation {
+                        yield ProviderEvent::observation(observation);
+                    }
+                    Err(mark_transient_compaction_failure(error))?;
+                    return;
+                }
             }
         };
         yield ProviderEvent::observation(accepted.observation);
@@ -1174,22 +1175,27 @@ fn cold_compaction_http_sse_stream(
             }
         }
 
-        let summary = summary.finish().map_err(map_compaction_decode_error)?;
-        let started = facts.started.ok_or_else(protocol_sent)?;
-        let upstream_completed = facts.completed.is_some();
-        let completed = facts.completed.unwrap_or_else(|| started.clone());
+        let started = facts
+            .started
+            .ok_or_else(|| mark_transient_compaction_failure(protocol_sent()))?;
+        let completed = facts
+            .completed
+            .ok_or_else(|| mark_transient_compaction_failure(protocol_sent()))?;
+        let (summary, encrypted_content) = summary
+            .finish_with_encrypted_content()
+            .map_err(map_compaction_decode_error)?;
         let (created, output_done, terminal) = crate::transport::compaction::compaction_wire_events(
             &started,
             &completed,
-            &summary,
+            summary.as_deref(),
+            &encrypted_content,
             facts.created_response.as_ref(),
             facts.terminal_response.as_ref(),
-            facts.terminal_was_incomplete,
         )
-        .map_err(|_| protocol_sent())?
+        .map_err(|_| mark_transient_compaction_failure(protocol_sent()))?
         .into_parts();
         ensure_sent_context(&context)?;
-        if upstream_completed && session.allows_account_state_mutation() {
+        if session.allows_account_state_mutation() {
             selector.record_success(&session).await;
         }
         if let Some(key) = reasoning_replay_key.as_ref() {
@@ -1210,7 +1216,6 @@ struct CompactionFacts {
     accounting: Vec<GatewayEvent>,
     created_response: Option<Value>,
     terminal_response: Option<Value>,
-    terminal_was_incomplete: bool,
 }
 
 impl CompactionFacts {
@@ -1249,7 +1254,6 @@ impl CompactionFacts {
             Some("response.completed" | "response.incomplete")
                 if self.terminal_response.is_none() =>
             {
-                self.terminal_was_incomplete = event_type == Some("response.incomplete");
                 self.terminal_response = response;
             }
             _ => {}
@@ -1259,7 +1263,9 @@ impl CompactionFacts {
 
 fn map_compaction_decode_error(error: GrokCompactionDecodeError) -> ProviderError {
     match error {
-        GrokCompactionDecodeError::Degenerate => mark_transient_compaction_failure(protocol_sent()),
+        GrokCompactionDecodeError::MissingEncryptedContent => {
+            mark_transient_compaction_failure(protocol_sent())
+        }
     }
 }
 
@@ -1288,7 +1294,7 @@ fn cold_http_sse_stream(
         wire_profile,
         credential_recovery,
         responses_url,
-        request,
+        mut request,
         upstream_model,
         context,
         session,
@@ -1312,54 +1318,69 @@ fn cold_http_sse_stream(
             None,
             &upstream_model,
         );
-        let body = request.to_json_bytes().map_err(map_request_error)?;
-        let inference_request = GrokInferenceRequest::new(
-            responses_url,
-            headers,
-            body,
-            session.binding().clone(),
-        );
-        let Some(handshake_deadline) = remaining(context.deadline()) else {
-            Err(provider_error(
-                ProviderErrorKind::Timeout,
-                UpstreamSendState::NotSent,
-            ))?;
-            return;
-        };
         let cancellation = context.cancellation().clone();
-        let boundary = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
-            _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
-            response = transport.execute(inference_request) => InferenceBoundary::Response(response),
-        };
-        let response = match boundary {
-            InferenceBoundary::Cancelled => {
-                Err(provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::Ambiguous))?;
+        let mut invalid_encrypted_content_retried = false;
+        let response = loop {
+            let body = request.to_json_bytes().map_err(map_request_error)?;
+            let inference_request = GrokInferenceRequest::new(
+                responses_url.clone(),
+                headers.clone(),
+                body,
+                session.binding().clone(),
+            );
+            let Some(handshake_deadline) = remaining(context.deadline()) else {
+                Err(provider_error(
+                    ProviderErrorKind::Timeout,
+                    UpstreamSendState::NotSent,
+                ))?;
                 return;
-            }
-            InferenceBoundary::Deadline => {
-                Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Ambiguous))?;
-                return;
-            }
-            InferenceBoundary::Response(Ok(response)) => response,
-            InferenceBoundary::Response(Err(error)) => {
-                let observation = xai_error_observation(&error)?;
-                let credential_failure = transport_credential_failure(&error, &upstream_model);
-                let error =
-                    map_continuation_failure(&context, map_transport_error_for_context(error, &context));
-                let error = recover_or_record_failure(
-                    selector.as_ref(),
-                    credential_recovery.as_ref(),
-                    &session,
-                    error,
-                    credential_failure,
-                    context.credential_recovery_attempted(),
-                )
-                .await;
-                yield ProviderEvent::observation(observation);
-                Err(error)?;
-                return;
+            };
+            let boundary = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => InferenceBoundary::Cancelled,
+                _ = tokio::time::sleep(handshake_deadline) => InferenceBoundary::Deadline,
+                response = transport.execute(inference_request) => InferenceBoundary::Response(response),
+            };
+            match boundary {
+                InferenceBoundary::Cancelled => {
+                    Err(provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::Ambiguous))?;
+                    return;
+                }
+                InferenceBoundary::Deadline => {
+                    Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Ambiguous))?;
+                    return;
+                }
+                InferenceBoundary::Response(Ok(response)) => break response,
+                InferenceBoundary::Response(Err(error)) => {
+                    if !invalid_encrypted_content_retried
+                        && is_invalid_encrypted_content_failure(&error)
+                        && request.strip_invalid_encrypted_reasoning()
+                    {
+                        invalid_encrypted_content_retried = true;
+                        if let Some(capture) = session_capture.as_mut() {
+                            capture.request_input = request.input_items();
+                        }
+                        continue;
+                    }
+                    let observation = xai_error_observation(&error)?;
+                    let credential_failure = transport_credential_failure(&error, &upstream_model);
+                    let error = map_continuation_failure(
+                        &context,
+                        map_transport_error_for_context(error, &context),
+                    );
+                    let error = recover_or_record_failure(
+                        selector.as_ref(),
+                        credential_recovery.as_ref(),
+                        &session,
+                        error,
+                        credential_failure,
+                        context.credential_recovery_attempted(),
+                    )
+                    .await;
+                    yield ProviderEvent::observation(observation);
+                    Err(error)?;
+                    return;
+                }
             }
         };
 
@@ -1496,6 +1517,17 @@ fn cold_http_sse_stream(
             yield event;
         }
     })
+}
+
+fn is_invalid_encrypted_content_failure(error: &GrokInferenceTransportError) -> bool {
+    error.kind() == GrokInferenceTransportErrorKind::InvalidRequest
+        && error.status() == Some(400)
+        && error.upstream_code().is_some_and(|code| {
+            matches!(
+                code.as_str(),
+                REASONING_DECODE_FAILED_CODE | "invalid_encrypted_content"
+            )
+        })
 }
 
 enum InferenceBoundary {
@@ -1689,6 +1721,14 @@ fn transport_credential_failure(
 ) -> Option<GrokCredentialFailure> {
     match error.kind() {
         GrokInferenceTransportErrorKind::Unauthorized => Some(GrokCredentialFailure::Unauthorized),
+        GrokInferenceTransportErrorKind::PermissionDenied => {
+            Some(GrokCredentialFailure::AccessDenied)
+        }
+        GrokInferenceTransportErrorKind::RateLimited if model_capacity_failure(error) => {
+            Some(GrokCredentialFailure::ModelCapacity {
+                upstream_model: upstream_model.clone(),
+            })
+        }
         GrokInferenceTransportErrorKind::RateLimited => Some(GrokCredentialFailure::RateLimited {
             retry_after: error.retry_after(),
         }),
@@ -1715,8 +1755,56 @@ fn transport_credential_failure(
                 retry_after: error.retry_after(),
             })
         }
+        GrokInferenceTransportErrorKind::Unavailable if empty_upstream_failure(error) => {
+            Some(GrokCredentialFailure::EmptyUpstream)
+        }
+        GrokInferenceTransportErrorKind::Unavailable => {
+            Some(GrokCredentialFailure::UpstreamUnavailable)
+        }
         _ => None,
     }
+}
+
+fn model_capacity_failure(error: &GrokInferenceTransportError) -> bool {
+    transport_error_contains_any(
+        error,
+        &[
+            "model_capacity",
+            "capacity",
+            "overloaded",
+            "server_busy",
+            "too many concurrent",
+            "engine_overloaded",
+        ],
+    )
+}
+
+fn empty_upstream_failure(error: &GrokInferenceTransportError) -> bool {
+    transport_error_contains_any(
+        error,
+        &[
+            "empty_upstream",
+            "empty model output",
+            "no content/tool_calls",
+            "no client-visible content",
+            "empty upstream",
+        ],
+    )
+}
+
+fn transport_error_contains_any(error: &GrokInferenceTransportError, signals: &[&str]) -> bool {
+    let code = error
+        .upstream_code()
+        .map(|code| code.as_str())
+        .unwrap_or_default();
+    let message = error
+        .client_visible_upstream_error()
+        .map(ClientVisibleUpstreamError::message)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    signals
+        .iter()
+        .any(|signal| code.contains(signal) || message.contains(signal))
 }
 
 async fn map_and_record_stream_transport_failure(
@@ -1916,7 +2004,7 @@ fn map_transport_error_with_state(
         mapped = mapped.with_status(status);
         if allow_explicit_replay
             && forced_send_state.is_none()
-            && explicit_rejection_is_replay_safe(transport_kind, status)
+            && explicit_rejection_is_replay_safe(&error, status)
         {
             mapped = mapped.with_replay_safe();
         }
@@ -1942,26 +2030,24 @@ fn map_transport_error_with_state(
     mapped
 }
 
-fn explicit_rejection_is_replay_safe(kind: GrokInferenceTransportErrorKind, status: u16) -> bool {
-    matches!(
-        (kind, status),
-        (GrokInferenceTransportErrorKind::Unauthorized, 401)
-            | (
-                GrokInferenceTransportErrorKind::QuotaExhausted,
-                402 | 403 | 429
-            )
-            | (
-                GrokInferenceTransportErrorKind::FreeQuotaExhausted,
-                402 | 403 | 429
-            )
-            | (
-                GrokInferenceTransportErrorKind::ModelQuotaExhausted,
-                402 | 403 | 429
-            )
-            | (GrokInferenceTransportErrorKind::PaymentRequired, 402)
-            | (GrokInferenceTransportErrorKind::ModelAccessDenied, 403)
-            | (GrokInferenceTransportErrorKind::RateLimited, 429)
-    )
+fn explicit_rejection_is_replay_safe(error: &GrokInferenceTransportError, status: u16) -> bool {
+    let kind = error.kind();
+    if kind == GrokInferenceTransportErrorKind::SafetyRejected {
+        return false;
+    }
+    if matches!(status, 401 | 402 | 403 | 405 | 429 | 529) || (500..=599).contains(&status) {
+        return true;
+    }
+    status == 400
+        && (matches!(
+            kind,
+            GrokInferenceTransportErrorKind::QuotaExhausted
+                | GrokInferenceTransportErrorKind::FreeQuotaExhausted
+                | GrokInferenceTransportErrorKind::ModelQuotaExhausted
+                | GrokInferenceTransportErrorKind::PaymentRequired
+                | GrokInferenceTransportErrorKind::Unavailable
+        ) || (kind == GrokInferenceTransportErrorKind::RateLimited
+            && model_capacity_failure(error)))
 }
 
 fn provider_error(kind: ProviderErrorKind, send_state: UpstreamSendState) -> ProviderError {
@@ -1981,9 +2067,9 @@ const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTA_CATALOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
-// grok2api 对 Free/未知额度耗尽采用 24 小时恢复探测；当前公共账号状态没有
-// 独立的 paid period-end 字段，因此 Build 账号统一使用同一保守下限。
-const EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+// rolling 24h 描述的是上游用量窗口，不代表从本次观测起封禁 24 小时；
+// 缺少可信 reset 时间时按 sub2api 的短周期探测策略恢复检查。
+const EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL: Duration = QUOTA_CATALOG_INTERVAL;
 const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";
 

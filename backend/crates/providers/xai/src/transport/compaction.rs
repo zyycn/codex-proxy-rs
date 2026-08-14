@@ -2,16 +2,15 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gateway_core::error::IdentifierError;
-use gateway_core::event::{
-    FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta,
-};
+use gateway_core::event::{GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta};
 use gateway_core::operation::GenerateRequest;
 use gateway_core::policy::ClientApiKeyId;
 use serde_json::{Map, Value, json};
+use uuid::Uuid;
 
+use super::request::strip_invalid_encrypted_reasoning_from_body;
 use super::{GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey};
 
-const MIN_GROK_COMPACTION_SUMMARY_CHARS: usize = 500;
 // 来自 xAI grok-build 的 full-replace compaction 模板；当前协议没有额外的
 // `/compact <text>` 用户上下文，因此不保留上游模板中的占位符。
 const GROK_COMPACTION_PROMPT: &str = r#"Your task is to produce a faithful, concise summary of the conversation so far so that a successor assistant can continue the work seamlessly after the earlier turns are discarded. The successor will see the user's original query plus this summary. Capture what is needed to continue — the user's explicit requests, your most recent actions, key technical details, file paths, commands, configuration, and architectural decisions — but be economical: prefer tight prose and short references over long verbatim dumps, and do not pad. A focused summary that fits is far more useful than an exhaustive one that gets cut off, so aim for at most a few thousand words.
@@ -68,27 +67,16 @@ impl GrokCompactionRequest {
         input.push(summary_prompt_item());
         body.insert("input".to_owned(), Value::Array(input));
 
-        for field in [
-            "background",
-            "include",
-            "max_output_tokens",
-            "parallel_tool_calls",
-            "previous_response_id",
-            "prompt_cache_key",
-            "response_format",
-            "service_tier",
-            "text",
-            "truncation",
-        ] {
-            body.remove(field);
-        }
-        body.insert("temperature".to_owned(), json!(1.0));
+        // 压缩请求已经携带规范化后的完整历史，不能让账号派生的缓存身份
+        // 把它重新变成依赖原账号状态的原生续接请求。
+        body.remove("prompt_cache_key");
+        body.insert("include".to_owned(), json!(["reasoning.encrypted_content"]));
         if body
             .get("tools")
             .and_then(Value::as_array)
             .is_some_and(|tools| !tools.is_empty())
         {
-            body.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
+            body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
         } else {
             body.remove("tool_choice");
         }
@@ -120,6 +108,11 @@ impl GrokCompactionRequest {
         self.reasoning_replay_session_id.as_deref()
     }
 
+    /// 返回经 sub2api 别名表归一化后的 xAI wire 模型。
+    pub(crate) fn upstream_model(&self) -> Option<&str> {
+        self.body.get("model").and_then(Value::as_str)
+    }
+
     /// 序列化上游请求正文。
     ///
     /// # Errors
@@ -127,6 +120,11 @@ impl GrokCompactionRequest {
     /// JSON 序列化失败时返回错误。
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, GrokRequestEncodeError> {
         serde_json::to_vec(&self.body).map_err(|_| GrokRequestEncodeError::Serialization)
+    }
+
+    /// 为同账号的一次 `invalid_encrypted_content` 恢复请求剥离被拒绝密文。
+    pub(crate) fn strip_invalid_encrypted_reasoning(&mut self) -> bool {
+        strip_invalid_encrypted_reasoning_from_body(&mut self.body)
     }
 }
 
@@ -166,6 +164,8 @@ impl fmt::Debug for GrokCompactionRequest {
 #[derive(Default)]
 pub struct GrokCompactionSummaryDecoder {
     text: String,
+    terminal_text: Option<String>,
+    encrypted_content: Option<String>,
 }
 
 impl GrokCompactionSummaryDecoder {
@@ -174,6 +174,8 @@ impl GrokCompactionSummaryDecoder {
     pub const fn new() -> Self {
         Self {
             text: String::new(),
+            terminal_text: None,
+            encrypted_content: None,
         }
     }
 
@@ -188,20 +190,48 @@ impl GrokCompactionSummaryDecoder {
                 self.text.push_str(&delta.text);
             }
         }
+        if let Some(wire) = event.wire_event().filter(|wire| wire.has_json_data()) {
+            capture_encrypted_reasoning(wire.data(), &mut self.encrypted_content);
+            capture_completed_summary(wire.data(), &mut self.terminal_text);
+        }
         Ok(())
     }
 
-    /// 完成摘要解码并返回清理后的摘要文本。
+    /// 完成摘要解码并返回上游摘要文本。
     ///
     /// # Errors
     ///
-    /// 摘要为空或过短时返回错误。
+    /// 保留此 `Result` 签名以稳定 decoder contract。
     pub fn finish(self) -> Result<String, GrokCompactionDecodeError> {
-        let summary = clean_summary(&self.text);
-        if summary.is_empty() || summary.chars().count() < MIN_GROK_COMPACTION_SUMMARY_CHARS {
-            return Err(GrokCompactionDecodeError::Degenerate);
+        Ok(self.summary_text().unwrap_or_default())
+    }
+
+    /// 完成摘要解码，并返回可见摘要与 xAI 真实 reasoning 密文。
+    pub(crate) fn finish_with_encrypted_content(
+        self,
+    ) -> Result<(Option<String>, String), GrokCompactionDecodeError> {
+        let summary = self.summary_text();
+        let encrypted_content = self
+            .encrypted_content
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(GrokCompactionDecodeError::MissingEncryptedContent)?;
+        Ok((summary, encrypted_content))
+    }
+
+    fn summary_text(&self) -> Option<String> {
+        if let Some(text) = self
+            .terminal_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            return Some(text.to_owned());
         }
-        Ok(summary)
+        let text = self.text.trim();
+        if !text.is_empty() {
+            return Some(text.to_owned());
+        }
+        None
     }
 }
 
@@ -210,6 +240,8 @@ impl fmt::Debug for GrokCompactionSummaryDecoder {
         formatter
             .debug_struct("GrokCompactionSummaryDecoder")
             .field("summary_bytes", &self.text.len())
+            .field("has_terminal_summary", &self.terminal_text.is_some())
+            .field("has_encrypted_content", &self.encrypted_content.is_some())
             .finish()
     }
 }
@@ -217,8 +249,8 @@ impl fmt::Debug for GrokCompactionSummaryDecoder {
 /// Grok 摘要响应不满足压缩 contract。
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum GrokCompactionDecodeError {
-    #[error("Grok compaction response summary was too short")]
-    Degenerate,
+    #[error("Grok compaction response omitted reasoning.encrypted_content")]
+    MissingEncryptedContent,
 }
 
 pub(crate) struct GrokCompactionWireEvents {
@@ -240,10 +272,10 @@ impl GrokCompactionWireEvents {
 pub(crate) fn compaction_wire_events(
     started: &ResponseMeta,
     completed: &ResponseMeta,
-    summary: &str,
+    summary: Option<&str>,
+    encrypted_content: &str,
     created_source: Option<&Value>,
     terminal_source: Option<&Value>,
-    terminal_was_incomplete: bool,
 ) -> Result<GrokCompactionWireEvents, IdentifierError> {
     let created_response = compaction_response(
         started,
@@ -253,17 +285,14 @@ pub(crate) fn compaction_wire_events(
         Vec::new(),
         Value::Null,
     );
-    let item = compaction_item(summary);
-    let (status, terminal_event, incomplete_details) = terminal_shape(
-        completed.finish_reason(),
-        terminal_was_incomplete,
-        terminal_source,
-    );
+    let item = compaction_item(summary, encrypted_content);
+    // sub2api 的 compact contract 以真实密文为成功依据，不向客户端延续
+    // 摘要生成阶段的 incomplete 状态。
     let terminal_response = compaction_response(
         completed,
         terminal_source.or(created_source),
-        status,
-        incomplete_details,
+        "completed",
+        Value::Null,
         vec![item.clone()],
         terminal_source
             .and_then(|source| source.get("usage"))
@@ -294,9 +323,9 @@ pub(crate) fn compaction_wire_events(
         )?,
         terminal: ProtocolWireEvent::json_with_sse_metadata(
             "openai",
-            Some(terminal_event.to_owned()),
+            Some("response.completed".to_owned()),
             json!({
-                "type": terminal_event,
+                "type": "response.completed",
                 "response": terminal_response,
             }),
             None,
@@ -333,38 +362,96 @@ fn compaction_response(
     response.insert("model".to_owned(), Value::String(meta.model().to_owned()));
     response.insert("output".to_owned(), Value::Array(output));
     response.insert("usage".to_owned(), usage);
+    response.remove("output_text");
     Value::Object(response)
 }
 
-fn compaction_item(summary: &str) -> Value {
-    json!({
-        "type": "compaction",
-        "encrypted_content": summary,
-    })
+fn compaction_item(summary: Option<&str>, encrypted_content: &str) -> Value {
+    let mut item = Map::from_iter([
+        (
+            "id".to_owned(),
+            Value::String(format!("cmp_{}", Uuid::new_v4().simple())),
+        ),
+        ("type".to_owned(), Value::String("compaction".to_owned())),
+        ("status".to_owned(), Value::String("completed".to_owned())),
+        (
+            "encrypted_content".to_owned(),
+            Value::String(encrypted_content.to_owned()),
+        ),
+    ]);
+    if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
+        item.insert(
+            "summary".to_owned(),
+            json!([{
+                "type": "summary_text",
+                "text": summary,
+            }]),
+        );
+    }
+    Value::Object(item)
 }
 
-fn terminal_shape(
-    finish_reason: Option<FinishReason>,
-    terminal_was_incomplete: bool,
-    terminal_source: Option<&Value>,
-) -> (&'static str, &'static str, Value) {
-    let incomplete = terminal_was_incomplete
-        || matches!(
-            finish_reason,
-            Some(FinishReason::Length | FinishReason::ContentFilter)
-        );
-    if !incomplete {
-        return ("completed", "response.completed", Value::Null);
+fn capture_encrypted_reasoning(value: &Value, captured: &mut Option<String>) {
+    if let Some(item) = value.get("item") {
+        capture_encrypted_reasoning_item(item, captured);
     }
-    let details = terminal_source
-        .and_then(|source| source.get("incomplete_details"))
-        .cloned()
-        .unwrap_or_else(|| match finish_reason {
-            Some(FinishReason::Length) => json!({ "reason": "max_output_tokens" }),
-            Some(FinishReason::ContentFilter) => json!({ "reason": "content_filter" }),
-            _ => json!({ "reason": "other" }),
-        });
-    ("incomplete", "response.incomplete", details)
+    for output in [value.get("output"), value.pointer("/response/output")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_array)
+    {
+        for item in output {
+            capture_encrypted_reasoning_item(item, captured);
+        }
+    }
+}
+
+fn capture_encrypted_reasoning_item(item: &Value, captured: &mut Option<String>) {
+    let Some(item) = item.as_object() else {
+        return;
+    };
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return;
+    }
+    if let Some(encrypted_content) = item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        *captured = Some(encrypted_content.to_owned());
+    }
+}
+
+fn capture_completed_summary(value: &Value, captured: &mut Option<String>) {
+    let mut parts = Vec::new();
+    for output in [value.get("output"), value.pointer("/response/output")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_array)
+    {
+        for item in output {
+            let Some(item) = item.as_object() else {
+                continue;
+            };
+            if item.get("type").and_then(Value::as_str) != Some("message") {
+                continue;
+            }
+            let Some(content) = item.get("content").and_then(Value::as_array) else {
+                continue;
+            };
+            parts.extend(content.iter().filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+            }));
+        }
+    }
+    if !parts.is_empty() {
+        *captured = Some(parts.join("\n"));
+    }
 }
 
 fn unix_seconds() -> u64 {
@@ -383,72 +470,4 @@ fn summary_prompt_item() -> Value {
             "text": GROK_COMPACTION_PROMPT,
         }],
     })
-}
-
-fn clean_summary(raw: &str) -> String {
-    let mut summary = raw.to_owned();
-    while let Some(start) = summary.find("<analysis>") {
-        let leading = match summary.find("<summary>") {
-            Some(summary_start) => {
-                start < summary_start
-                    || summary[summary_start + "<summary>".len()..start]
-                        .trim()
-                        .is_empty()
-            }
-            None => summary[..start].trim().is_empty(),
-        };
-        if !leading {
-            break;
-        }
-        if let Some(relative_end) = summary[start..].find("</analysis>") {
-            let end = start + relative_end + "</analysis>".len();
-            summary.replace_range(start..end, "");
-        } else {
-            let drop_end = summary[start..]
-                .find("<summary>")
-                .map_or(summary.len(), |relative| start + relative);
-            summary.replace_range(start..drop_end, "");
-            break;
-        }
-    }
-
-    if let Some(start) = summary.find("<summary>")
-        && let Some(end) = summary.rfind("</summary>")
-        && end > start
-    {
-        let before = summary[..start].to_owned();
-        let after = summary[end + "</summary>".len()..].to_owned();
-        let inner = strip_leading_scratchpad(summary[start + "<summary>".len()..end].trim());
-        summary = format!("{before}Summary:\n{inner}{after}");
-    }
-
-    summary = neutralize_compaction_control_tokens(&summary);
-    while summary.contains("\n\n\n") {
-        summary = summary.replace("\n\n\n", "\n\n");
-    }
-    summary.trim().to_owned()
-}
-
-fn strip_leading_scratchpad(inner: &str) -> String {
-    let mut summary = inner.trim();
-    let lead = summary.trim_start_matches(['#', '*', '-', '>', ' ', '\t']);
-    if !lead.starts_with(|character: char| character.is_ascii_digit())
-        && let Some(end) = summary.rfind("</analysis>")
-    {
-        summary = summary[end + "</analysis>".len()..].trim_start();
-    }
-    if let Some(inner) = summary.strip_prefix("<summary>") {
-        summary = inner.trim_start();
-    }
-    summary.to_owned()
-}
-
-fn neutralize_compaction_control_tokens(summary: &str) -> String {
-    summary
-        .replace("</summary>", "<\u{200b}/summary>")
-        .replace("<summary>", "<\u{200b}summary>")
-        .replace("</analysis>", "<\u{200b}/analysis>")
-        .replace("<analysis>", "<\u{200b}analysis>")
-        .replace("</summary_request>", "<\u{200b}/summary_request>")
-        .replace("<summary_request>", "<\u{200b}summary_request>")
 }

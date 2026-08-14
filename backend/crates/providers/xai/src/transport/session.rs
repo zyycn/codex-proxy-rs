@@ -347,6 +347,14 @@ pub enum GrokCredentialFailure {
         upstream_model: UpstreamModelId,
         retry_after: Option<Duration>,
     },
+    /// 非内容策略的 403：当前账号的访问资格暂不可用。
+    AccessDenied,
+    /// 上游明确报告模型容量不足；重模型按模型隔离，其余账号短暂冷却。
+    ModelCapacity { upstream_model: UpstreamModelId },
+    /// 上游返回空模型输出。
+    EmptyUpstream,
+    /// 上游 5xx/529 暂时不可用。
+    UpstreamUnavailable,
     /// 成功的 SSE 响应在终止 Responses 事件前结束。
     StreamInterrupted,
 }

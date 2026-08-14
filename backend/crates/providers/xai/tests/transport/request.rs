@@ -133,14 +133,17 @@ fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
     let request = raw_request(json!({
         "model": "client-model",
         "input": "hello",
-        "reasoning": {"effort": "max"}
+        "reasoning": {"effort": "max"},
+        "reasoning_effort": "extra_high",
+        "reasoningEffort": "minimal"
     }));
-    let encoded = GrokResponsesRequest::encode(&request, "Build/grok-4.6-low", &client_key())
-        .expect("xhigh request");
-    assert_eq!(
-        Value::Object(encoded.body().clone()).pointer("/reasoning/effort"),
-        Some(&json!("xhigh"))
-    );
+    let encoded = GrokResponsesRequest::encode(&request, "xai/grok-4.6-latest", &client_key())
+        .expect("aliased request");
+    let body = Value::Object(encoded.body().clone());
+    assert_eq!(body.pointer("/model"), Some(&json!("grok-4.6")));
+    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("high")));
+    assert_eq!(body.pointer("/reasoning_effort"), Some(&json!("high")));
+    assert_eq!(body.pointer("/reasoningEffort"), None);
 
     let request = raw_request(json!({
         "model": "client-model",
@@ -150,8 +153,7 @@ fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
     let encoded = GrokResponsesRequest::encode(&request, "grok-composer-2.5-fast", &client_key())
         .expect("Composer request");
     let body = Value::Object(encoded.body().clone());
-    assert_eq!(body.pointer("/reasoning/effort"), None);
-    assert_eq!(body.pointer("/reasoning/summary"), Some(&json!("auto")));
+    assert_eq!(body.pointer("/reasoning"), None);
 
     let request = raw_request(json!({
         "model": "client-model",
@@ -179,7 +181,7 @@ fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
         .expect("Composer reasoning without effort");
     assert_eq!(
         Value::Object(encoded.body().clone()).pointer("/reasoning"),
-        Some(&json!({}))
+        None
     );
 
     let request = raw_request(json!({
@@ -191,7 +193,94 @@ fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
         .expect("unknown provider prefix");
     assert_eq!(
         Value::Object(encoded.body().clone()).pointer("/reasoning/effort"),
-        Some(&json!("high"))
+        None
+    );
+}
+
+#[test]
+fn encoder_should_strip_sub2api_grok_unsupported_fields() {
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "prompt_cache_retention": "24h",
+        "safety_identifier": "user-1",
+        "presence_penalty": 0.1,
+        "presencePenalty": 0.2,
+        "frequency_penalty": 0.3,
+        "frequencyPenalty": 0.4,
+        "stop": ["done"],
+        "external_web_access": true,
+        "metadata": {"external_web_access": false},
+        "tools": [{
+            "type": "function",
+            "name": "lookup",
+            "external_web_access": true,
+            "parameters": {
+                "type": "object",
+                "properties": {"q": {"type": "string", "external_web_access": true}}
+            }
+        }]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-latest", &client_key())
+        .expect("sanitized 4.5 request");
+    let body = Value::Object(encoded.body().clone());
+    for pointer in [
+        "/prompt_cache_retention",
+        "/safety_identifier",
+        "/presence_penalty",
+        "/presencePenalty",
+        "/frequency_penalty",
+        "/frequencyPenalty",
+        "/stop",
+        "/external_web_access",
+        "/metadata/external_web_access",
+        "/tools/0/external_web_access",
+        "/tools/0/parameters/properties/q/external_web_access",
+    ] {
+        assert_eq!(body.pointer(pointer), None, "field survived at {pointer}");
+    }
+
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "logprobs": true,
+        "top_logprobs": 5
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.20-reasoning", &client_key())
+        .expect("sanitized 4.20 request");
+    let body = Value::Object(encoded.body().clone());
+    assert_eq!(
+        body.pointer("/model"),
+        Some(&json!("grok-4.20-0309-reasoning"))
+    );
+    assert_eq!(body.pointer("/logprobs"), None);
+    assert_eq!(body.pointer("/top_logprobs"), None);
+}
+
+#[test]
+fn external_web_access_false_should_strip_only_the_unsupported_field() {
+    let request = raw_request(json!({
+        "model": "client-model",
+        "input": "hello",
+        "tools": [{
+            "type": "web_search",
+            "external_web_access": false
+        }],
+        "tool_choice": {"type": "web_search"}
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("web search survives field sanitization");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(
+        body.pointer("/tools/0"),
+        Some(&json!({"type": "web_search"}))
+    );
+    assert_eq!(
+        body.pointer("/tool_choice"),
+        Some(&json!({"type": "web_search"}))
     );
 }
 
@@ -447,6 +536,28 @@ fn function_parameters_should_remove_only_nullable_object_roots() {
 }
 
 #[test]
+fn function_parameters_should_default_missing_or_null_schemas() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "hello",
+        "tools": [
+            {"type": "function", "name": "lookup"},
+            {"type": "function", "name": "wait", "parameters": null}
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("default function schemas");
+    let body = Value::Object(encoded.body().clone());
+    for index in 0..2 {
+        assert_eq!(
+            body.pointer(&format!("/tools/{index}/parameters")),
+            Some(&json!({"type": "object", "properties": {}}))
+        );
+    }
+}
+
+#[test]
 fn function_parameters_should_keep_local_object_refs_after_removing_null() {
     let request = raw_request(json!({
         "model": "client",
@@ -531,6 +642,8 @@ fn explicit_session_should_add_x_search_after_codex_additional_tools_normalizati
     let body = Value::Object(encoded.body().clone());
 
     assert_eq!(body.pointer("/input/0/type"), Some(&json!("message")));
+    assert_eq!(body.pointer("/input/0/role"), Some(&json!("user")));
+    assert_eq!(body.pointer("/input/1"), None);
     assert_eq!(body.pointer("/tools/0/name"), Some(&json!("apply_patch")));
     assert_eq!(
         body.pointer("/tools/0/parameters/required"),
@@ -542,7 +655,55 @@ fn explicit_session_should_add_x_search_after_codex_additional_tools_normalizati
 }
 
 #[test]
-fn explicit_session_should_add_x_search_to_allowed_tools_choice() {
+fn additional_tools_should_keep_top_level_definition_and_drop_unsupported_types() {
+    let request = raw_request(json!({
+        "model": "client",
+        "tools": [
+            {
+                "type": "function",
+                "name": "existing",
+                "description": "top-level wins",
+                "parameters": {"type": "object"}
+            },
+            {"type": "image_generation", "model": "gpt-image-2"}
+        ],
+        "tool_choice": "auto",
+        "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "existing",
+                        "description": "carrier duplicate",
+                        "parameters": {"type": "object"}
+                    },
+                    {"type": "function", "name": "wait"},
+                    {"type": "future_client_tool", "name": "drop-me"}
+                ]
+            },
+            {"type": "message", "role": "user", "content": "hello"}
+        ]
+    }));
+
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("promoted additional tools");
+    let body = Value::Object(encoded.body().clone());
+
+    assert_eq!(body.pointer("/input/0/role"), Some(&json!("user")));
+    assert_eq!(body.pointer("/input/1"), None);
+    assert_eq!(body.pointer("/tools/0/name"), Some(&json!("existing")));
+    assert_eq!(
+        body.pointer("/tools/0/description"),
+        Some(&json!("top-level wins"))
+    );
+    assert_eq!(body.pointer("/tools/1/name"), Some(&json!("wait")));
+    assert_eq!(body.pointer("/tools/2"), None);
+    assert_eq!(body.pointer("/tool_choice"), Some(&json!("auto")));
+}
+
+#[test]
+fn explicit_session_should_drop_xai_unsupported_allowed_tools_choice() {
     let request = raw_request(json!({
         "model": "client",
         "prompt_cache_key": "conversation-42",
@@ -563,10 +724,8 @@ fn explicit_session_should_add_x_search_to_allowed_tools_choice() {
         GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("request");
     let body = Value::Object(encoded.body().clone());
 
-    assert_eq!(
-        body.pointer("/tool_choice/tools/1"),
-        Some(&json!({"type": "x_search"}))
-    );
+    assert_eq!(body.pointer("/tool_choice"), None);
+    assert_eq!(body.pointer("/tools/1"), Some(&json!({"type": "x_search"})));
 }
 
 #[test]
@@ -784,7 +943,7 @@ fn custom_apply_patch_declaration_should_use_patch_parameter() {
 }
 
 #[test]
-fn hosted_tool_choice_should_narrow_visible_tools_and_require_the_selected_kind() {
+fn hosted_tool_choice_should_preserve_the_sub2api_specific_choice() {
     let request = raw_request(json!({
         "model": "client",
         "input": "search",
@@ -799,13 +958,19 @@ fn hosted_tool_choice_should_narrow_visible_tools_and_require_the_selected_kind(
         GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).expect("hosted choice");
     let body = Value::Object(encoded.body().clone());
 
-    assert_eq!(body.pointer("/tool_choice"), Some(&json!("required")));
+    assert_eq!(
+        body.pointer("/tool_choice"),
+        Some(&json!({"type": "web_search"}))
+    );
     assert_eq!(
         body.pointer("/tools"),
-        Some(&json!([{
-            "type": "web_search",
-            "filters": {"allowed_domains": ["example.com"]}
-        }]))
+        Some(&json!([
+            {
+                "type": "web_search",
+                "filters": {"allowed_domains": ["example.com"]}
+            },
+            {"type": "x_search"}
+        ]))
     );
 }
 
@@ -1047,7 +1212,6 @@ fn compaction_history_should_become_plaintext_user_continuation_in_place() {
             {"type": "message", "role": "user", "content": "before compaction"},
             {
                 "type": "compaction",
-                "id": "cmp_1",
                 "encrypted_content": "Repository state and pending work."
             },
             {"type": "message", "role": "user", "content": "continue"}
@@ -1080,7 +1244,53 @@ fn compaction_history_should_become_plaintext_user_continuation_in_place() {
 }
 
 #[test]
-fn compaction_history_should_reject_missing_empty_or_non_string_plaintext() {
+fn sub2api_compaction_history_should_restore_reasoning_ciphertext_and_visible_summary() {
+    for item_type in ["compaction", "compaction_summary"] {
+        let request = raw_request(json!({
+            "model": "client",
+            "input": [
+                {
+                    "type": item_type,
+                    "id": "cmp_1",
+                    "status": "completed",
+                    "encrypted_content": "grok-encrypted-state",
+                    "summary": [
+                        {"type": "summary_text", "text": "first part"},
+                        {"type": "summary_text", "text": "second part"}
+                    ]
+                },
+                {"type": "message", "role": "user", "content": "continue"}
+            ]
+        }));
+
+        let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+            .expect("sub2api compaction continuation");
+        let body = Value::Object(encoded.body().clone());
+
+        assert_eq!(
+            body.pointer("/input"),
+            Some(&json!([
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": "grok-encrypted-state"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "<conversation_summary>\nfirst part\nsecond part\n</conversation_summary>"
+                    }]
+                },
+                {"type": "message", "role": "user", "content": "continue"}
+            ]))
+        );
+    }
+}
+
+#[test]
+fn malformed_compaction_history_should_be_dropped_like_sub2api() {
     for encrypted_content in [
         None,
         Some(json!(null)),
@@ -1098,12 +1308,9 @@ fn compaction_history_should_reject_missing_empty_or_non_string_plaintext() {
             "model": "client",
             "input": [Value::Object(compaction)]
         }));
-
-        assert_eq!(
-            GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
-                .expect_err("invalid compaction plaintext"),
-            GrokRequestEncodeError::InvalidRequestField { field: "input" }
-        );
+        let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+            .expect("malformed compaction item is omitted");
+        assert_eq!(encoded.body().get("input"), Some(&json!([])));
     }
 }
 
@@ -1145,12 +1352,34 @@ fn tool_search_history_should_load_returned_tools_at_the_original_turn() {
 }
 
 #[test]
-fn unsupported_or_ambiguous_tool_contracts_should_fail_before_upstream_io() {
+fn unsupported_tools_should_be_filtered_with_their_orphaned_choice() {
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "x",
+        "tools": [{"type": "future_tool"}],
+        "tool_choice": {"type": "future_tool"}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("unsupported tool filter");
+    assert_eq!(encoded.body().get("tools"), None);
+    assert_eq!(encoded.body().get("tool_choice"), None);
+
+    let request = raw_request(json!({
+        "model": "client",
+        "input": "x",
+        "tools": [{"type": "function", "name": "kept"}],
+        "tool_choice": {"type": "function", "name": "missing"}
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
+        .expect("orphaned function choice filter");
+    let body = Value::Object(encoded.body().clone());
+    assert_eq!(body.pointer("/tools/0/name"), Some(&json!("kept")));
+    assert_eq!(encoded.body().get("tool_choice"), None);
+}
+
+#[test]
+fn ambiguous_tool_contracts_should_fail_before_upstream_io() {
     for (body, field) in [
-        (
-            json!({"model": "client", "input": "x", "tools": [{"type": "future_tool"}]}),
-            "tools",
-        ),
         (
             json!({"model": "client", "input": "x", "tools": [
                 {"type": "tool_search", "execution": "client"},

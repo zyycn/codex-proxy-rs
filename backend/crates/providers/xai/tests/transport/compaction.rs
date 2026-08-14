@@ -1,4 +1,6 @@
-use gateway_core::event::{GatewayEvent, ProviderEvent, ReasoningDelta, TextDelta, ToolCallDelta};
+use gateway_core::event::{
+    GatewayEvent, ProtocolWireEvent, ProviderEvent, ReasoningDelta, TextDelta, ToolCallDelta,
+};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use provider_xai::{
@@ -74,7 +76,7 @@ fn encoder_should_preserve_history_order_and_append_summary_prompt() {
 }
 
 #[test]
-fn encoder_should_preserve_tools_and_remove_non_prefix_constraints() {
+fn encoder_should_preserve_sub2api_compaction_constraints() {
     let request = encode(json!({
         "model": "client-model",
         "input": [
@@ -89,21 +91,24 @@ fn encoder_should_preserve_tools_and_remove_non_prefix_constraints() {
         "prompt_cache_key": "cache_private",
         "service_tier": "priority",
         "max_output_tokens": 16,
+        "background": true,
+        "truncation": "auto",
         "stream": false,
         "store": true
     }))
     .expect("compaction request");
 
     let body = request.body();
-    let forbidden = [
-        "parallel_tool_calls",
-        "text",
-        "previous_response_id",
-        "prompt_cache_key",
-        "service_tier",
-        "max_output_tokens",
-    ];
+    let forbidden = ["previous_response_id", "prompt_cache_key", "service_tier"];
     assert!(forbidden.into_iter().all(|field| !body.contains_key(field)));
+    assert_eq!(body.get("parallel_tool_calls"), Some(&Value::Bool(true)));
+    assert_eq!(
+        body.get("text"),
+        Some(&json!({"format": {"type": "json_object"}}))
+    );
+    assert_eq!(body.get("max_output_tokens"), Some(&json!(16)));
+    assert_eq!(body.get("background"), Some(&Value::Bool(true)));
+    assert_eq!(body.get("truncation"), Some(&json!("auto")));
     assert_eq!(
         body.get("tools"),
         Some(&json!([{
@@ -112,8 +117,12 @@ fn encoder_should_preserve_tools_and_remove_non_prefix_constraints() {
             "parameters": {"type": "object"}
         }]))
     );
-    assert_eq!(body.get("tool_choice"), Some(&json!("auto")));
-    assert_eq!(body.get("temperature"), Some(&json!(1.0)));
+    assert_eq!(body.get("tool_choice"), Some(&json!("none")));
+    assert_eq!(
+        body.get("include"),
+        Some(&json!(["reasoning.encrypted_content"]))
+    );
+    assert!(!body.contains_key("temperature"));
     assert_eq!(body.get("stream"), Some(&Value::Bool(true)));
     assert_eq!(body.get("store"), Some(&Value::Bool(false)));
 }
@@ -181,54 +190,56 @@ fn encoder_should_consume_only_the_terminal_compaction_trigger() {
 }
 
 #[test]
-fn decoder_should_return_clean_typed_summary_after_normal_terminal() {
-    let summary = decode_summary(&valid_summary("checkpoint-only-secret")).expect("summary");
+fn decoder_should_preserve_sub2api_summary_text_after_trimming_edges() {
+    let raw = valid_summary("checkpoint-only-secret");
+    let summary = decode_summary(&format!("  {raw}  \n")).expect("summary");
 
-    assert!(summary.as_str().starts_with("Summary:\nPrivate state:"));
-    assert!(!summary.as_str().contains("<summary>"));
+    assert_eq!(summary, raw);
 }
 
 #[test]
-fn decoder_should_remove_nested_leading_scratchpad() {
+fn decoder_should_not_interpret_nested_summary_or_analysis_tokens() {
     let raw = format!(
         "<summary>\n<analysis>private scratchpad</analysis>\nActual state\n{}\n</summary>",
         "preserved implementation context ".repeat(20)
     );
-    let summary = decode_summary(&raw).expect("clean summary");
+    let summary = decode_summary(&raw).expect("summary");
 
     assert!(summary.as_str().contains("Actual state"));
-    assert!(!summary.as_str().contains("private scratchpad"));
+    assert!(summary.as_str().contains("private scratchpad"));
+    assert!(summary.as_str().starts_with("<summary>"));
 }
 
 #[test]
-fn decoder_should_remove_top_level_leading_scratchpad() {
+fn decoder_should_preserve_top_level_analysis_as_upstream_text() {
     let raw = format!(
         "<analysis>private scratchpad</analysis>\n{}",
         valid_summary("actual state")
     );
-    let summary = decode_summary(&raw).expect("clean summary");
+    let summary = decode_summary(&raw).expect("summary");
 
-    assert!(!summary.as_str().contains("private scratchpad"));
+    assert!(summary.as_str().contains("private scratchpad"));
 }
 
 #[test]
-fn decoder_should_keep_summary_after_unclosed_leading_scratchpad() {
+fn decoder_should_preserve_unclosed_leading_analysis() {
     let raw = format!(
         "<analysis>truncated private scratchpad\n{}",
         valid_summary("actual state")
     );
-    let summary = decode_summary(&raw).expect("clean summary");
+    let summary = decode_summary(&raw).expect("summary");
 
+    assert!(summary.as_str().contains("truncated private scratchpad"));
     assert!(summary.as_str().contains("actual state"));
 }
 
 #[test]
-fn decoder_should_neutralize_live_compaction_control_tokens_in_body() {
+fn decoder_should_preserve_compaction_control_tokens_like_sub2api() {
     let raw = valid_summary(
         "Quoted <summary> and </summary>, <analysis> and </analysis>, \
          plus <summary_request> and </summary_request>.",
     );
-    let summary = decode_summary(&raw).expect("clean summary");
+    let summary = decode_summary(&raw).expect("summary");
 
     for token in [
         "<summary>",
@@ -238,20 +249,20 @@ fn decoder_should_neutralize_live_compaction_control_tokens_in_body() {
         "<summary_request>",
         "</summary_request>",
     ] {
-        assert!(!summary.as_str().contains(token), "live token {token}");
+        assert!(summary.as_str().contains(token), "token {token}");
     }
 }
 
 #[test]
-fn decoder_should_preserve_unclosed_summary_body_without_live_token() {
+fn decoder_should_preserve_unclosed_summary_token() {
     let raw = format!(
         "<summary>\nActual state\n{}",
         "preserved implementation context ".repeat(20)
     );
-    let summary = decode_summary(&raw).expect("clean summary");
+    let summary = decode_summary(&raw).expect("summary");
 
     assert!(summary.as_str().contains("Actual state"));
-    assert!(!summary.as_str().contains("<summary>"));
+    assert!(summary.as_str().contains("<summary>"));
 }
 
 #[test]
@@ -267,17 +278,95 @@ fn decoder_should_preserve_numbered_sections_that_quote_analysis_close() {
 }
 
 #[test]
-fn decoder_should_reject_degenerate_summary() {
-    let error = decode_summary("<summary>too short</summary>").expect_err("short summary");
+fn decoder_should_accept_short_summary_like_sub2api() {
+    let summary = decode_summary("<summary>too short</summary>").expect("short summary");
 
-    assert_eq!(error, GrokCompactionDecodeError::Degenerate);
+    assert_eq!(summary, "<summary>too short</summary>");
 }
 
 #[test]
-fn decoder_should_reject_empty_cleaned_summary_as_degenerate() {
-    let error = decode_summary("<analysis>draft only</analysis>").expect_err("empty summary");
+fn decoder_should_accept_empty_summary_text() {
+    let summary = decode_summary("  \n\t ").expect("empty summary");
 
-    assert_eq!(error, GrokCompactionDecodeError::Degenerate);
+    assert!(summary.is_empty());
+}
+
+#[test]
+fn decoder_should_fall_back_to_completed_output_without_text_deltas() {
+    let mut decoder = GrokCompactionSummaryDecoder::new();
+    let wire = ProtocolWireEvent::json_with_sse_metadata(
+        "openai",
+        Some("response.completed".to_owned()),
+        json!({
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "encrypted_content": "real-ciphertext"
+                    },
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "first part"},
+                            {"type": "output_text", "text": "second part"}
+                        ]
+                    }
+                ]
+            }
+        }),
+        None,
+        None,
+    )
+    .expect("terminal wire event");
+    decoder
+        .observe(&ProviderEvent::wire(wire))
+        .expect("terminal response");
+
+    assert_eq!(
+        decoder.finish().expect("summary"),
+        "first part\nsecond part"
+    );
+}
+
+#[test]
+fn decoder_should_prefer_complete_terminal_output_over_partial_deltas() {
+    let mut decoder = GrokCompactionSummaryDecoder::new();
+    decoder
+        .observe(&ProviderEvent::canonical(GatewayEvent::TextDelta(
+            TextDelta {
+                content_index: 0,
+                text: "partial summary".to_owned(),
+            },
+        )))
+        .expect("partial summary delta");
+    let wire = ProtocolWireEvent::json_with_sse_metadata(
+        "openai",
+        Some("response.completed".to_owned()),
+        json!({
+            "type": "response.completed",
+            "response": {
+                "output": [{
+                    "type": "message",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "complete terminal summary"
+                    }]
+                }]
+            }
+        }),
+        None,
+        None,
+    )
+    .expect("terminal wire event");
+    decoder
+        .observe(&ProviderEvent::wire(wire))
+        .expect("terminal response");
+
+    assert_eq!(
+        decoder.finish().expect("summary"),
+        "complete terminal summary"
+    );
 }
 
 #[test]

@@ -26,8 +26,10 @@
       }
     }
   ],
-  "tool_choice": "auto",
-  "temperature": 1.0,
+  "tool_choice": "none",
+  "include": [
+    "reasoning.encrypted_content"
+  ],
   "store": false,
   "stream": true
 }

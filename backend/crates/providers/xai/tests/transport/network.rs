@@ -262,6 +262,8 @@ async fn inference_transport_should_classify_http_failures_without_retaining_bod
         (408, GrokInferenceTransportErrorKind::Timeout),
         (429, GrokInferenceTransportErrorKind::RateLimited),
         (500, GrokInferenceTransportErrorKind::Unavailable),
+        (504, GrokInferenceTransportErrorKind::Unavailable),
+        (529, GrokInferenceTransportErrorKind::Unavailable),
         (418, GrokInferenceTransportErrorKind::Protocol),
     ];
 
@@ -332,7 +334,7 @@ async fn inference_transport_should_expose_safe_flat_json_error_details() {
 
     assert_eq!(
         error.kind(),
-        GrokInferenceTransportErrorKind::QuotaExhausted
+        GrokInferenceTransportErrorKind::PaymentRequired
     );
     assert_eq!(
         (detail.message(), detail.code(), detail.error_type()),
@@ -395,15 +397,21 @@ async fn inference_transport_should_scope_forbidden_failures_from_safe_metadata(
         ),
         (
             json!({"error": {"code": "permission_denied", "message": "access to the chat endpoint is denied"}}),
-            GrokInferenceTransportErrorKind::ModelAccessDenied,
+            GrokInferenceTransportErrorKind::PermissionDenied,
             false,
             Some("permission_denied"),
         ),
         (
             json!({"error": {"code": "permission_denied", "message": "request rejected", "details": {"check": "SAFETY_CHECK_TYPE_INPUT"}}}),
-            GrokInferenceTransportErrorKind::SafetyRejected,
+            GrokInferenceTransportErrorKind::PermissionDenied,
             false,
             Some("permission_denied"),
+        ),
+        (
+            json!({"error": {"code": "invalid_token", "message": "request blocked by policy"}}),
+            GrokInferenceTransportErrorKind::SafetyRejected,
+            false,
+            Some("invalid_token"),
         ),
         (
             json!({"error": {"code": "policy_denied", "message": "request rejected"}}),
@@ -559,10 +567,69 @@ async fn inference_transport_should_classify_free_usage_429_as_account_free_quot
 }
 
 #[tokio::test]
+async fn inference_transport_should_apply_sub2api_body_aware_400_failures() {
+    let cases = [
+        (
+            json!({"error": {"code": "subscription:free-usage-exhausted", "message": "free usage exhausted"}}),
+            GrokInferenceTransportErrorKind::FreeQuotaExhausted,
+            Some("subscription_free_usage_exhausted"),
+        ),
+        (
+            json!({"error": {"message": "selected model is at capacity"}}),
+            GrokInferenceTransportErrorKind::RateLimited,
+            Some("model_capacity"),
+        ),
+        (
+            json!({"error": {"message": "spending limit reached"}}),
+            GrokInferenceTransportErrorKind::PaymentRequired,
+            Some("billing_quota"),
+        ),
+        (
+            json!({"error": {"message": "empty model output: no content/tool_calls"}}),
+            GrokInferenceTransportErrorKind::Unavailable,
+            Some("empty_upstream"),
+        ),
+        (
+            json!({"error": {"message": "rate limit exceeded"}}),
+            GrokInferenceTransportErrorKind::InvalidRequest,
+            Some("rate_limit"),
+        ),
+        (
+            json!({"error": {"message": "invalid tool schema"}}),
+            GrokInferenceTransportErrorKind::InvalidRequest,
+            None,
+        ),
+    ];
+
+    for (body, expected_kind, expected_code) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let origin = Url::parse(&server.uri()).expect("wiremock origin");
+        let error = inference_transport(&origin)
+            .execute(inference_request(&origin))
+            .await
+            .expect_err("400 response must be classified");
+
+        assert_eq!(error.kind(), expected_kind);
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            expected_code
+        );
+    }
+}
+
+#[tokio::test]
 async fn inference_transport_should_bound_retry_after_to_the_safe_window() {
     for (header, expected) in [
         ("120", Some(Duration::from_secs(120))),
-        ("121", None),
+        ("121", Some(Duration::from_secs(121))),
+        ("86400", Some(Duration::from_secs(86_400))),
+        ("86401", None),
         ("0", None),
     ] {
         let server = MockServer::start().await;

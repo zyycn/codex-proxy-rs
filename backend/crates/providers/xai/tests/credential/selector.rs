@@ -560,7 +560,7 @@ async fn model_quota_feedback_writes_model_scoped_cooldown_without_blocking_othe
 
     let account = fixture.store.account(&selected).expect("selected account");
     assert_eq!(account.credential_state(), CredentialState::Ready);
-    let minimum_until = SystemTime::now() + Duration::from_secs(23 * 60 * 60);
+    let minimum_until = SystemTime::now() + Duration::from_secs(9 * 60);
     let scope = ProviderCooldownScope::upstream_model(failed_model);
     // model-scoped cooldown：目标模型被排除，账号级无 cooldown。
     assert!(

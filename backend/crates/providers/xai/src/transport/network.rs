@@ -50,7 +50,7 @@ const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 const MAX_INFERENCE_BODY_BYTES: usize = 256 * 1024 * 1024;
-const MAX_RETRY_AFTER_SECONDS: u64 = 120;
+const MAX_RETRY_AFTER_SECONDS: u64 = 24 * 60 * 60;
 const TRUSTED_DOH_HOST: &str = "dns.google";
 const TRUSTED_DOH_URL: &str = "https://dns.google/resolve";
 const MAX_DOH_RESPONSE_BYTES: usize = 64 * 1024;
@@ -992,19 +992,32 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
         Ok(BoundedBody::TooLarge) | Err(_) => Vec::new(),
     };
     let metadata = inference_error_metadata(&body);
+    let body_failure = classify_grok_body_failure(&metadata, &body);
     let kind = match status {
-        StatusCode::BAD_REQUEST
-        | StatusCode::NOT_FOUND
-        | StatusCode::CONFLICT
-        | StatusCode::UNPROCESSABLE_ENTITY => GrokInferenceTransportErrorKind::InvalidRequest,
-        StatusCode::UNAUTHORIZED => GrokInferenceTransportErrorKind::Unauthorized,
-        StatusCode::PAYMENT_REQUIRED => classify_payment_required(&metadata),
-        StatusCode::FORBIDDEN => classify_forbidden(&metadata, &body),
-        StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
-            GrokInferenceTransportErrorKind::Timeout
+        StatusCode::BAD_REQUEST => match body_failure {
+            Some(GrokBodyFailure::RateLimit) | None => {
+                GrokInferenceTransportErrorKind::InvalidRequest
+            }
+            Some(failure) => failure.transport_kind(),
+        },
+        StatusCode::NOT_FOUND | StatusCode::CONFLICT | StatusCode::UNPROCESSABLE_ENTITY => {
+            GrokInferenceTransportErrorKind::InvalidRequest
         }
-        StatusCode::TOO_MANY_REQUESTS => classify_too_many_requests(&metadata),
-        status if status.is_server_error() => GrokInferenceTransportErrorKind::Unavailable,
+        StatusCode::UNAUTHORIZED => GrokInferenceTransportErrorKind::Unauthorized,
+        StatusCode::PAYMENT_REQUIRED => body_failure
+            .map(GrokBodyFailure::transport_kind)
+            .unwrap_or_else(|| classify_payment_required(&metadata)),
+        StatusCode::FORBIDDEN => classify_forbidden(&metadata, &body, body_failure),
+        StatusCode::REQUEST_TIMEOUT => GrokInferenceTransportErrorKind::Timeout,
+        StatusCode::TOO_MANY_REQUESTS => body_failure
+            .map(GrokBodyFailure::transport_kind)
+            .unwrap_or_else(|| classify_too_many_requests(&metadata)),
+        _ if status_code == 529 => body_failure
+            .map(GrokBodyFailure::transport_kind)
+            .unwrap_or(GrokInferenceTransportErrorKind::Unavailable),
+        status if status.is_server_error() => body_failure
+            .map(GrokBodyFailure::transport_kind)
+            .unwrap_or(GrokInferenceTransportErrorKind::Unavailable),
         _ => GrokInferenceTransportErrorKind::Protocol,
     };
     let credential_recovery_required = kind == GrokInferenceTransportErrorKind::Unauthorized;
@@ -1015,7 +1028,11 @@ async fn classify_inference_status(response: Response) -> GrokInferenceTransport
     let upstream_code = if status == StatusCode::BAD_REQUEST && reasoning_decode_failed(&metadata) {
         Some("reasoning_decode_failed".to_owned())
     } else {
-        metadata.code.as_deref().and_then(normalize_failure_code)
+        metadata
+            .code
+            .as_deref()
+            .and_then(normalize_failure_code)
+            .or_else(|| body_failure.map(GrokBodyFailure::marker).map(str::to_owned))
     };
     if let Some(message) = metadata.client_message.as_deref() {
         error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
@@ -1043,6 +1060,115 @@ struct InferenceErrorMetadata {
     message: Option<String>,
     // 仅结构化 JSON 的 message 可进入客户端协议；纯文本正文只参与内部分类。
     client_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrokBodyFailure {
+    Quota(GrokQuotaFailureKind),
+    Billing,
+    EmptyUpstream,
+    ModelCapacity,
+    RateLimit,
+}
+
+impl GrokBodyFailure {
+    fn transport_kind(self) -> GrokInferenceTransportErrorKind {
+        match self {
+            Self::Quota(failure) => quota_transport_error_kind(failure),
+            Self::Billing => GrokInferenceTransportErrorKind::PaymentRequired,
+            Self::EmptyUpstream => GrokInferenceTransportErrorKind::Unavailable,
+            Self::ModelCapacity | Self::RateLimit => GrokInferenceTransportErrorKind::RateLimited,
+        }
+    }
+
+    const fn marker(self) -> &'static str {
+        match self {
+            Self::Quota(GrokQuotaFailureKind::Account) => "quota_exhausted",
+            Self::Quota(GrokQuotaFailureKind::FreeAccount) => "free_usage_exhausted",
+            Self::Quota(GrokQuotaFailureKind::FreeModelUsage) => "model_quota_exhausted",
+            Self::Billing => "billing_quota",
+            Self::EmptyUpstream => "empty_upstream",
+            Self::ModelCapacity => "model_capacity",
+            Self::RateLimit => "rate_limit",
+        }
+    }
+}
+
+fn classify_grok_body_failure(
+    metadata: &InferenceErrorMetadata,
+    body: &[u8],
+) -> Option<GrokBodyFailure> {
+    let text = format!(
+        "{} {}",
+        inference_metadata_text(metadata),
+        String::from_utf8_lossy(body).to_ascii_lowercase()
+    );
+    let quota_failure = classify_grok_quota_failure(
+        metadata.code.as_deref(),
+        metadata.error_type.as_deref(),
+        Some(&text),
+    );
+    if let Some(
+        failure @ (GrokQuotaFailureKind::FreeAccount | GrokQuotaFailureKind::FreeModelUsage),
+    ) = quota_failure
+    {
+        return Some(GrokBodyFailure::Quota(failure));
+    }
+    if contains_any(
+        &text,
+        &[
+            "billing quota",
+            "insufficient_quota",
+            "payment required",
+            "payment failed",
+            "spending limit",
+            "run out of credits",
+            "out of credits",
+            "余额不足",
+            "欠费",
+            "需要付费",
+        ],
+    ) {
+        return Some(GrokBodyFailure::Billing);
+    }
+    if let Some(failure) = quota_failure {
+        return Some(GrokBodyFailure::Quota(failure));
+    }
+    if contains_any(
+        &text,
+        &[
+            "empty model output",
+            "no content/tool_calls",
+            "no client-visible content",
+            "empty_upstream",
+            "empty upstream",
+        ],
+    ) {
+        return Some(GrokBodyFailure::EmptyUpstream);
+    }
+    if contains_any(
+        &text,
+        &[
+            "capacity",
+            "overloaded",
+            "server_busy",
+            "too many concurrent",
+            "engine_overloaded",
+        ],
+    ) {
+        return Some(GrokBodyFailure::ModelCapacity);
+    }
+    contains_any(
+        &text,
+        &[
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "请求过于频繁",
+            "速率限制",
+        ],
+    )
+    .then_some(GrokBodyFailure::RateLimit)
 }
 
 fn inference_error_metadata(body: &[u8]) -> InferenceErrorMetadata {
@@ -1091,13 +1217,18 @@ fn classify_payment_required(metadata: &InferenceErrorMetadata) -> GrokInference
 fn classify_forbidden(
     metadata: &InferenceErrorMetadata,
     body: &[u8],
+    body_failure: Option<GrokBodyFailure>,
 ) -> GrokInferenceTransportErrorKind {
     let text = inference_metadata_text(metadata);
     let body_text = String::from_utf8_lossy(body).to_ascii_lowercase();
-    if safety_rejected(&text) || safety_rejected(&body_text) {
+    if account_access_rejected(&text) || account_access_rejected(&body_text) {
+        GrokInferenceTransportErrorKind::PermissionDenied
+    } else if safety_rejected(&text) || safety_rejected(&body_text) {
         GrokInferenceTransportErrorKind::SafetyRejected
     } else if credential_rejected(&text) {
         GrokInferenceTransportErrorKind::Unauthorized
+    } else if let Some(failure) = body_failure {
+        failure.transport_kind()
     } else if let Some(failure) = quota_failure(metadata) {
         quota_transport_error_kind(failure)
     } else if model_access_denied(metadata) {
@@ -1117,10 +1248,27 @@ fn classify_too_many_requests(
 }
 
 fn reasoning_decode_failed(metadata: &InferenceErrorMetadata) -> bool {
-    metadata.message.as_deref().is_some_and(|message| {
-        message.contains("could not decode the compaction blob")
-            || message.contains("could not decrypt the provided encrypted_content")
-    })
+    let code = metadata.code.as_deref().map(str::trim).unwrap_or_default();
+    let message = metadata
+        .message
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if message.contains("could not decode the compaction blob") {
+        return true;
+    }
+    if code.eq_ignore_ascii_case("invalid_encrypted_content") {
+        return !message.is_empty();
+    }
+    if !code.is_empty() && !code.eq_ignore_ascii_case("invalid-argument") {
+        return false;
+    }
+    if code.is_empty() && !message.contains("decrypt") {
+        return false;
+    }
+    message.contains("encrypted_content")
+        && (message.contains("decrypt") || message.contains("unmodified"))
 }
 
 fn quota_failure(metadata: &InferenceErrorMetadata) -> Option<GrokQuotaFailureKind> {
@@ -1152,7 +1300,48 @@ fn model_access_denied(metadata: &InferenceErrorMetadata) -> bool {
 fn safety_rejected(text: &str) -> bool {
     contains_any(
         text,
-        &["content violates usage guidelines", "safety_check_type_"],
+        &[
+            "content violates usage guidelines",
+            "safety_check_type_",
+            "content_filter",
+            "content_policy",
+            "content moderation",
+            "cyber_policy",
+            "new_sensitive",
+            "moderation feature is not available",
+            "image is sensitive",
+            "text is sensitive",
+            "prohibited content",
+            "forbidden content",
+            "request blocked by policy",
+            "request rejected by policy",
+            "request violates policy",
+            "prompt violates policy",
+            "input violates policy",
+        ],
+    )
+}
+
+fn account_access_rejected(text: &str) -> bool {
+    contains_any(
+        text,
+        &[
+            "account_suspended",
+            "account_disabled",
+            "user_suspended",
+            "user_disabled",
+            "subscription_required",
+            "entitlement_required",
+            "not_entitled",
+            "plan_required",
+            "permission_denied",
+            "account suspended",
+            "account disabled",
+            "user suspended",
+            "subscription required",
+            "entitlement required",
+            "not entitled",
+        ],
     )
 }
 
