@@ -108,6 +108,7 @@ impl CodexCredentialCodec {
                 oauth_subject: account.oauth_subject.clone(),
                 poid: account.poid.clone(),
             }),
+            uuid::Uuid::new_v4().to_string(),
             cookies,
         )
     }
@@ -115,20 +116,22 @@ impl CodexCredentialCodec {
     /// 为尚未解析资料的 OAuth 账号编码凭据。
     pub(crate) fn encode_unresolved(
         secret: &CodexOAuthSecret,
+        installation_id: String,
         cookies: Vec<CodexCookie>,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
-        Self::encode_oauth(secret, None, cookies)
+        Self::encode_oauth(secret, None, installation_id, cookies)
     }
 
     fn encode_oauth(
         secret: &CodexOAuthSecret,
         principal: Option<CodexCredentialPrincipal>,
+        installation_id: String,
         cookies: Vec<CodexCookie>,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
         Self::encode_complete(CodexCredentialData::OAuth(CodexOAuthCredentialData {
             schema_version: CODEX_CREDENTIAL_SCHEMA_VERSION,
             principal,
-            installation_id: uuid::Uuid::new_v4().to_string(),
+            installation_id,
             access_token: secret.access_token.expose_secret().to_owned(),
             refresh_token: secret
                 .refresh_token

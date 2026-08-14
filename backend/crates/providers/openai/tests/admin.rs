@@ -33,7 +33,7 @@ use gateway_core::provider_ports::{
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
-use provider_openai::credential::ImportCodexOAuthCredential;
+use provider_openai::credential::{CodexCredentialCodec, ImportCodexOAuthCredential};
 use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
@@ -233,6 +233,14 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
                 .get("reauthorization_credential_revision")
                 .is_none()
         );
+        assert!(
+            payload
+                .expose_to_provider()
+                .get("installation_id")
+                .and_then(Value::as_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .is_some_and(|value| value.get_version_num() == 4)
+        );
         assert_eq!(
             mutation.get("schema_version").and_then(Value::as_u64),
             Some(3)
@@ -268,7 +276,7 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
 }
 
 #[tokio::test]
-async fn openai_reauthorization_pending_payload_contains_only_stable_account_identity() {
+async fn openai_reauthorization_pending_payload_reuses_the_account_installation_id() {
     let accounts = Arc::new(MemoryAccountStore::default());
     accounts
         .seed_oauth_credential(ImportCodexOAuthCredential {
@@ -280,6 +288,14 @@ async fn openai_reauthorization_pending_payload_contains_only_stable_account_ide
             enabled: true,
         })
         .await;
+    let account_id = ProviderAccountId::new("acct_pending_reauth").expect("account id");
+    let existing = accounts
+        .load_current_credential(&account_id)
+        .await
+        .expect("seeded credential");
+    let expected_installation_id = CodexCredentialCodec::decode(&existing.credential)
+        .expect("decode seeded credential")
+        .installation_id;
     let pending = Arc::new(TestOAuthPending::default());
     let config = valid_config();
     let bundle = provider_openai::initialize(
@@ -297,9 +313,7 @@ async fn openai_reauthorization_pending_payload_contains_only_stable_account_ide
         .admin_provider()
         .start_authorization(PendingAuthorizationMutation::new(
             ProviderKind::new("openai").expect("provider"),
-            AuthorizationMutationTarget::Reauthorize {
-                account_id: ProviderAccountId::new("acct_pending_reauth").expect("account id"),
-            },
+            AuthorizationMutationTarget::Reauthorize { account_id },
             AuthorizationOwnerBinding::from_context(&context),
         ))
         .await
@@ -325,6 +339,10 @@ async fn openai_reauthorization_pending_payload_contains_only_stable_account_ide
             .get("reauthorization_account_id")
             .and_then(Value::as_str),
         Some("acct_pending_reauth")
+    );
+    assert_eq!(
+        document.get("installation_id").and_then(Value::as_str),
+        Some(expected_installation_id.as_str())
     );
     assert!(
         document

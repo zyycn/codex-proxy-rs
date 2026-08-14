@@ -148,7 +148,16 @@ OpenAI OAuth 导入先取得 access token（仅有 refresh token 时先交换）
 由 `accessToken` 补齐。解析器只读取 `email`、`https://api.openai.com/profile` 与
 `https://api.openai.com/auth` 中的官方 claims，不调用 `whoami`，也不使用导入文档顶层的
 `userId/accountId` 补身份。两个令牌都没有用户身份 claims 时，账号以未验证错误状态入库。首次 OAuth
-在服务端 `state`、PKCE 与官方 token exchange 成功后解析并保存同一 token set。重新授权的目标绑定
+返回与当前 Codex Desktop 一致的两层登录地址：内层使用 `auth.openai.com/oauth/authorize` 的
+官方参数顺序，外层使用 `https://chatgpt.com/codex/desktop-auth` 并开启
+`codex_streamlined_login`。`codex_app_version` 每次从共享 Desktop 画像快照读取；
+首次授权在 10 分钟 pending flow 中生成账号级 `installation_id`，换码成功后把同一个值写入 credential。
+`source_surface_stable_id` 与 `codex_origin_stable_id` 由该 ID 经过带版本域的 SHA-256 确定性派生，并映射为
+UUIDv4；重新授权读取既有 `installation_id`，因此得到相同的 surface ID。系统不额外持久化 surface ID，
+也不再从全局 HMAC 身份锚点派生；它不等同于 DeviceCheck attestation。为了对齐 macOS Desktop
+交给外部浏览器的最终 `chatgpt.com` URL，Provider 同样携带 `no_universal_links=1` 浏览器路由参数。
+服务端随后仍以 `state`、PKCE
+与官方 token exchange 成功后解析并保存同一 token set。重新授权的目标绑定
 只保存目标账号 ID，不接受或冻结客户端提供的 credential revision；complete 阶段重新读取目标账号及其当前 revision，并以当前 revision 做最终 CAS。
 重新授权和手工或后台 RT refresh 只轮换目标账号的 token，保留既有账号资料与 OAuth principal。
 

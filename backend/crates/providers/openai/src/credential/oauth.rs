@@ -36,11 +36,16 @@ use super::token_client::{
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
 use super::types::parse_chatgpt_jwt_claims;
+use crate::transport::profile::CodexWireProfileState;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
+const DESKTOP_AUTH_ENDPOINT: &str = "https://chatgpt.com/codex/desktop-auth";
 const AUTHORIZATION_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const AUTHORIZATION_ORIGINATOR: &str = "Codex Desktop";
+const STREAMLINED_LOGIN_QUERY: &str = "codex_streamlined_login";
+const NO_UNIVERSAL_LINKS_QUERY: &str = "no_universal_links";
+const SURFACE_STABLE_ID_DOMAIN: &[u8] = b"openai/codex-desktop/surface-stable-id/v1\0";
 const AUTHORIZATION_TTL: TimeDelta = TimeDelta::minutes(10);
 const AUTHORIZATION_CLAIM_TTL: Duration = Duration::from_secs(90);
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
@@ -139,6 +144,7 @@ pub struct CodexPendingAuthorization {
     state: SecretString,
     nonce: SecretString,
     code_verifier: SecretString,
+    installation_id: String,
     reauthorization: Option<ProviderAccountId>,
     mutation: PendingAuthorizationMutation,
 }
@@ -152,6 +158,7 @@ pub struct StoredCodexPendingAuthorization {
     pub state: SecretString,
     pub nonce: SecretString,
     pub code_verifier: SecretString,
+    pub installation_id: String,
     pub reauthorization_account_id: Option<String>,
     pub mutation: PendingAuthorizationMutation,
 }
@@ -174,6 +181,7 @@ impl CodexPendingAuthorization {
             state: input.state,
             nonce: input.nonce,
             code_verifier: input.code_verifier,
+            installation_id: input.installation_id,
             reauthorization,
             mutation: input.mutation,
         };
@@ -185,6 +193,7 @@ impl CodexPendingAuthorization {
             || !valid_secret(pending.state.expose_secret())
             || !valid_secret(pending.nonce.expose_secret())
             || !valid_secret(pending.code_verifier.expose_secret())
+            || !valid_installation_id(&pending.installation_id)
             || !pending_mutation_matches(&pending)
         {
             return Err(CodexOAuthPendingStoreError::InvalidValue);
@@ -233,6 +242,11 @@ impl CodexPendingAuthorization {
     }
 
     #[must_use]
+    pub fn installation_id(&self) -> &str {
+        &self.installation_id
+    }
+
+    #[must_use]
     pub const fn reauthorization(&self) -> Option<&ProviderAccountId> {
         self.reauthorization.as_ref()
     }
@@ -255,6 +269,7 @@ impl fmt::Debug for CodexPendingAuthorization {
             .field("state", &"<redacted>")
             .field("nonce", &"<redacted>")
             .field("code_verifier", &"<redacted>")
+            .field("installation_id", &"<pseudonymous>")
             .field("reauthorization", &self.reauthorization)
             .field("mutation", &self.mutation)
             .finish()
@@ -350,6 +365,7 @@ pub struct CodexOAuthAdminService {
     store: Arc<dyn ProviderAccountStore>,
     credentials: CodexCredentialAdmin,
     oauth_client_id: String,
+    profile: CodexWireProfileState,
 }
 
 struct CodexOAuthAuthorizationCommitGuard {
@@ -399,6 +415,7 @@ impl CodexOAuthAdminService {
         exchanger: Arc<dyn AuthorizationCodeExchanger>,
         store: Arc<dyn ProviderAccountStore>,
         credentials: CodexCredentialAdmin,
+        profile: CodexWireProfileState,
     ) -> Self {
         Self {
             pending,
@@ -406,6 +423,7 @@ impl CodexOAuthAdminService {
             store,
             credentials,
             oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
+            profile,
         }
     }
 
@@ -422,8 +440,10 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
         &self,
         command: StartCodexOAuthAuthorization,
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
-        let (name, reauthorization) = match command.mutation.target() {
-            AuthorizationMutationTarget::Create { name } => (name.clone(), None),
+        let (name, reauthorization, installation_id) = match command.mutation.target() {
+            AuthorizationMutationTarget::Create { name } => {
+                (name.clone(), None, Uuid::new_v4().to_string())
+            }
             AuthorizationMutationTarget::Reauthorize { account_id } => {
                 let current = self
                     .store
@@ -435,10 +455,15 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
                 {
                     return Err(CodexOAuthAdminError::NotFound);
                 }
-                (current.account.name().to_owned(), Some(account_id.clone()))
+                let installation_id = current_installation_id(&current)?;
+                (
+                    current.account.name().to_owned(),
+                    Some(account_id.clone()),
+                    installation_id,
+                )
             }
         };
-        self.start_pending(command.mutation, name, reauthorization)
+        self.start_pending(command.mutation, name, reauthorization, installation_id)
             .await
     }
 
@@ -490,6 +515,9 @@ impl CodexOAuthAdminService {
                 .load_current_credential(target)
                 .await
                 .map_err(map_store_error)?;
+            if current_installation_id(&current)? != pending.installation_id() {
+                return Err(CodexOAuthAdminError::Conflict);
+            }
             Some(current)
         } else {
             None
@@ -527,6 +555,7 @@ impl CodexOAuthAdminService {
                     .prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
                         account_id,
                         name: pending.name,
+                        installation_id: pending.installation_id,
                         secret,
                         metadata,
                         access_token_expires_at,
@@ -546,6 +575,7 @@ impl CodexOAuthAdminService {
         mutation: PendingAuthorizationMutation,
         name: String,
         reauthorization: Option<ProviderAccountId>,
+        installation_id: String,
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
         if !valid_text(&name) {
             return Err(CodexOAuthAdminError::InvalidInput);
@@ -564,17 +594,21 @@ impl CodexOAuthAdminService {
             state: SecretString::from(random_secret()?),
             nonce: SecretString::from(random_secret()?),
             code_verifier: SecretString::from(random_secret()?),
+            installation_id,
             reauthorization_account_id: reauthorization.as_ref().map(ToString::to_string),
             mutation,
         })
         .map_err(map_pending_error)?;
+        let profile = self.profile.snapshot();
+        let authorization_url =
+            authorization_url(&pending, &self.oauth_client_id, &profile.desktop_version)?;
         self.pending
             .create(&pending)
             .await
             .map_err(map_pending_error)?;
         Ok(CodexOAuthAuthorizationStarted {
             flow_id: pending.flow_id.clone(),
-            authorization_url: authorization_url(&pending, &self.oauth_client_id)?,
+            authorization_url,
             expires_at,
         })
     }
@@ -690,31 +724,70 @@ fn current_oauth_refresh_token(
         .and_then(|oauth| oauth.refresh_token.clone()))
 }
 
+fn current_installation_id(current: &LoadedCredential) -> Result<String, CodexOAuthAdminError> {
+    let runtime = CodexCredentialCodec::decode(&current.credential)
+        .map_err(|_| CodexOAuthAdminError::Credential)?;
+    if runtime.authentication.oauth().is_none() {
+        return Err(CodexOAuthAdminError::Credential);
+    }
+    Ok(runtime.installation_id)
+}
+
+fn derive_surface_stable_id(installation_id: &str) -> Result<String, CodexOAuthAdminError> {
+    let installation_id =
+        Uuid::parse_str(installation_id).map_err(|_| CodexOAuthAdminError::Credential)?;
+    let mut digest = Sha256::new();
+    digest.update(SURFACE_STABLE_ID_DOMAIN);
+    digest.update(installation_id.as_bytes());
+    let digest = digest.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(Uuid::from_bytes(bytes).hyphenated().to_string())
+}
+
 fn authorization_url(
     pending: &CodexPendingAuthorization,
     oauth_client_id: &str,
+    desktop_version: &str,
 ) -> Result<String, CodexOAuthAdminError> {
-    let mut url =
+    if !valid_text(desktop_version) {
+        return Err(CodexOAuthAdminError::InvalidInput);
+    }
+    let mut inner =
         Url::parse(AUTHORIZATION_ENDPOINT).map_err(|_| CodexOAuthAdminError::InvalidInput)?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(
         pending.code_verifier.expose_secret().as_bytes(),
     ));
-    let query = [
-        ("response_type", "code"),
-        ("client_id", oauth_client_id),
-        ("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI),
-        ("scope", AUTHORIZATION_SCOPE),
-        ("code_challenge", challenge.as_str()),
-        ("code_challenge_method", "S256"),
-        ("id_token_add_organizations", "true"),
-        ("codex_cli_simplified_flow", "true"),
-        ("state", pending.state.expose_secret()),
-        ("originator", AUTHORIZATION_ORIGINATOR),
-    ]
-    .map(|(name, value)| format!("{name}={}", urlencoding::encode(value)))
-    .join("&");
-    url.set_query(Some(&query));
-    Ok(url.into())
+    let stable_id = derive_surface_stable_id(pending.installation_id())?;
+    {
+        let mut query = inner.query_pairs_mut();
+        query
+            .append_pair("response_type", "code")
+            .append_pair("client_id", oauth_client_id)
+            .append_pair("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI)
+            .append_pair("scope", AUTHORIZATION_SCOPE)
+            .append_pair("code_challenge", challenge.as_str())
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("id_token_add_organizations", "true")
+            .append_pair("codex_cli_simplified_flow", "true")
+            .append_pair("state", pending.state.expose_secret())
+            .append_pair("originator", AUTHORIZATION_ORIGINATOR)
+            .append_pair("codex_app_version", desktop_version)
+            .append_pair("source_surface_stable_id", &stable_id)
+            .append_pair("codex_origin_stable_id", &stable_id)
+            .append_pair(STREAMLINED_LOGIN_QUERY, "true");
+    }
+
+    let mut outer =
+        Url::parse(DESKTOP_AUTH_ENDPOINT).map_err(|_| CodexOAuthAdminError::InvalidInput)?;
+    outer
+        .query_pairs_mut()
+        .append_pair("authorize_url", inner.as_str())
+        .append_pair(STREAMLINED_LOGIN_QUERY, "true")
+        .append_pair(NO_UNIVERSAL_LINKS_QUERY, "1");
+    Ok(outer.into())
 }
 
 fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAuthAdminError> {
@@ -764,6 +837,12 @@ fn valid_text(value: &str) -> bool {
 
 fn valid_secret(value: &str) -> bool {
     valid_text(value) && value.len() >= 16
+}
+
+fn valid_installation_id(value: &str) -> bool {
+    Uuid::parse_str(value)
+        .ok()
+        .is_some_and(|uuid| uuid.get_version_num() == 4)
 }
 
 pub(crate) fn oauth_owner_ref(owner: &AuthorizationOwner) -> String {

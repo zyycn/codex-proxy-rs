@@ -176,6 +176,7 @@ pub async fn initialize(
             exchanger,
             Arc::clone(&accounts),
             CodexCredentialAdmin,
+            profile.clone(),
         )
         .with_oauth_client_id(config.oauth_client_id()),
     );

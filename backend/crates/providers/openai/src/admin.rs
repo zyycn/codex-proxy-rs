@@ -1011,6 +1011,7 @@ struct PendingDocument {
     state: String,
     nonce: String,
     code_verifier: String,
+    installation_id: String,
     reauthorization_account_id: Option<String>,
     mutation: PendingMutationDocument,
 }
@@ -1070,6 +1071,10 @@ fn encode_pending(pending: &CodexPendingAuthorization) -> Map<String, Value> {
     document.insert(
         "code_verifier".to_owned(),
         Value::String(pending.code_verifier().expose_secret().to_owned()),
+    );
+    document.insert(
+        "installation_id".to_owned(),
+        Value::String(pending.installation_id().to_owned()),
     );
     document.insert(
         "reauthorization_account_id".to_owned(),
@@ -1161,6 +1166,7 @@ fn decode_pending(
         state: SecretString::from(document.state),
         nonce: SecretString::from(document.nonce),
         code_verifier: SecretString::from(document.code_verifier),
+        installation_id: document.installation_id,
         reauthorization_account_id: document.reauthorization_account_id,
         mutation: decode_mutation(document.mutation)?,
     })

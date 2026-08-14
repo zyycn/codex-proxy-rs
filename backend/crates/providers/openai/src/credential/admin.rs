@@ -55,6 +55,7 @@ pub struct ImportCodexOAuthCredential {
 pub(crate) struct UnresolvedCodexOAuthCredential {
     pub(crate) account_id: String,
     pub(crate) name: String,
+    pub(crate) installation_id: String,
     pub(crate) secret: CodexOAuthSecret,
     pub(crate) metadata: CodexOAuthMetadata,
     pub(crate) access_token_expires_at: Option<DateTime<Utc>>,
@@ -68,6 +69,7 @@ impl fmt::Debug for UnresolvedCodexOAuthCredential {
             .debug_struct("UnresolvedCodexOAuthCredential")
             .field("account_id", &self.account_id)
             .field("name", &self.name)
+            .field("installation_id", &"<pseudonymous>")
             .field("secret", &"<redacted>")
             .field("metadata", &self.metadata)
             .field("access_token_expires_at", &self.access_token_expires_at)
@@ -473,8 +475,12 @@ impl CodexCredentialAdmin {
             chatgpt_account_id: upstream_account_id,
         } = input.metadata;
         let has_upstream_user_id = upstream_user_id.is_some();
-        let credential = CodexCredentialCodec::encode_unresolved(&input.secret, Vec::new())
-            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let credential = CodexCredentialCodec::encode_unresolved(
+            &input.secret,
+            input.installation_id,
+            Vec::new(),
+        )
+        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let account = ProviderAccount::new(
             account_id,
             provider,
@@ -917,6 +923,7 @@ impl CodexCredentialAdminService {
                                 .or_else(|| metadata.email.clone())
                                 .filter(|name| !name.trim().is_empty())
                                 .unwrap_or_else(|| "Codex OAuth".to_owned()),
+                            installation_id: uuid::Uuid::new_v4().to_string(),
                             secret,
                             metadata,
                             access_token_expires_at,
