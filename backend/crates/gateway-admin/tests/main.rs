@@ -6,6 +6,7 @@ use gateway_core::engine::credential::OpaqueProviderData;
 use gateway_admin::{
     model::{
         PageSize, Revision,
+        accounts::AccountUsage,
         auth::LoginCommand,
         client_keys::ClientKeyPageSize,
         observability::{DecimalAmount, RequestOutcome, TimeRange},
@@ -133,6 +134,51 @@ fn representative_quota_should_prefer_short_window_and_highest_usage() {
     };
 
     assert_eq!(quota.representative_used_percent(), Some(45.0));
+}
+
+#[test]
+fn representative_window_usage_should_accept_account_wide_rolling_window_without_reset() {
+    let usage = AccountUsage {
+        account_id: "acct_xai".to_owned(),
+        request_count: 5,
+        success_count: 5,
+        input_tokens: Some(100),
+        output_tokens: Some(20),
+        cached_tokens: Some(80),
+        cache_write_tokens: Some(0),
+        reasoning_tokens: Some(0),
+        image_input_tokens: Some(0),
+        image_output_tokens: Some(0),
+        image_request_count: 0,
+        image_request_failed_count: 0,
+        total_tokens: Some(120),
+        cost_coverage: Default::default(),
+        costs: Vec::new(),
+        last_used_at: Some(Utc::now()),
+        request_buckets: Vec::new(),
+        models: Vec::new(),
+    };
+    let quota = ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![ProviderQuotaWindow {
+            key: "free-rolling-24h".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "日限额".to_owned(),
+            source: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+            window_seconds: Some(86_400),
+            used_percent: None,
+            reset_at: None,
+            limit_reached: false,
+            local_usage: Some(usage.clone()),
+            provider_data: None,
+        }],
+        limit_reached: false,
+        provider_data: None,
+    };
+
+    assert_eq!(quota.representative_window_usage(), Some(&usage));
 }
 
 #[test]

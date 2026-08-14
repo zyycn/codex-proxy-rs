@@ -608,8 +608,9 @@ pub struct ProviderQuota {
 impl ProviderQuota {
     /// 返回账号展开面板使用的当前额度窗口用量。
     ///
-    /// 只选择具备完整时间边界且可按账号归属的窗口；优先级与 Dashboard
-    /// 代表性额度窗口一致，同一优先级保持 Provider 投影顺序。
+    /// Provider 已提供账号级本地用量时，固定窗口和无固定重置点的滚动窗口
+    /// 都可作为代表用量；优先级与 Dashboard 代表性额度窗口一致，
+    /// 同一优先级保持 Provider 投影顺序。
     #[must_use]
     pub fn representative_window_usage(&self) -> Option<&AccountUsage> {
         self.windows
@@ -618,7 +619,6 @@ impl ProviderQuota {
             .filter(|(_, window)| {
                 window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
                     && window.window_seconds.is_some()
-                    && window.reset_at.is_some()
                     && window.local_usage.is_some()
             })
             .min_by_key(|(index, window)| (quota_usage_priority(window), *index))
