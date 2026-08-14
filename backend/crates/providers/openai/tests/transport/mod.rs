@@ -10,7 +10,9 @@ use std::{
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use gateway_protocol::openai::events::{TokenUsage, extract_sse_usage};
-use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
+use provider_openai::transport::profile::{
+    CodexBundledReleaseProfile, CodexWireProfile, CodexWireProfileState,
+};
 use provider_openai::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope,
 };

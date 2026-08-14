@@ -112,6 +112,7 @@ fn is_sensitive_opening_header(name: &str) -> bool {
             | "x-codex-turn-metadata"
             | "x-codex-turn-state"
             | "x-codex-parent-thread-id"
+            | "x-oai-attestation"
     )
 }
 

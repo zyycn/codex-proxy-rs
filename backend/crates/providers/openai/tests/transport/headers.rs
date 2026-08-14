@@ -178,6 +178,7 @@ fn websocket_opening_audit_should_redact_sensitive_headers() {
                 "x-codex-turn-metadata".to_owned(),
                 "{\"secret\":true}".to_owned(),
             ),
+            ("x-oai-attestation".to_owned(), "device-token".to_owned()),
         ],
     );
     let audit = connection.opening_audit_snapshot();
@@ -190,6 +191,7 @@ fn websocket_opening_audit_should_redact_sensitive_headers() {
             "user-agent",
             "x-client-request-id",
             "x-codex-turn-metadata",
+            "x-oai-attestation",
         ]
     );
     assert!(
@@ -313,6 +315,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("content-type", "application/json"),
         ("accept", "text/event-stream"),
         ("x-codex-installation-id", "install-123"),
+        ("openai-beta", "responses_websockets=2026-02-06"),
         ("x-openai-internal-codex-residency", "us"),
         ("x-codex-turn-state", "turn-state"),
         ("x-codex-turn-metadata", "{\"thread_source\":\"subagent\"}"),
@@ -382,10 +385,7 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
         raw_header_values(&raw, "x-openai-future-mode"),
         vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
     );
-    assert_eq!(
-        raw_header_values(&raw, "openai-beta"),
-        vec![b"future_responses=v2".to_vec(), b"future_tools=v3".to_vec()]
-    );
+    assert!(raw_header_values(&raw, "openai-beta").is_empty());
     assert_eq!(
         raw_header_values(&raw, "x-codex-turn-state"),
         vec![b"turn-ascii".to_vec(), b"turn-\x80".to_vec()]
@@ -396,10 +396,7 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
             "content-type",
             b"application/vnd.openai.request+json".as_slice(),
         ),
-        (
-            "x-openai-internal-codex-residency",
-            b"future-region".as_slice(),
-        ),
+        ("x-openai-internal-codex-residency", b"us".as_slice()),
         ("x-still-valid", b"after-invalid".as_slice()),
         ("authorization", b"Bearer lease-token".as_slice()),
         ("chatgpt-account-id", b"lease-account".as_slice()),
@@ -416,7 +413,12 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
         raw_header_values(&raw, "originator"),
         vec![b"codex_cli_rs".to_vec()]
     );
-    for dropped in ["x-oai-attestation", "x-oai-is", "x-oai-is-update"] {
+    for dropped in [
+        "openai-beta",
+        "x-oai-attestation",
+        "x-oai-is",
+        "x-oai-is-update",
+    ] {
         assert!(
             raw_header_values(&raw, dropped).is_empty(),
             "unexpected {dropped}"
@@ -509,7 +511,7 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
     );
     assert_eq!(
         values("openai-beta"),
-        vec![b"future_responses=v2".to_vec(), b"future_tools=v3".to_vec()]
+        vec![b"responses_websockets=2026-02-06".to_vec()]
     );
     assert_eq!(
         values("accept"),
@@ -524,6 +526,10 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
         vec![test_wire_profile().snapshot().user_agent().into_bytes()]
     );
     assert_eq!(values("originator"), vec![b"codex_cli_rs".to_vec()]);
+    assert_eq!(
+        values("x-openai-internal-codex-residency"),
+        vec![b"us".to_vec()]
+    );
     for dropped in ["x-oai-attestation", "x-oai-is", "x-oai-is-update"] {
         assert!(values(dropped).is_empty(), "unexpected {dropped}");
     }
@@ -631,7 +637,6 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         "content-type",
         "cookie",
         "accept",
-        "openai-beta",
         "x-openai-internal-codex-residency",
         "x-client-request-id",
         "x-codex-installation-id",
@@ -654,6 +659,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         "sec-fetch-site",
         "sec-fetch-mode",
         "sec-fetch-dest",
+        "openai-beta",
     ] {
         assert!(header_names.iter().all(|name| name != forbidden));
     }
@@ -947,7 +953,12 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
         )
         .await
         .expect("first response");
-    profile.update_cli_release("1.2.4");
+    profile.update_bundled_release(&CodexBundledReleaseProfile {
+        codex_version: "1.2.4".to_owned(),
+        desktop_version: "1.2.4".to_owned(),
+        desktop_build: "124".to_owned(),
+        verified_at: Utc::now(),
+    });
 
     let mut continuation = request.clone();
     continuation.set_previous_response_id(Some("resp_profile_first".to_owned()));

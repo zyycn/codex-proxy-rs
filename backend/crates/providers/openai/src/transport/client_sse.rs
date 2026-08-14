@@ -677,7 +677,13 @@ impl CodexBackendClient {
             // API 透传黑名单也不能覆盖画像，避免下游客户端暴露不一致指纹。
             if matches!(
                 name.as_str(),
-                "originator" | "user-agent" | "x-oai-attestation" | "x-oai-is" | "x-oai-is-update"
+                "openai-beta"
+                    | "originator"
+                    | "user-agent"
+                    | "x-oai-attestation"
+                    | "x-oai-is"
+                    | "x-oai-is-update"
+                    | "x-openai-internal-codex-residency"
             ) {
                 continue;
             }
@@ -696,6 +702,10 @@ impl CodexBackendClient {
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.request_headers_for_http_response(request, context)?;
         headers.remove(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER);
+        headers.insert(
+            HeaderName::from_static("openai-beta"),
+            HeaderValue::from_static("responses_websockets=2026-02-06"),
+        );
         Ok(headers)
     }
 
@@ -709,14 +719,6 @@ impl CodexBackendClient {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
-        headers.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static("responses_websockets=2026-02-06"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-openai-internal-codex-residency"),
-            HeaderValue::from_static("us"),
-        );
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
             HeaderValue::from_str(context.request_id)?,
@@ -788,10 +790,6 @@ impl CodexBackendClient {
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_str(&profile.user_agent())?);
         headers.insert(AUTHORIZATION, HeaderValue::from_str(context.authorization)?);
-        headers.insert(
-            HeaderName::from_static("originator"),
-            HeaderValue::from_str(&profile.originator)?,
-        );
         insert_optional_header(&mut headers, "chatgpt-account-id", context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));

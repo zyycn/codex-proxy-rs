@@ -116,7 +116,7 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
     );
     assert_eq!(
         config.wire_profile_state().snapshot().user_agent(),
-        "Codex Desktop/0.146.0 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.727.51351)"
+        "Codex Desktop/0.147.0-alpha.6.6 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.803.81509)"
     );
 }
 

@@ -13,6 +13,7 @@ use gateway_core::engine::credential::{
     ProviderAccountStore, QuotaState,
 };
 use gateway_core::routing::ProviderKind;
+use provider_openai::OpenAiConfig;
 use provider_openai::credential::{
     CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CodexAgentIdentityAuthMode,
     CodexAgentIdentityCredentialData, CodexAgentIdentityError, CodexAgentIdentitySecret,
@@ -20,7 +21,9 @@ use provider_openai::credential::{
     CodexRuntimeAuthentication, is_agent_identity_task_invalid_response,
 };
 use provider_openai::transport::CodexWebSocketPool;
+use provider_openai::transport::headers::build_codex_profile_headers;
 use reqwest::StatusCode;
+use reqwest::header::USER_AGENT;
 use secrecy::ExposeSecret as _;
 use serde_json::Value;
 
@@ -142,6 +145,20 @@ fn agent_identity_task_error_classifier_requires_unauthorized_task_error() {
         StatusCode::UNAUTHORIZED,
         "invalid access token",
     ));
+}
+
+#[test]
+fn agent_identity_task_registration_should_use_the_shared_desktop_profile_headers() {
+    let profile = OpenAiConfig::default().wire_profile_state().snapshot();
+    let headers = build_codex_profile_headers(&profile).expect("Desktop profile headers");
+
+    assert_eq!(headers.len(), 3);
+    assert_eq!(headers["originator"], "Codex Desktop");
+    assert_eq!(headers["x-openai-internal-codex-residency"], "us");
+    assert_eq!(
+        headers[USER_AGENT],
+        "Codex Desktop/0.147.0-alpha.6.6 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.803.81509)"
+    );
 }
 
 struct SequenceTaskRegistrar {

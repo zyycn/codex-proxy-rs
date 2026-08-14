@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -159,6 +160,103 @@ async fn complete(id_token: String) -> Result<CompletedCodexOAuthCredential, Cod
         })
         .await?;
     Ok(completed.credential)
+}
+
+#[tokio::test]
+async fn authorize_url_matches_the_official_desktop_parameter_contract() {
+    let service = CodexOAuthAdminService::new(
+        Arc::new(PendingStore::default()),
+        Arc::new(Exchanger {
+            id_token: "unused".to_owned(),
+        }),
+        Arc::new(MemoryAccountStore::default()),
+        CodexCredentialAdmin,
+    );
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: mutation(),
+        })
+        .await
+        .expect("start OAuth authorization");
+    let url = Url::parse(&started.authorization_url).expect("authorization URL");
+    let ordered_parameters = url.query_pairs().into_owned().collect::<Vec<_>>();
+    assert_eq!(
+        ordered_parameters
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "response_type",
+            "client_id",
+            "redirect_uri",
+            "scope",
+            "code_challenge",
+            "code_challenge_method",
+            "id_token_add_organizations",
+            "codex_cli_simplified_flow",
+            "state",
+            "originator",
+        ]
+    );
+    let parameters = ordered_parameters.into_iter().collect::<BTreeMap<_, _>>();
+
+    assert_eq!(url.scheme(), "https");
+    assert_eq!(url.host_str(), Some("auth.openai.com"));
+    assert_eq!(url.path(), "/oauth/authorize");
+    assert_eq!(parameters.len(), 10);
+    assert!(
+        url.query()
+            .is_some_and(|query| query.contains("scope=openid%20profile%20email%20offline_access"))
+    );
+    assert!(!url.query().is_some_and(|query| query.contains('+')));
+    assert_eq!(
+        parameters.get("response_type").map(String::as_str),
+        Some("code")
+    );
+    assert_eq!(
+        parameters.get("redirect_uri").map(String::as_str),
+        Some("http://localhost:1455/auth/callback")
+    );
+    assert_eq!(
+        parameters.get("scope").map(String::as_str),
+        Some("openid profile email offline_access api.connectors.read api.connectors.invoke")
+    );
+    assert_eq!(
+        parameters.get("originator").map(String::as_str),
+        Some("Codex Desktop")
+    );
+    assert_eq!(
+        parameters.get("code_challenge_method").map(String::as_str),
+        Some("S256")
+    );
+    assert_eq!(
+        parameters
+            .get("id_token_add_organizations")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        parameters
+            .get("codex_cli_simplified_flow")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert!(
+        parameters
+            .get("client_id")
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        parameters
+            .get("state")
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        parameters
+            .get("code_challenge")
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(!parameters.contains_key("nonce"));
 }
 
 #[tokio::test]

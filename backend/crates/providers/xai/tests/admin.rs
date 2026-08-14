@@ -27,10 +27,11 @@ use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
-    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
-    ProviderCooldownScope, ProviderCredentialState, ProviderCredentialStatePort,
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy,
-    ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError, ProviderStorePorts,
+    ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderCatalogCacheKey,
+    ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderRefreshPolicy, ProviderRuntimePolicyPort,
+    ProviderScopedCooldown, ProviderStoreError, ProviderStorePorts,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::task::{
@@ -448,6 +449,7 @@ fn provider_ports_with_catalog(
         Arc::new(TestSessionAffinity),
         Arc::new(TestSessionExclusions),
         catalog_cache,
+        Arc::new(TestArtifactProfiles),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
         Arc::new(TestRuntimePolicy),
@@ -526,6 +528,25 @@ impl ProviderLeasePort for TestLeases {
         _request: ProviderLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async { Ok(ProviderLeaseAcquisition::Acquired(Box::new(()))) })
+    }
+}
+
+struct TestArtifactProfiles;
+
+impl ProviderArtifactProfileCachePort for TestArtifactProfiles {
+    fn replace_if_newer(
+        &self,
+        _profile: ProviderArtifactProfile,
+        _ttl: Duration,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
     }
 }
 

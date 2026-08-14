@@ -22,8 +22,7 @@ use crate::credential::{
     CodexOAuthAdmin, CodexOAuthAdminService, OfficialCodexAgentIdentityTaskRegistrar,
 };
 use crate::transport::profile::{
-    CodexCliReleaseService, CodexDesktopReleaseService, OfficialCodexCliReleaseTransport,
-    OfficialCodexDesktopReleaseTransport,
+    CodexArtifactProfileCache, CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport,
 };
 use crate::transport::{CodexWebSocketPool, build_reqwest_client};
 
@@ -63,6 +62,23 @@ pub async fn initialize(
     let runtime_policy = ports.runtime_policy();
     let credential_state = ports.credential_state();
     let profile = config.wire_profile_state();
+    let artifact_cache =
+        CodexArtifactProfileCache::new(provider_kind.clone(), ports.artifact_profiles());
+    let configured_build = profile.snapshot().desktop_build.parse::<u64>().ok();
+    let verified_profile = match artifact_cache.load().await {
+        Ok(cached) => cached.filter(|cached| {
+            cached
+                .desktop_build
+                .parse::<u64>()
+                .ok()
+                .zip(configured_build)
+                .is_some_and(|(cached, configured)| cached >= configured)
+        }),
+        Err(error) => {
+            tracing::warn!(error = %error, "OpenAI artifact profile cache could not be loaded");
+            None
+        }
+    };
     let session_identity = config
         .session_identity()
         .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
@@ -73,15 +89,10 @@ pub async fn initialize(
             OfficialCodexDesktopReleaseTransport::new()
                 .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
         ),
+        artifact_cache,
+        verified_profile,
     ));
     let desktop_release_status = desktop_release.status();
-    let cli_release = Arc::new(CodexCliReleaseService::new(
-        profile.clone(),
-        Arc::new(
-            OfficialCodexCliReleaseTransport::new()
-                .map_err(|_| OpenAiInitializeError::CliRelease)?,
-        ),
-    ));
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
     let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
         config.websocket_pool_config(),
@@ -89,7 +100,7 @@ pub async fn initialize(
     let agent_identity = Arc::new(CodexAgentIdentityTaskService::new(
         repository.clone(),
         Arc::new(
-            OfficialCodexAgentIdentityTaskRegistrar::new(http.clone())
+            OfficialCodexAgentIdentityTaskRegistrar::new(http.clone(), profile.clone())
                 .map_err(|_| OpenAiInitializeError::AgentIdentity)?,
         ),
         Arc::clone(&websocket_pool),
@@ -187,7 +198,6 @@ pub async fn initialize(
         catalog,
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
-        cli_release,
         desktop_release,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
@@ -243,8 +253,6 @@ pub enum OpenAiInitializeError {
     Refresh,
     #[error("OpenAI Desktop release service could not initialize")]
     DesktopRelease,
-    #[error("OpenAI CLI release service could not initialize")]
-    CliRelease,
     #[error("OpenAI worker plan is invalid")]
     Worker,
 }

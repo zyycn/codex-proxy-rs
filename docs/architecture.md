@@ -10,8 +10,8 @@ Codex Proxy RS 是单进程、单副本部署的多 Provider AI 网关：
 - 管理面提供 `/api/admin/*` 和 Vue 静态管理端。
 - 当前 Provider 为 OpenAI 与 xAI；账号 credential 均由所属 Provider 独占解释。
 - OpenAI 行为以重构前正式实现为语义基准；xAI/Grok 行为以 `grok2api` 验证结果为基准。
-- 两个 Provider 的请求画像都由启动配置提供基线，并通过进程级共享状态向每次新请求发布一致快照。OpenAI CLI、OpenAI Desktop 与 xAI CLI 的官方版本检查会分别原子更新自己负责的版本字段。
-- OpenAI CLI 使用官方 npm 包 `@openai/codex`，OpenAI Desktop 使用官方 appcast，xAI CLI 使用官方 npm 包 `@xai-official/grok`。检查失败保留上一份成功画像；检查成功后 OAuth、catalog、quota/billing、inference 与 Dashboard 自动采用最新版本。
+- 两个 Provider 的请求画像都由启动配置提供基线，并通过进程级共享状态向每次新请求发布一致快照。OpenAI Desktop 与 xAI CLI 的官方版本检查会分别原子更新自己负责的版本字段。
+- OpenAI Desktop 使用官方 appcast，并从同一 ZIP 的内嵌 Core 做有界 Range 探测；xAI CLI 使用官方 npm 包 `@xai-official/grok`。检查失败保留上一份成功画像；检查成功后 OAuth、catalog、quota/billing、inference 与 Dashboard 自动采用最新版本。OpenAI 制品画像写入 Redis 单键并使用 TTL，避免按发布次数堆积。
 - PostgreSQL 是业务与配置事实的唯一权威存储。
 - Redis 只保存可丢失、可重建或有自然过期时间的协调状态。
 
@@ -262,7 +262,7 @@ HTTP serve/drain 与 worker 运行时都在 `gateway-host`：Host 负责注册�
   Cron 游标、恢复中间状态、完成删除收敛、领取并执行一个 queued 任务、执行一小批保留清理；长时间
   `pg_dump` 与 multipart 上传由 daemon 自身持有，Host 只负责 panic 后重启、健康与关闭。它不使用
   Redis leader lease（单副本无竞争），只依赖 PostgreSQL 部分唯一约束防御并发 API/调度创建。
-- Provider：credential refresh、quota/catalog 健康，以及模型 etag 与官方版本 release 检查（OpenAI CLI、OpenAI Desktop、xAI CLI）。
+- Provider：credential refresh、quota/catalog 健康，以及模型 etag 与官方版本 release 检查（OpenAI Desktop、xAI CLI）。
 
 带 lease 的周期任务在每个周期开始向 Redis 申请一次 leader lease，周期内续租，周期结束即释放。这只是单周期互斥，不是跨周期 leader 选举：各副本独立计时，N 副本部署下同一任务的实际执行频率最坏可达单副本的 N 倍。
 

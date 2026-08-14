@@ -35,7 +35,7 @@
 - 换号只由 Core 在下游 commit 前按重放安全性决定。
 - fallback 只允许同一 Provider kind 内的账号；不跨 Provider，也不存在 Provider Instance 层。
 - continuation 升级链由 Core 冻结：native（原生 handle 绑定原账号）→ replay owner（原账号完整 transcript 重放）→ replay any（transcript 已可携带，允许换账号）；两个 Provider 都实现全链，xAI 的 transcript 由不透明 session state 承载，跨账号重放前做脱敏投影。
-- Provider wire profile 以配置为启动基线，并由共享运行时状态统一发布。OpenAI CLI 读取 `@openai/codex`、Desktop 读取官方 appcast、xAI CLI 读取 `@xai-official/grok`；发现新版本后自动更新对应版本字段，所有消费边界不得维护独立常量。
+- Provider wire profile 以配置为启动基线，并由共享运行时状态统一发布。OpenAI Desktop 读取官方 appcast，并从同一 ZIP 的内嵌 Core 做有界 Range 探测；xAI CLI 读取 `@xai-official/grok`。发现新版本后自动更新对应版本字段，所有消费边界不得维护独立常量。
 - `downstream_committed_at` 是不可撤回交付承诺，不是首字节已经写达的证明。
 
 ## 存储

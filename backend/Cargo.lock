@@ -2581,6 +2581,7 @@ dependencies = [
  "cookie",
  "crypto_box",
  "ed25519-dalek",
+ "flate2",
  "futures",
  "gateway-admin",
  "gateway-core",
@@ -2608,6 +2609,7 @@ dependencies = [
  "tracing-subscriber",
  "tungstenite 0.27.0",
  "url",
+ "urlencoding",
  "uuid",
  "wiremock",
  "zstd",
@@ -3623,7 +3625,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -4077,6 +4079,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf-8"

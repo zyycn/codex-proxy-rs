@@ -485,8 +485,11 @@ pub(crate) fn agent_identity_service_with_pool(
         .no_proxy()
         .build()
         .expect("agent task client");
-    let registrar =
-        OfficialCodexAgentIdentityTaskRegistrar::new(client).expect("agent task registrar");
+    let registrar = OfficialCodexAgentIdentityTaskRegistrar::new(
+        client,
+        provider_openai::OpenAiConfig::default().wire_profile_state(),
+    )
+    .expect("agent task registrar");
     Arc::new(CodexAgentIdentityTaskService::new(
         store.repository(),
         Arc::new(registrar),

@@ -22,6 +22,8 @@ use url::Url;
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::security::{CodexRuntimeAuthentication, CodexRuntimeCredential};
+use crate::transport::headers::build_codex_profile_headers;
+use crate::transport::profile::CodexWireProfileState;
 use crate::transport::websocket::CodexWebSocketExchangeError;
 use crate::transport::{CodexClientError, CodexWebSocketPool};
 
@@ -167,13 +169,21 @@ pub trait CodexAgentIdentityTaskRegistrar: Send + Sync + 'static {
 pub struct OfficialCodexAgentIdentityTaskRegistrar {
     client: reqwest::Client,
     base_url: Url,
+    profile: CodexWireProfileState,
 }
 
 impl OfficialCodexAgentIdentityTaskRegistrar {
-    pub fn new(client: reqwest::Client) -> Result<Self, CodexAgentIdentityError> {
+    pub fn new(
+        client: reqwest::Client,
+        profile: CodexWireProfileState,
+    ) -> Result<Self, CodexAgentIdentityError> {
         let base_url = Url::parse(OFFICIAL_AGENT_IDENTITY_AUTH_BASE_URL)
             .map_err(|_| CodexAgentIdentityError::InvalidConfiguration)?;
-        Ok(Self { client, base_url })
+        Ok(Self {
+            client,
+            base_url,
+            profile,
+        })
     }
 }
 
@@ -197,9 +207,13 @@ impl CodexAgentIdentityTaskRegistrar for OfficialCodexAgentIdentityTaskRegistrar
             .path_segments_mut()
             .map_err(|_| CodexAgentIdentityError::InvalidConfiguration)?
             .extend(["v1", "agent", credential.runtime_id(), "task", "register"]);
+        let profile = self.profile.snapshot();
+        let headers = build_codex_profile_headers(&profile)
+            .map_err(|_| CodexAgentIdentityError::InvalidConfiguration)?;
         let response = self
             .client
             .post(endpoint)
+            .headers(headers)
             .header(reqwest::header::ACCEPT, "application/json")
             .json(&credential.registration(Utc::now()))
             .send()

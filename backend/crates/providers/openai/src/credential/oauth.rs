@@ -38,7 +38,9 @@ use super::token_client::{
 use super::types::parse_chatgpt_jwt_claims;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
-const AUTHORIZATION_SCOPE: &str = "openid profile email offline_access";
+const AUTHORIZATION_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const AUTHORIZATION_ORIGINATOR: &str = "Codex Desktop";
 const AUTHORIZATION_TTL: TimeDelta = TimeDelta::minutes(10);
 const AUTHORIZATION_CLAIM_TTL: Duration = Duration::from_secs(90);
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
@@ -697,17 +699,21 @@ fn authorization_url(
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(
         pending.code_verifier.expose_secret().as_bytes(),
     ));
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", oauth_client_id)
-        .append_pair("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI)
-        .append_pair("scope", AUTHORIZATION_SCOPE)
-        .append_pair("state", pending.state.expose_secret())
-        .append_pair("nonce", pending.nonce.expose_secret())
-        .append_pair("code_challenge", &challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("id_token_add_organizations", "true")
-        .append_pair("codex_cli_simplified_flow", "true");
+    let query = [
+        ("response_type", "code"),
+        ("client_id", oauth_client_id),
+        ("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI),
+        ("scope", AUTHORIZATION_SCOPE),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("state", pending.state.expose_secret()),
+        ("originator", AUTHORIZATION_ORIGINATOR),
+    ]
+    .map(|(name, value)| format!("{name}={}", urlencoding::encode(value)))
+    .join("&");
+    url.set_query(Some(&query));
     Ok(url.into())
 }
 

@@ -47,7 +47,7 @@ UID/GID 和 mode，因此配置由当前用户持有，并只向容器组 `10001
 
 模板中的 `openai` / `xai` 只保留请求画像启动基线。OpenAI 的上游地址、WebSocket 池、额度刷新
 与 OAuth 设置，以及 xAI 的 OAuth、额度和模型目录策略，均由各自 Provider 使用代码内默认值管理；
-模板不重复列出这些默认项。运行后，OpenAI CLI/Desktop 与 xAI CLI 的官方发布检查只更新进程内
+模板不重复列出这些默认项。运行后，OpenAI Desktop 与 xAI CLI 的官方发布检查只更新进程内
 版本字段，不回写 `config.yaml`；检查失败时继续使用上一份有效画像。
 
 ## 启动

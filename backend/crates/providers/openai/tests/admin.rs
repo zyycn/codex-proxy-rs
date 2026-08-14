@@ -25,10 +25,10 @@ use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
-    ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort,
-    ProviderCooldownScope, ProviderCredentialState, ProviderCredentialStatePort,
-    ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError,
-    ProviderStorePorts,
+    ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderCatalogCacheKey,
+    ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError, ProviderStorePorts,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
@@ -54,7 +54,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 5);
+    assert_eq!(contributions.len(), 4);
     assert!(
         contributions
             .iter()
@@ -79,22 +79,6 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(release_worker.id.kind(), WorkerKind::QuotaCatalogHealth);
     let WorkerRunnable::Scheduled { schedule, .. } = &release_worker.runnable else {
         panic!("Desktop release worker must be scheduled");
-    };
-    assert_eq!(schedule.interval(), APPCAST_POLL_INTERVAL);
-    let cli_release_worker = contributions
-        .iter()
-        .find_map(|contribution| match contribution {
-            WorkerContribution::Registration(registration)
-                if registration.id.owner() == "openai-cli-release" =>
-            {
-                Some(registration)
-            }
-            WorkerContribution::Registration(_) | WorkerContribution::Disabled { .. } => None,
-        })
-        .expect("CLI release worker");
-    assert_eq!(cli_release_worker.id.kind(), WorkerKind::QuotaCatalogHealth);
-    let WorkerRunnable::Scheduled { schedule, .. } = &cli_release_worker.runnable else {
-        panic!("CLI release worker must be scheduled");
     };
     assert_eq!(schedule.interval(), APPCAST_POLL_INTERVAL);
     assert!(contributions.iter().any(|contribution| {
@@ -785,6 +769,7 @@ fn provider_ports_with_catalog(
         Arc::new(MemorySessionAffinity::default()),
         Arc::new(MemorySessionExclusions::default()),
         catalog_cache,
+        Arc::new(TestArtifactProfiles),
         Arc::new(TestCredentialState),
         Arc::new(TestCooldown),
         Arc::new(TestRuntimePolicy),
@@ -849,6 +834,25 @@ fn valid_config() -> TestOpenAiConfig {
     TestOpenAiConfig {
         config,
         _runtime: runtime,
+    }
+}
+
+struct TestArtifactProfiles;
+
+impl ProviderArtifactProfileCachePort for TestArtifactProfiles {
+    fn replace_if_newer(
+        &self,
+        _profile: ProviderArtifactProfile,
+        _ttl: Duration,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
     }
 }
 

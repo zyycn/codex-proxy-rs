@@ -1,3 +1,4 @@
+mod artifact_profile;
 mod client_admission;
 mod coordination_buffer;
 mod credential_cooldown;

@@ -153,7 +153,6 @@ async fn fetch_should_use_wham_usage_headers_only() {
     for (name, expected) in [
         ("authorization", "Bearer oauth-access"),
         ("chatgpt-account-id", "acct_123"),
-        ("originator", "codex_cli_rs"),
         ("accept", "application/json"),
         ("cookie", "session=old"),
     ] {
@@ -181,12 +180,12 @@ async fn fetch_should_use_wham_usage_headers_only() {
             "authorization",
             "chatgpt-account-id",
             "cookie",
-            "originator",
             "user-agent",
         ])
     );
     for forbidden in [
         "content-type",
+        "originator",
         "sec-ch-ua",
         "x-openai-internal-codex-residency",
         "x-client-request-id",
@@ -208,6 +207,30 @@ async fn fetch_should_use_wham_usage_headers_only() {
             "unexpected {forbidden} header"
         );
     }
+}
+
+#[tokio::test]
+async fn usage_not_found_should_preserve_status_without_a_nonofficial_fallback() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("missing"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client(&server.uri())
+        .fetch_usage(context())
+        .await
+        .expect_err("usage 404");
+    let CodexClientError::Upstream { status, .. } = error else {
+        panic!("expected upstream status");
+    };
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let requests = server.received_requests().await.expect("usage requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/api/codex/usage");
 }
 
 #[tokio::test]

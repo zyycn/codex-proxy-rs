@@ -32,8 +32,8 @@ pub use self::{
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
-        CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, CODEX_USAGE_PATH, WHAM_USAGE_PATH,
-        endpoint_url, usage_endpoint_urls,
+        CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, WHAM_USAGE_PATH, endpoint_url,
+        usage_endpoint_url,
     },
     headers::build_codex_base_headers,
     request::{CodexRequestEncodeError, encode_generate_request},

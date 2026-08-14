@@ -50,6 +50,18 @@ const profile = computed(() =>
   props.profiles.find(item => item.provider === activeProvider.value) ?? props.profiles[0] ?? null,
 )
 
+const versionParts = computed(() => {
+  const version = profile.value?.version ?? ''
+  const separator = version.indexOf('-')
+  if (separator <= 0 || separator === version.length - 1)
+    return { release: version, prerelease: '' }
+
+  return {
+    release: version.slice(0, separator),
+    prerelease: version.slice(separator + 1),
+  }
+})
+
 const releaseLabel = computed(() => {
   const release = profile.value?.release
   if (!release?.latestVersion)
@@ -221,10 +233,20 @@ function providerLabel(provider: string) {
           <div class="grid min-h-0 content-center">
             <div class="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1.5">
               <strong
-                class="block max-w-full wrap-break-word font-mono text-[27px] leading-[1.05] font-heavy tabular-nums text-(--cp-text-primary)"
+                :aria-label="profile.version"
+                class="inline-flex max-w-full min-w-0 items-baseline gap-2 font-mono leading-none tabular-nums"
                 :title="profile.version"
               >
-                {{ profile.version }}
+                <span class="wrap-break-word text-[27px] leading-[1.05] font-heavy text-(--cp-text-primary)">
+                  {{ versionParts.release }}
+                </span>
+                <span
+                  v-if="versionParts.prerelease"
+                  aria-hidden="true"
+                  class="truncate text-[12px] font-bold text-(--cp-text-secondary)"
+                >
+                  {{ versionParts.prerelease }}
+                </span>
               </strong>
               <span
                 v-if="profile.build"

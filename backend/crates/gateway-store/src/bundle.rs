@@ -79,6 +79,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         redis_connection.clone(),
         REDIS_NAMESPACE,
     )?);
+    let artifact_profiles = Arc::new(redis::RedisProviderArtifactProfileRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
     let runtime_policy = Arc::new(postgres::PgRuntimeSettingsRepository::new(pool.clone()));
     let oauth_pending = Arc::new(redis::RedisOAuthPendingFlowRepository::new(
         redis_connection.clone(),
@@ -167,6 +171,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             REDIS_NAMESPACE,
         )?),
         credential_state.clone(),
+        artifact_profiles,
         credential_state,
         cooldowns,
         runtime_policy,

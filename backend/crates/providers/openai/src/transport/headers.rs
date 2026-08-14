@@ -3,20 +3,33 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AG
 
 use super::client::CodexClientResult;
 
+const CODEX_RESIDENCY_HEADER: &str = "x-openai-internal-codex-residency";
+
 /// 构造 Codex Core 为模型请求设置的稳定身份请求头。
 pub fn build_codex_base_headers(
     profile: &CodexWireProfile,
     authorization: &str,
     account_id: Option<&str>,
 ) -> CodexClientResult<HeaderMap> {
-    let mut headers = HeaderMap::new();
+    let mut headers = build_codex_profile_headers(profile)?;
     headers.insert(AUTHORIZATION, HeaderValue::from_str(authorization)?);
     insert_optional_header(&mut headers, "chatgpt-account-id", account_id)?;
+    Ok(headers)
+}
+
+/// 构造不依赖访问凭据的 Codex Desktop 身份请求头。
+pub fn build_codex_profile_headers(profile: &CodexWireProfile) -> CodexClientResult<HeaderMap> {
+    let mut headers = HeaderMap::new();
     headers.insert(
         HeaderName::from_static("originator"),
         HeaderValue::from_str(&profile.originator)?,
     );
     headers.insert(USER_AGENT, HeaderValue::from_str(&profile.user_agent())?);
+    // 此部署固定采用官方支持的 US residency requirement。
+    headers.insert(
+        HeaderName::from_static(CODEX_RESIDENCY_HEADER),
+        HeaderValue::from_static("us"),
+    );
     Ok(headers)
 }
 

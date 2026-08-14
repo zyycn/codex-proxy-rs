@@ -269,7 +269,7 @@ impl CodexAuthSettings {
 #[serde(deny_unknown_fields)]
 pub struct CodexWireProfileConfig {
     pub originator: String,
-    /// npm `@openai/codex` 启动版本；运行时发布任务会更新此画像字段。
+    /// 官方 Desktop ZIP 内嵌 Core 的启动基线；运行时按完整制品元组更新。
     pub codex_version: String,
     pub desktop_version: String,
     pub desktop_build: String,
@@ -284,9 +284,9 @@ impl Default for CodexWireProfileConfig {
     fn default() -> Self {
         Self {
             originator: "Codex Desktop".to_owned(),
-            codex_version: "0.146.0".to_owned(),
-            desktop_version: "26.727.51351".to_owned(),
-            desktop_build: "6119".to_owned(),
+            codex_version: "0.147.0-alpha.6.6".to_owned(),
+            desktop_version: "26.803.81509".to_owned(),
+            desktop_build: "6415".to_owned(),
             os_type: "Mac OS".to_owned(),
             os_version: "15.7.1".to_owned(),
             arch: "arm64".to_owned(),

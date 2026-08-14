@@ -223,6 +223,7 @@ async fn fetch_should_send_official_catalog_headers_and_query() {
             "user-agent",
             "codex_cli_rs/0.144.0 (linux 6.8; x86_64) xterm (codex_cli_rs; 1.0.0)",
         ))
+        .and(header("x-openai-internal-codex-residency", "us"))
         .and(header("accept", "application/json"))
         .and(header("x-codex-installation-id", "installation-123"))
         .respond_with(
@@ -254,7 +255,6 @@ async fn fetch_should_send_official_catalog_headers_and_query() {
     for forbidden in [
         "content-type",
         "openai-beta",
-        "x-openai-internal-codex-residency",
         "x-client-request-id",
         "session_id",
         "session-id",

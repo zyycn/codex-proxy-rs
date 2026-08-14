@@ -407,6 +407,84 @@ pub trait ProviderCatalogCachePort: Send + Sync {
     ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>;
 }
 
+/// Provider 从官方制品核验出的可重建请求画像。
+///
+/// Core 只用单调制品序号约束覆盖顺序；具体版本字段由对应 Provider 放在
+/// `profile` 中解释。每个 Provider 在 Store 中只保留一份最新画像。
+#[derive(Clone, PartialEq)]
+pub struct ProviderArtifactProfile {
+    provider_kind: ProviderKind,
+    artifact_sequence: u64,
+    verified_at: SystemTime,
+    profile: OpaqueProviderData,
+}
+
+impl ProviderArtifactProfile {
+    #[must_use]
+    pub const fn new(
+        provider_kind: ProviderKind,
+        artifact_sequence: u64,
+        verified_at: SystemTime,
+        profile: OpaqueProviderData,
+    ) -> Self {
+        Self {
+            provider_kind,
+            artifact_sequence,
+            verified_at,
+            profile,
+        }
+    }
+
+    #[must_use]
+    pub const fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
+    }
+
+    #[must_use]
+    pub const fn artifact_sequence(&self) -> u64 {
+        self.artifact_sequence
+    }
+
+    #[must_use]
+    pub const fn verified_at(&self) -> SystemTime {
+        self.verified_at
+    }
+
+    #[must_use]
+    pub const fn profile(&self) -> &OpaqueProviderData {
+        &self.profile
+    }
+}
+
+impl fmt::Debug for ProviderArtifactProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderArtifactProfile")
+            .field("provider_kind", &self.provider_kind)
+            .field("artifact_sequence", &self.artifact_sequence)
+            .field("verified_at", &self.verified_at)
+            .field("profile", &"[PROVIDER-OWNED]")
+            .finish()
+    }
+}
+
+pub trait ProviderArtifactProfileCachePort: Send + Sync {
+    /// 覆盖同一 Provider 的固定 cache key。
+    ///
+    /// 返回 `false` 表示 Store 已持有更高的制品序号；相同序号但内容不同必须返回
+    /// [`ProviderStoreErrorKind::Conflict`]，不能静默改写已核验画像。
+    fn replace_if_newer(
+        &self,
+        profile: ProviderArtifactProfile,
+        ttl: Duration,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>>;
+
+    fn read<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>>;
+}
+
 /// Redis 中可重建的账号状态投影。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCredentialState {
@@ -946,6 +1024,7 @@ pub struct ProviderStorePorts {
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
     account_feedback: Arc<AccountFeedbackStats>,
     catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+    artifact_profiles: Arc<dyn ProviderArtifactProfileCachePort>,
     credential_state: Arc<dyn ProviderCredentialStatePort>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -962,6 +1041,7 @@ impl ProviderStorePorts {
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
         catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+        artifact_profiles: Arc<dyn ProviderArtifactProfileCachePort>,
         credential_state: Arc<dyn ProviderCredentialStatePort>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
         runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
@@ -974,6 +1054,7 @@ impl ProviderStorePorts {
             session_exclusions,
             account_feedback: Arc::new(AccountFeedbackStats::default()),
             catalog_cache,
+            artifact_profiles,
             credential_state,
             cooldowns,
             runtime_policy,
@@ -1009,6 +1090,11 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn catalog_cache(&self) -> Arc<dyn ProviderCatalogCachePort> {
         Arc::clone(&self.catalog_cache)
+    }
+
+    #[must_use]
+    pub fn artifact_profiles(&self) -> Arc<dyn ProviderArtifactProfileCachePort> {
+        Arc::clone(&self.artifact_profiles)
     }
 
     #[must_use]

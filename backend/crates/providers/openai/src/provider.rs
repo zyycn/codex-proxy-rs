@@ -57,8 +57,7 @@ use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
 use crate::transport::profile::{
-    APPCAST_POLL_INTERVAL, CodexCliReleaseService, CodexDesktopReleaseService,
-    CodexWireProfileState,
+    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState,
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals,
@@ -2339,7 +2338,6 @@ const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
-const CLI_RELEASE_WORKER_OWNER: &str = "openai-cli-release";
 const MODEL_ETAG_WORKER_OWNER: &str = "openai-model-etag";
 
 pub(crate) fn worker_contributions(
@@ -2348,7 +2346,6 @@ pub(crate) fn worker_contributions(
     catalog: Arc<CodexCredentialCatalogService>,
     quota_refresh_policy: CodexQuotaRefreshPolicy,
     oauth_refresh_enabled: bool,
-    cli_release: Arc<CodexCliReleaseService>,
     desktop_release: Arc<CodexDesktopReleaseService>,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
     let refresh_id = WorkerId::try_new(WorkerKind::OAuthRefresh, PROVIDER_NAME)?;
@@ -2356,8 +2353,6 @@ pub(crate) fn worker_contributions(
     let etag_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, MODEL_ETAG_WORKER_OWNER)?;
     let desktop_release_id =
         WorkerId::try_new(WorkerKind::QuotaCatalogHealth, DESKTOP_RELEASE_WORKER_OWNER)?;
-    let cli_release_id =
-        WorkerId::try_new(WorkerKind::QuotaCatalogHealth, CLI_RELEASE_WORKER_OWNER)?;
     let mut contributions = Vec::new();
     if oauth_refresh_enabled {
         contributions.push(WorkerContribution::Registration(scheduled_registration(
@@ -2384,13 +2379,6 @@ pub(crate) fn worker_contributions(
                 )?,
                 task: Box::new(OpenAiCatalogEtagTask { catalog }),
             },
-        )?),
-        WorkerContribution::Registration(scheduled_registration(
-            cli_release_id,
-            APPCAST_POLL_INTERVAL,
-            Box::new(OpenAiCliReleaseTask {
-                service: cli_release,
-            }),
         )?),
         WorkerContribution::Registration(scheduled_registration(
             desktop_release_id,
@@ -2510,27 +2498,6 @@ struct OpenAiCatalogEtagTask {
 
 struct OpenAiDesktopReleaseTask {
     service: Arc<CodexDesktopReleaseService>,
-}
-
-struct OpenAiCliReleaseTask {
-    service: Arc<CodexCliReleaseService>,
-}
-
-impl ScheduledTask for OpenAiCliReleaseTask {
-    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async move {
-            let refresh = self.service.refresh();
-            tokio::pin!(refresh);
-            let result = tokio::select! {
-                () = context.cancellation().cancelled() => return Ok(()),
-                result = &mut refresh => result,
-            };
-            if let Err(error) = result {
-                tracing::warn!(error = %error, "OpenAI CLI release check failed");
-            }
-            Ok(())
-        })
-    }
 }
 
 impl ScheduledTask for OpenAiDesktopReleaseTask {

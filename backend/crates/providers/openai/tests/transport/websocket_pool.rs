@@ -109,7 +109,12 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
         )
         .await
         .expect("connection-local response");
-    profile.update_desktop_release("2.0.0", "200");
+    profile.update_bundled_release(&CodexBundledReleaseProfile {
+        codex_version: "2.0.0".to_owned(),
+        desktop_version: "2.0.0".to_owned(),
+        desktop_build: "200".to_owned(),
+        verified_at: Utc::now(),
+    });
     let mut continuation = first_request;
     continuation.set_previous_response_id(Some("resp_connection_local".to_owned()));
     continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);

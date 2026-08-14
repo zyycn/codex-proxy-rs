@@ -5,31 +5,42 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
+use gateway_core::engine::credential::OpaqueProviderData;
+use gateway_core::provider_ports::{
+    ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
+};
+use gateway_core::routing::ProviderKind;
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use roxmltree::{Document, Node};
+use serde::Deserialize;
+use serde_json::{Map, Value};
 use url::Url;
+
+use self::desktop_artifact::{CodexDesktopArtifactError, fetch_codex_core_version};
+
+mod desktop_artifact;
 
 /// Codex Desktop 官方 appcast 地址。
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
-pub const CODEX_CLI_RELEASE_URL: &str = "https://registry.npmjs.org/@openai%2Fcodex/latest";
 /// 官方发布元数据检查周期。
 pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_APPCAST_BYTES: usize = 1024 * 1024;
-const MAX_CLI_RELEASE_BYTES: usize = 64 * 1024;
+const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
 
 /// Codex Desktop 上游请求身份。
 ///
-/// 启动配置提供经源码审计的 Core、运行环境和 Desktop 启动版本。npm CLI metadata
-/// 与官方 appcast 检查成功后，分别同步 Core 版本和 Desktop 版本及构建号。
+/// 启动配置提供经源码审计的 Core、运行环境和 Desktop 启动版本。运行时只会使用
+/// 同一个官方 Desktop ZIP 中核验出的 Core、Desktop 版本及构建号原子替换版本字段。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWireProfile {
     /// `originator` 请求头及 User-Agent 产品名。
     pub originator: String,
-    /// npm `@openai/codex` 启动版本；用于 `/codex/models?client_version=` 与 UA。
+    /// Desktop ZIP 内嵌 Core 版本；用于 `/codex/models?client_version=` 与 UA。
     pub codex_version: String,
     /// Desktop 应用版本，用于 app-server `clientInfo.version` 对应的 UA 后缀。
     pub desktop_version: String,
@@ -86,124 +97,148 @@ impl CodexWireProfileState {
             .clone()
     }
 
-    /// 使用官方 appcast 已验证的 Desktop 版本和构建号更新运行时画像。
-    pub fn update_desktop_release(&self, desktop_version: &str, desktop_build: &str) {
+    /// 原子发布同一 Desktop ZIP 中核验出的完整版本元组。
+    pub fn update_bundled_release(&self, release: &CodexBundledReleaseProfile) {
         let mut profile = self
             .profile
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if profile.desktop_version == desktop_version && profile.desktop_build == desktop_build {
-            return;
+        profile.codex_version.clone_from(&release.codex_version);
+        profile.desktop_version.clone_from(&release.desktop_version);
+        profile.desktop_build.clone_from(&release.desktop_build);
+        profile.verified_at = release.verified_at;
+    }
+}
+
+/// 同一个官方 Desktop ZIP 中核验出的原子版本元组。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexBundledReleaseProfile {
+    pub codex_version: String,
+    pub desktop_version: String,
+    pub desktop_build: String,
+    pub verified_at: DateTime<Utc>,
+}
+
+impl CodexBundledReleaseProfile {
+    fn artifact_sequence(&self) -> Result<u64, CodexDesktopReleaseError> {
+        parse_build_sequence(&self.desktop_build)
+    }
+
+    fn validate(&self) -> Result<(), CodexDesktopReleaseError> {
+        semver::Version::parse(&self.codex_version)
+            .map_err(|_| CodexDesktopReleaseError::InvalidCoreVersion)?;
+        if !numeric_dotted_version(&self.desktop_version) {
+            return Err(CodexDesktopReleaseError::InvalidVersion);
         }
-        profile.desktop_version = desktop_version.to_owned();
-        profile.desktop_build = desktop_build.to_owned();
-    }
-
-    /// 使用官方 npm metadata 发布的 Codex CLI 版本更新运行时请求画像。
-    pub fn update_cli_release(&self, codex_version: &str) {
-        let mut profile = self
-            .profile
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if profile.codex_version != codex_version {
-            profile.codex_version = codex_version.to_owned();
-        }
-    }
-}
-
-pub trait CodexCliReleaseTransport: Send + Sync {
-    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>>;
-}
-
-#[derive(Clone)]
-pub struct OfficialCodexCliReleaseTransport {
-    client: Client,
-    endpoint: Url,
-}
-
-impl OfficialCodexCliReleaseTransport {
-    pub fn new() -> Result<Self, CodexCliReleaseError> {
-        let endpoint =
-            Url::parse(CODEX_CLI_RELEASE_URL).map_err(|_| CodexCliReleaseError::InvalidEndpoint)?;
-        let client = Client::builder()
-            .https_only(true)
-            .no_proxy()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(APPCAST_TIMEOUT)
-            .build()
-            .map_err(|_| CodexCliReleaseError::ClientInitialization)?;
-        Ok(Self { client, endpoint })
-    }
-}
-
-impl CodexCliReleaseTransport for OfficialCodexCliReleaseTransport {
-    fn fetch(&self) -> BoxFuture<'_, Result<String, CodexCliReleaseError>> {
-        Box::pin(async move {
-            let response = self.client.get(self.endpoint.clone()).send().await?;
-            if !response.status().is_success() {
-                return Err(CodexCliReleaseError::HttpStatus(response.status().as_u16()));
-            }
-            if response
-                .content_length()
-                .is_some_and(|size| size > MAX_CLI_RELEASE_BYTES as u64)
-            {
-                return Err(CodexCliReleaseError::ResponseTooLarge);
-            }
-            let bytes = response.bytes().await?;
-            if bytes.len() > MAX_CLI_RELEASE_BYTES {
-                return Err(CodexCliReleaseError::ResponseTooLarge);
-            }
-            let document: serde_json::Value = serde_json::from_slice(&bytes)
-                .map_err(|_| CodexCliReleaseError::InvalidDocument)?;
-            let version = document
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                .ok_or(CodexCliReleaseError::InvalidDocument)?;
-            semver::Version::parse(version).map_err(|_| CodexCliReleaseError::InvalidVersion)?;
-            Ok(version.to_owned())
-        })
+        self.artifact_sequence()?;
+        Ok(())
     }
 }
 
 #[derive(Clone)]
-pub struct CodexCliReleaseService {
-    transport: Arc<dyn CodexCliReleaseTransport>,
-    profile: CodexWireProfileState,
+pub struct CodexArtifactProfileCache {
+    provider_kind: ProviderKind,
+    store: Arc<dyn ProviderArtifactProfileCachePort>,
 }
 
-impl CodexCliReleaseService {
+impl CodexArtifactProfileCache {
     #[must_use]
     pub fn new(
-        profile: CodexWireProfileState,
-        transport: Arc<dyn CodexCliReleaseTransport>,
+        provider_kind: ProviderKind,
+        store: Arc<dyn ProviderArtifactProfileCachePort>,
     ) -> Self {
-        Self { transport, profile }
+        Self {
+            provider_kind,
+            store,
+        }
     }
 
-    pub async fn refresh(&self) -> Result<String, CodexCliReleaseError> {
-        let version = self.transport.fetch().await?;
-        self.profile.update_cli_release(&version);
-        Ok(version)
+    pub async fn load(
+        &self,
+    ) -> Result<Option<CodexBundledReleaseProfile>, CodexDesktopReleaseError> {
+        self.store
+            .read(&self.provider_kind)
+            .await
+            .map_err(CodexDesktopReleaseError::ArtifactCache)?
+            .map(decode_artifact_profile)
+            .transpose()
+    }
+
+    async fn replace_if_newer(
+        &self,
+        profile: &CodexBundledReleaseProfile,
+    ) -> Result<bool, CodexDesktopReleaseError> {
+        profile.validate()?;
+        self.store
+            .replace_if_newer(
+                encode_artifact_profile(self.provider_kind.clone(), profile)?,
+                ARTIFACT_PROFILE_CACHE_TTL,
+            )
+            .await
+            .map_err(CodexDesktopReleaseError::ArtifactCache)
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum CodexCliReleaseError {
-    #[error("Codex CLI release client initialization failed")]
-    ClientInitialization,
-    #[error("Codex CLI release endpoint is invalid")]
-    InvalidEndpoint,
-    #[error("Codex CLI release request failed")]
-    Request(#[from] reqwest::Error),
-    #[error("Codex CLI release endpoint returned HTTP {0}")]
-    HttpStatus(u16),
-    #[error("Codex CLI release response exceeded the size limit")]
-    ResponseTooLarge,
-    #[error("Codex CLI release document is invalid")]
-    InvalidDocument,
-    #[error("Codex CLI release version is invalid")]
-    InvalidVersion,
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CachedArtifactProfile {
+    schema_version: u64,
+    codex_version: String,
+    desktop_version: String,
+    desktop_build: String,
+}
+
+fn encode_artifact_profile(
+    provider_kind: ProviderKind,
+    profile: &CodexBundledReleaseProfile,
+) -> Result<ProviderArtifactProfile, CodexDesktopReleaseError> {
+    let artifact_sequence = profile.artifact_sequence()?;
+    let mut fields = Map::new();
+    fields.insert(
+        "schema_version".to_owned(),
+        Value::from(ARTIFACT_PROFILE_SCHEMA_VERSION),
+    );
+    fields.insert(
+        "codex_version".to_owned(),
+        Value::String(profile.codex_version.clone()),
+    );
+    fields.insert(
+        "desktop_version".to_owned(),
+        Value::String(profile.desktop_version.clone()),
+    );
+    fields.insert(
+        "desktop_build".to_owned(),
+        Value::String(profile.desktop_build.clone()),
+    );
+    Ok(ProviderArtifactProfile::new(
+        provider_kind,
+        artifact_sequence,
+        profile.verified_at.into(),
+        OpaqueProviderData::new(fields),
+    ))
+}
+
+fn decode_artifact_profile(
+    profile: ProviderArtifactProfile,
+) -> Result<CodexBundledReleaseProfile, CodexDesktopReleaseError> {
+    let wire: CachedArtifactProfile = serde_json::from_value(Value::Object(
+        profile.profile().expose_to_provider().clone(),
+    ))
+    .map_err(|_| CodexDesktopReleaseError::InvalidArtifactCache)?;
+    if wire.schema_version != ARTIFACT_PROFILE_SCHEMA_VERSION {
+        return Err(CodexDesktopReleaseError::InvalidArtifactCache);
+    }
+    let decoded = CodexBundledReleaseProfile {
+        codex_version: wire.codex_version,
+        desktop_version: wire.desktop_version,
+        desktop_build: wire.desktop_build,
+        verified_at: DateTime::<Utc>::from(profile.verified_at()),
+    };
+    decoded.validate()?;
+    if decoded.artifact_sequence()? != profile.artifact_sequence() {
+        return Err(CodexDesktopReleaseError::InvalidArtifactCache);
+    }
+    Ok(decoded)
 }
 
 /// 官方 appcast 中按顺序出现的首个完整 Desktop 制品。
@@ -266,6 +301,11 @@ impl CodexDesktopReleaseStatus {
 /// Desktop appcast 获取边界。生产实现固定访问官方 HTTPS，测试实现只替换此边界。
 pub trait CodexDesktopReleaseTransport: Send + Sync {
     fn fetch(&self) -> BoxFuture<'_, Result<CodexDesktopRelease, CodexDesktopReleaseError>>;
+
+    fn fetch_bundled_core_version<'a>(
+        &'a self,
+        release: &'a CodexDesktopRelease,
+    ) -> BoxFuture<'a, Result<String, CodexDesktopReleaseError>>;
 }
 
 /// 固定访问官方 Desktop appcast 的生产 transport。
@@ -325,6 +365,24 @@ impl CodexDesktopReleaseTransport for OfficialCodexDesktopReleaseTransport {
             parse_desktop_release(xml)
         })
     }
+
+    fn fetch_bundled_core_version<'a>(
+        &'a self,
+        release: &'a CodexDesktopRelease,
+    ) -> BoxFuture<'a, Result<String, CodexDesktopReleaseError>> {
+        Box::pin(async move {
+            let artifact_url = release
+                .download_url
+                .as_deref()
+                .ok_or(CodexDesktopReleaseError::MissingArtifactIdentity)?;
+            let artifact_size = release
+                .download_size
+                .ok_or(CodexDesktopReleaseError::MissingArtifactIdentity)?;
+            fetch_codex_core_version(&self.client, artifact_url, artifact_size)
+                .await
+                .map_err(Into::into)
+        })
+    }
 }
 
 /// 拉取 appcast 并原子发布请求画像的 Provider 服务。
@@ -333,6 +391,8 @@ pub struct CodexDesktopReleaseService {
     transport: Arc<dyn CodexDesktopReleaseTransport>,
     status: CodexDesktopReleaseStatus,
     profile: CodexWireProfileState,
+    cache: CodexArtifactProfileCache,
+    verified: Arc<RwLock<Option<CodexBundledReleaseProfile>>>,
 }
 
 impl CodexDesktopReleaseService {
@@ -341,11 +401,18 @@ impl CodexDesktopReleaseService {
     pub fn new(
         profile: CodexWireProfileState,
         transport: Arc<dyn CodexDesktopReleaseTransport>,
+        cache: CodexArtifactProfileCache,
+        verified: Option<CodexBundledReleaseProfile>,
     ) -> Self {
+        if let Some(verified) = verified.as_ref() {
+            profile.update_bundled_release(verified);
+        }
         Self {
             transport,
             status: CodexDesktopReleaseStatus::default(),
             profile,
+            cache,
+            verified: Arc::new(RwLock::new(verified)),
         }
     }
 
@@ -357,11 +424,9 @@ impl CodexDesktopReleaseService {
     /// 执行一次有界检查；失败只更新观察状态，不修改上一份成功画像。
     pub async fn refresh(&self) -> Result<CodexDesktopRelease, CodexDesktopReleaseError> {
         let checked_at = Utc::now();
-        let result = self.transport.fetch().await;
+        let result = self.refresh_inner(checked_at).await;
         match result {
             Ok(release) => {
-                self.profile
-                    .update_desktop_release(&release.version, &release.build);
                 self.status.record_success(checked_at, release.clone());
                 Ok(release)
             }
@@ -371,6 +436,91 @@ impl CodexDesktopReleaseService {
             }
         }
     }
+
+    async fn refresh_inner(
+        &self,
+        checked_at: DateTime<Utc>,
+    ) -> Result<CodexDesktopRelease, CodexDesktopReleaseError> {
+        let release = self.transport.fetch().await?;
+        validate_release_artifact(&release)?;
+        let release_sequence = parse_build_sequence(&release.build)?;
+        let verified = self
+            .verified
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(verified) = verified {
+            let verified_sequence = verified.artifact_sequence()?;
+            if release_sequence < verified_sequence {
+                return Err(CodexDesktopReleaseError::ReleaseRollback);
+            }
+            if release_sequence == verified_sequence {
+                if release.version != verified.desktop_version
+                    || release.build != verified.desktop_build
+                {
+                    return Err(CodexDesktopReleaseError::InconsistentRelease);
+                }
+                if !self.cache.replace_if_newer(&verified).await? {
+                    return Err(CodexDesktopReleaseError::ReleaseRollback);
+                }
+                self.profile.update_bundled_release(&verified);
+                return Ok(release);
+            }
+        }
+
+        let codex_version = self.transport.fetch_bundled_core_version(&release).await?;
+        let bundled = CodexBundledReleaseProfile {
+            codex_version,
+            desktop_version: release.version.clone(),
+            desktop_build: release.build.clone(),
+            verified_at: checked_at,
+        };
+        bundled.validate()?;
+        let published = if self.cache.replace_if_newer(&bundled).await? {
+            bundled
+        } else {
+            self.cache
+                .load()
+                .await?
+                .filter(|cached| {
+                    cached
+                        .artifact_sequence()
+                        .is_ok_and(|sequence| sequence >= release_sequence)
+                })
+                .ok_or(CodexDesktopReleaseError::ReleaseRollback)?
+        };
+        self.profile.update_bundled_release(&published);
+        *self
+            .verified
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(published);
+        Ok(release)
+    }
+}
+
+fn validate_release_artifact(
+    release: &CodexDesktopRelease,
+) -> Result<(), CodexDesktopReleaseError> {
+    if !release.signature_present {
+        return Err(CodexDesktopReleaseError::MissingArtifactSignature);
+    }
+    let artifact_url = release
+        .download_url
+        .as_deref()
+        .ok_or(CodexDesktopReleaseError::MissingArtifactIdentity)?;
+    let artifact_size = release
+        .download_size
+        .ok_or(CodexDesktopReleaseError::MissingArtifactIdentity)?;
+    desktop_artifact::validate_codex_artifact(artifact_url, artifact_size)?;
+    Ok(())
+}
+
+fn parse_build_sequence(value: &str) -> Result<u64, CodexDesktopReleaseError> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|sequence| *sequence > 0)
+        .ok_or(CodexDesktopReleaseError::InvalidBuild)
 }
 
 /// 解析 appcast 中按顺序出现的首个完整发布项。
@@ -489,4 +639,20 @@ pub enum CodexDesktopReleaseError {
     InvalidPublishedAt,
     #[error("Codex Desktop appcast download size is invalid")]
     InvalidDownloadSize,
+    #[error("Codex Desktop appcast artifact identity is incomplete")]
+    MissingArtifactIdentity,
+    #[error("Codex Desktop appcast artifact signature is missing")]
+    MissingArtifactSignature,
+    #[error("Codex Desktop bundled Core version is invalid")]
+    InvalidCoreVersion,
+    #[error(transparent)]
+    Artifact(#[from] CodexDesktopArtifactError),
+    #[error("Codex Desktop artifact profile cache operation failed")]
+    ArtifactCache(#[source] ProviderStoreError),
+    #[error("Codex Desktop artifact profile cache is invalid")]
+    InvalidArtifactCache,
+    #[error("Codex Desktop appcast attempted to roll back the verified artifact")]
+    ReleaseRollback,
+    #[error("Codex Desktop appcast release identity conflicts with the verified artifact")]
+    InconsistentRelease,
 }
