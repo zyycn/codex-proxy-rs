@@ -116,18 +116,13 @@ const modalTitle = computed(() => {
 const oauthPanelTitle = computed(() => {
   if (props.reauthorizing)
     return accountName.value
-  return isXai.value ? '使用 xAI OAuth 完成账号接入' : '使用 OpenAI OAuth 完成账号接入'
+  return isXai.value ? 'xAI OAuth 授权' : 'OpenAI OAuth 授权'
 })
 
 const oauthPanelDescription = computed(() => {
-  if (props.reauthorizing) {
-    return isXai.value
-      ? '生成新的授权链接，完成后粘贴回调地址、含 code 和 state 的查询字符串或授权码更新账号凭据'
-      : '生成新的授权链接，完成后粘贴回调地址更新账号凭据'
-  }
   return isXai.value
-    ? '复制授权链接到浏览器打开，完成后粘贴回调地址、含 code 和 state 的查询字符串或授权码即可导入'
-    : '复制授权链接到浏览器打开，完成后把回调地址粘贴到下方即可导入'
+    ? '生成并打开授权链接 → 完成浏览器授权 → 粘贴回调地址、查询字符串或授权码'
+    : '生成并打开授权链接 → 完成浏览器授权 → 粘贴回调地址'
 })
 
 const canGenerateOauth = computed(() =>
@@ -152,21 +147,21 @@ const description = computed<string | undefined>(() => {
     return undefined
   if (props.reauthorizing) {
     return isXai.value
-      ? '完成授权后粘贴回调地址、含 code 和 state 的查询字符串或授权码，系统会更新账号凭据'
-      : '完成授权后粘贴回调地址，系统会更新账号凭据'
+      ? '完成新的 xAI 授权并替换此账号凭据'
+      : '完成新的 OpenAI 授权并替换此账号凭据'
   }
   if (isBatch.value)
-    return '导入 CPR 多平台账号包，系统会按文档中的平台自动分流'
+    return '粘贴或上传 CPR 账号包，一次导入多个平台账号'
   if (isXai.value) {
     return mode.value === 'oauth'
-      ? '复制 xAI 授权链接，完成后粘贴回调地址、含 code 和 state 的查询字符串或授权码，不使用 xAI API Key'
-      : '导入 xAI 账号文件，已存在账号会更新'
+      ? '通过浏览器授权导入 xAI 账号'
+      : '粘贴或上传 xAI 账号文件，匹配已有账号时更新凭据'
   }
   if (mode.value === 'oauth')
-    return '复制 OpenAI 授权链接，完成后粘贴回调地址，系统会自动写入或更新账号'
+    return '通过浏览器授权导入 OpenAI 账号'
   if (mode.value === 'agent_identity')
-    return '导入 Agent 身份文件，系统会按身份信息写入或更新账号'
-  return '导入 CPR、Sub2API 或 CPA 账号文件，已存在账号会更新'
+    return '粘贴或上传 Agent 身份文件，匹配已有账号时更新凭据'
+  return '粘贴或上传 CPR、Sub2API 或 CPA 账号文件，匹配已有账号时更新凭据'
 })
 
 function selectProvider(value: 'openai' | 'xai' | 'batch') {
@@ -288,7 +283,7 @@ async function copyText(value: string, successText: string) {
               v-model="oauthCallback"
               :aria-label="isXai ? '回调地址或授权码' : '回调地址'"
               size="sm"
-              :placeholder="isXai ? '粘贴完整回调地址、?code=...&state=... 或裸授权码' : 'http://localhost:1455/auth/callback?code=...&state=...'"
+              :placeholder="isXai ? '回调地址、?code=...&state=... 或授权码' : 'http://localhost:1455/auth/callback?code=...&state=...'"
               :disabled="saving"
             />
           </BaseFormItem>

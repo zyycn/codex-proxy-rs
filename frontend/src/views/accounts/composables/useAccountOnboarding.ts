@@ -189,11 +189,11 @@ export function useAccountOnboarding(options: {
     }
 
     if (importedCount === 0) {
-      throw new Error(failures.length > 0 ? `批量导入失败：${failures.join('；')}` : '批量文件没有可导入的账号')
+      throw new Error(failures.length > 0 ? `批量导入失败：${failures.join('、')}` : '批量文件没有可导入的账号')
     }
 
     if (failures.length > 0) {
-      return `已导入 ${importedCount} 个账号，${failures.length} 个文档失败：${failures.join('；')}`
+      return `已导入 ${importedCount} 个账号，${failures.length} 个文档失败：${failures.join('、')}`
     }
     return `已导入 ${importedCount} 个账号`
   }

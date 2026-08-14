@@ -21,7 +21,7 @@ export function parseAccountSchedulingForm(
       || parsedLimit < 1
       || parsedLimit > MAX_ACCOUNT_CONCURRENCY)
   ) {
-    return { valid: false, message: `并发限制必须留空或填写 1 到 ${MAX_ACCOUNT_CONCURRENCY} 的整数` }
+    return { valid: false, message: `并发限制必须留空，或为 1 到 ${MAX_ACCOUNT_CONCURRENCY} 的整数` }
   }
 
   const parsedWeight = Number(weight.trim())

@@ -38,13 +38,13 @@ const authPath = computed(() =>
   activePlatform.value === 'windows' ? '%userprofile%\\.codex\\auth.json' : '~/.codex/auth.json',
 )
 const codexAuthJson = computed(() => JSON.stringify({ OPENAI_API_KEY: keyValue.value }, null, 2))
-const defaultModel = 'gpt-5.5'
+const defaultModel = 'gpt-5.6-terra'
 
 const codexConfigToml = computed(
   () => `model_provider = "OpenAI"
 model = "${defaultModel}"
 review_model = "${defaultModel}"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "max"
 service_tier = "default"
 disable_response_storage = true
 network_access = "enabled"
@@ -70,7 +70,7 @@ const visibleFiles = computed(() => [
   <BaseModal
     v-model="open"
     title="使用密钥"
-    description="将以下配置文件添加到 Codex CLI 配置目录中"
+    description="将下方内容分别保存到显示的 Codex CLI 配置文件"
     width="760px"
   >
     <div class="flex flex-col gap-5">

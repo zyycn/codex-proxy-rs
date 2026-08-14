@@ -103,7 +103,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (connectionTestStatus.value === 'running') {
       return {
         label: '正在测试',
-        description: '正在发送一条真实 Responses 流式请求',
+        description: '正在向所选模型发送请求并接收流式响应',
         icon: Clock3,
         badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
         iconClass: 'text-(--cp-info)',
@@ -112,7 +112,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (connectionTestStatus.value === 'success') {
       return {
         label: '连接正常',
-        description: '账号凭据可用，已完成 Responses 流式验证',
+        description: '请求已完成，可在下方查看模型、耗时和事件轨迹',
         icon: CheckCircle2,
         badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
         iconClass: 'text-(--cp-success)',
@@ -121,7 +121,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (connectionTestStatus.value === 'error') {
       return {
         label: '测试失败',
-        description: '真实请求未完成，优先检查令牌状态、账号权限或上游网络',
+        description: '请求未完成，请在下方查看上游错误与事件轨迹',
         icon: XCircle,
         badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
         iconClass: 'text-(--cp-danger)',
@@ -129,7 +129,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
     return {
       label: '准备测试',
-      description: '点击开始后发送一条轻量 Responses 流式请求',
+      description: '选择模型后，点击“开始测试”发送真实请求',
       icon: Wifi,
       badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
       iconClass: 'text-(--cp-text-muted)',

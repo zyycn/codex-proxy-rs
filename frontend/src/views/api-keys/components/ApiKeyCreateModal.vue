@@ -27,16 +27,13 @@ const open = defineModel<boolean>({ default: false })
 const createdOpen = defineModel<boolean>('createdOpen', { default: false })
 const form = defineModel<ApiKeyFormValue>('form', { required: true })
 const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key')
-const description = computed(() => props.editing
-  ? '调整访问范围与调度限制，分组替换原子生效。'
-  : '为调用方选择一个或多个账号分组。')
 </script>
 
 <template>
   <BaseModal
     v-model="open"
     :title="title"
-    :description="description"
+    description="设置调用方可用的账号分组、并发和每分钟请求上限"
     variant="info"
     width="680px"
     body-max-height="min(680px, calc(100dvh - 190px))"
@@ -47,7 +44,7 @@ const description = computed(() => props.editing
         <BaseInput
           v-model="form.name"
           aria-label="名称"
-          placeholder="例如：生产环境、测试调用方..."
+          placeholder="例如：生产环境"
           :disabled="saving"
         />
       </BaseFormItem>
@@ -56,7 +53,7 @@ const description = computed(() => props.editing
         <BaseInput
           v-model="form.label"
           aria-label="标签（可选）"
-          placeholder="备注信息..."
+          placeholder="例如：后端服务"
           :disabled="saving"
         />
       </BaseFormItem>
@@ -108,7 +105,7 @@ const description = computed(() => props.editing
   <BaseModal
     v-model="createdOpen"
     title="API Key 已创建"
-    description="可以立即复制或导入 CCSwitch，之后也可从密钥列表再次操作"
+    description="复制密钥，或直接导入 CCSwitch"
     variant="success"
     width="540px"
   >
