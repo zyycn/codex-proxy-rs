@@ -51,6 +51,15 @@ fn candidate(id: &str, in_flight: u32, remaining: Option<u64>) -> AccountCandida
     }
 }
 
+fn candidate_with_concurrency(id: &str, in_flight: u32, concurrency: u32) -> AccountCandidate {
+    let mut candidate = candidate(id, in_flight, Some(100));
+    candidate.account = candidate.account.with_scheduling(
+        Some(AccountConcurrencyLimit::new(concurrency).expect("concurrency override")),
+        AccountWeight::DEFAULT,
+    );
+    candidate
+}
+
 fn weighted_candidate(id: &str, weight: u16, in_flight: u32) -> AccountCandidate {
     let mut candidate = candidate(id, in_flight, None);
     candidate.account = candidate.account.with_scheduling(
@@ -349,6 +358,20 @@ fn smart_selector_should_prefer_lower_inflight_count() {
 }
 
 #[test]
+fn smart_selector_should_prefer_lower_capacity_utilization_over_lower_inflight_count() {
+    let candidates = [
+        candidate_with_concurrency("acct_smaller", 1, 2),
+        candidate_with_concurrency("acct_larger", 2, 10),
+    ];
+
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::Smart))
+        .expect("candidate available");
+
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_larger");
+}
+
+#[test]
 fn selector_should_prioritize_the_highest_weight_for_every_rotation_strategy() {
     let candidates = vec![
         weighted_candidate("acct_low_weight", 1, 0),
@@ -620,6 +643,22 @@ fn quota_reset_selector_should_prefer_known_earliest_window() {
         .expect("candidate available");
 
     assert_eq!(selected.candidate().account.id().as_str(), "acct_earlier");
+}
+
+#[test]
+fn quota_reset_selector_should_use_capacity_utilization_as_load_tiebreaker() {
+    let reset_at = SystemTime::now() + Duration::from_secs(60);
+    let mut smaller = candidate_with_concurrency("acct_smaller", 1, 2);
+    smaller.signals.quota_reset_at = Some(reset_at);
+    let mut larger = candidate_with_concurrency("acct_larger", 2, 10);
+    larger.signals.quota_reset_at = Some(reset_at);
+    let candidates = [smaller, larger];
+
+    let selected = AccountSelector
+        .select(&candidates, &context(RotationStrategy::QuotaResetPriority))
+        .expect("candidate available");
+
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_larger");
 }
 
 #[test]

@@ -1588,14 +1588,26 @@ impl AccountSelector {
 
         let candidate = match context.policy.strategy() {
             RotationStrategy::QuotaResetPriority => {
-                eligible.sort_by_key(|candidate| {
+                let default_concurrency = context.policy.max_concurrent_per_account();
+                eligible.sort_by(|left, right| {
                     (
-                        candidate.signals.quota_reset_at.is_none(),
-                        candidate.signals.quota_reset_at,
-                        candidate.signals.in_flight,
-                        candidate.signals.last_started_at,
-                        candidate.account.id().clone(),
+                        left.signals.quota_reset_at.is_none(),
+                        left.signals.quota_reset_at,
                     )
+                        .cmp(&(
+                            right.signals.quota_reset_at.is_none(),
+                            right.signals.quota_reset_at,
+                        ))
+                        .then_with(|| {
+                            capacity_utilization(left, default_concurrency)
+                                .total_cmp(&capacity_utilization(right, default_concurrency))
+                        })
+                        .then_with(|| {
+                            left.signals
+                                .last_started_at
+                                .cmp(&right.signals.last_started_at)
+                        })
+                        .then_with(|| left.account.id().cmp(right.account.id()))
                 });
                 eligible.first().copied()?
             }
@@ -1604,9 +1616,11 @@ impl AccountSelector {
                 let index = context.round_robin_cursor as usize % eligible.len();
                 eligible.get(index).copied()?
             }
-            RotationStrategy::Smart => {
-                select_smart_candidate(&eligible, context.round_robin_cursor)?
-            }
+            RotationStrategy::Smart => select_smart_candidate(
+                &eligible,
+                context.policy.max_concurrent_per_account(),
+                context.round_robin_cursor,
+            )?,
             RotationStrategy::Sticky => {
                 eligible.sort_by_key(|candidate| {
                     (
@@ -1676,8 +1690,18 @@ const SMART_QUOTA_WEIGHT: f64 = 0.8;
 const SMART_FAILURE_WEIGHT: f64 = 1.0;
 const SMART_LATENCY_WEIGHT: f64 = 0.5;
 
+fn capacity_utilization(candidate: &AccountCandidate, default_concurrency: NonZeroU32) -> f64 {
+    f64::from(candidate.signals.in_flight)
+        / f64::from(
+            candidate
+                .account
+                .effective_concurrency(default_concurrency)
+                .get(),
+        )
+}
+
 struct SmartNormalization {
-    max_in_flight: u32,
+    max_capacity_utilization: f64,
     min_quota: Option<u64>,
     max_quota: Option<u64>,
     min_latency_ms: Option<u64>,
@@ -1685,11 +1709,11 @@ struct SmartNormalization {
 }
 
 impl SmartNormalization {
-    fn from_candidates(candidates: &[&AccountCandidate]) -> Self {
-        let max_in_flight = candidates
+    fn from_candidates(candidates: &[&AccountCandidate], default_concurrency: NonZeroU32) -> Self {
+        let max_capacity_utilization = candidates
             .iter()
-            .map(|candidate| candidate.signals.in_flight)
-            .max()
+            .map(|candidate| capacity_utilization(candidate, default_concurrency))
+            .reduce(f64::max)
             .unwrap_or_default();
         let min_quota = candidates
             .iter()
@@ -1710,7 +1734,7 @@ impl SmartNormalization {
             .filter(|latency| *latency > 0)
             .max();
         Self {
-            max_in_flight,
+            max_capacity_utilization,
             min_quota,
             max_quota,
             min_latency_ms,
@@ -1721,12 +1745,18 @@ impl SmartNormalization {
 
 fn select_smart_candidate<'a>(
     candidates: &[&'a AccountCandidate],
+    default_concurrency: NonZeroU32,
     cursor: u64,
 ) -> Option<&'a AccountCandidate> {
-    let normalization = SmartNormalization::from_candidates(candidates);
+    let normalization = SmartNormalization::from_candidates(candidates, default_concurrency);
     let mut ranked = candidates
         .iter()
-        .map(|candidate| (*candidate, smart_score(candidate, &normalization)))
+        .map(|candidate| {
+            (
+                *candidate,
+                smart_score(candidate, default_concurrency, &normalization),
+            )
+        })
         .collect::<Vec<_>>();
     ranked.sort_by(|(left, left_score), (right, right_score)| {
         right_score
@@ -1742,11 +1772,14 @@ fn select_smart_candidate<'a>(
     Some(ranked[index].0)
 }
 
-fn smart_score(candidate: &AccountCandidate, normalization: &SmartNormalization) -> f64 {
-    let load = lower_is_better(
-        u64::from(candidate.signals.in_flight),
-        0,
-        u64::from(normalization.max_in_flight),
+fn smart_score(
+    candidate: &AccountCandidate,
+    default_concurrency: NonZeroU32,
+    normalization: &SmartNormalization,
+) -> f64 {
+    let load = lower_ratio_is_better(
+        capacity_utilization(candidate, default_concurrency),
+        normalization.max_capacity_utilization,
     );
     let quota = candidate.signals.quota_remaining_rank.map_or(0.5, |quota| {
         higher_is_better(
@@ -1779,6 +1812,13 @@ fn smart_score(candidate: &AccountCandidate, normalization: &SmartNormalization)
         + SMART_QUOTA_WEIGHT * quota
         + SMART_FAILURE_WEIGHT * failure
         + SMART_LATENCY_WEIGHT * latency
+}
+
+fn lower_ratio_is_better(value: f64, maximum: f64) -> f64 {
+    if maximum <= 0.0 {
+        return 1.0;
+    }
+    1.0 - (value / maximum).clamp(0.0, 1.0)
 }
 
 fn lower_is_better(value: u64, minimum: u64, maximum: u64) -> f64 {
