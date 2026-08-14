@@ -736,6 +736,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
             .with_requested_service_tier(request.service_tier())
+            .with_request_tool_pricing(upstream_model.as_str(), request.tools())
             .with_raw_sse_passthrough();
         let mut pre_commit_events = PreCommitClientEvents::new();
         loop {

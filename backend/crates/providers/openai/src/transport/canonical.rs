@@ -21,7 +21,10 @@ use thiserror::Error;
 use super::protocol::responses::{
     ResponseEventSignals, ResponsesSseFailure, response_event_signals,
 };
-use super::usage::{normalize_service_tier, openai_billing_breakdown};
+use super::usage::{
+    OpenAiBillingUsage, WebSearchPricing, normalize_service_tier, openai_billing_breakdown,
+    web_search_pricing,
+};
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
 
@@ -43,6 +46,7 @@ pub struct CodexCanonicalDecoder {
     semantic_output_seen: bool,
     requested_service_tier: Option<String>,
     response_service_tier: Option<String>,
+    web_search_pricing: Option<WebSearchPricing>,
     timing_signals: ResponseEventSignals,
     raw_sse_passthrough: bool,
 }
@@ -139,6 +143,7 @@ impl CodexCanonicalDecoder {
             semantic_output_seen: false,
             requested_service_tier: None,
             response_service_tier: None,
+            web_search_pricing: None,
             timing_signals: ResponseEventSignals::default(),
             raw_sse_passthrough: false,
         }
@@ -157,6 +162,13 @@ impl CodexCanonicalDecoder {
     #[must_use]
     pub fn with_requested_service_tier(mut self, service_tier: Option<&str>) -> Self {
         self.requested_service_tier = normalize_service_tier(service_tier);
+        self
+    }
+
+    /// 记录请求工具类型，用于区分标准与预览 Web Search 的按次价格。
+    #[must_use]
+    pub fn with_request_tool_pricing(mut self, model: &str, tools: Option<&[Value]>) -> Self {
+        self.web_search_pricing = web_search_pricing(model, tools);
         self
     }
 
@@ -849,15 +861,15 @@ impl CodexCanonicalDecoder {
             .requested_service_tier
             .as_deref()
             .or(self.response_service_tier.as_deref());
+        let web_search_calls = web_search_call_count(response);
         if let Some(breakdown) = usage
             .filter(|usage| billable_usage_is_complete(response, *usage))
             .and_then(|usage| {
+                let web_search_calls = web_search_calls?;
                 openai_billing_breakdown(
                     &model,
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cached_tokens,
-                    usage.cache_write_tokens,
+                    OpenAiBillingUsage::from(usage)
+                        .with_web_search_calls(web_search_calls, self.web_search_pricing),
                     service_tier,
                 )
             })
@@ -982,6 +994,28 @@ fn core_usage(usage: TokenUsage) -> Usage {
     normalized.image_output_tokens = Some(usage.image_output_tokens);
     normalized.total_tokens = Some(usage.total_tokens);
     normalized
+}
+
+fn web_search_call_count(response: &Value) -> Option<u64> {
+    let mut calls = 0_u64;
+    for item in response
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
+    {
+        match item
+            .get("action")
+            .and_then(|action| action.get("type"))
+            .and_then(Value::as_str)
+        {
+            Some("search") => calls = calls.checked_add(1)?,
+            Some("open_page" | "find_in_page") => {}
+            Some(_) | None => return None,
+        }
+    }
+    Some(calls)
 }
 
 fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {

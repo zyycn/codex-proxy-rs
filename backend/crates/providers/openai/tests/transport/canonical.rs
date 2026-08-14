@@ -4,6 +4,7 @@ use provider_openai::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalFailure, CodexCanonicalOutcome,
 };
 use provider_openai::transport::protocol::websocket::websocket_event_to_sse_frame;
+use serde_json::json;
 
 const METADATA_PREFIX_FIXTURE: &str = include_str!(
     "../../../../gateway-api/tests/openai/responses/fixtures/http_sse/metadata_only_prefix.sse"
@@ -263,6 +264,69 @@ fn decoder_should_use_response_service_tier_when_request_omits_it() {
 }
 
 #[test]
+fn decoder_should_add_standard_web_search_call_cost() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_search_cost\",\"model\":\"gpt-5.4\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_search_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n",
+    );
+    let tools = vec![json!({ "type": "web_search" })];
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_request_tool_pricing("gpt-5.4", Some(&tools))
+        .push(body.as_bytes())
+        .expect("canonical web search response");
+
+    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
+        event,
+        GatewayEvent::CalculatedCost(cost)
+            if cost.total().amount().scaled() == 100_000_000
+    )));
+}
+
+#[test]
+fn decoder_should_use_non_reasoning_preview_web_search_price() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_preview_search_cost\",\"model\":\"gpt-4o\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_preview_search_cost\",\"model\":\"gpt-4o\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n",
+    );
+    let tools = vec![json!({ "type": "web_search_preview" })];
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_request_tool_pricing("gpt-4o", Some(&tools))
+        .push(body.as_bytes())
+        .expect("canonical preview web search response");
+
+    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
+        event,
+        GatewayEvent::CalculatedCost(cost)
+            if cost.total().amount().scaled() == 250_000_000
+    )));
+}
+
+#[test]
+fn decoder_should_fail_closed_for_fixed_block_web_search_content() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fixed_search_cost\",\"model\":\"gpt-4o-mini\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixed_search_cost\",\"model\":\"gpt-4o-mini\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+    );
+    let tools = vec![json!({ "type": "web_search" })];
+    let events = CodexCanonicalDecoder::new("fallback")
+        .with_request_tool_pricing("gpt-4o-mini", Some(&tools))
+        .push(body.as_bytes())
+        .expect("canonical fixed-block search response");
+
+    assert!(
+        canonical_facts(&events)
+            .into_iter()
+            .all(|event| !matches!(event, GatewayEvent::CalculatedCost(_)))
+    );
+}
+
+#[test]
 fn websocket_decoder_should_prefer_requested_service_tier_over_response_tier_for_billing() {
     let created = websocket_event_to_sse_frame(
         r#"{"type":"response.created","response":{"id":"resp_ws_fast_cost","model":"gpt-5.4","service_tier":"default"}}"#,
@@ -421,6 +485,25 @@ fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
         });
 
     assert_eq!(image_usage, Some((Some(31), Some(9))));
+}
+
+#[test]
+fn decoder_should_not_understate_cost_when_image_tool_price_is_ambiguous() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_image_cost\",\"model\":\"gpt-5.4\"}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"total_tokens\":17},\"tool_usage\":{\"image_gen\":{\"input_tokens\":31,\"output_tokens\":9}}}}\n\n",
+    );
+    let events = CodexCanonicalDecoder::new("fallback")
+        .push(body.as_bytes())
+        .expect("canonical image cost response");
+
+    assert!(
+        canonical_facts(&events)
+            .into_iter()
+            .all(|event| !matches!(event, GatewayEvent::CalculatedCost(_)))
+    );
 }
 
 #[test]

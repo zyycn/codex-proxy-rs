@@ -36,8 +36,8 @@ pub mod credential;
 pub mod transport;
 
 pub use transport::{
-    CodexCanonicalDecoder, CodexCanonicalError, CodexRequestEncodeError, encode_generate_request,
-    openai_billing_breakdown,
+    CodexCanonicalDecoder, CodexCanonicalError, CodexRequestEncodeError, OpenAiBillingUsage,
+    encode_generate_request, openai_billing_breakdown,
 };
 
 /// OpenAI 初始化后交给组装根的最小能力集。

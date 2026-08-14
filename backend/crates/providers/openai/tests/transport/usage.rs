@@ -8,7 +8,7 @@ use chrono::{TimeZone, Utc};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::transport::{
     CodexBackendClient, CodexClientError, CodexRequestContext, MAX_CODEX_USAGE_BODY_BYTES,
-    build_reqwest_client, openai_billing_breakdown,
+    OpenAiBillingUsage, build_reqwest_client, openai_billing_breakdown,
 };
 use reqwest::StatusCode;
 use wiremock::matchers::{method, path};
@@ -16,10 +16,24 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const OVERSIZED_BODY_ERROR: &str = "upstream usage response exceeded the body limit";
 
+fn billing_usage(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    cache_write_tokens: u64,
+) -> OpenAiBillingUsage {
+    OpenAiBillingUsage::new(
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        cache_write_tokens,
+    )
+}
+
 #[test]
 fn billing_breakdown_should_preserve_input_output_and_cache_components() {
-    let breakdown =
-        openai_billing_breakdown("gpt-5.6-sol", 100, 5, 20, 10, None).expect("known model pricing");
+    let breakdown = openai_billing_breakdown("gpt-5.6-sol", billing_usage(100, 5, 20, 10), None)
+        .expect("known model pricing");
 
     assert_eq!(breakdown.input_amount().amount().scaled(), 3_500_000);
     assert_eq!(breakdown.output_amount().amount().scaled(), 1_500_000);
@@ -32,50 +46,120 @@ fn billing_breakdown_should_preserve_input_output_and_cache_components() {
 
 #[test]
 fn billing_breakdown_should_use_latest_gpt_5_6_and_cached_input_prices() {
-    let terra = openai_billing_breakdown("gpt-5.6-terra", 1, 1, 0, 0, None)
+    let terra = openai_billing_breakdown("gpt-5.6-terra", billing_usage(1, 1, 0, 0), None)
         .expect("gpt-5.6-terra standard pricing");
     assert_eq!(terra.total_amount().amount().scaled(), 140_000);
 
-    let terra_fast = openai_billing_breakdown("gpt-5.6-terra", 1, 1, 0, 0, Some("fast"))
-        .expect("gpt-5.6-terra fast pricing");
+    let terra_fast =
+        openai_billing_breakdown("gpt-5.6-terra", billing_usage(1, 1, 0, 0), Some("fast"))
+            .expect("gpt-5.6-terra fast pricing");
     assert_eq!(terra_fast.total_amount().amount().scaled(), 280_000);
 
-    let terra_long = openai_billing_breakdown("gpt-5.6-terra", 272_001, 0, 0, 0, None)
-        .expect("gpt-5.6-terra long-context pricing");
+    let terra_long =
+        openai_billing_breakdown("gpt-5.6-terra", billing_usage(272_001, 0, 0, 0), None)
+            .expect("gpt-5.6-terra long-context pricing");
     assert_eq!(terra_long.total_amount().amount().scaled(), 10_880_040_000);
 
-    let luna = openai_billing_breakdown("gpt-5.6-luna", 1, 1, 0, 0, None)
+    let luna = openai_billing_breakdown("gpt-5.6-luna", billing_usage(1, 1, 0, 0), None)
         .expect("gpt-5.6-luna standard pricing");
     assert_eq!(luna.total_amount().amount().scaled(), 14_000);
 
-    let gpt_4o =
-        openai_billing_breakdown("gpt-4o", 1, 1, 1, 0, None).expect("gpt-4o cached-input pricing");
+    let gpt_4o = openai_billing_breakdown("gpt-4o", billing_usage(1, 1, 1, 0), None)
+        .expect("gpt-4o cached-input pricing");
     assert_eq!(gpt_4o.total_amount().amount().scaled(), 112_500);
 
-    let gpt_4o_mini = openai_billing_breakdown("gpt-4o-mini", 1, 1, 1, 0, None)
+    let gpt_4o_mini = openai_billing_breakdown("gpt-4o-mini", billing_usage(1, 1, 1, 0), None)
         .expect("gpt-4o-mini cached-input pricing");
     assert_eq!(gpt_4o_mini.total_amount().amount().scaled(), 6_750);
 }
 
 #[test]
 fn billing_breakdown_should_apply_fast_and_flex_tiers_without_guessing_unknown_models() {
-    let fast = openai_billing_breakdown("gpt-5.4", 1, 1, 0, 0, Some("fast")).expect("fast pricing");
-    let flex = openai_billing_breakdown("gpt-5.4", 1, 1, 0, 0, Some("flex")).expect("flex pricing");
+    let fast = openai_billing_breakdown("gpt-5.4", billing_usage(1, 1, 0, 0), Some("fast"))
+        .expect("fast pricing");
+    let flex = openai_billing_breakdown("gpt-5.4", billing_usage(1, 1, 0, 0), Some("flex"))
+        .expect("flex pricing");
 
     assert_eq!(fast.total_amount().amount().scaled(), 350_000);
     assert_eq!(fast.service_tier(), Some("fast"));
-    assert_eq!(fast.multiplier_percent(), 100);
+    assert_eq!(fast.multiplier_percent(), 200);
     assert_eq!(flex.total_amount().amount().scaled(), 87_500);
     assert_eq!(flex.multiplier_percent(), 50);
-    assert!(openai_billing_breakdown("unknown-model", 1, 1, 0, 0, None).is_none());
+    assert!(openai_billing_breakdown("unknown-model", billing_usage(1, 1, 0, 0), None).is_none());
+}
+
+#[test]
+fn billing_breakdown_should_use_official_fast_long_context_prices() {
+    let breakdown =
+        openai_billing_breakdown("gpt-5.6-sol", billing_usage(272_001, 1, 1, 1), Some("fast"))
+            .expect("gpt-5.6-sol fast long-context pricing");
+
+    assert_eq!(
+        (
+            breakdown.input_price_per_million().amount().scaled(),
+            breakdown.cache_read_price_per_million().amount().scaled(),
+            breakdown.cache_write_price_per_million().amount().scaled(),
+            breakdown.output_price_per_million().amount().scaled(),
+        ),
+        (
+            200_000_000_000,
+            20_000_000_000,
+            250_000_000_000,
+            900_000_000_000,
+        )
+    );
+}
+
+#[test]
+fn billing_breakdown_should_fail_closed_for_unpublished_prices() {
+    assert_eq!(
+        (
+            openai_billing_breakdown("gpt-5.5", billing_usage(272_001, 1, 0, 0), Some("fast"))
+                .is_none(),
+            openai_billing_breakdown("gpt-5.5-pro", billing_usage(1, 1, 0, 0), Some("fast"))
+                .is_none(),
+            openai_billing_breakdown("gpt-5.3-codex-spark", billing_usage(1, 1, 0, 0), None)
+                .is_none(),
+            openai_billing_breakdown("gpt-4o", billing_usage(1, 1, 0, 0), Some("flex")).is_none(),
+        ),
+        (true, true, true, true)
+    );
+}
+
+#[test]
+fn billing_breakdown_should_use_official_gpt_4o_fast_prices() {
+    let breakdown = openai_billing_breakdown("gpt-4o", billing_usage(1, 1, 1, 0), Some("priority"))
+        .expect("gpt-4o fast pricing");
+
+    assert_eq!(
+        (
+            breakdown.cache_read_price_per_million().amount().scaled(),
+            breakdown.output_price_per_million().amount().scaled(),
+            breakdown.standard_amount().amount().scaled(),
+            breakdown.total_amount().amount().scaled(),
+            breakdown.multiplier_percent(),
+        ),
+        (21_250_000_000, 170_000_000_000, 112_500, 191_250, 170,)
+    );
+}
+
+#[test]
+fn billing_breakdown_should_use_published_flex_cache_price() {
+    let breakdown = openai_billing_breakdown("gpt-5.4", billing_usage(1, 0, 1, 0), Some("flex"))
+        .expect("gpt-5.4 flex pricing");
+
+    assert_eq!(
+        breakdown.cache_read_price_per_million().amount().scaled(),
+        1_300_000_000
+    );
 }
 
 #[test]
 fn billing_breakdown_should_switch_only_after_the_long_context_threshold() {
-    let boundary = openai_billing_breakdown("gpt-5.4", 272_000, 0, 0, 0, None)
+    let boundary = openai_billing_breakdown("gpt-5.4", billing_usage(272_000, 0, 0, 0), None)
         .expect("short-context boundary");
-    let long =
-        openai_billing_breakdown("gpt-5.4", 272_001, 0, 0, 0, None).expect("long-context pricing");
+    let long = openai_billing_breakdown("gpt-5.4", billing_usage(272_001, 0, 0, 0), None)
+        .expect("long-context pricing");
 
     assert_eq!(
         boundary.input_price_per_million().amount().scaled(),
@@ -85,7 +169,7 @@ fn billing_breakdown_should_switch_only_after_the_long_context_threshold() {
         long.input_price_per_million().amount().scaled(),
         50_000_000_000
     );
-    assert!(openai_billing_breakdown("gpt-5.4", 1, 0, 2, 0, None).is_none());
+    assert!(openai_billing_breakdown("gpt-5.4", billing_usage(1, 0, 2, 0), None).is_none());
 }
 
 #[tokio::test]

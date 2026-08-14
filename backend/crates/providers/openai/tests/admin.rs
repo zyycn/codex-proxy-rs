@@ -148,15 +148,15 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
             cache_write_tokens: Some(0),
             total: CurrencyCost {
                 currency: "USD".to_owned(),
-                amount: "5".parse().expect("fast amount"),
+                amount: "4.25".parse().expect("fast amount"),
             },
         })
         .expect("fast billing")
         .expect("known fast pricing");
     assert_eq!(fast_billing.service_tier.as_deref(), Some("priority"));
-    assert_eq!(fast_billing.multiplier_percent, 200);
+    assert_eq!(fast_billing.multiplier_percent, 170);
     assert_eq!(fast_billing.standard_amount.amount.as_str(), "2.5");
-    assert_eq!(fast_billing.total_amount.amount.as_str(), "5");
+    assert_eq!(fast_billing.total_amount.amount.as_str(), "4.25");
 }
 
 #[tokio::test]

@@ -51,10 +51,10 @@ use crate::credential::{
 };
 use crate::credential::{CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref};
 use crate::transport::CodexWebSocketPool;
-use crate::transport::openai_billing_breakdown;
 use crate::transport::profile::{
     CodexDesktopReleaseSnapshot, CodexDesktopReleaseStatus, CodexWireProfile, CodexWireProfileState,
 };
+use crate::transport::{OpenAiBillingUsage, openai_billing_breakdown};
 
 const PROVIDER_NAME: &str = "openai";
 const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
@@ -215,10 +215,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
         };
         let Some(breakdown) = openai_billing_breakdown(
             &input.upstream_model_id,
-            input_tokens,
-            output_tokens,
-            input.cached_tokens.unwrap_or_default(),
-            input.cache_write_tokens.unwrap_or_default(),
+            OpenAiBillingUsage::new(
+                input_tokens,
+                output_tokens,
+                input.cached_tokens.unwrap_or_default(),
+                input.cache_write_tokens.unwrap_or_default(),
+            ),
             input.service_tier.as_deref(),
         ) else {
             return Ok(None);

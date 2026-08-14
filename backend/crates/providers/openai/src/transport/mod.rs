@@ -38,7 +38,7 @@ pub use self::{
     headers::build_codex_base_headers,
     request::{CodexRequestEncodeError, encode_generate_request},
     response_meta::CodexResponseMetadata,
-    usage::{MAX_CODEX_USAGE_BODY_BYTES, openai_billing_breakdown},
+    usage::{MAX_CODEX_USAGE_BODY_BYTES, OpenAiBillingUsage, openai_billing_breakdown},
     websocket::{
         CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey, WebSocketPoolDecision,
     },
