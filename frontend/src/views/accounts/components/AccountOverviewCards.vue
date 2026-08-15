@@ -47,15 +47,15 @@ function formatCount(value: number) {
 
 function overviewIconClass(tone: string) {
   if (tone === 'success') {
-    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
+    return 'bg-cp-success-bg text-cp-success-text'
   }
   if (tone === 'warning') {
-    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
+    return 'bg-cp-warning-bg text-cp-warning-text'
   }
   if (tone === 'danger') {
-    return 'bg-(--cp-danger-bg) text-(--cp-danger-text)'
+    return 'bg-cp-danger-bg text-cp-danger-text'
   }
-  return 'bg-(--cp-info-bg) text-(--cp-info-text)'
+  return 'bg-cp-info-bg text-cp-info-text'
 }
 </script>
 
@@ -69,15 +69,15 @@ function overviewIconClass(tone: string) {
     >
       <div class="flex items-stretch justify-between gap-3">
         <div class="flex min-w-0 flex-col">
-          <p class="m-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)">
+          <p class="m-0 text-[12px] leading-none font-heavy text-cp-secondary">
             {{ item.label }}
           </p>
           <strong
-            class="my-2 block font-mono text-[26px] leading-none font-extrabold text-(--cp-text-primary)"
+            class="my-2 block font-mono text-[26px] leading-none font-extrabold text-cp-primary"
           >
             {{ item.value }}
           </strong>
-          <p class="m-0 truncate text-[12px] leading-none font-emphasis text-(--cp-text-muted)">
+          <p class="m-0 truncate text-[12px] leading-none font-emphasis text-cp-muted-text">
             {{ item.caption }}
           </p>
         </div>

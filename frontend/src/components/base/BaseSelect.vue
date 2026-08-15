@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import type { CSSProperties } from 'vue'
+
 import { Check, ChevronDown } from '@lucide/vue'
 import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
-import { computed, nextTick, ref, useAttrs, watch } from 'vue'
+import { computed, inject, nextTick, ref, useAttrs, useId, watch } from 'vue'
+import { formFieldKey } from './BaseForm/context'
 
-interface SelectOption {
+type SelectSize = 'sm' | 'md' | 'lg'
+
+export interface SelectOption {
   label: string
   value: string
   disabled?: boolean
 }
-
-type SelectSize = 'default' | 'compact'
 
 defineOptions({
   inheritAttrs: false,
@@ -24,19 +26,18 @@ const props = withDefaults(
     disabled?: boolean
     placeholder?: string
     emptyText?: string
-    ariaLabel?: string
   }>(),
   {
-    size: 'default',
+    size: 'md',
     disabled: false,
     placeholder: '请选择',
     emptyText: '暂无选项',
-    ariaLabel: undefined,
   },
 )
 
 const model = defineModel<string>({ required: true })
 const attrs = useAttrs()
+const field = inject(formFieldKey, null)
 
 const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
@@ -44,7 +45,26 @@ const popoverRef = ref<HTMLElement | null>(null)
 const open = ref(false)
 const activeIndex = ref(-1)
 const popoverStyle = ref<CSSProperties>({})
-const selectId = `base-select-${Math.random().toString(36).slice(2)}`
+const selectId = `base-select-${useId()}`
+const controlId = computed(() => typeof attrs.id === 'string' ? attrs.id : (field?.controlId.value ?? selectId))
+const invalid = computed(() => Boolean(
+  field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true',
+))
+const describedBy = computed(() => [
+  typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined,
+  field?.describedBy.value,
+].filter(Boolean).join(' ') || undefined)
+const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
+const triggerAttrs = computed(() => Object.fromEntries(
+  Object.entries(attrs).filter(([key]) => ![
+    'class',
+    'style',
+    'id',
+    'aria-describedby',
+    'aria-invalid',
+    'aria-required',
+  ].includes(key)),
+))
 
 const sizeConfig: Record<
   SelectSize,
@@ -54,37 +74,44 @@ const sizeConfig: Record<
     icon: number
   }
 > = {
-  default: {
+  md: {
     trigger:
-      'h-(--cp-input-height-default) px-3.5 pr-9 text-[13px] rounded-(--cp-input-radius-base)',
+      'h-cp-control-md px-3.5 pr-9 text-[13px] rounded-cp-control',
     option: 'h-8.5 px-3 text-[13px]',
     icon: 16,
   },
-  compact: {
-    trigger: 'h-8 px-2.5 pr-7 text-xs rounded-(--cp-input-radius-base)',
+  sm: {
+    trigger: 'h-cp-control-sm px-2.5 pr-7 text-xs rounded-cp-control',
     option: 'h-8 px-2.5 text-xs',
     icon: 14,
+  },
+  lg: {
+    trigger: 'h-cp-control-lg px-4 pr-10 text-[14px] rounded-cp-control',
+    option: 'h-10 px-3.5 text-[14px]',
+    icon: 17,
   },
 }
 
 const selectedOption = computed(() => props.options.find(option => option.value === model.value))
 
 const triggerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-emphasis leading-none shadow-(--cp-shadow-input) outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
+  'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-emphasis leading-none shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
   sizeConfig[props.size].trigger,
   props.disabled
-    ? 'cursor-not-allowed bg-(--cp-disabled-bg) text-(--cp-disabled-text) shadow-none'
-    : open.value
-      ? 'cursor-pointer bg-(--cp-input-soft-bg-focus) text-(--cp-text-primary) shadow-(--cp-shadow-input-focus)'
-      : [
-          'cursor-pointer bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] text-(--cp-text-primary)',
-          'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-(--cp-shadow-input-hover)',
-          'focus-visible:bg-(--cp-input-soft-bg-focus) focus-visible:shadow-(--cp-shadow-input-focus)',
-        ],
+    ? 'cursor-not-allowed bg-cp-disabled text-cp-disabled-text shadow-none'
+    : invalid.value
+      ? 'cursor-pointer bg-(--cp-input-error-soft-bg) text-cp-danger-text shadow-cp-input-error'
+      : open.value
+        ? 'cursor-pointer bg-(--cp-input-soft-bg-focus) text-cp-primary shadow-cp-input-focus'
+        : [
+            'cursor-pointer bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] text-cp-primary',
+            'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-cp-input-hover',
+            'focus-visible:bg-(--cp-input-soft-bg-focus) focus-visible:shadow-cp-input-focus',
+          ],
 ])
 
 const popoverClasses = computed(() => [
-  'fixed z-50 flex flex-col gap-1 rounded-(--cp-popover-radius) border-0 bg-(--cp-bg-surface) p-1 shadow-(--cp-shadow-popover)',
+  'fixed z-50 flex flex-col gap-1 rounded-cp-overlay border-0 bg-cp-surface p-1 shadow-cp-popover',
   props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
 ])
 
@@ -228,15 +255,15 @@ function handleTriggerKeydown(event: KeyboardEvent) {
 
 function optionClasses(option: SelectOption, index: number) {
   return [
-    'flex w-full items-center gap-2 rounded-(--cp-input-radius-small) border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors',
+    'flex w-full touch-manipulation items-center gap-2 rounded-cp-control-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
     sizeConfig[props.size].option,
     option.disabled
-      ? 'cursor-not-allowed bg-transparent text-(--cp-disabled-text)'
+      ? 'cursor-not-allowed bg-transparent text-cp-disabled-text'
       : option.value === model.value
-        ? 'cursor-pointer bg-(--cp-info-bg) text-(--cp-info-text)'
+        ? 'cursor-pointer bg-cp-info-bg text-cp-info-text'
         : activeIndex.value === index
-          ? 'cursor-pointer bg-(--cp-default-bg-hover) text-(--cp-text-primary)'
-          : 'cursor-pointer bg-transparent text-(--cp-text-primary) hover:bg-(--cp-default-bg-hover)',
+          ? 'cursor-pointer bg-cp-default-hover text-cp-primary'
+          : 'cursor-pointer bg-transparent text-cp-primary hover:bg-cp-default-hover',
   ]
 }
 
@@ -263,19 +290,22 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
   <div
     ref="rootRef"
     class="relative inline-block text-left"
-    v-bind="attrs"
+    v-bind="rootAttrs"
   >
     <button
-      :id="selectId"
+      v-bind="triggerAttrs"
+      :id="controlId"
       ref="triggerRef"
       type="button"
       :class="triggerClasses"
       :disabled="disabled"
       role="combobox"
-      :aria-label="ariaLabel"
       :aria-expanded="open"
       :aria-controls="`${selectId}-listbox`"
       :aria-activedescendant="open && activeIndex >= 0 ? optionId(activeIndex) : undefined"
+      :aria-describedby="describedBy"
+      :aria-invalid="invalid || undefined"
+      :aria-required="field?.required.value || undefined"
       @click="toggleMenu"
       @keydown="handleTriggerKeydown"
     >
@@ -286,21 +316,22 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
         class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 transition-transform"
         :class="
           disabled
-            ? 'text-(--cp-disabled-icon)'
+            ? 'text-cp-disabled-icon'
             : open
-              ? 'rotate-180 text-(--cp-info)'
-              : 'text-(--cp-text-muted)'
+              ? 'rotate-180 text-cp-info'
+              : 'text-cp-muted-text'
         "
         :size="sizeConfig[size].icon"
+        aria-hidden="true"
       />
     </button>
 
     <Teleport to="body">
       <Transition
-        enter-active-class="transition-[opacity,transform] duration-150 ease-out"
+        enter-active-class="transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none"
         enter-from-class="-translate-y-1 opacity-0"
         enter-to-class="translate-y-0 opacity-100"
-        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-active-class="transition-opacity duration-150 ease-in motion-reduce:transition-none"
         leave-from-class="opacity-100"
         leave-to-class="opacity-0"
       >
@@ -311,11 +342,11 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
           :class="popoverClasses"
           :style="popoverStyle"
           role="listbox"
-          :aria-labelledby="selectId"
+          :aria-labelledby="controlId"
         >
           <div
             v-if="options.length === 0"
-            class="flex h-8.5 items-center rounded-(--cp-input-radius-small) px-3 text-[13px] leading-none font-emphasis text-(--cp-text-muted)"
+            class="flex h-8.5 items-center rounded-cp-control-sm px-3 text-[13px] leading-none font-emphasis text-cp-muted-text"
           >
             {{ emptyText }}
           </div>
@@ -338,8 +369,9 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
               <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
               <Check
                 v-if="option.value === model"
-                class="shrink-0 text-(--cp-info)"
-                :size="size === 'compact' ? 13 : 15"
+                class="shrink-0 text-cp-info"
+                :size="size === 'sm' ? 13 : size === 'lg' ? 17 : 15"
+                aria-hidden="true"
               />
             </button>
           </template>

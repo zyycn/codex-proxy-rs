@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RefreshCw } from '@lucide/vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 
 import AccountOverviewCard from './components/AccountOverviewCard.vue'
@@ -35,24 +35,25 @@ const {
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="系统概览" actions-inline>
+    <BasePageHeader title="系统概览">
       <template #description>
         <span>当日统计</span>
         <DashboardHeartbeat :updated-at="lastRefreshedAt" />
       </template>
       <template #actions>
-        <BaseButton
-          icon-only
-          class="text-(--cp-normal)"
+        <BaseIconButton
+          class="text-cp-normal"
           size="md"
           label="刷新概览"
-          spin-icon-on-loading
           :loading="loading || refreshing"
           :disabled="loading || refreshing"
           @click="refresh"
         >
+          <template #loading>
+            <RefreshCw class="animate-spin motion-reduce:animate-none" :size="19" />
+          </template>
           <RefreshCw :size="19" />
-        </BaseButton>
+        </BaseIconButton>
       </template>
     </BasePageHeader>
 

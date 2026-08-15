@@ -3,6 +3,7 @@ import type { useAccountConnectionTest } from '../composables/useAccountConnecti
 
 import { RefreshCw } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
@@ -35,12 +36,12 @@ const selectedModel = defineModel<string>('selectedModel', { required: true })
 
 function connectionLogClass(tone: string) {
   if (tone === 'success')
-    return 'text-(--cp-success-text)'
+    return 'text-cp-success-text'
   if (tone === 'danger')
-    return 'text-(--cp-danger-text)'
+    return 'text-cp-danger-text'
   if (tone === 'info')
-    return 'text-(--cp-info-text)'
-  return 'text-(--cp-text-secondary)'
+    return 'text-cp-info-text'
+  return 'text-cp-secondary'
 }
 </script>
 
@@ -49,12 +50,12 @@ function connectionLogClass(tone: string) {
     v-model="open"
     title="测试连接"
     description="验证账号凭据、身份绑定与上游模型端点是否可用"
-    variant="info"
-    width="720px"
+    tone="info"
+    size="lg"
   >
     <div v-if="account" class="flex flex-col gap-4">
       <section
-        class="flex items-center justify-between gap-4 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3"
+        class="flex items-center justify-between gap-4 rounded-cp-surface bg-cp-subtle px-4 py-3"
       >
         <AccountIdentityCell :account="account" size="lg" show-plan />
         <AccountStatusBadge
@@ -65,25 +66,25 @@ function connectionLogClass(tone: string) {
         />
       </section>
 
-      <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3">
+      <section class="rounded-cp-surface bg-cp-subtle px-4 py-3">
         <div class="grid gap-2">
           <div class="flex min-h-8 items-center justify-between gap-3">
-            <span class="text-[12px] font-heavy text-(--cp-text-muted)">
+            <span class="text-[12px] font-heavy text-cp-muted-text">
               测试模型
             </span>
-            <BaseButton
+            <BaseIconButton
               variant="ghost"
               size="sm"
-              icon-only
               label="刷新上游模型"
               :loading="refreshingModels"
               :disabled="status === 'running' || loadingModels"
               @click="emit('refreshModels')"
             >
-              <template #icon>
-                <RefreshCw class="size-3.5" />
+              <template #loading>
+                <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
               </template>
-            </BaseButton>
+              <RefreshCw class="size-3.5" />
+            </BaseIconButton>
           </div>
           <BaseSelect
             v-model="selectedModel"
@@ -96,7 +97,7 @@ function connectionLogClass(tone: string) {
         </div>
       </section>
 
-      <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) p-4">
+      <section class="rounded-cp-surface bg-cp-subtle p-4">
         <div class="flex items-start justify-between gap-4">
           <div class="flex min-w-0 items-start gap-3">
             <span
@@ -110,11 +111,11 @@ function connectionLogClass(tone: string) {
               />
             </span>
             <div class="min-w-0">
-              <p class="m-0 text-[16px] font-heavy text-(--cp-text-primary)">
+              <p class="m-0 text-[16px] font-heavy text-cp-primary">
                 {{ statusView.label }}
               </p>
               <p
-                class="mt-1.5 mb-0 text-[13px] leading-normal font-emphasis text-(--cp-text-secondary)"
+                class="mt-1.5 mb-0 text-[13px] leading-normal font-emphasis text-cp-secondary"
               >
                 {{ statusView.description }}
               </p>
@@ -129,70 +130,74 @@ function connectionLogClass(tone: string) {
         </div>
 
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
+          <div class="rounded-lg bg-cp-surface px-3 py-2.5">
+            <p class="m-0 text-[11px] font-heavy text-cp-muted-text">
               开始时间
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
+            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-cp-primary">
               {{ startedAt || '-' }}
             </p>
           </div>
-          <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
+          <div class="rounded-lg bg-cp-surface px-3 py-2.5">
+            <p class="m-0 text-[11px] font-heavy text-cp-muted-text">
               完成时间
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
+            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-cp-primary">
               {{ finishedAt || '-' }}
             </p>
           </div>
-          <div class="rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-            <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
+          <div class="rounded-lg bg-cp-surface px-3 py-2.5">
+            <p class="m-0 text-[11px] font-heavy text-cp-muted-text">
               响应耗时
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
+            <p class="mt-1.5 mb-0 font-mono text-[12px] font-emphasis text-cp-primary">
               {{ durationMs !== null ? `${durationMs}ms` : '-' }}
             </p>
           </div>
         </div>
 
-        <div class="mt-3 rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
+        <div class="mt-3 rounded-lg bg-cp-surface px-3 py-2.5">
+          <p class="m-0 text-[11px] font-heavy text-cp-muted-text">
             测试模型
           </p>
           <p
-            class="mt-1.5 mb-0 truncate font-mono text-[12px] font-emphasis text-(--cp-text-primary)"
+            class="mt-1.5 mb-0 truncate font-mono text-[12px] font-emphasis text-cp-primary"
             :title="model || '-'"
           >
             {{ model || '-' }}
           </p>
         </div>
 
-        <div class="mt-3 rounded-lg bg-(--cp-bg-surface) px-3 py-2.5">
-          <p class="m-0 text-[11px] font-heavy text-(--cp-text-muted)">
+        <div class="mt-3 rounded-lg bg-cp-surface px-3 py-2.5">
+          <p class="m-0 text-[11px] font-heavy text-cp-muted-text">
             事件轨迹
           </p>
-          <BaseScrollbar max-height="260px" view-class="pt-2 pr-2">
-            <div v-if="logs.length === 0" class="text-[12px] font-emphasis text-(--cp-text-muted)">
-              -
-            </div>
-            <div v-else class="flex flex-col gap-1.5">
-              <div
-                v-for="item in logs"
-                :key="item.key"
-                class="grid grid-cols-[54px_minmax(0,1fr)] gap-2 text-[12px] leading-[1.45] font-emphasis"
-              >
-                <span class="font-mono text-(--cp-text-muted)">{{ item.time }}</span>
-                <div class="min-w-0">
-                  <p class="m-0 wrap-break-word" :class="connectionLogClass(item.tone)">
-                    {{ item.text }}
-                  </p>
-                  <div v-if="item.detail" class="mt-2 rounded-lg bg-(--cp-bg-subtle) px-3 py-2">
-                    <BaseScrollbar max-height="138px" view-class="pr-2">
-                      <pre
-                        class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-emphasis text-(--cp-text-primary)"
-                        v-text="item.detail"
-                      />
-                    </BaseScrollbar>
+          <BaseScrollbar max-height="260px">
+            <div class="pt-2">
+              <div v-if="logs.length === 0" class="text-[12px] font-emphasis text-cp-muted-text">
+                -
+              </div>
+              <div v-else class="flex flex-col gap-1.5">
+                <div
+                  v-for="item in logs"
+                  :key="item.key"
+                  class="grid grid-cols-[54px_minmax(0,1fr)] gap-2 text-[12px] leading-[1.45] font-emphasis"
+                >
+                  <span class="font-mono text-cp-muted-text">{{ item.time }}</span>
+                  <div class="min-w-0">
+                    <p class="m-0 wrap-break-word" :class="connectionLogClass(item.tone)">
+                      {{ item.text }}
+                    </p>
+                    <div v-if="item.detail" class="mt-2 rounded-lg bg-cp-subtle px-3 py-2">
+                      <BaseScrollbar max-height="138px">
+                        <div>
+                          <pre
+                            class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-emphasis text-cp-primary"
+                            v-text="item.detail"
+                          />
+                        </div>
+                      </BaseScrollbar>
+                    </div>
                   </div>
                 </div>
               </div>

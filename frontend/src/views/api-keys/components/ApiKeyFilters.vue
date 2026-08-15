@@ -26,7 +26,7 @@ const search = defineModel<string>('search', { required: true })
     <div class="min-w-0 flex-1 md:w-96 md:flex-none">
       <BaseInput v-model="search" placeholder="搜索名称、标签或 ID" class="w-full">
         <template #prefix>
-          <Search class="size-4.5 text-(--cp-text-tertiary)" />
+          <Search class="size-4.5 text-cp-tertiary" />
         </template>
       </BaseInput>
     </div>
@@ -34,7 +34,7 @@ const search = defineModel<string>('search', { required: true })
     <div class="flex shrink-0 items-center justify-end gap-2 md:ml-auto">
       <BaseButton
         v-if="selectedCount > 0"
-        variant="danger"
+        variant="destructive"
         :disabled="batchDeleting"
         @click="emit('deleteSelected')"
       >

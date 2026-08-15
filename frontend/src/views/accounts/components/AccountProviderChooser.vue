@@ -44,14 +44,14 @@ const providers = [
       v-for="provider in providers"
       :key="provider.value"
       type="button"
-      class="group inline-flex size-[88px] cursor-pointer items-center justify-center rounded-(--cp-panel-radius) border-0 bg-transparent text-(--cp-text-primary) outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--cp-default-border-hover) disabled:cursor-not-allowed disabled:opacity-55"
+      class="group inline-flex size-[88px] cursor-pointer items-center justify-center rounded-cp-overlay border-0 bg-transparent text-cp-primary outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-default-border-hover disabled:cursor-not-allowed disabled:opacity-55"
       :disabled="disabled"
       :aria-label="`导入 ${provider.label} 账号`"
       :title="provider.label"
       @click="emit('select', provider.value)"
     >
       <span
-        class="inline-flex size-16 items-center justify-center rounded-(--cp-panel-radius) bg-(--cp-bg-subtle) transition-colors duration-150 group-hover:bg-(--cp-bg-muted)"
+        class="inline-flex size-16 items-center justify-center rounded-cp-overlay bg-cp-subtle transition-colors duration-150 group-hover:bg-cp-muted"
       >
         <component :is="provider.icon" aria-hidden="true" :width="36" :height="36" />
       </span>

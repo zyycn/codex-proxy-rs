@@ -55,55 +55,55 @@ const statusView = computed(() => {
     return {
       label: '重启中',
       icon: RefreshCw,
-      badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
-      iconClass: 'text-(--cp-info)',
+      badge: 'bg-cp-info-bg text-cp-info-text',
+      iconClass: 'text-cp-info',
     }
   }
   if (updating.value) {
     return {
       label: '更新中',
       icon: RefreshCw,
-      badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
-      iconClass: 'text-(--cp-info)',
+      badge: 'bg-cp-info-bg text-cp-info-text',
+      iconClass: 'text-cp-info',
     }
   }
   if (updateError.value || updateInfo.value?.warning) {
     return {
       label: '异常',
       icon: XCircle,
-      badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
-      iconClass: 'text-(--cp-danger)',
+      badge: 'bg-cp-danger-bg text-cp-danger-text',
+      iconClass: 'text-cp-danger',
     }
   }
   if (updateSuccess.value) {
     return {
       label: '已更新',
       icon: CheckCircle2,
-      badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
-      iconClass: 'text-(--cp-success)',
+      badge: 'bg-cp-success-bg text-cp-success-text',
+      iconClass: 'text-cp-success',
     }
   }
   if (hasUpdate.value) {
     return {
       label: '有新版本',
       icon: ArrowUpCircle,
-      badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
-      iconClass: 'text-(--cp-success)',
+      badge: 'bg-cp-success-bg text-cp-success-text',
+      iconClass: 'text-cp-success',
     }
   }
   if (updateInfo.value) {
     return {
       label: '已是最新',
       icon: CheckCircle2,
-      badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
-      iconClass: 'text-(--cp-success)',
+      badge: 'bg-cp-success-bg text-cp-success-text',
+      iconClass: 'text-cp-success',
     }
   }
   return {
     label: '未检查',
     icon: CheckCircle2,
-    badge: 'bg-(--cp-bg-muted) text-(--cp-text-secondary)',
-    iconClass: 'text-(--cp-text-muted)',
+    badge: 'bg-cp-muted text-cp-secondary',
+    iconClass: 'text-cp-muted-text',
   }
 })
 
@@ -193,22 +193,22 @@ function formatLogTime(value: string) {
 
 function logMarkerClass(level: string) {
   if (level === 'success')
-    return 'text-(--cp-success)'
+    return 'text-cp-success'
   if (level === 'warning')
-    return 'text-(--cp-warning)'
+    return 'text-cp-warning'
   if (level === 'error')
-    return 'text-(--cp-danger)'
-  return 'text-(--cp-info)'
+    return 'text-cp-danger'
+  return 'text-cp-info'
 }
 
 function logTextClass(level: string) {
   if (level === 'success')
-    return 'text-(--cp-success)'
+    return 'text-cp-success'
   if (level === 'warning')
-    return 'text-(--cp-warning)'
+    return 'text-cp-warning'
   if (level === 'error')
-    return 'text-(--cp-danger)'
-  return 'text-(--cp-text-primary)'
+    return 'text-cp-danger'
+  return 'text-cp-primary'
 }
 
 function normalizeUpdateVersion(value: unknown) {
@@ -327,20 +327,18 @@ watch(
     v-model="open"
     title="系统更新"
     description="检查版本、查看发布说明并执行在线更新"
-    variant="success"
-    width="820px"
-    body-max-height="72dvh"
-    body-view-class="pr-3"
-    :close-disabled="updating || restarting"
+    tone="success"
+    size="lg"
+    :dismissible="!updating && !restarting"
   >
     <div class="grid gap-3.5">
-      <section class="grid gap-4 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-4">
+      <section class="grid gap-4 rounded-cp-surface bg-cp-subtle px-4 py-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
-            <p class="m-0 text-[11px] leading-none font-heavy text-(--cp-text-muted)">
+            <p class="m-0 text-[11px] leading-none font-heavy text-cp-muted-text">
               Codex Proxy RS
             </p>
-            <p class="mt-2 mb-0 text-lg leading-none font-heavy text-(--cp-text-primary)">
+            <p class="mt-2 mb-0 text-lg leading-none font-heavy text-cp-primary">
               应用包更新
             </p>
           </div>
@@ -357,10 +355,10 @@ watch(
           <div
             v-for="item in summaryItems"
             :key="item.key"
-            class="min-w-0 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5"
+            class="min-w-0 rounded-cp-control bg-cp-surface px-3 py-2.5"
           >
             <div class="flex min-w-0 items-center justify-between gap-2">
-              <p class="m-0 truncate text-[11px] leading-none font-heavy text-(--cp-text-muted)">
+              <p class="m-0 truncate text-[11px] leading-none font-heavy text-cp-muted-text">
                 {{ item.label }}
               </p>
               <a
@@ -368,14 +366,14 @@ watch(
                 :href="item.releaseUrl"
                 target="_blank"
                 rel="noreferrer"
-                class="inline-flex shrink-0 items-center gap-1 text-[11px] leading-none font-bold text-(--cp-info-text) transition-colors hover:text-(--cp-info)"
+                class="inline-flex shrink-0 items-center gap-1 text-[11px] leading-none font-bold text-cp-info-text transition-colors hover:text-cp-info"
               >
                 发布页
                 <ExternalLink class="size-3" />
               </a>
             </div>
             <p
-              class="mt-2 mb-0 truncate font-mono text-[13px] leading-none font-bold text-(--cp-text-primary)"
+              class="mt-2 mb-0 truncate font-mono text-[13px] leading-none font-bold text-cp-primary"
               :title="item.title || item.value"
             >
               {{ item.value }}
@@ -385,7 +383,7 @@ watch(
 
         <p
           v-if="updateError || updateInfo?.warning"
-          class="m-0 rounded-(--cp-input-radius-base) bg-(--cp-danger-bg) px-3 py-2 text-[12px] leading-normal font-bold text-(--cp-danger-text)"
+          class="m-0 rounded-cp-control bg-cp-danger-bg px-3 py-2 text-[12px] leading-normal font-bold text-cp-danger-text"
         >
           {{ updateError || updateInfo?.warning }}
         </p>
@@ -393,39 +391,41 @@ watch(
 
       <section
         v-if="renderedReleaseNotes"
-        class="grid gap-2 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
+        class="grid gap-2 rounded-cp-surface bg-cp-subtle px-4 py-3.5"
       >
         <div class="flex items-center justify-between gap-3">
-          <p class="m-0 text-[13px] font-heavy text-(--cp-text-primary)">
+          <p class="m-0 text-[13px] font-heavy text-cp-primary">
             发布说明
           </p>
-          <span class="font-mono text-[11px] font-emphasis text-(--cp-text-muted)">
+          <span class="font-mono text-[11px] font-emphasis text-cp-muted-text">
             {{ displayValue(updateInfo?.latestVersion) }}
           </span>
         </div>
-        <BaseScrollbar class="-mx-4" max-height="160px" view-class="px-4 pr-5" track-inset="none">
-          <div class="release-notes" v-html="renderedReleaseNotes" />
+        <BaseScrollbar class="-mx-4" max-height="160px">
+          <div class="px-4">
+            <div class="release-notes" v-html="renderedReleaseNotes" />
+          </div>
         </BaseScrollbar>
       </section>
 
       <section
         v-if="showUpdateProgress"
-        class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle)"
+        class="overflow-hidden rounded-cp-surface bg-cp-subtle"
       >
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
-            <Terminal class="size-4 shrink-0 text-(--cp-success)" />
-            <p class="m-0 text-[13px] leading-none font-heavy text-(--cp-text-primary)">
+            <Terminal class="size-4 shrink-0 text-cp-success" />
+            <p class="m-0 text-[13px] leading-none font-heavy text-cp-primary">
               更新进度
             </p>
           </div>
           <span
-            class="inline-flex h-6 items-center gap-1.5 rounded-full bg-(--cp-bg-subtle) px-2 text-[11px] leading-none font-bold text-(--cp-text-secondary)"
+            class="inline-flex h-6 items-center gap-1.5 rounded-full bg-cp-subtle px-2 text-[11px] leading-none font-bold text-cp-secondary"
             :title="updateStreamError || streamStatusLabel"
           >
             <i
               class="size-1.5 rounded-full"
-              :class="updateStreaming ? 'bg-(--cp-success)' : 'bg-(--cp-text-muted)'"
+              :class="updateStreaming ? 'bg-cp-success' : 'bg-cp-muted-text'"
             />
             {{ streamStatusLabel }}
           </span>
@@ -435,40 +435,42 @@ watch(
           v-if="updateLogRows.length"
           ref="updateLogScrollbar"
           height="260px"
-          view-class="min-h-full px-4 pb-4"
         >
-          <div class="grid gap-2">
+          <div class="grid min-h-full gap-2 px-4 pb-4">
             <div
               v-for="log in updateLogRows"
               :key="log.id"
-              class="grid grid-cols-[68px_14px_minmax(0,1fr)] items-start gap-2 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2 font-mono text-[11px] leading-[1.55]"
+              class="grid grid-cols-[68px_14px_minmax(0,1fr)] items-start gap-2 rounded-cp-control bg-cp-surface px-3 py-2 font-mono text-[11px] leading-[1.55]"
             >
-              <span class="tabular-nums text-(--cp-text-muted)">{{ log.time }}</span>
+              <span class="tabular-nums text-cp-muted-text">{{ log.time }}</span>
               <Circle
                 class="mt-1 size-2.5"
                 :class="logMarkerClass(log.level)"
                 fill="currentColor"
               />
               <p class="m-0 min-w-0 wrap-break-word" :class="logTextClass(log.level)">
-                <span v-if="log.step" class="mr-1 text-(--cp-text-muted)">[{{ log.step }}]</span>
+                <span v-if="log.step" class="mr-1 text-cp-muted-text">[{{ log.step }}]</span>
                 {{ log.message }}
               </p>
             </div>
           </div>
         </BaseScrollbar>
         <div v-else class="grid h-30 place-items-center px-4 pb-4">
-          <BaseEmpty title="暂无进度" :icon="Terminal" compact plain />
+          <BaseEmpty title="暂无进度" :icon="Terminal" size="sm" surface="none" />
         </div>
       </section>
     </div>
 
     <template #footer>
       <BaseButton
-        variant="default"
+        variant="secondary"
         :loading="checking"
         :disabled="loading || updating || restarting"
         @click="handleCheckUpdates(true)"
       >
+        <template #loading>
+          <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
+        </template>
         <template #icon>
           <RefreshCw class="size-3.5" />
         </template>
@@ -476,7 +478,7 @@ watch(
       </BaseButton>
       <BaseButton
         v-if="updateSuccess && needRestart"
-        variant="success"
+        variant="primary"
         :loading="restarting"
         :disabled="updating"
         @click="handleRestart"
@@ -488,7 +490,7 @@ watch(
       </BaseButton>
       <BaseButton
         v-else
-        variant="success"
+        variant="primary"
         :loading="preparingUpdate || updating"
         :disabled="!canUpdate || preparingUpdate"
         @click="handleUpdateRequest"
@@ -505,30 +507,29 @@ watch(
     v-model="updateConfirmOpen"
     title="发现新的更新版本"
     description="检测到远端 latest 与当前显示的目标版本不一致"
-    variant="warning"
     confirm-text="确认更新"
     :loading="updating"
     :confirm-disabled="!updateConfirmInfo?.latestVersion"
     @confirm="handleConfirmUpdate"
   >
     <div class="grid gap-3">
-      <div class="grid gap-2 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-3">
+      <div class="grid gap-2 rounded-cp-control bg-cp-subtle p-3">
         <div
           v-for="item in updateConfirmRows"
           :key="item.key"
           class="flex min-w-0 items-center justify-between gap-3"
         >
-          <span class="text-[12px] leading-none font-bold text-(--cp-text-muted)">
+          <span class="text-[12px] leading-none font-bold text-cp-muted-text">
             {{ item.label }}
           </span>
           <span
-            class="truncate font-mono text-[13px] leading-none font-heavy text-(--cp-text-primary)"
+            class="truncate font-mono text-[13px] leading-none font-heavy text-cp-primary"
           >
             {{ item.value }}
           </span>
         </div>
       </div>
-      <p class="m-0 text-[12px] leading-relaxed font-emphasis text-(--cp-text-muted)">
+      <p class="m-0 text-[12px] leading-relaxed font-emphasis text-cp-muted-text">
         点击确认后弹窗会关闭，并按远端最新目标版本开始更新
       </p>
     </div>
@@ -603,7 +604,7 @@ watch(
 .release-notes :deep(pre) {
   margin: 8px 0;
   overflow-x: auto;
-  border-radius: var(--cp-input-radius-base);
+  border-radius: var(--cp-radius-control);
   background: var(--cp-bg-surface);
   padding: 8px 10px;
 }

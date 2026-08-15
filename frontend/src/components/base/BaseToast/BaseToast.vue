@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 
+import BaseIconButton from '../BaseIconButton.vue'
 import { toast } from './toast'
 
 const iconMap = {
@@ -19,35 +20,37 @@ const titleMap = {
 
 const colorClasses = {
   success: {
-    iconBg: 'bg-(--cp-success-bg)',
-    icon: 'text-(--cp-success)',
+    iconBg: 'bg-cp-success-bg',
+    icon: 'text-cp-success',
   },
   error: {
-    iconBg: 'bg-(--cp-danger-bg)',
-    icon: 'text-(--cp-danger)',
+    iconBg: 'bg-cp-danger-bg',
+    icon: 'text-cp-danger',
   },
   warning: {
-    iconBg: 'bg-(--cp-warning-bg)',
-    icon: 'text-(--cp-warning)',
+    iconBg: 'bg-cp-warning-bg',
+    icon: 'text-cp-warning',
   },
   info: {
-    iconBg: 'bg-(--cp-info-bg)',
-    icon: 'text-(--cp-info)',
+    iconBg: 'bg-cp-info-bg',
+    icon: 'text-cp-info',
   },
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div class="fixed top-6 right-6 z-9999 flex flex-col gap-3 pointer-events-none">
+    <div class="pointer-events-none fixed inset-x-3 top-3 z-9999 flex flex-col items-end gap-3 sm:inset-x-auto sm:top-6 sm:right-6">
       <TransitionGroup name="toast" tag="div" class="flex flex-col gap-3">
-        <div
+        <article
           v-for="message in toast.messages"
           :key="message.id"
-          class="pointer-events-auto flex min-h-16 w-90 items-center gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-surface) px-3.5 py-3 shadow-(--cp-shadow-popover) transition-all"
+          class="pointer-events-auto flex min-h-16 w-90 max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-cp-surface bg-cp-surface px-3.5 py-3 shadow-cp-popover"
+          :role="message.type === 'error' ? 'alert' : 'status'"
+          aria-atomic="true"
         >
           <div
-            class="flex items-center justify-center shrink-0 w-8.5 h-8.5 rounded-(--cp-icon-button-radius)"
+            class="flex size-8.5 shrink-0 items-center justify-center rounded-cp-control"
             :class="colorClasses[message.type].iconBg"
           >
             <component
@@ -58,25 +61,25 @@ const colorClasses = {
           </div>
 
           <div class="flex min-w-0 flex-1 flex-col gap-1">
-            <p class="m-0 truncate text-[13px] leading-[1.15] font-bold text-(--cp-text-primary)">
+            <p class="m-0 truncate text-[13px] leading-[1.15] font-bold text-cp-primary">
               {{ message.title ?? titleMap[message.type] }}
             </p>
             <p
-              class="m-0 max-h-8 overflow-hidden text-xs leading-tight font-semibold text-(--cp-text-secondary)"
+              class="m-0 max-h-8 overflow-hidden text-xs leading-tight font-semibold text-cp-secondary"
             >
               {{ message.message }}
             </p>
           </div>
 
-          <button
-            type="button"
-            class="flex items-center justify-center shrink-0 p-0 border-0 bg-transparent w-7 h-7 rounded-(--cp-button-radius-base) cursor-pointer opacity-60 transition-opacity hover:bg-(--cp-bg-subtle) hover:opacity-100"
-            :aria-label="`关闭${message.title ?? titleMap[message.type]}通知`"
+          <BaseIconButton
+            size="sm"
+            variant="ghost"
+            :label="`关闭${message.title ?? titleMap[message.type]}通知`"
             @click="toast.remove(message.id)"
           >
-            <X :size="16" class="text-(--cp-text-muted)" />
-          </button>
-        </div>
+            <X :size="16" class="text-cp-muted-text" />
+          </BaseIconButton>
+        </article>
       </TransitionGroup>
     </div>
   </Teleport>
@@ -89,6 +92,13 @@ const colorClasses = {
 
 .toast-leave-active {
   animation: toast-out 0.2s ease-in;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter-active,
+  .toast-leave-active {
+    animation: none;
+  }
 }
 
 @keyframes toast-in {

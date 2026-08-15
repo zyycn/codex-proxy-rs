@@ -32,8 +32,8 @@ const description = computed(() => props.group
     v-model="open"
     :title="title"
     :description="description"
-    width="560px"
-    :close-disabled="saving"
+    size="md"
+    :dismissible="!saving"
   >
     <BaseForm class="grid gap-5">
       <BaseFormItem label="分组名称" required>
@@ -56,7 +56,7 @@ const description = computed(() => props.group
         <BaseTextarea
           v-model="form.description"
           aria-label="分组描述"
-          size="sm"
+          :rows="4"
           placeholder="说明这个分组的用途..."
           :disabled="saving"
         />

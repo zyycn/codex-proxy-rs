@@ -25,10 +25,9 @@ const providerOptions = [
 <template>
   <BaseSegmented
     v-model="provider"
+    label="按平台筛选"
     :options="providerOptions"
     :disabled="disabled"
-    icon-only
-    size="input"
-    aria-label="按平台筛选"
+    display="icon"
   />
 </template>

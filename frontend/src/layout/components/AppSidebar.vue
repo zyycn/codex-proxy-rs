@@ -29,7 +29,7 @@ import {
 } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
@@ -328,7 +328,7 @@ onBeforeUnmount(() => {
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-bg-surface) px-4 shadow-(--cp-shadow-sidebar)"
+    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-cp-surface px-4 shadow-cp-sidebar"
     :class="[
       mobile ? 'flex' : 'hidden min-[961px]:flex',
       isCollapsed ? 'w-22 basis-22 items-center' : 'w-62.75 basis-62.75',
@@ -341,7 +341,7 @@ onBeforeUnmount(() => {
       <BaseMotionIcon
         aria-hidden="true"
         variant="brand"
-        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-(--cp-icon-button-radius)"
+        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-cp-control"
       >
         <img
           src="/favicon.svg"
@@ -355,27 +355,27 @@ onBeforeUnmount(() => {
         ref="brandLabelEl"
         class="grid min-w-33 content-center overflow-hidden"
       >
-        <strong class="text-base leading-[1.1] font-heavy text-(--cp-text-primary)">
+        <strong class="text-base leading-[1.1] font-heavy text-cp-primary">
           Codex Proxy
         </strong>
         <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
-          <span class="shrink-0 text-xs leading-none font-emphasis text-(--cp-text-secondary)">
+          <span class="shrink-0 text-xs leading-none font-emphasis text-cp-secondary">
             Rust build
           </span>
           <button
             v-if="hasVersionLabel"
             type="button"
-            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-(--cp-input-radius-small) border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
+            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-cp-control-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface"
             :class="[
               hasUpdate
-                ? 'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover)'
-                : 'bg-(--cp-bg-subtle) text-(--cp-text-muted) hover:bg-(--cp-bg-muted) hover:text-(--cp-text-secondary)',
+                ? 'bg-cp-success-bg text-cp-success-text hover:bg-cp-success-bg-hover'
+                : 'bg-cp-subtle text-cp-muted-text hover:bg-cp-muted hover:text-cp-secondary',
             ]"
             :title="updateButtonLabel"
             @click="openSystemUpdate"
           >
             <span>{{ versionLabel }}</span>
-            <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-(--cp-success)" />
+            <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-cp-success" />
           </button>
         </span>
       </span>
@@ -388,7 +388,7 @@ onBeforeUnmount(() => {
     >
       <span
         aria-hidden="true"
-        class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-(--cp-icon-button-radius) bg-(--cp-bg-nav-active) transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp-control bg-cp-nav-active transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
         :style="activeNavIndicatorStyle"
       >
         <span ref="navSignal" class="sidebar-active-signal absolute inset-y-0 left-0 w-2/3" />
@@ -397,16 +397,16 @@ onBeforeUnmount(() => {
         v-for="item in navItems"
         :key="item.label"
         type="button"
-        class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-(--cp-icon-button-radius) border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
+        class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp-control border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface"
         :class="[
           isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
             ? navFeedbackMuted
-              ? 'bg-transparent font-bold text-(--cp-text-primary) transition-none'
-              : 'bg-transparent font-bold text-(--cp-text-primary) transition-colors duration-200'
+              ? 'bg-transparent font-bold text-cp-primary transition-none'
+              : 'bg-transparent font-bold text-cp-primary transition-colors duration-200'
             : navFeedbackMuted
-              ? 'bg-transparent font-semibold text-(--cp-text-secondary) transition-none'
-              : 'bg-transparent font-semibold text-(--cp-text-secondary) transition-colors duration-200 hover:bg-(--cp-bg-subtle) hover:text-(--cp-text-primary)',
+              ? 'bg-transparent font-semibold text-cp-secondary transition-none'
+              : 'bg-transparent font-semibold text-cp-secondary transition-colors duration-200 hover:bg-cp-subtle hover:text-cp-primary',
         ]"
         @click="navigate(item.path)"
       >
@@ -422,88 +422,81 @@ onBeforeUnmount(() => {
 
     <div class="mt-auto mb-6" :class="isCollapsed ? 'w-11' : 'w-full'">
       <div
-        class="bg-(--cp-bg-subtle)"
+        class="bg-cp-subtle"
         :class="
           isCollapsed
-            ? 'grid gap-1 rounded-(--cp-icon-button-radius) p-1'
-            : 'flex h-11 items-center justify-between rounded-(--cp-panel-radius) px-2'
+            ? 'grid gap-1 rounded-cp-control p-1'
+            : 'flex h-11 items-center justify-between rounded-cp-overlay px-2'
         "
       >
         <span
           v-if="!isCollapsed"
-          class="inline-flex whitespace-nowrap h-7 items-center gap-1.5 rounded-lg bg-(--cp-success-bg) px-2.5 text-xs leading-none font-emphasis text-(--cp-success-text)"
+          class="inline-flex whitespace-nowrap h-7 items-center gap-1.5 rounded-lg bg-cp-success-bg px-2.5 text-xs leading-none font-emphasis text-cp-success-text"
         >
-          <i class="size-1.5 rounded-full bg-(--cp-success)" />
+          <i class="size-1.5 rounded-full bg-cp-success" />
           在线
         </span>
 
         <div class="flex items-center" :class="isCollapsed ? 'grid gap-1' : 'gap-1'">
-          <BaseButton
+          <BaseIconButton
             v-if="isCollapsed && hasUpdate"
-            icon-only
-            :variant="hasUpdate ? 'success' : 'ghost'"
-            size="default"
+            variant="success"
+            size="md"
             :label="updateButtonLabel"
             @click="openSystemUpdate"
           >
             <ArrowUpCircle :size="19" />
-          </BaseButton>
+          </BaseIconButton>
 
-          <BaseButton
-            icon-only
-            variant="ghost"
-            :size="isCollapsed ? 'default' : 'sm'"
+          <BaseIconButton
+            :size="isCollapsed ? 'md' : 'sm'"
             label="退出登录"
-            class="hover:bg-(--cp-danger-bg) hover:text-(--cp-danger)"
+            variant="destructive"
             @click="handleLogout"
           >
             <LogOut :size="isCollapsed ? 19 : 18" />
-          </BaseButton>
+          </BaseIconButton>
 
-          <BaseButton
-            icon-only
+          <BaseIconButton
             variant="ghost"
-            :size="isCollapsed ? 'default' : 'sm'"
+            :size="isCollapsed ? 'md' : 'sm'"
             :label="themeToggleLabel"
             @click="toggleTheme($event)"
           >
             <Sun v-if="effectiveTheme === 'dark'" :size="isCollapsed ? 19 : 18" />
             <Moon v-else :size="isCollapsed ? 19 : 18" />
-          </BaseButton>
+          </BaseIconButton>
 
-          <BaseButton
-            icon-only
+          <BaseIconButton
             variant="ghost"
-            :size="isCollapsed ? 'default' : 'sm'"
+            :size="isCollapsed ? 'md' : 'sm'"
             label="关于"
             @click="emit('openAbout')"
           >
             <Info :size="isCollapsed ? 19 : 18" />
-          </BaseButton>
+          </BaseIconButton>
 
-          <BaseButton
+          <BaseIconButton
             v-if="mobile"
-            icon-only
             variant="ghost"
             size="sm"
             label="关闭侧边栏"
             @click="emit('close')"
           >
             <PanelLeftClose :size="18" />
-          </BaseButton>
+          </BaseIconButton>
 
-          <BaseButton
+          <BaseIconButton
             v-else
-            icon-only
             variant="ghost"
-            :size="isCollapsed ? 'default' : 'sm'"
+            :size="isCollapsed ? 'md' : 'sm'"
             data-sidebar-toggle
             :label="isCollapsed ? '展开侧边栏' : '收缩侧边栏'"
             @click="emit('toggle')"
           >
             <PanelLeftOpen v-if="isCollapsed" :size="19" />
             <PanelLeftClose v-else :size="18" />
-          </BaseButton>
+          </BaseIconButton>
         </div>
       </div>
     </div>

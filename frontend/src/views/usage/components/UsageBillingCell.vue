@@ -41,21 +41,21 @@ const amountItems = computed(() => {
 
 function itemValueClass(tone?: string, accent?: boolean) {
   if (tone === 'success')
-    return 'text-(--cp-success-text)'
+    return 'text-cp-success-text'
   if (tone === 'info' || accent)
-    return 'text-(--cp-info-text)'
-  return 'text-(--cp-text-primary)'
+    return 'text-cp-info-text'
+  return 'text-cp-primary'
 }
 </script>
 
 <template>
   <div class="flex items-center justify-end gap-1.5">
-    <span class="font-mono text-[12px] font-heavy tabular-nums text-(--cp-success-text)">
+    <span class="font-mono text-[12px] font-heavy tabular-nums text-cp-success-text">
       {{ usageBillingText(record) }}
     </span>
 
-    <UsageDetailPopover v-if="billing" title="计费明细" width="248px" trigger-label="查看费用明细">
-      <div class="grid gap-1.5 text-(--cp-text-secondary)">
+    <UsageDetailPopover v-if="billing" title="计费明细" trigger-label="查看费用明细">
+      <div class="grid gap-1.5 text-cp-secondary">
         <div v-for="item in amountItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
           <span class="whitespace-nowrap">{{ item.label }}</span>
           <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(undefined, item.accent)">
@@ -63,7 +63,7 @@ function itemValueClass(tone?: string, accent?: boolean) {
           </span>
         </div>
       </div>
-      <div class="mt-1 grid gap-1.5 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) p-2 text-(--cp-text-secondary)">
+      <div class="mt-1 grid gap-1.5 rounded-cp-control bg-cp-subtle p-2 text-cp-secondary">
         <div v-for="item in billingItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
           <span class="whitespace-nowrap">{{ item.label }}</span>
           <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(item.tone)">

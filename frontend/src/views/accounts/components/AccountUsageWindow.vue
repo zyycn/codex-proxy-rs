@@ -68,7 +68,7 @@ const rootClass = computed(() =>
   variantValue(
     'grid min-w-0 grid-rows-[14px_14px] gap-1',
     'flex min-w-0 flex-col',
-    'rounded-lg bg-(--cp-bg-subtle) p-2',
+    'rounded-lg bg-cp-subtle p-2',
   ),
 )
 const headerClass = computed(() =>
@@ -80,10 +80,10 @@ const headerClass = computed(() =>
 )
 const labelClass = computed(() => {
   if (isMetric.value)
-    return 'truncate text-(--cp-text-muted)'
+    return 'truncate text-cp-muted-text'
   if (isCompact.value)
-    return 'truncate text-(--cp-text-muted)'
-  return 'text-(--cp-text-secondary)'
+    return 'truncate text-cp-muted-text'
+  return 'text-cp-secondary'
 })
 const valueClass = computed(() =>
   variantValue(
@@ -102,7 +102,7 @@ const trackShapeClass = computed(() =>
     'h-2 overflow-hidden rounded-full',
   ),
 )
-const trackClass = computed(() => `${trackShapeClass.value} bg-(--cp-default-border)`)
+const trackClass = computed(() => `${trackShapeClass.value} bg-cp-default-border`)
 const barStyle = computed(() => {
   if (!props.window)
     return undefined
@@ -184,7 +184,7 @@ const requestBars = computed(() => {
         >
           <span
             v-if="quotaLocalUsageVisible"
-            class="text-right text-(--cp-text-muted)"
+            class="text-right text-cp-muted-text"
             :class="valueClass"
             :title="`本地 Token 用量：${quotaLocalUsageDisplay}`"
           >
@@ -205,7 +205,7 @@ const requestBars = computed(() => {
         >
           <span
             v-if="quotaLocalUsageVisible"
-            class="text-(--cp-text-muted)"
+            class="text-cp-muted-text"
             :class="valueClass"
           >
             {{ quotaLocalUsageDisplay }}
@@ -234,7 +234,7 @@ const requestBars = computed(() => {
       </div>
       <div
         v-if="!isCompact && window.resetAtDisplay !== '—'"
-        class="mt-3 text-[12px] font-emphasis text-(--cp-text-secondary)"
+        class="mt-3 text-[12px] font-emphasis text-cp-secondary"
       >
         重置时间: {{ window.resetAtDisplay }}
       </div>
@@ -247,7 +247,7 @@ const requestBars = computed(() => {
         </span>
         <strong
           v-if="localRequestValueVisible"
-          class="shrink-0 font-mono tabular-nums text-(--cp-text-primary)"
+          class="shrink-0 font-mono tabular-nums text-cp-primary"
           :class="valueClass"
         >
           {{ localRequestDisplay }}
@@ -263,11 +263,11 @@ const requestBars = computed(() => {
         <span
           v-for="bar in requestBars"
           :key="bar.key"
-          class="relative min-w-0 flex-1 bg-(--cp-default-border)"
+          class="relative min-w-0 flex-1 bg-cp-default-border"
           :title="bar.title"
         >
           <span
-            class="absolute inset-x-0 bottom-0 bg-(--cp-success)"
+            class="absolute inset-x-0 bottom-0 bg-cp-success"
             :style="{ height: bar.height }"
           />
         </span>
@@ -275,8 +275,8 @@ const requestBars = computed(() => {
     </template>
 
     <div v-else :class="headerClass">
-      <span class="min-w-0 text-(--cp-text-secondary)">额度待观测</span>
-      <span class="shrink-0 font-mono text-(--cp-text-muted)" :class="valueClass">—</span>
+      <span class="min-w-0 text-cp-secondary">额度待观测</span>
+      <span class="shrink-0 font-mono text-cp-muted-text" :class="valueClass">—</span>
     </div>
   </div>
 </template>

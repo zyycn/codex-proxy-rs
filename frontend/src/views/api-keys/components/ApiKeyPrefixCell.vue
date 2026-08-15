@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Copy } from '@lucide/vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 
 defineProps<{
   prefix: string
@@ -15,11 +15,10 @@ const emit = defineEmits<{
 
 <template>
   <div class="flex items-center gap-2">
-    <code class="block min-w-0 truncate font-mono text-[12px] font-emphasis text-(--cp-text-primary)">
+    <code class="block min-w-0 truncate font-mono text-[12px] font-emphasis text-cp-primary">
       {{ prefix }}••••••••••••••••
     </code>
-    <BaseButton
-      icon-only
+    <BaseIconButton
       variant="ghost"
       size="sm"
       label="复制完整密钥"
@@ -28,6 +27,6 @@ const emit = defineEmits<{
       @click="emit('copy')"
     >
       <Copy class="size-3.5" />
-    </BaseButton>
+    </BaseIconButton>
   </div>
 </template>

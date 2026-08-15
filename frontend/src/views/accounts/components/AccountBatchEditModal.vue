@@ -31,12 +31,12 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
     v-model="open"
     title="批量编辑账号"
     :description="`统一调整选中的 ${selectedCount} 个账号，保存后将覆盖它们当前的调度参数和分组设置。`"
-    width="640px"
-    :close-disabled="saving"
+    size="md"
+    :dismissible="!saving"
   >
     <div class="grid gap-5">
       <div class="flex min-h-6 items-center justify-between gap-3">
-        <span class="text-[13px] leading-none font-medium text-(--cp-text-secondary)">调度</span>
+        <span class="text-[13px] leading-none font-medium text-cp-secondary">调度</span>
         <BaseSwitch
           v-model="enabled"
           label="切换所选账号调度"

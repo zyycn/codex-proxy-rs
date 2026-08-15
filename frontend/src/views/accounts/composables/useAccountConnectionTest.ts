@@ -105,8 +105,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         label: '正在测试',
         description: '正在向所选模型发送请求并接收流式响应',
         icon: Clock3,
-        badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
-        iconClass: 'text-(--cp-info)',
+        badge: 'bg-cp-info-bg text-cp-info-text',
+        iconClass: 'text-cp-info',
       }
     }
     if (connectionTestStatus.value === 'success') {
@@ -114,8 +114,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         label: '连接正常',
         description: '请求已完成，可在下方查看模型、耗时和事件轨迹',
         icon: CheckCircle2,
-        badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
-        iconClass: 'text-(--cp-success)',
+        badge: 'bg-cp-success-bg text-cp-success-text',
+        iconClass: 'text-cp-success',
       }
     }
     if (connectionTestStatus.value === 'error') {
@@ -123,16 +123,16 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         label: '测试失败',
         description: '请求未完成，请在下方查看上游错误与事件轨迹',
         icon: XCircle,
-        badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
-        iconClass: 'text-(--cp-danger)',
+        badge: 'bg-cp-danger-bg text-cp-danger-text',
+        iconClass: 'text-cp-danger',
       }
     }
     return {
       label: '准备测试',
       description: '选择模型后，点击“开始测试”发送真实请求',
       icon: Wifi,
-      badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
-      iconClass: 'text-(--cp-text-muted)',
+      badge: 'bg-cp-subtle text-cp-secondary',
+      iconClass: 'text-cp-muted-text',
     }
   })
 

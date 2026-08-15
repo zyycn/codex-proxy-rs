@@ -4,6 +4,7 @@ import { computed, shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
@@ -48,7 +49,7 @@ function togglePasswordVisible(): void {
 <template>
   <BaseCard
     as="form"
-    layout="flush"
+    padding="none"
     class="login-form relative grid min-h-129.25 w-[min(440px,100%)] gap-3 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-3 max-[560px]:p-5.5"
     @submit.prevent="emit('submit')"
   >
@@ -139,8 +140,7 @@ function togglePasswordVisible(): void {
             <KeyRound :size="17" />
           </template>
           <template #suffix>
-            <BaseButton
-              icon-only
+            <BaseIconButton
               variant="ghost"
               size="sm"
               class="login-password-toggle"
@@ -150,7 +150,7 @@ function togglePasswordVisible(): void {
             >
               <EyeOff v-if="isPasswordVisible" :size="16" />
               <Eye v-else :size="16" />
-            </BaseButton>
+            </BaseIconButton>
           </template>
         </BaseInput>
       </div>
@@ -194,11 +194,11 @@ function togglePasswordVisible(): void {
   --cp-input-current-bg: var(--login-input-bg);
   --cp-input-current-bg-hover: var(--login-input-bg-hover);
   --cp-input-soft-bg-focus: var(--login-input-focus);
-  --cp-button-radius-base: 6px;
-  --cp-icon-button-radius: 6px;
+  --cp-radius-control-sm: 6px;
+  --cp-radius-control: 6px;
   --cp-shadow-control: none;
   --cp-shadow-popover: none;
-  --cp-input-height-default: 43px;
+  --cp-control-height-md: 43px;
 
   background:
     linear-gradient(118deg, var(--login-form-bg-a), var(--login-form-bg-b) 56%, var(--login-form-bg-c)),

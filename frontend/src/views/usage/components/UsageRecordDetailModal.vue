@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 import type { UsageViewModel } from '@/api'
-import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useThemeColor } from '@/composables/useThemeColor'
@@ -46,8 +46,8 @@ const tokenDetails = computed(() => props.record ? usageTokenDetails(props.recor
 const billing = computed(() => props.record ? usageBilling(props.record) : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
 
-const panelClass = 'rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5'
-const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)'
+const panelClass = 'rounded-cp-surface bg-cp-subtle px-4 py-3.5'
+const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-cp-secondary'
 
 const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
 const finalAttemptIndex = computed(() => {
@@ -109,29 +109,31 @@ const detailGroups = computed(() => [
 const modelRouteGroup = computed(() => detailGroups.value[0])
 const clientUpstreamGroup = computed(() => detailGroups.value[1])
 
-const attemptColumns = [
-  {
-    key: 'attemptIndex',
-    label: '序号',
-    width: '56px',
-    align: 'center' as const,
-    fixed: false as const,
-  },
-  { key: 'outcome', label: '结果', width: '76px' },
-  { key: 'provider', label: '平台', width: '72px' },
-  { key: 'model', label: '模型', width: '140px' },
-  { key: 'transport', label: '传输', width: '84px' },
-  { key: 'statusCode', label: '状态', width: '84px' },
-  { key: 'accountLabel', label: '账号', width: '200px' },
-  {
-    key: 'latencyMs',
-    label: '耗时',
-    width: '84px',
-    align: 'right' as const,
-  },
-] satisfies BaseTableColumn[]
+interface AttemptRow {
+  id: string
+  attemptIndex: number
+  outcome: string
+  provider: string
+  model: string
+  transport: string
+  statusCode: number | null
+  accountLabel: string
+  accountId: string | null
+  latencyMs: number | null
+}
 
-const attemptRows = computed(() =>
+const attemptColumns = defineTableColumns<AttemptRow>([
+  { key: 'attemptIndex', label: '序号', kind: 'index' },
+  { key: 'outcome', label: '结果', kind: 'status', size: 'sm' },
+  { key: 'provider', label: '平台', kind: 'meta', size: 'sm' },
+  { key: 'model', label: '模型', kind: 'mono', size: 'lg' },
+  { key: 'transport', label: '传输', kind: 'status', size: 'sm' },
+  { key: 'statusCode', label: '状态', kind: 'status', size: 'sm' },
+  { key: 'accountLabel', label: '账号', kind: 'mono', size: '3xl' },
+  { key: 'latencyMs', label: '耗时', kind: 'numeric', size: 'sm' },
+])
+
+const attemptRows = computed<AttemptRow[]>(() =>
   (props.record?.attempts ?? []).map(attempt => ({
     id: attempt.id,
     attemptIndex: attempt.attemptIndex,
@@ -159,10 +161,10 @@ function attemptOutcomeText(outcome: string) {
 
 function attemptOutcomeClass(outcome: string) {
   if (outcome === 'succeeded')
-    return 'text-(--cp-success-text)'
+    return 'text-cp-success-text'
   if (outcome === 'failed')
-    return 'text-(--cp-danger-text)'
-  return 'text-(--cp-text-secondary)'
+    return 'text-cp-danger-text'
+  return 'text-cp-secondary'
 }
 
 const billingItems = computed(() => {
@@ -288,17 +290,15 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     v-model="open"
     title="使用记录详情"
     description="单次请求的完整链路信息"
-    variant="info"
-    width="960px"
-    body-max-height="min(76dvh,820px)"
-    body-view-class="grid gap-3"
+    tone="info"
+    size="xl"
   >
-    <template v-if="record">
+    <div v-if="record" class="grid gap-3">
       <section :class="panelClass">
         <div class="min-w-0">
           <span :class="fieldLabelClass">账号</span>
           <p
-            class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-heavy text-(--cp-text-primary)"
+            class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-heavy text-cp-primary"
             :title="displayValue(accountDisplay)"
           >
             {{ displayValue(accountDisplay) }}
@@ -353,11 +353,11 @@ const tokenDonutOption = computed<EChartsOption>(() => {
                 <BaseChart :option="tokenDonutOption" :height="152" />
                 <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div class="grid text-center">
-                    <span class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
+                    <span class="text-[11px] leading-none font-bold text-cp-muted-text">
                       总计
                     </span>
                     <strong
-                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-(--cp-text-primary)"
+                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-cp-primary"
                     >
                       {{ tokenDetails?.totalTokensDisplay ?? '—' }}
                     </strong>
@@ -409,7 +409,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
             尝试链路
           </h3>
           <span
-            class="text-[11px] leading-none font-emphasis text-(--cp-text-muted)"
+            class="text-[11px] leading-none font-emphasis text-cp-muted-text"
             title="中间尝试可能有缺口，仅展示可观测到的记录"
           >
             尽力观测
@@ -419,10 +419,8 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           class="attempt-table mt-2.5 min-w-0 font-mono tabular-nums"
           :columns="attemptColumns"
           :rows="attemptRows"
-          :stripe="false"
-          compact
+          density="compact"
           row-key="id"
-          min-width="640px"
         >
           <template #outcome="{ row }">
             <span :class="attemptOutcomeClass(row.outcome)">
@@ -436,14 +434,14 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           </template>
           <template #accountLabel="{ row }">
             <span
-              class="block max-w-full truncate font-mono text-[12px] font-bold text-(--cp-text-primary)"
+              class="block max-w-full truncate font-mono text-[12px] font-bold text-cp-primary"
               :title="row.accountId || ''"
             >
               {{ row.accountLabel }}
             </span>
           </template>
           <template #latencyMs="{ row }">
-            <span class="font-mono font-bold tabular-nums text-(--cp-text-primary)">
+            <span class="font-mono font-bold tabular-nums text-cp-primary">
               {{ formatDuration(row.latencyMs) }}
             </span>
           </template>
@@ -470,7 +468,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           :content="JSON.stringify(record.providerMetadata, null, 2)"
         />
       </section>
-    </template>
+    </div>
 
     <template #footer>
       <BaseButton variant="primary" @click="open = false">

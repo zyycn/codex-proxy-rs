@@ -3,6 +3,7 @@ import { Apple, Copy, Monitor } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -71,43 +72,43 @@ const visibleFiles = computed(() => [
     v-model="open"
     title="使用密钥"
     description="将下方内容分别保存到显示的 Codex CLI 配置文件"
-    width="760px"
+    size="lg"
   >
     <div class="flex flex-col gap-5">
       <div class="flex flex-wrap items-center gap-3">
-        <BaseSegmented v-model="activePlatform" :options="platformOptions" />
+        <BaseSegmented v-model="activePlatform" label="配置平台" :options="platformOptions" />
       </div>
 
       <div class="flex flex-col gap-3">
         <section
           v-for="file in visibleFiles"
           :key="file.path"
-          class="overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-subtle) shadow-(--cp-shadow-control)"
+          class="overflow-hidden rounded-cp-surface bg-cp-subtle shadow-cp-control"
         >
           <div class="flex items-center justify-between gap-3 px-4 py-2.5">
             <span
-              class="min-w-0 truncate font-mono text-[12px] font-emphasis text-(--cp-text-secondary)"
+              class="min-w-0 truncate font-mono text-[12px] font-emphasis text-cp-secondary"
             >
               {{ file.path }}
             </span>
-            <BaseButton
-              icon-only
-              variant="default"
+            <BaseIconButton
+              variant="secondary"
               size="sm"
               label="复制"
               @click="emit('copy', file.content)"
             >
               <Copy class="size-3.5" />
-            </BaseButton>
+            </BaseIconButton>
           </div>
           <BaseScrollbar
             max-height="360px"
-            view-class="mx-3 mb-3 rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3.5 py-3 shadow-(--cp-shadow-input)"
           >
-            <pre
-              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-emphasis text-(--cp-text-primary)"
-              v-text="file.content"
-            />
+            <div class="mx-3 mb-3 rounded-cp-control bg-cp-surface px-3.5 py-3 shadow-cp-input">
+              <pre
+                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-emphasis text-cp-primary"
+                v-text="file.content"
+              />
+            </div>
           </BaseScrollbar>
         </section>
       </div>

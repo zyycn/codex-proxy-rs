@@ -1,119 +1,62 @@
 <script setup lang="ts">
 import { LoaderCircle } from '@lucide/vue'
-import { computed, useSlots } from 'vue'
+import { computed } from 'vue'
 
-type ButtonVariant = 'default' | 'primary' | 'success' | 'warning' | 'danger' | 'ghost'
-type ButtonSize = 'sm' | 'default' | 'md' | 'lg'
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive'
+type ButtonSize = 'sm' | 'md' | 'lg'
 
 const props = withDefaults(
   defineProps<{
     variant?: ButtonVariant
     size?: ButtonSize
     loading?: boolean
-    spinIconOnLoading?: boolean
     disabled?: boolean
-    active?: boolean
-    iconOnly?: boolean
-    label?: string
-    title?: string
     type?: 'button' | 'submit' | 'reset'
   }>(),
   {
-    variant: 'primary',
-    size: 'default',
+    variant: 'secondary',
+    size: 'md',
     loading: false,
-    spinIconOnLoading: false,
     disabled: false,
-    active: false,
-    iconOnly: false,
     type: 'button',
   },
 )
 
-const slots = useSlots()
+defineSlots<{
+  icon?: () => unknown
+  loading?: () => unknown
+  default: () => unknown
+}>()
 
-const variantClasses = {
-  default:
-    'bg-(--cp-bg-muted) text-(--cp-text-primary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-active) active:bg-(--cp-default-bg-active)',
+const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    'bg-(--cp-info) text-(--cp-info-on) hover:bg-(--cp-info-hover) active:bg-(--cp-info-pressed)',
-  success:
-    'bg-(--cp-success-bg) text-(--cp-success-text) hover:bg-(--cp-success-bg-hover) active:bg-(--cp-success-bg-active)',
-  warning:
-    'bg-(--cp-warning-bg) text-(--cp-warning-text) hover:bg-(--cp-warning-bg-hover) active:bg-(--cp-warning-bg-active)',
-  danger:
-    'bg-(--cp-danger-bg) text-(--cp-danger-text) hover:bg-(--cp-danger-bg-hover) active:bg-(--cp-danger-bg-active)',
+    'bg-cp-accent text-cp-accent-on shadow-cp-control hover:bg-cp-accent-hover active:bg-cp-accent-pressed',
+  secondary:
+    'bg-cp-muted text-cp-primary shadow-cp-control hover:bg-cp-default-active active:bg-cp-nav-active',
   ghost:
-    'bg-transparent text-(--cp-text-secondary) hover:bg-(--cp-bg-subtle) active:bg-(--cp-bg-muted)',
+    'bg-transparent text-cp-secondary shadow-none hover:bg-cp-subtle hover:text-cp-primary active:bg-cp-muted',
+  destructive:
+    'bg-cp-danger-bg text-cp-danger-text shadow-none hover:bg-cp-danger-bg-hover active:bg-cp-danger-bg-active',
 }
-
-const iconOnlyDefaultClasses
-  = 'bg-(--cp-bg-surface) text-(--cp-text-secondary) shadow-(--cp-shadow-control) hover:bg-(--cp-default-bg-hover) hover:text-(--cp-normal) active:bg-(--cp-default-bg-active)'
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'h-7 gap-1.5 px-3 text-xs',
-  default: 'h-(--cp-input-height-default) gap-2 px-4 text-[13px]',
-  md: 'h-11 gap-2 px-4 text-[13px]',
-  lg: 'h-11.5 gap-2.5 px-5 text-[15px]',
+  sm: 'h-cp-control-sm gap-1.5 px-3 text-xs',
+  md: 'h-cp-control-md gap-2 px-4 text-[13px]',
+  lg: 'h-cp-control-lg gap-2.5 px-5 text-[14px]',
 }
 
-const iconOnlySizeClasses: Record<ButtonSize, string> = {
-  sm: 'size-8 rounded-(--cp-icon-button-radius)',
-  default: 'size-(--cp-input-height-default) rounded-(--cp-icon-button-radius)',
-  md: 'size-11 rounded-(--cp-icon-button-radius)',
-  lg: 'size-11.5 rounded-(--cp-icon-button-radius)',
-}
-
-const loadingIconSize: Record<ButtonSize, number> = {
+const spinnerSizes: Record<ButtonSize, number> = {
   sm: 14,
-  default: 15,
-  md: 16,
+  md: 15,
   lg: 17,
 }
 
-const loadingIndicatorStyle = computed(() => {
-  const iconSize = loadingIconSize[props.size]
-  return {
-    width: `${iconSize}px`,
-    height: `${iconSize}px`,
-  }
-})
-
 const classes = computed(() => [
-  'inline-flex items-center justify-center border-0 font-bold leading-[1.15] transition-[background-color,box-shadow,color,opacity,transform] duration-150 cursor-pointer outline-none motion-safe:active:translate-y-px motion-safe:active:scale-[0.985]',
-  props.iconOnly ? iconOnlySizeClasses[props.size] : sizeClasses[props.size],
-  props.iconOnly ? 'shrink-0' : undefined,
-  props.iconOnly ? '' : 'rounded-(--cp-button-radius-base)',
-  'focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)',
-  'disabled:cursor-not-allowed disabled:transform-none disabled:bg-(--cp-disabled-bg) disabled:text-(--cp-disabled-text) disabled:shadow-none',
-  props.iconOnly && (props.variant === 'default' || props.variant === 'primary')
-    ? iconOnlyDefaultClasses
-    : variantClasses[props.variant],
-  props.active ? 'bg-(--cp-default-bg-hover) text-(--cp-normal)' : undefined,
-])
-
-const ariaLabel = computed(() => props.label || props.title)
-
-const labelText = computed(() => {
-  const defaultSlot = slots.default?.()
-  const text = defaultSlot
-    ?.map(node => (typeof node.children === 'string' ? node.children : ''))
-    .join('')
-    .trim()
-
-  return text || ''
-})
-
-const labelClasses = computed(() => [
-  'inline-flex min-w-0 items-center justify-center gap-2 [&>svg]:shrink-0',
-  labelText.value.length === 2 ? 'tracking-[0.12em]' : undefined,
-])
-
-const loadingIconClasses = computed(() => [
-  'inline-grid shrink-0 place-items-center leading-none [&>svg]:block',
-  props.loading
-    ? '[&>svg]:origin-center [&>svg]:animate-spin [&>svg]:transform-view [&>svg]:will-change-transform motion-reduce:[&>svg]:animate-none'
-    : undefined,
+  'inline-flex shrink-0 touch-manipulation items-center justify-center rounded-cp-control-sm border-0 font-bold leading-none outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 motion-safe:active:translate-y-px motion-safe:active:scale-[0.985] motion-reduce:transition-none',
+  'focus-visible:ring-2 focus-visible:ring-cp-accent-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface',
+  'disabled:cursor-not-allowed disabled:transform-none disabled:bg-cp-disabled disabled:text-cp-disabled-text disabled:shadow-none',
+  sizeClasses[props.size],
+  variantClasses[props.variant],
 ])
 </script>
 
@@ -122,31 +65,24 @@ const loadingIconClasses = computed(() => [
     :type="type"
     :class="classes"
     :disabled="disabled || loading"
-    :aria-label="iconOnly ? ariaLabel : undefined"
-    :title="title || (iconOnly ? label : undefined)"
-    :aria-busy="loading"
+    :aria-busy="loading || undefined"
   >
     <span
-      v-if="loading && !spinIconOnLoading"
-      :class="loadingIconClasses"
-      :style="loadingIndicatorStyle"
+      v-if="loading"
+      class="inline-grid shrink-0 place-items-center leading-none"
       aria-hidden="true"
     >
-      <LoaderCircle
-        :size="loadingIconSize[size]"
-      />
+      <slot name="loading">
+        <LoaderCircle
+          class="animate-spin motion-reduce:animate-none"
+          :size="spinnerSizes[size]"
+        />
+      </slot>
     </span>
-    <span v-else-if="$slots.icon" :class="loadingIconClasses" aria-hidden="true">
+    <span v-else-if="$slots.icon" class="inline-grid shrink-0 place-items-center" aria-hidden="true">
       <slot name="icon" />
     </span>
-    <span v-if="!iconOnly && $slots.default" :class="labelClasses">
-      <slot />
-    </span>
-    <span
-      v-if="iconOnly && !$slots.icon && (!loading || spinIconOnLoading)"
-      :class="loadingIconClasses"
-      aria-hidden="true"
-    >
+    <span class="inline-flex min-w-0 items-center justify-center gap-2">
       <slot />
     </span>
   </button>

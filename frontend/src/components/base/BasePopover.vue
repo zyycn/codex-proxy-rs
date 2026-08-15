@@ -27,12 +27,9 @@ const props = withDefaults(
     placement?: PopoverPlacement
     trigger?: PopoverTrigger
     offset?: number
-    width?: number | string
     disabled?: boolean
     /** 包含 hover 的触发方式打开弹窗的延迟（毫秒）；click 触发不生效。 */
     hoverDelay?: number
-    panelClass?: string
-    triggerClass?: string
     anchorElement?: HTMLElement | null
     animatePosition?: boolean
   }>(),
@@ -42,8 +39,6 @@ const props = withDefaults(
     offset: 6,
     disabled: false,
     hoverDelay: 400,
-    panelClass: '',
-    triggerClass: '',
     anchorElement: null,
     animatePosition: false,
   },
@@ -53,7 +48,6 @@ const open = defineModel<boolean>({ default: false })
 const attrs = useAttrs()
 
 const rootRef = ref<HTMLElement | null>(null)
-const triggerRef = ref<HTMLElement | null>(null)
 const popoverRef = ref<HTMLElement | null>(null)
 const popoverStyle = ref<CSSProperties>({})
 const popoverArrowStyle = ref<CSSProperties>({})
@@ -62,39 +56,21 @@ const hoverOpenTimer = shallowRef<number>()
 const viewportTarget = computed(() => (open.value && typeof window !== 'undefined' ? window : null))
 
 const popoverClasses = computed(() => [
-  'fixed z-50 overflow-visible rounded-(--cp-popover-radius) border-0 bg-(--cp-bg-surface) p-1.5 text-left shadow-(--cp-shadow-popover)',
+  'fixed z-50 overflow-visible rounded-cp-overlay border-0 bg-cp-surface text-left text-cp-primary shadow-cp-popover',
   props.animatePosition
     ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
     : undefined,
-  props.panelClass,
 ])
 
-const sizeStyle = computed<CSSProperties>(() => {
-  const width = toCssLength(props.width)
-  return width ? { width } : {}
-})
-
-function toCssLength(value?: number | string) {
-  if (typeof value === 'number') {
-    return `${value}px`
-  }
-
-  const trimmed = value?.trim()
-  return trimmed || undefined
-}
-
 function updatePopoverPosition() {
-  const anchorElement = props.anchorElement ?? triggerRef.value
+  const anchorElement = props.anchorElement ?? rootRef.value
   if (!open.value || !anchorElement)
     return
 
   const viewportPadding = 8
   const triggerRect = anchorElement.getBoundingClientRect()
   const panelRect = popoverRef.value?.getBoundingClientRect()
-  const panelWidth = Math.max(
-    panelRect?.width ?? 0,
-    toCssLength(props.width) ? 0 : triggerRect.width,
-  )
+  const panelWidth = panelRect?.width ?? 0
   const panelHeight = panelRect?.height ?? 0
   const maxLeft = Math.max(viewportPadding, window.innerWidth - panelWidth - viewportPadding)
   const maxTop = Math.max(viewportPadding, window.innerHeight - panelHeight - viewportPadding)
@@ -113,7 +89,6 @@ function updatePopoverPosition() {
     left: `${left}px`,
     top: `${top}px`,
     maxWidth: `calc(100vw - ${viewportPadding * 2}px)`,
-    ...(toCssLength(props.width) ? {} : { minWidth: `${triggerRect.width}px` }),
   }
   popoverArrowStyle.value = popoverArrowPosition({
     placement: position.placement,
@@ -355,12 +330,12 @@ watch(
 )
 
 onClickOutside(rootRef, closePopover, { ignore: [popoverRef] })
-useEventListener(triggerRef, 'click', (event) => {
+useEventListener(rootRef, 'click', (event) => {
   event.stopPropagation()
   togglePopover()
 })
-useEventListener(triggerRef, ['mouseenter', 'focusin'], handleHoverEnter)
-useEventListener(triggerRef, ['mouseleave', 'focusout'], handleHoverLeave)
+useEventListener(rootRef, ['mouseenter', 'focusin'], handleHoverEnter)
+useEventListener(rootRef, ['mouseleave', 'focusout'], handleHoverLeave)
 useEventListener(popoverRef, ['mouseenter', 'focusin'], handleHoverEnter)
 useEventListener(popoverRef, ['mouseleave', 'focusout'], handleHoverLeave)
 useEventListener(viewportTarget, 'keydown', (event) => {
@@ -377,14 +352,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="rootRef" class="relative inline-block overflow-visible" v-bind="attrs">
-    <div
-      ref="triggerRef"
-      class="inline-flex"
-      :class="props.triggerClass"
-    >
-      <slot name="trigger" :open="open" :close="closePopover" :toggle="togglePopover" />
-    </div>
+  <div ref="rootRef" class="relative inline-flex overflow-visible" v-bind="attrs">
+    <slot name="trigger" :open="open" :close="closePopover" :toggle="togglePopover" />
 
     <Teleport to="body">
       <Transition
@@ -399,7 +368,7 @@ onBeforeUnmount(() => {
           v-if="open"
           ref="popoverRef"
           :class="popoverClasses"
-          :style="[sizeStyle, popoverStyle]"
+          :style="popoverStyle"
         >
           <span
             class="pointer-events-none absolute size-2 rotate-45 bg-inherit"

@@ -27,11 +27,11 @@ const props = defineProps<{
 }>()
 
 const toneClasses: Record<MetricTone, string> = {
-  primary: 'text-(--cp-text-primary)',
-  secondary: 'text-(--cp-text-secondary)',
-  success: 'text-(--cp-success-text)',
-  warning: 'text-(--cp-warning)',
-  active: 'text-(--cp-success)',
+  primary: 'text-cp-primary',
+  secondary: 'text-cp-secondary',
+  success: 'text-cp-success-text',
+  warning: 'text-cp-warning',
+  active: 'text-cp-success',
 }
 
 const metrics = computed<MetricItem[]>(() => {
@@ -82,7 +82,7 @@ const metrics = computed<MetricItem[]>(() => {
     class="m-0 grid grid-cols-[auto_auto] justify-start gap-x-2 gap-y-0.5 text-xs leading-4"
   >
     <template v-for="metric in metrics" :key="metric.label">
-      <dt class="text-(--cp-text-muted)">
+      <dt class="text-cp-muted-text">
         {{ metric.label }}
       </dt>
       <dd class="m-0 font-mono font-semibold tabular-nums" :class="toneClasses[metric.tone]">

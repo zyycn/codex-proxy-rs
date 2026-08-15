@@ -90,72 +90,73 @@ function providerSummary(group: AccountGroup) {
       :disabled="disabled || loading"
     >
       <template #prefix>
-        <Search class="size-4 text-(--cp-text-tertiary)" />
+        <Search class="size-4 text-cp-tertiary" />
       </template>
     </BaseInput>
 
     <BaseScrollbar
       v-if="visibleGroups.length > 0"
       max-height="260px"
-      view-class="grid gap-2 pr-2"
     >
-      <div
-        v-for="group in visibleGroups"
-        :key="group.id"
-        class="flex w-full items-start gap-3 rounded-(--cp-input-radius-base) border-0 px-3 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
-        :class="selectedIds.includes(group.id)
-          ? 'bg-(--cp-info-bg)'
-          : 'bg-(--cp-bg-subtle) hover:bg-(--cp-default-bg-hover)'"
-      >
-        <BaseCheckbox
-          :model-value="selectedIds.includes(group.id)"
-          :disabled="disabled || loading"
-          :label="`选择${group.name}`"
-          @update:model-value="toggle(group.id)"
-        />
-        <span class="min-w-0 flex-1">
-          <span class="flex min-w-0 items-center gap-2">
-            <strong class="min-w-0 truncate text-[13px] text-(--cp-text-primary)">
-              {{ group.name }}
-            </strong>
-            <span
-              v-if="!group.enabled"
-              class="shrink-0 rounded-md bg-(--cp-warning-bg) px-1.5 py-1 text-[10px] leading-none font-bold text-(--cp-warning-text)"
-            >
-              已禁用
+      <div class="grid gap-2">
+        <div
+          v-for="group in visibleGroups"
+          :key="group.id"
+          class="flex w-full items-start gap-3 rounded-cp-control border-0 px-3 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-cp-info-border"
+          :class="selectedIds.includes(group.id)
+            ? 'bg-cp-info-bg'
+            : 'bg-cp-subtle hover:bg-cp-default-hover'"
+        >
+          <BaseCheckbox
+            :model-value="selectedIds.includes(group.id)"
+            :disabled="disabled || loading"
+            :label="`选择${group.name}`"
+            @update:model-value="toggle(group.id)"
+          />
+          <span class="min-w-0 flex-1">
+            <span class="flex min-w-0 items-center gap-2">
+              <strong class="min-w-0 truncate text-[13px] text-cp-primary">
+                {{ group.name }}
+              </strong>
+              <span
+                v-if="!group.enabled"
+                class="shrink-0 rounded-md bg-cp-warning-bg px-1.5 py-1 text-[10px] leading-none font-bold text-cp-warning-text"
+              >
+                已禁用
+              </span>
+            </span>
+            <span class="mt-1 block text-[11px] font-emphasis text-cp-secondary">
+              {{ group.memberCount }} 个账号<template v-if="providerSummary(group)"> · {{ providerSummary(group) }}</template>
             </span>
           </span>
-          <span class="mt-1 block text-[11px] font-emphasis text-(--cp-text-secondary)">
-            {{ group.memberCount }} 个账号<template v-if="providerSummary(group)"> · {{ providerSummary(group) }}</template>
-          </span>
-        </span>
+        </div>
       </div>
     </BaseScrollbar>
 
     <BaseEmpty
       v-else-if="groups.length === 0 && !loading"
-      compact
+      size="sm"
       title="暂无可选分组"
       description="请先在分组管理中创建分组。"
     />
     <BaseEmpty
       v-else-if="!loading"
-      compact
+      size="sm"
       title="没有匹配分组"
       description="请调整搜索关键词。"
     />
 
     <div
       v-if="selectedIds.length === 0"
-      class="rounded-(--cp-input-radius-base) px-3.5 py-3"
+      class="rounded-cp-control px-3.5 py-3"
       :class="emptyCopy.tone === 'warning'
-        ? 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
-        : 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'"
+        ? 'bg-cp-warning-bg text-cp-warning-text'
+        : 'bg-cp-subtle text-cp-secondary'"
     >
       <p class="m-0 text-[12px] font-bold">
         {{ emptyCopy.title }}
       </p>
-      <p class="mt-1 mb-0 text-[11px] leading-[1.5] font-emphasis">
+      <p class="mt-1 mb-0 text-[11px] leading-normal font-emphasis">
         {{ emptyCopy.description }}
       </p>
     </div>

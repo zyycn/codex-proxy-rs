@@ -1,26 +1,36 @@
 <script setup lang="ts">
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from 'vue'
+import { nextTick, onBeforeUnmount, useId, useTemplateRef, watch } from 'vue'
 
 import { lockBodyScroll, unlockBodyScroll } from '@/utils/body-scroll-lock'
-import BaseButton from './BaseButton.vue'
+import BaseIconButton from './BaseIconButton.vue'
 import BaseScrollbar from './BaseScrollbar.vue'
 
-type ModalVariant = 'default' | 'info' | 'warning' | 'danger' | 'success'
+type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
+type ModalTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
 
-const props = defineProps<{
-  title: string
-  description?: string
-  width?: string | number
-  variant?: ModalVariant
-  closeDisabled?: boolean
-  bodyMaxHeight?: string
-  bodyViewClass?: string
-  hideFooter?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    title: string
+    description?: string
+    size?: ModalSize
+    tone?: ModalTone
+    dismissible?: boolean
+    role?: 'dialog' | 'alertdialog'
+  }>(),
+  {
+    description: undefined,
+    size: 'md',
+    tone: 'neutral',
+    dismissible: true,
+    role: 'dialog',
+  },
+)
 
 const open = defineModel<boolean>({ default: false })
 const panel = useTemplateRef<HTMLElement>('panel')
+const titleId = useId()
+const descriptionId = useId()
 let previouslyFocused: HTMLElement | null = null
 let ownsScrollLock = false
 
@@ -33,57 +43,46 @@ const focusableSelector = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
-const variant = computed(() => props.variant ?? 'default')
-
-const modalStyle = computed(() => {
-  const preferredWidth
-    = typeof props.width === 'number' ? `${props.width}px` : (props.width ?? '560px')
-
-  return {
-    width: `min(${preferredWidth}, calc(100dvw - 1.5rem))`,
-  }
-})
-const bodyClass = computed(() => [
-  'min-h-0 overflow-hidden py-4 pr-4 pl-3.25 sm:py-7 sm:pr-7 sm:pl-6.25',
-  props.description || variant.value !== 'default' ? 'pt-4 sm:pt-5' : 'pt-4 sm:pt-6',
-])
-const scrollViewClass = computed(() =>
-  ['pb-0.75 pl-0.75 pr-3 sm:pr-4', props.bodyViewClass].filter(Boolean).join(' '),
-)
+const sizeClasses: Record<ModalSize, string> = {
+  sm: 'max-w-md',
+  md: 'max-w-xl',
+  lg: 'max-w-3xl',
+  xl: 'max-w-5xl',
+}
 
 const iconMap = {
-  default: Info,
+  neutral: Info,
   info: Info,
   warning: AlertTriangle,
   danger: AlertCircle,
   success: CheckCircle2,
 }
 
-const variantClasses: Record<ModalVariant, { iconBg: string, icon: string }> = {
-  default: {
-    iconBg: 'bg-(--cp-info-bg)',
-    icon: 'text-(--cp-info)',
+const toneClasses: Record<ModalTone, { iconBg: string, icon: string }> = {
+  neutral: {
+    iconBg: 'bg-cp-info-bg',
+    icon: 'text-cp-info',
   },
   info: {
-    iconBg: 'bg-(--cp-info-bg)',
-    icon: 'text-(--cp-info)',
+    iconBg: 'bg-cp-info-bg',
+    icon: 'text-cp-info',
   },
   warning: {
-    iconBg: 'bg-(--cp-warning-bg)',
-    icon: 'text-(--cp-warning)',
+    iconBg: 'bg-cp-warning-bg',
+    icon: 'text-cp-warning',
   },
   danger: {
-    iconBg: 'bg-(--cp-danger-bg)',
-    icon: 'text-(--cp-danger)',
+    iconBg: 'bg-cp-danger-bg',
+    icon: 'text-cp-danger',
   },
   success: {
-    iconBg: 'bg-(--cp-success-bg)',
-    icon: 'text-(--cp-success)',
+    iconBg: 'bg-cp-success-bg',
+    icon: 'text-cp-success',
   },
 }
 
 function closeModal() {
-  if (props.closeDisabled)
+  if (!props.dismissible)
     return
   open.value = false
 }
@@ -187,74 +186,68 @@ onBeforeUnmount(() => {
           type="button"
           tabindex="-1"
           aria-label="关闭弹窗"
-          class="absolute inset-0 cursor-default border-0 bg-(--cp-overlay-scrim) p-0"
+          class="absolute inset-0 cursor-default border-0 bg-cp-overlay p-0"
           @click="closeModal"
         />
         <section
           ref="panel"
-          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-popover) sm:max-h-[calc(100dvh-3rem)]"
-          :style="modalStyle"
-          role="dialog"
+          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-cp-surface bg-cp-surface shadow-cp-popover sm:max-h-[calc(100dvh-3rem)]"
+          :class="sizeClasses[size]"
+          :role="role"
           aria-modal="true"
-          :aria-label="title"
+          :aria-labelledby="titleId"
+          :aria-describedby="description ? descriptionId : undefined"
           tabindex="-1"
         >
           <header
-            class="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_28px] gap-3 p-4 pb-0 sm:gap-4 sm:p-7 sm:pb-0"
+            class="grid shrink-0 items-start gap-3 p-4 pb-0 sm:gap-4 sm:p-7 sm:pb-0"
+            :class="tone === 'neutral'
+              ? 'grid-cols-[minmax(0,1fr)_28px]'
+              : 'grid-cols-[auto_minmax(0,1fr)_28px]'"
           >
             <span
-              v-if="variant !== 'default'"
-              class="inline-flex size-11 items-center justify-center rounded-(--cp-icon-button-radius)"
-              :class="$slots.icon ? 'bg-(--cp-bg-subtle)' : variantClasses[variant].iconBg"
+              v-if="tone !== 'neutral'"
+              class="inline-flex size-11 items-center justify-center rounded-cp-control"
+              :class="$slots.icon ? 'bg-cp-subtle' : toneClasses[tone].iconBg"
             >
               <slot name="icon">
-                <component :is="iconMap[variant]" :size="18" :class="variantClasses[variant].icon" />
+                <component :is="iconMap[tone]" :size="18" :class="toneClasses[tone].icon" />
               </slot>
             </span>
-            <div class="min-w-0" :class="variant === 'default' ? 'col-span-2' : ''">
-              <h2 class="m-0 text-lg leading-[1.15] font-heavy text-(--cp-text-primary)">
+            <div class="min-w-0">
+              <h2 :id="titleId" class="m-0 text-lg leading-[1.15] font-heavy text-cp-primary">
                 {{ title }}
               </h2>
               <p
                 v-if="description"
-                class="mt-2 mb-0 text-[13px] leading-[1.45] font-semibold text-(--cp-text-secondary)"
+                :id="descriptionId"
+                class="mt-2 mb-0 text-[13px] leading-[1.45] font-semibold text-cp-secondary"
               >
                 {{ description }}
               </p>
             </div>
-            <BaseButton
-              icon-only
-              class="col-start-3"
+            <BaseIconButton
               label="关闭"
               size="sm"
               variant="ghost"
-              :disabled="closeDisabled"
+              :disabled="!dismissible"
               @click="closeModal"
             >
               <X :size="16" />
-            </BaseButton>
+            </BaseIconButton>
           </header>
-          <div :class="bodyClass">
-            <BaseScrollbar
-              class="h-full -mr-3 sm:-mr-4"
-              :max-height="bodyMaxHeight"
-              :view-class="scrollViewClass"
-            >
-              <slot />
+          <div class="min-h-0 overflow-hidden px-4 py-4 sm:px-7 sm:py-6">
+            <BaseScrollbar class="h-full">
+              <div class="p-0.75">
+                <slot />
+              </div>
             </BaseScrollbar>
           </div>
           <footer
-            v-if="!hideFooter"
+            v-if="$slots.footer"
             class="flex shrink-0 flex-wrap justify-end gap-2 px-4 pb-4 sm:gap-3 sm:px-7 sm:pb-7"
           >
-            <slot name="footer">
-              <BaseButton variant="default" @click="open = false">
-                取消
-              </BaseButton>
-              <BaseButton variant="primary" @click="open = false">
-                确认
-              </BaseButton>
-            </slot>
+            <slot name="footer" />
           </footer>
         </section>
       </div>

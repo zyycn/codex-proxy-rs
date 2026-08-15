@@ -36,9 +36,11 @@ const {
   error,
   activeBackup,
   creating,
+  refreshing,
   deleting,
   deleteTarget,
   downloadStates,
+  load: loadRecords,
   refresh,
   changePage,
   changePageSize,
@@ -72,7 +74,7 @@ watch(
   async (isActive) => {
     if (isActive) {
       await loadSettings()
-      await refresh()
+      await loadRecords()
       startPolling()
     }
     else {
@@ -113,6 +115,7 @@ watch(
       :error="error"
       :active-backup="activeBackup"
       :creating="creating"
+      :refreshing="refreshing"
       :deleting="deleting"
       :delete-target="deleteTarget"
       :download-states="downloadStates"

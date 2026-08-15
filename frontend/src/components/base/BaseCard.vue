@@ -1,30 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-type CardPadding = 'default' | 'compact'
-type CardLayout = 'content' | 'flush'
-type HeaderCollapseAt = 'sm' | 'lg' | 'none'
-
+type CardPadding = 'none' | 'compact' | 'default'
 const props = withDefaults(
   defineProps<{
     as?: keyof HTMLElementTagNameMap
     padding?: CardPadding
-    layout?: CardLayout
     title?: string
     description?: string
-    headerCollapseAt?: HeaderCollapseAt
-    headerClass?: string
-    bodyClass?: string
   }>(),
   {
     as: 'section',
     padding: 'default',
-    layout: 'content',
     title: undefined,
     description: undefined,
-    headerCollapseAt: 'sm',
-    headerClass: undefined,
-    bodyClass: '',
   },
 )
 
@@ -37,55 +26,36 @@ const slots = defineSlots<{
   default?: () => unknown
 }>()
 
-const paddingClasses: Record<CardPadding, string> = {
-  default: 'p-5.5',
+const paddingClasses: Record<CardPadding, string | undefined> = {
+  none: undefined,
   compact: 'p-4',
+  default: 'p-5.5',
 }
 
 const hasManagedHeader = computed(
-  () =>
-    !!props.title || !!props.description || !!slots.actions || !!slots.title || !!slots.description,
+  () => Boolean(props.title || props.description || slots.actions || slots.title || slots.description),
 )
-
-const outerPaddingClass = computed(() => {
-  if (props.layout === 'flush')
-    return undefined
-  return paddingClasses[props.padding]
-})
-
-const managedHeaderLayoutClasses = computed(() => {
-  if (props.headerCollapseAt === 'none') {
-    return 'flex items-start justify-between gap-3'
-  }
-
-  if (props.headerCollapseAt === 'lg') {
-    return 'flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between'
-  }
-
-  return 'flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'
-})
+const hasHeader = computed(() => Boolean(slots.header || hasManagedHeader.value))
+const contentClasses = computed(() => [
+  hasHeader.value ? 'mt-4' : undefined,
+  'flex min-h-0 min-w-0 flex-1 flex-col',
+])
 </script>
 
 <template>
   <component
     :is="props.as"
-    class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden rounded-(--cp-card-radius) bg-(--cp-bg-surface) shadow-(--cp-shadow-card)"
-    :class="[
-      outerPaddingClass,
-    ]"
+    class="[--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] overflow-hidden rounded-cp-surface bg-cp-surface shadow-cp-card"
+    :class="[paddingClasses[padding], hasHeader ? 'flex min-h-0 flex-col' : undefined]"
   >
     <template v-if="$slots.header || hasManagedHeader || $slots.body">
-      <header
-        v-if="$slots.header || hasManagedHeader"
-        class="shrink-0"
-        :class="props.headerClass"
-      >
+      <header v-if="$slots.header || hasManagedHeader" class="shrink-0">
         <slot name="header">
-          <div :class="managedHeaderLayoutClasses">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0 pt-0.5">
               <h2
                 v-if="props.title || $slots.title"
-                class="m-0 text-xl leading-[1.15] font-heavy text-(--cp-text-primary)"
+                class="m-0 text-xl leading-[1.15] font-heavy text-cp-primary text-balance"
               >
                 <slot name="title">
                   {{ props.title }}
@@ -93,14 +63,13 @@ const managedHeaderLayoutClasses = computed(() => {
               </h2>
               <p
                 v-if="props.description || $slots.description"
-                class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)"
+                class="mt-1.75 mb-0 text-[13px] leading-[1.3] font-emphasis text-cp-secondary text-pretty"
               >
                 <slot name="description">
                   {{ props.description }}
                 </slot>
               </p>
             </div>
-
             <div v-if="$slots.actions" class="shrink-0">
               <slot name="actions" />
             </div>
@@ -108,10 +77,7 @@ const managedHeaderLayoutClasses = computed(() => {
         </slot>
       </header>
 
-      <div
-        v-if="$slots.body || $slots.default"
-        :class="props.bodyClass"
-      >
+      <div v-if="$slots.body || $slots.default" :class="contentClasses">
         <slot name="body">
           <slot />
         </slot>

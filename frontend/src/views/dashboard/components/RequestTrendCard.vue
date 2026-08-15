@@ -43,6 +43,7 @@ const {
     <template #actions>
       <BaseSegmented
         v-model="activeKind"
+        label="趋势指标"
         :options="tabs"
         class="w-full max-w-61.5 sm:w-61.5"
         @update:model-value="handleTrendChange"
@@ -50,9 +51,9 @@ const {
     </template>
 
     <template #body>
-      <div class="mt-4.5 grid gap-3.5">
+      <div class="grid gap-3.5">
         <div
-          class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-(--cp-bg-subtle)/45 p-1.5"
+          class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-cp-subtle/45 p-1.5"
         >
           <button
             v-for="item in props.summary"
@@ -60,7 +61,7 @@ const {
             type="button"
             :aria-label="`突出显示${item.label}曲线`"
             :aria-pressed="pinnedSummaryLabel === item.label"
-            class="group grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg border-0 bg-transparent px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+            class="group grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg border-0 bg-transparent px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
             @click="toggleSummarySeries(item.label)"
           >
             <i
@@ -70,20 +71,20 @@ const {
               :class="[
                 isSummarySeriesActive(item.label) ? 'scale-125' : undefined,
                 {
-                  'bg-(--cp-info)': item.tone === 'info',
-                  'bg-(--cp-success)': item.tone === 'success',
-                  'bg-(--cp-warning)': item.tone === 'warning',
-                  'bg-(--cp-danger)': item.tone === 'danger',
-                  'bg-(--cp-normal)': item.tone === 'normal',
+                  'bg-cp-info': item.tone === 'info',
+                  'bg-cp-success': item.tone === 'success',
+                  'bg-cp-warning': item.tone === 'warning',
+                  'bg-cp-danger': item.tone === 'danger',
+                  'bg-cp-normal': item.tone === 'normal',
                 },
               ]"
             />
             <span class="grid min-w-0 gap-1">
-              <span class="truncate text-[10px] leading-none font-bold text-(--cp-text-secondary)">
+              <span class="truncate text-[10px] leading-none font-bold text-cp-secondary">
                 {{ item.label }}
               </span>
               <strong
-                class="truncate font-mono text-[15px] leading-none font-heavy tabular-nums text-(--cp-text-primary)"
+                class="truncate font-mono text-[15px] leading-none font-heavy tabular-nums text-cp-primary"
                 :title="item.value"
               >
                 {{ item.value }}
@@ -96,10 +97,11 @@ const {
           <BaseChart v-if="hasSamples" :option="chartOption" :height="220" />
           <BaseEmpty
             v-if="!hasSamples"
-            compact
+            size="sm"
+            surface="none"
             title="暂无趋势数据"
             description="当日暂无请求日志"
-            class="h-full place-content-center bg-transparent"
+            class="h-full place-content-center"
           />
         </div>
       </div>

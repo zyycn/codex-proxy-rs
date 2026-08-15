@@ -16,9 +16,8 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
   <BaseCard
     title="运行参数"
     description="请求节奏、账号并发和 Token 刷新"
-    body-class="mt-5"
   >
-    <BaseForm :columns="2" class="max-w-6xl">
+    <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem
         label="单账号默认最大并发"
         description="账号未单独设置时使用的并发上限"

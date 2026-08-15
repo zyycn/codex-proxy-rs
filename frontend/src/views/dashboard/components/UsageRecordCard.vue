@@ -22,13 +22,12 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.k
     class="h-117 w-full"
   >
     <template #body>
-      <div class="mt-4.25 flex h-91 w-full overflow-hidden">
+      <div class="flex h-91 w-full overflow-hidden">
         <UsageRecordsTable
           class="min-w-0 flex-1"
           :columns="dashboardUsageRecordColumns"
           :rows="rows"
           empty-text="暂无成功记录"
-          min-width="1824px"
         />
       </div>
     </template>

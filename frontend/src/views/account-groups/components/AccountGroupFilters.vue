@@ -27,7 +27,7 @@ const status = defineModel<string>('status', { required: true })
       placeholder="搜索分组名称..."
     >
       <template #prefix>
-        <Search class="size-4.5 text-(--cp-text-tertiary)" />
+        <Search class="size-4.5 text-cp-tertiary" />
       </template>
     </BaseInput>
     <BaseSelect
@@ -39,7 +39,7 @@ const status = defineModel<string>('status', { required: true })
     <div class="flex shrink-0 items-center justify-end gap-2 sm:ml-auto">
       <BaseButton
         v-if="selectedCount > 0"
-        variant="danger"
+        variant="destructive"
         :disabled="batchDeleting"
         @click="emit('deleteSelected')"
       >

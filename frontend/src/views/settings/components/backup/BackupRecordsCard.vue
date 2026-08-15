@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { BackupRecord } from '@/api'
 
-import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
-
 import { Download, Play, RefreshCw, Trash2 } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
+import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { formatDateTime } from '@/utils/date'
 
@@ -21,6 +22,7 @@ defineProps<{
   error: string
   activeBackup: boolean
   creating: boolean
+  refreshing: boolean
   deleting: boolean
   deleteTarget: BackupRecord | null
   downloadStates: Record<string, boolean>
@@ -37,16 +39,16 @@ const emit = defineEmits<{
   cancelDelete: []
 }>()
 
-const columns: BaseTableColumn<BackupRecord>[] = [
-  { key: 'id', label: 'ID', width: 150 },
-  { key: 'status', label: '状态', width: 110 },
-  { key: 'fileName', label: '文件名', width: '28%', ellipsis: true },
-  { key: 'sizeBytes', label: '大小', width: 100 },
-  { key: 'expiresAt', label: '过期时间', width: 170 },
-  { key: 'trigger', label: '触发方式', width: 100 },
-  { key: 'startedAt', label: '开始时间', width: 170 },
-  { key: 'actions', label: '操作', width: 112, minWidth: 112, fixed: 'right' },
-]
+const columns = defineTableColumns<BackupRecord>([
+  { key: 'id', label: 'ID', kind: 'mono', size: 'lg' },
+  { key: 'status', label: '状态', kind: 'status' },
+  { key: 'fileName', label: '文件名', kind: 'text' },
+  { key: 'sizeBytes', label: '大小', kind: 'numeric' },
+  { key: 'expiresAt', label: '过期时间', kind: 'datetime' },
+  { key: 'trigger', label: '触发方式', kind: 'status' },
+  { key: 'startedAt', label: '开始时间', kind: 'datetime' },
+  { key: 'actions', label: '操作', kind: 'actions' },
+])
 
 function triggerLabel(value: string): string {
   return value === 'manual' ? '手动' : '计划'
@@ -92,7 +94,6 @@ function canDelete(record: BackupRecord): boolean {
   <BaseCard
     title="备份记录"
     description="创建手动备份和管理已有备份记录"
-    body-class="mt-3"
   >
     <template #actions>
       <div class="flex flex-wrap items-center gap-2">
@@ -107,7 +108,15 @@ function canDelete(record: BackupRecord): boolean {
           </template>
           {{ creating ? '创建中...' : '创建备份' }}
         </BaseButton>
-        <BaseButton variant="default" :disabled="loading" @click="emit('refresh')">
+        <BaseButton
+          variant="secondary"
+          :loading="refreshing"
+          :disabled="loading"
+          @click="emit('refresh')"
+        >
+          <template #loading>
+            <RefreshCw class="size-4 animate-spin motion-reduce:animate-none" />
+          </template>
           <template #icon>
             <RefreshCw class="size-4" />
           </template>
@@ -116,95 +125,86 @@ function canDelete(record: BackupRecord): boolean {
       </div>
     </template>
 
-    <BaseTable
-      class="min-h-0 flex-1"
-      :columns="columns"
-      :rows="records"
-      row-key="id"
-      :loading="loading"
-      :pagination="{
-        page,
-        pageSize,
-        total,
-      }"
-      empty-text="暂无备份记录"
-      min-width="1180px"
-      @page-change="emit('pageChange', $event)"
-      @page-size-change="emit('pageSizeChange', $event)"
-    >
-      <template #id="{ row }">
-        <span class="text-(--cp-text-secondary)" :title="row.id">{{ shortId(row.id) }}</span>
-      </template>
+    <div class="flex min-h-0 flex-1 flex-col">
+      <BaseTable
+        class="min-h-0 flex-1"
+        :columns="columns"
+        :rows="records"
+        row-key="id"
+        :loading="loading"
+        empty-text="暂无备份记录"
+      >
+        <template #id="{ row }">
+          <span class="text-cp-secondary" :title="row.id">{{ shortId(row.id) }}</span>
+        </template>
 
-      <template #status="{ row }">
-        <BackupStatusBadge :status="row.status" />
-      </template>
+        <template #status="{ row }">
+          <BackupStatusBadge :status="row.status" />
+        </template>
 
-      <template #fileName="{ row }">
-        <span class="text-(--cp-text-secondary)" :title="row.objectKey">{{ formatFileName(row) }}</span>
-      </template>
+        <template #fileName="{ row }">
+          <span class="text-cp-secondary" :title="row.objectKey">{{ formatFileName(row) }}</span>
+        </template>
 
-      <template #sizeBytes="{ row }">
-        <span class="text-(--cp-text-secondary)">{{ formatSize(row.sizeBytes) }}</span>
-      </template>
+        <template #sizeBytes="{ row }">
+          <span class="text-cp-secondary">{{ formatSize(row.sizeBytes) }}</span>
+        </template>
 
-      <template #expiresAt="{ row }">
-        <span class="text-(--cp-text-secondary)">
-          {{ row.expiresAt ? formatDateTime(row.expiresAt) : '—' }}
-        </span>
-      </template>
+        <template #expiresAt="{ row }">
+          <span class="text-cp-secondary">
+            {{ row.expiresAt ? formatDateTime(row.expiresAt) : '—' }}
+          </span>
+        </template>
 
-      <template #trigger="{ row }">
-        <span class="text-(--cp-text-secondary)">
-          {{ triggerLabel(row.triggerKind) }}
-        </span>
-      </template>
+        <template #trigger="{ row }">
+          <span class="text-cp-secondary">
+            {{ triggerLabel(row.triggerKind) }}
+          </span>
+        </template>
 
-      <template #startedAt="{ row }">
-        <span class="text-(--cp-text-secondary)">
-          {{ row.startedAt ? formatDateTime(row.startedAt) : '—' }}
-        </span>
-      </template>
+        <template #startedAt="{ row }">
+          <span class="text-cp-secondary">
+            {{ row.startedAt ? formatDateTime(row.startedAt) : '—' }}
+          </span>
+        </template>
 
-      <template #actions="{ row }">
-        <div class="flex items-center justify-start gap-1">
-          <BaseButton
-            variant="ghost"
-            icon-only
-            :disabled="!canDownload(row)"
-            :loading="Boolean(downloadStates[row.id])"
-            title="下载备份"
-            aria-label="下载备份"
-            @click="emit('download', row)"
-          >
-            <template #icon>
+        <template #actions="{ row }">
+          <div class="flex items-center justify-start gap-1">
+            <BaseIconButton
+              variant="ghost"
+              :disabled="!canDownload(row)"
+              :loading="Boolean(downloadStates[row.id])"
+              label="下载备份"
+              @click="emit('download', row)"
+            >
               <Download class="size-4" />
-            </template>
-          </BaseButton>
-          <BaseButton
-            variant="ghost"
-            icon-only
-            :disabled="!canDelete(row)"
-            title="删除备份"
-            aria-label="删除备份"
-            @click="emit('requestDelete', row)"
-          >
-            <template #icon>
+            </BaseIconButton>
+            <BaseIconButton
+              variant="ghost"
+              :disabled="!canDelete(row)"
+              label="删除备份"
+              @click="emit('requestDelete', row)"
+            >
               <Trash2 class="size-4" />
-            </template>
-          </BaseButton>
-        </div>
-      </template>
-    </BaseTable>
+            </BaseIconButton>
+          </div>
+        </template>
+      </BaseTable>
+      <BaseTablePagination
+        :pagination="{ page, pageSize, total }"
+        :loading="loading"
+        @page-change="emit('pageChange', $event)"
+        @page-size-change="emit('pageSizeChange', $event)"
+      />
+    </div>
 
     <BaseConfirmModal
       :model-value="deleteTarget !== null"
       title="删除备份"
       description="将删除远端对象并移除记录，此操作不可撤销"
-      variant="danger"
+      destructive
       confirm-text="确认删除"
       :loading="deleting"
-      width="480px"
       @update:model-value="emit('cancelDelete')"
       @confirm="emit('confirmDelete')"
     >

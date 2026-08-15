@@ -37,30 +37,30 @@ const label = computed(() => STATUS_LABELS[props.status] || props.status)
 const textClass = computed(() => {
   switch (tone.value) {
     case 'success':
-      return 'text-(--cp-success-text)'
+      return 'text-cp-success-text'
     case 'danger':
-      return 'text-(--cp-danger-text)'
+      return 'text-cp-danger-text'
     case 'warning':
-      return 'text-(--cp-warning-text)'
+      return 'text-cp-warning-text'
     case 'info':
-      return 'text-(--cp-info-text)'
+      return 'text-cp-info-text'
     default:
-      return 'text-(--cp-text-secondary)'
+      return 'text-cp-secondary'
   }
 })
 
 const dotClass = computed(() => {
   switch (tone.value) {
     case 'success':
-      return 'bg-(--cp-success)'
+      return 'bg-cp-success'
     case 'danger':
-      return 'bg-(--cp-danger)'
+      return 'bg-cp-danger'
     case 'warning':
-      return 'bg-(--cp-warning)'
+      return 'bg-cp-warning'
     case 'info':
-      return 'bg-(--cp-info)'
+      return 'bg-cp-info'
     default:
-      return 'bg-(--cp-text-muted)'
+      return 'bg-cp-muted-text'
   }
 })
 </script>

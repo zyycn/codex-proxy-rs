@@ -5,18 +5,18 @@ defineProps<{
 
 function statusClass(statusCode?: number | null) {
   if (statusCode === undefined || statusCode === null) {
-    return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
+    return 'bg-cp-subtle text-cp-secondary'
   }
 
   if (statusCode >= 200 && statusCode < 300) {
-    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
+    return 'bg-cp-success-bg text-cp-success-text'
   }
 
   if (statusCode >= 300 && statusCode < 400) {
-    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
+    return 'bg-cp-warning-bg text-cp-warning-text'
   }
 
-  return 'bg-(--cp-danger-bg) text-(--cp-danger-text)'
+  return 'bg-cp-danger-bg text-cp-danger-text'
 }
 </script>
 

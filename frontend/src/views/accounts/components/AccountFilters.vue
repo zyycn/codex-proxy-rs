@@ -47,11 +47,11 @@ const groupOptions = computed(() => [
     <div class="flex min-w-0 flex-wrap items-center gap-2 md:flex-none md:gap-3">
       <BaseInput
         v-model="search"
-        placeholder="搜索邮箱或 ID..."
+        placeholder="搜索账号"
         class="min-w-0 flex-1 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-80 md:flex-none"
       >
         <template #prefix>
-          <Search class="size-4.5 text-(--cp-text-tertiary)" />
+          <Search class="size-4.5 text-cp-tertiary" />
         </template>
       </BaseInput>
 
@@ -67,7 +67,7 @@ const groupOptions = computed(() => [
         :options="groupOptions"
         :disabled="groupsLoading"
         aria-label="按账号分组筛选"
-        class="w-44 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)]"
+        class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
       />
 
       <ProviderFilterSegmented
@@ -81,16 +81,16 @@ const groupOptions = computed(() => [
     >
       <BaseButton
         v-if="selectedCount > 0"
-        variant="default"
+        variant="secondary"
         class="w-full whitespace-nowrap md:w-auto"
         @click="emit('editSelected')"
       >
-        <Pencil class="size-4 text-(--cp-info)" />
+        <Pencil class="size-4 text-cp-info" />
         批量编辑账号
       </BaseButton>
       <BaseButton
         v-if="selectedCount > 0"
-        variant="danger"
+        variant="destructive"
         class="w-full whitespace-nowrap md:w-auto"
         :disabled="batchDeleting"
         @click="emit('deleteSelected')"
@@ -100,7 +100,7 @@ const groupOptions = computed(() => [
       </BaseButton>
       <BaseButton
         v-if="selectedCount > 0"
-        variant="default"
+        variant="secondary"
         class="w-full whitespace-nowrap md:w-auto"
         :loading="exportingAccounts"
         @click="emit('exportSelected')"

@@ -5,20 +5,16 @@ import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplate
 
 const props = withDefaults(
   defineProps<{
-    viewClass?: string
     maxHeight?: string
     height?: string
     horizontal?: boolean
     vertical?: boolean
-    trackInset?: 'default' | 'none'
   }>(),
   {
-    viewClass: '',
     maxHeight: undefined,
     height: undefined,
     horizontal: false,
     vertical: true,
-    trackInset: 'default',
   },
 )
 
@@ -61,7 +57,6 @@ let horizontalDragStartScrollLeft = 0
 let scrollTopPosition = 0
 let scrollLeftPosition = 0
 let scrollFrameId: number | undefined
-let rootHovering = false
 const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollbar, 1600, {
   immediate: false,
 })
@@ -91,16 +86,10 @@ const wrapClasses = computed(() => [
   props.maxHeight ? undefined : 'h-full',
 ])
 const verticalTrackClass = computed(() =>
-  props.horizontal && canScrollX.value ? 'bottom-3' : 'bottom-1',
+  props.horizontal && canScrollX.value ? 'bottom-1.5' : 'bottom-0',
 )
 const horizontalTrackClass = computed(() =>
-  props.vertical && canScrollY.value ? 'right-3' : 'right-1',
-)
-const verticalTrackInsetClass = computed(() =>
-  props.trackInset === 'none' ? 'right-0' : 'right-1',
-)
-const horizontalTrackInsetClass = computed(() =>
-  props.trackInset === 'none' ? 'bottom-0 left-0' : 'bottom-1 left-1',
+  props.vertical && canScrollY.value ? 'right-1.5' : 'right-0',
 )
 
 function showScrollbar() {
@@ -113,7 +102,10 @@ function clearHideTimer() {
 
 function scheduleHideScrollbar() {
   clearHideTimer()
-  if (!rootHovering) {
+  if (!dragging.value
+    && !horizontalDragging.value
+    && !verticalTrackHovering.value
+    && !horizontalTrackHovering.value) {
     startHideTimer()
   }
 }
@@ -129,12 +121,10 @@ function activateScrollbar() {
 }
 
 function handleRootMouseEnter() {
-  rootHovering = true
   activateScrollbar()
 }
 
 function handleRootMouseLeave() {
-  rootHovering = false
   hideScrollbar()
 }
 
@@ -152,7 +142,7 @@ function setTrackHovering(axis: ScrollbarAxis, hovering: boolean) {
 function handleTrackMouseEnter(axis: ScrollbarAxis) {
   setTrackHovering(axis, true)
   showScrollbar()
-  scheduleHideScrollbar()
+  clearHideTimer()
 }
 
 function handleTrackMouseLeave(axis: ScrollbarAxis) {
@@ -182,7 +172,12 @@ function measureVerticalScrollbar(wrap: HTMLElement) {
   const clientHeight = wrap.clientHeight
   const scrollHeight = wrap.scrollHeight
   const scrollRange = clamp(scrollHeight - clientHeight, 0, Number.POSITIVE_INFINITY)
-  const availableTrackHeight = clamp(clientHeight - 8, 0, Number.POSITIVE_INFINITY)
+  const availableTrackHeight = trackLength(
+    verticalTrackRef.value,
+    clientHeight,
+    'top',
+    'bottom',
+  )
   if (scrollRange <= overflowTolerance || availableTrackHeight <= 0) {
     wrap.scrollTop = 0
     verticalMetrics.scrollRange = 0
@@ -209,7 +204,12 @@ function measureHorizontalScrollbar(wrap: HTMLElement) {
   const clientWidth = wrap.clientWidth
   const scrollWidth = wrap.scrollWidth
   const scrollRange = clamp(scrollWidth - clientWidth, 0, Number.POSITIVE_INFINITY)
-  const availableTrackWidth = clamp(clientWidth - 8, 0, Number.POSITIVE_INFINITY)
+  const availableTrackWidth = trackLength(
+    horizontalTrackRef.value,
+    clientWidth,
+    'left',
+    'right',
+  )
   if (scrollRange <= overflowTolerance || availableTrackWidth <= 0) {
     wrap.scrollLeft = 0
     horizontalMetrics.scrollRange = 0
@@ -223,6 +223,28 @@ function measureHorizontalScrollbar(wrap: HTMLElement) {
   horizontalMetrics.scrollRange = scrollRange
   horizontalMetrics.thumbRange = availableTrackWidth - nextThumbWidth
   horizontalThumbWidth.value = nextThumbWidth
+}
+
+function trackLength(
+  track: HTMLElement | null,
+  viewportLength: number,
+  startProperty: 'top' | 'left',
+  endProperty: 'bottom' | 'right',
+) {
+  if (!track)
+    return clamp(viewportLength - 8, 0, Number.POSITIVE_INFINITY)
+
+  const style = getComputedStyle(track)
+  const start = Number.parseFloat(style[startProperty])
+  const end = Number.parseFloat(style[endProperty])
+  const inset = (Number.isFinite(start) ? start : 4) + (Number.isFinite(end) ? end : 4)
+  const root = rootRef.value
+  const containerLength = root
+    ? startProperty === 'top'
+      ? root.clientHeight
+      : root.clientWidth
+    : viewportLength
+  return clamp(containerLength - inset, 0, Number.POSITIVE_INFINITY)
 }
 
 function updateVerticalThumbPosition(scrollTop: number) {
@@ -448,6 +470,7 @@ useEventListener(wrapRef, 'scroll', handleScroll, { passive: true })
 useEventListener(dragDocument, 'pointermove', handleDocumentPointerMove)
 useEventListener(dragDocument, ['pointerup', 'pointercancel'], handleDocumentPointerUp)
 useEventListener(rootRef, 'mouseenter', handleRootMouseEnter)
+useEventListener(rootRef, 'mousemove', activateScrollbar, { passive: true })
 useEventListener(rootRef, 'mouseleave', handleRootMouseLeave)
 useEventListener(verticalTrackRef, 'mouseenter', () => handleTrackMouseEnter('vertical'))
 useEventListener(verticalTrackRef, 'mouseleave', () => handleTrackMouseLeave('vertical'))
@@ -471,7 +494,7 @@ defineExpose({
     :style="{ maxHeight, height }"
   >
     <div ref="wrap" :class="wrapClasses" tabindex="0">
-      <div ref="view" :class="viewClass">
+      <div ref="view">
         <slot />
       </div>
     </div>
@@ -480,15 +503,14 @@ defineExpose({
       v-show="canScrollY"
       ref="verticalTrack"
       aria-hidden="true"
-      class="absolute top-1 z-40 w-1.5 rounded-full transition-opacity duration-200"
+      class="base-scrollbar-track-y absolute right-0 bottom-0 z-40 flex w-3 justify-end transition-opacity duration-200"
       :class="[
-        verticalTrackInsetClass,
         verticalTrackClass,
         verticalScrollbarVisible ? 'opacity-100' : 'opacity-0',
       ]"
     >
       <div
-        class="w-full rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
+        class="w-1.5 rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
         :class="dragging ? 'bg-(--cp-scrollbar-thumb-hover)' : ''"
         :style="thumbStyle"
         @pointerdown="handleThumbPointerDown"
@@ -499,15 +521,14 @@ defineExpose({
       v-show="canScrollX"
       ref="horizontalTrack"
       aria-hidden="true"
-      class="absolute z-40 h-1.5 rounded-full transition-opacity duration-200"
+      class="base-scrollbar-track-x absolute bottom-0 left-0 z-40 flex h-3 items-end transition-opacity duration-200"
       :class="[
-        horizontalTrackInsetClass,
         horizontalTrackClass,
         horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0',
       ]"
     >
       <div
-        class="h-full rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
+        class="h-1.5 rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
         :class="horizontalDragging ? 'bg-(--cp-scrollbar-thumb-hover)' : ''"
         :style="horizontalThumbStyle"
         @pointerdown="handleHorizontalThumbPointerDown"
@@ -525,5 +546,9 @@ defineExpose({
   display: none;
   width: 0;
   height: 0;
+}
+
+.base-scrollbar-track-y {
+  top: var(--cp-scrollbar-track-top, 0.25rem);
 }
 </style>

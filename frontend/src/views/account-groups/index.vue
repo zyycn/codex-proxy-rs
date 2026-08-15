@@ -3,6 +3,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
+import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
 import AccountGroupActions from './components/AccountGroupActions.vue'
@@ -59,7 +60,6 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
     <BaseCard
       class="mt-5 flex h-[calc(100dvh-136px)] min-h-125 flex-col"
-      body-class="mt-3 flex min-h-0 flex-1"
     >
       <template #header>
         <AccountGroupFilters
@@ -73,87 +73,91 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       </template>
 
       <template #body>
-        <BaseTable
-          class="min-h-0 flex-1"
-          :columns="accountGroupColumns"
-          :rows="groups"
-          :loading="loading"
-          :selected-row-keys="selectedRowKeys"
-          :pagination="pagination"
-          empty-text="暂无分组，请点击创建分组创建"
-          min-width="1200px"
-          @page-change="handlePageChange"
-          @page-size-change="handlePageSizeChange"
-        >
-          <template #header-selection>
-            <BaseCheckbox
-              :model-value="allSelected"
-              :indeterminate="indeterminate"
-              label="选择当前页分组"
-              @update:model-value="toggleAll"
-            />
-          </template>
-          <template #selection="{ row }">
-            <BaseCheckbox
-              :model-value="selectedIds.has(row.id)"
-              label="选择分组"
-              @update:model-value="toggleSelection(row.id)"
-            />
-          </template>
-          <template #identity="{ row }">
-            <div class="grid min-w-0 gap-1">
-              <strong class="truncate text-[13px] text-(--cp-text-primary)">
-                {{ row.name }}
-              </strong>
-              <span class="truncate text-[11px] font-emphasis text-(--cp-text-muted)">
-                {{ row.description || '未填写描述' }}
+        <div class="flex h-full min-h-0 flex-col">
+          <BaseTable
+            class="min-h-0 flex-1"
+            :columns="accountGroupColumns"
+            :rows="groups"
+            :loading="loading"
+            :selected-row-keys="selectedRowKeys"
+            empty-text="暂无分组，请点击创建分组创建"
+          >
+            <template #header-selection>
+              <BaseCheckbox
+                :model-value="allSelected"
+                :indeterminate="indeterminate"
+                label="选择当前页分组"
+                @update:model-value="toggleAll"
+              />
+            </template>
+            <template #selection="{ row }">
+              <BaseCheckbox
+                :model-value="selectedIds.has(row.id)"
+                label="选择分组"
+                @update:model-value="toggleSelection(row.id)"
+              />
+            </template>
+            <template #identity="{ row }">
+              <div class="grid min-w-0 gap-1">
+                <strong class="truncate text-[13px] text-cp-primary">
+                  {{ row.name }}
+                </strong>
+                <span class="truncate text-[11px] font-emphasis text-cp-muted-text">
+                  {{ row.description || '未填写描述' }}
+                </span>
+              </div>
+            </template>
+
+            <template #color="{ row }">
+              <span
+                class="mx-auto block size-4 rounded-sm"
+                :style="{ backgroundColor: row.color }"
+                :title="row.color"
+                :aria-label="`分组颜色 ${row.color}`"
+              />
+            </template>
+
+            <template #enabled="{ row }">
+              <span
+                class="inline-flex h-6 items-center rounded-lg px-2 text-[11px] font-bold"
+                :class="row.enabled
+                  ? 'bg-cp-success-bg text-cp-success-text'
+                  : 'bg-cp-muted text-cp-muted-text'"
+              >
+                {{ row.enabled ? '已启用' : '已禁用' }}
               </span>
-            </div>
-          </template>
+            </template>
 
-          <template #color="{ row }">
-            <span
-              class="mx-auto block size-4 rounded-sm"
-              :style="{ backgroundColor: row.color }"
-              :title="row.color"
-              :aria-label="`分组颜色 ${row.color}`"
-            />
-          </template>
+            <template #accountCount="{ row }">
+              <AccountGroupMetricsCell :group="row" kind="accounts" />
+            </template>
 
-          <template #enabled="{ row }">
-            <span
-              class="inline-flex h-6 items-center rounded-lg px-2 text-[11px] font-bold"
-              :class="row.enabled
-                ? 'bg-(--cp-success-bg) text-(--cp-success-text)'
-                : 'bg-(--cp-bg-muted) text-(--cp-text-muted)'"
-            >
-              {{ row.enabled ? '已启用' : '已禁用' }}
-            </span>
-          </template>
+            <template #capacity="{ row }">
+              <AccountGroupMetricsCell :group="row" kind="capacity" />
+            </template>
 
-          <template #accountCount="{ row }">
-            <AccountGroupMetricsCell :group="row" kind="accounts" />
-          </template>
+            <template #usage="{ row }">
+              <AccountGroupMetricsCell :group="row" kind="usage" />
+            </template>
 
-          <template #capacity="{ row }">
-            <AccountGroupMetricsCell :group="row" kind="capacity" />
-          </template>
-
-          <template #usage="{ row }">
-            <AccountGroupMetricsCell :group="row" kind="usage" />
-          </template>
-
-          <template #actions="{ row }">
-            <AccountGroupActions
-              :group="row"
-              :deleting="deleting"
-              :updating-status="updatingStatusGroupIds.has(row.id)"
-              @edit="openEdit"
-              @toggle="requestToggle"
-              @delete="requestDelete"
-            />
-          </template>
-        </BaseTable>
+            <template #actions="{ row }">
+              <AccountGroupActions
+                :group="row"
+                :deleting="deleting"
+                :updating-status="updatingStatusGroupIds.has(row.id)"
+                @edit="openEdit"
+                @toggle="requestToggle"
+                @delete="requestDelete"
+              />
+            </template>
+          </BaseTable>
+          <BaseTablePagination
+            :pagination="pagination"
+            :loading="loading"
+            @page-change="handlePageChange"
+            @page-size-change="handlePageSizeChange"
+          />
+        </div>
       </template>
     </BaseCard>
 
@@ -169,7 +173,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       v-model="showBatchDeleteModal"
       title="确认删除"
       description="删除后这些分组将立即失效，此操作不可撤销"
-      variant="danger"
+      destructive
       confirm-text="确认删除"
       :loading="batchDeleting"
       @confirm="confirmBatchDelete"
@@ -183,7 +187,6 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       v-model="showDisableModal"
       title="禁用账号分组"
       description="禁用后，使用该分组的 API 密钥将无法再使用其中的账号。"
-      variant="warning"
       confirm-text="确认禁用"
       :loading="disabling"
       @confirm="confirmDisable"
@@ -191,10 +194,10 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       <p class="m-0">
         确定禁用“{{ pendingDisableGroup?.name }}”吗？
       </p>
-      <p v-if="referencedKeyNames.length > 0" class="mt-2 mb-0 text-(--cp-warning-text)">
+      <p v-if="referencedKeyNames.length > 0" class="mt-2 mb-0 text-cp-warning-text">
         将影响 {{ referencedKeyNames.length }} 个 API 密钥：{{ referencedKeyNames.join('、') }}
       </p>
-      <p v-else-if="pendingDisableGroup?.clientKeyCount" class="mt-2 mb-0 text-(--cp-warning-text)">
+      <p v-else-if="pendingDisableGroup?.clientKeyCount" class="mt-2 mb-0 text-cp-warning-text">
         将影响 {{ pendingDisableGroup.clientKeyCount }} 个 API 密钥。
       </p>
     </BaseConfirmModal>
@@ -203,7 +206,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       v-model="showDeleteModal"
       title="删除账号分组"
       description="删除后该分组将立即失效，此操作不可撤销"
-      variant="danger"
+      destructive
       confirm-text="确认删除"
       :loading="deleting"
       @confirm="confirmDelete"

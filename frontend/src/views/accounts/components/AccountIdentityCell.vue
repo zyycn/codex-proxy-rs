@@ -50,16 +50,16 @@ const avatarSizeClass = computed(() =>
 
 const secondaryClass = computed(() =>
   props.size === 'lg'
-    ? 'mt-1 text-[12px] text-(--cp-text-secondary)'
-    : 'mt-0.5 font-mono text-[11px] text-(--cp-text-muted)',
+    ? 'mt-1 text-[12px] text-cp-secondary'
+    : 'mt-0.5 font-mono text-[11px] text-cp-muted-text',
 )
 
 const avatarClass = computed(() => {
   const palettes = [
-    'bg-(--cp-info-bg) text-(--cp-info-text) shadow-[inset_0_0_0_1px_var(--cp-info-border)]',
-    'bg-(--cp-success-bg) text-(--cp-success-text) shadow-[inset_0_0_0_1px_var(--cp-success-border)]',
-    'bg-(--cp-normal-bg) text-(--cp-normal-text) shadow-[inset_0_0_0_1px_var(--cp-normal-border)]',
-    'bg-(--cp-warning-bg) text-(--cp-warning-text) shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
+    'bg-cp-info-bg text-cp-info-text shadow-[inset_0_0_0_1px_var(--cp-info-border)]',
+    'bg-cp-success-bg text-cp-success-text shadow-[inset_0_0_0_1px_var(--cp-success-border)]',
+    'bg-cp-normal-bg text-cp-normal-text shadow-[inset_0_0_0_1px_var(--cp-normal-border)]',
+    'bg-cp-warning-bg text-cp-warning-text shadow-[inset_0_0_0_1px_var(--cp-warning-border)]',
   ]
   const key = String(props.account.id || props.account.email || displayTitle.value)
   const hash = sumBy([...key], char => char.charCodeAt(0))
@@ -77,7 +77,7 @@ const avatarClass = computed(() => {
     </span>
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-[14px] font-heavy text-(--cp-text-primary)">
+        <span class="min-w-0 flex-1 truncate text-[14px] font-heavy text-cp-primary">
           {{ displayTitle }}
         </span>
         <span

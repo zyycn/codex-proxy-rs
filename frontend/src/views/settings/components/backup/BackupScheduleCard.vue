@@ -42,7 +42,6 @@ const TIMEZONE_OPTIONS = [
   <BaseCard
     title="定时备份"
     description="配置自动定时备份"
-    body-class="mt-5"
   >
     <template #actions>
       <BaseButton variant="primary" :loading="saving" :disabled="loading" @click="emit('save')">
@@ -54,7 +53,7 @@ const TIMEZONE_OPTIONS = [
     </template>
 
     <div class="@container">
-      <BaseForm :columns="2" class="max-w-6xl @max-[640px]:grid-cols-1!">
+      <BaseForm class="max-w-6xl @min-[640px]:grid-cols-2">
         <div class="col-span-2 flex items-center gap-4 @max-[640px]:col-span-1">
           <BaseCheckbox
             v-model="schedule.scheduleEnabled"

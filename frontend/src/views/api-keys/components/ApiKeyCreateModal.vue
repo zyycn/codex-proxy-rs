@@ -8,6 +8,7 @@ import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 
@@ -34,10 +35,9 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     v-model="open"
     :title="title"
     description="设置调用方可用的账号分组、并发和每分钟请求上限"
-    variant="info"
-    width="680px"
-    body-max-height="min(680px, calc(100dvh - 190px))"
-    :close-disabled="saving"
+    tone="info"
+    size="lg"
+    :dismissible="!saving"
   >
     <BaseForm class="grid gap-5">
       <BaseFormItem label="名称" required>
@@ -106,38 +106,38 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     v-model="createdOpen"
     title="API Key 已创建"
     description="复制密钥，或直接导入 CCSwitch"
-    variant="success"
-    width="540px"
+    tone="success"
+    size="md"
   >
     <div class="flex flex-col gap-4">
-      <div class="rounded-(--cp-input-radius-base) border border-(--cp-warning-border) bg-(--cp-warning-bg) px-4 py-3">
-        <p class="m-0 text-[13px] font-semibold text-(--cp-warning-text)">
+      <div class="rounded-cp-control border border-cp-warning-border bg-cp-warning-bg px-4 py-3">
+        <p class="m-0 text-[13px] font-semibold text-cp-warning-text">
           该密钥具有网关访问权限，请仅发送给可信调用方
         </p>
       </div>
       <div>
-        <p class="mb-2 text-[13px] font-medium text-(--cp-text-secondary)">
+        <p class="mb-2 text-[13px] font-medium text-cp-secondary">
           API Key
         </p>
         <div class="flex items-center gap-2">
-          <code class="flex-1 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5 font-mono text-[13px] break-all text-(--cp-text-primary)">
+          <code class="flex-1 rounded-cp-control bg-cp-subtle px-3 py-2.5 font-mono text-[13px] break-all text-cp-primary">
             {{ createdKey }}
           </code>
-          <BaseButton icon-only size="md" title="复制" @click="emit('copy', createdKey)">
+          <BaseIconButton size="md" label="复制" @click="emit('copy', createdKey)">
             <Copy class="size-4" />
-          </BaseButton>
+          </BaseIconButton>
         </div>
       </div>
     </div>
 
     <template #footer>
-      <BaseButton variant="default" @click="emit('copy', createdKey)">
+      <BaseButton variant="secondary" @click="emit('copy', createdKey)">
         <template #icon>
           <Copy class="size-4" />
         </template>
         复制密钥
       </BaseButton>
-      <BaseButton variant="default" @click="emit('importCcs')">
+      <BaseButton variant="secondary" @click="emit('importCcs')">
         <template #icon>
           <Upload class="size-4" />
         </template>

@@ -1,97 +1,109 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject, useAttrs } from 'vue'
+import { formFieldKey } from './BaseForm/context'
+
+type InputSize = 'sm' | 'md' | 'lg'
+
+defineOptions({ inheritAttrs: false })
 
 const props = withDefaults(
   defineProps<{
     placeholder?: string
     type?: string
     disabled?: boolean
-    error?: string
-    autocomplete?: string
-    name?: string
-    ariaLabel?: string
-    min?: number | string
-    max?: number | string
+    size?: InputSize
   }>(),
   {
     placeholder: '',
     type: 'text',
     disabled: false,
-    error: undefined,
-    autocomplete: undefined,
-    name: undefined,
-    ariaLabel: undefined,
-    min: undefined,
-    max: undefined,
+    size: 'md',
   },
 )
 
 const model = defineModel<string>({ default: '' })
+const attrs = useAttrs()
+const field = inject(formFieldKey, null)
 
-// number 输入也保持字符串契约，避免原生 v-model 隐式转换为 number。
-function updateModel(event: Event) {
-  model.value = (event.target as HTMLInputElement).value
+const controlId = computed(() => typeof attrs.id === 'string' ? attrs.id : field?.controlId.value)
+const invalid = computed(() => Boolean(
+  field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true',
+))
+const describedBy = computed(() => [
+  typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined,
+  field?.describedBy.value,
+].filter(Boolean).join(' ') || undefined)
+
+const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
+const controlAttrs = computed(() => Object.fromEntries(
+  Object.entries(attrs).filter(([key]) => ![
+    'class',
+    'style',
+    'id',
+    'aria-describedby',
+    'aria-invalid',
+    'aria-required',
+  ].includes(key)),
+))
+
+const sizeClasses: Record<InputSize, string> = {
+  sm: 'h-cp-control-sm gap-2 px-3 text-xs',
+  md: 'h-cp-control-md gap-2.5 px-3.5 text-[13px]',
+  lg: 'h-cp-control-lg gap-3 px-4 text-[14px]',
 }
 
 const containerClasses = computed(() => [
-  'relative inline-flex h-(--cp-input-height-default) w-full min-w-0 items-center gap-2.5 overflow-visible rounded-(--cp-input-radius-base) border-0 px-3.5 text-[13px] text-(--cp-text-primary) shadow-(--cp-shadow-input) transition-[background-color,box-shadow,color] duration-[160ms]',
+  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp-control border-0 text-cp-primary shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] motion-reduce:transition-none',
+  sizeClasses[props.size],
   props.disabled
-    ? 'cursor-not-allowed bg-(--cp-disabled-bg) text-(--cp-disabled-text) shadow-none'
-    : props.error
-      ? 'bg-(--cp-input-error-soft-bg) shadow-(--cp-shadow-input-error)'
+    ? 'cursor-not-allowed bg-cp-disabled text-cp-disabled-text shadow-none'
+    : invalid.value
+      ? 'bg-(--cp-input-error-soft-bg) shadow-cp-input-error'
       : [
           'bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))]',
-          'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-(--cp-shadow-input-hover)',
-          'focus-within:bg-(--cp-input-soft-bg-focus) focus-within:shadow-(--cp-shadow-input-focus)',
+          'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-cp-input-hover',
+          'focus-within:bg-(--cp-input-soft-bg-focus) focus-within:shadow-cp-input-focus',
         ],
 ])
 
 const iconClasses = computed(() => [
   'inline-flex shrink-0',
   props.disabled
-    ? 'text-(--cp-disabled-icon)'
-    : props.error
-      ? 'text-(--cp-danger)'
-      : 'text-(--cp-text-muted)',
+    ? 'text-cp-disabled-icon'
+    : invalid.value
+      ? 'text-cp-danger'
+      : 'text-cp-muted-text',
 ])
 
-const inputClasses = computed(() => [
-  'h-full min-w-0 flex-1 border-0 bg-transparent text-[13px] font-emphasis leading-[1.15] outline-0',
-  'placeholder:text-(--cp-text-muted) disabled:cursor-not-allowed disabled:text-(--cp-disabled-text)',
-  props.error
-    ? 'text-(--cp-danger-text)'
-    : props.disabled
-      ? 'text-(--cp-disabled-text)'
-      : 'text-(--cp-text-primary)',
-])
+function updateModel(event: Event) {
+  model.value = (event.target as HTMLInputElement).value
+}
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-2">
+  <div v-bind="rootAttrs" class="min-w-0">
     <span class="base-input__control" :class="containerClasses">
-      <span v-if="$slots.prefix" :class="iconClasses">
+      <span v-if="$slots.prefix" :class="iconClasses" aria-hidden="true">
         <slot name="prefix" />
       </span>
       <input
+        v-bind="controlAttrs"
+        :id="controlId"
         :value="model"
-        class="base-input__field"
-        :class="inputClasses"
-        :name="name"
+        class="base-input__field h-full min-w-0 flex-1 border-0 bg-transparent font-emphasis leading-[1.15] text-cp-primary outline-0 placeholder:text-cp-muted-text disabled:cursor-not-allowed disabled:text-cp-disabled-text"
         :placeholder="placeholder"
         :type="type"
         :disabled="disabled"
-        :autocomplete="autocomplete"
-        :min="min"
-        :max="max"
-        :aria-label="ariaLabel"
-        :aria-invalid="error ? 'true' : undefined"
+        :required="field?.required.value || undefined"
+        :aria-describedby="describedBy"
+        :aria-invalid="invalid || undefined"
+        :aria-required="field?.required.value || undefined"
         @input="updateModel"
       >
       <span v-if="$slots.suffix" :class="iconClasses">
         <slot name="suffix" />
       </span>
     </span>
-    <span v-if="error" class="text-xs font-emphasis leading-[1.15] text-(--cp-danger-text)">{{ error }}</span>
   </div>
 </template>
 

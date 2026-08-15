@@ -8,17 +8,18 @@ defineProps<{
   content: string
 }>()
 
-const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)'
-const codeBlockViewClass = 'rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5'
+const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-cp-secondary'
 const codeBlockClass
-  = 'm-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)'
+  = 'm-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-cp-primary'
 </script>
 
 <template>
   <h3 class="mb-3" :class="panelTitleClass">
     {{ title }}
   </h3>
-  <BaseScrollbar :max-height="maxHeight" :view-class="codeBlockViewClass">
-    <pre :class="codeBlockClass">{{ content }}</pre>
+  <BaseScrollbar :max-height="maxHeight">
+    <div class="rounded-cp-control bg-cp-surface px-3 py-2.5">
+      <pre :class="codeBlockClass">{{ content }}</pre>
+    </div>
   </BaseScrollbar>
 </template>

@@ -25,34 +25,34 @@ const props = withDefaults(
 
 const statusStyles = {
   success: {
-    text: 'text-(--cp-success-text)',
-    dot: 'bg-(--cp-success)',
-    badge: 'bg-(--cp-success-bg) text-(--cp-success-text)',
-    icon: 'bg-(--cp-success-bg) text-(--cp-success-text)',
+    text: 'text-cp-success-text',
+    dot: 'bg-cp-success',
+    badge: 'bg-cp-success-bg text-cp-success-text',
+    icon: 'bg-cp-success-bg text-cp-success-text',
   },
   danger: {
-    text: 'text-(--cp-danger-text)',
-    dot: 'bg-(--cp-danger)',
-    badge: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
-    icon: 'bg-(--cp-danger-bg) text-(--cp-danger-text)',
+    text: 'text-cp-danger-text',
+    dot: 'bg-cp-danger',
+    badge: 'bg-cp-danger-bg text-cp-danger-text',
+    icon: 'bg-cp-danger-bg text-cp-danger-text',
   },
   warning: {
-    text: 'text-(--cp-warning-text)',
-    dot: 'bg-(--cp-warning)',
-    badge: 'bg-(--cp-warning-bg) text-(--cp-warning-text)',
-    icon: 'bg-(--cp-warning-bg) text-(--cp-warning-text)',
+    text: 'text-cp-warning-text',
+    dot: 'bg-cp-warning',
+    badge: 'bg-cp-warning-bg text-cp-warning-text',
+    icon: 'bg-cp-warning-bg text-cp-warning-text',
   },
   info: {
-    text: 'text-(--cp-info-text)',
-    dot: 'bg-(--cp-info)',
-    badge: 'bg-(--cp-info-bg) text-(--cp-info-text)',
-    icon: 'bg-(--cp-info-bg) text-(--cp-info-text)',
+    text: 'text-cp-info-text',
+    dot: 'bg-cp-info',
+    badge: 'bg-cp-info-bg text-cp-info-text',
+    icon: 'bg-cp-info-bg text-cp-info-text',
   },
   normal: {
-    text: 'text-(--cp-text-secondary)',
-    dot: 'bg-(--cp-text-muted)',
-    badge: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
-    icon: 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)',
+    text: 'text-cp-secondary',
+    dot: 'bg-cp-muted-text',
+    badge: 'bg-cp-subtle text-cp-secondary',
+    icon: 'bg-cp-subtle text-cp-secondary',
   },
 } as const
 
@@ -135,8 +135,6 @@ const cardIcon = computed(() => {
     :disabled="!hasDetail"
     trigger="hover-click"
     placement="top-start"
-    width="352px"
-    panel-class="!p-0 text-(--cp-text-primary)"
   >
     <template #trigger="{ open }">
       <component
@@ -165,21 +163,21 @@ const cardIcon = computed(() => {
       </component>
     </template>
 
-    <section class="overflow-hidden rounded-(--cp-popover-radius)">
-      <header class="flex items-start gap-3 bg-(--cp-bg-subtle) px-4 py-3">
+    <section class="w-88 overflow-hidden rounded-cp-overlay">
+      <header class="flex items-start gap-3 bg-cp-subtle px-4 py-3">
         <span
           aria-hidden="true"
-          class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius)"
+          class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp-control"
           :class="statusStyle.icon"
         >
           <component :is="cardIcon" class="size-4.5" />
         </span>
 
         <div class="min-w-0 flex-1">
-          <p class="m-0 text-[11px] leading-none font-heavy tracking-[0.08em] text-(--cp-text-tertiary)">
+          <p class="m-0 text-[11px] leading-none font-heavy tracking-[0.08em] text-cp-tertiary">
             账号状态
           </p>
-          <h3 class="mt-1.5 mb-0 text-[14px] leading-5 font-heavy text-(--cp-text-primary) text-balance">
+          <h3 class="mt-1.5 mb-0 text-[14px] leading-5 font-heavy text-cp-primary text-balance">
             {{ detailTitle }}
           </h3>
         </div>
@@ -193,39 +191,41 @@ const cardIcon = computed(() => {
       </header>
 
       <div class="grid gap-3 px-4 py-3 text-[12px] leading-5">
-        <p class="m-0 text-pretty font-emphasis text-(--cp-text-secondary)">
+        <p class="m-0 text-pretty font-emphasis text-cp-secondary">
           {{ detailDescription }}
         </p>
 
         <div
           v-if="isRateLimited"
-          class="flex items-center justify-between gap-3 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2"
+          class="flex items-center justify-between gap-3 rounded-cp-control bg-cp-subtle px-3 py-2"
         >
-          <span class="font-heavy text-(--cp-text-tertiary)">预计恢复</span>
-          <span class="font-mono font-emphasis tabular-nums text-(--cp-text-primary)">
+          <span class="font-heavy text-cp-tertiary">预计恢复</span>
+          <span class="font-mono font-emphasis tabular-nums text-cp-primary">
             {{ rateLimitedRelative ?? props.rateLimitedUntil }}
           </span>
         </div>
 
-        <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3 py-2.5">
-          <p class="m-0 text-[11px] leading-none font-heavy text-(--cp-text-tertiary)">
+        <div class="rounded-cp-control bg-cp-subtle px-3 py-2.5">
+          <p class="m-0 text-[11px] leading-none font-heavy text-cp-tertiary">
             建议操作
           </p>
-          <p class="mt-1.5 mb-0 text-pretty font-emphasis text-(--cp-text-primary)">
+          <p class="mt-1.5 mb-0 text-pretty font-emphasis text-cp-primary">
             {{ recoveryHint }}
           </p>
         </div>
 
         <div
           v-if="errorText"
-          class="overflow-hidden rounded-(--cp-input-radius-base) bg-(--cp-bg-muted)"
+          class="overflow-hidden rounded-cp-control bg-cp-muted"
         >
           <div class="flex items-center justify-between gap-3 px-3 pt-2.5 pb-1.5">
-            <span class="text-[11px] leading-none font-heavy text-(--cp-text-tertiary)">上游原始反馈</span>
-            <span class="shrink-0 text-[10px] leading-none font-emphasis text-(--cp-text-muted)">仅供排查</span>
+            <span class="text-[11px] leading-none font-heavy text-cp-tertiary">上游原始反馈</span>
+            <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-muted-text">仅供排查</span>
           </div>
-          <BaseScrollbar class="bg-(--cp-bg-subtle)" max-height="124px" view-class="px-3 py-2 pr-2">
-            <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.55] font-emphasis text-(--cp-text-secondary)">{{ errorText }}</pre>
+          <BaseScrollbar class="bg-cp-subtle" max-height="124px">
+            <div class="px-3 py-2">
+              <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.55] font-emphasis text-cp-secondary">{{ errorText }}</pre>
+            </div>
           </BaseScrollbar>
         </div>
       </div>

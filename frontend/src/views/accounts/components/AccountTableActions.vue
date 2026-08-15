@@ -2,7 +2,8 @@
 import type { AccountRow } from '../constants'
 import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 
 defineProps<{
@@ -25,83 +26,74 @@ const emit = defineEmits<{
 
 <template>
   <div class="relative flex items-center justify-start gap-1">
-    <BaseButton
-      icon-only
+    <BaseIconButton
       variant="ghost"
       size="sm"
       label="编辑账号"
       @click.stop="emit('edit', account)"
     >
-      <Pencil class="size-3.5 text-(--cp-info)" />
-    </BaseButton>
+      <Pencil class="size-3.5 text-cp-info" />
+    </BaseIconButton>
 
-    <BaseButton
-      icon-only
+    <BaseIconButton
       variant="ghost"
       size="sm"
-      title="删除账号"
+      label="删除账号"
       :disabled="deleting"
       @click.stop="emit('delete', account)"
     >
-      <Trash2 class="size-3.5 text-(--cp-danger)" />
-    </BaseButton>
+      <Trash2 class="size-3.5 text-cp-danger" />
+    </BaseIconButton>
 
-    <BasePopover placement="bottom-end" width="160px">
+    <BasePopover placement="bottom-end">
       <template #trigger="{ open }">
-        <BaseButton icon-only variant="ghost" size="sm" title="更多操作" :active="open">
+        <BaseIconButton variant="ghost" size="sm" label="更多操作" :pressed="open">
           <MoreHorizontal class="size-4" />
-        </BaseButton>
+        </BaseIconButton>
       </template>
 
       <template #default="{ close }">
-        <BaseButton
-          variant="ghost"
-          size="sm"
-          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
-          :loading="testing"
-          :disabled="testing"
-          @click.stop="(close(), emit('test', account))"
-        >
-          <template #icon>
-            <Wifi class="size-3.5 text-(--cp-text-muted)" />
-          </template>
-          测试连接
-        </BaseButton>
-        <BaseButton
-          variant="ghost"
-          size="sm"
-          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
-          :loading="refreshing"
-          :disabled="refreshing"
-          @click.stop="(close(), emit('refresh', account.id))"
-        >
-          <template #icon>
-            <RefreshCw class="size-3.5 text-(--cp-text-muted)" />
-          </template>
-          刷新令牌
-        </BaseButton>
-        <BaseButton
-          variant="ghost"
-          size="sm"
-          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
-          @click.stop="(close(), emit('reauthorize', account))"
-        >
-          <KeyRound class="size-3.5 text-(--cp-text-muted)" />
-          重新授权
-        </BaseButton>
-        <BaseButton
-          variant="ghost"
-          size="sm"
-          class="h-8.5! w-full justify-start! gap-2! rounded-(--cp-input-radius-small)! px-3! text-left text-[13px] leading-none! font-emphasis! text-(--cp-text-primary)!"
-          :loading="recovering"
-          :disabled="recovering"
-          @click.stop="(close(), emit('recover', account.id))"
-        >
-          <template #icon>
-            <RotateCcw class="size-3.5 text-(--cp-text-muted)" />
-          </template>
-          恢复状态
-        </BaseButton>
+        <div class="w-40 p-1.5">
+          <BaseMenuItem
+            :loading="testing"
+            :disabled="testing"
+            @click.stop="(close(), emit('test', account))"
+          >
+            <template #icon>
+              <Wifi class="size-3.5 text-cp-muted-text" />
+            </template>
+            测试连接
+          </BaseMenuItem>
+          <BaseMenuItem
+            :loading="refreshing"
+            :disabled="refreshing"
+            @click.stop="(close(), emit('refresh', account.id))"
+          >
+            <template #loading>
+              <RefreshCw class="size-3.5 animate-spin text-cp-muted-text motion-reduce:animate-none" />
+            </template>
+            <template #icon>
+              <RefreshCw class="size-3.5 text-cp-muted-text" />
+            </template>
+            刷新令牌
+          </BaseMenuItem>
+          <BaseMenuItem @click.stop="(close(), emit('reauthorize', account))">
+            <template #icon>
+              <KeyRound class="size-3.5 text-cp-muted-text" />
+            </template>
+            重新授权
+          </BaseMenuItem>
+          <BaseMenuItem
+            :loading="recovering"
+            :disabled="recovering"
+            @click.stop="(close(), emit('recover', account.id))"
+          >
+            <template #icon>
+              <RotateCcw class="size-3.5 text-cp-muted-text" />
+            </template>
+            恢复状态
+          </BaseMenuItem>
+        </div>
       </template>
     </BasePopover>
   </div>

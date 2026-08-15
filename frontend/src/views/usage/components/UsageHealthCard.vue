@@ -148,7 +148,6 @@ function formatTooltip(params: unknown) {
     as="article"
     title="请求健康"
     :description="`按${granularityText}观察请求量、成功率与失败时段`"
-    body-class="mt-3"
     class="h-full min-h-90"
   >
     <template #body>
@@ -156,8 +155,8 @@ function formatTooltip(params: unknown) {
         <BaseChart v-if="hasData" :option="chartOption" :height="264" />
         <BaseEmpty
           v-else
-          compact
-          plain
+          size="sm"
+          surface="none"
           :title="loading ? '正在加载请求健康数据' : '暂无请求健康数据'"
           description="当前范围没有可绘制的请求记录"
           class="h-66 place-content-center"

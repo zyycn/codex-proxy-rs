@@ -244,31 +244,29 @@ function clamp(value: number, minimum: number, maximum: number) {
     v-model="open"
     class="p-0.75"
     placement="bottom-start"
-    :width="304"
     :disabled="props.disabled"
-    panel-class="p-3!"
   >
     <template #trigger>
       <button
         type="button"
-        class="group inline-flex size-8 items-center justify-center rounded-[4px] border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-(--cp-info-border) disabled:cursor-not-allowed disabled:opacity-60"
+        class="group inline-flex size-8 items-center justify-center rounded-sm border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-cp-info-border disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="props.disabled"
         :aria-label="props.label"
         aria-haspopup="dialog"
         :aria-expanded="open"
       >
-        <span class="base-color-picker__checker relative flex size-full items-center justify-center overflow-hidden rounded-[4px]" aria-hidden="true">
+        <span class="base-color-picker__checker relative flex size-full items-center justify-center overflow-hidden rounded-sm" aria-hidden="true">
           <span class="absolute inset-0" :style="{ backgroundColor: normalizedModel }" />
           <ChevronDown class="relative size-3.5 text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.65)]" />
         </span>
       </button>
     </template>
 
-    <div class="grid gap-3" role="dialog" :aria-label="props.label">
+    <div class="grid w-76 gap-3 p-3" role="dialog" :aria-label="props.label">
       <div class="grid h-43 grid-cols-[1fr_14px] gap-2">
         <div
           ref="svPanel"
-          class="base-color-picker__sv relative touch-none overflow-hidden rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+          class="base-color-picker__sv relative touch-none overflow-hidden rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
           :style="{ backgroundColor: hueColor }"
           role="slider"
           tabindex="0"
@@ -290,7 +288,7 @@ function clamp(value: number, minimum: number, maximum: number) {
 
         <div
           ref="hueSlider"
-          class="base-color-picker__hue relative touch-none rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+          class="base-color-picker__hue relative touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
           role="slider"
           tabindex="0"
           aria-label="色相"
@@ -303,7 +301,7 @@ function clamp(value: number, minimum: number, maximum: number) {
           @keydown="handleHueKeydown"
         >
           <span
-            class="absolute left-1/2 h-1.5 w-4.5 -translate-x-1/2 -translate-y-1/2 rounded-[2px] bg-white shadow-[0_0_0_1px_#64748b,0_1px_2px_#0000004d]"
+            class="absolute left-1/2 h-1.5 w-4.5 -translate-x-1/2 -translate-y-1/2 rounded-xs bg-white shadow-[0_0_0_1px_#64748b,0_1px_2px_#0000004d]"
             :style="hueThumbStyle"
             aria-hidden="true"
           />
@@ -313,7 +311,7 @@ function clamp(value: number, minimum: number, maximum: number) {
       <div class="grid grid-cols-[1fr_36px] items-center gap-2">
         <div
           ref="alphaSlider"
-          class="base-color-picker__alpha relative h-3 touch-none rounded-[4px] outline-none focus-visible:ring-2 focus-visible:ring-(--cp-info-border)"
+          class="base-color-picker__alpha relative h-3 touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
           :style="alphaTrackStyle"
           role="slider"
           tabindex="0"
@@ -333,7 +331,7 @@ function clamp(value: number, minimum: number, maximum: number) {
             aria-hidden="true"
           />
         </div>
-        <span class="text-right font-mono text-[11px] tabular-nums text-(--cp-text-secondary)">
+        <span class="text-right font-mono text-[11px] tabular-nums text-cp-secondary">
           {{ Math.round(alpha * 100) }}%
         </span>
       </div>
@@ -348,7 +346,7 @@ function clamp(value: number, minimum: number, maximum: number) {
           v-for="color in props.presets"
           :key="color"
           type="button"
-          class="relative flex size-6.5 items-center justify-center rounded-[4px] border-0 outline-none transition-transform duration-150 hover:scale-105 focus-visible:ring-2 focus-visible:ring-(--cp-info-border) focus-visible:ring-offset-2 focus-visible:ring-offset-(--cp-bg-surface)"
+          class="relative flex size-6.5 items-center justify-center rounded-sm border-0 outline-none transition-transform duration-150 hover:scale-105 focus-visible:ring-2 focus-visible:ring-cp-info-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface"
           :style="{ backgroundColor: color }"
           role="radio"
           :aria-label="color"
@@ -366,18 +364,28 @@ function clamp(value: number, minimum: number, maximum: number) {
       </div>
 
       <div class="flex items-start gap-2">
-        <BaseInput
-          v-model="customInput"
-          class="min-w-0 flex-1"
-          aria-label="RGBA 颜色"
-          placeholder="rgba(96, 165, 250, 1)"
-          autocomplete="off"
-          :disabled="props.disabled"
-          :error="inputError"
-          @change="updateFromInput"
-          @keydown.enter="confirm"
-        />
-        <BaseButton size="default" variant="default" :disabled="!parseRgbaColor(customInput)" @click="confirm">
+        <div class="min-w-0 flex-1">
+          <BaseInput
+            v-model="customInput"
+            aria-label="RGBA 颜色"
+            placeholder="rgba(96, 165, 250, 1)"
+            autocomplete="off"
+            :disabled="props.disabled"
+            :aria-invalid="Boolean(inputError) || undefined"
+            aria-describedby="color-input-error"
+            @change="updateFromInput"
+            @keydown.enter="confirm"
+          />
+          <p
+            v-if="inputError"
+            id="color-input-error"
+            class="mt-1.5 mb-0 text-xs font-emphasis text-cp-danger-text"
+            aria-live="polite"
+          >
+            {{ inputError }}
+          </p>
+        </div>
+        <BaseButton size="md" variant="secondary" :disabled="!parseRgbaColor(customInput)" @click="confirm">
           确定
         </BaseButton>
       </div>

@@ -14,7 +14,9 @@ const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindo
 const summaryClass = computed(
   () =>
     `grid w-full min-w-0 gap-1.5 py-0.5 ${
-      visibleQuotaWindows.value.length <= 1 ? 'min-h-13 content-center' : ''
+      visibleQuotaWindows.value.length <= 1
+        ? 'min-h-13 content-center'
+        : 'min-h-16.5 content-center'
     }`,
 )
 </script>

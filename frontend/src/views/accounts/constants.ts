@@ -1,6 +1,6 @@
 import type { AccountErrorReason, AccountStatus, getAccounts } from '@/api'
-import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import { clamp } from 'es-toolkit'
+import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import { providerDisplayName } from '@/utils/providers'
 
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -25,106 +25,45 @@ const quotaGroupOrder = new Map([
   ['other', 2],
 ])
 
-const relaxedCellClass = 'py-2 align-middle'
-
-export const accountColumns = [
-  {
-    key: 'expander',
-    label: '',
-    width: '40px',
-    minWidth: '40px',
-    align: 'center' as const,
-    headerClass: '!px-2',
-    cellClass: `!px-2 ${relaxedCellClass}`,
-  },
-  {
-    key: 'selection',
-    label: '',
-    width: '40px',
-    minWidth: '40px',
-    align: 'center' as const,
-    headerClass: '!px-2',
-    cellClass: `!px-2 ${relaxedCellClass}`,
-  },
+export const accountColumns = defineTableColumns<AccountRow>([
+  { key: 'expander', kind: 'expander' },
+  { key: 'selection', kind: 'selection' },
   {
     key: 'identity',
-    label: '邮箱',
-    sortable: true,
-    sortKey: 'email',
-    width: '270px',
-    minWidth: '270px',
-    cellClass: relaxedCellClass,
+    label: '账号',
+    kind: 'identity',
+    size: '3xl',
+    sortable: 'email',
   },
   {
     key: 'provider',
     label: '平台/类型',
-    width: '120px',
-    minWidth: '120px',
-    align: 'center' as const,
+    kind: 'meta',
+    size: 'md',
+    align: 'center',
     format: value => accountProviderLabel(typeof value === 'string' ? value : null),
-    cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
-  {
-    key: 'status',
-    label: '状态',
-    sortable: true,
-    flex: 0.6,
-    minWidth: '60px',
-    cellClass: relaxedCellClass,
-  },
-  {
-    key: 'planType',
-    label: '套餐',
-    sortable: true,
-    flex: 0.5,
-    minWidth: '90px',
-    cellClass: relaxedCellClass,
-  },
-  {
-    key: 'usage',
-    label: '用量',
-    sortable: true,
-    flex: 1.3,
-    minWidth: '220px',
-    cellClass: relaxedCellClass,
-  },
-  {
-    key: 'groups',
-    label: '账号分组',
-    flex: 1,
-    width: '112px',
-    minWidth: '112px',
-    align: 'center' as const,
-    cellClass: relaxedCellClass,
-  },
+  { key: 'status', label: '状态', kind: 'status', align: 'left', sortable: true },
+  { key: 'planType', label: '套餐', kind: 'status', sortable: true },
+  { key: 'usage', label: '用量', kind: 'custom', size: '2xl', sortable: true },
+  { key: 'groups', label: '账号分组', kind: 'status' },
   {
     key: 'lastUsedAt',
     label: '最后使用',
+    kind: 'datetime',
     sortable: true,
-    flex: 1,
-    minWidth: '120px',
     emptyText: '',
-    headerClass: '!pl-8',
-    cellClass: `${relaxedCellClass} !pl-8 text-(--cp-text-secondary)`,
   },
   {
     key: 'accessTokenExpiresAtDisplay',
     label: '过期时间',
-    sortable: true,
-    sortKey: 'expiresAt',
-    flex: 1.2,
-    minWidth: '160px',
+    kind: 'datetime',
+    sortable: 'expiresAt',
     format: value => optionalAccountCell(value),
     emptyText: '',
-    cellClass: `${relaxedCellClass} text-(--cp-text-secondary)`,
   },
-  {
-    key: 'actions',
-    label: '操作',
-    width: '136px',
-    minWidth: '136px',
-  },
-] satisfies BaseTableColumn<AccountRow>[]
+  { key: 'actions', label: '操作', kind: 'actions', size: 'lg' },
+])
 
 export const statusLabels: Record<AccountStatus, string> = {
   normal: '正常',
@@ -193,34 +132,34 @@ export function quotaWindowBarStyle(window: AccountQuotaWindow, minimumWidth = '
 
 export function quotaWindowBarClass(window: AccountQuotaWindow) {
   if (window.usedPercent === null)
-    return 'bg-(--cp-default-border-hover)'
+    return 'bg-cp-default-border-hover'
   if (window.usedPercent >= 95)
-    return 'bg-(--cp-danger)'
+    return 'bg-cp-danger'
   if (window.usedPercent >= 80)
-    return 'bg-(--cp-warning)'
-  return 'bg-(--cp-success)'
+    return 'bg-cp-warning'
+  return 'bg-cp-success'
 }
 
 export function quotaWindowPercentTextClass(window: AccountQuotaWindow) {
   if (window.usedPercent === null)
-    return 'text-(--cp-text-muted)'
+    return 'text-cp-muted-text'
   if (window.usedPercent >= 95)
-    return 'text-(--cp-danger-text)'
+    return 'text-cp-danger-text'
   if (window.usedPercent >= 80)
-    return 'text-(--cp-warning-text)'
-  return 'text-(--cp-success-text)'
+    return 'text-cp-warning-text'
+  return 'text-cp-success-text'
 }
 
 export function modelSuccessRateTextClass(successRate: number | null) {
   if (successRate === null)
-    return 'text-(--cp-text-muted)'
+    return 'text-cp-muted-text'
   if (successRate >= 99.5)
-    return 'text-(--cp-success-text)'
+    return 'text-cp-success-text'
   if (successRate >= 98)
-    return 'text-(--cp-normal-text)'
+    return 'text-cp-normal-text'
   if (successRate >= 95)
-    return 'text-(--cp-warning-text)'
-  return 'text-(--cp-danger-text)'
+    return 'text-cp-warning-text'
+  return 'text-cp-danger-text'
 }
 
 function compareQuotaWindows(left: AccountQuotaWindow, right: AccountQuotaWindow) {

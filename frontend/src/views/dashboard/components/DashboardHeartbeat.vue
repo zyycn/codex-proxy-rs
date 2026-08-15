@@ -71,8 +71,8 @@ onBeforeUnmount(() => {
       aria-hidden="true"
       class="relative inline-flex size-2 shrink-0 items-center justify-center"
     >
-      <span ref="heartbeatRing" class="absolute size-2 rounded-full bg-(--cp-success) opacity-0" />
-      <span ref="heartbeatDot" class="relative size-1.5 rounded-full bg-(--cp-success)" />
+      <span ref="heartbeatRing" class="absolute size-2 rounded-full bg-cp-success opacity-0" />
+      <span ref="heartbeatDot" class="relative size-1.5 rounded-full bg-cp-success" />
     </span>
     <span aria-hidden="true">自动刷新 30s</span>
   </span>

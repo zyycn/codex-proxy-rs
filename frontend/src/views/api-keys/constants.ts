@@ -1,51 +1,23 @@
-const relaxedActionCellClass = '!px-4'
+import type { getApiKeys } from '@/api'
+import { defineTableColumns } from '@/components/base/BaseTable/columns'
 
-export const apiKeyColumns = [
-  { key: 'selection', label: '', width: '48px', minWidth: '48px', align: 'center' as const },
-  {
-    key: 'identity',
-    label: '名称',
-    sortable: true,
-    sortKey: 'name',
-    minWidth: '220px',
-    flex: 0.9,
-  },
-  { key: 'prefix', label: '密钥前缀', minWidth: '180px', flex: 1 },
-  {
-    key: 'enabled',
-    label: '状态',
-    sortable: true,
-    width: '112px',
-    minWidth: '112px',
-    align: 'center' as const,
-  },
-  { key: 'scope', label: '分组', width: '112px', minWidth: '112px', align: 'center' as const },
-  {
-    key: 'createdAtDisplay',
-    label: '创建时间',
-    sortable: true,
-    sortKey: 'createdAt',
-    width: '176px',
-    minWidth: '176px',
-    cellClass: 'font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
-  },
+type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number] & {
+  createdAtDisplay: string
+}
+
+export const apiKeyColumns = defineTableColumns<ApiKeyRow>([
+  { key: 'selection', kind: 'selection' },
+  { key: 'identity', label: '名称', kind: 'identity', size: 'xl', sortable: 'name' },
+  { key: 'prefix', label: '密钥前缀', kind: 'mono', size: '2xl' },
+  { key: 'enabled', label: '状态', kind: 'status', sortable: true },
+  { key: 'scope', label: '分组', kind: 'status' },
+  { key: 'createdAtDisplay', label: '创建时间', kind: 'datetime', sortable: 'createdAt' },
   {
     key: 'lastUsedAt',
     label: '最后使用',
+    kind: 'datetime',
     sortable: true,
-    sortKey: 'lastUsedAt',
-    width: '176px',
-    minWidth: '176px',
     emptyText: '',
-    headerClass: '!pl-8',
-    cellClass: '!pl-8 text-(--cp-text-secondary)',
   },
-  {
-    key: 'actions',
-    label: '操作',
-    width: '208px',
-    minWidth: '208px',
-    headerClass: relaxedActionCellClass,
-    cellClass: relaxedActionCellClass,
-  },
-]
+  { key: 'actions', label: '操作', kind: 'actions', size: 'xl' },
+])

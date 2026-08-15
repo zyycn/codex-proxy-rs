@@ -25,12 +25,12 @@ export function usageRecordType(record: UsageDisplayRecord) {
 export function usageRecordTypeClass(record: UsageDisplayRecord) {
   const type = usageRecordType(record)
   if (type === 'WS')
-    return 'bg-(--cp-info-bg) text-(--cp-info-text)'
+    return 'bg-cp-info-bg text-cp-info-text'
   if (type === 'SSE')
-    return 'bg-(--cp-success-bg) text-(--cp-success-text)'
+    return 'bg-cp-success-bg text-cp-success-text'
   if (type === 'Chat')
-    return 'bg-(--cp-warning-bg) text-(--cp-warning-text)'
-  return 'bg-(--cp-bg-subtle) text-(--cp-text-secondary)'
+    return 'bg-cp-warning-bg text-cp-warning-text'
+  return 'bg-cp-subtle text-cp-secondary'
 }
 
 export function usageAccountText(record: UsageDisplayRecord) {

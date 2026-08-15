@@ -28,7 +28,7 @@ const OVERLAY_BASE_CLASS = [
   'place-items-center',
   'rounded-[inherit]',
 ].join(' ')
-const OVERLAY_MASK_CLASS = 'bg-(--cp-bg-surface)/82 backdrop-blur-[4px]'
+const OVERLAY_MASK_CLASS = 'bg-cp-surface/82 backdrop-blur-[4px]'
 const PANEL_CLASS = [
   'inline-flex',
   'min-h-10',
@@ -41,7 +41,7 @@ const PANEL_CLASS = [
   'text-xs',
   'leading-[1.15]',
   'font-heavy',
-  'text-(--cp-text-secondary)',
+  'text-cp-secondary',
 ].join(' ')
 const MARK_CLASS = [
   'inline-block',

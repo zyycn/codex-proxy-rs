@@ -35,12 +35,12 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
     v-model="open"
     title="编辑账号"
     description="查看账号信息，并调整调度与所属分组。"
-    width="640px"
-    :close-disabled="saving"
+    size="md"
+    :dismissible="!saving"
   >
     <div v-if="account" class="grid gap-5">
       <div
-        class="flex flex-wrap items-center justify-between gap-4 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3.5"
+        class="flex flex-wrap items-center justify-between gap-4 rounded-cp-control bg-cp-subtle px-4 py-3.5"
       >
         <AccountIdentityCell
           class="min-w-0 flex-1"
@@ -57,7 +57,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       </div>
 
       <div class="flex min-h-6 items-center justify-between gap-3">
-        <span class="text-[13px] leading-none font-medium text-(--cp-text-secondary)">调度</span>
+        <span class="text-[13px] leading-none font-medium text-cp-secondary">调度</span>
         <BaseSwitch
           v-model="enabled"
           label="切换账号调度"

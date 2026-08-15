@@ -9,6 +9,7 @@ import { computed, ref } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -196,15 +197,14 @@ async function copyText(value: string, successText: string) {
     v-model="open"
     :title="modalTitle"
     :description="description"
-    :variant="isChoosingProvider ? 'default' : 'info'"
-    :width="isChoosingProvider ? '420px' : '620px'"
-    :close-disabled="saving"
-    :hide-footer="isChoosingProvider"
+    :tone="isChoosingProvider ? 'neutral' : 'info'"
+    :size="isChoosingProvider ? 'sm' : 'md'"
+    :dismissible="!saving"
   >
     <template #icon>
-      <LayoutGrid v-if="isBatch" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
-      <Xai v-else-if="isXai" class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
-      <Openai v-else class="text-(--cp-text-primary)" aria-hidden="true" :width="20" :height="20" />
+      <LayoutGrid v-if="isBatch" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
+      <Xai v-else-if="isXai" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
+      <Openai v-else class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
     </template>
 
     <AccountProviderChooser
@@ -217,23 +217,24 @@ async function copyText(value: string, successText: string) {
       <BaseSegmented
         v-if="!reauthorizing && !isBatch"
         v-model="mode"
+        label="账号添加方式"
         :options="modeOptions"
         class="w-full"
       />
 
       <div v-if="mode === 'oauth'" class="flex flex-col gap-4">
-        <div class="rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-4 py-3">
+        <div class="rounded-cp-control bg-cp-subtle px-4 py-3">
           <div class="flex items-start gap-3">
             <div
-              class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-(--cp-icon-button-radius) bg-(--cp-bg-surface) text-(--cp-info)"
+              class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-cp-control bg-cp-surface text-cp-info"
             >
               <KeyRound class="size-4" />
             </div>
             <div class="min-w-0 flex-1">
-              <p class="m-0 text-[13px] font-bold text-(--cp-text-primary)">
+              <p class="m-0 text-[13px] font-bold text-cp-primary">
                 {{ oauthPanelTitle }}
               </p>
-              <p class="m-0 mt-1 text-[12px] leading-[1.55] font-medium text-(--cp-text-secondary)">
+              <p class="m-0 mt-1 text-[12px] leading-[1.55] font-medium text-cp-secondary">
                 {{ oauthPanelDescription }}
               </p>
             </div>
@@ -242,7 +243,7 @@ async function copyText(value: string, successText: string) {
 
         <div class="flex flex-wrap items-center gap-2">
           <BaseButton
-            variant="default"
+            variant="secondary"
             :loading="oauthLoading"
             :disabled="!canGenerateOauth"
             @click="emit('generateOauth')"
@@ -254,9 +255,8 @@ async function copyText(value: string, successText: string) {
         <BaseForm v-if="oauthAuthUrl">
           <BaseFormItem label="授权链接">
             <template #extra>
-              <BaseButton
-                icon-only
-                variant="default"
+              <BaseIconButton
+                variant="secondary"
                 size="sm"
                 title="复制链接"
                 label="复制链接"
@@ -264,16 +264,17 @@ async function copyText(value: string, successText: string) {
                 @click="copyText(oauthAuthUrl, '授权链接已复制')"
               >
                 <Copy class="size-3.5" />
-              </BaseButton>
+              </BaseIconButton>
             </template>
             <BaseScrollbar
               max-height="92px"
-              view-class="rounded-(--cp-input-radius-base) bg-(--cp-input-current-bg,var(--cp-input-context-bg)) px-3.5 py-3 shadow-(--cp-shadow-input)"
             >
-              <pre
-                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-emphasis text-(--cp-text-secondary)"
-                v-text="oauthAuthUrl"
-              />
+              <div class="rounded-cp-control bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] px-3.5 py-3 shadow-cp-input">
+                <pre
+                  class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-emphasis text-cp-secondary"
+                  v-text="oauthAuthUrl"
+                />
+              </div>
             </BaseScrollbar>
           </BaseFormItem>
         </BaseForm>
@@ -283,7 +284,7 @@ async function copyText(value: string, successText: string) {
             <BaseTextarea
               v-model="oauthCallback"
               :aria-label="isXai ? '回调地址或授权码' : '回调地址'"
-              size="sm"
+              :rows="4"
               :placeholder="isXai ? '回调地址、?code=...&state=... 或授权码' : 'http://localhost:1455/auth/callback?code=...&state=...'"
               :disabled="saving"
             />
@@ -298,7 +299,7 @@ async function copyText(value: string, successText: string) {
           :error="fileError || undefined"
         >
           <template #extra>
-            <BaseButton variant="default" size="sm" :disabled="saving" @click="openImportFile()">
+            <BaseButton variant="secondary" size="sm" :disabled="saving" @click="openImportFile()">
               <template #icon>
                 <Upload class="size-3.5" />
               </template>
@@ -308,7 +309,7 @@ async function copyText(value: string, successText: string) {
           <BaseTextarea
             v-model="importText"
             :aria-label="importFileLabel"
-            size="lg"
+            :rows="9"
             :placeholder="importFilePlaceholder"
             :disabled="saving"
           />
@@ -316,12 +317,11 @@ async function copyText(value: string, successText: string) {
       </BaseForm>
     </div>
 
-    <template #footer>
+    <template v-if="!isChoosingProvider" #footer>
       <BaseButton variant="ghost" :disabled="saving" @click="open = false">
         取消
       </BaseButton>
       <BaseButton
-        v-if="!isChoosingProvider"
         variant="primary"
         :loading="saving"
         :disabled="!canSubmit"

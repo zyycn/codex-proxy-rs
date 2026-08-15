@@ -1,156 +1,50 @@
+import type { UsageDisplayRecord } from './utils/records'
+import type { getOpsErrors } from '@/api'
+import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import { formatProvider } from './utils/format'
 
-export const usageRecordColumns = [
+type OpsErrorRow = Awaited<ReturnType<typeof getOpsErrors>>['items'][number]
+
+export const usageRecordColumns = defineTableColumns<UsageDisplayRecord>([
   {
     key: 'accountEmail',
     label: '账号',
-    width: '280px',
-    fixed: false as const,
-    ellipsis: true,
+    kind: 'identity',
+    size: '3xl',
   },
   {
     key: 'provider',
     label: '平台/类型',
-    width: '100px',
-    align: 'center' as const,
-    ellipsis: false,
+    kind: 'status',
+    size: 'sm',
     format: (value: unknown) => formatProvider(typeof value === 'string' ? value : null),
   },
-  {
-    key: 'model',
-    label: '模型',
-    width: '160px',
-    ellipsis: false,
-  },
-  {
-    key: 'reasoningEffort',
-    label: '推理强度',
-    width: '98px',
-    ellipsis: false,
-    cellClass: 'whitespace-nowrap text-[12px] font-bold text-(--cp-text-primary)',
-  },
-  {
-    key: 'route',
-    label: '端点',
-    width: '185px',
-    ellipsis: false,
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'recordType',
-    label: '类型',
-    width: '78px',
-    align: 'center' as const,
-    ellipsis: false,
-  },
-  {
-    key: 'tokenDetails',
-    label: 'TOKEN',
-    width: '184px',
-    align: 'right' as const,
-    ellipsis: false,
-  },
-  {
-    key: 'billing',
-    label: '费用',
-    width: '132px',
-    align: 'right' as const,
-    ellipsis: false,
-  },
-  {
-    key: 'latency',
-    label: '延迟',
-    width: '156px',
-    align: 'right' as const,
-    ellipsis: false,
-  },
-  {
-    key: 'createdAtDisplay',
-    label: '时间',
-    width: '190px',
-    ellipsis: false,
-    cellClass:
-      'whitespace-nowrap font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
-  },
-  {
-    key: 'clientIp',
-    label: 'IP',
-    width: '240px',
-    ellipsis: false,
-  },
-  {
-    key: 'userAgent',
-    label: 'User-Agent',
-    width: '340px',
-    ellipsis: false,
-    cellClass:
-      'whitespace-normal break-words text-[12px] leading-[1.45] font-emphasis text-(--cp-text-secondary)',
-  },
-  {
-    key: 'actions',
-    label: '操作',
-    width: '92px',
-    ellipsis: false,
-    headerClass: '!px-4',
-    cellClass: '!px-4',
-  },
-]
+  { key: 'model', label: '模型', kind: 'custom' },
+  { key: 'reasoningEffort', label: '推理强度', kind: 'status' },
+  { key: 'route', label: '端点', kind: 'mono' },
+  { key: 'recordType', label: '类型', kind: 'status', size: 'sm' },
+  { key: 'tokenDetails', label: 'TOKEN', kind: 'numeric', size: 'xl' },
+  { key: 'billing', label: '费用', kind: 'numeric', size: 'lg' },
+  { key: 'latency', label: '延迟', kind: 'numeric', size: 'lg' },
+  { key: 'createdAtDisplay', label: '时间', kind: 'datetime' },
+  { key: 'clientIp', label: 'IP', kind: 'custom', size: '2xl' },
+  { key: 'userAgent', label: 'User-Agent', kind: 'text', size: '3xl' },
+  { key: 'actions', label: '操作', kind: 'actions', size: 'sm' },
+])
 
-export const opsErrorColumns = [
-  {
-    key: 'accountId',
-    label: '账号',
-    width: '230px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'createdAtDisplay',
-    label: '时间',
-    width: '190px',
-    cellClass:
-      'whitespace-nowrap font-mono text-[12px] font-emphasis tabular-nums text-(--cp-text-secondary)',
-  },
-  { key: 'upstreamStatusCode', label: '上游状态', width: '96px', align: 'center' as const },
-  { key: 'clientStatusCode', label: '客户端状态', width: '96px', align: 'center' as const },
-  {
-    key: 'failureClass',
-    label: '失败分类',
-    width: '170px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'kind',
-    label: '事件',
-    width: '170px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'route',
-    label: '端点',
-    width: '190px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'model',
-    label: '模型',
-    width: '180px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  {
-    key: 'requestId',
-    label: '请求 ID',
-    width: '250px',
-    cellClass: 'font-mono text-[12px] font-emphasis',
-  },
-  { key: 'message', label: '消息', minWidth: '300px', flex: 1 },
-  {
-    key: 'actions',
-    label: '操作',
-    width: '80px',
-    headerClass: '!px-4',
-    cellClass: '!px-4',
-  },
-]
+export const opsErrorColumns = defineTableColumns<OpsErrorRow>([
+  { key: 'accountId', label: '账号', kind: 'mono', size: '3xl' },
+  { key: 'createdAtDisplay', label: '时间', kind: 'datetime' },
+  { key: 'upstreamStatusCode', label: '上游状态', kind: 'status', size: 'sm' },
+  { key: 'clientStatusCode', label: '客户端状态', kind: 'status', size: 'md' },
+  { key: 'failureClass', label: '失败分类', kind: 'mono' },
+  { key: 'kind', label: '事件', kind: 'mono' },
+  { key: 'route', label: '端点', kind: 'mono' },
+  { key: 'model', label: '模型', kind: 'mono' },
+  { key: 'requestId', label: '请求 ID', kind: 'mono', size: '2xl' },
+  { key: 'message', label: '消息', kind: 'text', size: '3xl' },
+  { key: 'actions', label: '操作', kind: 'actions', size: 'sm' },
+])
 
 export const usageTimeRangeOptions = [
   { label: '今天', value: 'today' },

@@ -3,7 +3,7 @@ import type { AccountRow } from '../constants'
 import { RefreshCw } from '@lucide/vue'
 
 import { computed } from 'vue'
-import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { orderedPanelQuotaWindows } from '../constants'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountUsageWindow from './AccountUsageWindow.vue'
@@ -21,14 +21,14 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
 </script>
 
 <template>
-  <section class="rounded-lg bg-(--cp-bg-surface) p-4 shadow-(--cp-shadow-control)">
+  <section class="rounded-lg bg-cp-surface p-4 shadow-cp-control">
     <div class="mb-3 flex items-center justify-between gap-3">
       <div>
-        <h3 class="m-0 text-[14px] font-heavy text-(--cp-text-primary)">
+        <h3 class="m-0 text-[14px] font-heavy text-cp-primary">
           账号额度
         </h3>
         <p
-          class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-emphasis text-(--cp-text-secondary)"
+          class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-emphasis text-cp-secondary"
         >
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
           <template v-if="account.provider === 'openai'">
@@ -40,18 +40,19 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
           <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>
         </p>
       </div>
-      <BaseButton
-        icon-only
+      <BaseIconButton
         variant="ghost"
         size="sm"
-        title="刷新额度"
-        spin-icon-on-loading
+        label="刷新额度"
         :loading="refreshing"
         :disabled="refreshing"
         @click="emit('refreshQuota', account.id)"
       >
+        <template #loading>
+          <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
+        </template>
         <RefreshCw class="size-3.5" />
-      </BaseButton>
+      </BaseIconButton>
     </div>
 
     <div class="grid gap-3">

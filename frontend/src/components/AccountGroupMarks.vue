@@ -21,11 +21,11 @@ const fullNames = computed(() => props.groups
     <span
       v-for="group in groups"
       :key="group.id"
-      class="size-4 shrink-0 rounded-[4px]"
+      class="size-4 shrink-0 rounded-sm"
       :style="{ backgroundColor: group.color }"
       :title="group.name"
       aria-hidden="true"
     />
   </div>
-  <span v-else class="text-xs text-(--cp-text-muted)">—</span>
+  <span v-else class="text-xs text-cp-muted-text">—</span>
 </template>

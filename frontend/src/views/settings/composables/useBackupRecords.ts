@@ -21,6 +21,7 @@ function isActive(status: BackupStatus): boolean {
 /** 备份记录：分页、可见时轮询、手动创建、下载与请求删除。 */
 export function useBackupRecords() {
   const creating = shallowRef(false)
+  const refreshing = shallowRef(false)
   const deleting = shallowRef(false)
   const deleteTarget = shallowRef<BackupRecord | null>(null)
   const downloadStates = shallowRef<Record<string, boolean>>({})
@@ -60,7 +61,7 @@ export function useBackupRecords() {
       timer = undefined
       if (stopped)
         return
-      await paged.execute()
+      await paged.execute({ silent: true })
       scheduleNextPoll()
     }, POLL_INTERVAL_MS)
   }
@@ -82,8 +83,20 @@ export function useBackupRecords() {
     }
   }
 
-  async function refresh(): Promise<void> {
+  async function load(): Promise<void> {
     await paged.execute()
+  }
+
+  async function refresh(): Promise<void> {
+    if (refreshing.value)
+      return
+    refreshing.value = true
+    try {
+      await paged.execute({ silent: true })
+    }
+    finally {
+      refreshing.value = false
+    }
   }
 
   async function changePage(page: number): Promise<void> {
@@ -104,7 +117,7 @@ export function useBackupRecords() {
     try {
       await createBackup()
       toast.success('备份任务已创建')
-      await paged.execute()
+      await paged.execute({ silent: true })
     }
     catch (cause) {
       toast.error(errorMessage(cause, '创建备份失败'))
@@ -148,7 +161,7 @@ export function useBackupRecords() {
     try {
       await deleteBackup(target.id)
       toast.success('已请求删除备份')
-      await paged.execute()
+      await paged.execute({ silent: true })
     }
     catch (cause) {
       toast.error(errorMessage(cause, '删除备份失败'))
@@ -174,9 +187,11 @@ export function useBackupRecords() {
     error: paged.error,
     activeBackup,
     creating,
+    refreshing,
     deleting,
     deleteTarget,
     downloadStates,
+    load,
     refresh,
     changePage,
     changePageSize,

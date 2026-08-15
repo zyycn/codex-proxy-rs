@@ -209,13 +209,12 @@ onBeforeUnmount(() => {
     as="article"
     :title="timeline.title"
     :description="timeline.description"
-    header-collapse-at="lg"
     class="w-full"
   >
     <template #actions>
       <div class="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div
-          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-none font-emphasis text-(--cp-text-muted)"
+          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-none font-emphasis text-cp-muted-text"
         >
           <span
             v-for="item in healthLegend"
@@ -242,19 +241,16 @@ onBeforeUnmount(() => {
     </template>
 
     <template #body>
-      <div class="mt-4.25">
+      <div>
         <BasePopover
           v-model="popoverOpen"
           trigger="hover"
           placement="top"
           :offset="12"
-          width="288px"
           :anchor-element="activeAnchor"
           :disabled="!activePoint"
           animate-position
-          panel-class="!p-0 text-(--cp-text-primary)"
-          trigger-class="w-full"
-          class="block! min-w-0 w-full"
+          class="min-w-0 w-full"
         >
           <template #trigger>
             <div
@@ -295,7 +291,9 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <HealthTimelinePointPopover v-if="activePoint" :point="activePoint" />
+          <div class="w-72 overflow-hidden rounded-cp-overlay">
+            <HealthTimelinePointPopover v-if="activePoint" :point="activePoint" />
+          </div>
         </BasePopover>
       </div>
     </template>

@@ -169,12 +169,10 @@ function formatTooltip(params: unknown) {
     as="article"
     title="响应速度"
     description="总耗时或首字的分位耗时，越低越快"
-    header-collapse-at="none"
-    body-class="mt-3"
     class="h-full min-h-90"
   >
     <template #actions>
-      <BaseSegmented v-model="activeView" :options="viewOptions" :disabled="loading" class="w-43" />
+      <BaseSegmented v-model="activeView" label="性能指标" :options="viewOptions" :disabled="loading" class="w-43" />
     </template>
 
     <template #body>
@@ -182,8 +180,8 @@ function formatTooltip(params: unknown) {
         <BaseChart v-if="hasData" :option="chartOption" :height="264" />
         <BaseEmpty
           v-else
-          compact
-          plain
+          size="sm"
+          surface="none"
           :title="loading ? '正在加载性能数据' : '暂无性能数据'"
           :description="
             activeView === 'firstToken' ? '当前范围没有首字耗时样本' : '当前范围没有总耗时样本'

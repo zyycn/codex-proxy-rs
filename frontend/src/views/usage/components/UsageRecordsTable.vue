@@ -18,17 +18,28 @@ import UsageModelCell from './UsageModelCell.vue'
 import UsageReasoningEffortCell from './UsageReasoningEffortCell.vue'
 import UsageTokenCell from './UsageTokenCell.vue'
 
-// 使用记录表：列单元格渲染的唯一定义，供使用统计页与仪表盘卡片共用。
-// 其余 BaseTable 配置（loading/pagination/empty-text/min-width 及分页事件）
-// 由 attrs 透传，actions 列仅在调用方提供插槽时渲染。
-defineProps<{
-  columns: BaseTableColumn<UsageDisplayRecord>[]
-  rows: UsageDisplayRecord[]
-}>()
+// 使用记录表只负责该领域的单元格呈现；筛选与分页由页面组合。
+withDefaults(
+  defineProps<{
+    columns: BaseTableColumn<UsageDisplayRecord>[]
+    rows: UsageDisplayRecord[]
+    loading?: boolean
+    emptyText?: string
+  }>(),
+  {
+    loading: false,
+    emptyText: '暂无使用记录',
+  },
+)
 </script>
 
 <template>
-  <BaseTable :columns="columns" :rows="rows">
+  <BaseTable
+    :columns="columns"
+    :rows="rows"
+    :loading="loading"
+    :empty-text="emptyText"
+  >
     <template #provider="{ row }">
       <ProviderIconGroup
         :provider="String(row.provider || '')"
@@ -38,7 +49,7 @@ defineProps<{
 
     <template #accountEmail="{ row }">
       <span
-        class="block max-w-full truncate font-mono text-[12px] leading-none font-bold text-(--cp-text-primary)"
+        class="block max-w-full truncate font-mono text-[12px] leading-none font-bold text-cp-primary"
         :title="usageAccountText(row)"
       >
         {{ usageAccountText(row) }}
@@ -62,7 +73,7 @@ defineProps<{
         <code class="font-mono text-[12px] font-emphasis">{{ row.route || '—' }}</code>
         <span
           v-if="usageIsCompact(row)"
-          class="inline-flex shrink-0 text-(--cp-warning-text)"
+          class="inline-flex shrink-0 text-cp-warning-text"
           title="压缩请求"
           aria-label="压缩请求"
         >

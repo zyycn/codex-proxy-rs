@@ -41,18 +41,18 @@ const authenticationLabel = computed(() => {
 <template>
   <span class="inline-flex items-center whitespace-nowrap" :class="groupGapClass">
     <span
-      class="inline-flex shrink-0 items-center justify-center bg-(--cp-bg-muted) text-(--cp-text-primary)"
+      class="inline-flex shrink-0 items-center justify-center bg-cp-muted text-cp-primary"
       :class="iconContainerClass"
       :title="providerLabel"
     >
       <Openai v-if="normalizedProvider === 'openai'" :class="iconClass" aria-hidden="true" />
       <Xai v-else-if="normalizedProvider === 'xai'" :class="iconClass" aria-hidden="true" />
-      <span v-else class="text-[10px] font-heavy text-(--cp-text-muted)">?</span>
+      <span v-else class="text-[10px] font-heavy text-cp-muted-text">?</span>
     </span>
 
     <span
       v-if="showAuthenticationKind"
-      class="inline-flex shrink-0 items-center justify-center bg-(--cp-bg-muted) text-(--cp-text-primary)"
+      class="inline-flex shrink-0 items-center justify-center bg-cp-muted text-cp-primary"
       :class="iconContainerClass"
       :title="authenticationLabel"
     >
@@ -66,7 +66,7 @@ const authenticationLabel = computed(() => {
         :class="iconClass"
         aria-hidden="true"
       />
-      <span v-else class="text-[10px] font-heavy text-(--cp-text-muted)">?</span>
+      <span v-else class="text-[10px] font-heavy text-cp-muted-text">?</span>
     </span>
 
     <span class="sr-only">

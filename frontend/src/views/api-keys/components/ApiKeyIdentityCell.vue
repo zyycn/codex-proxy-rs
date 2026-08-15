@@ -10,10 +10,10 @@ defineProps<{
 
 <template>
   <div class="flex flex-col gap-0.5">
-    <span class="text-[13px] font-bold text-(--cp-text-primary)">
+    <span class="text-[13px] font-bold text-cp-primary">
       {{ apiKey.name }}
     </span>
-    <span v-if="apiKey.label" class="text-[12px] font-emphasis text-(--cp-text-tertiary)">
+    <span v-if="apiKey.label" class="text-[12px] font-emphasis text-cp-tertiary">
       {{ apiKey.label }}
     </span>
   </div>

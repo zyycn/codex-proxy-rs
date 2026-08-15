@@ -4,8 +4,9 @@ import type { getOpsErrors } from '@/api'
 
 import { Eye, RefreshCw, Search } from '@lucide/vue'
 import { shallowRef, toRef } from 'vue'
-import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
@@ -41,7 +42,7 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
 </script>
 
 <template>
-  <div class="grid min-h-130 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3">
+  <div class="grid min-h-130 min-w-0 w-full flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3">
     <div
       class="flex w-full flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center"
       role="group"
@@ -55,7 +56,7 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
             class="min-w-0 sm:col-span-2 lg:min-w-64 lg:flex-1 lg:max-w-96"
           >
             <template #prefix>
-              <Search class="size-4.5 text-(--cp-text-tertiary)" />
+              <Search class="size-4.5 text-cp-tertiary" />
             </template>
           </BaseInput>
           <BaseInput v-model="failureClass" placeholder="失败分类（精确）" class="min-w-0" />
@@ -64,67 +65,71 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
       </div>
 
       <div class="flex shrink-0 self-end items-center justify-end gap-2 lg:ml-auto">
-        <BaseButton
-          icon-only
+        <BaseIconButton
           variant="ghost"
           size="md"
           label="刷新错误明细"
-          spin-icon-on-loading
           :loading="refreshing"
           :disabled="loading || refreshing"
           @click="refresh"
         >
+          <template #loading>
+            <RefreshCw class="size-4.5 animate-spin motion-reduce:animate-none" />
+          </template>
           <RefreshCw class="size-4.5" />
-        </BaseButton>
+        </BaseIconButton>
       </div>
     </div>
 
-    <BaseTable
-      class="min-h-0 flex-1"
-      :columns="opsErrorColumns"
-      :rows="records"
-      :loading="loading"
-      :pagination="pagination"
-      empty-text="暂无错误明细"
-      min-width="1900px"
-      @page-change="handlePageChange"
-      @page-size-change="handlePageSizeChange"
-    >
-      <template #upstreamStatusCode="{ row }">
-        <UsageStatusCodeBadge
-          :status-code="typeof row.upstreamStatusCode === 'number' ? row.upstreamStatusCode : null"
-        />
-      </template>
-      <template #clientStatusCode="{ row }">
-        <UsageStatusCodeBadge
-          :status-code="typeof row.clientStatusCode === 'number' ? row.clientStatusCode : null"
-        />
-      </template>
-      <template #failureClass="{ row }">
-        <span class="font-mono text-[12px] font-bold text-(--cp-danger-text)">
-          {{ row.failureClass || '—' }}
-        </span>
-      </template>
-      <template #accountId="{ row }">
-        <span
-          class="block max-w-full truncate font-mono text-[12px] font-bold text-(--cp-text-primary)"
-          :title="row.accountId || ''"
-        >
-          {{ row.metadata.accountLabel || '—' }}
-        </span>
-      </template>
-      <template #actions="{ row }">
-        <BaseButton
-          icon-only
-          variant="ghost"
-          size="sm"
-          label="查看错误详情"
-          @click="showDetail(row)"
-        >
-          <Eye class="size-3.5" />
-        </BaseButton>
-      </template>
-    </BaseTable>
+    <div class="flex min-h-0 min-w-0 flex-col">
+      <BaseTable
+        class="min-h-0 flex-1"
+        :columns="opsErrorColumns"
+        :rows="records"
+        :loading="loading"
+        empty-text="暂无错误明细"
+      >
+        <template #upstreamStatusCode="{ row }">
+          <UsageStatusCodeBadge
+            :status-code="typeof row.upstreamStatusCode === 'number' ? row.upstreamStatusCode : null"
+          />
+        </template>
+        <template #clientStatusCode="{ row }">
+          <UsageStatusCodeBadge
+            :status-code="typeof row.clientStatusCode === 'number' ? row.clientStatusCode : null"
+          />
+        </template>
+        <template #failureClass="{ row }">
+          <span class="font-mono text-[12px] font-bold text-cp-danger-text">
+            {{ row.failureClass || '—' }}
+          </span>
+        </template>
+        <template #accountId="{ row }">
+          <span
+            class="block max-w-full truncate font-mono text-[12px] font-bold text-cp-primary"
+            :title="row.accountId || ''"
+          >
+            {{ row.metadata.accountLabel || '—' }}
+          </span>
+        </template>
+        <template #actions="{ row }">
+          <BaseIconButton
+            variant="ghost"
+            size="sm"
+            label="查看错误详情"
+            @click="showDetail(row)"
+          >
+            <Eye class="size-3.5" />
+          </BaseIconButton>
+        </template>
+      </BaseTable>
+      <BaseTablePagination
+        :pagination="pagination"
+        :loading="loading"
+        @page-change="handlePageChange"
+        @page-size-change="handlePageSizeChange"
+      />
+    </div>
   </div>
 
   <OpsErrorDetailModal v-model="detailOpen" :record="selectedRecord" />

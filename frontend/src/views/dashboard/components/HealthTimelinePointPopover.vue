@@ -23,26 +23,26 @@ const outcomeMeta = computed(() => [
   {
     label: '成功',
     value: props.point.successRequests,
-    dotClass: 'bg-(--cp-success)',
-    valueClass: 'text-(--cp-success-text)',
+    dotClass: 'bg-cp-success',
+    valueClass: 'text-cp-success-text',
   },
   {
     label: '服务失败',
     value: props.point.failedRequests,
-    dotClass: 'bg-(--cp-danger)',
-    valueClass: 'text-(--cp-danger-text)',
+    dotClass: 'bg-cp-danger',
+    valueClass: 'text-cp-danger-text',
   },
   {
     label: '客户端取消',
     value: props.point.cancelledRequests,
-    dotClass: 'bg-(--cp-normal)',
-    valueClass: 'text-(--cp-normal-text)',
+    dotClass: 'bg-cp-normal',
+    valueClass: 'text-cp-normal-text',
   },
   {
     label: '调用方错误',
     value: props.point.callerErrorRequests,
-    dotClass: 'bg-(--cp-info)',
-    valueClass: 'text-(--cp-info-text)',
+    dotClass: 'bg-cp-info',
+    valueClass: 'text-cp-info-text',
   },
 ])
 const outcomeSegments = computed(() => {
@@ -65,12 +65,12 @@ const metricItems = outcomeMeta
   <section
     role="dialog"
     :aria-label="`${point.time} 请求健康详情`"
-    class="overflow-hidden rounded-(--cp-popover-radius)"
+    class="overflow-hidden rounded-cp-overlay"
   >
-    <header class="flex items-center justify-between gap-3 bg-(--cp-bg-subtle) px-3.5 py-3">
+    <header class="flex items-center justify-between gap-3 bg-cp-subtle px-3.5 py-3">
       <div class="flex min-w-0 items-center gap-2">
         <span class="size-2 shrink-0 rounded-full" :class="status.cellClass" />
-        <strong class="font-mono text-[13px] leading-none font-heavy text-(--cp-text-primary)">
+        <strong class="font-mono text-[13px] leading-none font-heavy text-cp-primary">
           {{ point.time }}
         </strong>
         <span
@@ -80,7 +80,7 @@ const metricItems = outcomeMeta
           {{ status.label }}
         </span>
       </div>
-      <span class="shrink-0 text-[10px] leading-none font-emphasis text-(--cp-text-muted)">
+      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-muted-text">
         15 分钟
       </span>
     </header>
@@ -88,7 +88,7 @@ const metricItems = outcomeMeta
     <div class="grid gap-3.5 px-3.5 py-3.5">
       <div class="flex items-end justify-between gap-4">
         <div>
-          <p class="m-0 text-[11px] leading-none font-emphasis text-(--cp-text-muted)">
+          <p class="m-0 text-[11px] leading-none font-emphasis text-cp-muted-text">
             有效请求可用性
           </p>
           <strong
@@ -99,11 +99,11 @@ const metricItems = outcomeMeta
           </strong>
         </div>
         <div class="text-right">
-          <span class="block text-[10px] leading-none font-emphasis text-(--cp-text-muted)">
+          <span class="block text-[10px] leading-none font-emphasis text-cp-muted-text">
             有效请求
           </span>
           <strong
-            class="mt-2 block font-mono text-[15px] leading-none font-heavy tabular-nums text-(--cp-text-primary)"
+            class="mt-2 block font-mono text-[15px] leading-none font-heavy tabular-nums text-cp-primary"
           >
             {{ formatHealthCount(eligibleRequests) }}
           </strong>
@@ -111,7 +111,7 @@ const metricItems = outcomeMeta
       </div>
 
       <div
-        class="flex h-1.5 w-full overflow-hidden rounded-full bg-(--cp-bg-muted)"
+        class="flex h-1.5 w-full overflow-hidden rounded-full bg-cp-muted"
         aria-hidden="true"
       >
         <span
@@ -127,10 +127,10 @@ const metricItems = outcomeMeta
         <div
           v-for="item in metricItems"
           :key="item.label"
-          class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-2.5 py-2.5"
+          class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-cp-control bg-cp-subtle px-2.5 py-2.5"
         >
           <span class="size-1.5 rounded-full" :class="item.dotClass" />
-          <span class="truncate text-[10px] leading-none font-emphasis text-(--cp-text-secondary)">
+          <span class="truncate text-[10px] leading-none font-emphasis text-cp-secondary">
             {{ item.label }}
           </span>
           <strong
@@ -143,7 +143,7 @@ const metricItems = outcomeMeta
       </div>
 
       <p
-        class="m-0 border-t border-(--cp-divider-subtle) pt-3 text-[10px] leading-[1.45] font-emphasis text-(--cp-text-muted)"
+        class="m-0 border-t border-cp-divider pt-3 text-[10px] leading-[1.45] font-emphasis text-cp-muted-text"
       >
         客户端取消与调用方错误单独记录，不计入可用性。
       </p>

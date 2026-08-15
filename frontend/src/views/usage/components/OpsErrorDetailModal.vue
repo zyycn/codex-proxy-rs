@@ -59,28 +59,27 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
     v-model="open"
     title="错误明细"
     description="状态码、失败分类与诊断信息"
-    variant="danger"
-    width="920px"
-    body-max-height="min(76dvh,760px)"
+    tone="danger"
+    size="xl"
   >
     <template v-if="record">
-      <section class="rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5">
+      <section class="rounded-cp-surface bg-cp-subtle px-4 py-3.5">
         <div class="flex flex-wrap items-center gap-3">
           <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
-          <span class="text-[12px] font-bold text-(--cp-text-secondary)">
+          <span class="text-[12px] font-bold text-cp-secondary">
             客户端 {{ display(record.clientStatusCode) }}
           </span>
-          <span class="text-[12px] font-bold text-(--cp-text-secondary)">
+          <span class="text-[12px] font-bold text-cp-secondary">
             上游 {{ display(record.upstreamStatusCode) }}
           </span>
         </div>
-        <p class="mt-3 mb-0 text-[13px] leading-relaxed font-bold text-(--cp-text-primary)">
+        <p class="mt-3 mb-0 text-[13px] leading-relaxed font-bold text-cp-primary">
           {{ display(record.message) }}
         </p>
       </section>
 
       <dl
-        class="mt-3 grid grid-cols-1 gap-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5 sm:grid-cols-2"
+        class="mt-3 grid grid-cols-1 gap-3 rounded-cp-surface bg-cp-subtle px-4 py-3.5 sm:grid-cols-2"
       >
         <div
           v-for="field in fields"
@@ -88,11 +87,11 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
           class="min-w-0"
           :class="field.wide ? 'sm:col-span-2' : undefined"
         >
-          <dt class="text-[11px] leading-none font-bold text-(--cp-text-muted)">
+          <dt class="text-[11px] leading-none font-bold text-cp-muted-text">
             {{ field.label }}
           </dt>
           <dd
-            class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-normal font-emphasis text-(--cp-text-primary)"
+            class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-normal font-emphasis text-cp-primary"
             :title="display(field.value)"
           >
             {{ display(field.value) }}
@@ -102,20 +101,21 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
 
       <section
         v-if="metadataText"
-        class="mt-3 rounded-(--cp-card-radius) bg-(--cp-bg-subtle) px-4 py-3.5"
+        class="mt-3 rounded-cp-surface bg-cp-subtle px-4 py-3.5"
       >
-        <h3 class="m-0 text-[12px] leading-none font-heavy text-(--cp-text-secondary)">
+        <h3 class="m-0 text-[12px] leading-none font-heavy text-cp-secondary">
           Metadata
         </h3>
         <BaseScrollbar
           class="mt-3"
           max-height="260px"
-          view-class="rounded-(--cp-input-radius-base) bg-(--cp-bg-surface) px-3 py-2.5"
         >
-          <pre
-            class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)"
-            v-text="metadataText"
-          />
+          <div class="rounded-cp-control bg-cp-surface px-3 py-2.5">
+            <pre
+              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-cp-primary"
+              v-text="metadataText"
+            />
+          </div>
         </BaseScrollbar>
       </section>
     </template>

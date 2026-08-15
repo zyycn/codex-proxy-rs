@@ -241,12 +241,10 @@ function formatTooltip(params: unknown) {
     as="article"
     title="成本效率"
     description="预估费用、Token 与缓存收益"
-    header-collapse-at="none"
-    body-class="mt-3"
     class="h-full min-h-90"
   >
     <template #actions>
-      <BaseSegmented v-model="activeView" :options="viewOptions" :disabled="loading" class="w-50" />
+      <BaseSegmented v-model="activeView" label="成本视图" :options="viewOptions" :disabled="loading" class="w-50" />
     </template>
 
     <template #body>
@@ -254,8 +252,8 @@ function formatTooltip(params: unknown) {
         <BaseChart v-if="hasData" :option="chartOption" :height="264" />
         <BaseEmpty
           v-else
-          compact
-          plain
+          size="sm"
+          surface="none"
           :title="loading ? '正在加载成本数据' : '暂无成本效率数据'"
           description="当前范围没有可绘制的费用或 Token 数据"
           class="h-66 place-content-center"

@@ -70,7 +70,7 @@ watch(
 </script>
 
 <template>
-  <div class="relative flex h-dvh overflow-hidden bg-(--cp-bg-page)">
+  <div class="relative flex h-dvh overflow-hidden bg-cp-page">
     <AppSidebar
       :collapsed="sidebarCollapsed"
       @toggle="toggleSidebar"
@@ -78,14 +78,13 @@ watch(
       @open-system-update="openSystemUpdate"
     />
     <FloatingSidebarToggle v-if="!mobileSidebarOpen" @open="openMobileSidebar" />
-    <main class="h-dvh min-w-0 flex-1 overflow-hidden">
-      <BaseScrollbar
-        ref="pageScrollbarRef"
-        view-class="flex min-h-full min-w-0 flex-col p-4 min-[961px]:p-6"
-      >
-        <RouterView v-slot="{ Component }">
-          <component :is="Component" class="min-h-0 flex-1" />
-        </RouterView>
+    <main class="relative isolate h-dvh min-w-0 flex-1 overflow-hidden">
+      <BaseScrollbar ref="pageScrollbarRef">
+        <div class="flex min-h-full min-w-0 flex-col p-4 min-[961px]:p-6">
+          <RouterView v-slot="{ Component }">
+            <component :is="Component" class="min-h-0 flex-1" />
+          </RouterView>
+        </div>
       </BaseScrollbar>
     </main>
 

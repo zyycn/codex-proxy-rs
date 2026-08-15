@@ -32,11 +32,11 @@ function updateGroup(groupId: string, selected: boolean) {
     <div
       v-for="group in groups"
       :key="group.id"
-      class="flex min-h-11 items-center justify-between gap-3 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-2.5"
+      class="flex min-h-11 items-center justify-between gap-3 rounded-cp-control bg-cp-subtle px-3.5 py-2.5"
     >
       <span class="flex min-w-0 items-center gap-2.5">
         <span
-          class="size-3.5 shrink-0 rounded-[4px]"
+          class="size-3.5 shrink-0 rounded-sm"
           :style="{ backgroundColor: group.color }"
           aria-hidden="true"
         />
@@ -50,7 +50,7 @@ function updateGroup(groupId: string, selected: boolean) {
       </span>
       <span
         v-if="!group.enabled"
-        class="shrink-0 text-[11px] font-emphasis text-(--cp-text-muted)"
+        class="shrink-0 text-[11px] font-emphasis text-cp-muted-text"
       >
         已禁用
       </span>
@@ -58,7 +58,7 @@ function updateGroup(groupId: string, selected: boolean) {
   </div>
   <p
     v-else
-    class="m-0 rounded-(--cp-input-radius-base) bg-(--cp-bg-subtle) px-3.5 py-3 text-[12px] font-emphasis text-(--cp-text-secondary)"
+    class="m-0 rounded-cp-control bg-cp-subtle px-3.5 py-3 text-[12px] font-emphasis text-cp-secondary"
   >
     {{ loading ? '正在加载分组...' : '暂无分组，请先在分组管理中创建。' }}
   </p>

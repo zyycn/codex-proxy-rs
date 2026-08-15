@@ -1,113 +1,235 @@
-import { clamp, sumBy } from 'es-toolkit'
-
-// 行类型保持结构化约束；动态列 key 的取值统一走 cellValue。
 export type TableRow = object
+
+export type TableColumnKind
+  = | 'text'
+    | 'identity'
+    | 'meta'
+    | 'status'
+    | 'numeric'
+    | 'datetime'
+    | 'mono'
+    | 'index'
+    | 'selection'
+    | 'expander'
+    | 'actions'
+    | 'custom'
+
+export type TableColumnSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
+
+export type TableColumnAlign = 'left' | 'right' | 'center'
+type TableColumnSticky = 'left' | 'right'
 
 export interface BaseTableColumn<Row extends TableRow = TableRow> {
   key: string
   label?: string
-  sortable?: boolean
-  sortKey?: string
+  kind?: TableColumnKind
+  size?: TableColumnSize
+  align?: TableColumnAlign
+  sortable?: boolean | string
   format?: (value: unknown, row: Row) => unknown
-  width?: number | string
-  minWidth?: number | string
-  maxWidth?: number | string
-  flex?: number
-  fixed?: 'left' | 'right' | false
-  align?: 'left' | 'right' | 'center'
-  ellipsis?: boolean
   emptyText?: string
-  headerClass?: string
-  cellClass?: string
 }
-
-type BaseTableSortDirection = 'asc' | 'desc'
 
 export interface BaseTableSort {
   key: string
-  direction: BaseTableSortDirection
+  direction: 'asc' | 'desc'
 }
 
-export type ResolvedTableColumn<Row extends TableRow = TableRow> = Omit<
-  BaseTableColumn<Row>,
-  'fixed'
-> & {
-  fixed?: 'left' | 'right'
-  resolvedWidth: string
-  resolvedMinWidth?: string
-  resolvedMaxWidth?: string
+export interface BaseTableProps<Row extends TableRow> {
+  columns: BaseTableColumn<Row>[]
+  rows: Row[]
+  rowKey?: string | ((row: Row, index: number) => string | number)
+  selectedRowKeys?: Array<string | number>
+  expandedRowKeys?: Array<string | number>
+  density?: 'compact' | 'default'
+  loading?: boolean
+  emptyText?: string
+  sort?: BaseTableSort
+}
+
+interface ColumnRecipe {
+  size: TableColumnSize
+  basisWidth?: number
+  align: TableColumnAlign
+  truncate: boolean
+  contentClass?: string
+  paddingClass?: string
+  sticky?: TableColumnSticky
+}
+
+const columnWidths: Record<TableColumnSize, number> = {
+  'xs': 64,
+  'sm': 88,
+  'md': 112,
+  'lg': 144,
+  'xl': 184,
+  '2xl': 240,
+  '3xl': 288,
+}
+
+const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
+  text: {
+    size: '2xl',
+    align: 'left',
+    truncate: true,
+  },
+  identity: {
+    size: '2xl',
+    align: 'left',
+    truncate: true,
+  },
+  meta: {
+    size: 'lg',
+    align: 'left',
+    truncate: true,
+    contentClass: 'text-cp-secondary',
+  },
+  status: {
+    size: 'md',
+    align: 'center',
+    truncate: false,
+  },
+  numeric: {
+    size: 'md',
+    align: 'right',
+    truncate: false,
+    contentClass: 'font-mono tabular-nums text-cp-secondary',
+  },
+  datetime: {
+    size: 'xl',
+    align: 'left',
+    truncate: false,
+    contentClass: 'whitespace-nowrap font-mono text-[12px] tabular-nums text-cp-secondary',
+  },
+  mono: {
+    size: 'xl',
+    align: 'left',
+    truncate: true,
+    contentClass: 'font-mono text-[12px] font-emphasis',
+  },
+  index: {
+    size: 'xs',
+    align: 'center',
+    truncate: false,
+    contentClass: 'font-mono tabular-nums text-cp-secondary',
+  },
+  selection: {
+    size: 'xs',
+    basisWidth: 48,
+    align: 'center',
+    truncate: false,
+    paddingClass: 'px-2',
+    sticky: 'left',
+  },
+  expander: {
+    size: 'xs',
+    basisWidth: 40,
+    align: 'center',
+    truncate: false,
+    paddingClass: 'px-2',
+    sticky: 'left',
+  },
+  actions: {
+    size: 'md',
+    align: 'left',
+    truncate: false,
+    paddingClass: 'px-3',
+    sticky: 'right',
+  },
+  custom: {
+    size: 'lg',
+    align: 'left',
+    truncate: false,
+  },
+}
+
+export interface ResolvedTableColumn<Row extends TableRow = TableRow>
+  extends BaseTableColumn<Row> {
+  kind: TableColumnKind
+  basisWidth: number
+  align: TableColumnAlign
+  truncate: boolean
+  contentClass?: string
+  paddingClass?: string
+  sticky?: TableColumnSticky
+  stickyOffset?: number
+}
+
+export function defineTableColumns<Row extends TableRow>(columns: BaseTableColumn<Row>[]) {
+  return columns
 }
 
 export function resolveColumns<Row extends TableRow>(
   columns: BaseTableColumn<Row>[],
-  minWidth?: number | string,
 ): ResolvedTableColumn<Row>[] {
-  const actionColumnIndex = columns.findIndex(column => column.key === 'actions')
-  const fixedColumnIndex = actionColumnIndex >= 0 ? actionColumnIndex : 0
-  const fixedPercentTotal = sumBy(columns, column =>
-    column.width === undefined ? 0 : numericPercentWidth(column.width))
-  const fixedPixelTotal = sumBy(columns, column =>
-    column.width === undefined ? 0 : numericPixelWidth(column.width))
-  const minWidthPixels = minWidth === undefined ? 0 : numericPixelWidth(minWidth)
-  const flexibleColumns = columns.filter(column => column.width === undefined)
-  const flexTotal = sumBy(flexibleColumns, column => column.flex ?? 1)
-  const available = clamp(100 - fixedPercentTotal, 0, Number.POSITIVE_INFINITY)
-  const availablePixels = clamp(minWidthPixels - fixedPixelTotal, 0, Number.POSITIVE_INFINITY)
-
-  return columns.map((column, index) => {
-    const flex = column.flex ?? 1
-    const automaticallyFixed
-      = index === fixedColumnIndex ? (actionColumnIndex >= 0 ? 'right' : 'left') : undefined
-    const width
-      = column.width === undefined
-        ? minWidthPixels > 0 && fixedPercentTotal === 0
-          ? flexTotal > 0
-            ? `${(availablePixels * flex) / flexTotal}px`
-            : `${availablePixels / clamp(flexibleColumns.length, 1, Number.POSITIVE_INFINITY)}px`
-          : flexTotal > 0
-            ? `${(available * flex) / flexTotal}%`
-            : `${available / clamp(flexibleColumns.length, 1, Number.POSITIVE_INFINITY)}%`
-        : normalizeWidth(column.width)
+  const resolved = columns.map((column): ResolvedTableColumn<Row> => {
+    const kind = column.kind ?? 'text'
+    const recipe = columnRecipes[kind]
+    const basisWidth = recipe.basisWidth ?? columnWidths[column.size ?? recipe.size]
 
     return {
       ...column,
-      fixed: column.fixed === false ? undefined : (column.fixed ?? automaticallyFixed),
-      resolvedWidth: width,
-      resolvedMinWidth: column.minWidth === undefined ? undefined : normalizeWidth(column.minWidth),
-      resolvedMaxWidth: column.maxWidth === undefined ? undefined : normalizeWidth(column.maxWidth),
+      kind,
+      basisWidth,
+      align: column.align ?? recipe.align,
+      truncate: recipe.truncate,
+      contentClass: recipe.contentClass,
+      paddingClass: recipe.paddingClass,
+      sticky: recipe.sticky,
     }
   })
+
+  let leftOffset = 0
+  for (const column of resolved) {
+    if (column.sticky !== 'left')
+      continue
+    column.stickyOffset = leftOffset
+    leftOffset += column.basisWidth
+  }
+
+  let rightOffset = 0
+  for (const column of [...resolved].reverse()) {
+    if (column.sticky !== 'right')
+      continue
+    column.stickyOffset = rightOffset
+    rightOffset += column.basisWidth
+  }
+
+  return resolved
 }
 
-function normalizeWidth(width: number | string) {
-  return typeof width === 'number' ? `${width}px` : width
+export function minimumTableWidth<Row extends TableRow>(columns: ResolvedTableColumn<Row>[]) {
+  return columns.reduce((total, column) => total + column.basisWidth, 0)
 }
 
-export function columnStyle<Row extends TableRow>(column: ResolvedTableColumn<Row>) {
+export function tableStyle<Row extends TableRow>(columns: ResolvedTableColumn<Row>[]) {
+  return { width: `max(100%, ${minimumTableWidth(columns)}px)` }
+}
+
+export function columnStyle<Row extends TableRow>(
+  column: ResolvedTableColumn<Row>,
+  columns: ResolvedTableColumn<Row>[],
+) {
+  const tableWidth = minimumTableWidth(columns)
+  const widthPercent = tableWidth > 0 ? (column.basisWidth / tableWidth) * 100 : 0
+
   return {
-    width: column.resolvedWidth,
-    minWidth: column.resolvedMinWidth,
-    maxWidth: column.resolvedMaxWidth,
+    width: `${widthPercent}%`,
+    minWidth: `${column.basisWidth}px`,
   }
 }
 
-export function tableStyle(minWidth?: number | string) {
-  if (minWidth === undefined) {
+export function stickyStyle<Row extends TableRow>(column: ResolvedTableColumn<Row>) {
+  if (!column.sticky)
     return undefined
-  }
-
-  return { width: `max(100%, ${normalizeWidth(minWidth)})` }
+  return { [column.sticky]: `${column.stickyOffset ?? 0}px` }
 }
 
-export function alignClass<Row extends TableRow>(column: BaseTableColumn<Row>) {
-  if (column.align === 'center') {
+export function alignClass<Row extends TableRow>(column: ResolvedTableColumn<Row>) {
+  if (column.align === 'center')
     return 'text-center'
-  }
-
-  if (column.align === 'right') {
+  if (column.align === 'right')
     return 'text-right'
-  }
-
   return 'text-left'
 }
 
@@ -125,21 +247,15 @@ export function cellDisplayValue<Row extends TableRow>(column: BaseTableColumn<R
   return isEmptyCellValue(value) ? (column.emptyText ?? '—') : value
 }
 
-export function cellTitle<Row extends TableRow>(column: BaseTableColumn<Row>, row: Row) {
-  if (column.ellipsis === false || column.key === 'selection' || column.key === 'actions') {
+export function cellTitle<Row extends TableRow>(column: ResolvedTableColumn<Row>, row: Row) {
+  if (!column.truncate)
     return undefined
-  }
-
   const value = cellDisplayValue(column, row)
-  if (isEmptyCellValue(value)) {
-    return undefined
-  }
-
   return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined
 }
 
-export function cellContentClass<Row extends TableRow>(column: BaseTableColumn<Row>) {
-  if (column.key === 'selection') {
+export function cellContentClass<Row extends TableRow>(column: ResolvedTableColumn<Row>) {
+  if (column.kind === 'selection' || column.kind === 'expander') {
     return [
       'flex min-w-0 items-center overflow-visible leading-none',
       column.align === 'right'
@@ -149,36 +265,11 @@ export function cellContentClass<Row extends TableRow>(column: BaseTableColumn<R
           : 'justify-start',
     ]
   }
-
-  if (column.key === 'actions') {
+  if (column.kind === 'actions')
     return 'min-w-0 overflow-visible'
-  }
-
-  return ['min-w-0', column.ellipsis === false ? undefined : 'truncate']
+  return ['min-w-0', column.truncate ? 'truncate' : undefined]
 }
 
-function numericPercentWidth(width: number | string) {
-  if (typeof width === 'number') {
-    return 0
-  }
-
-  if (width.endsWith('%')) {
-    const parsed = Number.parseFloat(width)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-
-  return 0
-}
-
-function numericPixelWidth(width: number | string) {
-  if (typeof width === 'number') {
-    return width
-  }
-
-  if (width.endsWith('px')) {
-    const parsed = Number.parseFloat(width)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-
-  return 0
+export function columnSortKey<Row extends TableRow>(column: BaseTableColumn<Row>) {
+  return typeof column.sortable === 'string' ? column.sortable : column.key
 }

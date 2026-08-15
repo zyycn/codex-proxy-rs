@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 
 interface StorageForm {
@@ -52,14 +53,13 @@ function toggleSecretVisible(): void {
 <template>
   <BaseCard
     title="S3 存储配置"
-    body-class="mt-5"
   >
     <template #description>
-      <span class="text-(--cp-text-secondary)">
+      <span class="text-cp-secondary">
         配置 S3 兼容存储（支持
         <button
           type="button"
-          class="cursor-pointer border-0 bg-transparent p-0 text-(--cp-info) underline underline-offset-2"
+          class="cursor-pointer border-0 bg-transparent p-0 text-cp-info underline underline-offset-2"
           @click="emit('openR2Guide')"
         >
           Cloudflare R2
@@ -71,7 +71,7 @@ function toggleSecretVisible(): void {
     <template #actions>
       <div class="flex flex-wrap items-center gap-2">
         <BaseButton
-          variant="default"
+          variant="secondary"
           :loading="testing"
           :disabled="loading"
           :title="verified ? '已通过连接测试' : '尚未通过连接测试'"
@@ -80,12 +80,12 @@ function toggleSecretVisible(): void {
           <template #icon>
             <CircleCheck
               v-if="verified"
-              class="size-4 text-(--cp-success-text)"
+              class="size-4 text-cp-success-text"
               aria-hidden="true"
             />
             <CircleAlert
               v-else
-              class="size-4 text-(--cp-warning-text)"
+              class="size-4 text-cp-warning-text"
               aria-hidden="true"
             />
           </template>
@@ -101,7 +101,7 @@ function toggleSecretVisible(): void {
     </template>
 
     <div class="@container">
-      <BaseForm :columns="2" class="max-w-6xl @max-[640px]:grid-cols-1!">
+      <BaseForm class="max-w-6xl @min-[640px]:grid-cols-2">
         <BaseFormItem label="端点地址" description="S3 兼容服务的 HTTPS 地址">
           <BaseInput
             v-model="storage.endpoint"
@@ -134,8 +134,7 @@ function toggleSecretVisible(): void {
             autocomplete="off"
           >
             <template #suffix>
-              <BaseButton
-                icon-only
+              <BaseIconButton
                 variant="ghost"
                 size="sm"
                 :label="accessKeyVisible ? '隐藏 Access Key ID' : '显示 Access Key ID'"
@@ -144,7 +143,7 @@ function toggleSecretVisible(): void {
               >
                 <EyeOff v-if="accessKeyVisible" :size="16" />
                 <Eye v-else :size="16" />
-              </BaseButton>
+              </BaseIconButton>
             </template>
           </BaseInput>
         </BaseFormItem>
@@ -157,8 +156,7 @@ function toggleSecretVisible(): void {
             autocomplete="new-password"
           >
             <template #suffix>
-              <BaseButton
-                icon-only
+              <BaseIconButton
                 variant="ghost"
                 size="sm"
                 :label="secretVisible ? '隐藏 Secret Access Key' : '显示 Secret Access Key'"
@@ -167,7 +165,7 @@ function toggleSecretVisible(): void {
               >
                 <EyeOff v-if="secretVisible" :size="16" />
                 <Eye v-else :size="16" />
-              </BaseButton>
+              </BaseIconButton>
             </template>
           </BaseInput>
         </BaseFormItem>

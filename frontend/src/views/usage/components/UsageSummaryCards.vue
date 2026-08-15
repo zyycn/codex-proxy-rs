@@ -21,7 +21,7 @@ const items = computed(() => [
     icon: Activity,
     value: props.summary.totalRequests,
     detail: '筛选范围内',
-    tone: 'text-(--cp-info-text) bg-(--cp-info-bg)',
+    tone: 'text-cp-info-text bg-cp-info-bg',
   },
   {
     key: 'tokens',
@@ -29,7 +29,7 @@ const items = computed(() => [
     icon: FileText,
     value: props.summary.totalTokens,
     detail: `输入 ${props.summary.inputTokens} / 输出 ${props.summary.outputTokens}`,
-    tone: 'text-(--cp-success-text) bg-(--cp-success-bg)',
+    tone: 'text-cp-success-text bg-cp-success-bg',
   },
   {
     key: 'cached',
@@ -37,7 +37,7 @@ const items = computed(() => [
     icon: Database,
     value: props.summary.cachedTokens,
     detail: '缓存读取命中',
-    tone: 'text-(--cp-warning-text) bg-(--cp-warning-bg)',
+    tone: 'text-cp-warning-text bg-cp-warning-bg',
   },
   {
     key: 'latency',
@@ -45,7 +45,7 @@ const items = computed(() => [
     icon: Timer,
     value: averageLatencyDisplay(props.summary.averageLatencyMs),
     detail: '成功请求平均值',
-    tone: 'text-(--cp-normal-text) bg-(--cp-normal-bg)',
+    tone: 'text-cp-normal-text bg-cp-normal-bg',
   },
 ])
 </script>
@@ -64,21 +64,21 @@ const items = computed(() => [
     >
       <BaseMotionIcon
         aria-hidden="true"
-        class="inline-flex size-9 shrink-0 items-center justify-center rounded-(--cp-input-radius-base)"
+        class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp-control"
         :class="item.tone"
       >
         <component :is="item.icon" class="size-4.5" />
       </BaseMotionIcon>
       <div class="flex min-w-0 flex-col justify-between py-0.5">
-        <span class="block text-[12px] leading-none font-bold text-(--cp-text-muted)">
+        <span class="block text-[12px] leading-none font-bold text-cp-muted-text">
           {{ item.label }}
         </span>
         <strong
-          class="block truncate text-[22px] leading-none font-extrabold text-(--cp-text-primary)"
+          class="block truncate text-[22px] leading-none font-extrabold text-cp-primary"
         >
           {{ item.value }}
         </strong>
-        <span class="block truncate text-[12px] leading-none font-emphasis text-(--cp-text-secondary)">
+        <span class="block truncate text-[12px] leading-none font-emphasis text-cp-secondary">
           {{ item.detail }}
         </span>
       </div>

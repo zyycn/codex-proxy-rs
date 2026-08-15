@@ -73,15 +73,15 @@ watch(
   <div class="w-full">
     <BasePageHeader title="系统设置" description="管理运行参数、调度策略、模型映射与备份配置" />
 
-    <div class="mt-4 flex min-h-(--cp-input-height-default) flex-wrap items-center justify-between gap-3">
+    <div class="mt-4 flex min-h-cp-control-md flex-wrap items-center justify-between gap-3">
       <BaseSegmented
         :model-value="section"
+        label="设置分区"
         class="bg-(--cp-input-soft-bg)!"
         :options="[
           { label: '运行设置', value: 'runtime' },
           { label: '备份', value: 'backup' },
         ]"
-        aria-label="设置分区"
         @update:model-value="switchSection"
       />
       <BaseButton
@@ -132,10 +132,9 @@ watch(
         v-model="showDeleteAdminKeyModal"
         title="删除管理员 API Key"
         description="删除后外部系统将无法继续使用该 Key 调用管理接口"
-        variant="danger"
+        destructive
         confirm-text="确认删除"
         :loading="adminKeyDeleting"
-        width="480px"
         @confirm="handleDeleteAdminApiKey"
       >
         <p class="m-0">

@@ -2,11 +2,12 @@
 import { Eye } from '@lucide/vue'
 import { shallowRef, watch } from 'vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageFilters from './components/UsageFilters.vue'
@@ -80,28 +81,27 @@ watch(timeRange, () => {
 
     <BaseCard
       class="mt-5 flex flex-col"
-      body-class="mt-3 flex min-h-0 flex-col"
     >
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-(--cp-text-primary)">
+            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-primary">
               请求明细
             </h2>
             <p
-              class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)"
+              class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-emphasis text-cp-secondary"
             >
               成功请求与失败请求明细
             </p>
           </div>
-          <BaseSegmented v-model="recordView" :options="recordViewOptions" class="w-52" />
+          <BaseSegmented v-model="recordView" label="请求明细类型" :options="recordViewOptions" class="w-52" />
         </div>
       </template>
 
       <template #body>
         <div
           v-show="recordView === 'success'"
-          class="grid min-h-130 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
+          class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
         >
           <UsageFilters
             v-model:search="searchQuery"
@@ -110,34 +110,37 @@ watch(timeRange, () => {
             @refresh="refreshUsageRecords"
           />
 
-          <UsageRecordsTable
-            class="min-h-0 flex-1"
-            :columns="usageRecordColumns"
-            :rows="records"
-            :loading="loading"
-            :pagination="usagePagination"
-            empty-text="暂无使用记录"
-            min-width="1920px"
-            @page-change="handlePageChange"
-            @page-size-change="handlePageSizeChange"
-          >
-            <template #actions="{ row }">
-              <div class="flex items-center justify-start">
-                <BaseButton
-                  icon-only
-                  variant="ghost"
-                  size="sm"
-                  label="查看使用记录详情"
-                  @click="handleViewDetail(row)"
-                >
-                  <Eye class="size-3.5" />
-                </BaseButton>
-              </div>
-            </template>
-          </UsageRecordsTable>
+          <div class="flex min-h-0 min-w-0 flex-col">
+            <UsageRecordsTable
+              class="min-h-0 flex-1"
+              :columns="usageRecordColumns"
+              :rows="records"
+              :loading="loading"
+              empty-text="暂无使用记录"
+            >
+              <template #actions="{ row }">
+                <div class="flex items-center justify-start">
+                  <BaseIconButton
+                    variant="ghost"
+                    size="sm"
+                    label="查看使用记录详情"
+                    @click="handleViewDetail(row)"
+                  >
+                    <Eye class="size-3.5" />
+                  </BaseIconButton>
+                </div>
+              </template>
+            </UsageRecordsTable>
+            <BaseTablePagination
+              :pagination="usagePagination"
+              :loading="loading"
+              @page-change="handlePageChange"
+              @page-size-change="handlePageSizeChange"
+            />
+          </div>
         </div>
 
-        <div v-show="recordView === 'errors'" class="min-h-130 flex-1">
+        <div v-show="recordView === 'errors'" class="min-h-130 min-w-0 flex-1">
           <OpsErrorPanel :time-range-params="timeRangeParams" />
         </div>
       </template>

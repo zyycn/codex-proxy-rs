@@ -2,27 +2,22 @@
 import BaseButton from './BaseButton.vue'
 import BaseModal from './BaseModal.vue'
 
-type ConfirmVariant = 'info' | 'warning' | 'danger' | 'success'
-type ButtonVariant = 'primary' | 'success' | 'warning' | 'danger'
-
 const props = withDefaults(
   defineProps<{
     title: string
     description?: string
-    variant?: ConfirmVariant
+    destructive?: boolean
     confirmText?: string
     cancelText?: string
     loading?: boolean
     confirmDisabled?: boolean
-    width?: string | number
   }>(),
   {
-    variant: 'warning',
+    destructive: false,
     confirmText: '确认',
     cancelText: '取消',
     loading: false,
     confirmDisabled: false,
-    width: '480px',
   },
 )
 
@@ -31,13 +26,6 @@ const emit = defineEmits<{
   cancel: []
 }>()
 const open = defineModel<boolean>({ default: false })
-const confirmVariantMap: Record<ConfirmVariant, ButtonVariant> = {
-  info: 'primary',
-  warning: 'warning',
-  danger: 'danger',
-  success: 'success',
-}
-
 function handleCancel() {
   if (props.loading)
     return
@@ -57,23 +45,24 @@ function handleConfirm() {
     v-model="open"
     :title="title"
     :description="description"
-    :variant="variant"
-    :width="width"
-    :close-disabled="loading"
+    size="sm"
+    :tone="destructive ? 'danger' : 'warning'"
+    role="alertdialog"
+    :dismissible="!loading"
   >
     <div
       v-if="$slots.default"
-      class="text-[14px] leading-[1.55] font-emphasis text-(--cp-text-secondary)"
+      class="text-[14px] leading-[1.55] font-emphasis text-cp-secondary"
     >
       <slot />
     </div>
 
     <template #footer>
-      <BaseButton variant="default" :disabled="loading" @click="handleCancel">
+      <BaseButton variant="secondary" :disabled="loading" @click="handleCancel">
         {{ cancelText }}
       </BaseButton>
       <BaseButton
-        :variant="confirmVariantMap[variant]"
+        :variant="destructive ? 'destructive' : 'primary'"
         :loading="loading"
         :disabled="confirmDisabled"
         @click="handleConfirm"
