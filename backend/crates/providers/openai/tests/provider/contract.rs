@@ -18,7 +18,10 @@ use gateway_core::engine::{
 };
 use gateway_core::error::ProviderErrorKind;
 use gateway_core::event::GatewayEvent;
-use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
+use gateway_core::operation::{
+    CapabilityRequirements, GenerateRequest, Operation, OperationKind, ProtocolPayload,
+    ProviderSessionState,
+};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
@@ -2423,4 +2426,37 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
     assert!(presentation.image_detail_original());
     assert!(presentation.verbosity());
     assert!(!presentation.hidden());
+}
+
+#[tokio::test]
+async fn provider_routes_catalog_model_when_supported_in_api_is_false() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_non_api_model").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    br#"{"models":[{"slug":"gpt-5.6-sol-wm","display_name":"GPT-5.6-Sol-WM","supported_in_api":false,"visibility":"hide"}]}"#,
+                    "application/json",
+                ),
+        )
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("catalog model capabilities");
+    let model = capabilities.first().expect("catalog model");
+
+    assert!(
+        model
+            .capabilities()
+            .match_requirements(&CapabilityRequirements::new(OperationKind::Generate))
+            .is_some()
+    );
 }

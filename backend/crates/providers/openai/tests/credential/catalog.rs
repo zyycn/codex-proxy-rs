@@ -253,7 +253,7 @@ async fn cross_plan_presentation_drift_unions_on_the_first_seen_model() {
 }
 
 #[tokio::test]
-async fn cross_plan_responses_api_conflict_still_fails_the_union() {
+async fn cross_plan_supported_in_api_drift_unions_on_the_first_seen_model() {
     let store = Arc::new(MemoryAccountStore::default());
     seed_account_with_plan(&store, "acct_conflict_plus", "plus").await;
     seed_account_with_plan(&store, "acct_conflict_pro", "pro").await;
@@ -272,15 +272,12 @@ async fn cross_plan_responses_api_conflict_still_fails_the_union() {
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
 
-    let error = service
+    let snapshot = service
         .synchronize()
         .await
-        .expect_err("routing facts must still agree across plans");
+        .expect("supported_in_api drift must not block catalog publication");
 
-    assert!(matches!(
-        error,
-        CodexCredentialCatalogError::ConflictingModelFacts
-    ));
+    assert_eq!(snapshot.models().len(), 1);
     server.verify().await;
 }
 

@@ -1368,9 +1368,7 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
 fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
     use CodexCredentialCatalogError as Error;
     provider_admin_error(match error {
-        Error::InvalidCredentialData | Error::ConflictingModelFacts | Error::InvalidEtag => {
-            ProviderAdminErrorKind::Invalid
-        }
+        Error::InvalidCredentialData | Error::InvalidEtag => ProviderAdminErrorKind::Invalid,
         Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,
         Error::ConcurrentUpdate => ProviderAdminErrorKind::Conflict,
         Error::Upstream { .. } | Error::Cache => ProviderAdminErrorKind::Unavailable,

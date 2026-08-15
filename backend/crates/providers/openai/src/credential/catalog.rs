@@ -138,8 +138,6 @@ pub enum CodexCredentialCatalogError {
     InvalidCredentialData,
     #[error("Codex model catalog upstream query failed: {detail}")]
     Upstream { detail: String },
-    #[error("Codex model catalog contains conflicting account facts")]
-    ConflictingModelFacts,
     #[error("Codex model catalog cache is unavailable")]
     Cache,
     #[error("Codex model catalog ETag is invalid")]
@@ -358,11 +356,6 @@ impl CodexCredentialCatalogService {
                     Entry::Vacant(entry) => {
                         union_order.push(entry.key().clone());
                         entry.insert(model.clone());
-                    }
-                    // 展示与元数据允许跨套餐漂移，union 取首见值；只有路由
-                    // 事实冲突才让整轮刷新失败。
-                    Entry::Occupied(entry) if conflicting_routing_facts(entry.get(), model) => {
-                        return Err(CodexCredentialCatalogError::ConflictingModelFacts);
                     }
                     Entry::Occupied(_) => {}
                 }
@@ -659,13 +652,6 @@ fn model_ids(models: &[CodexCatalogModel]) -> Vec<String> {
         .iter()
         .map(|model| model.request_model().as_str().to_owned())
         .collect()
-}
-
-/// 路由正确性只依赖 Responses API 支持证据（决定 Generate operation 是否
-/// 编译进 `ModelCapabilities`）；display_name/limits/metadata 等展示事实
-/// 跨套餐漂移不构成冲突。
-fn conflicting_routing_facts(existing: &CodexCatalogModel, candidate: &CodexCatalogModel) -> bool {
-    existing.capabilities().responses_api() != candidate.capabilities().responses_api()
 }
 
 fn catalog_candidates_by_scope(

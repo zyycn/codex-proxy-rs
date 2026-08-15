@@ -1492,12 +1492,10 @@ fn nonnegative_millis(value: Option<i64>) -> Option<u64> {
 }
 
 fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabilities {
-    let evidence = model.capabilities();
-    let mut operations = BTreeSet::new();
-    if evidence.responses_api() == CodexCatalogCapabilityEvidence::DeclaredNative {
-        operations.insert(OperationKind::Generate);
-    }
-    let capabilities = ModelCapabilities::new(operations, None).with_upstream_feature_validation();
+    // Catalog membership is enough to publish Generate. `supported_in_api` is advisory;
+    // the upstream response is authoritative for normal and diagnostic requests.
+    let capabilities = ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None)
+        .with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
         .with_presentation(codex_model_presentation(model))
 }
