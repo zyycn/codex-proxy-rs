@@ -190,7 +190,7 @@ const {
       <template #body>
         <div class="flex h-full min-h-0 flex-col">
           <BaseTable
-            class="min-h-0 flex-1"
+            class="min-h-0 flex-1 [--cp-table-row-min-height:72px]"
             :columns="accountColumns"
             :rows="accounts"
             :loading="loading"
