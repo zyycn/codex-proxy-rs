@@ -75,7 +75,11 @@ const classes = computed(() => [
     :aria-busy="loading || undefined"
     :title="label"
   >
-    <span v-if="loading" class="inline-grid place-items-center" aria-hidden="true">
+    <span
+      v-if="loading"
+      class="inline-grid place-items-center [&>svg]:block [&>svg]:origin-center [&>svg]:transform-view [&>svg]:will-change-transform"
+      aria-hidden="true"
+    >
       <slot name="loading">
         <LoaderCircle
           class="animate-spin motion-reduce:animate-none"

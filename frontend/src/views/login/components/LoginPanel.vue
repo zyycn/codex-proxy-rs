@@ -157,6 +157,7 @@ function togglePasswordVisible(): void {
 
       <div class="min-w-0 mb-2">
         <BaseButton
+          variant="primary"
           size="lg"
           type="submit"
           class="login-submit"
@@ -179,6 +180,11 @@ function togglePasswordVisible(): void {
   --cp-text-primary: var(--login-title);
   --cp-text-secondary: var(--login-description);
   --cp-text-muted: var(--login-placeholder);
+  --cp-accent: var(--login-button);
+  --cp-accent-hover: var(--login-button-hover);
+  --cp-accent-pressed: var(--login-button-active);
+  --cp-accent-border: var(--login-input-icon);
+  --cp-accent-on: var(--cp-white);
   --cp-info: var(--login-button);
   --cp-info-hover: var(--login-button-hover);
   --cp-info-pressed: var(--login-button-active);

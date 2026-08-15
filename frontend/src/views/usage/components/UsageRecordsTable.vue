@@ -10,6 +10,7 @@ import {
   usageIsCompact,
   usageRecordType,
   usageRecordTypeClass,
+  usageUserAgent,
 } from '../utils/records'
 import UsageBillingCell from './UsageBillingCell.vue'
 import UsageClientIpCell from './UsageClientIpCell.vue'
@@ -58,6 +59,12 @@ withDefaults(
 
     <template #clientIp="{ row }">
       <UsageClientIpCell :record="row" />
+    </template>
+
+    <template #userAgent="{ row }">
+      <span class="block max-w-full wrap-break-word whitespace-normal font-mono text-[12px] leading-[1.4] font-emphasis text-cp-secondary">
+        {{ usageUserAgent(row) }}
+      </span>
     </template>
 
     <template #model="{ row }">

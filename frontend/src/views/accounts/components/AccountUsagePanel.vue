@@ -1,10 +1,26 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
+import { defineTableColumns } from '@/components/base/BaseTable/columns'
+import BaseTable from '@/components/base/BaseTable/index.vue'
 import { modelSuccessRateTextClass } from '../constants'
 
 defineProps<{
   account: AccountRow
 }>()
+
+type AccountModelUsage = AccountRow['usage']['models'][number]
+
+const modelUsageColumns = defineTableColumns<AccountModelUsage>([
+  { key: 'model', label: '模型', kind: 'text', size: 'lg' },
+  { key: 'requestCountDisplay', label: '调用', kind: 'numeric', size: 'xs' },
+  { key: 'successRateDisplay', label: '成功率', kind: 'numeric', size: 'sm' },
+  { key: 'inputTokensDisplay', label: '输入', kind: 'numeric', size: 'xs' },
+  { key: 'outputTokensDisplay', label: '输出', kind: 'numeric', size: 'xs' },
+  { key: 'cachedTokensDisplay', label: '缓存', kind: 'numeric', size: 'xs' },
+  { key: 'totalTokensDisplay', label: '总计', kind: 'numeric', size: 'xs' },
+  { key: 'billingAmountUsdDisplay', label: '计费', kind: 'numeric', size: 'sm' },
+  { key: 'lastUsedAtDisplay', label: '最近请求', kind: 'datetime', size: 'sm' },
+])
 </script>
 
 <template>
@@ -62,44 +78,21 @@ defineProps<{
         <span class="text-[11px] font-emphasis text-cp-muted-text">当前额度窗口</span>
       </div>
 
-      <div
-        class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.2fr] gap-3 pb-2 text-[11px] font-heavy text-cp-secondary shadow-[inset_0_-1px_0_var(--cp-divider-subtle)]"
-      >
-        <span>模型</span>
-        <span>调用</span>
-        <span>成功率</span>
-        <span>输入</span>
-        <span>输出</span>
-        <span>缓存</span>
-        <span>总计</span>
-        <span>计费</span>
-        <span>最近请求</span>
-      </div>
-      <div
-        v-if="account.usage.models.length === 0"
-        class="pt-3 text-[12px] font-emphasis text-cp-muted-text"
-      >
-        -
-      </div>
-      <template v-else>
-        <div
-          v-for="model in account.usage.models"
-          :key="model.model"
-          class="grid grid-cols-[1.5fr_0.7fr_0.8fr_1fr_1fr_1fr_1fr_1fr_1.2fr] gap-3 pt-3 text-[12px] font-emphasis text-cp-primary"
+      <div class="h-52 min-w-0">
+        <BaseTable
+          :columns="modelUsageColumns"
+          :rows="account.usage.models"
+          row-key="model"
+          density="compact"
+          empty-text="暂无模型用量"
         >
-          <span class="truncate">{{ model.model }}</span>
-          <span>{{ model.requestCountDisplay }}</span>
-          <span :class="modelSuccessRateTextClass(model.successRate)">
-            {{ model.successRateDisplay }}
-          </span>
-          <span>{{ model.inputTokensDisplay }}</span>
-          <span>{{ model.outputTokensDisplay }}</span>
-          <span>{{ model.cachedTokensDisplay }}</span>
-          <span>{{ model.totalTokensDisplay }}</span>
-          <span>{{ model.billingAmountUsdDisplay }}</span>
-          <span>{{ model.lastUsedAtDisplay }}</span>
-        </div>
-      </template>
+          <template #successRateDisplay="{ row }">
+            <span :class="modelSuccessRateTextClass(row.successRate)">
+              {{ row.successRateDisplay }}
+            </span>
+          </template>
+        </BaseTable>
+      </div>
     </div>
   </section>
 </template>

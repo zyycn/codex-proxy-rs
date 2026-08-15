@@ -14,7 +14,7 @@ export type TableColumnKind
     | 'actions'
     | 'custom'
 
-export type TableColumnSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl'
+export type TableColumnSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl'
 
 export type TableColumnAlign = 'left' | 'right' | 'center'
 type TableColumnSticky = 'left' | 'right'
@@ -65,6 +65,7 @@ const columnWidths: Record<TableColumnSize, number> = {
   'xl': 184,
   '2xl': 240,
   '3xl': 288,
+  '4xl': 352,
 }
 
 const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {

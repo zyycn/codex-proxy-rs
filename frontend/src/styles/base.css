@@ -1,5 +1,4 @@
 html {
-  min-width: 360px;
   background: var(--cp-bg-page);
   color: var(--cp-text-primary);
   font-family: var(--font-sans);
