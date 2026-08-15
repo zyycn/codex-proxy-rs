@@ -55,6 +55,9 @@ jobs:
           target: runtime
           load: true
           tags: ${{ env.CPR_IMAGE }}
+          no-cache-filters: |
+            runtime-base
+            runtime
           cache-from: type=gha,scope=runtime-ci
           cache-to: type=gha,mode=max,scope=runtime-ci
 

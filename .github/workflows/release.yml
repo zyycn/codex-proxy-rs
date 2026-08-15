@@ -468,6 +468,9 @@ jobs:
           push: true
           build-args: |
             CPR_PREBUILT_DIR=dist/docker
+          no-cache-filters: |
+            runtime-base
+            runtime-prebuilt
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.os }}-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.os }}-${{ matrix.arch }},mode=min
           provenance: mode=max
