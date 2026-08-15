@@ -91,9 +91,7 @@ const inputClasses = computed(() => [
         <slot name="suffix" />
       </span>
     </span>
-    <span v-if="error" class="text-xs font-emphasis leading-[1.15] text-(--cp-danger-text)">{{
-      error
-    }}</span>
+    <span v-if="error" class="text-xs font-emphasis leading-[1.15] text-(--cp-danger-text)">{{ error }}</span>
   </div>
 </template>
 

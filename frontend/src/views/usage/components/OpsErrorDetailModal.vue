@@ -114,7 +114,8 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
         >
           <pre
             class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-(--cp-text-primary)"
-          >{{ metadataText }}</pre>
+            v-text="metadataText"
+          />
         </BaseScrollbar>
       </section>
     </template>

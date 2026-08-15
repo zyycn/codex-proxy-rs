@@ -106,7 +106,8 @@ const visibleFiles = computed(() => [
           >
             <pre
               class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-emphasis text-(--cp-text-primary)"
-            >{{ file.content }}</pre>
+              v-text="file.content"
+            />
           </BaseScrollbar>
         </section>
       </div>

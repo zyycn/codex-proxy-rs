@@ -190,7 +190,8 @@ function connectionLogClass(tone: string) {
                     <BaseScrollbar max-height="138px" view-class="pr-2">
                       <pre
                         class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.6] font-emphasis text-(--cp-text-primary)"
-                      >{{ item.detail }}</pre>
+                        v-text="item.detail"
+                      />
                     </BaseScrollbar>
                   </div>
                 </div>

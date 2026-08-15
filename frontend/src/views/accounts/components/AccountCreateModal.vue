@@ -272,7 +272,8 @@ async function copyText(value: string, successText: string) {
             >
               <pre
                 class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-emphasis text-(--cp-text-secondary)"
-              >{{ oauthAuthUrl }}</pre>
+                v-text="oauthAuthUrl"
+              />
             </BaseScrollbar>
           </BaseFormItem>
         </BaseForm>

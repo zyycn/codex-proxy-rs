@@ -78,9 +78,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
       >
         <component :is="metric.icon" :size="18" />
       </BaseMotionIcon>
-      <span class="mt-1 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)">{{
-        metric.title
-      }}</span>
+      <span class="mt-1 text-[13px] leading-[1.15] font-emphasis text-(--cp-text-secondary)">{{ metric.title }}</span>
     </div>
 
     <div class="mt-3.25 flex h-7.75 items-end gap-2">
@@ -115,9 +113,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
       <span
         class="inline-grid min-w-0 w-full grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2.5"
       >
-        <span class="shrink-0 text-[11px] leading-none font-emphasis text-(--cp-text-muted)">{{
-          metric.details[0]?.label
-        }}</span>
+        <span class="shrink-0 text-[11px] leading-none font-emphasis text-(--cp-text-muted)">{{ metric.details[0]?.label }}</span>
         <b
           class="min-w-0 truncate font-mono text-xs leading-none font-bold tabular-nums"
           :class="metric.details[0]?.tone ? metricToneValueClasses[metric.details[0].tone] : undefined"
@@ -128,9 +124,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
       <span
         class="inline-grid min-w-0 w-full grid-cols-[auto_minmax(0,auto)] items-baseline justify-end gap-2.5"
       >
-        <span class="shrink-0 text-[11px] leading-none font-emphasis text-(--cp-text-muted)">{{
-          metric.details[1]?.label
-        }}</span>
+        <span class="shrink-0 text-[11px] leading-none font-emphasis text-(--cp-text-muted)">{{ metric.details[1]?.label }}</span>
         <b
           class="min-w-0 truncate font-mono text-xs leading-none font-bold tabular-nums"
           :class="metric.details[1]?.tone ? metricToneValueClasses[metric.details[1].tone] : undefined"

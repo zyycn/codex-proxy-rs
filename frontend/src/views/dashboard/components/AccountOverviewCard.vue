@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { dashboardSnapshotView, MetricTone } from '../composables/presenter'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
-import { clamp } from 'es-toolkit'
 
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -9,6 +8,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
 import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow.vue'
+import { formatDashboardCompactNumber } from '../composables/presenter'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 
 type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
@@ -24,7 +24,7 @@ const scheduleStats = computed(() => {
   const cap = props.capacity
   const display = (value: number | null | undefined) => value === null || value === undefined
     ? '—'
-    : String(value)
+    : formatDashboardCompactNumber(value)
   return [
     { label: '默认并发', value: display(cap?.maxConcurrentPerAccount) },
     { label: '总槽位', value: display(cap?.totalSlots) },
@@ -32,11 +32,15 @@ const scheduleStats = computed(() => {
   ]
 })
 
-const usedPercent = computed(() => {
-  const cap = props.capacity
-  if (!cap || cap.totalSlots === 0 || cap.usedSlots === null || cap.usedSlots === undefined)
-    return null
-  return clamp(Math.round((cap.usedSlots / cap.totalSlots) * 100), 0, 100)
+const usedProgressStyle = computed(() => {
+  const capacity = props.capacity
+  if (!capacity?.totalSlots || capacity.usedSlots === null)
+    return { width: '0' }
+
+  return {
+    width: `${(capacity.usedSlots / capacity.totalSlots) * 100}%`,
+    minWidth: capacity.usedSlots > 0 ? '3px' : undefined,
+  }
 })
 
 const usedRatio = computed(() => {
@@ -44,17 +48,8 @@ const usedRatio = computed(() => {
   if (!cap || cap.totalSlots === null || cap.totalSlots === undefined)
     return '— / —'
   if (cap.usedSlots === null || cap.usedSlots === undefined)
-    return `— / ${cap.totalSlots}`
-  return `${cap.usedSlots} / ${cap.totalSlots}`
-})
-
-const occupancyLabel = computed(() => {
-  if (usedPercent.value !== null)
-    return `${usedPercent.value}% 已占用`
-  const cap = props.capacity
-  return cap && cap.totalSlots !== null && cap.totalSlots !== undefined
-    ? ''
-    : '暂无容量数据'
+    return `— / ${formatDashboardCompactNumber(cap.totalSlots)}`
+  return `${formatDashboardCompactNumber(cap.usedSlots)} / ${formatDashboardCompactNumber(cap.totalSlots)}`
 })
 
 const strategyLabel = computed(() => {
@@ -179,18 +174,17 @@ const statusBars = computed(() => {
           <div class="grid h-30.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto">
             <span class="block h-3.5 text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">槽位占用</span>
             <div>
-              <div class="grid h-8.5 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+              <div class="h-8.5">
                 <strong
                   class="font-mono text-[32px] leading-[1.05] font-heavy tabular-nums text-(--cp-text-primary)"
-                >{{ usedRatio }}</strong>
-                <span class="mt-3.5 text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">
-                  {{ occupancyLabel }}
-                </span>
+                >
+                  {{ usedRatio }}
+                </strong>
               </div>
               <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-(--cp-progress-track)">
                 <i
                   class="block h-2.5 rounded-full bg-(--cp-success)"
-                  :style="{ width: usedPercent === null ? '0' : `${usedPercent}%` }"
+                  :style="usedProgressStyle"
                 />
               </div>
             </div>
@@ -200,20 +194,20 @@ const statusBars = computed(() => {
             class="grid h-22.5 grid-cols-3 gap-4 rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto"
           >
             <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
-              <span class="text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">{{
-                stat.label
-              }}</span>
+              <span class="text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">{{ stat.label }}</span>
               <strong
                 class="block font-mono text-[21px] leading-[1.1] font-heavy tabular-nums text-(--cp-text-primary)"
-              >{{ stat.value }}</strong>
+              >
+                {{ stat.value }}
+              </strong>
             </div>
           </div>
 
           <div class="grid h-20.5 content-between rounded-[14px] bg-(--cp-bg-subtle) p-4 xl:h-auto">
             <span class="text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">分配策略</span>
-            <strong class="block text-[17px] leading-[1.15] font-emphasis text-(--cp-text-primary)">{{
-              strategyLabel
-            }}</strong>
+            <strong class="block text-[17px] leading-[1.15] font-emphasis text-(--cp-text-primary)">
+              {{ strategyLabel }}
+            </strong>
           </div>
         </div>
       </section>
@@ -267,7 +261,9 @@ const statusBars = computed(() => {
                   </span>
                   <strong
                     class="font-mono text-sm leading-[1.15] font-heavy tabular-nums text-(--cp-text-primary)"
-                  >{{ account.metricValue }}</strong>
+                  >
+                    {{ account.metricValue }}
+                  </strong>
                 </span>
 
                 <span class="grid min-w-0 gap-1">
@@ -303,7 +299,9 @@ const statusBars = computed(() => {
           <div class="grid justify-items-end">
             <strong
               class="font-mono text-2xl leading-[1.05] font-heavy tabular-nums text-(--cp-success-text)"
-            >{{ normalRate }}</strong>
+            >
+              {{ normalRate }}
+            </strong>
             <span class="mt-0.5 text-xs leading-[1.15] font-bold text-(--cp-text-secondary)">正常率</span>
           </div>
         </header>
@@ -337,17 +335,17 @@ const statusBars = computed(() => {
               <component :is="row.icon" :size="16" />
             </span>
             <span class="col-start-3 grid gap-1">
-              <strong class="text-sm leading-[1.15] font-emphasis text-(--cp-text-primary)">{{
-                row.label
-              }}</strong>
-              <span class="text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">{{
-                row.description
-              }}</span>
+              <strong class="text-sm leading-[1.15] font-emphasis text-(--cp-text-primary)">
+                {{ row.label }}
+              </strong>
+              <span class="text-xs leading-[1.15] font-emphasis text-(--cp-text-secondary)">{{ row.description }}</span>
             </span>
             <strong
               class="col-start-4 text-right font-mono text-[17px] leading-[1.15] font-heavy tabular-nums"
               :class="toneValueClass(row.tone)"
-            >{{ row.value }}</strong>
+            >
+              {{ row.value }}
+            </strong>
           </div>
         </div>
       </section>

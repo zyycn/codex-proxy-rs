@@ -331,7 +331,7 @@ onBeforeUnmount(() => {
     class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-bg-surface) px-4 shadow-(--cp-shadow-sidebar)"
     :class="[
       mobile ? 'flex' : 'hidden min-[961px]:flex',
-      isCollapsed ? 'w-22 basis-22 items-center' : 'w-[251px] basis-[251px]',
+      isCollapsed ? 'w-22 basis-22 items-center' : 'w-62.75 basis-62.75',
     ]"
   >
     <div
@@ -414,7 +414,9 @@ onBeforeUnmount(() => {
         <span
           class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
           :class="isCollapsed ? 'pointer-events-none w-0' : 'w-auto'"
-        >{{ item.label }}</span>
+        >
+          {{ item.label }}
+        </span>
       </button>
     </nav>
 
