@@ -1119,7 +1119,8 @@ pub struct AccountStateChange {
     pub observed_at: SystemTime,
     /// 受控错误原因；恢复 Ready 时必须清空。
     pub error_reason: Option<AccountErrorReason>,
-    /// 已脱敏的上游诊断信息；恢复 Ready 时必须清空。
+    /// 供管理端展示的错误消息；结构化上游失败应保留原始 message，不能写入整个正文。
+    /// 恢复 Ready 时必须清空。
     pub message: Option<String>,
 }
 

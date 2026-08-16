@@ -42,26 +42,13 @@ interface ConnectionTestEvent {
   model?: string
   payload?: ConnectionTestRequestPayload
   success?: boolean
-  upstreamBody?: string
-  upstreamStatus?: number
   error?: string
 }
 
 function connectionTestErrorText(event: ConnectionTestEvent) {
-  if (typeof event.upstreamBody === 'string' && event.upstreamBody.length > 0)
-    return event.upstreamBody
-  if (Number.isInteger(event.upstreamStatus))
-    return `HTTP ${event.upstreamStatus}`
-  return event.error || '测试连接失败'
-}
-
-function connectionTestFailureLabel(event: ConnectionTestEvent) {
-  const hasUpstreamResponse
-    = (typeof event.upstreamBody === 'string' && event.upstreamBody.length > 0)
-      || Number.isInteger(event.upstreamStatus)
-  return hasUpstreamResponse
-    ? '上游返回错误'
-    : '未能向上游发起请求'
+  if (typeof event.error === 'string' && event.error.trim().length > 0)
+    return event.error
+  return '测试连接失败'
 }
 
 export function useAccountConnectionTest(options: { reload: () => Promise<unknown> }) {
@@ -284,11 +271,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
     if (event.type === 'error') {
       connectionTestError.value = connectionTestErrorText(event)
-      appendConnectionTestLog(
-        connectionTestFailureLabel(event),
-        'danger',
-        connectionTestError.value,
-      )
+      appendConnectionTestLog(connectionTestError.value, 'danger')
       finishConnectionTest('error')
       clearConnectionTestRun()
       void options.reload()

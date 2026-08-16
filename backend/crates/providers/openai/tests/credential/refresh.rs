@@ -82,6 +82,17 @@ impl TokenRefresher for SingleUseRefresher {
     }
 }
 
+struct FailingRefresher {
+    failure: RefreshFailure,
+}
+
+#[async_trait]
+impl TokenRefresher for FailingRefresher {
+    async fn refresh(&self, _: &str) -> Result<TokenPair, RefreshFailure> {
+        Err(self.failure.clone())
+    }
+}
+
 struct RefreshLeases;
 
 impl ProviderLeasePort for RefreshLeases {
@@ -264,6 +275,50 @@ async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_s
             .expect("refreshed account")
             .next_refresh_at()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_persists_the_original_upstream_error_message() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let upstream_message = "Refresh token has already been used.";
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(FailingRefresher {
+            failure: RefreshFailure::InvalidGrant {
+                message: Some(upstream_message.to_owned()),
+            },
+        }),
+        Arc::new(RefreshLeases),
+        Arc::new(RefreshCredentialState),
+        policy,
+    );
+    let account_id = "acct_invalid_refresh_token";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_add(Duration::from_secs(120))
+            .expect("test expiry"),
+        None,
+    )
+    .await;
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Invalidated {
+            account_id: invalidated_account_id,
+        }] if invalidated_account_id == account_id
+    ));
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("invalidated account")
+            .last_error_message(),
+        Some(upstream_message)
     );
 }
 

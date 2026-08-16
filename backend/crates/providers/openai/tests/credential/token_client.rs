@@ -273,24 +273,46 @@ async fn authorization_code_exchange_requires_id_token_and_json_response() {
 
 #[tokio::test]
 async fn refresh_token_reuse_should_be_classified_as_invalid_grant() {
+    let upstream_message = "Your refresh token has already been used to generate a new access token. Please try signing in again.";
     let failure = refresh_failure(
         400,
-        r#"{"error":"invalid_grant","error_description":"refresh_token_reused"}"#,
+        r#"{"error":{"message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","type":"invalid_request_error","param":null,"code":"refresh_token_reused"}}"#,
     )
     .await;
 
-    assert_eq!(failure, RefreshFailure::InvalidGrant);
+    assert_eq!(
+        failure,
+        RefreshFailure::InvalidGrant {
+            message: Some(upstream_message.to_owned())
+        }
+    );
+}
+
+#[tokio::test]
+async fn oauth_error_description_should_not_be_used_as_the_upstream_message() {
+    let failure = refresh_failure(
+        400,
+        r#"{"error":"invalid_grant","error_description":"not the official refresh error message field"}"#,
+    )
+    .await;
+
+    assert_eq!(failure, RefreshFailure::InvalidGrant { message: None });
 }
 
 #[tokio::test]
 async fn deactivated_account_should_be_classified_as_banned() {
     let failure = refresh_failure(
         403,
-        r#"{"error":"access_denied","error_description":"account has been deactivated"}"#,
+        r#"{"error":{"code":"access_denied","message":"account has been deactivated"}}"#,
     )
     .await;
 
-    assert_eq!(failure, RefreshFailure::Banned);
+    assert_eq!(
+        failure,
+        RefreshFailure::Banned {
+            message: Some("account has been deactivated".to_owned())
+        }
+    );
 }
 
 #[tokio::test]
@@ -328,7 +350,7 @@ async fn server_error_or_rate_limit_must_stay_transient_even_with_oauth_error_bo
     for status in [500, 502, 503, 429] {
         let failure = refresh_failure(
             status,
-            r#"{"error":"invalid_grant","error_description":"refresh_token_expired"}"#,
+            r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
         )
         .await;
         assert_eq!(

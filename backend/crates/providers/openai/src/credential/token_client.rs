@@ -51,12 +51,12 @@ impl fmt::Debug for TokenPair {
 }
 
 /// Codex token 刷新的稳定失败分类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RefreshFailure {
     #[error("refresh token is invalid or expired")]
-    InvalidGrant,
+    InvalidGrant { message: Option<String> },
     #[error("account is banned")]
-    Banned,
+    Banned { message: Option<String> },
     #[error("refresh transport failed before server processing")]
     RetryableTransport,
     #[error("refresh transport failed after possible server processing")]
@@ -184,6 +184,45 @@ struct RefreshTokenResponse {
     refresh_token: Option<String>,
     id_token: Option<String>,
     expires_in: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RefreshErrorResponse {
+    error: Option<RefreshError>,
+    code: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RefreshError {
+    Details(RefreshErrorDetails),
+    Code(String),
+}
+
+#[derive(Deserialize)]
+struct RefreshErrorDetails {
+    code: Option<String>,
+    message: Option<String>,
+}
+
+impl RefreshErrorResponse {
+    fn code(&self) -> Option<&str> {
+        match self.error.as_ref() {
+            Some(RefreshError::Details(error)) => error.code.as_deref(),
+            Some(RefreshError::Code(code)) => Some(code.as_str()),
+            None => None,
+        }
+        .or(self.code.as_deref())
+    }
+
+    fn message(&self) -> Option<String> {
+        match self.error.as_ref() {
+            Some(RefreshError::Details(error)) => error.message.as_deref(),
+            Some(RefreshError::Code(_)) | None => None,
+        }
+        .filter(|message| !message.trim().is_empty())
+        .map(ToOwned::to_owned)
+    }
 }
 
 #[derive(Deserialize)]
@@ -317,18 +356,32 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
     if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
         return RefreshFailure::Transport;
     }
-    // 4xx 正文才是权威 OAuth 错误响应，据其区分真过期/封禁与其余瞬态。
-    let lower = String::from_utf8_lossy(body).to_ascii_lowercase();
-    if lower.contains("account has been deactivated") {
-        return RefreshFailure::Banned;
+    // 官方刷新错误的消息与错误码分别位于 `error.message`、`error.code`；
+    // `error` 字符串与顶层 `code` 仅用于兼容官方客户端自身的错误码提取契约。
+    let Ok(error) = serde_json::from_slice::<RefreshErrorResponse>(body) else {
+        return RefreshFailure::Transport;
+    };
+    let message = error.message();
+    if message.as_deref().is_some_and(|message| {
+        message
+            .to_ascii_lowercase()
+            .contains("account has been deactivated")
+    }) {
+        return RefreshFailure::Banned { message };
     }
-    if lower.contains("invalid_grant")
-        || lower.contains("invalid_token")
-        || lower.contains("access_denied")
-        || lower.contains("refresh_token_expired")
-        || lower.contains("refresh_token_reused")
-    {
-        return RefreshFailure::InvalidGrant;
+    let normalized_code = error.code().map(str::to_ascii_lowercase);
+    if matches!(
+        normalized_code.as_deref(),
+        Some(
+            "invalid_grant"
+                | "invalid_token"
+                | "access_denied"
+                | "refresh_token_expired"
+                | "refresh_token_reused"
+                | "refresh_token_invalidated"
+        )
+    ) {
+        return RefreshFailure::InvalidGrant { message };
     }
     RefreshFailure::Transport
 }

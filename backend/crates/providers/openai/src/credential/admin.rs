@@ -1133,10 +1133,10 @@ fn china_rfc3339(value: DateTime<Utc>) -> String {
         .to_rfc3339()
 }
 
-const fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {
+fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {
     match error {
-        RefreshFailure::InvalidGrant => CodexCredentialAdminError::RefreshRejected,
-        RefreshFailure::Banned => CodexCredentialAdminError::AccountBanned,
+        RefreshFailure::InvalidGrant { .. } => CodexCredentialAdminError::RefreshRejected,
+        RefreshFailure::Banned { .. } => CodexCredentialAdminError::AccountBanned,
         RefreshFailure::RetryableTransport => CodexCredentialAdminError::RefreshUnavailable,
         RefreshFailure::Transport => CodexCredentialAdminError::RefreshAmbiguous,
     }

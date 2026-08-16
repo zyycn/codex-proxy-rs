@@ -565,11 +565,7 @@ impl AccountsService for DefaultAccountsService {
                     let upstream_body = error
                         .upstream_response()
                         .map(|response| String::from_utf8_lossy(response.body()).into_owned());
-                    let message = upstream_body
-                        .as_deref()
-                        .filter(|body| !body.is_empty())
-                        .unwrap_or_else(|| error.client_message())
-                        .to_owned();
+                    let message = error.client_message().to_owned();
                     vec![AccountConnectionTestEvent::Failed {
                         message,
                         provider_error_code: error.client_error_code().map(ToOwned::to_owned),

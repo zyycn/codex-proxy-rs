@@ -258,6 +258,7 @@ impl CodexCredentialRefreshService {
                     CredentialState::Expired,
                     AccountErrorReason::CredentialExpired,
                     "refresh_recovery_window_exhausted",
+                    None,
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
                 .await;
@@ -293,22 +294,24 @@ impl CodexCredentialRefreshService {
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
         match self.refresher.refresh(refresh_token.expose_secret()).await {
             Ok(tokens) => self.persist_success(due, tokens).await,
-            Err(RefreshFailure::InvalidGrant) => {
+            Err(RefreshFailure::InvalidGrant { message }) => {
                 self.persist_terminal(
                     &due.account,
                     CredentialState::Expired,
                     AccountErrorReason::CredentialExpired,
                     "refresh_invalid_grant",
+                    message,
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
                 .await
             }
-            Err(RefreshFailure::Banned) => {
+            Err(RefreshFailure::Banned { message }) => {
                 self.persist_terminal(
                     &due.account,
                     CredentialState::Banned,
                     AccountErrorReason::AccountBanned,
                     "account_banned",
+                    message,
                     CodexCredentialRefreshOutcome::Banned { account_id },
                 )
                 .await
@@ -484,6 +487,7 @@ impl CodexCredentialRefreshService {
         credential_state: CredentialState,
         error_reason: AccountErrorReason,
         reason: &'static str,
+        message: Option<String>,
         outcome: CodexCredentialRefreshOutcome,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         match self.repository.load_runtime_credential(account).await {
@@ -502,7 +506,7 @@ impl CodexCredentialRefreshService {
                 credential_state,
                 SystemTime::now(),
                 Some(error_reason),
-                Some(reason.to_owned()),
+                Some(message.unwrap_or_else(|| reason.to_owned())),
             )
             .await
         {
