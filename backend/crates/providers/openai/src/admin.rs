@@ -258,7 +258,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             ))
             .await
             .inspect_err(|error| {
-                log_import_failure("prepare_document", credential_admin_error_code(*error));
+                log_import_failure("prepare_document", credential_admin_error_code(error));
             })
             .map_err(map_credential_admin_error)?;
         let observed_at = Utc::now();
@@ -1275,31 +1275,37 @@ fn map_store_error(error: gateway_core::error::StoreError) -> ProviderAdminError
 
 fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdminError {
     use CodexCredentialAdminError as Error;
-    provider_admin_error(match error {
+    let upstream_message = error.upstream_message().map(ToOwned::to_owned);
+    let kind = match error {
         Error::InvalidInput
         | Error::InvalidCredential
         | Error::MissingRefreshToken
-        | Error::RefreshRejected
-        | Error::AccountBanned => ProviderAdminErrorKind::Invalid,
+        | Error::RefreshRejected { .. }
+        | Error::AccountBanned { .. } => ProviderAdminErrorKind::Invalid,
         Error::NotFound => ProviderAdminErrorKind::NotFound,
-        Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous => {
+        Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous { .. } => {
             ProviderAdminErrorKind::Conflict
         }
         Error::RefreshUnavailable => ProviderAdminErrorKind::Unavailable,
-    })
+    };
+    let error = provider_admin_error(kind);
+    match upstream_message {
+        Some(message) => error.with_message(message),
+        None => error,
+    }
 }
 
-const fn credential_admin_error_code(error: CodexCredentialAdminError) -> &'static str {
+const fn credential_admin_error_code(error: &CodexCredentialAdminError) -> &'static str {
     match error {
         CodexCredentialAdminError::InvalidInput => "invalid_input",
         CodexCredentialAdminError::InvalidCredential => "invalid_credential",
         CodexCredentialAdminError::NotFound => "not_found",
         CodexCredentialAdminError::MissingRefreshToken => "missing_refresh_token",
         CodexCredentialAdminError::RefreshLeaseUnavailable => "refresh_lease_unavailable",
-        CodexCredentialAdminError::RefreshRejected => "refresh_rejected",
-        CodexCredentialAdminError::AccountBanned => "account_banned",
+        CodexCredentialAdminError::RefreshRejected { .. } => "refresh_rejected",
+        CodexCredentialAdminError::AccountBanned { .. } => "account_banned",
         CodexCredentialAdminError::RefreshUnavailable => "refresh_unavailable",
-        CodexCredentialAdminError::RefreshAmbiguous => "refresh_ambiguous",
+        CodexCredentialAdminError::RefreshAmbiguous { .. } => "refresh_ambiguous",
     }
 }
 

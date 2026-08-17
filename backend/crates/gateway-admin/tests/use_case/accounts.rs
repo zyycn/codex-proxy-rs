@@ -60,7 +60,7 @@ pub(super) type EventLog = Arc<Mutex<Vec<&'static str>>>;
 pub(super) struct FakeProviderAdmin {
     kind: ProviderKind,
     events: EventLog,
-    failure: Mutex<Option<ProviderAdminErrorKind>>,
+    failure: Mutex<Option<ProviderAdminError>>,
     quota_failure: Mutex<Option<ProviderAdminErrorKind>>,
     pending: Arc<Mutex<Option<PendingAuthorizationMutation>>>,
     retry_authorization_after_abort: Mutex<bool>,
@@ -89,7 +89,12 @@ impl FakeProviderAdmin {
     }
 
     pub(super) fn fail_next(&self, kind: ProviderAdminErrorKind) {
-        *self.failure.lock().expect("provider failure") = Some(kind);
+        *self.failure.lock().expect("provider failure") = Some(ProviderAdminError::new(kind));
+    }
+
+    fn fail_next_with_message(&self, kind: ProviderAdminErrorKind, message: &str) {
+        *self.failure.lock().expect("provider failure") =
+            Some(ProviderAdminError::new(kind).with_message(message));
     }
 
     pub(super) fn fail_next_quota(&self, kind: ProviderAdminErrorKind) {
@@ -145,7 +150,7 @@ impl FakeProviderAdmin {
 
     fn require_available(&self) -> Result<(), ProviderAdminError> {
         match self.failure.lock().expect("provider failure").take() {
-            Some(kind) => Err(ProviderAdminError::new(kind)),
+            Some(error) => Err(error),
             None => Ok(()),
         }
     }
@@ -1644,6 +1649,32 @@ async fn accounts_refresh_provider_failure_should_not_call_store_commit() {
         .await
         .expect_err("Provider preparation must fail");
 
+    assert_eq!(
+        recorded(&events),
+        ["store.load_account", "provider.prepare_refresh"]
+    );
+}
+
+#[tokio::test]
+async fn accounts_refresh_should_preserve_the_provider_failure_message() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let upstream_message = "Your refresh token has already been used.";
+    provider.fail_next_with_message(ProviderAdminErrorKind::Conflict, upstream_message);
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider, store).await;
+
+    let error = services
+        .accounts()
+        .refresh(
+            &context("refresh-provider-message"),
+            ProviderAccountId::new("acct_test").expect("account ID"),
+        )
+        .await
+        .expect_err("Provider preparation must fail");
+
+    assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Conflict);
+    assert_eq!(error.to_string(), upstream_message);
     assert_eq!(
         recorded(&events),
         ["store.load_account", "provider.prepare_refresh"]

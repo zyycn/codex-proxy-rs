@@ -376,7 +376,7 @@ impl fmt::Debug for PreparedCodexCredentialRotationGuard {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CodexCredentialAdminError {
     #[error("Codex account input is invalid")]
     InvalidInput,
@@ -389,13 +389,30 @@ pub enum CodexCredentialAdminError {
     #[error("Codex refresh lease is unavailable")]
     RefreshLeaseUnavailable,
     #[error("Codex refresh token was rejected")]
-    RefreshRejected,
+    RefreshRejected { message: Option<String> },
     #[error("Codex account is banned")]
-    AccountBanned,
+    AccountBanned { message: Option<String> },
     #[error("Codex refresh service is unavailable")]
     RefreshUnavailable,
     #[error("Codex refresh send state is ambiguous")]
-    RefreshAmbiguous,
+    RefreshAmbiguous { message: Option<String> },
+}
+
+impl CodexCredentialAdminError {
+    #[must_use]
+    pub fn upstream_message(&self) -> Option<&str> {
+        match self {
+            Self::RefreshRejected { message }
+            | Self::AccountBanned { message }
+            | Self::RefreshAmbiguous { message } => message.as_deref(),
+            Self::InvalidInput
+            | Self::InvalidCredential
+            | Self::NotFound
+            | Self::MissingRefreshToken
+            | Self::RefreshLeaseUnavailable
+            | Self::RefreshUnavailable => None,
+        }
+    }
 }
 
 /// 无状态的 Codex Admin command preparer。
@@ -800,6 +817,7 @@ impl CodexCredentialAdminService {
             .refresher
             .refresh(refresh_token.expose_secret())
             .await
+            .inspect_err(|error| log_manual_refresh_failure(&account_id, error))
             .map_err(map_refresh_failure)?;
         let access_token_rotated = tokens.access_token.is_some();
         let secret = CodexOAuthSecret {
@@ -1135,11 +1153,29 @@ fn china_rfc3339(value: DateTime<Utc>) -> String {
 
 fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {
     match error {
-        RefreshFailure::InvalidGrant { .. } => CodexCredentialAdminError::RefreshRejected,
-        RefreshFailure::Banned { .. } => CodexCredentialAdminError::AccountBanned,
-        RefreshFailure::RetryableTransport => CodexCredentialAdminError::RefreshUnavailable,
-        RefreshFailure::Transport => CodexCredentialAdminError::RefreshAmbiguous,
+        RefreshFailure::InvalidGrant { message, .. } => {
+            CodexCredentialAdminError::RefreshRejected { message }
+        }
+        RefreshFailure::Banned { message, .. } => {
+            CodexCredentialAdminError::AccountBanned { message }
+        }
+        RefreshFailure::RetryableTransport { .. } => CodexCredentialAdminError::RefreshUnavailable,
+        RefreshFailure::Transport { message, .. } => {
+            CodexCredentialAdminError::RefreshAmbiguous { message }
+        }
     }
+}
+
+fn log_manual_refresh_failure(account_id: &ProviderAccountId, error: &RefreshFailure) {
+    let upstream = error.upstream();
+    tracing::warn!(
+        account_id = %account_id,
+        failure_class = error.classification(),
+        upstream_message = ?error.message(),
+        upstream_status = ?upstream.map(super::token_client::RefreshUpstreamFailure::status),
+        upstream_body = ?upstream.map(super::token_client::RefreshUpstreamFailure::body),
+        "OpenAI OAuth manual refresh failed"
+    );
 }
 
 fn parse_import_document(

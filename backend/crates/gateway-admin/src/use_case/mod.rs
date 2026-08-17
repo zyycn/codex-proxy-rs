@@ -59,7 +59,11 @@ fn map_provider_error(
         ProviderAdminErrorKind::Unavailable => AdminErrorKind::Unavailable,
         ProviderAdminErrorKind::Internal => AdminErrorKind::Internal,
     };
-    AdminError::new(kind, format!("{resource} operation failed"))
+    let message = error
+        .message()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{resource} operation failed"));
+    AdminError::new(kind, message)
 }
 
 async fn publish_committed(

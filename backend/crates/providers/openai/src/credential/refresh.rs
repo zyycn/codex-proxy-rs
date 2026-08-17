@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use super::token_client::{RefreshFailure, TokenPair, TokenRefresher};
+use super::token_client::{RefreshFailure, RefreshUpstreamFailure, TokenPair, TokenRefresher};
 use super::types::CodexOAuthSecret;
 
 const PROVIDER_NAME: &str = "openai";
@@ -91,18 +91,43 @@ fn log_refresh_deferred(
     access_token_expires_at: Option<SystemTime>,
     attempt: u32,
     reason: &'static str,
+    upstream_message: Option<&str>,
+    upstream: Option<&RefreshUpstreamFailure>,
     retry_at: SystemTime,
 ) {
     tracing::warn!(
         account_id = %account_id,
         attempt,
         reason,
+        upstream_message = ?upstream_message,
+        upstream_status = ?upstream.map(RefreshUpstreamFailure::status),
+        upstream_body = ?upstream.map(RefreshUpstreamFailure::body),
         retry_at = %DateTime::<Utc>::from(retry_at),
         access_token_expires_at = ?access_token_expires_at.map(DateTime::<Utc>::from),
         recovery_deadline = ?refresh_recovery_deadline(access_token_expires_at)
             .map(DateTime::<Utc>::from),
         "OpenAI OAuth refresh deferred"
     );
+}
+
+struct RefreshFailureContext<'a> {
+    reason: &'static str,
+    message: Option<String>,
+    upstream: Option<&'a RefreshUpstreamFailure>,
+}
+
+impl<'a> RefreshFailureContext<'a> {
+    const fn new(
+        reason: &'static str,
+        message: Option<String>,
+        upstream: Option<&'a RefreshUpstreamFailure>,
+    ) -> Self {
+        Self {
+            reason,
+            message,
+            upstream,
+        }
+    }
 }
 
 fn refresh_due_at(
@@ -257,8 +282,7 @@ impl CodexCredentialRefreshService {
                     &due.account,
                     CredentialState::Expired,
                     AccountErrorReason::CredentialExpired,
-                    "refresh_recovery_window_exhausted",
-                    None,
+                    RefreshFailureContext::new("refresh_recovery_window_exhausted", None, None),
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
                 .await;
@@ -294,31 +318,33 @@ impl CodexCredentialRefreshService {
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
         match self.refresher.refresh(refresh_token.expose_secret()).await {
             Ok(tokens) => self.persist_success(due, tokens).await,
-            Err(RefreshFailure::InvalidGrant { message }) => {
+            Err(RefreshFailure::InvalidGrant { message, upstream }) => {
                 self.persist_terminal(
                     &due.account,
                     CredentialState::Expired,
                     AccountErrorReason::CredentialExpired,
-                    "refresh_invalid_grant",
-                    message,
+                    RefreshFailureContext::new(
+                        "refresh_invalid_grant",
+                        message,
+                        upstream.as_deref(),
+                    ),
                     CodexCredentialRefreshOutcome::Invalidated { account_id },
                 )
                 .await
             }
-            Err(RefreshFailure::Banned { message }) => {
+            Err(RefreshFailure::Banned { message, upstream }) => {
                 self.persist_terminal(
                     &due.account,
                     CredentialState::Banned,
                     AccountErrorReason::AccountBanned,
-                    "account_banned",
-                    message,
+                    RefreshFailureContext::new("account_banned", message, upstream.as_deref()),
                     CodexCredentialRefreshOutcome::Banned { account_id },
                 )
                 .await
             }
-            Err(RefreshFailure::RetryableTransport) => {
+            Err(RefreshFailure::RetryableTransport { message }) => {
                 if self
-                    .defer_refresh(&due.account, "transport-not-sent")
+                    .defer_refresh(&due.account, "transport-not-sent", Some(&message), None)
                     .await?
                 {
                     Ok(CodexCredentialRefreshOutcome::Transient { account_id })
@@ -326,11 +352,16 @@ impl CodexCredentialRefreshService {
                     Ok(CodexCredentialRefreshOutcome::Stale { account_id })
                 }
             }
-            Err(RefreshFailure::Transport) => {
+            Err(RefreshFailure::Transport { message, upstream }) => {
                 // 上游瞬态（429/5xx/超时/畸形响应等，发送状态未知）保留现有凭据、
                 // 推进退避重试；仅 invalid_grant/banned 才终态失效账号。
                 if self
-                    .defer_refresh(&due.account, "transport-ambiguous")
+                    .defer_refresh(
+                        &due.account,
+                        "transport-ambiguous",
+                        message.as_deref(),
+                        upstream.as_deref(),
+                    )
                     .await?
                 {
                     Ok(CodexCredentialRefreshOutcome::Transient { account_id })
@@ -486,10 +517,14 @@ impl CodexCredentialRefreshService {
         account: &ProviderAccount,
         credential_state: CredentialState,
         error_reason: AccountErrorReason,
-        reason: &'static str,
-        message: Option<String>,
+        failure: RefreshFailureContext<'_>,
         outcome: CodexCredentialRefreshOutcome,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
+        let RefreshFailureContext {
+            reason,
+            message,
+            upstream,
+        } = failure;
         match self.repository.load_runtime_credential(account).await {
             Ok(_) => {}
             Err(CredentialRepositoryError::RevisionConflict) => {
@@ -499,6 +534,7 @@ impl CodexCredentialRefreshService {
             }
             Err(error) => return Err(error.into()),
         }
+        let persisted_message = message.as_deref().unwrap_or(reason).to_owned();
         match self
             .repository
             .apply_state_with_reason(
@@ -506,7 +542,7 @@ impl CodexCredentialRefreshService {
                 credential_state,
                 SystemTime::now(),
                 Some(error_reason),
-                Some(message.unwrap_or_else(|| reason.to_owned())),
+                Some(persisted_message),
             )
             .await
         {
@@ -515,6 +551,9 @@ impl CodexCredentialRefreshService {
                     account_id = %account.id(),
                     ?credential_state,
                     reason,
+                    upstream_message = ?message.as_deref(),
+                    upstream_status = ?upstream.map(RefreshUpstreamFailure::status),
+                    upstream_body = ?upstream.map(RefreshUpstreamFailure::body),
                     access_token_expires_at = ?account.access_token_expires_at()
                         .map(DateTime::<Utc>::from),
                     recovery_deadline = ?refresh_recovery_deadline(account.access_token_expires_at())
@@ -536,6 +575,8 @@ impl CodexCredentialRefreshService {
         &self,
         account: &ProviderAccount,
         reason: &'static str,
+        upstream_message: Option<&str>,
+        upstream: Option<&RefreshUpstreamFailure>,
     ) -> Result<bool, CodexCredentialRefreshError> {
         let attempt = self
             .credential_state
@@ -556,6 +597,8 @@ impl CodexCredentialRefreshService {
                     account.access_token_expires_at(),
                     attempt,
                     reason,
+                    upstream_message,
+                    upstream,
                     retry_at,
                 );
                 Ok(true)

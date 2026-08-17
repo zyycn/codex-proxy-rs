@@ -31,22 +31,50 @@ pub enum ProviderAdminErrorKind {
     Internal,
 }
 
-/// 不泄漏 OAuth material 与 Provider 响应体的管理错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// 不携带 OAuth 请求材料的管理错误。
+///
+/// `message` 用于当前认证管理请求展示；上游没有标准 `error.message` 时，
+/// Provider 可以按其官方契约回退为完整的非成功响应正文。
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 #[error("provider admin operation failed: {kind:?}")]
 pub struct ProviderAdminError {
     kind: ProviderAdminErrorKind,
+    message: Option<String>,
+}
+
+impl std::fmt::Debug for ProviderAdminError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderAdminError")
+            .field("kind", &self.kind)
+            .field("message", &self.message.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl ProviderAdminError {
     #[must_use]
     pub const fn new(kind: ProviderAdminErrorKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            message: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
     }
 
     #[must_use]
     pub const fn kind(&self) -> ProviderAdminErrorKind {
         self.kind
+    }
+
+    #[must_use]
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
     }
 }
 

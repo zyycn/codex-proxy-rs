@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode, redirect::Policy};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::Duration;
 
@@ -51,16 +51,106 @@ impl fmt::Debug for TokenPair {
 }
 
 /// Codex token 刷新的稳定失败分类。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RefreshFailure {
     #[error("refresh token is invalid or expired")]
-    InvalidGrant { message: Option<String> },
+    InvalidGrant {
+        message: Option<String>,
+        upstream: Option<Box<RefreshUpstreamFailure>>,
+    },
     #[error("account is banned")]
-    Banned { message: Option<String> },
+    Banned {
+        message: Option<String>,
+        upstream: Option<Box<RefreshUpstreamFailure>>,
+    },
     #[error("refresh transport failed before server processing")]
-    RetryableTransport,
+    RetryableTransport { message: String },
     #[error("refresh transport failed after possible server processing")]
-    Transport,
+    Transport {
+        message: Option<String>,
+        upstream: Option<Box<RefreshUpstreamFailure>>,
+    },
+}
+
+impl fmt::Debug for RefreshFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RefreshFailure")
+            .field("classification", &self.classification())
+            .field("message", &self.message().map(|_| "<redacted>"))
+            .field("upstream", &self.upstream())
+            .finish()
+    }
+}
+
+impl RefreshFailure {
+    #[must_use]
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Self::InvalidGrant { message, .. }
+            | Self::Banned { message, .. }
+            | Self::Transport { message, .. } => message.as_deref(),
+            Self::RetryableTransport { message } => Some(message),
+        }
+    }
+
+    #[must_use]
+    pub fn upstream(&self) -> Option<&RefreshUpstreamFailure> {
+        match self {
+            Self::InvalidGrant { upstream, .. }
+            | Self::Banned { upstream, .. }
+            | Self::Transport { upstream, .. } => upstream.as_deref(),
+            Self::RetryableTransport { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn classification(&self) -> &'static str {
+        match self {
+            Self::InvalidGrant { .. } => "invalid-grant",
+            Self::Banned { .. } => "account-banned",
+            Self::RetryableTransport { .. } => "transport-not-sent",
+            Self::Transport { .. } => "transport-ambiguous",
+        }
+    }
+}
+
+/// 当前 OAuth 刷新请求收到的完整非成功响应。
+///
+/// 该值不持久化；`Debug` 不输出正文。调用方仅在受控刷新失败日志中显式记录正文。
+#[derive(Clone, PartialEq, Eq)]
+pub struct RefreshUpstreamFailure {
+    status: u16,
+    body: String,
+}
+
+impl RefreshUpstreamFailure {
+    fn new(status: StatusCode, body: &[u8]) -> Self {
+        Self {
+            status: status.as_u16(),
+            body: String::from_utf8_lossy(body).into_owned(),
+        }
+    }
+
+    #[must_use]
+    pub const fn status(&self) -> u16 {
+        self.status
+    }
+
+    #[must_use]
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+}
+
+impl fmt::Debug for RefreshUpstreamFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RefreshUpstreamFailure")
+            .field("status", &self.status)
+            .field("body", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Codex token 刷新端口。
@@ -186,6 +276,13 @@ struct RefreshTokenResponse {
     expires_in: Option<u64>,
 }
 
+#[derive(Serialize)]
+struct RefreshTokenRequest<'a> {
+    client_id: &'a str,
+    grant_type: &'static str,
+    refresh_token: &'a str,
+}
+
 #[derive(Deserialize)]
 struct RefreshErrorResponse {
     error: Option<RefreshError>,
@@ -220,7 +317,6 @@ impl RefreshErrorResponse {
             Some(RefreshError::Details(error)) => error.message.as_deref(),
             Some(RefreshError::Code(_)) | None => None,
         }
-        .filter(|message| !message.trim().is_empty())
         .map(ToOwned::to_owned)
     }
 }
@@ -239,11 +335,11 @@ impl TokenRefresher for OpenAiTokenClient {
         let response = self
             .client
             .post(&self.config.token_endpoint)
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("client_id", self.config.client_id.as_str()),
-                ("refresh_token", refresh_token),
-            ])
+            .json(&RefreshTokenRequest {
+                client_id: self.config.client_id.as_str(),
+                grant_type: "refresh_token",
+                refresh_token,
+            })
             .send()
             .await
             .map_err(|error| refresh_transport_failure(&error))?;
@@ -251,7 +347,10 @@ impl TokenRefresher for OpenAiTokenClient {
         if !status.is_success() {
             return Err(classify_refresh_failure(status, &body));
         }
-        parse_token_pair(&body).map_err(|()| RefreshFailure::Transport)
+        parse_token_pair(&body).map_err(|()| RefreshFailure::Transport {
+            message: Some("OpenAI OAuth refresh returned an invalid success response".to_owned()),
+            upstream: None,
+        })
     }
 }
 
@@ -312,13 +411,21 @@ async fn read_bounded_response(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| RefreshFailure::Transport)?
+        .map_err(|error| RefreshFailure::Transport {
+            message: Some(error.to_string()),
+            upstream: None,
+        })?
     {
         let next_len = body
             .len()
             .checked_add(chunk.len())
             .filter(|length| *length <= MAX_OAUTH_RESPONSE_BYTES)
-            .ok_or(RefreshFailure::Transport)?;
+            .ok_or_else(|| RefreshFailure::Transport {
+                message: Some(format!(
+                    "OpenAI OAuth response exceeded {MAX_OAUTH_RESPONSE_BYTES} bytes"
+                )),
+                upstream: None,
+            })?;
         body.reserve(next_len.saturating_sub(body.len()));
         body.extend_from_slice(&chunk);
     }
@@ -351,23 +458,34 @@ fn optional_expiry(value: Option<u64>) -> Option<Duration> {
 }
 
 fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
-    // 5xx 与 429 按状态码判为瞬态：其正文（CDN/网关页等）不是权威 OAuth 错误响应，
-    // 不据此终态失效账号。
-    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
-        return RefreshFailure::Transport;
-    }
     // 官方刷新错误的消息与错误码分别位于 `error.message`、`error.code`；
     // `error` 字符串与顶层 `code` 仅用于兼容官方客户端自身的错误码提取契约。
-    let Ok(error) = serde_json::from_slice::<RefreshErrorResponse>(body) else {
-        return RefreshFailure::Transport;
+    let error = serde_json::from_slice::<RefreshErrorResponse>(body).ok();
+    let message = Some(refresh_failure_message(error.as_ref(), body));
+    let upstream = || Some(Box::new(RefreshUpstreamFailure::new(status, body)));
+    // 5xx 与 429 按状态码判为瞬态：其正文（CDN/网关页等）不是权威 OAuth 错误响应，
+    // 不据此终态失效账号，但官方 `error.message` 仍用于本次诊断。
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        return RefreshFailure::Transport {
+            message,
+            upstream: upstream(),
+        };
+    }
+    let Some(error) = error else {
+        return RefreshFailure::Transport {
+            message,
+            upstream: upstream(),
+        };
     };
-    let message = error.message();
     if message.as_deref().is_some_and(|message| {
         message
             .to_ascii_lowercase()
             .contains("account has been deactivated")
     }) {
-        return RefreshFailure::Banned { message };
+        return RefreshFailure::Banned {
+            message,
+            upstream: upstream(),
+        };
     }
     let normalized_code = error.code().map(str::to_ascii_lowercase);
     if matches!(
@@ -381,16 +499,36 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
                 | "refresh_token_invalidated"
         )
     ) {
-        return RefreshFailure::InvalidGrant { message };
+        return RefreshFailure::InvalidGrant {
+            message,
+            upstream: upstream(),
+        };
     }
-    RefreshFailure::Transport
+    RefreshFailure::Transport {
+        message,
+        upstream: upstream(),
+    }
+}
+
+fn refresh_failure_message(error: Option<&RefreshErrorResponse>, body: &[u8]) -> String {
+    if let Some(message) = error.and_then(RefreshErrorResponse::message) {
+        return message;
+    }
+    if body.is_empty() {
+        return "Unknown error".to_owned();
+    }
+    String::from_utf8_lossy(body).into_owned()
 }
 
 fn refresh_transport_failure(error: &reqwest::Error) -> RefreshFailure {
+    let message = error.to_string();
     if is_safe_to_retry_refresh_transport(error) {
-        RefreshFailure::RetryableTransport
+        RefreshFailure::RetryableTransport { message }
     } else {
-        RefreshFailure::Transport
+        RefreshFailure::Transport {
+            message: Some(message),
+            upstream: None,
+        }
     }
 }
 

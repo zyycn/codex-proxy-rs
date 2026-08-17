@@ -46,7 +46,10 @@ async fn oversized_chunked_oauth_response_should_fail_closed_and_redact_body() {
         .expect_err("oversized response must fail closed before body classification");
     let diagnostic = format!("{failure:?} {failure}");
 
-    assert_eq!(failure, RefreshFailure::Transport);
+    assert!(matches!(
+        failure,
+        RefreshFailure::Transport { upstream: None, .. }
+    ));
     assert!(!diagnostic.contains(marker));
     assert!(!diagnostic.contains("refresh-secret-request-marker"));
 }
@@ -95,7 +98,10 @@ async fn refresh_response_should_reject_a_malformed_rotated_id_token() {
         .await
         .expect_err("malformed ID token must not replace the stored token set");
 
-    assert_eq!(failure, RefreshFailure::Transport);
+    assert!(matches!(
+        failure,
+        RefreshFailure::Transport { upstream: None, .. }
+    ));
 }
 
 #[tokio::test]
@@ -142,7 +148,7 @@ async fn refresh_response_keeps_the_upstream_rotated_token_verbatim() {
 }
 
 #[tokio::test]
-async fn refresh_should_exchange_the_official_form_fields() {
+async fn refresh_should_exchange_the_official_json_fields() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -160,11 +166,24 @@ async fn refresh_should_exchange_the_official_form_fields() {
         .await
         .expect("refresh succeeds");
     let requests = server.received_requests().await.expect("received request");
-    let body = String::from_utf8(requests[0].body.clone()).expect("form body is UTF-8");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("JSON request body");
 
-    assert!(body.contains("grant_type=refresh_token"));
-    assert!(body.contains("client_id=test-public-client"));
-    assert!(body.contains("refresh_token=refresh+secret"));
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "client_id": "test-public-client",
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh secret"
+        })
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
 }
 
 #[tokio::test]
@@ -280,23 +299,27 @@ async fn refresh_token_reuse_should_be_classified_as_invalid_grant() {
     )
     .await;
 
-    assert_eq!(
-        failure,
-        RefreshFailure::InvalidGrant {
-            message: Some(upstream_message.to_owned())
-        }
-    );
+    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
+        panic!("refresh-token reuse must be terminal");
+    };
+    assert_eq!(message.as_deref(), Some(upstream_message));
+    let upstream = upstream.expect("complete upstream failure");
+    assert_eq!(upstream.status(), 400);
+    assert!(upstream.body().contains(r#""code":"refresh_token_reused""#));
 }
 
 #[tokio::test]
-async fn oauth_error_description_should_not_be_used_as_the_upstream_message() {
-    let failure = refresh_failure(
-        400,
-        r#"{"error":"invalid_grant","error_description":"not the official refresh error message field"}"#,
-    )
-    .await;
+async fn oauth_error_without_nested_message_should_use_the_complete_body() {
+    let body = r#"{"error":"invalid_grant","error_description":"not the official refresh error message field"}"#;
+    let failure = refresh_failure(400, body).await;
+    let diagnostic = format!("{failure:?} {failure}");
 
-    assert_eq!(failure, RefreshFailure::InvalidGrant { message: None });
+    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
+        panic!("invalid_grant must be terminal");
+    };
+    assert_eq!(message.as_deref(), Some(body));
+    assert_eq!(upstream.expect("complete upstream failure").body(), body);
+    assert!(!diagnostic.contains("error_description"));
 }
 
 #[tokio::test]
@@ -307,40 +330,39 @@ async fn deactivated_account_should_be_classified_as_banned() {
     )
     .await;
 
-    assert_eq!(
-        failure,
-        RefreshFailure::Banned {
-            message: Some("account has been deactivated".to_owned())
-        }
-    );
+    let RefreshFailure::Banned { message, upstream } = failure else {
+        panic!("deactivated account must be banned");
+    };
+    assert_eq!(message.as_deref(), Some("account has been deactivated"));
+    assert_eq!(upstream.expect("complete upstream failure").status(), 403);
 }
 
 #[tokio::test]
 async fn generic_banned_text_should_not_impersonate_the_deactivation_contract() {
     let failure = refresh_failure(403, "account is banned").await;
 
-    assert_eq!(failure, RefreshFailure::Transport);
+    assert_transport_failure(&failure, 403, "account is banned", "account is banned");
 }
 
 #[tokio::test]
 async fn unregistered_disabled_account_text_should_remain_a_transport_failure() {
     let failure = refresh_failure(400, "account disabled").await;
 
-    assert_eq!(failure, RefreshFailure::Transport);
+    assert_transport_failure(&failure, 400, "account disabled", "account disabled");
 }
 
 #[tokio::test]
 async fn quota_text_should_not_disable_the_oauth_credential() {
     let failure = refresh_failure(400, "quota exceeded").await;
 
-    assert_eq!(failure, RefreshFailure::Transport);
+    assert_transport_failure(&failure, 400, "quota exceeded", "quota exceeded");
 }
 
 #[tokio::test]
 async fn token_revoked_text_without_invalid_grant_should_remain_temporary() {
     let failure = refresh_failure(400, "token_revoked").await;
 
-    assert_eq!(failure, RefreshFailure::Transport);
+    assert_transport_failure(&failure, 400, "token_revoked", "token_revoked");
 }
 
 #[tokio::test]
@@ -353,12 +375,27 @@ async fn server_error_or_rate_limit_must_stay_transient_even_with_oauth_error_bo
             r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
         )
         .await;
-        assert_eq!(
-            failure,
-            RefreshFailure::Transport,
-            "status {status} must classify as transient"
+        assert_transport_failure(
+            &failure,
+            status,
+            "Refresh token expired.",
+            r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
         );
     }
+}
+
+fn assert_transport_failure(failure: &RefreshFailure, status: u16, message: &str, body: &str) {
+    let RefreshFailure::Transport {
+        message: actual_message,
+        upstream,
+    } = failure
+    else {
+        panic!("status {status} must classify as transient");
+    };
+    assert_eq!(actual_message.as_deref(), Some(message));
+    let upstream = upstream.as_deref().expect("complete upstream failure");
+    assert_eq!(upstream.status(), status);
+    assert_eq!(upstream.body(), body);
 }
 
 async fn refresh_failure(status: u16, body: &str) -> RefreshFailure {

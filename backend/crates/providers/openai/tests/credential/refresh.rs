@@ -78,7 +78,10 @@ impl TokenRefresher for SingleUseRefresher {
             .lock()
             .expect("refresh response lock")
             .take()
-            .ok_or(RefreshFailure::Transport)
+            .ok_or_else(|| RefreshFailure::Transport {
+                message: Some("test refresh response is exhausted".to_owned()),
+                upstream: None,
+            })
     }
 }
 
@@ -288,6 +291,7 @@ async fn scheduled_refresh_persists_the_original_upstream_error_message() {
         Arc::new(FailingRefresher {
             failure: RefreshFailure::InvalidGrant {
                 message: Some(upstream_message.to_owned()),
+                upstream: None,
             },
         }),
         Arc::new(RefreshLeases),
