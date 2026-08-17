@@ -1,10 +1,6 @@
 //! Codex Authorization Code + PKCE/OIDC 管理流。
 
-use std::{
-    fmt,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -35,7 +31,7 @@ use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
-use super::types::parse_chatgpt_jwt_claims;
+use super::types::{parse_access_token_expiration, parse_chatgpt_jwt_claims};
 use crate::transport::profile::CodexWireProfileState;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
@@ -527,13 +523,12 @@ impl CodexOAuthAdminService {
             .map(current_oauth_refresh_token)
             .transpose()?
             .flatten();
-        let (mut secret, id_token, expires_in) = self
+        let (mut secret, id_token) = self
             .exchange_pending(&pending, callback_url, fallback_refresh_token)
             .await?;
         let mutation = pending.mutation.clone();
-        let access_token_expires_at = expires_in
-            .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
-            .map(DateTime::<Utc>::from);
+        let access_token_expires_at =
+            parse_access_token_expiration(secret.access_token.expose_secret());
         let metadata = parse_chatgpt_jwt_claims(id_token.expose_secret())
             .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
         secret.id_token = Some(id_token);
@@ -671,14 +666,7 @@ impl CodexOAuthAdminService {
         pending: &CodexPendingAuthorization,
         callback_url: &str,
         fallback_refresh_token: Option<SecretString>,
-    ) -> Result<
-        (
-            super::types::CodexOAuthSecret,
-            SecretString,
-            Option<Duration>,
-        ),
-        CodexOAuthAdminError,
-    > {
+    ) -> Result<(super::types::CodexOAuthSecret, SecretString), CodexOAuthAdminError> {
         let (code, callback_state) = callback_parts(callback_url)?;
         if !constant_time_equal(
             pending.state.expose_secret().as_bytes(),
@@ -709,7 +697,7 @@ impl CodexOAuthAdminService {
                 .as_ref()
                 .map(ExposeSecret::expose_secret),
         );
-        Ok((secret, tokens.id_token, tokens.expires_in))
+        Ok((secret, tokens.id_token))
     }
 }
 

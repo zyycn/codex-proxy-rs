@@ -112,7 +112,6 @@ impl AuthorizationCodeExchanger for Exchanger {
                 id_token: None,
             },
             id_token: SecretString::from(self.id_token.clone()),
-            expires_in: Some(Duration::from_secs(60 * 60)),
         })
     }
 }

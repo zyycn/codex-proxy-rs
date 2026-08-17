@@ -27,9 +27,6 @@ pub struct TokenPair {
     pub refresh_token: Option<String>,
     /// 官方刷新响应省略时由持久化调用方保留当前 ID token。
     pub id_token: Option<String>,
-    /// OAuth endpoint 可以省略或返回零 expiry；这不影响已经成功的 token
-    /// exchange，只意味着调用方不能据此安排下一次刷新。
-    pub expires_in: Option<Duration>,
 }
 
 impl fmt::Debug for TokenPair {
@@ -45,7 +42,6 @@ impl fmt::Debug for TokenPair {
                 &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
             )
             .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
-            .field("expires_in", &self.expires_in)
             .finish()
     }
 }
@@ -121,13 +117,21 @@ impl RefreshFailure {
 #[derive(Clone, PartialEq, Eq)]
 pub struct RefreshUpstreamFailure {
     status: u16,
+    code: Option<String>,
+    error_type: Option<String>,
     body: String,
 }
 
 impl RefreshUpstreamFailure {
-    fn new(status: StatusCode, body: &[u8]) -> Self {
+    fn new(status: StatusCode, body: &[u8], error: Option<&RefreshErrorResponse>) -> Self {
         Self {
             status: status.as_u16(),
+            code: error
+                .and_then(RefreshErrorResponse::code)
+                .map(str::to_owned),
+            error_type: error
+                .and_then(RefreshErrorResponse::error_type)
+                .map(str::to_owned),
             body: String::from_utf8_lossy(body).into_owned(),
         }
     }
@@ -135,6 +139,16 @@ impl RefreshUpstreamFailure {
     #[must_use]
     pub const fn status(&self) -> u16 {
         self.status
+    }
+
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+
+    #[must_use]
+    pub fn error_type(&self) -> Option<&str> {
+        self.error_type.as_deref()
     }
 
     #[must_use]
@@ -148,6 +162,8 @@ impl fmt::Debug for RefreshUpstreamFailure {
         formatter
             .debug_struct("RefreshUpstreamFailure")
             .field("status", &self.status)
+            .field("code", &self.code)
+            .field("error_type", &self.error_type)
             .field("body", &"<redacted>")
             .finish()
     }
@@ -182,7 +198,6 @@ impl fmt::Debug for AuthorizationCodeGrant {
 pub struct AuthorizationTokenSet {
     pub secret: crate::credential::CodexOAuthSecret,
     pub id_token: SecretString,
-    pub expires_in: Option<Duration>,
 }
 
 impl fmt::Debug for AuthorizationTokenSet {
@@ -191,7 +206,6 @@ impl fmt::Debug for AuthorizationTokenSet {
             .debug_struct("AuthorizationTokenSet")
             .field("secret", &"[REDACTED]")
             .field("id_token", &"[REDACTED]")
-            .field("expires_in", &self.expires_in)
             .finish()
     }
 }
@@ -273,7 +287,6 @@ struct RefreshTokenResponse {
     access_token: Option<String>,
     refresh_token: Option<String>,
     id_token: Option<String>,
-    expires_in: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -300,6 +313,8 @@ enum RefreshError {
 struct RefreshErrorDetails {
     code: Option<String>,
     message: Option<String>,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
 }
 
 impl RefreshErrorResponse {
@@ -319,6 +334,13 @@ impl RefreshErrorResponse {
         }
         .map(ToOwned::to_owned)
     }
+
+    fn error_type(&self) -> Option<&str> {
+        match self.error.as_ref() {
+            Some(RefreshError::Details(error)) => error.error_type.as_deref(),
+            Some(RefreshError::Code(_)) | None => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -326,7 +348,6 @@ struct AuthorizationCodeResponse {
     access_token: String,
     refresh_token: String,
     id_token: String,
-    expires_in: Option<u64>,
 }
 
 #[async_trait]
@@ -398,7 +419,6 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
                 id_token: None,
             },
             id_token,
-            expires_in: optional_expiry(tokens.expires_in),
         })
     }
 }
@@ -447,14 +467,7 @@ fn parse_token_pair(body: &[u8]) -> Result<TokenPair, ()> {
         refresh_token: tokens.refresh_token,
         // 官方刷新响应允许省略 ID token；缺失时由调用方保留当前值。
         id_token: tokens.id_token,
-        expires_in: optional_expiry(tokens.expires_in),
     })
-}
-
-fn optional_expiry(value: Option<u64>) -> Option<Duration> {
-    value
-        .filter(|seconds| *seconds > 0)
-        .map(Duration::from_secs)
 }
 
 fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
@@ -462,44 +475,35 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
     // `error` 字符串与顶层 `code` 仅用于兼容官方客户端自身的错误码提取契约。
     let error = serde_json::from_slice::<RefreshErrorResponse>(body).ok();
     let message = Some(refresh_failure_message(error.as_ref(), body));
-    let upstream = || Some(Box::new(RefreshUpstreamFailure::new(status, body)));
-    // 5xx 与 429 按状态码判为瞬态：其正文（CDN/网关页等）不是权威 OAuth 错误响应，
-    // 不据此终态失效账号，但官方 `error.message` 仍用于本次诊断。
-    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
-        return RefreshFailure::Transport {
+    let upstream = || {
+        Some(Box::new(RefreshUpstreamFailure::new(
+            status,
+            body,
+            error.as_ref(),
+        )))
+    };
+    let normalized_code = error
+        .as_ref()
+        .and_then(RefreshErrorResponse::code)
+        .map(str::to_ascii_lowercase);
+    // 与官方 Codex 相同：三个明确的 RT 原因在任意 HTTP 状态下都是永久失败；
+    // 此外任意 401 永久失败，其他未知 OAuth code 保持暂态。
+    if matches!(
+        normalized_code.as_deref(),
+        Some("refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated")
+    ) || status == StatusCode::UNAUTHORIZED
+    {
+        return RefreshFailure::InvalidGrant {
             message,
             upstream: upstream(),
         };
     }
-    let Some(error) = error else {
-        return RefreshFailure::Transport {
-            message,
-            upstream: upstream(),
-        };
-    };
     if message.as_deref().is_some_and(|message| {
         message
             .to_ascii_lowercase()
             .contains("account has been deactivated")
     }) {
         return RefreshFailure::Banned {
-            message,
-            upstream: upstream(),
-        };
-    }
-    let normalized_code = error.code().map(str::to_ascii_lowercase);
-    if matches!(
-        normalized_code.as_deref(),
-        Some(
-            "invalid_grant"
-                | "invalid_token"
-                | "access_denied"
-                | "refresh_token_expired"
-                | "refresh_token_reused"
-                | "refresh_token_invalidated"
-        )
-    ) {
-        return RefreshFailure::InvalidGrant {
             message,
             upstream: upstream(),
         };

@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{DateTime, TimeZone as _, Utc};
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{ProviderAccountId, ProviderAccountStore};
 use gateway_core::policy::ClientApiKeyId;
@@ -36,7 +37,6 @@ impl SingleUseRefresher {
                 access_token: Some("refreshed-access-token".to_owned()),
                 refresh_token: None,
                 id_token: None,
-                expires_in: Some(Duration::from_secs(60 * 60)),
             })),
         })
     }
@@ -52,7 +52,17 @@ impl SingleUseRefresher {
                 access_token: Some("refreshed-access-token".to_owned()),
                 refresh_token: None,
                 id_token: Some(id_token.to_owned()),
-                expires_in: Some(Duration::from_secs(60 * 60)),
+            })),
+        })
+    }
+
+    fn with_access_token(access_token: String) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            response: Mutex::new(Some(TokenPair {
+                access_token: Some(access_token),
+                refresh_token: None,
+                id_token: None,
             })),
         })
     }
@@ -64,7 +74,6 @@ impl SingleUseRefresher {
                 access_token: None,
                 refresh_token: None,
                 id_token: None,
-                expires_in: Some(Duration::from_secs(60 * 60)),
             })),
         })
     }
@@ -358,6 +367,48 @@ async fn scheduled_refresh_persists_a_returned_id_token() {
             .and_then(|oauth| oauth.id_token.as_ref())
             .map(SecretString::expose_secret),
         Some("header.rotated-id.signature")
+    );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_uses_the_rotated_access_token_jwt_expiration() {
+    let expires_at = Utc
+        .timestamp_opt(2_000_000_000, 0)
+        .single()
+        .expect("valid test timestamp");
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({"exp": expires_at.timestamp()}))
+            .expect("test JWT payload"),
+    );
+    let refresher = SingleUseRefresher::with_access_token(format!(
+        "unverified-header.{payload}.unverified-signature"
+    ));
+    let store = Arc::new(MemoryAccountStore::default());
+    let service = refresh_service(
+        &store,
+        refresher,
+        MutableRuntimePolicy::new(Duration::from_secs(5 * 60)),
+    );
+    let account_id = "acct_rotated_access_expiration";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_add(Duration::from_secs(120))
+            .expect("test expiry"),
+        None,
+    )
+    .await;
+
+    service.refresh_due().await.expect("refresh cycle");
+
+    assert_eq!(
+        store
+            .account(account_id)
+            .expect("refreshed account")
+            .access_token_expires_at()
+            .map(DateTime::<Utc>::from),
+        Some(expires_at)
     );
 }
 

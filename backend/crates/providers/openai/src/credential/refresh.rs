@@ -21,7 +21,7 @@ use thiserror::Error;
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::token_client::{RefreshFailure, RefreshUpstreamFailure, TokenPair, TokenRefresher};
-use super::types::CodexOAuthSecret;
+use super::types::{CodexOAuthSecret, parse_access_token_expiration};
 
 const PROVIDER_NAME: &str = "openai";
 const MAX_REFRESH_BATCH: u32 = 1_000;
@@ -101,6 +101,8 @@ fn log_refresh_deferred(
         reason,
         upstream_message = ?upstream_message,
         upstream_status = ?upstream.map(RefreshUpstreamFailure::status),
+        upstream_code = ?upstream.and_then(RefreshUpstreamFailure::code),
+        upstream_type = ?upstream.and_then(RefreshUpstreamFailure::error_type),
         upstream_body = ?upstream.map(RefreshUpstreamFailure::body),
         retry_at = %DateTime::<Utc>::from(retry_at),
         access_token_expires_at = ?access_token_expires_at.map(DateTime::<Utc>::from),
@@ -437,9 +439,11 @@ impl CodexCredentialRefreshService {
             access_token,
             refresh_token: rotated_refresh_token,
             id_token: rotated_id_token,
-            expires_in,
         } = tokens;
-        let access_token_rotated = access_token.is_some();
+        let access_token_expires_at = match access_token.as_deref() {
+            Some(access_token) => parse_access_token_expiration(access_token).map(SystemTime::from),
+            None => due.account.access_token_expires_at(),
+        };
         let CodexOAuthSecret {
             access_token: current_access_token,
             refresh_token: current_refresh_token,
@@ -466,12 +470,6 @@ impl CodexCredentialRefreshService {
                 .as_ref()
                 .map(ExposeSecret::expose_secret),
         );
-        let observed_at = SystemTime::now();
-        let access_token_expires_at = if access_token_rotated {
-            expires_in.and_then(|value| observed_at.checked_add(value))
-        } else {
-            due.account.access_token_expires_at()
-        };
         // 成功轮换清掉仅用于失败退避的 retry-not-before；正常预刷新窗口由
         // worker 结合当前 runtime policy 动态判断，不写入账号时间字段。
         let next_refresh_at = None;
@@ -553,6 +551,8 @@ impl CodexCredentialRefreshService {
                     reason,
                     upstream_message = ?message.as_deref(),
                     upstream_status = ?upstream.map(RefreshUpstreamFailure::status),
+                    upstream_code = ?upstream.and_then(RefreshUpstreamFailure::code),
+                    upstream_type = ?upstream.and_then(RefreshUpstreamFailure::error_type),
                     upstream_body = ?upstream.map(RefreshUpstreamFailure::body),
                     access_token_expires_at = ?account.access_token_expires_at()
                         .map(DateTime::<Utc>::from),

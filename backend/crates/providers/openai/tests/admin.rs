@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone as _, Utc};
 use futures::future::BoxFuture;
 use gateway_admin::model::accounts::AccountRecord;
@@ -760,6 +761,61 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
         .await
         .expect_err("missing refresh target");
     assert_eq!(refresh_error.kind(), ProviderAdminErrorKind::NotFound);
+}
+
+#[tokio::test]
+async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_rotation_expiration".to_owned(),
+            name: "admin rotation expiration".to_owned(),
+            secret: secret("admin-rotation-access"),
+            verified_account: profile("chatgpt-admin-rotation-expiration"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let account = store
+        .account("acct_admin_rotation_expiration")
+        .expect("stored account");
+    let record = account_record(&account);
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let expires_at = Utc
+        .timestamp_opt(2_000_000_000, 0)
+        .single()
+        .expect("valid test timestamp");
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({"exp": expires_at.timestamp()}))
+            .expect("test JWT payload"),
+    );
+    let mut material = Map::new();
+    material.insert(
+        "access_token".to_owned(),
+        Value::String(format!("unverified-header.{payload}.unverified-signature")),
+    );
+    material.insert(
+        "refresh_token".to_owned(),
+        Value::String("admin-rotation-refresh".to_owned()),
+    );
+
+    let prepared = bundle
+        .admin_provider()
+        .prepare_rotation(PrepareCredentialRotation {
+            account: record,
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(material)),
+        })
+        .await
+        .expect("JWT rotation should be prepared");
+
+    assert_eq!(prepared.facts().access_token_expires_at, Some(expires_at));
 }
 
 fn provider_ports() -> ProviderStorePorts {

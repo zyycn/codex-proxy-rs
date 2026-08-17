@@ -819,7 +819,13 @@ impl CodexCredentialAdminService {
             .await
             .inspect_err(|error| log_manual_refresh_failure(&account_id, error))
             .map_err(map_refresh_failure)?;
-        let access_token_rotated = tokens.access_token.is_some();
+        let access_token_expires_at = match tokens.access_token.as_deref() {
+            Some(access_token) => parse_access_token_expiration(access_token),
+            None => current
+                .account
+                .access_token_expires_at()
+                .map(DateTime::<Utc>::from),
+        };
         let secret = CodexOAuthSecret {
             access_token: tokens
                 .access_token
@@ -839,17 +845,6 @@ impl CodexCredentialAdminService {
             Some(account_id.as_str()),
             &secret,
         );
-        let access_token_expires_at = if access_token_rotated {
-            tokens
-                .expires_in
-                .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
-                .map(DateTime::<Utc>::from)
-        } else {
-            current
-                .account
-                .access_token_expires_at()
-                .map(DateTime::<Utc>::from)
-        };
         // 正常预刷新由 worker 读取当时的 runtime policy 动态判断；这里仅清除
         // 之前瞬态失败留下的 retry-not-before。
         let next_refresh_at = None;
@@ -1016,6 +1011,7 @@ impl CodexCredentialAdminService {
         let access_token = tokens
             .access_token
             .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+        let access_token_expires_at = parse_access_token_expiration(&access_token);
         let secret = CodexOAuthSecret {
             access_token: SecretString::from(access_token),
             // RT 未轮换时仍保留导入提供的 RT，保证本次补全不会丢失后续刷新能力。
@@ -1030,10 +1026,6 @@ impl CodexCredentialAdminService {
             Some(account_id.as_str()),
             &secret,
         );
-        let access_token_expires_at = tokens
-            .expires_in
-            .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
-            .map(DateTime::<Utc>::from);
         Ok((secret, access_token_expires_at))
     }
 
@@ -1173,6 +1165,8 @@ fn log_manual_refresh_failure(account_id: &ProviderAccountId, error: &RefreshFai
         failure_class = error.classification(),
         upstream_message = ?error.message(),
         upstream_status = ?upstream.map(super::token_client::RefreshUpstreamFailure::status),
+        upstream_code = ?upstream.and_then(super::token_client::RefreshUpstreamFailure::code),
+        upstream_type = ?upstream.and_then(super::token_client::RefreshUpstreamFailure::error_type),
         upstream_body = ?upstream.map(super::token_client::RefreshUpstreamFailure::body),
         "OpenAI OAuth manual refresh failed"
     );

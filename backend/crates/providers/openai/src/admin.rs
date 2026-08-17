@@ -49,7 +49,9 @@ use crate::credential::{
     CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
     StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
-use crate::credential::{CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref};
+use crate::credential::{
+    CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
+};
 use crate::transport::CodexWebSocketPool;
 use crate::transport::profile::{
     CodexDesktopReleaseSnapshot, CodexDesktopReleaseStatus, CodexWireProfile, CodexWireProfileState,
@@ -380,8 +382,10 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .oauth()
                 .and_then(|oauth| oauth.id_token.clone());
         }
+        let access_token_expires_at =
+            parse_access_token_expiration(secret.access_token.expose_secret());
         let prepared = CodexCredentialAdmin
-            .prepare_refreshed_oauth_rotation(current, secret, None, None)
+            .prepare_refreshed_oauth_rotation(current, secret, access_token_expires_at, None)
             .map_err(map_credential_admin_error)?;
         prepared_rotation(prepared, command.account.provider_kind)
     }

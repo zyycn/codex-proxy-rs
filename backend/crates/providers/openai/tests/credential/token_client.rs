@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use provider_openai::credential::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OpenAiTokenClient, RefreshFailure, TokenClientConfig, TokenRefresher,
@@ -55,7 +53,7 @@ async fn oversized_chunked_oauth_response_should_fail_closed_and_redact_body() {
 }
 
 #[tokio::test]
-async fn bounded_oauth_response_should_parse_lifetime_and_rotated_token() {
+async fn bounded_oauth_response_should_parse_the_official_rotated_token_fields() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -77,7 +75,6 @@ async fn bounded_oauth_response_should_parse_lifetime_and_rotated_token() {
     assert_eq!(tokens.access_token.as_deref(), Some("access-rotated"));
     assert_eq!(tokens.refresh_token.as_deref(), Some("refresh-rotated"));
     assert_eq!(tokens.id_token.as_deref(), Some("header.e30.signature"));
-    assert_eq!(tokens.expires_in, Some(Duration::from_secs(3600)));
 }
 
 #[tokio::test]
@@ -122,7 +119,6 @@ async fn refresh_response_should_allow_all_rotated_tokens_to_be_omitted() {
     assert!(tokens.access_token.is_none());
     assert!(tokens.refresh_token.is_none());
     assert!(tokens.id_token.is_none());
-    assert!(tokens.expires_in.is_none());
 }
 
 #[tokio::test]
@@ -305,21 +301,48 @@ async fn refresh_token_reuse_should_be_classified_as_invalid_grant() {
     assert_eq!(message.as_deref(), Some(upstream_message));
     let upstream = upstream.expect("complete upstream failure");
     assert_eq!(upstream.status(), 400);
+    assert_eq!(upstream.code(), Some("refresh_token_reused"));
+    assert_eq!(upstream.error_type(), Some("invalid_request_error"));
     assert!(upstream.body().contains(r#""code":"refresh_token_reused""#));
 }
 
 #[tokio::test]
-async fn oauth_error_without_nested_message_should_use_the_complete_body() {
+async fn generic_invalid_grant_should_remain_transient_like_official_codex() {
     let body = r#"{"error":"invalid_grant","error_description":"not the official refresh error message field"}"#;
     let failure = refresh_failure(400, body).await;
     let diagnostic = format!("{failure:?} {failure}");
 
-    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
-        panic!("invalid_grant must be terminal");
+    let RefreshFailure::Transport { message, upstream } = failure else {
+        panic!("unknown official refresh code must remain transient");
     };
     assert_eq!(message.as_deref(), Some(body));
-    assert_eq!(upstream.expect("complete upstream failure").body(), body);
+    let upstream = upstream.expect("complete upstream failure");
+    assert_eq!(upstream.code(), Some("invalid_grant"));
+    assert_eq!(upstream.body(), body);
     assert!(!diagnostic.contains("error_description"));
+}
+
+#[tokio::test]
+async fn unauthorized_without_a_known_refresh_code_should_be_permanent() {
+    let body = r#"{
+        "error": {
+            "message": "Invalid refresh token.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "invalid_refresh_token"
+        }
+    }"#;
+    let failure = refresh_failure(401, body).await;
+
+    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
+        panic!("official Codex treats every 401 as permanent");
+    };
+    assert_eq!(message.as_deref(), Some("Invalid refresh token."));
+    let upstream = upstream.expect("complete upstream failure");
+    assert_eq!(upstream.status(), 401);
+    assert_eq!(upstream.code(), Some("invalid_refresh_token"));
+    assert_eq!(upstream.error_type(), Some("invalid_request_error"));
+    assert_eq!(upstream.body(), body);
 }
 
 #[tokio::test]
@@ -366,21 +389,26 @@ async fn token_revoked_text_without_invalid_grant_should_remain_temporary() {
 }
 
 #[tokio::test]
-async fn server_error_or_rate_limit_must_stay_transient_even_with_oauth_error_body() {
-    // 5xx/429（含 CDN/网关页恰好嵌入 invalid_grant 字样）按状态码判瞬态，
-    // 不因正文子串把账号永久终态——正文只在 4xx 时才是权威 OAuth 错误。
+async fn official_refresh_code_should_be_permanent_regardless_of_http_status() {
     for status in [500, 502, 503, 429] {
         let failure = refresh_failure(
             status,
             r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
         )
         .await;
-        assert_transport_failure(
-            &failure,
-            status,
-            "Refresh token expired.",
-            r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
+        assert!(
+            matches!(failure, RefreshFailure::InvalidGrant { .. }),
+            "official refresh code must take precedence for status {status}"
         );
+    }
+}
+
+#[tokio::test]
+async fn unknown_server_error_or_rate_limit_should_remain_transient() {
+    let body = r#"{"error":{"code":"temporarily_unavailable","message":"Try again."}}"#;
+    for status in [500, 502, 503, 429] {
+        let failure = refresh_failure(status, body).await;
+        assert_transport_failure(&failure, status, "Try again.", body);
     }
 }
 
