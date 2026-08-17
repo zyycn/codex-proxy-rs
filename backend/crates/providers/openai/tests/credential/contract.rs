@@ -812,13 +812,15 @@ fn credential_expired_failure_keeps_expired_oauth_for_bounded_refresh_recovery()
     ))
     .expect("record credential expiry");
 
+    let retained = store
+        .account("acct_primary")
+        .expect("account retained for refresh");
+    assert_eq!(retained.credential_state(), CredentialState::Ready);
     assert_eq!(
-        store
-            .account("acct_primary")
-            .expect("account retained for refresh")
-            .credential_state(),
-        CredentialState::Ready
+        retained.last_error_reason(),
+        Some(AccountErrorReason::AccessTokenExpired)
     );
+    assert_eq!(retained.last_error_message(), Some("token_expired"));
 }
 
 #[test]

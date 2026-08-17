@@ -315,7 +315,7 @@ async fn generic_invalid_grant_should_remain_transient_like_official_codex() {
     let RefreshFailure::Transport { message, upstream } = failure else {
         panic!("unknown official refresh code must remain transient");
     };
-    assert_eq!(message.as_deref(), Some(body));
+    assert_eq!(message, None);
     let upstream = upstream.expect("complete upstream failure");
     assert_eq!(upstream.code(), Some("invalid_grant"));
     assert_eq!(upstream.body(), body);
@@ -323,7 +323,7 @@ async fn generic_invalid_grant_should_remain_transient_like_official_codex() {
 }
 
 #[tokio::test]
-async fn unauthorized_without_a_known_refresh_code_should_be_permanent() {
+async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
     let body = r#"{
         "error": {
             "message": "Invalid refresh token.",
@@ -334,8 +334,8 @@ async fn unauthorized_without_a_known_refresh_code_should_be_permanent() {
     }"#;
     let failure = refresh_failure(401, body).await;
 
-    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
-        panic!("official Codex treats every 401 as permanent");
+    let RefreshFailure::Transport { message, upstream } = failure else {
+        panic!("production policy gives every 401 a bounded recovery window");
     };
     assert_eq!(message.as_deref(), Some("Invalid refresh token."));
     let upstream = upstream.expect("complete upstream failure");
@@ -343,6 +343,22 @@ async fn unauthorized_without_a_known_refresh_code_should_be_permanent() {
     assert_eq!(upstream.code(), Some("invalid_refresh_token"));
     assert_eq!(upstream.error_type(), Some("invalid_request_error"));
     assert_eq!(upstream.body(), body);
+}
+
+#[tokio::test]
+async fn unauthorized_should_back_off_even_with_a_recognized_refresh_code() {
+    let failure = refresh_failure(
+        401,
+        r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
+    )
+    .await;
+
+    assert_transport_failure(
+        &failure,
+        401,
+        Some("Refresh token expired."),
+        r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
+    );
 }
 
 #[tokio::test]
@@ -364,32 +380,32 @@ async fn deactivated_account_should_be_classified_as_banned() {
 async fn generic_banned_text_should_not_impersonate_the_deactivation_contract() {
     let failure = refresh_failure(403, "account is banned").await;
 
-    assert_transport_failure(&failure, 403, "account is banned", "account is banned");
+    assert_transport_failure(&failure, 403, None, "account is banned");
 }
 
 #[tokio::test]
 async fn unregistered_disabled_account_text_should_remain_a_transport_failure() {
     let failure = refresh_failure(400, "account disabled").await;
 
-    assert_transport_failure(&failure, 400, "account disabled", "account disabled");
+    assert_transport_failure(&failure, 400, None, "account disabled");
 }
 
 #[tokio::test]
 async fn quota_text_should_not_disable_the_oauth_credential() {
     let failure = refresh_failure(400, "quota exceeded").await;
 
-    assert_transport_failure(&failure, 400, "quota exceeded", "quota exceeded");
+    assert_transport_failure(&failure, 400, None, "quota exceeded");
 }
 
 #[tokio::test]
 async fn token_revoked_text_without_invalid_grant_should_remain_temporary() {
     let failure = refresh_failure(400, "token_revoked").await;
 
-    assert_transport_failure(&failure, 400, "token_revoked", "token_revoked");
+    assert_transport_failure(&failure, 400, None, "token_revoked");
 }
 
 #[tokio::test]
-async fn official_refresh_code_should_be_permanent_regardless_of_http_status() {
+async fn recognized_refresh_code_should_be_permanent_on_non_unauthorized_status() {
     for status in [500, 502, 503, 429] {
         let failure = refresh_failure(
             status,
@@ -408,11 +424,16 @@ async fn unknown_server_error_or_rate_limit_should_remain_transient() {
     let body = r#"{"error":{"code":"temporarily_unavailable","message":"Try again."}}"#;
     for status in [500, 502, 503, 429] {
         let failure = refresh_failure(status, body).await;
-        assert_transport_failure(&failure, status, "Try again.", body);
+        assert_transport_failure(&failure, status, Some("Try again."), body);
     }
 }
 
-fn assert_transport_failure(failure: &RefreshFailure, status: u16, message: &str, body: &str) {
+fn assert_transport_failure(
+    failure: &RefreshFailure,
+    status: u16,
+    message: Option<&str>,
+    body: &str,
+) {
     let RefreshFailure::Transport {
         message: actual_message,
         upstream,
@@ -420,7 +441,7 @@ fn assert_transport_failure(failure: &RefreshFailure, status: u16, message: &str
     else {
         panic!("status {status} must classify as transient");
     };
-    assert_eq!(actual_message.as_deref(), Some(message));
+    assert_eq!(actual_message.as_deref(), message);
     let upstream = upstream.as_deref().expect("complete upstream failure");
     assert_eq!(upstream.status(), status);
     assert_eq!(upstream.body(), body);

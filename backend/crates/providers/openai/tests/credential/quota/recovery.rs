@@ -75,7 +75,7 @@ async fn quota_refresh_updates_access_fact_without_recovering_credential_error()
 }
 
 #[tokio::test]
-async fn exhausted_quota_worker_keeps_old_document_when_new_window_usage_is_high() {
+async fn exhausted_quota_worker_only_touches_refresh_time_when_recovery_is_rejected() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_worker_quota_recovery_gate";
     create_account(&store, account_id).await;
@@ -101,7 +101,7 @@ async fn exhausted_quota_worker_keeps_old_document_when_new_window_usage_is_high
         server.uri(),
     );
 
-    service
+    let old_snapshot = service
         .refresh_account(account.id())
         .await
         .expect("seed exhausted quota");
@@ -125,6 +125,14 @@ async fn exhausted_quota_worker_keeps_old_document_when_new_window_usage_is_high
     assert_eq!(summary.exhausted, 1);
     assert_eq!(summary.updated, 0);
     assert_eq!(store.quota_json(account_id), Some(old_quota));
+    let refreshed = service
+        .read_account(account.id())
+        .await
+        .expect("read refreshed quota")
+        .expect("refreshed quota snapshot");
+    assert!(refreshed.observed_at() > old_snapshot.observed_at());
+    assert_eq!(refreshed.fact(), old_snapshot.fact());
+    assert_eq!(refreshed.quota().access(), QuotaAccessState::Exhausted);
     assert_eq!(
         store
             .account(account_id)
@@ -137,10 +145,18 @@ async fn exhausted_quota_worker_keeps_old_document_when_new_window_usage_is_high
 
 #[tokio::test]
 async fn manual_quota_refresh_only_recovers_after_reset_advances_below_ten_percent() {
-    for (suffix, reset_at, used_percent, recovered) in [
-        ("same_reset", 1_900_000_000_i64, 0_u64, false),
-        ("exactly_ten", 1_900_003_600_i64, 10_u64, false),
-        ("below_ten", 1_900_003_600_i64, 9_u64, true),
+    for (suffix, allowed, limit_reached, reset_at, used_percent, recovered) in [
+        (
+            "still_exhausted",
+            false,
+            true,
+            1_900_003_600_i64,
+            0_u8,
+            false,
+        ),
+        ("same_reset", true, false, 1_900_000_000_i64, 0_u8, false),
+        ("exactly_ten", true, false, 1_900_003_600_i64, 10_u8, false),
+        ("below_ten", true, false, 1_900_003_600_i64, 9_u8, true),
     ] {
         let store = Arc::new(MemoryAccountStore::default());
         let account_id = format!("acct_manual_quota_recovery_{suffix}");
@@ -166,7 +182,7 @@ async fn manual_quota_refresh_only_recovers_after_reset_advances_below_ten_perce
                 .expect("client"),
             server.uri(),
         );
-        service
+        let old_snapshot = service
             .refresh_account(account.id())
             .await
             .expect("seed exhausted quota");
@@ -177,8 +193,8 @@ async fn manual_quota_refresh_only_recovers_after_reset_advances_below_ten_perce
             .and(path("/api/codex/usage"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "rate_limit": {
-                    "allowed": true,
-                    "limit_reached": false,
+                    "allowed": allowed,
+                    "limit_reached": limit_reached,
                     "primary_window": {"used_percent": used_percent, "reset_at": reset_at}
                 }
             })))
@@ -197,11 +213,12 @@ async fn manual_quota_refresh_only_recovers_after_reset_advances_below_ten_perce
             assert_ne!(store.quota_json(&account_id), Some(old_quota));
             assert_eq!(current.quota().access(), QuotaAccessState::Allowed);
         } else {
-            assert_eq!(snapshot.fact().remaining_percent(), Some(0));
+            assert_eq!(snapshot.fact(), old_snapshot.fact());
             assert_eq!(snapshot.quota().access(), QuotaAccessState::Exhausted);
             assert_eq!(store.quota_json(&account_id), Some(old_quota));
             assert_eq!(current.quota().access(), QuotaAccessState::Exhausted);
         }
+        assert!(snapshot.observed_at() > old_snapshot.observed_at());
     }
 }
 

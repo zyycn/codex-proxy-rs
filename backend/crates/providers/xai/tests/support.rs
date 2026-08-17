@@ -9,10 +9,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
-    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
-    LoadedCredential, NewProviderAccount, PlaintextCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, ProviderAccountUpdate, QuotaAccessChange, QuotaObservation, QuotaState,
-    QuotaWriteOutcome,
+    CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts, CredentialRevision,
+    CredentialState, LoadedCredential, NewProviderAccount, PlaintextCredential, ProviderAccount,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaAccessChange,
+    QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
@@ -327,7 +327,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         &self,
         update: CredentialCasUpdate,
     ) -> Result<CredentialCasOutcome, StoreError> {
-        let (
+        let CredentialCasUpdateParts {
             account_id,
             expected_revision,
             profile,
@@ -335,22 +335,36 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             has_refresh_token,
             access_token_expires_at,
             next_refresh_at,
-        ) = update.into_parts();
+            account_state,
+        } = update.into_parts();
         let mut accounts = lock(&self.accounts);
         let stored = accounts.get_mut(&account_id).ok_or_else(invalid)?;
         if stored.account.revision() != expected_revision {
             return Ok(CredentialCasOutcome::Conflict);
         }
         let next = expected_revision.next().map_err(|_| invalid())?;
+        let credential_state = account_state
+            .as_ref()
+            .map_or(stored.account.credential_state(), |state| {
+                state.credential_state
+            });
+        let last_error_reason = account_state.as_ref().map_or_else(
+            || stored.account.last_error_reason(),
+            |state| state.error_reason,
+        );
+        let last_error_message = account_state.as_ref().map_or_else(
+            || stored.account.last_error_message().map(str::to_owned),
+            |state| state.message.clone(),
+        );
         stored.account = rebuild_account(
             &stored.account,
             AccountReplacement {
                 revision: next,
                 access_token_expires_at,
-                credential_state: stored.account.credential_state(),
+                credential_state,
                 quota: stored.account.quota(),
-                last_error_reason: stored.account.last_error_reason(),
-                last_error_message: stored.account.last_error_message().map(str::to_owned),
+                last_error_reason,
+                last_error_message,
                 enabled: stored.account.enabled(),
                 has_refresh_token,
                 next_refresh_at,
@@ -393,6 +407,25 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             &stored.account,
             AccountReplacement::preserving(&stored.account).with_quota(quota),
         );
+        Ok(QuotaWriteOutcome::Updated)
+    }
+
+    async fn touch_quota_observation(
+        &self,
+        touch: QuotaObservationTouch,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        let mut accounts = lock(&self.accounts);
+        let stored = accounts.get_mut(&touch.account_id).ok_or_else(invalid)?;
+        if stored.account.revision() != touch.expected_revision {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        let Some(quota) = &mut stored.quota else {
+            return Ok(QuotaWriteOutcome::Conflict);
+        };
+        if quota.observed_at > touch.observed_at {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        quota.observed_at = touch.observed_at;
         Ok(QuotaWriteOutcome::Updated)
     }
 

@@ -474,7 +474,7 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
     // 官方刷新错误的消息与错误码分别位于 `error.message`、`error.code`；
     // `error` 字符串与顶层 `code` 仅用于兼容官方客户端自身的错误码提取契约。
     let error = serde_json::from_slice::<RefreshErrorResponse>(body).ok();
-    let message = Some(refresh_failure_message(error.as_ref(), body));
+    let message = error.as_ref().and_then(RefreshErrorResponse::message);
     let upstream = || {
         Some(Box::new(RefreshUpstreamFailure::new(
             status,
@@ -486,13 +486,19 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
         .as_ref()
         .and_then(RefreshErrorResponse::code)
         .map(str::to_ascii_lowercase);
-    // 与官方 Codex 相同：三个明确的 RT 原因在任意 HTTP 状态下都是永久失败；
-    // 此外任意 401 永久失败，其他未知 OAuth code 保持暂态。
+    // 生产策略故意与官方 Codex 的“任意 401 立即终态”不同：
+    // 显式 401 先进入有界恢复退避，避免瞬时授权故障直接失效账号。
+    if status == StatusCode::UNAUTHORIZED {
+        return RefreshFailure::Transport {
+            message,
+            upstream: upstream(),
+        };
+    }
+    // 非 401 响应仍与官方一致：三个明确的 RT 原因是永久失败。
     if matches!(
         normalized_code.as_deref(),
         Some("refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated")
-    ) || status == StatusCode::UNAUTHORIZED
-    {
+    ) {
         return RefreshFailure::InvalidGrant {
             message,
             upstream: upstream(),
@@ -512,16 +518,6 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
         message,
         upstream: upstream(),
     }
-}
-
-fn refresh_failure_message(error: Option<&RefreshErrorResponse>, body: &[u8]) -> String {
-    if let Some(message) = error.and_then(RefreshErrorResponse::message) {
-        return message;
-    }
-    if body.is_empty() {
-        return "Unknown error".to_owned();
-    }
-    String::from_utf8_lossy(body).into_owned()
 }
 
 fn refresh_transport_failure(error: &reqwest::Error) -> RefreshFailure {

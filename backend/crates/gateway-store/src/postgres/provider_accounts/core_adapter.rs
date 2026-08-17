@@ -103,7 +103,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         &self,
         update: CredentialCasUpdate,
     ) -> Result<CredentialCasOutcome, CoreStoreError> {
-        let (
+        let CredentialCasUpdateParts {
             account_id,
             expected_revision,
             profile,
@@ -111,7 +111,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             has_refresh_token,
             access_token_expires_at,
             next_refresh_at,
-        ) = update.into_parts();
+            account_state,
+        } = update.into_parts();
         if profile.account_id != account_id {
             return Err(CoreStoreError::new(CoreStoreErrorKind::InvalidData));
         }
@@ -122,13 +123,38 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             CREDENTIALS_MAX_BYTES,
         )
         .map_err(core_store_error)?;
+        let credential_state = account_state
+            .as_ref()
+            .map(|state| state.credential_state.as_str());
+        let credential_observed_at = account_state
+            .as_ref()
+            .map(|state| DateTime::<Utc>::from(state.observed_at));
+        let error_reason = account_state
+            .as_ref()
+            .and_then(|state| state.error_reason.map(AccountErrorReason::as_str));
+        let message = account_state
+            .as_ref()
+            .and_then(|state| state.message.as_deref());
         let next = sqlx::query_scalar::<_, i64>(
             "update provider_accounts
              set name = $3, email = $4, plan_type = $5,
                  provider_credentials_json = $6,
                  credential_revision = credential_revision + 1,
                  has_refresh_token = $7, access_token_expires_at = $8,
-                 next_refresh_at = $9, updated_at = now()
+                 next_refresh_at = $9,
+                 credential_state = case
+                   when $10::text is not null and enabled and upstream_user_id is not null
+                   then $10 else credential_state end,
+                 credential_observed_at = case
+                   when $10::text is not null and enabled and upstream_user_id is not null
+                   then $11 else credential_observed_at end,
+                 last_error_reason = case
+                   when $10::text is not null and enabled and upstream_user_id is not null
+                   then $12 else last_error_reason end,
+                 last_error_message = case
+                   when $10::text is not null and enabled and upstream_user_id is not null
+                   then $13 else last_error_message end,
+                 updated_at = greatest(now(), coalesce($11, now()))
              where id = $1 and credential_revision = $2
              returning credential_revision",
         )
@@ -141,6 +167,10 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(has_refresh_token)
         .bind(access_token_expires_at.map(DateTime::<Utc>::from))
         .bind(next_refresh_at.map(DateTime::<Utc>::from))
+        .bind(credential_state)
+        .bind(credential_observed_at)
+        .bind(error_reason)
+        .bind(message)
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
@@ -270,6 +300,25 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 change.account_id.as_str(),
                 Revision::new(change.expected_revision.get()).map_err(core_store_error)?,
                 change.state,
+            )
+            .await
+            .map_err(core_store_error)?;
+        Ok(if updated {
+            QuotaWriteOutcome::Updated
+        } else {
+            QuotaWriteOutcome::Conflict
+        })
+    }
+
+    async fn touch_quota_observation(
+        &self,
+        touch: QuotaObservationTouch,
+    ) -> Result<QuotaWriteOutcome, CoreStoreError> {
+        let updated = self
+            .touch_provider_quota_observation(
+                touch.account_id.as_str(),
+                Revision::new(touch.expected_revision.get()).map_err(core_store_error)?,
+                DateTime::<Utc>::from(touch.observed_at),
             )
             .await
             .map_err(core_store_error)?;

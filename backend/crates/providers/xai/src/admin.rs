@@ -27,8 +27,9 @@ use gateway_admin::model::{AdminError, MutationActor, MutationContext, Revision}
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::accounting::Money;
 use gateway_core::engine::credential::{
-    CredentialRevision, LoadedCredential, NewProviderAccount, OpaqueProviderData,
-    PlaintextCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    CredentialCasUpdateParts, CredentialRevision, LoadedCredential, NewProviderAccount,
+    OpaqueProviderData, PlaintextCredential, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore,
 };
 use gateway_core::error::StoreErrorKind;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
@@ -906,15 +907,16 @@ fn prepared_rotation(
     provider_kind: ProviderKind,
 ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
     let (profile, credential, guard) = prepared.into_parts();
-    let (
+    let CredentialCasUpdateParts {
         account_id,
         expected_revision,
-        credential_profile,
+        profile: credential_profile,
         credential,
         has_refresh_token,
         access_token_expires_at,
         next_refresh_at,
-    ) = credential.into_parts();
+        account_state: _account_state,
+    } = credential.into_parts();
     if profile != credential_profile || profile.account_id != account_id {
         return Err(provider_error(ProviderAdminErrorKind::Internal));
     }

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { AccountErrorReason, AccountStatus } from '@/api'
 import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
+import { useNow } from '@vueuse/core'
 import { computed } from 'vue'
 
 import BasePopover from '@/components/base/BasePopover.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
+import { formatDateTime } from '@/utils/date'
 import { errorReasonLabels, statusLabels, statusTones } from '../constants'
 
 const props = withDefaults(
@@ -13,12 +15,14 @@ const props = withDefaults(
     errorReason?: AccountErrorReason | null
     errorMessage?: string | null
     rateLimitedUntil?: string | null
+    nextRefreshAt?: string | null
     variant?: 'inline' | 'pill'
   }>(),
   {
     errorReason: null,
     errorMessage: null,
     rateLimitedUntil: null,
+    nextRefreshAt: null,
     variant: 'inline',
   },
 )
@@ -56,16 +60,28 @@ const statusStyles = {
   },
 } as const
 
-const tone = computed(() => statusTones[props.status])
+const now = useNow({ interval: 30_000 })
+const backoffUntil = computed(() => {
+  if (props.status === 'disabled' || !props.nextRefreshAt)
+    return null
+
+  const timestamp = new Date(props.nextRefreshAt.replace(' ', 'T')).getTime()
+  return Number.isFinite(timestamp) && timestamp > now.value.getTime() ? timestamp : null
+})
+const isBackoff = computed(() => backoffUntil.value !== null)
+const nextRefreshDisplay = computed(() =>
+  backoffUntil.value === null ? null : formatDateTime(backoffUntil.value),
+)
+const tone = computed(() => isBackoff.value ? 'warning' : statusTones[props.status])
 const statusStyle = computed(() => statusStyles[tone.value])
-const label = computed(() => statusLabels[props.status])
+const label = computed(() => isBackoff.value ? '退避中' : statusLabels[props.status])
 const reasonLabel = computed(() =>
   props.errorReason
     ? errorReasonLabels[props.errorReason]
     : null,
 )
 const errorText = computed(() => props.errorMessage || null)
-const detailTitle = computed(() => reasonLabel.value || label.value)
+const detailTitle = computed(() => isBackoff.value ? 'OAuth 刷新退避' : reasonLabel.value || label.value)
 const isRateLimited = computed(() =>
   props.status === 'rate_limited' && Boolean(props.rateLimitedUntil),
 )
@@ -75,7 +91,7 @@ const rateLimitedRelative = computed(() => {
     return null
 
   const until = new Date(rateLimitedUntil.replace(' ', 'T')).getTime()
-  const diffMinutes = Math.round((until - Date.now()) / 60_000)
+  const diffMinutes = Math.round((until - now.value.getTime()) / 60_000)
   if (Number.isNaN(diffMinutes) || diffMinutes < 1)
     return null
   if (diffMinutes < 60)
@@ -87,10 +103,12 @@ const rateLimitedRelative = computed(() => {
   return `剩余 ${hours} 小时 ${mins} 分`
 })
 const hasDetail = computed(() =>
-  props.status === 'error' || isRateLimited.value,
+  props.status === 'error' || isRateLimited.value || isBackoff.value,
 )
 
 const detailDescription = computed(() => {
+  if (isBackoff.value)
+    return '刷新失败，系统正在等待下一次自动尝试。'
   if (props.status === 'rate_limited')
     return '上游暂时限制了请求频率，系统正在冷却该账号。'
   if (props.status === 'error')
@@ -99,6 +117,8 @@ const detailDescription = computed(() => {
 })
 
 const recoveryHint = computed(() => {
+  if (isBackoff.value)
+    return '系统会在计划时间自动重试。'
   if (props.status === 'rate_limited')
     return '冷却结束后，系统会自动恢复调度。'
 
@@ -115,11 +135,14 @@ const recoveryHint = computed(() => {
   return '重新测试连接以获取最新状态。'
 })
 
-const triggerLabel = computed(() =>
-  `${detailTitle.value}。${detailDescription.value} 点击或聚焦查看详情。`,
-)
+const triggerLabel = computed(() => {
+  const retry = nextRefreshDisplay.value ? ` 下次尝试：${nextRefreshDisplay.value}。` : ''
+  return `${detailTitle.value}。${detailDescription.value}${retry} 点击或聚焦查看详情。`
+})
 
 const cardIcon = computed(() => {
+  if (isBackoff.value)
+    return Timer
   switch (props.status) {
     case 'error': return AlertTriangle
     case 'rate_limited': return Timer
@@ -202,6 +225,16 @@ const cardIcon = computed(() => {
           <span class="font-heavy text-cp-tertiary">预计恢复</span>
           <span class="font-mono font-emphasis tabular-nums text-cp-primary">
             {{ rateLimitedRelative ?? props.rateLimitedUntil }}
+          </span>
+        </div>
+
+        <div
+          v-if="isBackoff"
+          class="flex items-center justify-between gap-3 rounded-cp-control bg-cp-subtle px-3 py-2"
+        >
+          <span class="font-heavy text-cp-tertiary">下次尝试</span>
+          <span class="font-mono font-emphasis tabular-nums text-cp-primary">
+            {{ nextRefreshDisplay }}
           </span>
         </div>
 

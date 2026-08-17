@@ -151,6 +151,13 @@ impl CodexAccountQuotaSnapshot {
         self.quota = quota;
         self
     }
+
+    /// 只更新展示与调度使用的最后成功查询时间，保留既有额度事实。
+    #[must_use]
+    pub(crate) const fn with_observed_at(mut self, observed_at: SystemTime) -> Self {
+        self.observed_at = observed_at;
+        self
+    }
 }
 
 impl CodexQuotaFact {

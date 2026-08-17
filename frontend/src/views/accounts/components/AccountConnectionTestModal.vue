@@ -62,6 +62,7 @@ function connectionLogClass(tone: string) {
           :status="account.status"
           :error-reason="account.errorReason"
           :error-message="account.errorMessage"
+          :next-refresh-at="account.nextRefreshAt"
           variant="pill"
         />
       </section>

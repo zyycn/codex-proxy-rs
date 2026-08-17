@@ -10,10 +10,10 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 use gateway_core::engine::credential::{
     AccountConcurrencyLimit, AccountErrorReason, AccountRuntimeSignals, AccountStateChange,
-    AccountWeight, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
-    LoadedCredential, NewProviderAccount, OpaqueProviderData, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, ProviderAccountUpdate, QuotaAccessChange, QuotaObservation, QuotaState,
-    QuotaWriteOutcome,
+    AccountWeight, CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts,
+    CredentialRevision, CredentialState, LoadedCredential, NewProviderAccount, OpaqueProviderData,
+    ProviderAccount, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaAccessChange, QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::policy::ClientApiKeyId;
@@ -207,7 +207,7 @@ impl ProviderAccountStore for MemoryAccountStore {
         &self,
         update: CredentialCasUpdate,
     ) -> Result<CredentialCasOutcome, StoreError> {
-        let (
+        let CredentialCasUpdateParts {
             account_id,
             expected_revision,
             profile,
@@ -215,7 +215,8 @@ impl ProviderAccountStore for MemoryAccountStore {
             has_refresh_token,
             access_token_expires_at,
             next_refresh_at,
-        ) = update.into_parts();
+            account_state,
+        } = update.into_parts();
         let mut accounts = self.accounts.lock().expect("account store lock");
         let stored = accounts
             .get_mut(&account_id)
@@ -226,15 +227,29 @@ impl ProviderAccountStore for MemoryAccountStore {
         let next = expected_revision
             .next()
             .map_err(|_| store_error(StoreErrorKind::Conflict))?;
+        let credential_state = account_state
+            .as_ref()
+            .map_or(stored.account.credential_state(), |state| {
+                state.credential_state
+            });
+        let last_error_reason = account_state.as_ref().map_or_else(
+            || stored.account.last_error_reason(),
+            |state| state.error_reason,
+        );
+        let last_error_message = account_state.as_ref().map_or_else(
+            || stored.account.last_error_message().map(str::to_owned),
+            |state| state.message.clone(),
+        );
+        let state_observed_at = account_state.as_ref().map(|state| state.observed_at);
         stored.account = rebuild_account(
             &stored.account,
             AccountRebuild {
                 revision: next,
                 enabled: stored.account.enabled(),
-                credential_state: stored.account.credential_state(),
+                credential_state,
                 quota: stored.account.quota(),
-                last_error_reason: stored.account.last_error_reason(),
-                last_error_message: stored.account.last_error_message().map(str::to_owned),
+                last_error_reason,
+                last_error_message,
                 access_token_expires_at,
                 has_refresh_token,
                 next_refresh_at,
@@ -243,6 +258,9 @@ impl ProviderAccountStore for MemoryAccountStore {
         );
         stored.credential = credential;
         stored.quota = None;
+        if let Some(observed_at) = state_observed_at {
+            stored.state_observed_at = Some(observed_at);
+        }
         Ok(CredentialCasOutcome::Updated(next))
     }
 
@@ -282,6 +300,27 @@ impl ProviderAccountStore for MemoryAccountStore {
             &stored.account,
             AccountRebuild::preserving(&stored.account).with_quota(quota),
         );
+        Ok(QuotaWriteOutcome::Updated)
+    }
+
+    async fn touch_quota_observation(
+        &self,
+        touch: QuotaObservationTouch,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts
+            .get_mut(&touch.account_id)
+            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
+        if stored.account.revision() != touch.expected_revision {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        let Some(quota) = &mut stored.quota else {
+            return Ok(QuotaWriteOutcome::Conflict);
+        };
+        if quota.observed_at > touch.observed_at {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        quota.observed_at = touch.observed_at;
         Ok(QuotaWriteOutcome::Updated)
     }
 

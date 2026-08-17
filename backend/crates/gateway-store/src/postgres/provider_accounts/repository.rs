@@ -29,6 +29,12 @@ pub trait ProviderAccountRepository: Send + Sync {
         observed_at: DateTime<Utc>,
         state: QuotaState,
     ) -> StoreResult<bool>;
+    async fn touch_provider_quota_observation(
+        &self,
+        account_id: &str,
+        expected_revision: Revision,
+        observed_at: DateTime<Utc>,
+    ) -> StoreResult<bool>;
     async fn apply_provider_quota_access(
         &self,
         account_id: &str,
@@ -237,13 +243,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                      else credential_observed_at
                  end,
                  last_error_reason = case
-                     when enabled and upstream_user_id is not null then
-                         case when $3 = 'ready' then null else $5 end
+                     when enabled and upstream_user_id is not null then $5
                      else last_error_reason
                  end,
                  last_error_message = case
-                     when enabled and upstream_user_id is not null then
-                         case when $3 = 'ready' then null else $6 end
+                     when enabled and upstream_user_id is not null then $6
                      else last_error_message
                  end,
                  updated_at = case when enabled then greatest(now(), $4) else updated_at end
@@ -351,6 +355,29 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("apply provider quota access"))?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn touch_provider_quota_observation(
+        &self,
+        account_id: &str,
+        expected_revision: Revision,
+        observed_at: DateTime<Utc>,
+    ) -> StoreResult<bool> {
+        require_nonempty(ENTITY, "account_id", account_id)?;
+        let result = sqlx::query(
+            "update provider_accounts
+             set quota_observed_at = $3
+             where id = $1 and credential_revision = $2
+               and provider_quota_json is not null
+               and (quota_observed_at is null or quota_observed_at <= $3)",
+        )
+        .bind(account_id)
+        .bind(to_i64(expected_revision.get())?)
+        .bind(observed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| postgres_unavailable("touch provider quota observation"))?;
         Ok(result.rows_affected() == 1)
     }
 

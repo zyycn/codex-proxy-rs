@@ -19,8 +19,8 @@ use chrono::Utc;
 use gateway_core::engine::credential::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
-    QuotaWriteOutcome,
+    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
+    QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::provider_ports::{ProviderCooldown, ProviderCooldownPort};
 use gateway_protocol::openai::events::{
@@ -646,7 +646,25 @@ impl CodexCredentialQuotaService {
         } else {
             None
         };
-        if !quota_refresh_can_update(account, &snapshot, previous.as_ref()) {
+        if account.quota().is_exhausted()
+            && !quota_refresh_allows_recovery(account, &snapshot, previous.as_ref())
+        {
+            let outcome = self
+                .store
+                .touch_quota_observation(QuotaObservationTouch {
+                    account_id: account.id().clone(),
+                    expected_revision: account.revision(),
+                    observed_at,
+                })
+                .await?;
+            if outcome == QuotaWriteOutcome::Conflict {
+                summary.stale += 1;
+                return Ok(());
+            }
+            if let Some(previous) = previous {
+                self.scheduling
+                    .observe(&previous.with_observed_at(observed_at));
+            }
             summary.exhausted += 1;
             return Ok(());
         }
@@ -930,8 +948,29 @@ impl CodexCredentialQuotaService {
         } else {
             None
         };
-        if !quota_refresh_can_update(&account, &snapshot, previous.as_ref()) {
-            return Ok(previous.unwrap_or_else(|| snapshot.with_quota_state(account.quota())));
+        if !quota_refresh_allows_recovery(&account, &snapshot, previous.as_ref()) {
+            if self
+                .store
+                .touch_quota_observation(QuotaObservationTouch {
+                    account_id: account.id().clone(),
+                    expected_revision: account.revision(),
+                    observed_at,
+                })
+                .await?
+                == QuotaWriteOutcome::Conflict
+            {
+                return Err(CodexCredentialQuotaError::RevisionConflict);
+            }
+            return Ok(match previous {
+                Some(previous) => {
+                    let previous = previous.with_observed_at(observed_at);
+                    self.scheduling.observe(&previous);
+                    previous
+                }
+                None => snapshot
+                    .with_quota_state(account.quota())
+                    .with_observed_at(observed_at),
+            });
         }
         let state = if account.quota().is_exhausted() {
             QuotaState::allowed(observed_at)
@@ -1027,7 +1066,7 @@ impl CodexCredentialQuotaService {
     }
 }
 
-fn quota_refresh_can_update(
+fn quota_refresh_allows_recovery(
     account: &ProviderAccount,
     refreshed: &CodexAccountQuotaSnapshot,
     previous: Option<&CodexAccountQuotaSnapshot>,

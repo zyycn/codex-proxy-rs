@@ -248,6 +248,7 @@ const {
                 :error-reason="row.errorReason"
                 :error-message="row.errorMessage"
                 :rate-limited-until="row.quota.rateLimitedUntil"
+                :next-refresh-at="row.nextRefreshAt"
               />
             </template>
 

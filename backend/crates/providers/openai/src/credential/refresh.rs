@@ -32,7 +32,7 @@ const REFRESH_BACKOFF_MAX_ATTEMPTS: u32 = 5;
 /// 耗尽指数退避后的 OAuth 恢复周期。
 const REFRESH_RECOVERY_DELAY: Duration = Duration::from_secs(10 * 60);
 /// 过期 AT 仍允许 RT 恢复的最长窗口。
-const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+const REFRESH_RECOVERY_WINDOW: Duration = Duration::from_secs(2 * 60 * 60);
 
 pub(crate) fn refresh_recovery_deadline(
     access_token_expires_at: Option<SystemTime>,
@@ -275,20 +275,10 @@ impl CodexCredentialRefreshService {
         policy: ProviderRefreshPolicy,
     ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         let account_id = due.account.id().to_string();
-        if refresh_recovery_window_exhausted(
+        let recovery_window_exhausted = refresh_recovery_window_exhausted(
             due.account.access_token_expires_at(),
             SystemTime::now(),
-        ) {
-            return self
-                .persist_terminal(
-                    &due.account,
-                    CredentialState::Expired,
-                    AccountErrorReason::CredentialExpired,
-                    RefreshFailureContext::new("refresh_recovery_window_exhausted", None, None),
-                    CodexCredentialRefreshOutcome::Invalidated { account_id },
-                )
-                .await;
-        }
+        );
         let capacity = self
             .leases
             .try_acquire(ProviderLeaseRequest::RefreshCapacity(
@@ -318,7 +308,44 @@ impl CodexCredentialRefreshService {
             .refresh_token
             .as_ref()
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
-        match self.refresher.refresh(refresh_token.expose_secret()).await {
+        let refresh_result = self.refresher.refresh(refresh_token.expose_secret()).await;
+        if recovery_window_exhausted && let Err(failure) = &refresh_result {
+            let message = failure.message().map(str::to_owned);
+            let upstream = failure.upstream();
+            return match failure {
+                RefreshFailure::Banned { .. } => {
+                    self.persist_terminal(
+                        &due.account,
+                        CredentialState::Banned,
+                        AccountErrorReason::AccountBanned,
+                        RefreshFailureContext::new(
+                            "refresh_recovery_window_exhausted",
+                            message,
+                            upstream,
+                        ),
+                        CodexCredentialRefreshOutcome::Banned { account_id },
+                    )
+                    .await
+                }
+                RefreshFailure::InvalidGrant { .. }
+                | RefreshFailure::RetryableTransport { .. }
+                | RefreshFailure::Transport { .. } => {
+                    self.persist_terminal(
+                        &due.account,
+                        CredentialState::Expired,
+                        AccountErrorReason::CredentialExpired,
+                        RefreshFailureContext::new(
+                            "refresh_recovery_window_exhausted",
+                            message,
+                            upstream,
+                        ),
+                        CodexCredentialRefreshOutcome::Invalidated { account_id },
+                    )
+                    .await
+                }
+            };
+        }
+        match refresh_result {
             Ok(tokens) => self.persist_success(due, tokens).await,
             Err(RefreshFailure::InvalidGrant { message, upstream }) => {
                 self.persist_terminal(
@@ -355,8 +382,8 @@ impl CodexCredentialRefreshService {
                 }
             }
             Err(RefreshFailure::Transport { message, upstream }) => {
-                // 上游瞬态（429/5xx/超时/畸形响应等，发送状态未知）保留现有凭据、
-                // 推进退避重试；仅 invalid_grant/banned 才终态失效账号。
+                // 上游瞬态（401/429/5xx/超时/畸形响应等）保留现有凭据、
+                // 记录最近一次失败并推进有界退避。
                 if self
                     .defer_refresh(
                         &due.account,
@@ -532,7 +559,12 @@ impl CodexCredentialRefreshService {
             }
             Err(error) => return Err(error.into()),
         }
-        let persisted_message = message.as_deref().unwrap_or(reason).to_owned();
+        let persisted_message = message
+            .as_ref()
+            .filter(|message| !message.trim().is_empty())
+            .map(String::as_str)
+            .or_else(|| account.last_error_message())
+            .map(str::to_owned);
         match self
             .repository
             .apply_state_with_reason(
@@ -540,7 +572,7 @@ impl CodexCredentialRefreshService {
                 credential_state,
                 SystemTime::now(),
                 Some(error_reason),
-                Some(persisted_message),
+                persisted_message,
             )
             .await
         {
@@ -590,7 +622,20 @@ impl CodexCredentialRefreshService {
             attempt,
             reason,
         )?;
-        match self.repository.defer_refresh(account, retry_at).await {
+        let message = upstream_message
+            .filter(|message| !message.trim().is_empty())
+            .map(str::to_owned);
+        let error_reason = upstream.map(|_| {
+            account
+                .credential_state()
+                .error_reason()
+                .unwrap_or(AccountErrorReason::AccessTokenExpired)
+        });
+        match self
+            .repository
+            .defer_refresh(account, retry_at, error_reason, message)
+            .await
+        {
             Ok(_) => {
                 log_refresh_deferred(
                     account.id(),

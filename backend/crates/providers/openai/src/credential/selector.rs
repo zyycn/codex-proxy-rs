@@ -720,7 +720,15 @@ impl CodexCredentialSelector {
                             .map(chrono::DateTime::<chrono::Utc>::from),
                         "OpenAI access token expired; retaining account for bounded OAuth refresh recovery"
                     );
-                    return Ok(());
+                    return self
+                        .apply_credential_state(
+                            account,
+                            CredentialState::Ready,
+                            AccountErrorReason::AccessTokenExpired,
+                            now,
+                            message,
+                        )
+                        .await;
                 }
                 self.apply_credential_state(
                     account,

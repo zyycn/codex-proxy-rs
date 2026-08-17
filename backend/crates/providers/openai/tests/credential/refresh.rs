@@ -7,7 +7,10 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone as _, Utc};
 use futures::future::BoxFuture;
-use gateway_core::engine::credential::{ProviderAccountId, ProviderAccountStore};
+use gateway_core::engine::credential::{
+    AccountErrorReason, AccountStateChange, AccountStatus, CredentialState, ProviderAccountId,
+    ProviderAccountStore, QuotaAccessChange, QuotaEvidence, QuotaState, QuotaWriteOutcome,
+};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
@@ -15,12 +18,16 @@ use gateway_core::provider_ports::{
     ProviderSchedulingState, ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
-use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
+use provider_openai::credential::token_client::{
+    OpenAiTokenClient, RefreshFailure, TokenClientConfig, TokenPair, TokenRefresher,
+};
 use provider_openai::credential::{
     CodexCredentialCodec, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,
     ImportCodexOAuthCredential,
 };
 use secrecy::{ExposeSecret as _, SecretString};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{MemoryAccountStore, profile, secret};
 
@@ -291,6 +298,66 @@ async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_s
 }
 
 #[tokio::test]
+async fn scheduled_refresh_rotates_tokens_while_quota_is_exhausted() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let service = refresh_service(&store, SingleUseRefresher::new(), policy);
+    let account_id = "acct_exhausted_quota_refresh";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_add(Duration::from_secs(120))
+            .expect("test expiry"),
+        None,
+    )
+    .await;
+    let account = store.account(account_id).expect("seeded account");
+    assert_eq!(
+        store
+            .apply_quota_access(QuotaAccessChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                state: QuotaState::exhausted(
+                    QuotaEvidence::UsageLimitReached,
+                    SystemTime::now(),
+                    None,
+                ),
+            })
+            .await
+            .expect("persist exhausted quota"),
+        QuotaWriteOutcome::Updated
+    );
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed {
+            account_id: refreshed_account_id,
+            ..
+        }] if refreshed_account_id == account_id
+    ));
+    let account = store.account(account_id).expect("refreshed account");
+    assert!(account.quota().is_exhausted());
+    let loaded = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .expect("refreshed credential");
+    let runtime = CodexCredentialCodec::decode(&loaded.credential).expect("runtime credential");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(oauth.access_token.expose_secret(), "refreshed-access-token");
+    let expected_refresh_token = format!("rt-access-{account_id}");
+    assert_eq!(
+        oauth
+            .refresh_token
+            .as_ref()
+            .map(SecretString::expose_secret),
+        Some(expected_refresh_token.as_str())
+    );
+}
+
+#[tokio::test]
 async fn scheduled_refresh_persists_the_original_upstream_error_message() {
     let store = Arc::new(MemoryAccountStore::default());
     let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
@@ -333,6 +400,158 @@ async fn scheduled_refresh_persists_the_original_upstream_error_message() {
             .last_error_message(),
         Some(upstream_message)
     );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_persists_retryable_message_inside_the_two_hour_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let upstream_message = "Invalid refresh token.";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": {
+                "message": upstream_message,
+                "type": "invalid_request_error",
+                "code": "invalid_refresh_token"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(OpenAiTokenClient::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test HTTP client"),
+            TokenClientConfig {
+                client_id: "test-public-client".to_owned(),
+                token_endpoint: format!("{}/oauth/token", server.uri()),
+            },
+        )),
+        Arc::new(RefreshLeases),
+        Arc::new(RefreshCredentialState),
+        policy,
+    );
+    let account_id = "acct_retryable_unauthorized";
+    let expires_at = SystemTime::now()
+        .checked_sub(Duration::from_secs(30 * 60))
+        .expect("expired access token");
+    seed_refreshable_account(&store, account_id, expires_at, None).await;
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Transient {
+            account_id: deferred_account_id,
+        }] if deferred_account_id == account_id
+    ));
+    let account = store.account(account_id).expect("deferred account");
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    assert_eq!(
+        account.last_error_reason(),
+        Some(AccountErrorReason::AccessTokenExpired)
+    );
+    assert_eq!(account.last_error_message(), Some(upstream_message));
+    let retry_at = account.next_refresh_at().expect("next refresh attempt");
+    assert!(retry_at > SystemTime::now());
+    assert!(
+        retry_at
+            <= expires_at
+                .checked_add(Duration::from_secs(2 * 60 * 60))
+                .expect("recovery deadline")
+    );
+    let projection = account.status_projection(SystemTime::now(), None);
+    assert_eq!(projection.status, AccountStatus::Error);
+    assert_eq!(projection.error_message.as_deref(), Some(upstream_message));
+}
+
+#[tokio::test]
+async fn scheduled_refresh_uses_the_final_message_after_the_two_hour_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let upstream_message = "Invalid refresh token.";
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(FailingRefresher {
+            failure: RefreshFailure::Transport {
+                message: Some(upstream_message.to_owned()),
+                upstream: None,
+            },
+        }),
+        Arc::new(RefreshLeases),
+        Arc::new(RefreshCredentialState),
+        policy,
+    );
+    let account_id = "acct_exhausted_unauthorized";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_sub(Duration::from_secs(2 * 60 * 60 + 60))
+            .expect("expired recovery window"),
+        None,
+    )
+    .await;
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Invalidated {
+            account_id: invalidated_account_id,
+        }] if invalidated_account_id == account_id
+    ));
+    let account = store.account(account_id).expect("invalidated account");
+    assert_eq!(account.credential_state(), CredentialState::Expired);
+    assert_eq!(account.last_error_message(), Some(upstream_message));
+}
+
+#[tokio::test]
+async fn scheduled_refresh_success_clears_a_deferred_failure_message() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let account_id = "acct_recovered_after_backoff";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_sub(Duration::from_secs(60))
+            .expect("expired access token"),
+        None,
+    )
+    .await;
+    let account = store.account(account_id).expect("seeded account");
+    store
+        .apply_state_change(AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            credential_state: CredentialState::Ready,
+            observed_at: SystemTime::now(),
+            error_reason: Some(AccountErrorReason::AccessTokenExpired),
+            message: Some("Invalid refresh token.".to_owned()),
+        })
+        .await
+        .expect("seed deferred failure");
+    let service = refresh_service(&store, SingleUseRefresher::new(), policy);
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed {
+            account_id: refreshed_account_id,
+            ..
+        }] if refreshed_account_id == account_id
+    ));
+    let account = store.account(account_id).expect("refreshed account");
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    assert_eq!(account.last_error_reason(), None);
+    assert_eq!(account.last_error_message(), None);
 }
 
 #[tokio::test]

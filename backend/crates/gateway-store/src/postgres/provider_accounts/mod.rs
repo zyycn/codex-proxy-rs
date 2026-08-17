@@ -38,12 +38,13 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use gateway_core::engine::credential::{
     AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
-    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision as CoreCredentialRevision,
-    CredentialState, LoadedCredential, NewProviderAccount as CoreNewProviderAccount,
-    OpaqueProviderData, PlaintextCredential, ProviderAccount as CoreProviderAccount,
-    ProviderAccountId as CoreProviderAccountId, ProviderAccountIdentity, ProviderAccountStore,
+    CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts,
+    CredentialRevision as CoreCredentialRevision, CredentialState, LoadedCredential,
+    NewProviderAccount as CoreNewProviderAccount, OpaqueProviderData, PlaintextCredential,
+    ProviderAccount as CoreProviderAccount, ProviderAccountId as CoreProviderAccountId,
+    ProviderAccountIdentity, ProviderAccountStore,
     ProviderAccountUpdate as CoreProviderAccountUpdate, QuotaAccessChange, QuotaAccessState,
-    QuotaEvidence, QuotaObservation, QuotaState, QuotaWriteOutcome,
+    QuotaEvidence, QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
 use gateway_core::routing::{AccountGroupId, ProviderKind};

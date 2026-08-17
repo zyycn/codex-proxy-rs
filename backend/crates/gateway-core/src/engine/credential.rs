@@ -946,7 +946,28 @@ impl fmt::Debug for LoadedCredential {
     }
 }
 
-/// 刷新成功后的完整 CAS 写回。
+/// 与 credential revision CAS 同事务提交的账号错误事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialStateWrite {
+    pub credential_state: CredentialState,
+    pub observed_at: SystemTime,
+    pub error_reason: Option<AccountErrorReason>,
+    pub message: Option<String>,
+}
+
+/// [`CredentialCasUpdate`] 跨 store 边界的命名字段。
+pub struct CredentialCasUpdateParts {
+    pub account_id: ProviderAccountId,
+    pub expected_revision: CredentialRevision,
+    pub profile: ProviderAccountUpdate,
+    pub credential: PlaintextCredential,
+    pub has_refresh_token: bool,
+    pub access_token_expires_at: Option<SystemTime>,
+    pub next_refresh_at: Option<SystemTime>,
+    pub account_state: Option<Box<CredentialStateWrite>>,
+}
+
+/// 刷新后的完整 CAS 写回。
 #[derive(Clone, PartialEq)]
 pub struct CredentialCasUpdate {
     account_id: ProviderAccountId,
@@ -956,6 +977,7 @@ pub struct CredentialCasUpdate {
     has_refresh_token: bool,
     access_token_expires_at: Option<SystemTime>,
     next_refresh_at: Option<SystemTime>,
+    account_state: Option<Box<CredentialStateWrite>>,
 }
 
 impl fmt::Debug for CredentialCasUpdate {
@@ -969,6 +991,7 @@ impl fmt::Debug for CredentialCasUpdate {
             .field("has_refresh_token", &self.has_refresh_token)
             .field("access_token_expires_at", &self.access_token_expires_at)
             .field("next_refresh_at", &self.next_refresh_at)
+            .field("account_state", &self.account_state)
             .finish()
     }
 }
@@ -1002,7 +1025,32 @@ impl CredentialCasUpdate {
             has_refresh_token,
             access_token_expires_at,
             next_refresh_at,
+            account_state: None,
         })
+    }
+
+    /// 将刷新调度与账号错误事实放入同一个 revision CAS。
+    #[must_use]
+    pub fn with_account_state(
+        mut self,
+        credential_state: CredentialState,
+        observed_at: SystemTime,
+        error_reason: Option<AccountErrorReason>,
+        message: Option<String>,
+    ) -> Self {
+        let message = message.filter(|value| !value.trim().is_empty());
+        let error_reason = if credential_state == CredentialState::Ready {
+            message.as_ref().and(error_reason)
+        } else {
+            error_reason.or_else(|| credential_state.error_reason())
+        };
+        self.account_state = Some(Box::new(CredentialStateWrite {
+            credential_state,
+            observed_at,
+            error_reason,
+            message,
+        }));
+        self
     }
 
     #[must_use]
@@ -1041,26 +1089,17 @@ impl CredentialCasUpdate {
     }
 
     #[must_use]
-    pub fn into_parts(
-        self,
-    ) -> (
-        ProviderAccountId,
-        CredentialRevision,
-        ProviderAccountUpdate,
-        PlaintextCredential,
-        bool,
-        Option<SystemTime>,
-        Option<SystemTime>,
-    ) {
-        (
-            self.account_id,
-            self.expected_revision,
-            self.profile,
-            self.credential,
-            self.has_refresh_token,
-            self.access_token_expires_at,
-            self.next_refresh_at,
-        )
+    pub fn into_parts(self) -> CredentialCasUpdateParts {
+        CredentialCasUpdateParts {
+            account_id: self.account_id,
+            expected_revision: self.expected_revision,
+            profile: self.profile,
+            credential: self.credential,
+            has_refresh_token: self.has_refresh_token,
+            access_token_expires_at: self.access_token_expires_at,
+            next_refresh_at: self.next_refresh_at,
+            account_state: self.account_state,
+        }
     }
 }
 
@@ -1102,6 +1141,14 @@ pub enum QuotaWriteOutcome {
     Conflict,
 }
 
+/// 只推进 Provider quota 文档的最后成功查询时间。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaObservationTouch {
+    pub account_id: ProviderAccountId,
+    pub expected_revision: CredentialRevision,
+    pub observed_at: SystemTime,
+}
+
 /// 不改 Provider 原始 quota JSON 的额度访问事实写入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaAccessChange {
@@ -1117,10 +1164,13 @@ pub struct AccountStateChange {
     pub expected_revision: CredentialRevision,
     pub credential_state: CredentialState,
     pub observed_at: SystemTime,
-    /// 受控错误原因；恢复 Ready 时必须清空。
+    /// 受控错误原因；无失败事实的 Ready 写入必须清空。
+    ///
+    /// Ready 凭据可以在 AT 过期后继续 RT 恢复，此时允许保留最近一次
+    /// 刷新失败原因，供错误状态投影展示。
     pub error_reason: Option<AccountErrorReason>,
     /// 供管理端展示的错误消息；结构化上游失败应保留原始 message，不能写入整个正文。
-    /// 恢复 Ready 时必须清空。
+    /// 刷新成功或其他无失败事实的 Ready 写入必须清空。
     pub message: Option<String>,
 }
 
@@ -1169,6 +1219,11 @@ pub trait ProviderAccountStore: Send + Sync {
     async fn compare_and_swap_quota(
         &self,
         observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError>;
+
+    async fn touch_quota_observation(
+        &self,
+        touch: QuotaObservationTouch,
     ) -> Result<QuotaWriteOutcome, StoreError>;
 
     async fn apply_quota_access(

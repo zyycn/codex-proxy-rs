@@ -18,8 +18,8 @@ use gateway_core::engine::credential::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
     CredentialRevision, CredentialState, OpaqueProviderData, PlaintextCredential,
     ProviderAccountId, ProviderAccountIdentity, ProviderAccountStore, ProviderAccountUpdate,
-    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
-    QuotaWriteOutcome,
+    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
+    QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::routing::{AccountGroupId, ProviderKind};
 use gateway_store::{
@@ -49,6 +49,22 @@ struct RecoveredAccountRow {
     provider_credentials_json: serde_json::Value,
     credential_revision: i64,
     access_token_expires_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct CoreRefreshRow {
+    name: String,
+    email: Option<String>,
+    plan_type: Option<String>,
+    provider_credentials_json: serde_json::Value,
+    credential_revision: i64,
+    credential_state: String,
+    last_error_reason: Option<String>,
+    last_error_message: Option<String>,
+    quota_access_state: String,
+    quota_evidence: Option<String>,
+    quota_access_observed_at: Option<chrono::DateTime<Utc>>,
+    quota_reset_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[test]
@@ -152,6 +168,111 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
         1,
         "quota observation is runtime state, not a global configuration mutation"
     );
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn quota_observation_touch_only_advances_the_refresh_time() {
+    let Some(database) = TestDatabase::create("provider_account_quota_touch").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let account_id = ProviderAccountId::new("acct_quota_touch").expect("account id");
+    repository
+        .insert_provider_account(account(account_id.as_str(), "user-quota-touch"))
+        .await
+        .expect("insert quota fixture");
+    let revision = CredentialRevision::new(1).expect("revision");
+    let observed_at = SystemTime::now()
+        .checked_sub(Duration::from_secs(60))
+        .expect("old observation time");
+    let touched_at = observed_at
+        .checked_add(Duration::from_secs(30))
+        .expect("new observation time");
+    let reset_at = observed_at
+        .checked_add(Duration::from_secs(3_600))
+        .expect("quota reset time");
+    let quota_json = json!({
+        "rate_limit": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+        }
+    });
+    assert_eq!(
+        repository
+            .compare_and_swap_quota(QuotaObservation {
+                account_id: account_id.clone(),
+                expected_revision: revision,
+                quota: OpaqueProviderData::new(
+                    quota_json.as_object().expect("quota object").clone(),
+                ),
+                observed_at,
+                state: QuotaState::exhausted(
+                    QuotaEvidence::UsageLimitReached,
+                    observed_at,
+                    Some(reset_at),
+                ),
+            })
+            .await
+            .expect("persist exhausted quota"),
+        QuotaWriteOutcome::Updated
+    );
+    let account_updated_at: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "select updated_at from provider_accounts where id = 'acct_quota_touch'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load account update time before quota touch");
+
+    assert_eq!(
+        repository
+            .touch_quota_observation(QuotaObservationTouch {
+                account_id,
+                expected_revision: revision,
+                observed_at: touched_at,
+            })
+            .await
+            .expect("touch quota refresh time"),
+        QuotaWriteOutcome::Updated
+    );
+
+    let stored = sqlx::query_as::<
+        _,
+        (
+            serde_json::Value,
+            chrono::DateTime<Utc>,
+            String,
+            Option<String>,
+            chrono::DateTime<Utc>,
+            Option<chrono::DateTime<Utc>>,
+            chrono::DateTime<Utc>,
+        ),
+    >(
+        "select provider_quota_json, quota_observed_at, quota_access_state,
+                quota_evidence, quota_access_observed_at, quota_reset_at, updated_at
+         from provider_accounts where id = 'acct_quota_touch'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load touched quota row");
+    assert_eq!(stored.0, quota_json);
+    assert_eq!(
+        stored.1.timestamp_micros(),
+        chrono::DateTime::<Utc>::from(touched_at).timestamp_micros()
+    );
+    assert_eq!(stored.2, "exhausted");
+    assert_eq!(stored.3.as_deref(), Some("usage_limit_reached"));
+    assert_eq!(
+        stored.4.timestamp_micros(),
+        chrono::DateTime::<Utc>::from(observed_at).timestamp_micros()
+    );
+    assert_eq!(
+        stored.5.map(|value| value.timestamp_micros()),
+        Some(chrono::DateTime::<Utc>::from(reset_at).timestamp_micros())
+    );
+    assert_eq!(stored.6, account_updated_at);
 
     database.close().await;
 }
@@ -279,6 +400,27 @@ async fn credential_error_message_is_persisted_and_cleared_on_recovery() {
         stored.as_deref(),
         Some("upstream returned 402 payment required")
     );
+
+    repository
+        .apply_state_change(AccountStateChange {
+            message: Some("Invalid refresh token.".to_owned()),
+            account_id: account_id.clone(),
+            expected_revision: revision,
+            credential_state: CredentialState::Ready,
+            observed_at: SystemTime::now(),
+            error_reason: Some(AccountErrorReason::AccessTokenExpired),
+        })
+        .await
+        .expect("persist recoverable refresh failure");
+    let recoverable: (Option<String>, Option<String>) = sqlx::query_as(
+        "select last_error_reason, last_error_message from provider_accounts where id = $1",
+    )
+    .bind(account_id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .expect("read recoverable refresh failure");
+    assert_eq!(recoverable.0.as_deref(), Some("access_token_expired"));
+    assert_eq!(recoverable.1.as_deref(), Some("Invalid refresh token."));
 
     repository
         .apply_state_change(AccountStateChange {
@@ -1208,8 +1350,37 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
         })
         .await
         .expect("seed provider account");
+    sqlx::query(
+        "update provider_accounts
+         set last_error_reason = 'access_token_expired',
+             last_error_message = 'stale refresh failure'
+         where id = 'acct_core_refresh'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("seed refresh failure details");
 
     let account_id = ProviderAccountId::new("acct_core_refresh").expect("account ID");
+    let quota_observed_at = SystemTime::now();
+    let quota_reset_at = quota_observed_at
+        .checked_add(Duration::from_secs(3_600))
+        .expect("quota reset time");
+    assert_eq!(
+        repository
+            .apply_quota_access(QuotaAccessChange {
+                account_id: account_id.clone(),
+                expected_revision: CredentialRevision::new(1).expect("credential revision"),
+                state: QuotaState::exhausted(
+                    QuotaEvidence::UsageLimitReached,
+                    quota_observed_at,
+                    Some(quota_reset_at),
+                ),
+            })
+            .await
+            .expect("seed quota exhaustion"),
+        QuotaWriteOutcome::Updated
+    );
+    let state_observed_at = SystemTime::now();
     let refreshed = CredentialCasUpdate::new(
         account_id.clone(),
         CredentialRevision::new(1).expect("credential revision"),
@@ -1224,7 +1395,8 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
         Some(SystemTime::now() + Duration::from_secs(3_600)),
         Some(SystemTime::now() + Duration::from_secs(1_800)),
     )
-    .expect("valid refresh update");
+    .expect("valid refresh update")
+    .with_account_state(CredentialState::Ready, state_observed_at, None, None);
     assert_eq!(
         repository
             .compare_and_swap_credential(refreshed)
@@ -1235,24 +1407,37 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
         )
     );
 
-    let row: (
-        String,
-        Option<String>,
-        Option<String>,
-        serde_json::Value,
-        i64,
-    ) = sqlx::query_as(
-        "select name, email, plan_type, provider_credentials_json, credential_revision
+    let row = sqlx::query_as::<_, CoreRefreshRow>(
+        "select name, email, plan_type, provider_credentials_json, credential_revision,
+                credential_state, last_error_reason, last_error_message,
+                quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at
          from provider_accounts where id = 'acct_core_refresh'",
     )
     .fetch_one(&database.pool)
     .await
     .expect("load refreshed account");
-    assert_eq!(row.0, "after refresh");
-    assert_eq!(row.1.as_deref(), Some("after@example.invalid"));
-    assert_eq!(row.2.as_deref(), Some("premium"));
-    assert_eq!(row.3["access_token"], "after-secret");
-    assert_eq!(row.4, 2);
+    assert_eq!(row.name, "after refresh");
+    assert_eq!(row.email.as_deref(), Some("after@example.invalid"));
+    assert_eq!(row.plan_type.as_deref(), Some("premium"));
+    assert_eq!(
+        row.provider_credentials_json["access_token"],
+        "after-secret"
+    );
+    assert_eq!(row.credential_revision, 2);
+    assert_eq!(row.credential_state, "ready");
+    assert_eq!(row.last_error_reason, None);
+    assert_eq!(row.last_error_message, None);
+    assert_eq!(row.quota_access_state, "exhausted");
+    assert_eq!(row.quota_evidence.as_deref(), Some("usage_limit_reached"));
+    assert_eq!(
+        row.quota_access_observed_at
+            .map(|value| value.timestamp_micros()),
+        Some(chrono::DateTime::<Utc>::from(quota_observed_at).timestamp_micros())
+    );
+    assert_eq!(
+        row.quota_reset_at.map(|value| value.timestamp_micros()),
+        Some(chrono::DateTime::<Utc>::from(quota_reset_at).timestamp_micros())
+    );
 
     assert!(
         repository

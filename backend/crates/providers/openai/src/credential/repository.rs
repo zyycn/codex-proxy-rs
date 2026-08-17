@@ -120,15 +120,18 @@ impl CodexCredentialRepository {
             access_token_expires_at,
             next_refresh_at,
         )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
-    /// token 签名边界不可用时，以相同 credential 推进持久刷新退避。
+    /// 以相同 credential 原子推进刷新退避及本次上游错误事实。
     pub async fn defer_refresh(
         &self,
         account: &ProviderAccount,
         next_refresh_at: SystemTime,
+        error_reason: Option<AccountErrorReason>,
+        message: Option<String>,
     ) -> Result<CredentialRevision, CredentialRepositoryError> {
         let current = self
             .store
@@ -140,7 +143,7 @@ impl CodexCredentialRepository {
         let data = CodexCredentialCodec::decode_complete(&current.credential)?;
         let has_refresh_token = data.has_refresh_token();
         let credential = CodexCredentialCodec::encode_complete(data)?;
-        let update = CredentialCasUpdate::new(
+        let mut update = CredentialCasUpdate::new(
             account.id().clone(),
             account.revision(),
             unchanged_profile(account),
@@ -150,6 +153,14 @@ impl CodexCredentialRepository {
             Some(next_refresh_at),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        if let Some(error_reason) = error_reason {
+            update = update.with_account_state(
+                account.credential_state(),
+                SystemTime::now(),
+                Some(error_reason),
+                message,
+            );
+        }
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
@@ -245,13 +256,11 @@ impl CodexCredentialRepository {
         if !account.enabled() {
             return Ok(());
         }
-        let (error_reason, message) = if credential_state == CredentialState::Ready {
-            (None, None)
+        let message = message.filter(|value| !value.trim().is_empty());
+        let error_reason = if credential_state == CredentialState::Ready {
+            message.as_ref().and(error_reason)
         } else {
-            (
-                error_reason.or_else(|| credential_state.error_reason()),
-                message.filter(|value| !value.trim().is_empty()),
-            )
+            error_reason.or_else(|| credential_state.error_reason())
         };
         self.store
             .apply_state_change(AccountStateChange {
