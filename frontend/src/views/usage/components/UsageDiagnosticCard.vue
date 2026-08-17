@@ -109,7 +109,7 @@ function diagnosticNameDisplay(name: string) {
     as="article"
     title="热点诊断"
     :description="`按${selectedDimensionLabel}定位错误、慢请求与费用热点`"
-    class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-90 lg:min-h-90 lg:max-h-90"
+    class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-full lg:min-h-90 lg:max-h-105"
   >
     <template #actions>
       <BaseSegmented
@@ -125,7 +125,7 @@ function diagnosticNameDisplay(name: string) {
       <BaseTable
         v-if="hasData"
         :key="resultDimension"
-        class="min-h-0 w-full"
+        class="min-h-0 w-full xl:contain-[size]"
         :columns="diagnosticColumns"
         :rows="displayItems"
         density="compact"

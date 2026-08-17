@@ -173,7 +173,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
 }
 
 #[tokio::test]
-async fn quota_observation_touch_only_advances_the_refresh_time() {
+async fn quota_observation_touch_preserves_quota_state_and_advances_account_update_time() {
     let Some(database) = TestDatabase::create("provider_account_quota_touch").await else {
         return;
     };
@@ -188,7 +188,7 @@ async fn quota_observation_touch_only_advances_the_refresh_time() {
         .checked_sub(Duration::from_secs(60))
         .expect("old observation time");
     let touched_at = observed_at
-        .checked_add(Duration::from_secs(30))
+        .checked_add(Duration::from_secs(90))
         .expect("new observation time");
     let reset_at = observed_at
         .checked_add(Duration::from_secs(3_600))
@@ -272,7 +272,11 @@ async fn quota_observation_touch_only_advances_the_refresh_time() {
         stored.5.map(|value| value.timestamp_micros()),
         Some(chrono::DateTime::<Utc>::from(reset_at).timestamp_micros())
     );
-    assert_eq!(stored.6, account_updated_at);
+    assert_eq!(
+        stored.6.timestamp_micros(),
+        chrono::DateTime::<Utc>::from(touched_at).timestamp_micros()
+    );
+    assert!(stored.6 > account_updated_at);
 
     database.close().await;
 }

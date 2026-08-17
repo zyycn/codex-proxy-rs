@@ -226,11 +226,15 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
 
   function failConnectionTest(message = '测试连接失败') {
     if (connectionTestStatus.value === 'running') {
-      connectionTestError.value = message
-      appendConnectionTestLog(connectionTestError.value, 'danger')
-      finishConnectionTest('error')
+      recordConnectionTestFailure('failure', '测试失败', message)
     }
     clearConnectionTestRun()
+  }
+
+  function recordConnectionTestFailure(key: string, label: string, message: string) {
+    connectionTestError.value = message
+    setConnectionTestLog(key, label, 'danger', message)
+    finishConnectionTest('error')
   }
 
   function handleConnectionTestEvent(event: ConnectionTestEvent) {
@@ -261,18 +265,22 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         finishConnectionTest('success')
       }
       else {
-        connectionTestError.value = connectionTestErrorText(event)
-        appendConnectionTestLog(connectionTestError.value, 'danger')
-        finishConnectionTest('error')
+        recordConnectionTestFailure(
+          'upstream-response',
+          '上游响应',
+          connectionTestErrorText(event),
+        )
       }
       clearConnectionTestRun()
       void options.reload()
       return
     }
     if (event.type === 'error') {
-      connectionTestError.value = connectionTestErrorText(event)
-      appendConnectionTestLog(connectionTestError.value, 'danger')
-      finishConnectionTest('error')
+      recordConnectionTestFailure(
+        'upstream-response',
+        '上游响应',
+        connectionTestErrorText(event),
+      )
       clearConnectionTestRun()
       void options.reload()
     }
@@ -381,15 +389,11 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
           }),
       )
       if (connectionTestStatus.value === 'running') {
-        connectionTestError.value = '测试连接未返回完成事件'
-        appendConnectionTestLog(connectionTestError.value, 'danger')
-        finishConnectionTest('error')
+        recordConnectionTestFailure('failure', '测试失败', '测试连接未返回完成事件')
       }
     }
     catch (error: unknown) {
-      connectionTestError.value = errorMessage(error, '测试连接失败')
-      appendConnectionTestLog(connectionTestError.value, 'danger')
-      finishConnectionTest('error')
+      recordConnectionTestFailure('failure', '测试失败', errorMessage(error, '测试连接失败'))
     }
     finally {
       clearConnectionTestRun()

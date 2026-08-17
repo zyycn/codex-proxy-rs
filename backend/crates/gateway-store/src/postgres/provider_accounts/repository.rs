@@ -367,7 +367,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         require_nonempty(ENTITY, "account_id", account_id)?;
         let result = sqlx::query(
             "update provider_accounts
-             set quota_observed_at = $3
+             set quota_observed_at = $3, updated_at = greatest(now(), $3)
              where id = $1 and credential_revision = $2
                and provider_quota_json is not null
                and (quota_observed_at is null or quota_observed_at <= $3)",

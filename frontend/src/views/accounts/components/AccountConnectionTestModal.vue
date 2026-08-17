@@ -186,7 +186,10 @@ function connectionLogClass(tone: string) {
                 >
                   <span class="font-mono text-cp-muted-text">{{ item.time }}</span>
                   <div class="min-w-0">
-                    <p class="m-0 wrap-break-word" :class="connectionLogClass(item.tone)">
+                    <p
+                      class="m-0 wrap-break-word"
+                      :class="connectionLogClass(item.tone)"
+                    >
                       {{ item.text }}
                     </p>
                     <div v-if="item.detail" class="mt-2 rounded-lg bg-cp-subtle px-3 py-2">
