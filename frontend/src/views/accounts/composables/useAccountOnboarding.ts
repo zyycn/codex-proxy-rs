@@ -8,7 +8,10 @@ import {
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { providerDisplayName } from '@/utils/providers'
+import { errorMessage } from '@/utils/async'
+import { isRecord } from '@/utils/object'
+import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
+import { emptyAccountCreateForm } from '../components/AccountCreateModal/model'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type ImportProvider = 'openai' | 'xai'
@@ -27,7 +30,7 @@ export function useAccountOnboarding(options: {
   const authorizingOAuthAction = useAsyncAction()
   const creatingAccount = creatingAccountAction.loading
   const authorizingOAuth = authorizingOAuthAction.loading
-  const createForm = ref(emptyCreateForm())
+  const createForm = ref(emptyAccountCreateForm())
 
   const showCreateModal = computed({
     get: () => createModalOpen.value,
@@ -35,7 +38,7 @@ export function useAccountOnboarding(options: {
       createModalOpen.value = value
       if (!value) {
         reauthorizingAccount.value = null
-        createForm.value = emptyCreateForm()
+        createForm.value = emptyAccountCreateForm()
       }
     },
   })
@@ -124,7 +127,7 @@ export function useAccountOnboarding(options: {
 
   function openCreateAccount() {
     reauthorizingAccount.value = null
-    createForm.value = emptyCreateForm()
+    createForm.value = emptyAccountCreateForm()
     showCreateModal.value = true
   }
 
@@ -133,7 +136,7 @@ export function useAccountOnboarding(options: {
       return
     reauthorizingAccount.value = account
     createForm.value = {
-      ...emptyCreateForm(),
+      ...emptyAccountCreateForm(),
       provider: account.provider,
       name: account.name,
       mode: 'oauth',
@@ -164,7 +167,7 @@ export function useAccountOnboarding(options: {
       })
       importedCount += result.importedCount
     }
-    return `${providerDisplayName(provider) ?? provider} 账号已导入 ${importedCount} 个`
+    return `${formatProviderLabel(provider)} 账号已导入 ${importedCount} 个`
   }
 
   async function importMixedAccountDocument() {
@@ -181,10 +184,8 @@ export function useAccountOnboarding(options: {
         importedCount += result.importedCount
       }
       catch (error) {
-        const message = error instanceof Error && error.message
-          ? error.message
-          : '导入失败'
-        failures.push(`${providerDisplayName(entry.provider) ?? 'OpenAI'}：${message}`)
+        const message = errorMessage(error, '导入失败')
+        failures.push(`${formatProviderLabel(entry.provider, 'OpenAI')}：${message}`)
       }
     }
 
@@ -230,34 +231,6 @@ export function useAccountOnboarding(options: {
   }
 }
 
-function emptyCreateForm() {
-  return {
-    provider: '',
-    name: '',
-    mode: 'oauth',
-    importText: '',
-    oauthFlowId: '',
-    oauthAuthUrl: '',
-    oauthCallback: '',
-  }
-}
-
-export function accountProviderModeOptions(provider: string) {
-  if (provider === 'xai') {
-    return [
-      { label: 'OAuth', value: 'oauth' },
-      { label: '账号文件', value: 'json' },
-    ]
-  }
-  if (provider !== 'openai')
-    return []
-  return [
-    { label: 'OAuth', value: 'oauth' },
-    { label: '账号文件', value: 'json' },
-    { label: 'Agent 身份', value: 'agent_identity' },
-  ]
-}
-
 function parseImportJson(value: string) {
   try {
     return JSON.parse(value)
@@ -268,7 +241,7 @@ function parseImportJson(value: string) {
 }
 
 function requireImportProvider(value: string): ImportProvider {
-  if (value === 'openai' || value === 'xai')
+  if (isSupportedProvider(value))
     return value
   throw new Error('请选择要导入的账号平台')
 }
@@ -278,7 +251,7 @@ function providerImportDocuments(value: unknown, provider: ImportProvider): Mixe
     const documents = parseMixedImportDocuments(value)
       .filter(entry => entry.provider === provider)
     if (documents.length === 0) {
-      const label = providerDisplayName(provider) ?? provider
+      const label = formatProviderLabel(provider)
       throw new Error(`批量导入文件不包含 ${label} 账号文档`)
     }
     return documents
@@ -297,7 +270,7 @@ function parseMixedImportDocuments(value: unknown): MixedImportDocument[] {
     if (!isRecord(entry))
       throw new Error('批量导入文件包含无效的 Provider 文档')
     const provider = entry.provider
-    if (provider !== 'openai' && provider !== 'xai')
+    if (!isSupportedProvider(provider))
       throw new Error('批量导入文件包含无效的 Provider 文档')
     if (!isRecord(entry.document))
       throw new Error('批量导入文件包含无效的 Provider 文档')
@@ -307,8 +280,4 @@ function parseMixedImportDocuments(value: unknown): MixedImportDocument[] {
   if (documents.length === 0)
     throw new Error('批量文件没有可导入的账号文档')
   return documents
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

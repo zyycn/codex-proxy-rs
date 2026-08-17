@@ -7,7 +7,7 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
-import { providerDisplayName } from '@/utils/providers'
+import { formatProviderLabel } from '@/utils/providers'
 
 const props = withDefaults(
   defineProps<{
@@ -76,7 +76,7 @@ function toggle(groupId: string) {
 function providerSummary(group: AccountGroup) {
   return Object.entries(group.providerCounts)
     .filter(([, count]) => count > 0)
-    .map(([provider, count]) => `${providerDisplayName(provider) ?? provider} ${count}`)
+    .map(([provider, count]) => `${formatProviderLabel(provider)} ${count}`)
     .join(' · ')
 }
 </script>

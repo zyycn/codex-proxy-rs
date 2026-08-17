@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import { Check, ChevronDown } from '@lucide/vue'
+import { clamp } from 'es-toolkit'
 import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 
+import { normalizeRgbaHexColor } from '@/utils/color'
+import BaseButton from '../BaseButton.vue'
+import BaseInput from '../BaseInput.vue'
+import BasePopover from '../BasePopover.vue'
 import {
   formatRgbaColor,
   hexToHsv,
   hsvToHex,
-  normalizeHexColor,
   parseRgbaColor,
   rgbaToHexColor,
-} from '@/utils/color'
-import BaseButton from './BaseButton.vue'
-import BaseInput from './BaseInput.vue'
-import BasePopover from './BasePopover.vue'
+} from './color'
 
 const props = withDefaults(
   defineProps<{
@@ -38,7 +39,7 @@ const svPanel = useTemplateRef<HTMLElement>('svPanel')
 const hueSlider = useTemplateRef<HTMLElement>('hueSlider')
 const alphaSlider = useTemplateRef<HTMLElement>('alphaSlider')
 
-const normalizedModel = computed(() => normalizeHexColor(model.value) ?? '#60A5FA80')
+const normalizedModel = computed(() => normalizeRgbaHexColor(model.value) ?? '#60A5FA80')
 const draftColor = computed(() => hsvToHex({
   h: hue.value,
   s: saturation.value,
@@ -201,18 +202,18 @@ function updateFromInput() {
 }
 
 function choosePreset(value: string) {
-  const normalized = normalizeHexColor(value)
+  const normalized = normalizeRgbaHexColor(value)
   if (normalized)
     resetDraft(normalized)
 }
 
 function isPresetSelected(value: string) {
-  const normalized = normalizeHexColor(value)
+  const normalized = normalizeRgbaHexColor(value)
   return normalized?.slice(0, 7) === draftColor.value.slice(0, 7)
 }
 
 function presetCheckClass(value: string) {
-  const normalized = normalizeHexColor(value)
+  const normalized = normalizeRgbaHexColor(value)
   if (!normalized)
     return 'text-white'
 
@@ -232,10 +233,6 @@ function confirm() {
 
   model.value = rgbaToHexColor(rgba)
   open.value = false
-}
-
-function clamp(value: number, minimum: number, maximum: number) {
-  return Math.min(maximum, Math.max(minimum, value))
 }
 </script>
 

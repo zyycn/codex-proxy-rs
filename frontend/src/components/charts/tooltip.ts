@@ -1,14 +1,57 @@
-// ECharts tooltip 回调参数的通用安全取值：参数形状不受控（数组/对象混合），
-// 统一在此收敛类型判断。
+import { isRecord } from '@/utils/object'
+
+interface ChartTooltipTheme {
+  surface: string
+  textPrimary: string
+  pointer: string
+}
+
+interface ChartTooltipStyleOptions {
+  axisPointer?: boolean
+  confine?: boolean
+  padding?: [number, number]
+  fontFamily?: string
+  fontWeight?: number
+}
+
+export function chartTooltipStyle(
+  theme: ChartTooltipTheme,
+  options: ChartTooltipStyleOptions = {},
+) {
+  const base = {
+    confine: options.confine,
+    backgroundColor: theme.surface,
+    borderColor: 'transparent',
+    borderWidth: 0,
+    padding: options.padding ?? [10, 14],
+    textStyle: {
+      color: theme.textPrimary,
+      fontSize: 12,
+      fontFamily: options.fontFamily ?? 'Inter Variable, Inter, system-ui, sans-serif',
+      fontWeight: options.fontWeight ?? 650,
+    },
+    extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
+  }
+
+  if (!options.axisPointer)
+    return base
+
+  return {
+    ...base,
+    axisPointer: {
+      type: 'line' as const,
+      lineStyle: { color: theme.pointer, type: 'dashed' as const, width: 1 },
+    },
+  }
+}
+
 export function tooltipRows(params: unknown): Record<string, unknown>[] {
   const values = Array.isArray(params) ? params : [params]
-  return values.filter(
-    (value): value is Record<string, unknown> => typeof value === 'object' && value !== null,
-  )
+  return values.filter(isRecord)
 }
 
 export function tooltipIndex(source: unknown) {
-  if (typeof source !== 'object' || source === null || !('dataIndex' in source))
+  if (!isRecord(source))
     return -1
   return typeof source.dataIndex === 'number' ? source.dataIndex : -1
 }

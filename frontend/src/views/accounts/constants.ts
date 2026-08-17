@@ -1,23 +1,9 @@
 import type { AccountErrorReason, AccountStatus, getAccounts } from '@/api'
-import { clamp } from 'es-toolkit'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
-import { providerDisplayName } from '@/utils/providers'
+import { formatProviderLabel } from '@/utils/providers'
 
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
-
-export interface AccountRequestBucket {
-  bucketStart: string
-  requestCount: number
-}
-
-export interface AccountLocalUsage {
-  requestCount?: number
-  requestCountDisplay?: string
-  totalTokens?: number
-  totalTokensDisplay?: string
-  requestBuckets?: AccountRequestBucket[]
-}
 
 const quotaGroupOrder = new Map([
   ['shortTerm', 0],
@@ -118,38 +104,6 @@ export function orderedPanelQuotaWindows(windows: AccountQuotaWindow[]) {
   return [...windows].sort(compareQuotaWindows)
 }
 
-function quotaWindowPercent(window: AccountQuotaWindow) {
-  return clamp(window.usedPercent ?? 0, 0, 100)
-}
-
-export function quotaWindowBarStyle(window: AccountQuotaWindow, minimumWidth = '8px') {
-  const percent = quotaWindowPercent(window)
-  return {
-    width: `${percent}%`,
-    minWidth: percent > 0 ? minimumWidth : '0',
-  }
-}
-
-export function quotaWindowBarClass(window: AccountQuotaWindow) {
-  if (window.usedPercent === null)
-    return 'bg-cp-default-border-hover'
-  if (window.usedPercent >= 95)
-    return 'bg-cp-danger'
-  if (window.usedPercent >= 80)
-    return 'bg-cp-warning'
-  return 'bg-cp-success'
-}
-
-export function quotaWindowPercentTextClass(window: AccountQuotaWindow) {
-  if (window.usedPercent === null)
-    return 'text-cp-muted-text'
-  if (window.usedPercent >= 95)
-    return 'text-cp-danger-text'
-  if (window.usedPercent >= 80)
-    return 'text-cp-warning-text'
-  return 'text-cp-success-text'
-}
-
 export function modelSuccessRateTextClass(successRate: number | null) {
   if (successRate === null)
     return 'text-cp-muted-text'
@@ -181,7 +135,7 @@ function groupOrder(window: AccountQuotaWindow) {
 }
 
 function accountProviderLabel(value?: string | null) {
-  return providerDisplayName(value) ?? (value || '—')
+  return formatProviderLabel(value)
 }
 
 function optionalAccountCell(value: unknown) {

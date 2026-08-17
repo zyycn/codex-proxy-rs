@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView, MetricTone } from '../composables/presenter'
+import type { dashboardSnapshotView, MetricTone } from '../composables/useDashboard'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { formatCompactNumber } from '@/utils/number'
 import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
-import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow.vue'
-import { formatDashboardCompactNumber } from '../composables/presenter'
+import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow/index.vue'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 
 type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
@@ -24,7 +24,7 @@ const scheduleStats = computed(() => {
   const cap = props.capacity
   const display = (value: number | null | undefined) => value === null || value === undefined
     ? '—'
-    : formatDashboardCompactNumber(value)
+    : formatCompactNumber(value)
   return [
     { label: '默认并发', value: display(cap?.maxConcurrentPerAccount) },
     { label: '总槽位', value: display(cap?.totalSlots) },
@@ -48,8 +48,8 @@ const usedRatio = computed(() => {
   if (!cap || cap.totalSlots === null || cap.totalSlots === undefined)
     return '— / —'
   if (cap.usedSlots === null || cap.usedSlots === undefined)
-    return `— / ${formatDashboardCompactNumber(cap.totalSlots)}`
-  return `${formatDashboardCompactNumber(cap.usedSlots)} / ${formatDashboardCompactNumber(cap.totalSlots)}`
+    return `— / ${formatCompactNumber(cap.totalSlots)}`
+  return `${formatCompactNumber(cap.usedSlots)} / ${formatCompactNumber(cap.totalSlots)}`
 })
 
 const strategyLabel = computed(() => {
@@ -225,9 +225,7 @@ const statusBars = computed(() => {
         >
           <BaseEmpty
             v-if="accounts.length === 0"
-            size="sm"
-            title="暂无账号用量"
-            description="暂无账号请求记录"
+            title="暂无账号请求记录"
             class="min-h-40 place-content-center xl:h-full"
           />
           <template v-else>
@@ -247,7 +245,6 @@ const statusBars = computed(() => {
                   <ProviderIconGroup
                     :provider="account.provider"
                     :authentication-kind="account.authenticationKind"
-                    size="sm"
                   />
                 </template>
               </AccountIdentityCell>

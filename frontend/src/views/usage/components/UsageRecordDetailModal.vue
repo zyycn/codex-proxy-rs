@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { UsageViewModel } from '@/api'
+import type { UsageViewModel } from '../utils/records'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { useThemeColor } from '@/composables/useThemeColor'
+import { chartTooltipStyle } from '@/components/charts/tooltip'
+import { useChartPalette } from '@/composables/useChartPalette'
 import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
 import { formatDuration } from '../utils/format'
 import {
@@ -35,7 +36,7 @@ const props = defineProps<{
 
 const open = defineModel<boolean>({ default: false })
 
-const themeColor = useThemeColor()
+const { palette } = useChartPalette()
 
 const requestText = computed(() => props.record ? visibleRequestText(props.record) : '')
 const responseText = computed(() => props.record ? visibleResponseText(props.record) : '')
@@ -198,31 +199,31 @@ const tokenChartItems = computed(() => [
     label: '输入',
     value: Number(tokenDetails.value?.inputTokens || 0),
     display: tokenDetails.value?.inputTokensDisplay ?? '—',
-    color: themeColor('--cp-info', '#2563EB'),
+    color: palette.value.info,
   },
   {
     label: '输出',
     value: Number(tokenDetails.value?.outputTokens || 0),
     display: tokenDetails.value?.outputTokensDisplay ?? '—',
-    color: themeColor('--cp-success', '#10B981'),
+    color: palette.value.success,
   },
   {
     label: '缓存读取',
     value: Number(tokenDetails.value?.cachedTokens || 0),
     display: tokenDetails.value?.cachedTokensDisplay ?? '—',
-    color: themeColor('--cp-warning', '#D97706'),
+    color: palette.value.warning,
   },
   {
     label: '缓存写入',
     value: Number(tokenDetails.value?.cacheWriteTokens || 0),
     display: tokenDetails.value?.cacheWriteTokensDisplay ?? '—',
-    color: themeColor('--cp-danger', '#DC2626'),
+    color: palette.value.danger,
   },
   {
     label: '推理',
     value: Number(tokenDetails.value?.reasoningTokens || 0),
     display: tokenDetails.value?.reasoningTokensDisplay ?? '—',
-    color: themeColor('--cp-reasoning', '#8B5CF6'),
+    color: palette.value.reasoning,
   },
 ])
 
@@ -232,17 +233,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
   return {
     tooltip: {
       trigger: 'item',
-      backgroundColor: themeColor('--cp-bg-surface', '#fff'),
-      borderColor: 'transparent',
-      borderWidth: 0,
-      padding: [9, 12],
-      textStyle: {
-        color: themeColor('--cp-text-primary', '#334155'),
-        fontSize: 12,
-        fontFamily: 'Inter Variable, Inter, system-ui, sans-serif',
-        fontWeight: 650,
-      },
-      extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
+      ...chartTooltipStyle(palette.value, { padding: [9, 12] }),
       formatter: (params: unknown) => {
         if (typeof params !== 'object' || params === null)
           return ''
@@ -275,7 +266,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
               {
                 name: '暂无',
                 value: 1,
-                itemStyle: { color: themeColor('--cp-bg-muted', '#E5E7EB') },
+                itemStyle: { color: palette.value.surfaceMuted },
               },
             ],
         emphasis: { scale: false },

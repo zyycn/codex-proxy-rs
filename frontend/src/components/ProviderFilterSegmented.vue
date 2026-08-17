@@ -2,6 +2,7 @@
 import { Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
 
+import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
 import BaseSegmented from './base/BaseSegmented.vue'
 
 withDefaults(
@@ -17,8 +18,8 @@ const provider = defineModel<string>({ required: true })
 
 const providerOptions = [
   { label: '全部平台', value: '', icon: LayoutGrid },
-  { label: 'OpenAI', value: 'openai', icon: Openai },
-  { label: 'xAI', value: 'xai', icon: Xai },
+  { label: PROVIDER_DISPLAY_NAMES.openai, value: 'openai', icon: Openai },
+  { label: PROVIDER_DISPLAY_NAMES.xai, value: 'xai', icon: Xai },
 ]
 </script>
 

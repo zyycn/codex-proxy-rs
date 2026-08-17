@@ -8,7 +8,8 @@ import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { useUsageChartPalette } from '../composables/useUsageChartPalette'
+import { useChartPalette } from '@/composables/useChartPalette'
+import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
 import {
   tooltipIndex,
@@ -18,7 +19,7 @@ import {
   usageTooltip,
   usageValueAxis,
 } from '../utils/chart'
-import { escapeTooltip, formatCompactNumber, formatPercent } from '../utils/format'
+import { escapeTooltip, formatPercent } from '../utils/format'
 
 type Health = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']
 type HealthPoint = Health['points'][number]
@@ -36,7 +37,7 @@ const props = withDefaults(
 
 use([BarChart])
 
-const { palette } = useUsageChartPalette()
+const { palette } = useChartPalette()
 const points = computed<HealthPoint[]>(() => props.health.points)
 
 const hasData = computed(

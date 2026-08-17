@@ -7,27 +7,28 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { useUsageChartPalette } from '../composables/useUsageChartPalette'
+import { useChartPalette } from '@/composables/useChartPalette'
+import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
 import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
   usageLegend,
+  usageLineSeries,
   usageTooltip,
   usageValueAxis,
 } from '../utils/chart'
 import {
   decimalDisplayNumber,
   escapeTooltip,
-  formatCompactNumber,
   formatPercent,
   formatUsd,
   formatUsdAxis,
 } from '../utils/format'
 
 type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
-type UsageChartPalette = ReturnType<typeof useUsageChartPalette>['palette']['value']
+type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
 
 const props = withDefaults(
   defineProps<{
@@ -40,7 +41,7 @@ const props = withDefaults(
 )
 
 const activeView = shallowRef('cost')
-const { palette } = useUsageChartPalette()
+const { palette } = useChartPalette()
 const points = computed(() => props.cost.points)
 const hasStandardCost = computed(() =>
   points.value.some(point => point.standardCost != null),
@@ -107,35 +108,35 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   const chartPoints = points.value
   if (activeView.value === 'tokens') {
     return [
-      lineSeries(
+      usageLineSeries(
         '未缓存输入',
         chartPoints.map(point => Math.max(0, point.inputTokens - point.cachedTokens)),
         theme.info,
-        'tokens',
+        { stack: 'tokens' },
       ),
-      lineSeries(
+      usageLineSeries(
         '缓存输入',
         chartPoints.map(point => point.cachedTokens),
         theme.normal,
-        'tokens',
+        { stack: 'tokens' },
       ),
-      lineSeries(
+      usageLineSeries(
         '输出',
         chartPoints.map(point => point.outputTokens),
         theme.success,
-        'tokens',
+        { stack: 'tokens' },
       ),
     ]
   }
 
   if (activeView.value === 'cache') {
     return [
-      lineSeries(
+      usageLineSeries(
         '缓存 Token 占比',
         chartPoints.map(point => point.cachedTokenRate),
         theme.normal,
       ),
-      lineSeries(
+      usageLineSeries(
         '命中请求率',
         chartPoints.map(point => point.cacheHitRequestRate),
         theme.success,
@@ -144,17 +145,16 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   }
 
   const series = [
-    lineSeries(
+    usageLineSeries(
       '预估费用',
       chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
       theme.success,
-      undefined,
-      true,
+      { area: 'strong' },
     ),
   ]
   if (hasStandardCost.value) {
     series.push(
-      lineSeries(
+      usageLineSeries(
         '标准费用',
         chartPoints.map(point => decimalDisplayNumber(point.standardCost)),
         theme.textMuted,
@@ -162,43 +162,6 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
     )
   }
   return series
-}
-
-function lineSeries(
-  name: string,
-  data: Array<number | null>,
-  color: string,
-  stack?: string,
-  area = Boolean(stack),
-): LineSeriesOption {
-  return {
-    name,
-    type: 'line',
-    data: data.map(value => value ?? null),
-    connectNulls: false,
-    stack,
-    smooth: true,
-    showSymbol: data.length <= 12,
-    symbol: 'circle',
-    symbolSize: 5,
-    lineStyle: { color, width: 2.2 },
-    itemStyle: { color },
-    areaStyle: area
-      ? {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: `${color}30` },
-              { offset: 1, color: `${color}08` },
-            ],
-          },
-        }
-      : undefined,
-  }
 }
 
 function formatTooltip(params: unknown) {

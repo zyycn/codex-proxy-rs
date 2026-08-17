@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
+import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
 
 withDefaults(
   defineProps<{
@@ -23,12 +24,12 @@ const providers = [
   },
   {
     value: 'openai' as const,
-    label: 'OpenAI',
+    label: PROVIDER_DISPLAY_NAMES.openai,
     icon: Openai,
   },
   {
     value: 'xai' as const,
-    label: 'xAI',
+    label: PROVIDER_DISPLAY_NAMES.xai,
     icon: Xai,
   },
 ]

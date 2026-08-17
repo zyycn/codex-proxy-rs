@@ -1,13 +1,12 @@
 <script setup lang="ts">
+import type { SystemUpdateDetail } from '@/api'
 import {
   ArrowUpCircle,
-  CheckCircle2,
   Circle,
   ExternalLink,
   Power,
   RefreshCw,
   Terminal,
-  XCircle,
 } from '@lucide/vue'
 
 import { storeToRefs } from 'pinia'
@@ -15,12 +14,17 @@ import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
-import { useSystemUpdateStore } from '@/stores/modules/system-update'
+import { normalizeSystemVersion, useSystemUpdateStore } from '@/stores/modules/system-update'
 import { errorMessage } from '@/utils/async'
-import { renderMarkdown } from '@/utils/markdown'
+import { formatTime } from '@/utils/date'
+import { renderReleaseNotes } from './markdown'
+import {
+  resolveSystemUpdateLogClasses,
+  resolveSystemUpdatePresentation,
+} from './presenter'
 
 const open = defineModel<boolean>({ default: false })
 
@@ -46,176 +50,38 @@ const { loadSystem, checkUpdates, updateNow, restartNow } = systemUpdateStore
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
 const updateConfirmOpen = shallowRef(false)
-const updateConfirmInfo = shallowRef<any>(null)
+const updateConfirmInfo = shallowRef<SystemUpdateDetail | null>(null)
 const updateConfirmPreviousTarget = shallowRef('')
 const preparingUpdate = shallowRef(false)
 
-const statusView = computed(() => {
-  if (restarting.value) {
-    return {
-      label: '重启中',
-      icon: RefreshCw,
-      badge: 'bg-cp-info-bg text-cp-info-text',
-      iconClass: 'text-cp-info',
-    }
-  }
-  if (updating.value) {
-    return {
-      label: '更新中',
-      icon: RefreshCw,
-      badge: 'bg-cp-info-bg text-cp-info-text',
-      iconClass: 'text-cp-info',
-    }
-  }
-  if (updateError.value || updateInfo.value?.warning) {
-    return {
-      label: '异常',
-      icon: XCircle,
-      badge: 'bg-cp-danger-bg text-cp-danger-text',
-      iconClass: 'text-cp-danger',
-    }
-  }
-  if (updateSuccess.value) {
-    return {
-      label: '已更新',
-      icon: CheckCircle2,
-      badge: 'bg-cp-success-bg text-cp-success-text',
-      iconClass: 'text-cp-success',
-    }
-  }
-  if (hasUpdate.value) {
-    return {
-      label: '有新版本',
-      icon: ArrowUpCircle,
-      badge: 'bg-cp-success-bg text-cp-success-text',
-      iconClass: 'text-cp-success',
-    }
-  }
-  if (updateInfo.value) {
-    return {
-      label: '已是最新',
-      icon: CheckCircle2,
-      badge: 'bg-cp-success-bg text-cp-success-text',
-      iconClass: 'text-cp-success',
-    }
-  }
-  return {
-    label: '未检查',
-    icon: CheckCircle2,
-    badge: 'bg-cp-muted text-cp-secondary',
-    iconClass: 'text-cp-muted-text',
-  }
-})
-
-const summaryItems = computed(() => [
-  {
-    key: 'current',
-    label: '当前版本',
-    value: loading.value ? '...' : version.value?.version ? `v${version.value.version}` : '-',
-    title: version.value?.version,
-  },
-  {
-    key: 'latest',
-    label: '最新版本',
-    value: updateInfo.value?.latestVersion ? `v${updateInfo.value.latestVersion}` : '-',
-    title: updateInfo.value?.latestVersion,
-    releaseUrl: updateInfo.value?.releaseUrl,
-  },
-  {
-    key: 'build',
-    label: '构建',
-    value: displayValue(updateInfo.value?.buildTypeLabel),
-    title: updateInfo.value?.buildType,
-  },
-  {
-    key: 'deployment',
-    label: '部署',
-    value: displayValue(version.value?.deploymentModeLabel),
-    title: version.value?.deploymentMode,
-  },
-])
+const presentation = computed(() => resolveSystemUpdatePresentation({
+  version: version.value,
+  updateInfo: updateInfo.value,
+  loading: loading.value,
+  restarting: restarting.value,
+  updating: updating.value,
+  updateError: updateError.value,
+  updateSuccess: updateSuccess.value,
+  hasUpdate: hasUpdate.value,
+  updateStreaming: updateStreaming.value,
+  updateStreamError: updateStreamError.value,
+  previousTargetVersion: updateConfirmPreviousTarget.value,
+  confirmedTargetVersion: updateConfirmInfo.value?.latestVersion ?? null,
+}))
 
 const updateLogRows = computed(() =>
   updateLogs.value.map(item => ({
     ...item,
-    time: formatLogTime(item.at),
+    time: formatTime(item.at, '--:--:--'),
+    classes: resolveSystemUpdateLogClasses(item.level),
   })),
 )
 
-const renderedReleaseNotes = computed(() => renderMarkdown(updateInfo.value?.notes))
+const renderedReleaseNotes = computed(() => renderReleaseNotes(updateInfo.value?.notes))
 
 const showUpdateProgress = computed(
   () => hasUpdate.value || updating.value || restarting.value || updateLogRows.value.length > 0,
 )
-
-const updateConfirmRows = computed(() => [
-  {
-    key: 'current',
-    label: '当前版本',
-    value: version.value?.version ? `v${version.value.version}` : '-',
-  },
-  {
-    key: 'previous',
-    label: '已显示目标',
-    value: updateConfirmPreviousTarget.value ? `v${updateConfirmPreviousTarget.value}` : '-',
-  },
-  {
-    key: 'target',
-    label: '远端最新目标',
-    value: updateConfirmInfo.value?.latestVersion
-      ? `v${updateConfirmInfo.value.latestVersion}`
-      : '-',
-  },
-])
-
-const streamStatusLabel = computed(() => {
-  if (updateStreaming.value)
-    return '实时'
-  if (updateStreamError.value)
-    return '断开'
-  return '待连接'
-})
-
-const restartButtonLabel = computed(() => {
-  return restarting.value ? '重启中' : '立即重启'
-})
-
-function displayValue(value: unknown) {
-  return value ? String(value) : '-'
-}
-
-function formatLogTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime()))
-    return '--:--:--'
-  return date.toLocaleTimeString('zh-CN', { hour12: false })
-}
-
-function logMarkerClass(level: string) {
-  if (level === 'success')
-    return 'text-cp-success'
-  if (level === 'warning')
-    return 'text-cp-warning'
-  if (level === 'error')
-    return 'text-cp-danger'
-  return 'text-cp-info'
-}
-
-function logTextClass(level: string) {
-  if (level === 'success')
-    return 'text-cp-success'
-  if (level === 'warning')
-    return 'text-cp-warning'
-  if (level === 'error')
-    return 'text-cp-danger'
-  return 'text-cp-primary'
-}
-
-function normalizeUpdateVersion(value: unknown) {
-  return String(value ?? '')
-    .trim()
-    .replace(/^v/i, '')
-}
 
 async function scrollUpdateLogsToBottom() {
   await nextTick()
@@ -242,7 +108,7 @@ async function handleUpdateRequest() {
   if (preparingUpdate.value || updating.value)
     return
 
-  const previousTargetVersion = normalizeUpdateVersion(updateInfo.value?.latestVersion)
+  const previousTargetVersion = normalizeSystemVersion(updateInfo.value?.latestVersion)
   preparingUpdate.value = true
   try {
     const data = await checkUpdates(true)
@@ -250,7 +116,7 @@ async function handleUpdateRequest() {
       toast.success('当前已是最新版本')
       return
     }
-    const remoteTargetVersion = normalizeUpdateVersion(data.latestVersion)
+    const remoteTargetVersion = normalizeSystemVersion(data.latestVersion)
     if (!remoteTargetVersion) {
       toast.error('远端目标版本为空')
       return
@@ -284,7 +150,7 @@ async function runConfirmedUpdate(targetVersion: string) {
 }
 
 async function handleConfirmUpdate() {
-  const targetVersion = normalizeUpdateVersion(updateConfirmInfo.value?.latestVersion)
+  const targetVersion = normalizeSystemVersion(updateConfirmInfo.value?.latestVersion)
   if (!targetVersion)
     return
 
@@ -344,16 +210,20 @@ watch(
           </div>
           <span
             class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-heavy"
-            :class="statusView.badge"
+            :class="presentation.status.badge"
           >
-            <component :is="statusView.icon" class="size-3.5" :class="statusView.iconClass" />
-            {{ statusView.label }}
+            <component
+              :is="presentation.status.icon"
+              class="size-3.5"
+              :class="presentation.status.iconClass"
+            />
+            {{ presentation.status.label }}
           </span>
         </div>
 
         <div class="grid gap-2.5 sm:grid-cols-4">
           <div
-            v-for="item in summaryItems"
+            v-for="item in presentation.summaryItems"
             :key="item.key"
             class="min-w-0 rounded-cp-control bg-cp-surface px-3 py-2.5"
           >
@@ -398,7 +268,7 @@ watch(
             发布说明
           </p>
           <span class="font-mono text-[11px] font-emphasis text-cp-muted-text">
-            {{ displayValue(updateInfo?.latestVersion) }}
+            {{ presentation.releaseVersion }}
           </span>
         </div>
         <BaseScrollbar class="-mx-4" max-height="160px">
@@ -421,13 +291,13 @@ watch(
           </div>
           <span
             class="inline-flex h-6 items-center gap-1.5 rounded-full bg-cp-subtle px-2 text-[11px] leading-none font-bold text-cp-secondary"
-            :title="updateStreamError || streamStatusLabel"
+            :title="updateStreamError || presentation.streamStatusLabel"
           >
             <i
               class="size-1.5 rounded-full"
               :class="updateStreaming ? 'bg-cp-success' : 'bg-cp-muted-text'"
             />
-            {{ streamStatusLabel }}
+            {{ presentation.streamStatusLabel }}
           </span>
         </header>
 
@@ -445,10 +315,10 @@ watch(
               <span class="tabular-nums text-cp-muted-text">{{ log.time }}</span>
               <Circle
                 class="mt-1 size-2.5"
-                :class="logMarkerClass(log.level)"
+                :class="log.classes.marker"
                 fill="currentColor"
               />
-              <p class="m-0 min-w-0 wrap-break-word" :class="logTextClass(log.level)">
+              <p class="m-0 min-w-0 wrap-break-word" :class="log.classes.text">
                 <span v-if="log.step" class="mr-1 text-cp-muted-text">[{{ log.step }}]</span>
                 {{ log.message }}
               </p>
@@ -486,7 +356,7 @@ watch(
         <template #icon>
           <Power class="size-4" />
         </template>
-        {{ restartButtonLabel }}
+        {{ presentation.restartButtonLabel }}
       </BaseButton>
       <BaseButton
         v-else
@@ -515,7 +385,7 @@ watch(
     <div class="grid gap-3">
       <div class="grid gap-2 rounded-cp-control bg-cp-subtle p-3">
         <div
-          v-for="item in updateConfirmRows"
+          v-for="item in presentation.confirmRows"
           :key="item.key"
           class="flex min-w-0 items-center justify-between gap-3"
         >

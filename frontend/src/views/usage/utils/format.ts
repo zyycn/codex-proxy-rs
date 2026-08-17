@@ -1,25 +1,17 @@
-import { providerDisplayName } from '@/utils/providers'
-
-const compactNumberFormatter = new Intl.NumberFormat('zh-CN', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
+import { formatLocalizedCompactNumber } from '@/utils/number'
+import { formatProviderLabel } from '@/utils/providers'
 
 const percentFormatter = new Intl.NumberFormat('zh-CN', {
   style: 'percent',
   maximumFractionDigits: 1,
 })
 
-export function formatCompactNumber(value: number) {
-  return compactNumberFormatter.format(finiteOrZero(value))
-}
-
 export function formatPercent(value?: number | null) {
   return value == null || !Number.isFinite(value) ? '—' : percentFormatter.format(value)
 }
 
 export function formatProvider(value?: string | null) {
-  return providerDisplayName(value) ?? (value || '—')
+  return formatProviderLabel(value)
 }
 
 export function formatDuration(value?: number | null) {
@@ -72,7 +64,7 @@ export function formatEstimatedAmount(currency: string, value?: string | null) {
 export function formatUsdAxis(value: number) {
   const safeValue = finiteOrZero(value)
   if (Math.abs(safeValue) >= 1_000)
-    return `$${formatCompactNumber(safeValue)}`
+    return `$${formatLocalizedCompactNumber(safeValue)}`
   if (Math.abs(safeValue) < 0.01 && safeValue !== 0)
     return `$${safeValue.toFixed(3)}`
   return `$${safeValue.toFixed(safeValue < 1 ? 2 : 1)}`

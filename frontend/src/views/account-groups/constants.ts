@@ -1,6 +1,19 @@
 import type { AccountGroup } from '@/api'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 
+export const DEFAULT_ACCOUNT_GROUP_COLOR = '#60A5FA80'
+
+export const ACCOUNT_GROUP_COLOR_PRESETS = [
+  '#60A5FA80',
+  '#22D3EE80',
+  '#2DD4BF80',
+  '#4ADE8080',
+  '#FBBF2480',
+  '#FB718580',
+  '#A78BFA80',
+  '#94A3B880',
+] as const
+
 export const accountGroupColumns = defineTableColumns<AccountGroup>([
   { key: 'selection', kind: 'selection' },
   { key: 'identity', label: '分组', kind: 'identity' },

@@ -7,7 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { formatDateTime } from '@/utils/date'
-import { providerDisplayName } from '@/utils/providers'
+import { formatProviderLabel } from '@/utils/providers'
 
 interface WireProfile {
   provider: string
@@ -174,7 +174,7 @@ watch(
 )
 
 function providerLabel(provider: string) {
-  return providerDisplayName(provider) ?? provider
+  return formatProviderLabel(provider)
 }
 </script>
 
@@ -198,7 +198,6 @@ function providerLabel(provider: string) {
     <template #body>
       <BaseEmpty
         v-if="!profile"
-        size="sm"
         title="暂无请求身份"
         class="min-h-71.75 flex-1 place-content-center"
       />

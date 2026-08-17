@@ -3,7 +3,7 @@ import type { AccountRow } from '../constants'
 
 import { computed } from 'vue'
 import { visibleSummaryQuotaWindows } from '../constants'
-import AccountUsageWindow from './AccountUsageWindow.vue'
+import AccountUsageWindow from './AccountUsageWindow/index.vue'
 
 const props = defineProps<{
   account: AccountRow

@@ -16,9 +16,9 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { errorMessage } from '@/utils/async'
-import { normalizeHexColor } from '@/utils/color'
+import { normalizeRgbaHexColor } from '@/utils/color'
 import { formatDateTime } from '@/utils/date'
-import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../colors'
+import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
 export interface AccountGroupFormValue {
   name: string
@@ -124,7 +124,7 @@ export function useAccountGroups() {
       toast.warning('请输入分组名称')
       return
     }
-    const color = normalizeHexColor(form.value.color)
+    const color = normalizeRgbaHexColor(form.value.color)
     if (!color) {
       toast.warning('请选择有效的分组颜色')
       return

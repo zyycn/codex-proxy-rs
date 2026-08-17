@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
+import type { UsageViewModel } from '../utils/records'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
-import type { UsageViewModel } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 
@@ -10,11 +10,11 @@ import {
   getUsageRecordInsightsOverview,
   getUsageRecords,
   getUsageRecordSummary,
-  normalizeUsageRecord,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
 import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { normalizeUsageRecord } from '../utils/records'
 
 interface UseUsageRecordsTableOptions {
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>

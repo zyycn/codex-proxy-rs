@@ -2,9 +2,9 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, useId, useTemplateRef, watch } from 'vue'
 
-import { lockBodyScroll, unlockBodyScroll } from '@/utils/body-scroll-lock'
-import BaseIconButton from './BaseIconButton.vue'
-import BaseScrollbar from './BaseScrollbar.vue'
+import BaseIconButton from '../BaseIconButton.vue'
+import BaseScrollbar from '../BaseScrollbar.vue'
+import { lockBodyScroll, unlockBodyScroll } from './bodyScrollLock'
 
 type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 type ModalTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'

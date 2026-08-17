@@ -6,7 +6,7 @@ import { computed } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { orderedPanelQuotaWindows } from '../constants'
 import AccountPlanBadge from './AccountPlanBadge.vue'
-import AccountUsageWindow from './AccountUsageWindow.vue'
+import AccountUsageWindow from './AccountUsageWindow/index.vue'
 
 const props = defineProps<{
   account: AccountRow

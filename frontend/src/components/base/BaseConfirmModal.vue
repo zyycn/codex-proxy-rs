@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import BaseButton from './BaseButton.vue'
-import BaseModal from './BaseModal.vue'
+import BaseModal from './BaseModal/index.vue'
 
 const props = withDefaults(
   defineProps<{

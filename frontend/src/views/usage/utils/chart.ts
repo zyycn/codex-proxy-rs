@@ -1,6 +1,58 @@
-import type { useUsageChartPalette } from '../composables/useUsageChartPalette'
+import type { LineSeriesOption } from 'echarts'
+import type { useChartPalette } from '@/composables/useChartPalette'
+import { chartTooltipStyle } from '@/components/charts/tooltip'
 
-type UsageChartPalette = ReturnType<typeof useUsageChartPalette>['palette']['value']
+type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
+type UsageAreaStrength = 'strong' | 'subtle'
+
+interface UsageLineSeriesOptions {
+  stack?: string
+  area?: UsageAreaStrength | false
+}
+
+const areaAlpha: Record<UsageAreaStrength, readonly [string, string]> = {
+  strong: ['30', '08'],
+  subtle: ['18', '02'],
+}
+
+export function usageLineSeries(
+  name: string,
+  data: Array<number | null | undefined>,
+  color: string,
+  options: UsageLineSeriesOptions = {},
+): LineSeriesOption {
+  const area = options.area ?? (options.stack ? 'strong' : false)
+  const alpha = area ? areaAlpha[area] : null
+
+  return {
+    name,
+    type: 'line',
+    data: data.map(value => value ?? null),
+    connectNulls: false,
+    stack: options.stack,
+    smooth: true,
+    showSymbol: data.length <= 12,
+    symbol: 'circle',
+    symbolSize: 5,
+    lineStyle: { color, width: 2.2 },
+    itemStyle: { color },
+    areaStyle: alpha
+      ? {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: `${color}${alpha[0]}` },
+              { offset: 1, color: `${color}${alpha[1]}` },
+            ],
+          },
+        }
+      : undefined,
+  }
+}
 
 export function usageTooltip(
   theme: UsageChartPalette,
@@ -8,21 +60,7 @@ export function usageTooltip(
 ) {
   return {
     trigger: 'axis' as const,
-    backgroundColor: theme.surface,
-    borderColor: 'transparent',
-    borderWidth: 0,
-    padding: [10, 14],
-    textStyle: {
-      color: theme.textPrimary,
-      fontSize: 12,
-      fontFamily: 'Inter Variable, Inter, system-ui, sans-serif',
-      fontWeight: 650,
-    },
-    extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
-    axisPointer: {
-      type: 'line' as const,
-      lineStyle: { color: theme.pointer, type: 'dashed' as const, width: 1 },
-    },
+    ...chartTooltipStyle(theme, { axisPointer: true }),
     formatter,
   }
 }

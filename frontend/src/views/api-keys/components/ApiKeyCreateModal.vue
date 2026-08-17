@@ -10,7 +10,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 
 const props = defineProps<{
   groups: AccountGroup[]

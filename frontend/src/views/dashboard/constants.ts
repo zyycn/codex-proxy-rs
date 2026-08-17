@@ -1,4 +1,5 @@
-import type { MetricTone } from './composables/presenter'
+import type { MetricTone } from './composables/useDashboard'
+import { formatInteger } from '@/utils/number'
 
 // tone 到 Tailwind 类的唯一映射；仪表盘各卡片共用。
 export const metricToneIconClasses: Record<MetricTone, string> = {
@@ -105,5 +106,5 @@ export function healthReliabilityValueClass(successRequests: number, failedReque
 }
 
 export function formatHealthCount(value: number) {
-  return Math.max(0, value).toLocaleString('zh-CN')
+  return formatInteger(Math.max(0, value))
 }

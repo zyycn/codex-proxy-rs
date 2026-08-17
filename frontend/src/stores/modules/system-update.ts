@@ -242,7 +242,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       const result = await performSystemUpdate({ targetVersion: confirmedTargetVersion })
       updateSuccess.value = true
       needRestart.value = result.needRestart
-      restartTargetVersion.value = result.needRestart ? normalizeVersion(result.targetVersion) : ''
+      restartTargetVersion.value = result.needRestart ? normalizeSystemVersion(result.targetVersion) : ''
       updateInfo.value = {
         ...currentInfo,
         latestVersion: result.targetVersion,
@@ -271,7 +271,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     while (Date.now() < deadline) {
       try {
         const readyVersion = await getSystemVersion(restartProbeTimeoutMs)
-        if (normalizeVersion(readyVersion.version) === expectedVersion) {
+        if (normalizeSystemVersion(readyVersion.version) === expectedVersion) {
           window.location.reload()
           return
         }
@@ -348,7 +348,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   }
 })
 
-function normalizeVersion(value: unknown) {
+export function normalizeSystemVersion(value: unknown) {
   return String(value ?? '')
     .trim()
     .replace(/^v/i, '')

@@ -4,11 +4,11 @@ import type { useAccountConnectionTest } from '../composables/useAccountConnecti
 import { RefreshCw } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
-import AccountStatusBadge from './AccountStatusBadge.vue'
+import AccountStatusBadge from './AccountStatusBadge/index.vue'
 
 type ConnectionTest = ReturnType<typeof useAccountConnectionTest>
 

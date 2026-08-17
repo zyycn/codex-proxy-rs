@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { useAccountOnboarding } from '../composables/useAccountOnboarding'
-import type { AccountRow } from '../constants'
+import type { AccountRow } from '../../constants'
+import type { AccountCreateForm } from './model'
+import type { AccountCreateProvider } from './presenter'
 import { Openai, Xai } from '@boxicons/vue'
 import { Copy, KeyRound, LayoutGrid, Upload } from '@lucide/vue'
 
@@ -10,16 +11,13 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { useCopyText } from '@/composables/useCopyText'
-import { accountProviderModeOptions } from '../composables/useAccountOnboarding'
 import AccountProviderChooser from './AccountProviderChooser.vue'
-
-type AccountOnboarding = ReturnType<typeof useAccountOnboarding>
-type CreateForm = AccountOnboarding['createForm']['value']
+import { resolveAccountCreatePresentation } from './presenter'
 
 const props = withDefaults(
   defineProps<{
@@ -41,7 +39,7 @@ const emit = defineEmits<{
   generateOauth: []
 }>()
 const open = defineModel<boolean>({ default: false })
-const form = defineModel<CreateForm>('form', { required: true })
+const form = defineModel<AccountCreateForm>('form', { required: true })
 const copyWithToast = useCopyText()
 
 const fileError = ref('')
@@ -51,9 +49,13 @@ const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
   reset: true,
 })
 
-const modeOptions = computed(() => accountProviderModeOptions(form.value.provider))
-const isProviderSelected = computed(() => ['openai', 'xai', 'batch'].includes(form.value.provider))
-const isChoosingProvider = computed(() => !props.reauthorizing && !isProviderSelected.value)
+const view = computed(() => resolveAccountCreatePresentation({
+  form: form.value,
+  account: props.account,
+  saving: props.saving,
+  oauthLoading: props.oauthLoading,
+  reauthorizing: props.reauthorizing,
+}))
 
 const provider = computed({
   get: () => form.value.provider,
@@ -90,82 +92,7 @@ const oauthCallback = computed({
   },
 })
 
-const oauthAuthUrl = computed(() => form.value.oauthAuthUrl || '')
-const isXai = computed(() => form.value.provider === 'xai')
-const isBatch = computed(() => form.value.provider === 'batch')
-const importFileLabel = computed(() => {
-  if (isBatch.value)
-    return '批量账号文件'
-  return mode.value === 'agent_identity' ? 'Agent 身份文件' : '账号文件'
-})
-const importFilePlaceholder = computed(() => mode.value === 'agent_identity'
-  ? '粘贴 Agent 身份文件内容'
-  : isBatch.value
-    ? '粘贴 CPR 多平台导出文件内容'
-    : '粘贴 CPR、Sub2API 或 CPA 账号文件内容')
-
-const accountName = computed(() => {
-  return props.account?.email || props.account?.accountId || props.account?.id || '该账号'
-})
-
-const modalTitle = computed(() => {
-  if (props.reauthorizing)
-    return '重新授权账号'
-  return isChoosingProvider.value ? '选择账号平台' : '导入账号'
-})
-
-const oauthPanelTitle = computed(() => {
-  if (props.reauthorizing)
-    return accountName.value
-  return isXai.value ? 'xAI OAuth 授权' : 'OpenAI OAuth 授权'
-})
-
-const oauthPanelDescription = computed(() => {
-  return isXai.value
-    ? '生成并打开授权链接 → 完成浏览器授权 → 粘贴回调地址、查询字符串或授权码'
-    : '生成并打开授权链接 → 完成浏览器授权 → 粘贴回调地址'
-})
-
-const canGenerateOauth = computed(() =>
-  isProviderSelected.value
-  && !props.saving
-  && !props.oauthLoading,
-)
-
-const canSubmit = computed(() => {
-  if (!isProviderSelected.value || props.saving || props.oauthLoading)
-    return false
-  if (mode.value === 'oauth') {
-    if (!form.value.oauthFlowId || !oauthAuthUrl.value)
-      return false
-    return oauthCallback.value.trim().length > 0
-  }
-  return importText.value.trim().length > 0
-})
-
-const description = computed<string | undefined>(() => {
-  if (isChoosingProvider.value)
-    return undefined
-  if (props.reauthorizing) {
-    return isXai.value
-      ? '完成新的 xAI 授权并替换此账号凭据'
-      : '完成新的 OpenAI 授权并替换此账号凭据'
-  }
-  if (isBatch.value)
-    return '粘贴或上传 CPR 账号包，一次导入多个平台账号'
-  if (isXai.value) {
-    return mode.value === 'oauth'
-      ? '通过浏览器授权导入 xAI 账号'
-      : '粘贴或上传 xAI 账号文件，匹配已有账号时更新凭据'
-  }
-  if (mode.value === 'oauth')
-    return '通过浏览器授权导入 OpenAI 账号'
-  if (mode.value === 'agent_identity')
-    return '粘贴或上传 Agent 身份文件，匹配已有账号时更新凭据'
-  return '粘贴或上传 CPR、Sub2API 或 CPA 账号文件，匹配已有账号时更新凭据'
-})
-
-function selectProvider(value: 'openai' | 'xai' | 'batch') {
+function selectProvider(value: AccountCreateProvider) {
   provider.value = value
 }
 
@@ -195,30 +122,30 @@ async function copyText(value: string, successText: string) {
 <template>
   <BaseModal
     v-model="open"
-    :title="modalTitle"
-    :description="description"
-    :tone="isChoosingProvider ? 'neutral' : 'info'"
-    :size="isChoosingProvider ? 'sm' : 'md'"
+    :title="view.modal.title"
+    :description="view.modal.description"
+    :tone="view.modal.tone"
+    :size="view.modal.size"
     :dismissible="!saving"
   >
     <template #icon>
-      <LayoutGrid v-if="isBatch" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
-      <Xai v-else-if="isXai" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
+      <LayoutGrid v-if="view.isBatch" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
+      <Xai v-else-if="view.isXai" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
       <Openai v-else class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
     </template>
 
     <AccountProviderChooser
-      v-if="isChoosingProvider"
+      v-if="view.choosingProvider"
       :disabled="saving || oauthLoading"
       @select="selectProvider"
     />
 
     <div v-else class="flex flex-col gap-4">
       <BaseSegmented
-        v-if="!reauthorizing && !isBatch"
+        v-if="!reauthorizing && !view.isBatch"
         v-model="mode"
         label="账号添加方式"
-        :options="modeOptions"
+        :options="view.modeOptions"
         class="w-full"
       />
 
@@ -232,10 +159,10 @@ async function copyText(value: string, successText: string) {
             </div>
             <div class="min-w-0 flex-1">
               <p class="m-0 text-[13px] font-bold text-cp-primary">
-                {{ oauthPanelTitle }}
+                {{ view.oauth.panelTitle }}
               </p>
               <p class="m-0 mt-1 text-[12px] leading-[1.55] font-medium text-cp-secondary">
-                {{ oauthPanelDescription }}
+                {{ view.oauth.panelDescription }}
               </p>
             </div>
           </div>
@@ -245,14 +172,14 @@ async function copyText(value: string, successText: string) {
           <BaseButton
             variant="secondary"
             :loading="oauthLoading"
-            :disabled="!canGenerateOauth"
+            :disabled="!view.canGenerateOauth"
             @click="emit('generateOauth')"
           >
             {{ reauthorizing ? '重新生成授权链接' : '生成授权链接' }}
           </BaseButton>
         </div>
 
-        <BaseForm v-if="oauthAuthUrl">
+        <BaseForm v-if="view.oauth.authUrl">
           <BaseFormItem label="授权链接">
             <template #extra>
               <BaseIconButton
@@ -261,7 +188,7 @@ async function copyText(value: string, successText: string) {
                 title="复制链接"
                 label="复制链接"
                 :disabled="saving || oauthLoading"
-                @click="copyText(oauthAuthUrl, '授权链接已复制')"
+                @click="copyText(view.oauth.authUrl, '授权链接已复制')"
               >
                 <Copy class="size-3.5" />
               </BaseIconButton>
@@ -272,7 +199,7 @@ async function copyText(value: string, successText: string) {
               <div class="rounded-cp-control bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] px-3.5 py-3 shadow-cp-input">
                 <pre
                   class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-emphasis text-cp-secondary"
-                  v-text="oauthAuthUrl"
+                  v-text="view.oauth.authUrl"
                 />
               </div>
             </BaseScrollbar>
@@ -280,12 +207,12 @@ async function copyText(value: string, successText: string) {
         </BaseForm>
 
         <BaseForm>
-          <BaseFormItem :label="isXai ? '回调地址或授权码' : '回调地址'" required>
+          <BaseFormItem :label="view.oauth.callbackLabel" required>
             <BaseTextarea
               v-model="oauthCallback"
-              :aria-label="isXai ? '回调地址或授权码' : '回调地址'"
+              :aria-label="view.oauth.callbackLabel"
               :rows="4"
-              :placeholder="isXai ? '回调地址、?code=...&state=... 或授权码' : 'http://localhost:1455/auth/callback?code=...&state=...'"
+              :placeholder="view.oauth.callbackPlaceholder"
               :disabled="saving"
             />
           </BaseFormItem>
@@ -294,7 +221,7 @@ async function copyText(value: string, successText: string) {
 
       <BaseForm v-else>
         <BaseFormItem
-          :label="importFileLabel"
+          :label="view.importFile.label"
           required
           :error="fileError || undefined"
         >
@@ -308,26 +235,26 @@ async function copyText(value: string, successText: string) {
           </template>
           <BaseTextarea
             v-model="importText"
-            :aria-label="importFileLabel"
+            :aria-label="view.importFile.label"
             :rows="9"
-            :placeholder="importFilePlaceholder"
+            :placeholder="view.importFile.placeholder"
             :disabled="saving"
           />
         </BaseFormItem>
       </BaseForm>
     </div>
 
-    <template v-if="!isChoosingProvider" #footer>
+    <template v-if="!view.choosingProvider" #footer>
       <BaseButton variant="ghost" :disabled="saving" @click="open = false">
         取消
       </BaseButton>
       <BaseButton
         variant="primary"
         :loading="saving"
-        :disabled="!canSubmit"
+        :disabled="!view.canSubmit"
         @click="emit('create')"
       >
-        {{ reauthorizing ? '完成重新授权' : mode === 'oauth' ? '完成授权导入' : isBatch ? '批量导入' : '导入' }}
+        {{ view.submitLabel }}
       </BaseButton>
     </template>
   </BaseModal>

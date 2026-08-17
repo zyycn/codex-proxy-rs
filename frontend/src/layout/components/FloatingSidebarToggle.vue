@@ -8,6 +8,7 @@ import {
   useStorage,
   useWindowSize,
 } from '@vueuse/core'
+import { clamp } from 'es-toolkit'
 import {
   computed,
   nextTick,
@@ -177,10 +178,6 @@ function applyPosition(position: StoredPosition) {
   x.value = next.x
   y.value = next.y
   storedPosition.value = next
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
 }
 
 function positiveNumber(value: number, fallback: number) {

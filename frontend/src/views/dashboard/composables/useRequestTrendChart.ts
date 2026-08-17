@@ -1,11 +1,11 @@
 import type { BarSeriesOption, EChartsOption, LineSeriesOption } from 'echarts'
 import type { Ref } from 'vue'
-import type { dashboardTrendView, normalizeDashboardTrendKind } from './presenter'
+import type { dashboardTrendView, normalizeDashboardTrendKind } from './useDashboard'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 
-import { tooltipIndex } from '@/components/charts/tooltip'
-import { useThemeColor } from '@/composables/useThemeColor'
+import { chartTooltipStyle, tooltipIndex } from '@/components/charts/tooltip'
+import { useChartPalette } from '@/composables/useChartPalette'
 
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
 type TrendView = ReturnType<typeof dashboardTrendView>
@@ -51,7 +51,7 @@ export function useRequestTrendChart(options: {
   onTrendChange: (kind: TrendKind) => void
 }) {
   const { points, summary, activeKind } = options
-  const themeColor = useThemeColor()
+  const { color: themeColor, palette } = useChartPalette()
   const preferredMotion = usePreferredReducedMotion()
   const pinnedSummaryLabel = shallowRef<string>()
 
@@ -84,34 +84,21 @@ export function useRequestTrendChart(options: {
       animationEasingUpdate: 'cubicOut',
       tooltip: {
         trigger: 'axis',
-        confine: true,
-        backgroundColor: themeColor('--cp-bg-surface', '#fff'),
-        borderColor: 'transparent',
-        borderWidth: 0,
-        padding: [10, 14],
-        textStyle: {
-          color: themeColor('--cp-text-primary', '#334155'),
-          fontSize: 12,
+        ...chartTooltipStyle(palette.value, {
+          axisPointer: true,
+          confine: true,
           fontFamily: 'Inter, system-ui, sans-serif',
           fontWeight: 600,
-        },
-        extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
-        axisPointer: {
-          type: 'line',
-          lineStyle: {
-            color: themeColor('--cp-default-border-hover', '#E2E8F0'),
-            type: 'dashed',
-          },
-        },
+        }),
         formatter: formatTooltip,
       },
     }
   })
 
   function getCoordinateSystem(times: string[]) {
-    const muted = themeColor('--cp-text-muted', '#94A3B8')
-    const gridLine = themeColor('--cp-divider-subtle', '#E2E8F0')
-    const axisLine = themeColor('--cp-default-border', '#E2E8F0')
+    const muted = palette.value.textMuted
+    const gridLine = palette.value.divider
+    const axisLine = palette.value.border
     return {
       grid: {
         left: 8,
@@ -207,7 +194,7 @@ export function useRequestTrendChart(options: {
           trendPointText(point, 'cacheHitRate'),
           trendColor('缓存', '--cp-text-tertiary', '#94A3B8'),
         ),
-        tooltipItem('请求', point?.requests, themeColor('--cp-text-secondary', '#64748B')),
+        tooltipItem('请求', point?.requests, palette.value.textSecondary),
       ]
         .filter(Boolean)
         .join('<br/>')

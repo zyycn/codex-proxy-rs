@@ -1,7 +1,7 @@
 import { shallowRef } from 'vue'
 
 import { toast } from '@/components/base/BaseToast'
-import { withMinimumDuration } from '@/utils/async'
+import { errorMessage, withMinimumDuration } from '@/utils/async'
 
 type MaybePromise<T> = T | Promise<T>
 type AsyncActionErrorText = string | false | ((error: unknown) => string | false)
@@ -13,26 +13,13 @@ interface AsyncActionRunOptions {
   rethrow?: boolean
 }
 
-function errorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message
-  }
-
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message
-    return typeof message === 'string' ? message : ''
-  }
-
-  return ''
-}
-
 function resolveErrorText(error: unknown, errorText: AsyncActionErrorText | undefined) {
   const fallback = typeof errorText === 'function' ? errorText(error) : errorText
   if (fallback === false) {
     return ''
   }
 
-  return errorMessage(error) || fallback || ''
+  return errorMessage(error, '') || fallback || ''
 }
 
 export function useAsyncAction() {

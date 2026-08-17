@@ -5,6 +5,7 @@ import { AlertTriangle, Gauge, ShieldCheck, Users } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
+import { formatInteger } from '@/utils/number'
 
 const props = defineProps<{
   summary: Awaited<ReturnType<typeof getAccounts>>['summary']
@@ -13,37 +14,33 @@ const props = defineProps<{
 const overviewItems = computed(() => [
   {
     label: '总账号',
-    value: formatCount(props.summary.total),
+    value: formatInteger(props.summary.total),
     caption: '账号池规模',
     tone: 'info',
     icon: Users,
   },
   {
     label: '正常账号',
-    value: formatCount(props.summary.normal),
+    value: formatInteger(props.summary.normal),
     caption: '可参与调度',
     tone: 'success',
     icon: ShieldCheck,
   },
   {
     label: '额度受限',
-    value: formatCount((props.summary.quotaExhausted ?? 0) + (props.summary.rateLimited ?? 0)),
+    value: formatInteger((props.summary.quotaExhausted ?? 0) + (props.summary.rateLimited ?? 0)),
     caption: '等待额度恢复',
     tone: 'warning',
     icon: Gauge,
   },
   {
     label: '待处理',
-    value: formatCount((props.summary.disabled ?? 0) + (props.summary.error ?? 0)),
+    value: formatInteger((props.summary.disabled ?? 0) + (props.summary.error ?? 0)),
     caption: '已停用 / 错误',
     tone: 'danger',
     icon: AlertTriangle,
   },
 ])
-
-function formatCount(value: number) {
-  return value.toLocaleString('zh-CN')
-}
 
 function overviewIconClass(tone: string) {
   if (tone === 'success') {

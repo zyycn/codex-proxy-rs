@@ -1,7 +1,12 @@
 import { delay } from 'es-toolkit'
 
 export function errorMessage(error: unknown, fallback = '请求失败') {
-  return error instanceof Error && error.message ? error.message : fallback
+  const message = error instanceof Error
+    ? error.message
+    : error && typeof error === 'object' && 'message' in error
+      ? (error as { message?: unknown }).message
+      : undefined
+  return typeof message === 'string' && message ? message : fallback
 }
 
 export async function withMinimumDuration<T>(

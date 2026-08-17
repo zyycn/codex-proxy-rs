@@ -2,8 +2,9 @@
 import type { getOpsErrors } from '@/api'
 
 import { computed } from 'vue'
-import BaseModal from '@/components/base/BaseModal.vue'
-import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
+import { displayValue } from '../utils/detail'
+import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
@@ -37,10 +38,6 @@ const metadataText = computed(() => {
   return JSON.stringify(metadata, null, 2)
 })
 
-function display(value: unknown) {
-  return value === undefined || value === null || value === '' ? '—' : String(value)
-}
-
 function latencyDisplay(value: unknown) {
   return typeof value === 'number' ? `${value} ms` : '—'
 }
@@ -67,14 +64,14 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
         <div class="flex flex-wrap items-center gap-3">
           <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
           <span class="text-[12px] font-bold text-cp-secondary">
-            客户端 {{ display(record.clientStatusCode) }}
+            客户端 {{ displayValue(record.clientStatusCode) }}
           </span>
           <span class="text-[12px] font-bold text-cp-secondary">
-            上游 {{ display(record.upstreamStatusCode) }}
+            上游 {{ displayValue(record.upstreamStatusCode) }}
           </span>
         </div>
         <p class="mt-3 mb-0 text-[13px] leading-relaxed font-bold text-cp-primary">
-          {{ display(record.message) }}
+          {{ displayValue(record.message) }}
         </p>
       </section>
 
@@ -92,9 +89,9 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
           </dt>
           <dd
             class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-normal font-emphasis text-cp-primary"
-            :title="display(field.value)"
+            :title="displayValue(field.value)"
           >
-            {{ display(field.value) }}
+            {{ displayValue(field.value) }}
           </dd>
         </div>
       </dl>
@@ -103,20 +100,7 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
         v-if="metadataText"
         class="mt-3 rounded-cp-surface bg-cp-subtle px-4 py-3.5"
       >
-        <h3 class="m-0 text-[12px] leading-none font-heavy text-cp-secondary">
-          Metadata
-        </h3>
-        <BaseScrollbar
-          class="mt-3"
-          max-height="260px"
-        >
-          <div class="rounded-cp-control bg-cp-surface px-3 py-2.5">
-            <pre
-              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] text-cp-primary"
-              v-text="metadataText"
-            />
-          </div>
-        </BaseScrollbar>
+        <UsageDetailCodePanel title="Metadata" max-height="260px" :content="metadataText" />
       </section>
     </template>
   </BaseModal>

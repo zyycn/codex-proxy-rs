@@ -8,8 +8,9 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
-import { formatCompactNumber, formatDuration, formatPercent, formatUsd } from '../utils/format'
+import { formatDuration, formatPercent, formatUsd } from '../utils/format'
 
 type Diagnostics = Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
 

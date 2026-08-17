@@ -1,8 +1,9 @@
-import type { UsageViewModel } from '@/api'
+import type { UsageViewModel } from '../utils/records'
 import { shallowRef } from 'vue'
-import { getUsageRecordDetail, normalizeUsageRecord } from '@/api'
+import { getUsageRecordDetail } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { normalizeUsageRecord } from '../utils/records'
 
 export function useUsageRecordDetail() {
   const showDetailModal = shallowRef(false)

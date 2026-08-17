@@ -5,7 +5,7 @@ import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 
 defineProps<{

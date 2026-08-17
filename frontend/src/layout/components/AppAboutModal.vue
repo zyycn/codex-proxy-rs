@@ -4,7 +4,7 @@ import { ExternalLink } from '@lucide/vue'
 import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 
-import BaseModal from '@/components/base/BaseModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
 
 const open = defineModel<boolean>({ default: false })

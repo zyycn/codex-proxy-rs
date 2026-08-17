@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EChartsOption, LineSeriesOption } from 'echarts'
+import type { EChartsOption } from 'echarts'
 import type { getUsageRecordInsightsOverview } from '@/api'
 
 import { computed, shallowRef } from 'vue'
@@ -7,13 +7,14 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { useUsageChartPalette } from '../composables/useUsageChartPalette'
+import { useChartPalette } from '@/composables/useChartPalette'
 
 import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
   usageLegend,
+  usageLineSeries,
   usageTooltip,
   usageValueAxis,
 } from '../utils/chart'
@@ -33,7 +34,7 @@ const props = withDefaults(
 )
 
 const activeView = shallowRef('total')
-const { palette } = useUsageChartPalette()
+const { palette } = useChartPalette()
 const performancePoints = computed<PerformancePoint[]>(() => props.performance.points)
 
 const viewOptions = [
@@ -79,18 +80,18 @@ const chartOption = computed<EChartsOption>(() => {
     ),
     yAxis: usageValueAxis(theme, formatDurationAxis),
     series: [
-      lineSeries(
+      usageLineSeries(
         percentileLabels.p50,
         points.map(point => point.p50),
         theme.info,
-        true,
+        { area: 'subtle' },
       ),
-      lineSeries(
+      usageLineSeries(
         percentileLabels.p95,
         points.map(point => point.p95),
         theme.warning,
       ),
-      lineSeries(
+      usageLineSeries(
         percentileLabels.p99,
         points.map(point => point.p99),
         theme.danger,
@@ -112,41 +113,6 @@ function percentileValue(point: PerformancePoint, percentile: 'p50' | 'p95' | 'p
   if (percentile === 'p95')
     return point.latencyP95Ms
   return point.latencyP99Ms
-}
-
-function lineSeries(
-  name: string,
-  data: Array<number | null | undefined>,
-  color: string,
-  area = false,
-): LineSeriesOption {
-  return {
-    name,
-    type: 'line',
-    data: data.map(value => value ?? null),
-    connectNulls: false,
-    smooth: true,
-    showSymbol: data.length <= 12,
-    symbol: 'circle',
-    symbolSize: 5,
-    lineStyle: { color, width: 2.2 },
-    itemStyle: { color },
-    areaStyle: area
-      ? {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: `${color}18` },
-              { offset: 1, color: `${color}02` },
-            ],
-          },
-        }
-      : undefined,
-  }
 }
 
 function formatTooltip(params: unknown) {

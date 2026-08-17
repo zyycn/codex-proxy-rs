@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardTrendView, normalizeDashboardTrendKind } from '../composables/presenter'
+import type { dashboardTrendView, normalizeDashboardTrendKind } from '../composables/useDashboard'
 
 import { toRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -97,10 +97,8 @@ const {
           <BaseChart v-if="hasSamples" :option="chartOption" :height="220" />
           <BaseEmpty
             v-if="!hasSamples"
-            size="sm"
             surface="none"
             title="暂无趋势数据"
-            description="当日暂无请求日志"
             class="h-full place-content-center"
           />
         </div>

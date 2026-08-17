@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '../composables/presenter'
+import type { dashboardSnapshotView } from '../composables/useDashboard'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import UsageRecordsTable from '@/views/usage/components/UsageRecordsTable.vue'
