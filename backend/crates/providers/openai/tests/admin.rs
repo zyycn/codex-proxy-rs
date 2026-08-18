@@ -579,7 +579,7 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
     let secondary = quota
         .windows
         .iter()
-        .find(|window| window.key == "core-secondary")
+        .find(|window| window.key == "codex-secondary")
         .expect("core secondary quota");
     assert_eq!(secondary.label, "次级额度");
     assert_eq!(secondary.used_percent, Some(88.0));

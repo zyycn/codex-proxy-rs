@@ -20,7 +20,7 @@ pub(in crate::transport::websocket) enum WebSocketTerminalKind {
 }
 
 pub(super) enum ExchangeAction {
-    RateLimits(Vec<(String, String)>),
+    RateLimits(events::ParsedRateLimits),
     TurnState(String),
     Forward {
         frame: String,
@@ -41,8 +41,8 @@ pub(super) fn reduce_websocket_event(
     };
     if let Some(parsed) = events::parse_rate_limits_event(&value) {
         let headers = events::rate_limits_to_header_pairs(&parsed);
-        metadata.rate_limit_headers.extend(headers.iter().cloned());
-        return Ok(ExchangeAction::RateLimits(headers));
+        metadata.rate_limit_headers.extend(headers);
+        return Ok(ExchangeAction::RateLimits(parsed));
     }
 
     response_meta::merge_response_metadata(

@@ -8,6 +8,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::Stream;
+use gateway_protocol::openai::events::ParsedRateLimits;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -36,8 +37,8 @@ pub struct CodexWebSocketStreamingExchange {
     pub set_cookie_headers: Vec<String>,
     /// 上游握手响应里的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
-    /// 上游内部 rate-limit 事件里的动态更新。
-    pub rate_limit_header_updates: CodexWebSocketRateLimitHeaderUpdates,
+    /// 上游内部 `codex.rate_limits` 事件里的结构化动态更新。
+    pub rate_limit_updates: CodexWebSocketRateLimitUpdates,
     /// 上游内部 metadata 事件里的动态 turn state。
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
     /// WebSocket 连接池决策。
@@ -53,8 +54,8 @@ pub struct CodexWebSocketStreamingExchange {
 /// Responses WebSocket live SSE 字节流。
 pub type CodexWebSocketSseStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, CodexWebSocketExchangeError>> + Send + 'static>>;
-/// live 流中的限流头动态更新。
-pub type CodexWebSocketRateLimitHeaderUpdates = Arc<Mutex<Vec<(String, String)>>>;
+/// live 流中的结构化限流动态更新。
+pub type CodexWebSocketRateLimitUpdates = Arc<Mutex<Vec<ParsedRateLimits>>>;
 /// live 流中的 turn state 动态更新。
 pub type CodexWebSocketTurnStateUpdate = Arc<Mutex<Option<String>>>;
 

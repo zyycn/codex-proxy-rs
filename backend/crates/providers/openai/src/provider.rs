@@ -33,6 +33,9 @@ use gateway_core::task::{
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
+use gateway_protocol::openai::events::{
+    ParsedRateLimits, parse_rate_limit_headers, rate_limits_to_header_pairs,
+};
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -70,9 +73,9 @@ use crate::transport::usage::normalize_service_tier;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
-    CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError,
-    CodexRateLimitHeaderUpdates, CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics,
-    CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
+    CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexRateLimitUpdates,
+    CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics, CodexUpstreamDiagnostics,
+    CodexWebSocketPool, endpoint_url,
 };
 
 const PROVIDER_NAME: &str = "openai";
@@ -698,9 +701,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         if let Some(observation) = observation_state.observation() {
             yield ProviderEvent::observation(observation);
         }
-        if allows_account_state_mutation {
-            synchronize_passive_quota(&quota, &active_account, &response.rate_limit_headers).await;
-        }
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
             && let Err(error) = catalog.observe_response_etag(etag)
         {
@@ -728,7 +728,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let failure_diagnostics = response.diagnostics.clone();
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
         let failure_rate_limit_headers = response.rate_limit_headers.clone();
-        let rate_limit_updates = response.rate_limit_header_updates;
+        let mut passive_quota_observation =
+            OpenAiPassiveQuotaObservation::new(response.rate_limit_headers);
+        let rate_limit_updates = response.rate_limit_updates;
         let turn_state_updates = response.turn_state_update;
         // OpenAI 线路为透明代理：HTTP SSE 与 WebSocket 两条上游均启用 raw 透传，
         // 下游按字节转发上游原文，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）。
@@ -741,6 +743,14 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let mut pre_commit_events = PreCommitClientEvents::new();
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
+                if allows_account_state_mutation {
+                    synchronize_passive_quota(
+                        &quota,
+                        &active_account,
+                        passive_quota_observation.rate_limits(),
+                    )
+                    .await;
+                }
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
                 return;
             };
@@ -773,14 +783,21 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 Err(failure) => {
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     if !updates.is_empty() {
-                        if allows_account_state_mutation {
-                            synchronize_passive_quota(&quota, &active_account, &updates).await;
-                        }
-                        if observation_state.merge_rate_limit_headers(&updates)
+                        passive_quota_observation.observe(&updates);
+                        let update_headers = rate_limit_update_headers(&updates);
+                        if observation_state.merge_rate_limit_headers(&update_headers)
                             && let Some(observation) = observation_state.observation()
                         {
                             yield ProviderEvent::observation(observation);
                         }
+                    }
+                    if allows_account_state_mutation {
+                        synchronize_passive_quota(
+                            &quota,
+                            &active_account,
+                            passive_quota_observation.rate_limits(),
+                        )
+                        .await;
                     }
                     apply_failure(&failure_context, &active_account, &failure)
                     .await;
@@ -793,10 +810,8 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             let rate_limits_changed = if updates.is_empty() {
                 false
             } else {
-                if allows_account_state_mutation {
-                    synchronize_passive_quota(&quota, &active_account, &updates).await;
-                }
-                observation_state.merge_rate_limit_headers(&updates)
+                passive_quota_observation.observe(&updates);
+                observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
             };
             if let (Some(capture), Some(updates)) =
                 (session_capture.as_mut(), turn_state_updates.as_ref())
@@ -843,6 +858,14 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             let terminal_changed = completed
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
+            if allows_account_state_mutation && (completed || terminal_failure.is_some()) {
+                synchronize_passive_quota(
+                    &quota,
+                    &active_account,
+                    passive_quota_observation.rate_limits(),
+                )
+                .await;
+            }
             if let Some((failure, _)) = terminal_failure.as_ref() {
                 apply_failure(&failure_context, &active_account, failure)
                 .await;
@@ -920,11 +943,17 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let rate_limits_changed = if updates.is_empty() {
             false
         } else {
-            if allows_account_state_mutation {
-                synchronize_passive_quota(&quota, &active_account, &updates).await;
-            }
-            observation_state.merge_rate_limit_headers(&updates)
+            passive_quota_observation.observe(&updates);
+            observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
         };
+        if allows_account_state_mutation {
+            synchronize_passive_quota(
+                &quota,
+                &active_account,
+                passive_quota_observation.rate_limits(),
+            )
+            .await;
+        }
         if let Some((failure, _)) = terminal_failure.as_ref() {
             apply_failure(&failure_context, &active_account, failure)
             .await;
@@ -999,6 +1028,26 @@ struct OpenAiResponseObservationState {
     attempt_index: u32,
     timings: ProviderResponseTimings,
     terminal: Option<OpenAiResponseTerminal>,
+}
+
+struct OpenAiPassiveQuotaObservation {
+    rate_limits: Vec<ParsedRateLimits>,
+}
+
+impl OpenAiPassiveQuotaObservation {
+    fn new(headers: Vec<(String, String)>) -> Self {
+        Self {
+            rate_limits: parse_rate_limit_headers(&headers).into_iter().collect(),
+        }
+    }
+
+    fn observe(&mut self, updates: &[ParsedRateLimits]) {
+        self.rate_limits.extend_from_slice(updates);
+    }
+
+    fn rate_limits(&self) -> &[ParsedRateLimits] {
+        &self.rate_limits
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1432,13 +1481,18 @@ fn insert_optional_metadata_millis(
     }
 }
 
-async fn take_rate_limit_updates(
-    updates: Option<&CodexRateLimitHeaderUpdates>,
-) -> Vec<(String, String)> {
+async fn take_rate_limit_updates(updates: Option<&CodexRateLimitUpdates>) -> Vec<ParsedRateLimits> {
     let Some(updates) = updates else {
         return Vec::new();
     };
     std::mem::take(&mut *updates.lock().await)
+}
+
+fn rate_limit_update_headers(updates: &[ParsedRateLimits]) -> Vec<(String, String)> {
+    updates
+        .iter()
+        .flat_map(rate_limits_to_header_pairs)
+        .collect()
 }
 
 fn terminal_response_is_incomplete(events: &[ProviderEvent]) -> bool {
@@ -1466,18 +1520,32 @@ fn terminal_response_is_incomplete(events: &[ProviderEvent]) -> bool {
 async fn synchronize_passive_quota(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
-    headers: &[(String, String)],
+    rate_limits: &[ParsedRateLimits],
 ) {
-    if headers.is_empty() {
+    if rate_limits.is_empty() {
         return;
     }
-    if let Err(error) = quota.synchronize_passive_headers(account, headers).await {
+    if let Err(error) = quota
+        .synchronize_passive_rate_limits(account, rate_limits)
+        .await
+    {
         tracing::warn!(
             account_id = %account.id(),
             error = %error,
             "OpenAI passive quota synchronization failed"
         );
     }
+}
+
+async fn synchronize_passive_quota_headers(
+    quota: &CodexCredentialQuotaService,
+    account: &ProviderAccount,
+    headers: &[(String, String)],
+) {
+    let Some(rate_limits) = parse_rate_limit_headers(headers) else {
+        return;
+    };
+    synchronize_passive_quota(quota, account, std::slice::from_ref(&rate_limits)).await;
 }
 
 const fn actual_transport_name(transport: CodexBackendTransport) -> &'static str {
@@ -1873,7 +1941,7 @@ async fn apply_failure(
     if !context.allows_account_state_mutation {
         return;
     }
-    synchronize_passive_quota(context.quota, account, &failure.rate_limit_headers).await;
+    synchronize_passive_quota_headers(context.quota, account, &failure.rate_limit_headers).await;
     let needs_authoritative_quota_refresh = matches!(
         failure.account_failure,
         Some(CodexAccountFailure::QuotaExhausted | CodexAccountFailure::UsageLimitExhausted { .. })

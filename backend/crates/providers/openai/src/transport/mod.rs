@@ -27,8 +27,8 @@ pub use self::{
     client::{
         CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendSseStream,
         CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexClientResult,
-        CodexRateLimitHeaderUpdates, CodexRequestContext, CodexTransportDecision,
-        CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
+        CodexRateLimitUpdates, CodexRequestContext, CodexTransportDecision, CodexTransportMetrics,
+        CodexTurnStateUpdate, build_reqwest_client,
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{

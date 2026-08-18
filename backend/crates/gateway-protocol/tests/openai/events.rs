@@ -1,7 +1,7 @@
 use gateway_protocol::openai::events::{
-    RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage, is_codex_quota_header_name,
-    is_rate_limit_header_name, parse_rate_limit_headers, parse_rate_limits_event,
-    rate_limits_to_header_pairs, retry_after_seconds_from_body,
+    RateLimitKeySource, RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage,
+    is_codex_quota_header_name, is_rate_limit_header_name, parse_rate_limit_headers,
+    parse_rate_limits_event, rate_limits_to_header_pairs, retry_after_seconds_from_body,
 };
 use serde_json::json;
 
@@ -481,6 +481,58 @@ fn parse_rate_limits_event_should_extract_websocket_metered_limit() {
             Some("usage_limit_reached"),
         )
     );
+}
+
+#[test]
+fn parse_rate_limits_event_should_preserve_name_keyed_additional_limit() {
+    let event = json!({
+        "type": "codex.rate_limits",
+        "plan_type": "pro",
+        "rate_limits": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary": {
+                "used_percent": 0,
+                "window_minutes": 10080,
+                "reset_after_seconds": 354916,
+                "reset_at": 1787396838
+            },
+            "secondary": null
+        },
+        "additional_rate_limits": {
+            "GPT-5.3-Codex-Spark": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary": {
+                    "used_percent": 0,
+                    "window_minutes": 10080,
+                    "reset_after_seconds": 354916,
+                    "reset_at": 1787396838
+                },
+                "secondary": null
+            }
+        },
+        "credits": null
+    });
+
+    let parsed = parse_rate_limits_event(&event).expect("rate-limit event");
+    let details = parsed
+        .limits
+        .get("gpt_5.3_codex_spark")
+        .expect("name-keyed additional limit");
+
+    assert_eq!(parsed.active_limit.as_deref(), Some("gpt_5.3_codex_spark"));
+    assert_eq!(details.key_source, RateLimitKeySource::LimitName);
+    assert_eq!(details.limit_name.as_deref(), Some("GPT-5.3-Codex-Spark"));
+    assert_eq!(
+        details.primary,
+        Some(RateLimitWindow {
+            used_percent: 0.0,
+            window_minutes: Some(10080),
+            reset_at: Some(1787396838),
+        })
+    );
+    assert!(!parsed.limits.contains_key("codex"));
 }
 
 #[test]

@@ -396,11 +396,11 @@ async fn persisted_quota_orders_core_window_before_additional_limit() {
         .map(|window| window.source())
         .collect::<Vec<_>>();
 
-    assert_eq!(sources, ["codex", "gpt-5.3-codex-spark"]);
+    assert_eq!(sources, ["codex", "gpt_5.3_codex_spark"]);
 }
 
 #[tokio::test]
-async fn code_review_limit_projects_as_independent_window_with_limit_name() {
+async fn code_review_limit_projects_as_one_snapshot_per_limit_id() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_code_review").await;
     let account = store.account("acct_code_review").expect("account");
@@ -455,21 +455,16 @@ async fn code_review_limit_projects_as_independent_window_with_limit_name() {
         .expect("read quota")
         .expect("quota snapshot");
 
-    // spend_control 不再生成窗口（只作 exhaustion 信号）；顶层和 additional
-    // 的 code_review 桶分别保留，避免一个快照覆盖另一个。
+    // spend_control 不生成窗口（只作 exhaustion 信号）；官方 map 协议中同一个
+    // limit_id 只能保留一个快照，顶层 code_review 事实优先于重复 additional。
     let review = snapshot
         .windows()
         .iter()
         .filter(|window| window.source() == "code_review")
         .collect::<Vec<_>>();
-    assert_eq!(review.len(), 2);
-    assert!(review.iter().any(|window| {
-        window.limit_name() == Some("code_review") && window.used_percent() == Some(80.0)
-    }));
-    assert!(review.iter().any(|window| {
-        window.limit_name() == Some("code review") && window.used_percent() == Some(55.0)
-    }));
-    assert_ne!(review[0].key(), review[1].key());
-    assert_eq!(snapshot.windows().len(), 3);
+    assert_eq!(review.len(), 1);
+    assert_eq!(review[0].limit_name(), Some("code_review"));
+    assert_eq!(review[0].used_percent(), Some(80.0));
+    assert_eq!(snapshot.windows().len(), 2);
     assert_eq!(snapshot.quota().access(), QuotaAccessState::Unknown);
 }

@@ -208,11 +208,24 @@ pub struct RateLimitWindow {
     pub reset_at: Option<i64>,
 }
 
+/// 限流项键的来源。
+///
+/// HTTP headers 和事件里的 `metered_limit_name` 提供稳定 `limit_id`；
+/// WebSocket `additional_rate_limits` 在部分协议版本里只以可读名称为 map key，
+/// 此时必须由持久化层用既有名称元数据解析，不能把名称误当成稳定 ID。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitKeySource {
+    LimitId,
+    LimitName,
+}
+
 /// 单个计量项的限流信息。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitDetails {
     /// 稳定的计量项 ID。
     pub limit_id: String,
+    /// [`limit_id`](Self::limit_id) 是稳定 ID，还是名称生成的临时解析键。
+    pub key_source: RateLimitKeySource,
     /// 上游提供的可读名称。
     pub limit_name: Option<String>,
     /// 当前请求是否被允许。
@@ -341,20 +354,40 @@ pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
         return None;
     }
 
-    let limit_id = rate_limit_name(value)
-        .map(normalize_limit_id)
+    let explicit_limit_id = top_level_rate_limit_id(value).map(normalize_limit_id);
+    let explicit_limit_name = non_empty_string(value, "limit_name");
+    let default_limit_id = explicit_limit_id
+        .clone()
         .unwrap_or_else(|| "codex".to_string());
-    let limit_name = value
-        .get("metered_limit_name")
-        .and_then(Value::as_str)
-        .and_then(|_| value.get("limit_name"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToString::to_string);
-    let details = value
-        .get("rate_limits")
-        .and_then(|details| parse_details_from_object(details, &limit_id, limit_name));
+    let default_details = value.get("rate_limits").and_then(|details| {
+        parse_details_from_object(
+            details,
+            &default_limit_id,
+            explicit_limit_name,
+            RateLimitKeySource::LimitId,
+        )
+    });
+    let mut limits = parse_additional_rate_limits(value);
+    let matching_additional_ids = default_details
+        .as_ref()
+        .map(|default| {
+            limits
+                .iter()
+                .filter(|(_, additional)| same_rate_limit_facts(default, additional))
+                .map(|(limit_id, _)| limit_id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // 当前 WebSocket 协议会把活动具名桶同时镜像到顶层 `rate_limits`，但不附
+    // `metered_limit_name`。只要 additional 中存在相同事实，顶层就不是 core 桶。
+    let default_is_additional_alias =
+        explicit_limit_id.is_none() && !matching_additional_ids.is_empty();
+    if let Some(details) = default_details
+        && !default_is_additional_alias
+    {
+        limits.insert(default_limit_id.clone(), details);
+    }
     let credits = value.get("credits").and_then(parse_credits_from_object);
     let plan_type = value
         .get("plan_type")
@@ -363,17 +396,18 @@ pub fn parse_rate_limits_event(value: &Value) -> Option<ParsedRateLimits> {
         .filter(|plan| !plan.is_empty())
         .map(ToString::to_string);
 
-    if details.is_none() && credits.is_none() && plan_type.is_none() {
+    if limits.is_empty() && credits.is_none() && plan_type.is_none() {
         return None;
     }
 
-    let mut limits = BTreeMap::new();
-    if let Some(details) = details {
-        limits.insert(limit_id.clone(), details);
-    }
+    let active_limit = explicit_limit_id.or_else(|| match matching_additional_ids.as_slice() {
+        [limit_id] => Some(limit_id.clone()),
+        [] if !limits.is_empty() => Some(default_limit_id),
+        _ => None,
+    });
     Some(ParsedRateLimits {
         limits,
-        active_limit: Some(limit_id),
+        active_limit,
         credits,
         plan_type,
         promo_message: value
@@ -597,6 +631,7 @@ fn parse_details_from_lookup(
     }
     Some(RateLimitDetails {
         limit_id: limit_id.to_string(),
+        key_source: RateLimitKeySource::LimitId,
         limit_name,
         allowed,
         limit_reached,
@@ -687,6 +722,7 @@ fn parse_details_from_object(
     value: &Value,
     limit_id: &str,
     limit_name: Option<String>,
+    key_source: RateLimitKeySource,
 ) -> Option<RateLimitDetails> {
     let primary = value.get("primary").and_then(parse_window_from_object);
     let secondary = value.get("secondary").and_then(parse_window_from_object);
@@ -697,6 +733,7 @@ fn parse_details_from_object(
     }
     Some(RateLimitDetails {
         limit_id: limit_id.to_string(),
+        key_source,
         limit_name,
         allowed,
         limit_reached,
@@ -752,11 +789,59 @@ fn value_as_positive_i64(value: &Value) -> Option<i64> {
         .filter(|value| *value > 0)
 }
 
-fn rate_limit_name(value: &Value) -> Option<&str> {
+fn rate_limit_id(value: &Value) -> Option<&str> {
     value
         .get("metered_limit_name")
-        .or_else(|| value.get("limit_name"))
+        .or_else(|| value.get("limit_id"))
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn top_level_rate_limit_id(value: &Value) -> Option<&str> {
+    rate_limit_id(value).or_else(|| {
+        value
+            .get("limit_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn non_empty_string(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn parse_additional_rate_limits(value: &Value) -> BTreeMap<String, RateLimitDetails> {
+    value
+        .get("additional_rate_limits")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(map_key, value)| {
+            let explicit_limit_id = rate_limit_id(value).map(normalize_limit_id);
+            let (limit_id, key_source) = explicit_limit_id.map_or_else(
+                || (normalize_limit_id(map_key), RateLimitKeySource::LimitName),
+                |limit_id| (limit_id, RateLimitKeySource::LimitId),
+            );
+            let limit_name = non_empty_string(value, "limit_name")
+                .or_else(|| Some(map_key.trim().to_owned()).filter(|name| !name.is_empty()));
+            parse_details_from_object(value, &limit_id, limit_name, key_source)
+                .map(|details| (limit_id, details))
+        })
+        .collect()
+}
+
+fn same_rate_limit_facts(left: &RateLimitDetails, right: &RateLimitDetails) -> bool {
+    left.allowed == right.allowed
+        && left.limit_reached == right.limit_reached
+        && left.primary == right.primary
+        && left.secondary == right.secondary
 }
 
 fn normalize_limit_id(value: impl AsRef<str>) -> String {

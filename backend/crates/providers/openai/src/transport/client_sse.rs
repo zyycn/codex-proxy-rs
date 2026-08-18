@@ -147,14 +147,14 @@ impl CodexBackendClient {
             });
         }
 
-        let rate_limit_header_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         Ok(CodexBackendStreamingResponse {
-            body: http_sse_stream(response, Arc::clone(&rate_limit_header_updates)),
+            body: http_sse_stream(response, Arc::clone(&rate_limit_updates)),
             transport: CodexBackendTransport::HttpSse,
             turn_state,
             set_cookie_headers,
             rate_limit_headers,
-            rate_limit_header_updates: Some(rate_limit_header_updates),
+            rate_limit_updates: Some(rate_limit_updates),
             turn_state_update: None,
             websocket_pool_decision: None,
             diagnostics,
@@ -515,7 +515,7 @@ impl CodexBackendClient {
                     turn_state: exchange.turn_state,
                     set_cookie_headers: exchange.set_cookie_headers,
                     rate_limit_headers: exchange.rate_limit_headers,
-                    rate_limit_header_updates: Some(exchange.rate_limit_header_updates),
+                    rate_limit_updates: Some(exchange.rate_limit_updates),
                     turn_state_update: Some(exchange.turn_state_update),
                     websocket_pool_decision: exchange.pool_decision,
                     diagnostics: exchange.diagnostics,
@@ -878,7 +878,7 @@ fn websocket_connection_profile(headers: &HeaderMap) -> String {
 
 fn http_sse_stream(
     response: ReqwestResponse,
-    rate_limit_updates: CodexRateLimitHeaderUpdates,
+    rate_limit_updates: CodexRateLimitUpdates,
 ) -> CodexBackendSseStream {
     let stream: CodexBackendSseStream =
         Box::pin(response.bytes_stream().map_err(CodexClientError::Http));
@@ -901,7 +901,7 @@ fn http_sse_stream(
 
 fn observe_http_sse_rate_limits(
     stream: CodexBackendSseStream,
-    updates: CodexRateLimitHeaderUpdates,
+    updates: CodexRateLimitUpdates,
 ) -> CodexBackendSseStream {
     Box::pin(futures::stream::unfold(
         (stream, SseEventDecoder::default(), updates),
@@ -925,9 +925,9 @@ fn observe_http_sse_rate_limits(
 
 async fn append_http_sse_rate_limit_updates(
     frames: Vec<SseFrame>,
-    updates: &CodexRateLimitHeaderUpdates,
+    updates: &CodexRateLimitUpdates,
 ) {
-    let mut headers = Vec::new();
+    let mut observations = Vec::new();
     for frame in frames {
         for event in frame.events() {
             if event
@@ -940,10 +940,10 @@ async fn append_http_sse_rate_limit_updates(
             let Some(rate_limits) = events::parse_rate_limits_event_raw(&event.data) else {
                 continue;
             };
-            headers.extend(events::rate_limits_to_header_pairs(&rate_limits));
+            observations.push(rate_limits);
         }
     }
-    if !headers.is_empty() {
-        updates.lock().await.extend(headers);
+    if !observations.is_empty() {
+        updates.lock().await.extend(observations);
     }
 }

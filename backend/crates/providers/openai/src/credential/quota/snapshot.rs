@@ -12,6 +12,9 @@ use gateway_core::engine::credential::{
 };
 use serde_json::{Map, Value};
 
+use super::document::{
+    DEFAULT_CODEX_LIMIT_ID, RATE_LIMITS_BY_LIMIT_ID, canonicalize_rate_limit_document,
+};
 use super::{CodexCredentialQuotaError, QUOTA_SCHEDULING_TTL};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,9 +176,18 @@ impl CodexQuotaFact {
 }
 
 pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCredentialQuotaError> {
-    let object = usage
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
+    let object = canonicalize_rate_limit_document(
+        usage
+            .as_object()
+            .cloned()
+            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
+    );
+    parse_codex_quota_object(&object)
+}
+
+fn parse_codex_quota_object(
+    object: &Map<String, Value>,
+) -> Result<CodexQuotaFact, CodexCredentialQuotaError> {
     let mut aggregate = QuotaAggregate::default();
     for limit in canonical_rate_limits(object)? {
         aggregate.observe_rate_limit(limit.rate_limit)?;
@@ -194,6 +206,15 @@ pub fn parse_codex_quota_usage(usage: &Value) -> Result<CodexQuotaFact, CodexCre
         remaining_percent: aggregate.remaining_percent,
         resets_at: aggregate.resets_at,
     })
+}
+
+fn canonical_quota_object(usage: &Value) -> Result<Map<String, Value>, CodexCredentialQuotaError> {
+    Ok(canonicalize_rate_limit_document(
+        usage
+            .as_object()
+            .cloned()
+            .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
+    ))
 }
 
 pub(crate) fn quota_snapshot_from_observation(
@@ -277,13 +298,11 @@ pub(crate) fn parse_account_quota_snapshot(
     observed_at: SystemTime,
     usage: &Value,
 ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
-    let fact = parse_codex_quota_usage(usage)?;
-    let object = usage
-        .as_object()
-        .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-    let quota = authoritative_quota_state(object, observed_at)?;
+    let object = canonical_quota_object(usage)?;
+    let fact = parse_codex_quota_object(&object)?;
+    let quota = authoritative_quota_state(&object, observed_at)?;
     let mut windows = Vec::new();
-    for limit in canonical_rate_limits(object)? {
+    for limit in canonical_rate_limits(&object)? {
         parse_rate_limit_windows(
             &limit.key,
             &limit.source,
@@ -316,12 +335,16 @@ fn quota_source_order(source: &str) -> u8 {
     }
 }
 
-/// 顶层 account-wide Codex 桶是唯一可改变账号额度访问结论的 quota 响应字段。
+/// 默认 `codex` 桶是唯一可改变账号额度访问结论的 quota 响应字段。
 fn authoritative_quota_state(
     usage: &Map<String, Value>,
     observed_at: SystemTime,
 ) -> Result<QuotaState, CodexCredentialQuotaError> {
-    let Some(rate_limit) = usage.get("rate_limit") else {
+    let Some(rate_limit) = usage
+        .get(RATE_LIMITS_BY_LIMIT_ID)
+        .and_then(Value::as_object)
+        .and_then(|limits| limits.get(DEFAULT_CODEX_LIMIT_ID))
+    else {
         return Ok(QuotaState::observed_unknown(observed_at));
     };
     if rate_limit.is_null() {
@@ -398,94 +421,38 @@ fn canonical_rate_limits(
     object: &Map<String, Value>,
 ) -> Result<Vec<CanonicalRateLimit<'_>>, CodexCredentialQuotaError> {
     let mut limits = Vec::new();
-    let has_primary_codex_rate_limit = object
-        .get("rate_limit")
-        .is_some_and(|value| !value.is_null());
-    if let Some(rate_limit) = object.get("rate_limit") {
-        // 官方 Codex 将顶层 `rate_limit` 固定识别为 `codex`，而不把
-        // `active_limit` 投影成另一个展示桶。后者只是当前活动套餐的元数据。
-        limits.push(CanonicalRateLimit {
-            key: "core".to_owned(),
-            source: "codex".to_owned(),
-            account_wide: true,
-            limit_name: None,
-            rate_limit,
-        });
-    }
-    if let Some(rate_limit) = object
-        .get("code_review_rate_limit")
-        .filter(|value| !value.is_null())
-    {
-        limits.push(CanonicalRateLimit {
-            key: "code-review".to_owned(),
-            source: "code_review".to_owned(),
-            account_wide: false,
-            limit_name: Some("code_review".to_owned()),
-            rate_limit,
-        });
-    }
-    let Some(additional) = object
-        .get("additional_rate_limits")
-        .filter(|value| !value.is_null())
-    else {
+    let Some(by_limit_id) = object.get(RATE_LIMITS_BY_LIMIT_ID) else {
         return Ok(limits);
     };
-    for (index, value) in additional
-        .as_array()
+    for (limit_id, rate_limit) in by_limit_id
+        .as_object()
         .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?
-        .iter()
-        .enumerate()
     {
-        let item = value
+        let item = rate_limit
             .as_object()
             .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?;
-        let (source, limit_name) = canonical_rate_limit_source(item, index);
-        // 部分上游响应会在 `additional_rate_limits` 中重复默认的 `codex`
-        // 桶。它没有独立的 limit id，不能在账号面板再次展示。
-        if has_primary_codex_rate_limit && is_codex_limit_id(&source) {
-            continue;
-        }
-        if let Some(rate_limit) = item.get("rate_limit") {
-            // 非 Codex additional 桶保留为独立快照；额外用索引生成窗口键，
-            // 避免同名 additional 产生重复前端 key。
-            limits.push(CanonicalRateLimit {
-                key: format!("additional-{index}-{source}"),
-                account_wide: is_codex_limit_id(&source),
-                source,
-                limit_name,
-                rate_limit,
-            });
-        }
+        let source = item
+            .get("limit_id")
+            .and_then(Value::as_str)
+            .unwrap_or(limit_id)
+            .to_owned();
+        let limit_name = item
+            .get("limit_name")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        limits.push(CanonicalRateLimit {
+            key: source.clone(),
+            account_wide: is_codex_limit_id(&source),
+            source,
+            limit_name,
+            rate_limit,
+        });
     }
     Ok(limits)
 }
 
 fn is_codex_limit_id(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case("codex")
-}
-
-fn canonical_rate_limit_source(
-    item: &Map<String, Value>,
-    index: usize,
-) -> (String, Option<String>) {
-    let source = item
-        .get("metered_feature")
-        .or_else(|| item.get("limit_name"))
-        .and_then(Value::as_str)
-        .filter(|value| {
-            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-        })
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("additional-{index}"));
-    let limit_name = item
-        .get("limit_name")
-        .or_else(|| item.get("metered_feature"))
-        .and_then(Value::as_str)
-        .filter(|value| {
-            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
-        })
-        .map(str::to_owned);
-    (source, limit_name)
 }
 
 fn parse_rate_limit_windows(

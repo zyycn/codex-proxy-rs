@@ -9,7 +9,9 @@ use std::{
 
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
-use gateway_protocol::openai::events::{TokenUsage, extract_sse_usage};
+use gateway_protocol::openai::events::{
+    TokenUsage, extract_sse_usage, rate_limits_to_header_pairs,
+};
 use provider_openai::transport::profile::{
     CodexBundledReleaseProfile, CodexWireProfile, CodexWireProfileState,
 };
@@ -233,7 +235,7 @@ async fn collect_backend_response(
         mut turn_state,
         set_cookie_headers,
         mut rate_limit_headers,
-        rate_limit_header_updates,
+        rate_limit_updates,
         turn_state_update,
         websocket_pool_decision,
         diagnostics: _,
@@ -251,8 +253,10 @@ async fn collect_backend_response(
         });
         body_bytes.extend_from_slice(&chunk);
     }
-    if let Some(updates) = rate_limit_header_updates {
-        rate_limit_headers.extend(updates.lock().await.iter().cloned());
+    if let Some(updates) = rate_limit_updates {
+        for update in updates.lock().await.iter() {
+            rate_limit_headers.extend(rate_limits_to_header_pairs(update));
+        }
     }
     if let Some(update) = turn_state_update {
         turn_state = update.lock().await.clone().or(turn_state);

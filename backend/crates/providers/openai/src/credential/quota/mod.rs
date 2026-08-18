@@ -1,8 +1,10 @@
 //! Codex quota 服务编排：权威额度事实、展示投影、主动/被动同步与 429 冷却。
 //!
+//! - [`document`]：上游 `/usage` 输入到多桶 map 的单向规范化。
 //! - [`snapshot`]：快照/窗口解析、聚合、O(1) 滚动与调度信号。
 //! - [`evidence`]：额度接口错误到凭据/额度事实的分类。
 
+mod document;
 pub(crate) mod evidence;
 pub(crate) mod snapshot;
 
@@ -38,6 +40,10 @@ use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext
 
 use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
+use document::{
+    DEFAULT_CODEX_LIMIT_ID, RATE_LIMITS_BY_LIMIT_ID, RateLimitSnapshotsByLimitId,
+    canonicalize_rate_limit_document,
+};
 use evidence::{QuotaEndpointFailure, classify_quota_endpoint_failure};
 use snapshot::{
     parse_account_quota_snapshot, quota_projection_ttl, quota_snapshot_from_observation,
@@ -706,10 +712,25 @@ impl CodexCredentialQuotaService {
         let Some(rate_limits) = parse_rate_limit_headers(headers) else {
             return Ok(false);
         };
-        let has_quota_facts = rate_limits
-            .limits
-            .values()
-            .any(|details| passive_rate_limit_snapshot(details).is_some());
+        self.synchronize_passive_rate_limits(account, std::slice::from_ref(&rate_limits))
+            .await
+    }
+
+    /// 把一次推理响应中采集的结构化限流观察合并后单次落库。
+    pub async fn synchronize_passive_rate_limits(
+        &self,
+        account: &ProviderAccount,
+        rate_limits: &[ParsedRateLimits],
+    ) -> Result<bool, CodexCredentialQuotaError> {
+        if rate_limits.is_empty() {
+            return Ok(false);
+        }
+        let has_quota_facts = rate_limits.iter().any(|observation| {
+            observation
+                .limits
+                .values()
+                .any(|details| passive_rate_limit_snapshot(details).is_some())
+        });
         let existing = self
             .store
             .get_quotas(std::slice::from_ref(account.id()))
@@ -734,14 +755,14 @@ impl CodexCredentialQuotaService {
                 .compare_and_swap_quota(QuotaObservation {
                     account_id: account.id().clone(),
                     expected_revision: account.revision(),
-                    quota: OpaqueProviderData::new(merge_passive_quota(existing, &rate_limits)),
+                    quota: OpaqueProviderData::new(merge_passive_quota(existing, rate_limits)),
                     observed_at: SystemTime::now(),
                     state,
                 })
                 .await?;
             return Ok(outcome != QuotaWriteOutcome::Conflict);
         }
-        let quota = merge_passive_quota(existing, &rate_limits);
+        let quota = merge_passive_quota(existing, rate_limits);
         let observed_at = SystemTime::now();
         let snapshot = parse_account_quota_snapshot(
             account.id().clone(),
@@ -1177,18 +1198,48 @@ fn access_token_is_current(account: &ProviderAccount, now: SystemTime) -> bool {
 
 fn merge_passive_quota(
     mut quota: Map<String, Value>,
-    rate_limits: &ParsedRateLimits,
+    observations: &[ParsedRateLimits],
 ) -> Map<String, Value> {
-    let active_limit = rate_limits
-        .active_limit
-        .as_deref()
-        .or_else(|| rate_limits.limits.contains_key("codex").then_some("codex"));
-    if let Some(active_limit) = active_limit {
-        quota.insert(
-            "active_limit".to_owned(),
-            Value::String(active_limit.to_owned()),
-        );
+    let mut snapshots = RateLimitSnapshotsByLimitId::take_from_document(&mut quota);
+    for rate_limits in observations {
+        let default_is_named_alias = default_limit_is_named_alias(rate_limits);
+        let mut resolved_limit_ids = BTreeMap::new();
+        for (wire_limit_id, details) in &rate_limits.limits {
+            // HTTP 与 WebSocket 都可能把活动具名桶镜像为默认 `codex` 窗口。
+            // 同一 wire 观察里存在相同具名事实时丢弃镜像，不触碰 core 桶。
+            if wire_limit_id == DEFAULT_CODEX_LIMIT_ID && default_is_named_alias {
+                continue;
+            }
+            let Some(limit_id) = snapshots.resolve_limit_id(details) else {
+                continue;
+            };
+            let Some(rate_limit) = passive_rate_limit_snapshot(details) else {
+                continue;
+            };
+            snapshots.upsert(&limit_id, details, rate_limit);
+            resolved_limit_ids.insert(wire_limit_id.as_str(), limit_id);
+        }
+
+        let active_limit = rate_limits
+            .active_limit
+            .as_deref()
+            .and_then(|wire_limit_id| {
+                resolved_limit_ids.get(wire_limit_id).cloned().or_else(|| {
+                    (!rate_limits.limits.contains_key(wire_limit_id))
+                        .then(|| wire_limit_id.to_owned())
+                })
+            })
+            .or_else(|| resolved_limit_ids.get(DEFAULT_CODEX_LIMIT_ID).cloned());
+        if let Some(active_limit) = active_limit {
+            quota.insert("active_limit".to_owned(), Value::String(active_limit));
+        }
+        merge_passive_metadata(&mut quota, rate_limits);
     }
+    snapshots.write_to_document(&mut quota);
+    quota
+}
+
+fn merge_passive_metadata(quota: &mut Map<String, Value>, rate_limits: &ParsedRateLimits) {
     if let Some(plan_type) = rate_limits.plan_type.as_ref() {
         quota.insert("plan_type".to_owned(), Value::String(plan_type.clone()));
     }
@@ -1216,48 +1267,19 @@ fn merge_passive_quota(
         }
         quota.insert("credits".to_owned(), Value::Object(value));
     }
+}
 
-    let mut additional = quota
-        .remove("additional_rate_limits")
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    for (limit_id, details) in &rate_limits.limits {
-        let Some(rate_limit) = passive_rate_limit_snapshot(details) else {
-            continue;
-        };
-        if Some(limit_id.as_str()) == active_limit {
-            quota.insert("rate_limit".to_owned(), Value::Object(rate_limit));
-            continue;
-        }
-        let index = additional.iter().position(|item| {
-            item.get("metered_feature")
-                .or_else(|| item.get("limit_name"))
-                .and_then(Value::as_str)
-                .is_some_and(|existing| existing == limit_id)
-        });
-        let mut item = index
-            .and_then(|index| additional.get(index))
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        item.insert(
-            "metered_feature".to_owned(),
-            Value::String(limit_id.clone()),
-        );
-        if let Some(name) = details.limit_name.as_ref() {
-            item.insert("limit_name".to_owned(), Value::String(name.clone()));
-        }
-        item.insert("rate_limit".to_owned(), Value::Object(rate_limit));
-        match index {
-            Some(index) => additional[index] = Value::Object(item),
-            None => additional.push(Value::Object(item)),
-        }
-    }
-    quota.insert(
-        "additional_rate_limits".to_owned(),
-        Value::Array(additional),
-    );
-    quota
+fn default_limit_is_named_alias(rate_limits: &ParsedRateLimits) -> bool {
+    let Some(default_primary) = rate_limits
+        .limits
+        .get(DEFAULT_CODEX_LIMIT_ID)
+        .and_then(|details| details.primary)
+    else {
+        return false;
+    };
+    rate_limits.limits.iter().any(|(limit_id, details)| {
+        limit_id != DEFAULT_CODEX_LIMIT_ID && details.primary == Some(default_primary)
+    })
 }
 
 /// 丢弃 core 限额中上游给出的无事实 `secondary_window` 占位。
@@ -1269,7 +1291,13 @@ fn merge_passive_quota(
 /// 无事实值。带 reset、时长、正用量、触顶、未知或非法字段的次级窗口均完全按
 /// 原有额度逻辑保留。
 fn normalize_quota_window_placeholders(mut quota: Map<String, Value>) -> Map<String, Value> {
-    if let Some(rate_limit) = quota.get_mut("rate_limit").and_then(Value::as_object_mut) {
+    quota = canonicalize_rate_limit_document(quota);
+    if let Some(rate_limit) = quota
+        .get_mut(RATE_LIMITS_BY_LIMIT_ID)
+        .and_then(Value::as_object_mut)
+        .and_then(|limits| limits.get_mut(DEFAULT_CODEX_LIMIT_ID))
+        .and_then(Value::as_object_mut)
+    {
         drop_secondary_window_placeholder(rate_limit);
     }
     quota
