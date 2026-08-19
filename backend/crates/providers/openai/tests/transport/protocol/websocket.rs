@@ -160,6 +160,23 @@ fn websocket_event_to_sse_should_forward_public_events_and_strip_internal_events
 }
 
 #[test]
+fn websocket_event_to_sse_should_add_missing_previous_response_recovery_code() {
+    let event = json!({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "message": "Invalid `previous_response_id`."
+        }
+    })
+    .to_string();
+
+    let frame = websocket_event_to_sse_frame(&event).expect("public error event");
+
+    assert!(frame.contains(r#""code":"previous_response_not_found""#));
+}
+
+#[test]
 fn websocket_metadata_turn_state_should_accept_case_insensitive_header() {
     let event = json!({
         "type": "response.metadata",

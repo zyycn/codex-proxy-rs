@@ -16,6 +16,13 @@ fn new_chain_request(conversation_id: &str) -> CodexResponsesRequest {
     request
 }
 
+fn external_continuation_request(conversation_id: &str) -> CodexResponsesRequest {
+    let mut request = new_chain_request(conversation_id);
+    request.set_previous_response_id(Some("resp_from_another_account".to_owned()));
+    request.previous_response_scope = Some(PreviousResponseScope::ExternalUnknown);
+    request
+}
+
 fn explicit_websocket_warmup_request(conversation_id: &str) -> CodexResponsesRequest {
     let mut body = serde_json::Map::new();
     body.insert("model".to_string(), json!("gpt-5.5"));
@@ -105,6 +112,43 @@ async fn cold_websocket_should_fall_back_without_recording_a_successful_connect(
     assert_eq!(response.transport_metrics.ws_connect_ms, None);
     assert!(response.transport_metrics.first_event_ms.is_some());
     assert!(response.body.contains("response.completed"));
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn external_continuation_should_wait_for_a_cold_websocket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (websocket_stream, _) = listener.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let mut websocket = accept_codex_test_websocket(websocket_stream).await;
+        let _payload = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_cross_account", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::default());
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+
+    let response = backend
+        .create_response(
+            &external_continuation_request("conversation-cross-account"),
+            request_context("req_cross_account", Some("chatgpt-account-b")),
+        )
+        .await
+        .expect("external continuation should complete over WebSocket");
+    server.await.unwrap();
+
+    assert_eq!(response.transport, CodexBackendTransport::WebSocket);
     pool.shutdown().await;
 }
 

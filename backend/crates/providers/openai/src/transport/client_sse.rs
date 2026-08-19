@@ -245,11 +245,12 @@ impl CodexBackendClient {
             self.websocket_pool.as_deref().zip(pool_key)
         };
         let fast_path_budget = match requirement {
-            TransportRequirement::PersistedContinuation
-            | TransportRequirement::ExternalUnknown
-            | TransportRequirement::NewChain => Some(WEBSOCKET_FAST_PATH_BUDGET),
+            TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
+                Some(WEBSOCKET_FAST_PATH_BUDGET)
+            }
             TransportRequirement::ExplicitWebSocketWarmup
-            | TransportRequirement::ExactWebSocketContinuation => None,
+            | TransportRequirement::ExactWebSocketContinuation
+            | TransportRequirement::ExternalUnknown => None,
             TransportRequirement::HttpRequired => None,
         };
         let prepare_started_at = Instant::now();
