@@ -104,7 +104,11 @@ continuation 或 claim 表。
 
 - `store=true`：使用 Provider 持久化的 native handle。
 - `store=false`：opaque replay state 仅存在于活连接内，不落 PostgreSQL。
-- OpenAI continuation 顺序为 native、replay owner、replay any。
+- OpenAI continuation 顺序为 native、replay owner、replay any。`replay any` 是
+  Provider 定义的恢复阶段，不代表 Core 已持有完整 input：OpenAI 在跨账号时保留
+  canonical `previous_response_id` 与原始增量 input 做 continuation probe；上游返回
+  `previous_response_not_found` 时原样交给官方客户端触发 full retry。只有确实持有
+  可携带 transcript 的 Provider 才能清除 native handle 后在代理内部重放。
 - xAI 使用客户端提交的完整历史作为已验证 continuation 路径。
 - native continuation pin 同时绑定创建它的 Client Key、冻结账号范围、Provider 和账号；跨 Key 复用、
   scope 外账号或计划中不存在该 Provider 都 fail closed。`ReplayOwner` 同样固定原 Provider 和账号，

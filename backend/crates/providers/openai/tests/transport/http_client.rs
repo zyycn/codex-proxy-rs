@@ -371,6 +371,7 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
                 .insert_header("openai-model", "gpt-5.5-2026-07-01")
                 .insert_header("x-models-etag", "models-v2")
                 .insert_header("x-reasoning-included", "true")
+                .insert_header("x-codex-turn-state", "turn-state-from-upstream")
                 .insert_header("openai-processing-ms", "42")
                 .append_header("x-future-multi", "first")
                 .append_header("x-future-multi", "second")
@@ -452,6 +453,7 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
             "openai-processing-ms",
             "retry-after",
             "x-codex-safety-buffering-enabled",
+            "x-codex-turn-state",
             "x-future-bytes",
             "x-future-multi",
             "x-future-multi",
@@ -477,6 +479,15 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
             .client_headers
             .iter()
             .any(|(name, value)| { name == "x-future-bytes" && value.as_ref() == b"\xffopaque" })
+    );
+    assert!(
+        response
+            .response_metadata
+            .client_headers
+            .iter()
+            .any(|(name, value)| {
+                name == "x-codex-turn-state" && value.as_ref() == b"turn-state-from-upstream"
+            })
     );
     for blocked in [
         "set-cookie",

@@ -622,6 +622,18 @@ impl MemorySessionAffinity {
     pub(crate) fn binding_count(&self) -> usize {
         self.bindings.lock().expect("session affinity lock").len()
     }
+
+    pub(crate) fn seed_binding(
+        &self,
+        provider_kind: &ProviderKind,
+        key: &str,
+        account_id: ProviderAccountId,
+    ) {
+        self.bindings.lock().expect("session affinity lock").insert(
+            (provider_kind.as_str().to_owned(), key.to_owned()),
+            account_id,
+        );
+    }
 }
 
 impl ProviderSessionAffinityPort for MemorySessionAffinity {

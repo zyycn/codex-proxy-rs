@@ -362,9 +362,14 @@ pub enum ContinuationAttempt {
     None,
     /// 使用 Store 解析出的原生 handle 与账号绑定。
     Native,
-    /// 在原账号上用完整连接内 transcript 重放。
+    /// 在原账号上执行 Provider 定义的恢复。
+    ///
+    /// 只有持有可携带 transcript 的 Provider 才能清除 native handle 后重放；
+    /// 只持有 opaque state 的 Provider 必须保留 continuation 依赖或返回客户端错误。
     ReplayOwner,
-    /// transcript 已可携带，允许选择其他账号。
+    /// 允许选择其他账号并执行 Provider 定义的恢复。
+    ///
+    /// 该枚举本身不证明客户端 input 完整，也不授权 Provider 清除 previous-response。
     ReplayAny,
 }
 

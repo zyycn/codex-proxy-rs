@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuationScope};
 use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccount};
@@ -66,7 +67,7 @@ use crate::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals,
 };
 use crate::transport::request::{
-    CodexRequestEncodeError, encode_generate_request, scope_request_to_account,
+    CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -250,7 +251,12 @@ impl Provider for CodexProvider {
         if let Some(identity) = &self.session_identity {
             identity.prepare_local_conversation(&mut upstream_request);
         }
-        if upstream_request.turn_state.is_none() {
+        if previous_session.as_ref().is_some_and(|state| {
+            same_client_turn(
+                state.client_turn_id.as_deref(),
+                upstream_request.client_turn_id.as_deref(),
+            )
+        }) {
             upstream_request.turn_state = previous_session
                 .as_ref()
                 .and_then(|state| state.turn_state.clone());
@@ -280,57 +286,48 @@ impl Provider for CodexProvider {
         let output_started_at = Instant::now();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let cross_account = context
+        let state_owner_cross_account = context
             .account_state_owner()
             .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
             || previous_session
                 .as_ref()
                 .is_some_and(|state| state.account_id != lease.account_id().as_str());
-        let replay_previous_response = matches!(
-            context.continuation_attempt(),
-            ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
-        ) || previous_session.as_ref().is_some_and(|state| {
-            state.continuation_scope == OpenAiContinuationScope::ReplayRequired
-        });
-        if replay_previous_response && previous_session.is_some() {
-            // Codex 客户端 input 是完整历史；恢复时只解除上游续链绑定，避免重复叠加代理副本。
-            upstream_request.set_previous_response_id(None);
-            upstream_request.previous_response_scope = None;
-            upstream_request.turn_state = None;
-        }
-        scope_request_to_account(
-            &mut upstream_request,
-            lease.installation_id(),
-            cross_account,
-        );
-        if context.continuation_attempt() == ContinuationAttempt::Native
-            && !replay_previous_response
+        let has_explicit_state_owner =
+            context.account_state_owner().is_some() || previous_session.is_some();
+        let cross_account =
+            state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch());
+        if context.continuation_attempt() != ContinuationAttempt::None
             && let Some(continuation) = context.continuation()
         {
             match continuation {
                 ContinuationBinding::Pinned(continuation) => {
-                    let previous_response_scope = match previous_session
-                        .as_ref()
-                        .map(|state| state.continuation_scope)
-                    {
-                        Some(OpenAiContinuationScope::Persisted) => {
-                            PreviousResponseScope::Persisted
-                        }
-                        Some(OpenAiContinuationScope::ConnectionLocal) => {
-                            PreviousResponseScope::ConnectionLocal
-                        }
-                        Some(OpenAiContinuationScope::ReplayRequired) => {
-                            return Err(provider_error(
-                                ProviderErrorKind::Protocol,
-                                UpstreamSendState::NotSent,
-                            ));
-                        }
-                        None => match continuation.scope() {
-                            NativeContinuationScope::Persisted => PreviousResponseScope::Persisted,
-                            NativeContinuationScope::ConnectionLocal => {
+                    let previous_response_scope = match context.continuation_attempt() {
+                        ContinuationAttempt::Native => match previous_session
+                            .as_ref()
+                            .map(|state| state.continuation_scope)
+                        {
+                            Some(OpenAiContinuationScope::Persisted) => {
+                                PreviousResponseScope::Persisted
+                            }
+                            Some(OpenAiContinuationScope::ConnectionLocal) => {
                                 PreviousResponseScope::ConnectionLocal
                             }
+                            Some(OpenAiContinuationScope::ReplayRequired) => {
+                                PreviousResponseScope::ExternalUnknown
+                            }
+                            None => match continuation.scope() {
+                                NativeContinuationScope::Persisted => {
+                                    PreviousResponseScope::Persisted
+                                }
+                                NativeContinuationScope::ConnectionLocal => {
+                                    PreviousResponseScope::ConnectionLocal
+                                }
+                            },
                         },
+                        ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
+                            PreviousResponseScope::ExternalUnknown
+                        }
+                        ContinuationAttempt::None => PreviousResponseScope::ExternalUnknown,
                     };
                     upstream_request.set_previous_response_id(Some(
                         continuation.upstream_response_id().as_str().to_owned(),
@@ -345,6 +342,18 @@ impl Provider for CodexProvider {
                 }
             }
         }
+        let account_scope = if !cross_account {
+            RequestAccountScope::SameAccount
+        } else if upstream_request.previous_response_id().is_some() {
+            RequestAccountScope::CrossAccountContinuationProbe
+        } else {
+            RequestAccountScope::CrossAccountFullRequest
+        };
+        scope_request_to_account(
+            &mut upstream_request,
+            lease.installation_id(),
+            account_scope,
+        );
         let metadata = ProviderCallMetadata::new(
             provider_kind,
             candidate.upstream_model().clone(),
@@ -362,6 +371,7 @@ impl Provider for CodexProvider {
                 account_id: lease.account_id().as_str().to_owned(),
                 conversation_id: upstream_request.local_conversation_id.clone(),
                 turn_state: upstream_request.turn_state.clone(),
+                client_turn_id: upstream_request.client_turn_id.clone(),
                 response_store,
                 continuation_scope: None,
             });
@@ -414,6 +424,8 @@ struct OpenAiSessionState {
     conversation_id: Option<String>,
     #[serde(default)]
     turn_state: Option<String>,
+    #[serde(default)]
+    client_turn_id: Option<String>,
     continuation_scope: OpenAiContinuationScope,
 }
 
@@ -429,8 +441,15 @@ struct OpenAiSessionCapture {
     account_id: String,
     conversation_id: Option<String>,
     turn_state: Option<String>,
+    client_turn_id: Option<String>,
     response_store: bool,
     continuation_scope: Option<OpenAiContinuationScope>,
+}
+
+fn same_client_turn(previous: Option<&str>, current: Option<&str>) -> bool {
+    previous
+        .zip(current)
+        .is_some_and(|(previous, current)| !previous.is_empty() && previous == current)
 }
 
 fn decode_openai_session_state(request: &GenerateRequest) -> Option<OpenAiSessionState> {
@@ -474,6 +493,7 @@ fn attach_openai_session_update(
         account_id: capture.account_id,
         conversation_id: capture.conversation_id,
         turn_state: capture.turn_state,
+        client_turn_id: capture.client_turn_id,
         continuation_scope,
     }) else {
         return;
@@ -813,13 +833,16 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 passive_quota_observation.observe(&updates);
                 observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
             };
-            if let (Some(capture), Some(updates)) =
-                (session_capture.as_mut(), turn_state_updates.as_ref())
-                // take：仅在上游写入过新 turn_state 时更新 capture，避免逐 chunk 克隆。
+            let turn_state_changed = if let Some(updates) = turn_state_updates.as_ref()
                 && let Some(turn_state) = updates.lock().await.take()
             {
-                capture.turn_state = Some(turn_state);
-            }
+                if let Some(capture) = session_capture.as_mut() {
+                    capture.turn_state = Some(turn_state.clone());
+                }
+                observation_state.merge_client_header("x-codex-turn-state", &turn_state)
+            } else {
+                false
+            };
             let first_event_changed =
                 observation_state.observe_stream_chunk(&chunk, output_started_at);
             let chunk_len = chunk.len();
@@ -884,6 +907,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             if (rate_limits_changed
                 || service_tier_changed
                 || timing_changed
+                || turn_state_changed
                 || terminal_changed)
                 && let Some(observation) = observation_state.observation()
             {
@@ -958,12 +982,16 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             apply_failure(&failure_context, &active_account, failure)
             .await;
         }
-        if let (Some(capture), Some(updates)) =
-            (session_capture.as_mut(), turn_state_updates.as_ref())
+        let turn_state_changed = if let Some(updates) = turn_state_updates.as_ref()
             && let Some(turn_state) = updates.lock().await.take()
         {
-            capture.turn_state = Some(turn_state);
-        }
+            if let Some(capture) = session_capture.as_mut() {
+                capture.turn_state = Some(turn_state.clone());
+            }
+            observation_state.merge_client_header("x-codex-turn-state", &turn_state)
+        } else {
+            false
+        };
         attach_openai_session_update(&mut events, &mut session_capture);
         let completed = events
             .iter()
@@ -980,7 +1008,11 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                 .await;
         }
-        if (service_tier_changed || timing_changed || rate_limits_changed || terminal_changed)
+        if (service_tier_changed
+            || timing_changed
+            || rate_limits_changed
+            || turn_state_changed
+            || terminal_changed)
             && let Some(observation) = observation_state.observation()
         {
             yield ProviderEvent::observation(observation);
@@ -1167,6 +1199,26 @@ impl OpenAiResponseObservationState {
             }
         }
         changed
+    }
+
+    fn merge_client_header(&mut self, name: &str, value: &str) -> bool {
+        let value = Bytes::copy_from_slice(value.as_bytes());
+        if let Some((_, existing)) = self
+            .response_metadata
+            .client_headers
+            .iter_mut()
+            .find(|(existing_name, _)| existing_name.eq_ignore_ascii_case(name))
+        {
+            if *existing == value {
+                return false;
+            }
+            *existing = value;
+            return true;
+        }
+        self.response_metadata
+            .client_headers
+            .push((name.to_owned(), value));
+        true
     }
 
     fn mark_completed(&mut self, incomplete: bool) -> bool {
@@ -2220,7 +2272,7 @@ fn map_upstream_failure(
         error = error.with_status(status.as_u16());
     }
     if replay_boundary.permits_provider_proof()
-        && (failure.replay_is_safe() || continuation_failure.is_some() || cyber_policy_failure)
+        && (failure.replay_is_safe() || cyber_policy_failure)
     {
         error = error.with_replay_safe();
     }

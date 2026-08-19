@@ -1162,10 +1162,11 @@ where
         true
     }
 
-    /// 原生续写的原账号在本地调度阶段已不可用时，改用完整输入重放。
+    /// 原生续写的原账号在本地调度阶段已不可用时，交给 Provider 执行跨账号恢复。
     ///
     /// 这不是强制 Smart：下一次 attempt 仍使用请求配置的调度策略。只有网关持有
-    /// 对应 Provider 的可携带会话状态时，才可安全移除 native handle 并换号。
+    /// 对应 Provider 的会话状态时才进入恢复；是否保留 native handle、执行 probe
+    /// 或使用完整 transcript，由 Provider 自己的协议边界决定。
     fn prepare_unavailable_native_continuation_replay(&mut self, error: &ProviderError) -> bool {
         if self.account_selection.required_account().is_some()
             || self.continuation_attempt != ContinuationAttempt::Native

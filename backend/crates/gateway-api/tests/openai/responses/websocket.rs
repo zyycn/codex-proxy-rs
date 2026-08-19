@@ -411,6 +411,10 @@ async fn websocket_response_metadata_should_preserve_ordinary_headers_without_bl
             ProviderResponseHeader::new("x-future-header", Bytes::from_static(b"future-value")),
             ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"first")),
             ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"second")),
+            ProviderResponseHeader::new(
+                "x-codex-turn-state",
+                Bytes::from_static(b"turn-state-from-upstream"),
+            ),
             ProviderResponseHeader::new("x-future-bytes", Bytes::from_static(b"\xffopaque")),
             ProviderResponseHeader::new("bad\0name", Bytes::from_static(b"unrepresentable")),
             ProviderResponseHeader::new(
@@ -483,6 +487,10 @@ async fn websocket_response_metadata_should_preserve_ordinary_headers_without_bl
     // 官方 metadata 是 string map，同名多值只能保持既有的后值覆盖语义。
     assert_eq!(headers.get("x-future-multi"), Some(&json!("second")));
     assert_eq!(headers.get("x-request-id"), Some(&json!("req_upstream")));
+    assert_eq!(
+        headers.get("x-codex-turn-state"),
+        Some(&json!("turn-state-from-upstream"))
+    );
     for omitted in [
         "x-future-bytes",
         "bad\0name",

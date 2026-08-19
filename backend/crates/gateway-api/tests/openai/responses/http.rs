@@ -788,6 +788,10 @@ async fn streaming_response_should_append_ordinary_headers_and_skip_unrepresenta
     let trace = Arc::new(Trace::default());
     let headers = vec![
         ProviderResponseHeader::new("x-models-etag", Bytes::from_static(b"models-v2")),
+        ProviderResponseHeader::new(
+            "x-codex-turn-state",
+            Bytes::from_static(b"turn-state-from-upstream"),
+        ),
         ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"first")),
         ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"second")),
         ProviderResponseHeader::new("x-future-bytes", Bytes::from_static(b"\xffopaque")),
@@ -833,6 +837,13 @@ async fn streaming_response_should_append_ordinary_headers_and_skip_unrepresenta
             .get("x-future-bytes")
             .map(HeaderValue::as_bytes),
         Some(b"\xffopaque".as_slice())
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-state-from-upstream")
     );
     assert!(response.headers().get("authorization").is_none());
     assert!(response.headers().get("connection").is_none());

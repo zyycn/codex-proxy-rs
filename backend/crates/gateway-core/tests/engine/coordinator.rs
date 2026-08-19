@@ -493,6 +493,31 @@ fn bare_atomic_response_failed(response_id: &str) -> ProviderError {
         .with_atomic_client_events(vec![failed])
 }
 
+fn atomic_history_unavailable(response_id: &str) -> ProviderError {
+    let failed = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.failed".to_owned()),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": response_id,
+                    "status": "failed",
+                    "error": {
+                        "code": "previous_response_not_found",
+                        "message": "Previous response was not found. Retrying the full request."
+                    }
+                }
+            }),
+        )
+        .expect("history unavailable wire"),
+    );
+    ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
+        .with_status(400)
+        .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+        .with_atomic_client_events(vec![failed])
+}
+
 fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, ProviderError>> {
     let mut usage = Usage::new();
     usage.input_tokens = Some(12);
@@ -1481,7 +1506,7 @@ fn streaming_native_continuation_delivers_started_event_before_later_output() {
 }
 
 #[test]
-fn native_continuation_replays_owner_before_safely_switching_account() {
+fn native_continuation_uses_provider_defined_owner_then_cross_account_recovery() {
     let Operation::Generate(generate) = generate_operation() else {
         panic!("generate operation");
     };
@@ -1536,7 +1561,7 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("portable replay succeeds");
+    block_on(session.collect_uncommitted()).expect("provider-defined recovery succeeds");
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
     let contexts = provider.contexts.lock().expect("contexts lock");
@@ -1561,7 +1586,7 @@ fn native_continuation_replays_owner_before_safely_switching_account() {
 }
 
 #[test]
-fn unavailable_native_continuation_replays_with_the_configured_account_policy() {
+fn unavailable_native_continuation_uses_provider_recovery_with_the_configured_account_policy() {
     let Operation::Generate(generate) = generate_operation() else {
         panic!("generate operation");
     };
@@ -1602,7 +1627,7 @@ fn unavailable_native_continuation_replays_with_the_configured_account_policy() 
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("portable replay succeeds");
+    block_on(session.collect_uncommitted()).expect("provider-defined recovery succeeds");
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
     let contexts = provider.contexts.lock().expect("contexts lock");
@@ -1623,6 +1648,76 @@ fn unavailable_native_continuation_replays_with_the_configured_account_policy() 
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
+fn continuation_history_failure_without_replay_proof_is_delivered_without_hidden_retry() {
+    let Operation::Generate(generate) = generate_operation() else {
+        panic!("generate operation");
+    };
+    let operation = Operation::Generate(generate.with_provider_session_state(
+        ProviderSessionState::new("openai", Map::new()).expect("provider session state"),
+    ));
+    let route_plan = plan(&operation);
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_one",
+            items: vec![Err(atomic_history_unavailable("response-history-missing"))],
+        },
+        Script::Stream {
+            account_id: "acct_two",
+            items: complete_stream(None),
+        },
+    ]);
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-response"),
+        PreviousResponseId::new("upstream-response"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new("acct_one").expect("account"),
+    );
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+
+    let terminal = block_on(session.next_event())
+        .expect("history failure remains deliverable")
+        .expect("terminal history failure batch");
+    assert_eq!(
+        terminal.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    let events = terminal.into_provider_events();
+    let failure = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .find(|wire| wire.event_type() == Some("response.failed"))
+        .expect("raw response.failed event");
+    assert_eq!(
+        failure
+            .data()
+            .pointer("/response/error/code")
+            .and_then(Value::as_str),
+        Some("previous_response_not_found")
+    );
+    block_on(session.commit_downstream(Some(200))).expect("commit terminal history failure");
+    assert!(matches!(
+        block_on(session.next_event()),
+        Err(EngineError::Provider(_))
+    ));
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(
+        contexts[0].continuation_attempt(),
+        ContinuationAttempt::Native
+    );
 }
 
 #[test]

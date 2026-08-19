@@ -73,7 +73,6 @@ pub(super) fn response_header_is_forwardable(name: &str, connection_options: &[S
             | "x-openai-organization"
             | "x-openai-project"
             | "x-codex-installation-id"
-            | "x-codex-turn-state"
             | "x-codex-turn-metadata"
     )
 }

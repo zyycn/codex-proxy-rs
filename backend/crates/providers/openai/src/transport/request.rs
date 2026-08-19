@@ -61,6 +61,23 @@ const INSTALLATION_ID_KEYS: &[&str] = &[
     "x-codex-installation-id",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestAccountScope {
+    SameAccount,
+    CrossAccountFullRequest,
+    CrossAccountContinuationProbe,
+}
+
+impl RequestAccountScope {
+    const fn is_cross_account(self) -> bool {
+        !matches!(self, Self::SameAccount)
+    }
+
+    const fn preserves_continuation(self) -> bool {
+        matches!(self, Self::CrossAccountContinuationProbe)
+    }
+}
+
 /// Provider 专属编码错误；不保存 prompt、schema 或 option 值。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CodexRequestEncodeError {
@@ -289,12 +306,18 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
 ///
 /// 真实 account ID 与 installation ID 由随后构造的 `CodexRequestContext` 注入
 /// 请求头；正文只替换客户端原本声明过的 installation 字段，绝不接受客户端
-/// 提供的 token、cookie 或账号身份。
+/// 提供的 token、cookie 或账号身份。Continuation probe 保留 canonical
+/// previous-response 和原始增量 input，不能把它们误当成完整请求清理。
 pub(crate) fn scope_request_to_account(
     request: &mut CodexResponsesRequest,
     installation_id: &str,
-    cross_account: bool,
+    account_scope: RequestAccountScope,
 ) {
+    let cross_account = account_scope.is_cross_account();
+    let continuation = account_scope
+        .preserves_continuation()
+        .then(|| request.previous_response_id().map(ToOwned::to_owned))
+        .flatten();
     let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
     let preserve_turn_state =
         !cross_account && (request.turn_state.is_some() || client_metadata_turn_state.is_some());
@@ -306,22 +329,37 @@ pub(crate) fn scope_request_to_account(
     } else {
         None
     };
-    let turn_metadata = request
-        .turn_metadata
-        .as_deref()
-        .and_then(|metadata| scope_turn_metadata(metadata, installation_id, cross_account));
-    let client_metadata_turn_metadata = metadata_string(request, "x-codex-turn-metadata")
-        .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, cross_account));
+    let turn_metadata = (!account_scope.preserves_continuation())
+        .then(|| {
+            request
+                .turn_metadata
+                .as_deref()
+                .and_then(|metadata| scope_turn_metadata(metadata, installation_id, cross_account))
+        })
+        .flatten();
+    let client_metadata_turn_metadata = (!account_scope.preserves_continuation())
+        .then(|| {
+            metadata_string(request, "x-codex-turn-metadata")
+                .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, cross_account))
+        })
+        .flatten();
 
     if cross_account {
         request.passthrough_headers.remove("x-codex-turn-state");
         request.passthrough_headers.remove("x-codex-turn-metadata");
-        sanitize_cross_account_input(request);
+        if !account_scope.preserves_continuation() {
+            sanitize_cross_account_input(request);
+        }
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()
             .chain(ACCOUNT_BOUND_STATE_KEYS)
         {
             request.body_mut().remove(*key);
+        }
+        if account_scope.preserves_continuation() {
+            for key in TURN_METADATA_KEYS {
+                request.body_mut().remove(*key);
+            }
         }
     }
 
@@ -355,6 +393,11 @@ pub(crate) fn scope_request_to_account(
                         .chain(ACCOUNT_BOUND_STATE_KEYS)
                     {
                         metadata.remove(*key);
+                    }
+                    if account_scope.preserves_continuation() {
+                        for key in TURN_METADATA_KEYS {
+                            metadata.remove(*key);
+                        }
                     }
                 }
                 metadata.insert(
@@ -393,6 +436,9 @@ pub(crate) fn scope_request_to_account(
 
     request.turn_state = turn_state;
     request.turn_metadata = turn_metadata;
+    if let Some(continuation) = continuation {
+        request.set_previous_response_id(Some(continuation));
+    }
 }
 
 fn sanitize_cross_account_input(request: &mut CodexResponsesRequest) {
