@@ -28,7 +28,7 @@ export interface UsageViewModel {
   accountEmail: string | null
   accountName: string | null
   route: string
-  model: string
+  model: string | null
   requestedModel: string | null
   upstreamModel: string | null
   serviceTier: string | null

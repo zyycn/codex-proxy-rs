@@ -743,7 +743,7 @@ fn bare_response_failed_should_project_started_identity_with_the_fallback_model(
         canonical_facts(failure.events()).as_slice(),
         [GatewayEvent::Started(metadata)]
             if metadata.response_id() == "resp_bare_failed"
-                && metadata.model() == "fallback-model"
+                && metadata.model() == Some("fallback-model")
     ));
 }
 

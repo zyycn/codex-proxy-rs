@@ -123,7 +123,7 @@ impl UpstreamTransport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCallMetadata {
     provider: ProviderKind,
-    upstream_model: UpstreamModelId,
+    upstream_model: Option<UpstreamModelId>,
     resource: ProviderResource,
     upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
@@ -140,7 +140,23 @@ impl ProviderCallMetadata {
     ) -> Self {
         Self {
             provider,
-            upstream_model,
+            upstream_model: Some(upstream_model),
+            resource,
+            upstream_request_id: None,
+            transport,
+        }
+    }
+
+    /// 创建一次不声明模型的 Provider 原生端点调用事实。
+    #[must_use]
+    pub const fn for_provider_endpoint(
+        provider: ProviderKind,
+        resource: ProviderResource,
+        transport: UpstreamTransport,
+    ) -> Self {
+        Self {
+            provider,
+            upstream_model: None,
             resource,
             upstream_request_id: None,
             transport,
@@ -160,10 +176,10 @@ impl ProviderCallMetadata {
         &self.provider
     }
 
-    /// 返回实际模型；必须与冻结 target 一致。
+    /// 返回实际模型；Provider 原生端点没有模型事实。
     #[must_use]
-    pub const fn upstream_model(&self) -> &UpstreamModelId {
-        &self.upstream_model
+    pub const fn upstream_model(&self) -> Option<&UpstreamModelId> {
+        self.upstream_model.as_ref()
     }
 
     /// 返回匿名资源；账号调用返回 `None`。
@@ -199,7 +215,8 @@ impl ProviderCallMetadata {
     /// 确认 metadata 没有替换请求计划中冻结的 Provider 候选。
     #[must_use]
     pub fn confirms(&self, candidate: &ProviderCandidate) -> bool {
-        candidate.provider() == &self.provider && candidate.upstream_model() == &self.upstream_model
+        candidate.provider() == &self.provider
+            && candidate.upstream_model() == self.upstream_model.as_ref()
     }
 }
 
@@ -517,7 +534,7 @@ impl fmt::Debug for ProviderRequest {
             .debug_struct("ProviderRequest")
             .field("operation", &self.operation)
             .field("provider", self.candidate.provider())
-            .field("upstream_model", self.candidate.upstream_model())
+            .field("upstream_model", &self.candidate.upstream_model())
             .finish()
     }
 }

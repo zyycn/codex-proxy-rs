@@ -284,7 +284,13 @@ fn selected_provider_should_use_global_model_mapping() {
 
     assert_eq!(plan.candidates().len(), 1);
     assert_eq!(plan.candidates()[0].provider().as_str(), "openai");
-    assert_eq!(plan.candidates()[0].upstream_model().as_str(), "gpt-5.5");
+    assert_eq!(
+        plan.candidates()[0]
+            .upstream_model()
+            .expect("model route candidate")
+            .as_str(),
+        "gpt-5.5"
+    );
 }
 
 #[test]
@@ -337,7 +343,6 @@ fn provider_endpoint_plan_should_not_consult_or_publish_the_text_model_catalog()
     assert!(!snapshot.contains_public_model_for_provider(&public_model, &provider));
     let plan = snapshot
         .plan_provider_endpoint(
-            &public_model,
             &provider,
             &image_operation(),
             snapshot.all_account_scope(),
@@ -345,14 +350,10 @@ fn provider_endpoint_plan_should_not_consult_or_publish_the_text_model_catalog()
         )
         .expect("provider-owned endpoint remains routable");
 
-    assert_eq!(plan.public_model(), &public_model);
     assert_eq!(plan.operation(), OperationKind::GenerateImage);
     assert_eq!(plan.candidates().len(), 1);
     assert_eq!(plan.candidates()[0].provider(), &provider);
-    assert_eq!(
-        plan.candidates()[0].upstream_model().as_str(),
-        "gpt-image-2"
-    );
+    assert_eq!(plan.candidates()[0].upstream_model(), None);
     assert!(!snapshot.contains_public_model_for_provider(&public_model, &provider));
 }
 
@@ -362,7 +363,6 @@ fn provider_endpoint_plan_should_still_respect_circuit_filtering() {
     let provider = ProviderKind::new("openai").expect("provider");
     let error = snapshot
         .plan_provider_endpoint(
-            &PublicModelId::new("gpt-image-2").expect("model"),
             &provider,
             &image_operation(),
             snapshot.all_account_scope(),
@@ -375,7 +375,7 @@ fn provider_endpoint_plan_should_still_respect_circuit_filtering() {
 
     assert!(matches!(
         error,
-        gateway_core::error::RoutingError::NoCapableProvider { .. }
+        gateway_core::error::RoutingError::NoCapableProviderEndpoint { .. }
     ));
 }
 
@@ -408,7 +408,13 @@ fn unmapped_model_should_pass_through_unchanged() {
             )
             .expect("unknown model remains transparent");
 
-        assert_eq!(plan.candidates()[0].upstream_model().as_str(), requested);
+        assert_eq!(
+            plan.candidates()[0]
+                .upstream_model()
+                .expect("model route candidate")
+                .as_str(),
+            requested
+        );
     }
 }
 

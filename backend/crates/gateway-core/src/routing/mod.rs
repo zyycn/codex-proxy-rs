@@ -780,11 +780,11 @@ pub struct RoutingContext {
     pub blocked_providers: BTreeSet<ProviderKind>,
 }
 
-/// 已绑定 Provider 与真实上游模型的请求候选。
+/// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
     provider: ProviderKind,
-    upstream_model: UpstreamModelId,
+    upstream_model: Option<UpstreamModelId>,
     emulated_features: BTreeSet<Feature>,
     account_scope: Arc<FrozenAccountScope>,
 }
@@ -796,8 +796,8 @@ impl ProviderCandidate {
     }
 
     #[must_use]
-    pub const fn upstream_model(&self) -> &UpstreamModelId {
-        &self.upstream_model
+    pub const fn upstream_model(&self) -> Option<&UpstreamModelId> {
+        self.upstream_model.as_ref()
     }
 
     #[must_use]
@@ -816,7 +816,6 @@ impl ProviderCandidate {
 pub struct RoutingPlan {
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
-    public_model: PublicModelId,
     operation: OperationKind,
     max_attempts: NonZeroU32,
     account_scope: Arc<FrozenAccountScope>,
@@ -832,11 +831,6 @@ impl RoutingPlan {
     #[must_use]
     pub const fn account_selection_policy(&self) -> AccountSelectionPolicy {
         self.account_selection_policy
-    }
-
-    #[must_use]
-    pub const fn public_model(&self) -> &PublicModelId {
-        &self.public_model
     }
 
     #[must_use]

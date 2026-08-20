@@ -28,7 +28,7 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         operation: "responses".to_owned(),
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
-        requested_model_id: "coding".to_owned(),
+        requested_model_id: Some("coding".to_owned()),
         routing_scope: "all".to_owned(),
         routing_group_refs: Vec::new(),
         routing_group_names_snapshot: serde_json::json!([]),
@@ -47,7 +47,7 @@ fn model_request_rejects_mismatched_client_key_live_id() {
 }
 
 #[tokio::test]
-async fn merged_first_attempt_insert_should_match_sequential_semantics() {
+async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
     let Some(database) = TestDatabase::create("execution_merged_insert").await else {
         return;
     };
@@ -75,10 +75,10 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
         client_api_key_ref: "key_merged".to_owned(),
         config_revision: 1,
         protocol: "openai".to_owned(),
-        operation: "responses".to_owned(),
-        endpoint: "/v1/responses".to_owned(),
-        client_transport: "http_sse".to_owned(),
-        requested_model_id: "coding".to_owned(),
+        operation: "generate_image".to_owned(),
+        endpoint: "/v1/images/generations".to_owned(),
+        client_transport: "http_json".to_owned(),
+        requested_model_id: None,
         routing_scope: "all".to_owned(),
         routing_group_refs: Vec::new(),
         routing_group_names_snapshot: serde_json::json!([]),
@@ -99,8 +99,8 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
         provider_kind: "openai".to_owned(),
         provider_account_id: Some("acct_merged".to_owned()),
         provider_account_ref: Some("acct_merged".to_owned()),
-        upstream_model_id: "gpt-test".to_owned(),
-        upstream_transport: "http_sse".to_owned(),
+        upstream_model_id: None,
+        upstream_transport: "http_json".to_owned(),
         http_version: None,
     };
 
@@ -109,22 +109,31 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
         .await
         .expect("merged insert");
 
-    let (attempt_count, send_state, provider_kind, outcome): (i32, String, String, String) =
-        sqlx::query_as(
-            "select attempt_count, upstream_send_state, provider_kind, outcome
+    let (attempt_count, send_state, provider_kind, outcome, requested_model, upstream_model): (
+        i32,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "select attempt_count, upstream_send_state, provider_kind, outcome,
+                    requested_model_id, upstream_model_id
              from model_requests where id = 'req_merged'",
-        )
-        .fetch_one(&database.pool)
-        .await
-        .expect("load merged request");
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load merged request");
     assert_eq!(
         (
             attempt_count,
             send_state.as_str(),
             provider_kind.as_str(),
-            outcome.as_str()
+            outcome.as_str(),
+            requested_model,
+            upstream_model,
         ),
-        (1, "not_sent", "openai", "running")
+        (1, "not_sent", "openai", "running", None, None)
     );
 
     // 后续 attempt 沿用常规 CAS 递增路径；已持久化的 sent 水位不被重试重置。
@@ -142,8 +151,8 @@ async fn merged_first_attempt_insert_should_match_sequential_semantics() {
             provider_kind: "openai".to_owned(),
             provider_account_id: Some("acct_merged".to_owned()),
             provider_account_ref: Some("acct_merged".to_owned()),
-            upstream_model_id: "gpt-test".to_owned(),
-            upstream_transport: "http_sse".to_owned(),
+            upstream_model_id: None,
+            upstream_transport: "http_json".to_owned(),
             http_version: None,
         })
         .await
@@ -182,7 +191,7 @@ async fn model_request_persists_group_routing_snapshot_without_live_group_foreig
             operation: "responses".to_owned(),
             endpoint: "/v1/responses".to_owned(),
             client_transport: "http_sse".to_owned(),
-            requested_model_id: "coding".to_owned(),
+            requested_model_id: Some("coding".to_owned()),
             client_ip: None,
             user_agent: None,
             reasoning_effort: None,

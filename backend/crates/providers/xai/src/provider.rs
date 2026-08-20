@@ -195,11 +195,12 @@ impl GrokBuildProvider {
         if crate::transport::compaction::has_terminal_compaction_trigger(generate) {
             return self.execute_compaction(generate, candidate, context).await;
         }
+        let upstream_model = candidate_upstream_model(candidate)?;
         let previous_session = decode_xai_session_state(generate)?;
         let continuation_account = continuation_account(&context, previous_session.as_ref())?;
         let mut upstream_request = GrokResponsesRequest::encode(
             generate,
-            candidate.upstream_model().as_str(),
+            upstream_model.as_str(),
             context.client_api_key_ref(),
         )
         .map_err(map_request_error)?;
@@ -326,9 +327,10 @@ impl GrokBuildProvider {
         let inherited_session_id = previous_session
             .as_ref()
             .and_then(|previous| previous.session_id.clone());
+        let upstream_model = candidate_upstream_model(candidate)?;
         let upstream_request = GrokCompactionRequest::encode(
             generate,
-            candidate.upstream_model().as_str(),
+            upstream_model.as_str(),
             context.client_api_key_ref(),
         )
         .map_err(map_request_error)?;
@@ -452,10 +454,16 @@ fn provider_call_metadata(
 ) -> Result<ProviderCallMetadata, ProviderError> {
     Ok(ProviderCallMetadata::new(
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?,
-        candidate.upstream_model().clone(),
+        candidate_upstream_model(candidate)?.clone(),
         selected.resource(),
         UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| protocol_not_sent())?,
     ))
+}
+
+fn candidate_upstream_model(
+    candidate: &ProviderCandidate,
+) -> Result<&UpstreamModelId, ProviderError> {
+    candidate.upstream_model().ok_or_else(protocol_not_sent)
 }
 
 fn support(evidence: GrokCatalogCapabilityEvidence) -> SupportLevel {

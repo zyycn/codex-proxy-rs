@@ -95,6 +95,17 @@ pub struct SelectCodexCredential<'a> {
     pub session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
 }
 
+pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
+    pub request_url: &'a Url,
+    pub attempt: &'a AttemptContext,
+}
+
+struct CredentialSelectionInput<'a> {
+    request_url: &'a Url,
+    attempt: &'a AttemptContext,
+    session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
+}
+
 #[derive(Clone)]
 pub(crate) struct CodexCyberPolicyScope {
     key: ProviderSessionAffinityKey,
@@ -241,8 +252,8 @@ struct AffinityTelemetry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelCatalogEligibility {
-    Required,
+enum ModelCatalogEligibility<'a> {
+    Required(&'a str),
     NotApplicable,
 }
 
@@ -281,8 +292,17 @@ impl CodexCredentialSelector {
         &self,
         request: &SelectCodexCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        self.select_inner(request, None, ModelCatalogEligibility::Required)
-            .await
+        let input = CredentialSelectionInput {
+            request_url: request.request_url,
+            attempt: request.attempt,
+            session_affinity_key: request.session_affinity_key,
+        };
+        self.select_inner(
+            &input,
+            None,
+            ModelCatalogEligibility::Required(request.upstream_model),
+        )
+        .await
     }
 
     pub(crate) async fn select_with_cyber_policy(
@@ -290,10 +310,15 @@ impl CodexCredentialSelector {
         request: &SelectCodexCredential<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        let input = CredentialSelectionInput {
+            request_url: request.request_url,
+            attempt: request.attempt,
+            session_affinity_key: request.session_affinity_key,
+        };
         self.select_inner(
-            request,
+            &input,
             cyber_policy_session_key,
-            ModelCatalogEligibility::Required,
+            ModelCatalogEligibility::Required(request.upstream_model),
         )
         .await
     }
@@ -304,17 +329,22 @@ impl CodexCredentialSelector {
     /// 唯一差异是不能用文本模型目录成员关系淘汰账号。
     pub(crate) async fn select_for_provider_endpoint(
         &self,
-        request: &SelectCodexCredential<'_>,
+        request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        self.select_inner(request, None, ModelCatalogEligibility::NotApplicable)
+        let input = CredentialSelectionInput {
+            request_url: request.request_url,
+            attempt: request.attempt,
+            session_affinity_key: None,
+        };
+        self.select_inner(&input, None, ModelCatalogEligibility::NotApplicable)
             .await
     }
 
     async fn select_inner(
         &self,
-        request: &SelectCodexCredential<'_>,
+        request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
-        model_catalog_eligibility: ModelCatalogEligibility,
+        model_catalog_eligibility: ModelCatalogEligibility<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
         let accounts = self.repository.list_for_provider().await?;
@@ -328,12 +358,13 @@ impl CodexCredentialSelector {
                             .account_scope()
                             .is_some_and(|scope| scope.allows(account.id())))
                     && (diagnostic
-                        || model_catalog_eligibility == ModelCatalogEligibility::NotApplicable
-                        || {
-                            let observed_support = self
-                                .catalog
-                                .observed_model_support(account, request.upstream_model);
-                            matches!(observed_support, Ok(None | Some(true)))
+                        || match model_catalog_eligibility {
+                            ModelCatalogEligibility::NotApplicable => true,
+                            ModelCatalogEligibility::Required(upstream_model) => {
+                                let observed_support =
+                                    self.catalog.observed_model_support(account, upstream_model);
+                                matches!(observed_support, Ok(None | Some(true)))
+                            }
                         })
             })
             .collect::<Vec<_>>();

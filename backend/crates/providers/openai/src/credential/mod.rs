@@ -58,11 +58,11 @@ pub use security::{
     CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeAuthentication,
     CodexRuntimeCredential,
 };
-pub(crate) use selector::CodexCyberPolicyScope;
 pub use selector::{
     CodexAccountFailure, CodexCredentialLease, CodexCredentialSelector, CredentialSelectionError,
     SelectCodexCredential,
 };
+pub(crate) use selector::{CodexCyberPolicyScope, SelectCodexProviderEndpointCredential};
 pub use types::{
     CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
     CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCookie,

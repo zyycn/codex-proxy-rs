@@ -359,7 +359,9 @@ fn compaction_response(
     response.insert("status".to_owned(), Value::String(status.to_owned()));
     response.insert("error".to_owned(), Value::Null);
     response.insert("incomplete_details".to_owned(), incomplete_details);
-    response.insert("model".to_owned(), Value::String(meta.model().to_owned()));
+    if let Some(model) = meta.model() {
+        response.insert("model".to_owned(), Value::String(model.to_owned()));
+    }
     response.insert("output".to_owned(), Value::Array(output));
     response.insert("usage".to_owned(), usage);
     response.remove("output_text");

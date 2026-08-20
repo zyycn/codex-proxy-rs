@@ -16,7 +16,7 @@ use crate::operation::ProviderSessionState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseMeta {
     response_id: String,
-    model: String,
+    model: Option<String>,
     finish_reason: Option<FinishReason>,
 }
 
@@ -26,7 +26,17 @@ impl ResponseMeta {
     pub fn new(response_id: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             response_id: response_id.into(),
-            model: model.into(),
+            model: Some(model.into()),
+            finish_reason: None,
+        }
+    }
+
+    /// 创建不声明模型的 Provider 原生端点响应元数据。
+    #[must_use]
+    pub fn for_provider_endpoint(response_id: impl Into<String>) -> Self {
+        Self {
+            response_id: response_id.into(),
+            model: None,
             finish_reason: None,
         }
     }
@@ -46,8 +56,8 @@ impl ResponseMeta {
 
     /// 返回对客户端公开的模型名。
     #[must_use]
-    pub fn model(&self) -> &str {
-        &self.model
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 
     /// 返回规范化终止原因。

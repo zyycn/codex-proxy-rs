@@ -557,7 +557,7 @@ pub struct UsageRecord {
     pub operation: String,
     pub endpoint: String,
     pub client_transport: String,
-    pub requested_model_id: String,
+    pub requested_model_id: Option<String>,
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,

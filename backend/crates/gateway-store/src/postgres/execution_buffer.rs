@@ -551,7 +551,10 @@ impl ExecutionObservationWrite {
                 Some(failure.request_id.as_str()),
                 Some(failure.provider_kind.as_str()),
                 failure.account_id.as_ref().map(|value| value.as_str()),
-                Some(failure.upstream_model_id.as_str()),
+                failure
+                    .upstream_model_id
+                    .as_ref()
+                    .map(|model| model.as_str()),
                 failure.upstream_request_id.as_deref(),
             ])
             .saturating_add(provider_error_bytes(&failure.error)),
@@ -638,7 +641,7 @@ fn new_request_bytes(request: &NewModelRequest) -> usize {
         Some(request.protocol.as_str()),
         Some(request.endpoint.as_str()),
         Some(request.client_transport.as_str()),
-        Some(request.requested_model.as_str()),
+        request.requested_model.as_ref().map(|model| model.as_str()),
         request.user_agent.as_deref(),
         request.reasoning_effort.as_deref(),
         request.reasoning_preset.as_deref(),
@@ -659,7 +662,10 @@ fn attempt_bytes(attempt: &AttemptRecord) -> usize {
             .provider_account_ref
             .as_ref()
             .map(|value| value.as_str()),
-        Some(attempt.upstream_model_id.as_str()),
+        attempt
+            .upstream_model_id
+            .as_ref()
+            .map(|model| model.as_str()),
         Some(attempt.upstream_transport.as_str()),
         attempt.http_version.as_deref(),
     ]))

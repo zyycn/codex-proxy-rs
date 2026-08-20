@@ -115,7 +115,7 @@ interface AttemptRow {
   attemptIndex: number
   outcome: string
   provider: string
-  model: string
+  model: string | null
   transport: string
   statusCode: number | null
   accountLabel: string

@@ -53,8 +53,8 @@ use crate::credential::{
     CodexCredentialCatalogService, CodexCredentialLease, CodexCredentialQuotaService,
     CodexCredentialRefreshOutcome, CodexCredentialRefreshService, CodexCredentialSelector,
     CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie,
-    SelectCodexCredential, derive_codex_cyber_policy_session_key,
-    derive_codex_session_affinity_key,
+    SelectCodexCredential, SelectCodexProviderEndpointCredential,
+    derive_codex_cyber_policy_session_key, derive_codex_session_affinity_key,
 };
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
@@ -256,11 +256,16 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
+        let Some(upstream_model) = candidate.upstream_model() else {
+            return Err(provider_error(
+                ProviderErrorKind::Protocol,
+                UpstreamSendState::NotSent,
+            ));
+        };
         let previous_session = decode_openai_session_state(generate);
         let continuation_requested = generate.native_continuation_requested();
-        let mut upstream_request =
-            encode_generate_request(generate, candidate.upstream_model().as_str())
-                .map_err(map_request_error)?;
+        let mut upstream_request = encode_generate_request(generate, upstream_model.as_str())
+            .map_err(map_request_error)?;
         if let Some(conversation_id) = previous_session
             .as_ref()
             .and_then(|state| state.conversation_id.as_ref())
@@ -291,7 +296,7 @@ impl Provider for CodexProvider {
             .selector
             .select_with_cyber_policy(
                 &SelectCodexCredential {
-                    upstream_model: candidate.upstream_model().as_str(),
+                    upstream_model: upstream_model.as_str(),
                     request_url: &self.responses_url,
                     attempt: &context,
                     session_affinity_key: session_affinity_key.as_ref(),
@@ -375,7 +380,7 @@ impl Provider for CodexProvider {
         );
         let metadata = ProviderCallMetadata::new(
             provider_kind,
-            candidate.upstream_model().clone(),
+            upstream_model.clone(),
             ProviderResource::Account {
                 id: lease.account_id().clone(),
                 revision: lease.account().revision(),
@@ -399,7 +404,7 @@ impl Provider for CodexProvider {
             client: self.client.clone(),
             response_origin: self.responses_url.clone(),
             request: upstream_request,
-            upstream_model: candidate.upstream_model().clone(),
+            upstream_model: upstream_model.clone(),
             transport_policy: transport,
             context,
             selector: Arc::clone(&self.selector),
@@ -427,7 +432,7 @@ impl CodexProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if image.payload().protocol() != PROVIDER_NAME {
+        if image.payload().protocol() != PROVIDER_NAME || candidate.upstream_model().is_some() {
             return Err(provider_error(
                 ProviderErrorKind::InvalidRequest,
                 UpstreamSendState::NotSent,
@@ -442,11 +447,9 @@ impl CodexProvider {
         };
         let lease = self
             .selector
-            .select_for_provider_endpoint(&SelectCodexCredential {
-                upstream_model: candidate.upstream_model().as_str(),
+            .select_for_provider_endpoint(&SelectCodexProviderEndpointCredential {
                 request_url: &response_origin,
                 attempt: &context,
-                session_affinity_key: None,
             })
             .await
             .map_err(map_selection_error)?;
@@ -454,9 +457,8 @@ impl CodexProvider {
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let metadata = ProviderCallMetadata::new(
+        let metadata = ProviderCallMetadata::for_provider_endpoint(
             provider_kind,
-            candidate.upstream_model().clone(),
             ProviderResource::Account {
                 id: lease.account_id().clone(),
                 revision: lease.account().revision(),
@@ -477,7 +479,6 @@ impl CodexProvider {
             endpoint_path,
             body: image.payload().body().clone(),
             image_turn_id,
-            upstream_model: candidate.upstream_model().clone(),
             context,
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
@@ -517,7 +518,6 @@ struct ColdJsonResponse {
     endpoint_path: &'static str,
     body: Bytes,
     image_turn_id: Option<String>,
-    upstream_model: UpstreamModelId,
     context: AttemptContext,
     selector: Arc<CodexCredentialSelector>,
     quota: Arc<CodexCredentialQuotaService>,
@@ -836,10 +836,8 @@ fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
             }
         }
 
-        let response_meta = ResponseMeta::new(
-            request.context.request_id().as_str(),
-            request.upstream_model.as_str(),
-        );
+        let response_meta =
+            ResponseMeta::for_provider_endpoint(request.context.request_id().as_str());
         yield ProviderEvent::canonical(GatewayEvent::Started(response_meta.clone()));
         let wire = ProtocolWireEvent::raw_json(PROVIDER_NAME, response.body).map_err(|_| {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)

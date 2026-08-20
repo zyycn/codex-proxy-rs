@@ -259,6 +259,7 @@ pub(crate) async fn account_model_rows(
            and mr.outcome = 'succeeded'
            and mr.downstream_committed_at is not null
            and mr.client_status_code between 200 and 399
+           and coalesce(mr.upstream_model_id, mr.requested_model_id) is not null
          group by mr.provider_account_ref, coalesce(mr.upstream_model_id, mr.requested_model_id)
          order by mr.provider_account_ref, request_count desc, model",
     )
@@ -286,6 +287,7 @@ pub(crate) async fn account_model_costs(
            and mr.downstream_committed_at is not null
            and mr.client_status_code between 200 and 399
            and mr.cost_amount is not null and mr.cost_currency is not null
+           and coalesce(mr.upstream_model_id, mr.requested_model_id) is not null
          group by mr.provider_account_ref, coalesce(mr.upstream_model_id, mr.requested_model_id),
                   mr.cost_currency
          order by mr.provider_account_ref, model, mr.cost_currency",

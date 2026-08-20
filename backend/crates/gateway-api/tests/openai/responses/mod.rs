@@ -130,7 +130,7 @@ fn decoder_should_preserve_opaque_client_model_values() {
             "input": "hello"
         }));
 
-        assert_eq!(decoded.metadata().public_model(), model);
+        assert_eq!(decoded.metadata().requested_model(), model);
         assert_eq!(
             openai_wire_body(&decoded)
                 .get("model")
@@ -454,14 +454,20 @@ fn decoder_should_not_reject_large_bodies_using_catalog_context_limits() {
     let snapshot = super::snapshot("sk_context_test", "openai");
     let plan = snapshot
         .plan(
-            &PublicModelId::new(decoded.metadata().public_model()).expect("public model"),
+            &PublicModelId::new(decoded.metadata().requested_model()).expect("public model"),
             decoded.operation(),
             snapshot.all_account_scope(),
             &RoutingContext::default(),
         )
         .expect("large body must not be locally context-gated");
 
-    assert_eq!(plan.candidates()[0].upstream_model().as_str(), "model-a");
+    assert_eq!(
+        plan.candidates()[0]
+            .upstream_model()
+            .expect("model route candidate")
+            .as_str(),
+        "model-a"
+    );
 }
 
 #[test]

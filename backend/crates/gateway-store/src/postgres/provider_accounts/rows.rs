@@ -91,6 +91,7 @@ pub(crate) const ACCOUNT_USAGE_MODELS_BY_WINDOWS_SQL: &str = "with requested_win
         and mr.outcome = 'succeeded'
         and mr.downstream_committed_at is not null
         and mr.client_status_code between 200 and 399
+        and coalesce(mr.upstream_model_id, mr.requested_model_id) is not null
       group by requested.account_id, requested.window_key,
                coalesce(mr.upstream_model_id, mr.requested_model_id)
       order by requested.account_id, requested.window_key, request_count desc, model";
@@ -115,6 +116,7 @@ pub(crate) const ACCOUNT_USAGE_MODEL_COSTS_BY_WINDOWS_SQL: &str = "with requeste
         and mr.client_status_code between 200 and 399
         and mr.cost_amount is not null
         and mr.cost_currency is not null
+        and coalesce(mr.upstream_model_id, mr.requested_model_id) is not null
       group by requested.account_id, requested.window_key,
                coalesce(mr.upstream_model_id, mr.requested_model_id), mr.cost_currency
       order by requested.account_id, requested.window_key, model, mr.cost_currency";

@@ -165,7 +165,6 @@ impl fmt::Debug for ContinuationIntent {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResponsesRequestMetadata {
     requested_model: String,
-    public_model: String,
     stream: bool,
     store: bool,
     continuation: ContinuationIntent,
@@ -178,12 +177,6 @@ impl ResponsesRequestMetadata {
     #[must_use]
     pub fn requested_model(&self) -> &str {
         &self.requested_model
-    }
-
-    /// 返回协议层公开模型候选。
-    #[must_use]
-    pub fn public_model(&self) -> &str {
-        &self.public_model
     }
 
     /// 返回客户端是否请求 SSE。
@@ -222,7 +215,6 @@ impl fmt::Debug for ResponsesRequestMetadata {
         formatter
             .debug_struct("ResponsesRequestMetadata")
             .field("requested_model", &self.requested_model)
-            .field("public_model", &self.public_model)
             .field("stream", &self.stream)
             .field("store", &self.store)
             .field("continuation", &self.continuation)
@@ -366,8 +358,7 @@ pub(super) fn decode_request_object(
     Ok(DecodedResponsesRequest {
         operation,
         metadata: ResponsesRequestMetadata {
-            requested_model: model.clone(),
-            public_model: model,
+            requested_model: model,
             stream,
             store,
             continuation,

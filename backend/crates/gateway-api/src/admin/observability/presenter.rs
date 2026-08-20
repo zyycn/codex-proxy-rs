@@ -222,7 +222,7 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
     let model = record
         .upstream_model_id
         .clone()
-        .unwrap_or_else(|| record.requested_model_id.clone());
+        .or_else(|| record.requested_model_id.clone());
     let transport = record
         .upstream_transport
         .clone()
@@ -243,7 +243,7 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         account_name: record.provider_account_name,
         route: record.endpoint,
         model,
-        requested_model: Some(record.requested_model_id),
+        requested_model: record.requested_model_id,
         upstream_model: record.upstream_model_id,
         service_tier: record.service_tier,
         status_code,
@@ -351,9 +351,7 @@ pub(crate) fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptV
         provider: attempt
             .provider_kind
             .unwrap_or_else(|| "unknown".to_owned()),
-        model: attempt
-            .upstream_model_id
-            .unwrap_or_else(|| "unknown".to_owned()),
+        model: attempt.upstream_model_id,
         transport: attempt
             .upstream_transport
             .unwrap_or_else(|| "unknown".to_owned()),

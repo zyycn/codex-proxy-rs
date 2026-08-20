@@ -317,7 +317,10 @@ impl Provider for ScriptedProvider {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
                     candidate.provider().clone(),
-                    candidate.upstream_model().clone(),
+                    candidate
+                        .upstream_model()
+                        .cloned()
+                        .expect("model route candidate"),
                     ProviderResource::Account {
                         id: ProviderAccountId::new(account_id).expect("account id"),
                         revision: CredentialRevision::new(1).expect("revision"),
@@ -337,7 +340,10 @@ impl Provider for ScriptedProvider {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
                     candidate.provider().clone(),
-                    candidate.upstream_model().clone(),
+                    candidate
+                        .upstream_model()
+                        .cloned()
+                        .expect("model route candidate"),
                     ProviderResource::Account {
                         id: ProviderAccountId::new(account_id).expect("account id"),
                         revision: CredentialRevision::new(1).expect("revision"),
@@ -357,7 +363,10 @@ impl Provider for ScriptedProvider {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
                     candidate.provider().clone(),
-                    candidate.upstream_model().clone(),
+                    candidate
+                        .upstream_model()
+                        .cloned()
+                        .expect("model route candidate"),
                     ProviderResource::Account {
                         id: ProviderAccountId::new(account_id).expect("account id"),
                         revision: CredentialRevision::new(1).expect("revision"),
@@ -623,7 +632,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         operation: operation.kind(),
         endpoint: "responses".to_owned(),
         client_transport: "http_sse".to_owned(),
-        requested_model: PublicModelId::new("gpt-5").expect("model"),
+        requested_model: Some(PublicModelId::new("gpt-5").expect("model")),
         client_ip: Some("127.0.0.1".parse().expect("client IP")),
         user_agent: Some("gateway-core-test".to_owned()),
         reasoning_effort: Some("medium".to_owned()),

@@ -91,7 +91,7 @@ pub struct NewModelRequest {
     pub operation: String,
     pub endpoint: String,
     pub client_transport: String,
-    pub requested_model_id: String,
+    pub requested_model_id: Option<String>,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -112,7 +112,9 @@ impl NewModelRequest {
         require_nonempty(ENTITY, "operation", &self.operation)?;
         require_nonempty(ENTITY, "endpoint", &self.endpoint)?;
         require_nonempty(ENTITY, "client_transport", &self.client_transport)?;
-        require_nonempty(ENTITY, "requested_model_id", &self.requested_model_id)?;
+        if let Some(requested_model_id) = self.requested_model_id.as_deref() {
+            require_nonempty(ENTITY, "requested_model_id", requested_model_id)?;
+        }
         validate_routing_snapshot(
             &self.routing_scope,
             &self.routing_group_refs,
@@ -141,7 +143,7 @@ pub struct ModelRequestAttemptStart {
     pub provider_kind: String,
     pub provider_account_id: Option<String>,
     pub provider_account_ref: Option<String>,
-    pub upstream_model_id: String,
+    pub upstream_model_id: Option<String>,
     pub upstream_transport: String,
     pub http_version: Option<String>,
 }
@@ -151,10 +153,12 @@ impl ModelRequestAttemptStart {
         for (field, value) in [
             ("model_request_id", self.model_request_id.as_str()),
             ("provider_kind", self.provider_kind.as_str()),
-            ("upstream_model_id", self.upstream_model_id.as_str()),
             ("upstream_transport", self.upstream_transport.as_str()),
         ] {
             require_nonempty(ENTITY, field, value)?;
+        }
+        if let Some(upstream_model_id) = self.upstream_model_id.as_deref() {
+            require_nonempty(ENTITY, "upstream_model_id", upstream_model_id)?;
         }
         if self.attempt_count == 0 {
             return Err(invalid("attempt_count must be positive"));
@@ -841,7 +845,10 @@ impl ExecutionStore for PgExecutionStore {
                 provider_kind: Some(failure.provider_kind.as_str().to_owned()),
                 provider_account_id: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
                 provider_account_ref: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
-                upstream_model_id: Some(failure.upstream_model_id.as_str().to_owned()),
+                upstream_model_id: failure
+                    .upstream_model_id
+                    .as_ref()
+                    .map(|model| model.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
                 status_code: error.upstream_status().or(failure.upstream_status_code),
                 provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
@@ -1081,7 +1088,9 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         operation: request.operation.as_str().to_owned(),
         endpoint: request.endpoint,
         client_transport: request.client_transport,
-        requested_model_id: request.requested_model.as_str().to_owned(),
+        requested_model_id: request
+            .requested_model
+            .map(|model| model.as_str().to_owned()),
         client_ip: request.client_ip.map(|address| address.to_string()),
         user_agent: request.user_agent,
         reasoning_effort: request.reasoning_effort,
@@ -1150,7 +1159,9 @@ fn attempt_start_row(attempt: CoreAttemptRecord) -> ModelRequestAttemptStart {
             .provider_account_ref
             .as_ref()
             .map(|id| id.as_str().to_owned()),
-        upstream_model_id: attempt.upstream_model_id.as_str().to_owned(),
+        upstream_model_id: attempt
+            .upstream_model_id
+            .map(|model| model.as_str().to_owned()),
         upstream_transport: attempt.upstream_transport,
         http_version: attempt.http_version,
     }

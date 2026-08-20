@@ -33,7 +33,6 @@ const IMAGE_RESPONSE: &[u8] =
 #[derive(Debug, Clone, PartialEq)]
 struct CapturedImageRequest {
     provider: String,
-    public_model: String,
     endpoint: String,
     transport: ClientTransport,
     kind: ImageRequestKind,
@@ -123,7 +122,6 @@ impl ExecutionService for ImageExecution {
                 .expect("capture lock")
                 .push(CapturedImageRequest {
                     provider: request.provider.as_str().to_owned(),
-                    public_model: request.public_model.as_str().to_owned(),
                     endpoint: request.metadata.endpoint,
                     transport: request.metadata.transport,
                     kind: image.kind(),
@@ -245,7 +243,7 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
         (
             "/v1/images/generations",
             ImageRequestKind::Generation,
-            br#"{ "model":"gpt-image-2", "prompt":"a lighthouse", "future":9007199254740993 }"#.as_slice(),
+            br#"{ "model":"gpt-image-future", "prompt":"a lighthouse", "future":9007199254740993 }"#.as_slice(),
         ),
         (
             "/v1/images/edits",
@@ -282,7 +280,6 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
     assert_eq!(captured.len(), cases.len());
     for (captured, (endpoint, kind, body)) in captured.iter().zip(cases.iter()) {
         assert_eq!(captured.provider, "openai");
-        assert_eq!(captured.public_model, "gpt-image-2");
         assert_eq!(captured.endpoint, *endpoint);
         assert_eq!(captured.transport, ClientTransport::HttpJson);
         assert_eq!(captured.kind, *kind);

@@ -122,9 +122,29 @@ pub struct StartExecution {
 pub struct StartProviderExecution {
     pub client: AuthenticatedClient,
     pub provider: ProviderKind,
-    pub public_model: PublicModelId,
     pub operation: Operation,
     pub metadata: ExecutionRequestMetadata,
+}
+
+enum ExecutionTarget {
+    Model(PublicModelId),
+    ProviderEndpoint(ProviderKind),
+}
+
+impl ExecutionTarget {
+    fn into_public_model(self) -> Option<PublicModelId> {
+        match self {
+            Self::Model(model) => Some(model),
+            Self::ProviderEndpoint(_) => None,
+        }
+    }
+}
+
+struct PendingStartExecution {
+    client: AuthenticatedClient,
+    target: ExecutionTarget,
+    operation: Operation,
+    metadata: ExecutionRequestMetadata,
 }
 
 pub struct StartedExecution {
@@ -264,7 +284,19 @@ impl DefaultExecutionService {
     }
 
     async fn start_inner(&self, request: StartExecution) -> Result<StartedExecution, GatewayError> {
-        self.start_inner_with_provider(request, None).await
+        let StartExecution {
+            client,
+            public_model,
+            operation,
+            metadata,
+        } = request;
+        self.start_inner_with_target(PendingStartExecution {
+            client,
+            target: ExecutionTarget::Model(public_model),
+            operation,
+            metadata,
+        })
+        .await
     }
 
     async fn start_provider_endpoint_inner(
@@ -274,26 +306,21 @@ impl DefaultExecutionService {
         let StartProviderExecution {
             client,
             provider,
-            public_model,
             operation,
             metadata,
         } = request;
-        self.start_inner_with_provider(
-            StartExecution {
-                client,
-                public_model,
-                operation,
-                metadata,
-            },
-            Some(provider),
-        )
+        self.start_inner_with_target(PendingStartExecution {
+            client,
+            target: ExecutionTarget::ProviderEndpoint(provider),
+            operation,
+            metadata,
+        })
         .await
     }
 
-    async fn start_inner_with_provider(
+    async fn start_inner_with_target(
         &self,
-        mut request: StartExecution,
-        provider_endpoint: Option<ProviderKind>,
+        mut request: PendingStartExecution,
     ) -> Result<StartedExecution, GatewayError> {
         request.client.policy.authorize().map_err(|_| {
             GatewayError::new(GatewayErrorKind::PolicyDenied, "client API key is disabled")
@@ -309,16 +336,17 @@ impl DefaultExecutionService {
             .route_context(request.client.policy.account_scope().provider_kinds())
             .await?;
         let account_scope = Arc::clone(request.client.policy.account_scope());
-        let plan = match provider_endpoint.as_ref() {
-            Some(provider) => request.client.snapshot.plan_provider_endpoint(
-                &request.public_model,
-                provider,
-                &request.operation,
-                account_scope,
-                &routing_context,
-            ),
-            None => request.client.snapshot.plan(
-                &request.public_model,
+        let plan = match &request.target {
+            ExecutionTarget::ProviderEndpoint(provider) => {
+                request.client.snapshot.plan_provider_endpoint(
+                    provider,
+                    &request.operation,
+                    account_scope,
+                    &routing_context,
+                )
+            }
+            ExecutionTarget::Model(public_model) => request.client.snapshot.plan(
+                public_model,
                 &request.operation,
                 account_scope,
                 &routing_context,
@@ -426,18 +454,24 @@ impl DefaultExecutionService {
 
     async fn start_without_continuation(
         &self,
-        request: StartExecution,
+        request: PendingStartExecution,
         request_id: ModelRequestId,
         started_at: SystemTime,
         deadline_at: SystemTime,
         plan: crate::routing::RoutingPlan,
         continuation: Option<ContinuationBinding>,
     ) -> Result<StartedExecution, GatewayError> {
+        let PendingStartExecution {
+            client,
+            target,
+            operation,
+            metadata,
+        } = request;
         let admission_request = ClientAdmissionRequest {
             model_request_id: request_id.clone(),
-            client_api_key_id: request.client.policy.key_id().clone(),
+            client_api_key_id: client.policy.key_id().clone(),
             lease_ttl: MODEL_REQUEST_DEADLINE,
-            limits: request.client.policy.limits(),
+            limits: client.policy.limits(),
         };
         match self
             .admissions
@@ -462,7 +496,7 @@ impl DefaultExecutionService {
         }
         let admission = AdmissionLease {
             port: Arc::clone(&self.admissions),
-            client_api_key_id: request.client.policy.key_id().clone(),
+            client_api_key_id: client.policy.key_id().clone(),
             model_request_id: request_id.clone(),
         };
         let observation = plan
@@ -470,27 +504,27 @@ impl DefaultExecutionService {
             .first()
             .map_or_else(Default::default, |candidate| {
                 self.providers
-                    .request_observation(candidate.provider(), &request.operation)
+                    .request_observation(candidate.provider(), &operation)
             });
         let new_request = NewModelRequest {
             id: request_id.clone(),
-            client_api_key_id: Some(request.client.policy.key_id().clone()),
-            client_api_key_ref: request.client.policy.key_id().clone(),
+            client_api_key_id: Some(client.policy.key_id().clone()),
+            client_api_key_ref: client.policy.key_id().clone(),
             config_revision: plan.config_revision(),
-            routing: request.client.policy.account_scope().routing_snapshot(),
-            protocol: request.metadata.protocol,
-            operation: request.operation.kind(),
-            endpoint: request.metadata.endpoint,
-            client_transport: request.metadata.transport.as_str().to_owned(),
-            requested_model: request.public_model,
-            client_ip: request.metadata.client_ip,
-            user_agent: request.metadata.user_agent,
+            routing: client.policy.account_scope().routing_snapshot(),
+            protocol: metadata.protocol,
+            operation: operation.kind(),
+            endpoint: metadata.endpoint,
+            client_transport: metadata.transport.as_str().to_owned(),
+            requested_model: target.into_public_model(),
+            client_ip: metadata.client_ip,
+            user_agent: metadata.user_agent,
             reasoning_effort: observation.reasoning_effort,
             reasoning_preset: observation.reasoning_preset,
             request_kind: observation.request_kind,
             subagent_kind: observation.subagent_kind,
             compact: observation.compact,
-            image_generation_requested: request.operation.image_generation_requested(),
+            image_generation_requested: operation.image_generation_requested(),
             started_at,
             deadline_at,
         };
@@ -498,7 +532,7 @@ impl DefaultExecutionService {
             .coordinator
             .start(
                 new_request,
-                request.operation,
+                operation,
                 plan,
                 None,
                 continuation,
@@ -515,7 +549,7 @@ impl DefaultExecutionService {
         Ok(StartedExecution {
             request_id,
             created_at: started_at,
-            stream: request.metadata.stream,
+            stream: metadata.stream,
             session: Box::new(DefaultExecutionSession::new(
                 core,
                 admission,
@@ -623,7 +657,7 @@ impl DefaultExecutionService {
             operation: operation.kind(),
             endpoint: "/api/admin/accounts/connection-test".to_owned(),
             client_transport: ClientTransport::InternalProbe.as_str().to_owned(),
-            requested_model: public_model,
+            requested_model: Some(public_model),
             client_ip: None,
             user_agent: None,
             reasoning_effort: None,
@@ -1140,6 +1174,7 @@ fn new_request_id() -> Result<ModelRequestId, GatewayError> {
 fn map_routing_error(error: crate::error::RoutingError) -> GatewayError {
     match error {
         crate::error::RoutingError::NoCapableProvider { .. }
+        | crate::error::RoutingError::NoCapableProviderEndpoint { .. }
         | crate::error::RoutingError::EmptyAccountScope => GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
             "no provider can execute this request",

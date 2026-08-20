@@ -837,7 +837,7 @@ where
             provider_kind: metadata.provider().clone(),
             provider_account_id: metadata.provider_account_id().cloned(),
             provider_account_ref: metadata.provider_account_id().cloned(),
-            upstream_model_id: metadata.upstream_model().clone(),
+            upstream_model_id: metadata.upstream_model().cloned(),
             upstream_transport: metadata.transport().as_str().to_owned(),
             http_version: None,
         };
@@ -1083,7 +1083,7 @@ where
                             trigger: current.trigger,
                             provider_kind: current.metadata.provider().clone(),
                             account_id: current.metadata.provider_account_id().cloned(),
-                            upstream_model_id: current.metadata.upstream_model().clone(),
+                            upstream_model_id: current.metadata.upstream_model().cloned(),
                             upstream_status_code: current
                                 .response_observation
                                 .as_ref()

@@ -292,13 +292,8 @@ fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest
     ProviderRequest::new(operation, plan.candidates()[0].clone())
 }
 
-fn planned_provider_endpoint_request(
-    provider_name: &str,
-    model: &str,
-    operation: Operation,
-) -> ProviderRequest {
+fn planned_provider_endpoint_request(provider_name: &str, operation: Operation) -> ProviderRequest {
     let provider = ProviderKind::new(provider_name).expect("provider");
-    let public_model = PublicModelId::new(model).expect("public model");
     let account_scope = Arc::new(FrozenAccountScope::new(
         Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
             ProviderAccountId::new("acct_provider_contract").expect("account"),
@@ -316,7 +311,6 @@ fn planned_provider_endpoint_request(
     .expect("snapshot");
     let plan = snapshot
         .plan_provider_endpoint(
-            &public_model,
             &provider,
             &operation,
             account_scope,
@@ -827,7 +821,7 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
         (
             ImageRequestKind::Generation,
             "/images/generations",
-            br#"{ "model":"gpt-image-2", "prompt":"a lighthouse", "background":"transparent", "future_option":{"schema":2}, "future_integer":9007199254740993 }"#.as_slice(),
+            br#"{ "model":"gpt-image-future", "prompt":"a lighthouse", "background":"transparent", "future_option":{"schema":2}, "future_integer":9007199254740993 }"#.as_slice(),
             br#"{ "created": 1787212800, "data": [{"b64_json":"AAEC"}], "future": 9007199254740993 }"#.as_slice(),
         ),
         (
@@ -875,7 +869,7 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
                 json!("turn_image_contract"),
             )]));
         let operation = Operation::GenerateImage(ImageRequest::from_raw_json(*kind, payload));
-        let request = planned_provider_endpoint_request("openai", "gpt-image-2", operation);
+        let request = planned_provider_endpoint_request("openai", operation);
         let mut stream = provider
             .execute(
                 request,
@@ -942,7 +936,7 @@ async fn image_endpoint_returns_the_exact_upstream_error_response() {
         Operation::GenerateImage(ImageRequest::from_raw_json(ImageRequestKind::Edit, payload));
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
-            planned_provider_endpoint_request("openai", "gpt-image-2", operation),
+            planned_provider_endpoint_request("openai", operation),
             context("req_image_error", CancellationToken::new()),
         )
         .await

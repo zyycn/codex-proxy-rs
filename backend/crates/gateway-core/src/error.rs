@@ -98,6 +98,12 @@ pub enum RoutingError {
         /// 客户端提交的模型名称。
         model: String,
     },
+    /// 固定 Provider 的原生端点当前不可执行。
+    #[error("provider endpoint `{provider}` is unavailable")]
+    NoCapableProviderEndpoint {
+        /// adapter 已绑定的 Provider。
+        provider: String,
+    },
 }
 
 /// 调用方策略不满足约束或拒绝请求。

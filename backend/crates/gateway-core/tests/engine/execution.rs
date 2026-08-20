@@ -219,9 +219,8 @@ impl Provider for ColdFailingProvider {
         request: ProviderRequest,
         _: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        let metadata = ProviderCallMetadata::new(
+        let metadata = ProviderCallMetadata::for_provider_endpoint(
             request.candidate().provider().clone(),
-            request.candidate().upstream_model().clone(),
             ProviderResource::Account {
                 id: ProviderAccountId::new("acct_usage").expect("account"),
                 revision: CredentialRevision::new(1).expect("revision"),
@@ -289,7 +288,6 @@ fn provider_endpoint_should_persist_its_real_v1_endpoint() {
     let mut started = block_on(service.start_provider_endpoint(StartProviderExecution {
         client,
         provider: ProviderKind::new("openai").expect("provider"),
-        public_model: PublicModelId::new("gpt-image-2").expect("public model"),
         operation,
         metadata: ExecutionRequestMetadata {
             protocol: "openai".to_owned(),
@@ -310,6 +308,10 @@ fn provider_endpoint_should_persist_its_real_v1_endpoint() {
         vec!["/v1/images/generations".to_owned()],
         "execution error: {error:?}"
     );
+    assert_eq!(store.requested_models(), vec![None]);
+    let upstream_models = store.upstream_models();
+    assert!(!upstream_models.is_empty());
+    assert!(upstream_models.iter().all(Option::is_none));
 }
 
 #[test]
@@ -512,6 +514,8 @@ struct TrackingExecutionStore {
     touched: AtomicBool,
     probe_failures: Mutex<Vec<String>>,
     model_request_endpoints: Mutex<Vec<String>>,
+    requested_models: Mutex<Vec<Option<String>>>,
+    upstream_models: Mutex<Vec<Option<String>>>,
     fail_probe_observation: AtomicBool,
 }
 
@@ -533,12 +537,35 @@ impl TrackingExecutionStore {
             .expect("model request endpoints lock")
             .clone()
     }
+
+    fn requested_models(&self) -> Vec<Option<String>> {
+        self.requested_models
+            .lock()
+            .expect("requested models lock")
+            .clone()
+    }
+
+    fn upstream_models(&self) -> Vec<Option<String>> {
+        self.upstream_models
+            .lock()
+            .expect("upstream models lock")
+            .clone()
+    }
 }
 
 #[async_trait]
 impl ExecutionStore for TrackingExecutionStore {
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.touch();
+        self.requested_models
+            .lock()
+            .expect("requested models lock")
+            .push(
+                request
+                    .requested_model
+                    .as_ref()
+                    .map(|model| model.as_str().to_owned()),
+            );
         self.model_request_endpoints
             .lock()
             .expect("model request endpoints lock")
@@ -546,8 +573,17 @@ impl ExecutionStore for TrackingExecutionStore {
         Ok(())
     }
 
-    async fn record_attempt(&self, _: AttemptRecord) -> Result<(), StoreError> {
+    async fn record_attempt(&self, attempt: AttemptRecord) -> Result<(), StoreError> {
         self.touch();
+        self.upstream_models
+            .lock()
+            .expect("upstream models lock")
+            .push(
+                attempt
+                    .upstream_model_id
+                    .as_ref()
+                    .map(|model| model.as_str().to_owned()),
+            );
         Ok(())
     }
 

@@ -80,7 +80,7 @@ export interface UsageRecord {
   accountEmail: string | null
   accountName: string | null
   route: string
-  model: string
+  model: string | null
   requestedModel: string | null
   upstreamModel: string | null
   serviceTier: string | null
@@ -133,7 +133,7 @@ export interface UsageAttempt {
   attemptIndex: number
   trigger: string
   provider: string
-  model: string
+  model: string | null
   transport: string
   sendState: string
   outcome: string
