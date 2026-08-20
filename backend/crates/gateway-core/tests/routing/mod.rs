@@ -3,11 +3,13 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use gateway_core::engine::credential::{
     AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::operation::{
-    CapabilityRequirements, Feature, GenerateRequest, Operation, OperationKind, ProtocolPayload,
+    CapabilityRequirements, Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
+    OperationKind, ProtocolPayload, RawJsonPayload,
 };
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::{
@@ -47,6 +49,21 @@ fn operation() -> Operation {
     Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
             .expect("OpenAI payload"),
+    ))
+}
+
+fn image_operation() -> Operation {
+    let body = serde_json::json!({
+        "model": "gpt-image-2",
+        "prompt": "draw",
+    });
+    Operation::GenerateImage(ImageRequest::from_raw_json(
+        ImageRequestKind::Generation,
+        RawJsonPayload::new(
+            "openai",
+            Bytes::from(serde_json::to_vec(&body).expect("image JSON")),
+        )
+        .expect("OpenAI payload"),
     ))
 }
 
@@ -304,6 +321,57 @@ fn known_provider_catalog_missing_mapped_model_should_be_filtered() {
             },
         )
         .expect_err("known xAI catalog does not contain the mapped OpenAI model");
+
+    assert!(matches!(
+        error,
+        gateway_core::error::RoutingError::NoCapableProvider { .. }
+    ));
+}
+
+#[test]
+fn provider_endpoint_plan_should_not_consult_or_publish_the_text_model_catalog() {
+    let snapshot = snapshot();
+    let provider = ProviderKind::new("openai").expect("provider");
+    let public_model = PublicModelId::new("gpt-image-2").expect("model");
+
+    assert!(!snapshot.contains_public_model_for_provider(&public_model, &provider));
+    let plan = snapshot
+        .plan_provider_endpoint(
+            &public_model,
+            &provider,
+            &image_operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext::default(),
+        )
+        .expect("provider-owned endpoint remains routable");
+
+    assert_eq!(plan.public_model(), &public_model);
+    assert_eq!(plan.operation(), OperationKind::GenerateImage);
+    assert_eq!(plan.candidates().len(), 1);
+    assert_eq!(plan.candidates()[0].provider(), &provider);
+    assert_eq!(
+        plan.candidates()[0].upstream_model().as_str(),
+        "gpt-image-2"
+    );
+    assert!(!snapshot.contains_public_model_for_provider(&public_model, &provider));
+}
+
+#[test]
+fn provider_endpoint_plan_should_still_respect_circuit_filtering() {
+    let snapshot = snapshot();
+    let provider = ProviderKind::new("openai").expect("provider");
+    let error = snapshot
+        .plan_provider_endpoint(
+            &PublicModelId::new("gpt-image-2").expect("model"),
+            &provider,
+            &image_operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext {
+                blocked_providers: BTreeSet::from([provider.clone()]),
+                ..RoutingContext::default()
+            },
+        )
+        .expect_err("blocked provider has no endpoint candidate");
 
     assert!(matches!(
         error,

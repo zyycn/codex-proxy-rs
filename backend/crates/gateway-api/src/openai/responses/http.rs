@@ -123,7 +123,7 @@ async fn handle_responses(
 }
 
 /// 从 socket 与标准转发头提取旧 Usage 页面使用的诊断事实。
-pub(super) fn request_client_context(
+pub(in crate::openai) fn request_client_context(
     headers: &HeaderMap,
     peer_address: Option<SocketAddr>,
 ) -> (Option<IpAddr>, Option<String>) {
@@ -367,22 +367,24 @@ fn internal_gateway_response(message: &'static str) -> Response {
     gateway_error_response(&GatewayError::new(GatewayErrorKind::Internal, message))
 }
 
-pub(super) struct PendingExecution {
+pub(in crate::openai) struct PendingExecution {
     session: Option<Box<dyn ExecutionSession>>,
 }
 
 impl PendingExecution {
-    pub(super) fn new(session: Box<dyn ExecutionSession>) -> Self {
+    pub(in crate::openai) fn new(session: Box<dyn ExecutionSession>) -> Self {
         Self {
             session: Some(session),
         }
     }
 
-    pub(super) fn session_mut(&mut self) -> Option<&mut (dyn ExecutionSession + 'static)> {
+    pub(in crate::openai) fn session_mut(
+        &mut self,
+    ) -> Option<&mut (dyn ExecutionSession + 'static)> {
         self.session.as_deref_mut()
     }
 
-    async fn cancel_and_finalize(&mut self) {
+    pub(in crate::openai) async fn cancel_and_finalize(&mut self) {
         if let Some(session) = self.session.as_mut() {
             session.cancel();
             if !session.is_finalized() {
@@ -391,7 +393,10 @@ impl PendingExecution {
         }
     }
 
-    async fn record_response_status(&mut self, response: Response) -> Response {
+    pub(in crate::openai) async fn record_response_status(
+        &mut self,
+        response: Response,
+    ) -> Response {
         if let Some(session) = self.session.as_mut() {
             let _ = session
                 .record_client_status(response.status().as_u16())
@@ -400,7 +405,7 @@ impl PendingExecution {
         response
     }
 
-    pub(super) fn disarm(&mut self) {
+    pub(in crate::openai) fn disarm(&mut self) {
         self.session = None;
     }
 

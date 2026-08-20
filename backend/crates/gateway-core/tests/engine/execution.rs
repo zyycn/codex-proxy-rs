@@ -18,17 +18,17 @@ use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
-    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
+    AccountSelectionPolicy, CredentialRevision, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::{
     ClientApiKeyUsageSink, ClientTransport, DefaultExecutionService, ExecutionRequestMetadata,
     ExecutionService, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
-    StartExecution, provider_failure_affects_circuit,
+    StartExecution, StartProviderExecution, provider_failure_affects_circuit,
 };
 use gateway_core::engine::probe::{AccountProbe, AccountProbeRequest};
 use gateway_core::engine::provider::{
-    Provider, ProviderCatalogGeneration, ProviderModelCapabilities, ProviderRegistry,
-    ProviderRequest, ProviderStream,
+    Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
+    ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
     AttemptContext, AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization,
@@ -38,7 +38,10 @@ use gateway_core::error::{
     ClientVisibleUpstreamResponse, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError,
     StoreErrorKind,
 };
-use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
+use gateway_core::operation::{
+    GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind, ProtocolPayload,
+    RawJsonPayload,
+};
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
@@ -193,6 +196,51 @@ impl Provider for FailingProvider {
     }
 }
 
+struct ColdFailingProvider;
+
+#[async_trait]
+impl Provider for ColdFailingProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        request: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let metadata = ProviderCallMetadata::new(
+            request.candidate().provider().clone(),
+            request.candidate().upstream_model().clone(),
+            ProviderResource::Account {
+                id: ProviderAccountId::new("acct_usage").expect("account"),
+                revision: CredentialRevision::new(1).expect("revision"),
+            },
+            UpstreamTransport::new("http_json").expect("transport"),
+        );
+        Ok(ProviderStream::new(
+            metadata,
+            futures::stream::once(async {
+                Err(ProviderError::new(
+                    ProviderErrorKind::Transport,
+                    UpstreamSendState::NotSent,
+                ))
+            }),
+            (),
+        ))
+    }
+}
+
 #[test]
 fn successful_authentication_should_record_client_key_usage() {
     let usage = Arc::new(RecordingClientApiKeyUsage::default());
@@ -211,6 +259,57 @@ fn successful_authentication_should_record_client_key_usage() {
         .expect("successful authentication");
 
     assert_eq!(usage.recorded(), vec!["key_usage_test".to_owned()]);
+}
+
+#[test]
+fn provider_endpoint_should_persist_its_real_v1_endpoint() {
+    let store = Arc::new(TrackingExecutionStore::default());
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(client_snapshot()),
+        store.clone(),
+        ProviderRegistry::new([Arc::new(ColdFailingProvider) as Arc<dyn Provider>])
+            .expect("provider registry"),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service
+        .authenticate("sk_usage_test")
+        .expect("authenticated client");
+    let operation = Operation::GenerateImage(ImageRequest::from_raw_json(
+        ImageRequestKind::Generation,
+        RawJsonPayload::new(
+            "openai",
+            Bytes::from_static(br#"{"model":"gpt-image-2","prompt":"hello"}"#),
+        )
+        .expect("image payload"),
+    ));
+
+    let mut started = block_on(service.start_provider_endpoint(StartProviderExecution {
+        client,
+        provider: ProviderKind::new("openai").expect("provider"),
+        public_model: PublicModelId::new("gpt-image-2").expect("public model"),
+        operation,
+        metadata: ExecutionRequestMetadata {
+            protocol: "openai".to_owned(),
+            endpoint: "/v1/images/generations".to_owned(),
+            transport: ClientTransport::HttpJson,
+            stream: false,
+            client_ip: None,
+            user_agent: None,
+            previous_response_id: None,
+        },
+    }))
+    .expect("provider endpoint request should start without a text catalog entry");
+
+    let error = block_on(started.session.collect_uncommitted())
+        .expect_err("the cold provider stops execution after persistence");
+    assert_eq!(
+        store.model_request_endpoints(),
+        vec!["/v1/images/generations".to_owned()],
+        "execution error: {error:?}"
+    );
 }
 
 #[test]
@@ -412,6 +511,7 @@ impl ClientApiKeyUsageSink for RecordingClientApiKeyUsage {
 struct TrackingExecutionStore {
     touched: AtomicBool,
     probe_failures: Mutex<Vec<String>>,
+    model_request_endpoints: Mutex<Vec<String>>,
     fail_probe_observation: AtomicBool,
 }
 
@@ -426,12 +526,23 @@ impl TrackingExecutionStore {
             .expect("probe failures lock")
             .clone()
     }
+
+    fn model_request_endpoints(&self) -> Vec<String> {
+        self.model_request_endpoints
+            .lock()
+            .expect("model request endpoints lock")
+            .clone()
+    }
 }
 
 #[async_trait]
 impl ExecutionStore for TrackingExecutionStore {
-    async fn create_model_request(&self, _: NewModelRequest) -> Result<(), StoreError> {
+    async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.touch();
+        self.model_request_endpoints
+            .lock()
+            .expect("model request endpoints lock")
+            .push(request.endpoint);
         Ok(())
     }
 

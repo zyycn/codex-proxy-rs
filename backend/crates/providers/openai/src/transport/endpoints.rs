@@ -1,5 +1,9 @@
 /// `/codex/responses`
 pub const CODEX_RESPONSES_PATH: &str = "/codex/responses";
+/// `/images/generations`
+pub const CODEX_IMAGE_GENERATIONS_PATH: &str = "/images/generations";
+/// `/images/edits`
+pub const CODEX_IMAGE_EDITS_PATH: &str = "/images/edits";
 /// `/api/codex/usage`
 pub const CODEX_USAGE_API_PATH: &str = "/api/codex/usage";
 /// `/wham/usage`

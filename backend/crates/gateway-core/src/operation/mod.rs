@@ -1,13 +1,14 @@
 //! 协议无关的业务 operation。
 //!
 //! 这里只保留网关需要解释、路由或结算的稳定语义。协议 adapter 无法写入
-//! wire body 的连接级事实随 [`ProtocolPayload`] 不透明传递，由对应 Provider
-//! 自己解释。
+//! wire body 与连接级事实随 [`ProtocolPayload`] 或 [`RawJsonPayload`] 不透明传递，
+//! 由对应 Provider 自己解释。
 
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -232,6 +233,72 @@ impl fmt::Debug for ProtocolPayload {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProtocolPayload")
+            .field("protocol", &self.protocol)
+            .field("body", &"<not included in Debug>")
+            .field("context", &"<not included in Debug>")
+            .finish()
+    }
+}
+
+/// 客户端协议交给 Provider 的未经重编码 JSON 正文。
+///
+/// 协议 adapter 只确定路由端点；Core 保留原始字节与非 wire 上下文，
+/// 不验证、解析或改写正文。
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawJsonPayload {
+    protocol: String,
+    body: Bytes,
+    context: Map<String, Value>,
+}
+
+impl RawJsonPayload {
+    /// 创建未经重编码的协议 JSON 正文。
+    ///
+    /// # Errors
+    ///
+    /// 协议名称为空、过长或含控制字符时返回错误。
+    pub fn new(protocol: impl Into<String>, body: Bytes) -> Result<Self, OperationError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
+            field: "raw_json_payload protocol",
+        })?;
+        Ok(Self {
+            protocol,
+            body,
+            context: Map::new(),
+        })
+    }
+
+    /// 返回协议名称。
+    #[must_use]
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    /// 返回 adapter 收到的原始 JSON 字节。
+    #[must_use]
+    pub const fn body(&self) -> &Bytes {
+        &self.body
+    }
+
+    /// 附着不写入 wire body 的协议连接上下文。
+    #[must_use]
+    pub fn with_context(mut self, context: Map<String, Value>) -> Self {
+        self.context = context;
+        self
+    }
+
+    /// 返回仅供对应 Provider 解释的非 wire 上下文。
+    #[must_use]
+    pub const fn context(&self) -> &Map<String, Value> {
+        &self.context
+    }
+}
+
+impl fmt::Debug for RawJsonPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RawJsonPayload")
             .field("protocol", &self.protocol)
             .field("body", &"<not included in Debug>")
             .field("context", &"<not included in Debug>")
@@ -501,32 +568,39 @@ impl fmt::Debug for RerankRequest {
     }
 }
 
-/// 图像生成请求。
-#[derive(Clone, PartialEq, Eq)]
+/// 图像 API 的稳定端点语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageRequestKind {
+    /// 从文本生成图像。
+    Generation,
+    /// 使用输入图像执行编辑。
+    Edit,
+}
+
+/// 图像生成或编辑请求。
+#[derive(Clone, PartialEq)]
 pub struct ImageRequest {
-    prompt: String,
-    count: u32,
+    kind: ImageRequestKind,
+    payload: RawJsonPayload,
 }
 
 impl ImageRequest {
-    /// 创建图像生成请求。
-    ///
-    /// # Errors
-    ///
-    /// Prompt 为空时返回错误。
-    pub fn new(prompt: impl Into<String>) -> Result<Self, OperationError> {
-        let prompt = prompt.into();
-        if prompt.is_empty() {
-            return Err(OperationError::EmptyField { field: "prompt" });
-        }
-        Ok(Self { prompt, count: 1 })
+    /// 创建携带原始协议 JSON 正文的图像请求。
+    #[must_use]
+    pub const fn from_raw_json(kind: ImageRequestKind, payload: RawJsonPayload) -> Self {
+        Self { kind, payload }
     }
 
-    /// 设置图像数量。
+    /// 返回图像 API 端点语义。
     #[must_use]
-    pub const fn with_count(mut self, count: u32) -> Self {
-        self.count = count;
-        self
+    pub const fn kind(&self) -> ImageRequestKind {
+        self.kind
+    }
+
+    /// 返回未经重编码的协议 JSON 正文。
+    #[must_use]
+    pub const fn payload(&self) -> &RawJsonPayload {
+        &self.payload
     }
 }
 
@@ -534,8 +608,8 @@ impl fmt::Debug for ImageRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ImageRequest")
-            .field("prompt", &"<not included in Debug>")
-            .field("count", &self.count)
+            .field("kind", &self.kind)
+            .field("payload", &"<not included in Debug>")
             .finish()
     }
 }
@@ -649,7 +723,8 @@ impl Operation {
     pub fn image_generation_requested(&self) -> bool {
         match self {
             Self::Generate(request) => request.image_generation_requested(),
-            Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => false,
+            Self::GenerateImage(_) => true,
+            Self::Embed(_) | Self::Rerank(_) | Self::Speech(_) => false,
         }
     }
 

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use bytes::Bytes;
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use gateway_core::engine::continuation::{
@@ -22,8 +23,8 @@ use gateway_core::engine::{
 use gateway_core::error::{ContinuationFailure, ProviderErrorKind};
 use gateway_core::event::GatewayEvent;
 use gateway_core::operation::{
-    CapabilityRequirements, GenerateRequest, Operation, OperationKind, ProtocolPayload,
-    ProviderSessionState,
+    CapabilityRequirements, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
+    OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload,
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
@@ -47,7 +48,7 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_bytes, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
@@ -287,6 +288,41 @@ fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest
             &RoutingContext::default(),
         )
         .expect("routing plan");
+
+    ProviderRequest::new(operation, plan.candidates()[0].clone())
+}
+
+fn planned_provider_endpoint_request(
+    provider_name: &str,
+    model: &str,
+    operation: Operation,
+) -> ProviderRequest {
+    let provider = ProviderKind::new(provider_name).expect("provider");
+    let public_model = PublicModelId::new(model).expect("public model");
+    let account_scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_provider_contract").expect("account"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("revision"),
+        account_policy(),
+        vec![provider.clone()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("snapshot");
+    let plan = snapshot
+        .plan_provider_endpoint(
+            &public_model,
+            &provider,
+            &operation,
+            account_scope,
+            &RoutingContext::default(),
+        )
+        .expect("provider endpoint routing plan");
 
     ProviderRequest::new(operation, plan.candidates()[0].clone())
 }
@@ -770,6 +806,169 @@ async fn generate_without_an_eligible_openai_account_fails_before_network_io() {
 
     assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+}
+
+#[tokio::test]
+async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_codex_wire() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","supported_in_api":true}]}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cases = [
+        (
+            ImageRequestKind::Generation,
+            "/images/generations",
+            br#"{ "model":"gpt-image-2", "prompt":"a lighthouse", "background":"transparent", "future_option":{"schema":2}, "future_integer":9007199254740993 }"#.as_slice(),
+            br#"{ "created": 1787212800, "data": [{"b64_json":"AAEC"}], "future": 9007199254740993 }"#.as_slice(),
+        ),
+        (
+            ImageRequestKind::Edit,
+            "/images/edits",
+            br#"{"model":"gpt-image-2","images":[{"image_url":"data:image/png;base64,AAEC"}],"prompt":"add fog","prompt":"duplicate remains opaque"}"#.as_slice(),
+            br#"{"created":1787212801,"data":[{"b64_json":"AwQF"}],"quality":"high"}"#.as_slice(),
+        ),
+    ];
+    for (_, endpoint, body, response_body) in &cases {
+        Mock::given(method("POST"))
+            .and(path(*endpoint))
+            .and(header("originator", "codex_cli_rs"))
+            .and(header("x-codex-image-turn-id", "turn_image_contract"))
+            .and(body_bytes(body.to_vec()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .insert_header("x-request-id", "upstream_image_request")
+                    .insert_header("x-future-image-header", "preserved")
+                    .set_body_raw(response_body.to_vec(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let provider = provider_with_base_url(&store, server.uri());
+    let catalog = provider
+        .query_model_capabilities()
+        .await
+        .expect("text model catalog");
+    assert!(
+        catalog
+            .iter()
+            .all(|model| model.upstream_model().as_str() != "gpt-image-2"),
+        "the image model must not be published as a text model"
+    );
+
+    for (index, (kind, _, body, expected_response)) in cases.iter().enumerate() {
+        let payload = RawJsonPayload::new("openai", Bytes::copy_from_slice(body))
+            .expect("image payload")
+            .with_context(Map::from_iter([(
+                "image_turn_id".to_owned(),
+                json!("turn_image_contract"),
+            )]));
+        let operation = Operation::GenerateImage(ImageRequest::from_raw_json(*kind, payload));
+        let request = planned_provider_endpoint_request("openai", "gpt-image-2", operation);
+        let mut stream = provider
+            .execute(
+                request,
+                context(
+                    &format!("req_image_contract_{index}"),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("prepare image provider stream");
+        let mut raw_response = None;
+        let mut completed = false;
+        let mut observed_http_json = false;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("image provider event");
+            completed |= event
+                .canonical_facts()
+                .iter()
+                .any(|event| matches!(event, GatewayEvent::Completed(_)));
+            if let Some(raw) = event.wire_event().and_then(|wire| wire.raw_json_body()) {
+                assert!(raw_response.replace(raw.clone()).is_none());
+            }
+            if let Some(observation) = event.response_observation() {
+                observed_http_json |= observation.transport().as_str() == "http_json"
+                    && observation.status_code() == Some(200)
+                    && observation.client_headers().iter().any(|header| {
+                        header.name() == "x-future-image-header"
+                            && header.value().as_ref() == b"preserved"
+                    });
+            }
+        }
+
+        assert!(completed);
+        assert!(observed_http_json);
+        assert_eq!(raw_response.as_deref(), Some(*expected_response));
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn image_endpoint_returns_the_exact_upstream_error_response() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let request_body =
+        br#"{ "model":"gpt-image-2", "images":[], "future_invalid":9007199254740993 }"#;
+    let response_body = br#"{ "error":{"message":"future image validation","type":"image_error","code":"future_code"}, "future":9007199254740993 }"#;
+    Mock::given(method("POST"))
+        .and(path("/images/edits"))
+        .and(body_bytes(request_body.to_vec()))
+        .respond_with(
+            ResponseTemplate::new(422)
+                .insert_header("content-type", "application/problem+json")
+                .insert_header("x-future-image-error", "preserved")
+                .set_body_bytes(response_body.to_vec()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let payload =
+        RawJsonPayload::new("openai", Bytes::from_static(request_body)).expect("image payload");
+    let operation =
+        Operation::GenerateImage(ImageRequest::from_raw_json(ImageRequestKind::Edit, payload));
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_provider_endpoint_request("openai", "gpt-image-2", operation),
+            context("req_image_error", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare image provider stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("image rejection must surface an upstream response"),
+        }
+    };
+
+    assert_eq!(error.upstream_status(), Some(422));
+    let response = error
+        .client_visible_upstream_response()
+        .expect("raw upstream image error response");
+    assert_eq!(response.status(), 422);
+    assert_eq!(
+        response.content_type(),
+        Some(b"application/problem+json".as_slice())
+    );
+    assert_eq!(response.body().as_ref(), response_body);
+    assert!(response.headers().iter().any(|header| {
+        header.name() == "x-future-image-error" && header.value().as_ref() == b"preserved"
+    }));
+    server.verify().await;
 }
 
 #[tokio::test]

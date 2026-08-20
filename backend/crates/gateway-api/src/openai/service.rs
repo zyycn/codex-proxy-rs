@@ -1,11 +1,12 @@
 //! OpenAI wire adapter 到 Core 执行用例的唯一映射。
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use gateway_core::engine::continuation::PreviousResponseId;
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ClientTransport, ExecutionRequestMetadata,
-    ExecutionService, StartExecution, StartedExecution,
+    ExecutionService, StartExecution, StartProviderExecution, StartedExecution,
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
@@ -14,6 +15,8 @@ use uuid::Uuid;
 
 use super::auth::ClientApiKeyAuthError;
 use super::responses::{ContinuationIntent, DecodedResponsesRequest};
+
+const CODEX_IMAGE_ROUTE_MODEL: &str = "gpt-image-2";
 
 /// OpenAI HTTP/WS adapter 共享的 Core 与连接生命周期能力。
 #[derive(Clone)]
@@ -100,6 +103,45 @@ impl OpenAiService {
                     client_ip: metadata.client_ip(),
                     user_agent: metadata.user_agent().map(str::to_owned),
                     previous_response_id,
+                },
+            })
+            .await
+    }
+
+    pub(crate) async fn start_image(
+        &self,
+        client: AuthenticatedClient,
+        operation: gateway_core::operation::Operation,
+        client_ip: Option<IpAddr>,
+        user_agent: Option<String>,
+        endpoint: &'static str,
+    ) -> Result<StartedExecution, GatewayError> {
+        let public_model = PublicModelId::new(CODEX_IMAGE_ROUTE_MODEL).map_err(|_| {
+            GatewayError::new(
+                GatewayErrorKind::Internal,
+                "Codex image route model is invalid",
+            )
+        })?;
+        let provider = gateway_core::routing::ProviderKind::new("openai").map_err(|_| {
+            GatewayError::new(
+                GatewayErrorKind::Internal,
+                "OpenAI provider identifier is invalid",
+            )
+        })?;
+        self.execution
+            .start_provider_endpoint(StartProviderExecution {
+                client,
+                provider,
+                public_model,
+                operation,
+                metadata: ExecutionRequestMetadata {
+                    protocol: "openai".to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    transport: ClientTransport::HttpJson,
+                    stream: false,
+                    client_ip,
+                    user_agent,
+                    previous_response_id: None,
                 },
             })
             .await

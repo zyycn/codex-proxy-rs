@@ -6,7 +6,8 @@ mod request;
 mod response;
 mod websocket;
 
-pub use error::{ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
+pub use error::{ProtocolError, ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
+pub(super) use http::{PendingExecution, request_client_context};
 pub use http::{collect_execution_response, stream_execution_response};
 pub(crate) use http::{responses, review_responses};
 pub use request::{

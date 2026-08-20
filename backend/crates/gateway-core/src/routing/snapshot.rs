@@ -788,6 +788,51 @@ impl RuntimeSnapshot {
             candidates: Arc::from(candidates),
         })
     }
+
+    /// 为 Provider 自有、且不属于文本模型目录的端点冻结请求计划。
+    ///
+    /// 端点 adapter 已经确定 Provider 与上游模型，因此这里只执行账号范围、
+    /// circuit 和注册状态检查；不会查询模型映射或 Provider 文本模型目录。
+    pub fn plan_provider_endpoint(
+        &self,
+        public_model: &PublicModelId,
+        provider: &ProviderKind,
+        operation: &Operation,
+        account_scope: Arc<FrozenAccountScope>,
+        context: &RoutingContext,
+    ) -> Result<RoutingPlan, RoutingError> {
+        let allowed = !account_scope.provider_kinds().is_empty()
+            && account_scope.provider_kinds().contains(provider)
+            && self.providers.contains(provider)
+            && context
+                .required_provider
+                .as_ref()
+                .is_none_or(|required| required == provider)
+            && !context.blocked_providers.contains(provider);
+        if !allowed {
+            return Err(RoutingError::NoCapableProvider {
+                model: public_model.as_str().to_owned(),
+            });
+        }
+        let upstream_model = UpstreamModelId::from_client_wire(public_model.as_str().to_owned())
+            .map_err(|_| RoutingError::InvalidIdentifier)?;
+        let candidate = ProviderCandidate {
+            provider: provider.clone(),
+            upstream_model,
+            emulated_features: BTreeSet::new(),
+            account_scope: Arc::clone(&account_scope),
+        };
+        Ok(RoutingPlan {
+            config_revision: self.revision,
+            account_selection_policy: self.account_selection_policy,
+            public_model: public_model.clone(),
+            operation: operation.kind(),
+            max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)
+                .expect("constant request attempt limit is non-zero"),
+            account_scope,
+            candidates: Arc::from([candidate]),
+        })
+    }
 }
 
 /// 请求级冻结失败；此状态必须 fail closed。

@@ -3,6 +3,7 @@
 pub mod canonical;
 pub mod catalog;
 pub mod client;
+mod client_json;
 mod client_sse;
 pub mod diagnostics;
 pub mod endpoints;
@@ -25,15 +26,15 @@ pub use self::{
         CodexModelCatalogSnapshot, MAX_CODEX_MODEL_CATALOG_BYTES, parse_codex_model_catalog,
     },
     client::{
-        CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendSseStream,
-        CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexClientResult,
-        CodexRateLimitUpdates, CodexRequestContext, CodexTransportDecision, CodexTransportMetrics,
-        CodexTurnStateUpdate, build_reqwest_client,
+        CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendJsonResponse,
+        CodexBackendSseStream, CodexBackendStreamingResponse, CodexBackendTransport,
+        CodexClientError, CodexClientResult, CodexRateLimitUpdates, CodexRequestContext,
+        CodexTransportDecision, CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
-        CODEX_RESPONSES_PATH, CODEX_USAGE_API_PATH, WHAM_USAGE_PATH, endpoint_url,
-        usage_endpoint_url,
+        CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH, CODEX_RESPONSES_PATH,
+        CODEX_USAGE_API_PATH, WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
     },
     headers::build_codex_base_headers,
     request::{CodexRequestEncodeError, encode_generate_request},

@@ -190,6 +190,7 @@ pub struct ProtocolWireEvent {
     data: Value,
     has_json_data: bool,
     raw_sse_frame: Option<Bytes>,
+    raw_json_body: Option<Bytes>,
     sse_id: Option<String>,
     sse_retry: Option<u64>,
 }
@@ -228,6 +229,7 @@ impl ProtocolWireEvent {
             data,
             has_json_data: true,
             raw_sse_frame: None,
+            raw_json_body: None,
             sse_id,
             sse_retry,
         })
@@ -274,6 +276,32 @@ impl ProtocolWireEvent {
             data: Value::Null,
             has_json_data: false,
             raw_sse_frame: Some(raw_sse_frame),
+            raw_json_body: None,
+            sse_id: None,
+            sse_retry: None,
+        })
+    }
+
+    /// 创建未经改写的完整 JSON 响应正文。
+    ///
+    /// 该载荷用于非流式协议端点；Core 不解析或重编码其中的值。
+    ///
+    /// # Errors
+    ///
+    /// 协议名不满足内部路由标识约束时返回错误。
+    pub fn raw_json(
+        protocol: impl Into<String>,
+        raw_json_body: Bytes,
+    ) -> Result<Self, IdentifierError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None)?;
+        Ok(Self {
+            protocol,
+            event_type: None,
+            data: Value::Null,
+            has_json_data: false,
+            raw_sse_frame: None,
+            raw_json_body: Some(raw_json_body),
             sse_id: None,
             sse_retry: None,
         })
@@ -321,6 +349,18 @@ impl ProtocolWireEvent {
         self.raw_sse_frame.as_ref()
     }
 
+    /// 返回可直接写给 JSON 客户端的未经改写响应正文。
+    #[must_use]
+    pub const fn raw_json_body(&self) -> Option<&Bytes> {
+        self.raw_json_body.as_ref()
+    }
+
+    /// 拆出未经改写的完整 JSON 响应正文。
+    #[must_use]
+    pub fn into_raw_json_body(self) -> Option<Bytes> {
+        self.raw_json_body
+    }
+
     /// 拆出协议原生 JSON 数据。
     #[must_use]
     pub fn into_data(self) -> Value {
@@ -336,6 +376,7 @@ impl fmt::Debug for ProtocolWireEvent {
             .field("event_type", &self.event_type)
             .field("has_json_data", &self.has_json_data)
             .field("has_raw_sse_frame", &self.raw_sse_frame.is_some())
+            .field("has_raw_json_body", &self.raw_json_body.is_some())
             .field("has_sse_id", &self.sse_id.is_some())
             .field("sse_retry", &self.sse_retry)
             .field("data", &"<not included in Debug>")

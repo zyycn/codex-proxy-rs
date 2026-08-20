@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod images;
 pub mod models;
 pub mod responses;
 pub mod router;

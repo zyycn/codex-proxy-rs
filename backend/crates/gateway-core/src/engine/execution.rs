@@ -118,6 +118,15 @@ pub struct StartExecution {
     pub metadata: ExecutionRequestMetadata,
 }
 
+/// 启动一个由协议 adapter 明确绑定到 Provider 自有端点的请求。
+pub struct StartProviderExecution {
+    pub client: AuthenticatedClient,
+    pub provider: ProviderKind,
+    pub public_model: PublicModelId,
+    pub operation: Operation,
+    pub metadata: ExecutionRequestMetadata,
+}
+
 pub struct StartedExecution {
     pub request_id: ModelRequestId,
     pub created_at: SystemTime,
@@ -129,6 +138,9 @@ pub trait ExecutionSession: Send {
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>>;
     fn collect_uncommitted(&mut self) -> BoxFuture<'_, Result<Vec<ProviderEvent>, EngineError>>;
     fn response_headers(&self) -> &[ProviderResponseHeader];
+    fn response_status_code(&self) -> Option<u16> {
+        None
+    }
     fn commit_downstream(
         &mut self,
         client_status_code: Option<u16>,
@@ -155,6 +167,10 @@ pub trait ExecutionService: Send + Sync {
     fn start(
         &self,
         request: StartExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
+    fn start_provider_endpoint(
+        &self,
+        request: StartProviderExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
 }
 
@@ -247,9 +263,37 @@ impl DefaultExecutionService {
         }
     }
 
-    async fn start_inner(
+    async fn start_inner(&self, request: StartExecution) -> Result<StartedExecution, GatewayError> {
+        self.start_inner_with_provider(request, None).await
+    }
+
+    async fn start_provider_endpoint_inner(
+        &self,
+        request: StartProviderExecution,
+    ) -> Result<StartedExecution, GatewayError> {
+        let StartProviderExecution {
+            client,
+            provider,
+            public_model,
+            operation,
+            metadata,
+        } = request;
+        self.start_inner_with_provider(
+            StartExecution {
+                client,
+                public_model,
+                operation,
+                metadata,
+            },
+            Some(provider),
+        )
+        .await
+    }
+
+    async fn start_inner_with_provider(
         &self,
         mut request: StartExecution,
+        provider_endpoint: Option<ProviderKind>,
     ) -> Result<StartedExecution, GatewayError> {
         request.client.policy.authorize().map_err(|_| {
             GatewayError::new(GatewayErrorKind::PolicyDenied, "client API key is disabled")
@@ -264,16 +308,23 @@ impl DefaultExecutionService {
         let routing_context = self
             .route_context(request.client.policy.account_scope().provider_kinds())
             .await?;
-        let plan = request
-            .client
-            .snapshot
-            .plan(
+        let account_scope = Arc::clone(request.client.policy.account_scope());
+        let plan = match provider_endpoint.as_ref() {
+            Some(provider) => request.client.snapshot.plan_provider_endpoint(
+                &request.public_model,
+                provider,
+                &request.operation,
+                account_scope,
+                &routing_context,
+            ),
+            None => request.client.snapshot.plan(
                 &request.public_model,
                 &request.operation,
-                Arc::clone(request.client.policy.account_scope()),
+                account_scope,
                 &routing_context,
-            )
-            .map_err(map_routing_error)?;
+            ),
+        }
+        .map_err(map_routing_error)?;
         let continuation = match request.metadata.previous_response_id.as_ref() {
             Some(previous) => {
                 let resolve = self
@@ -783,6 +834,13 @@ impl ExecutionService for DefaultExecutionService {
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move { self.start_inner(request).await })
     }
+
+    fn start_provider_endpoint(
+        &self,
+        request: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async move { self.start_provider_endpoint_inner(request).await })
+    }
 }
 
 impl AccountProbe for DefaultExecutionService {
@@ -946,6 +1004,12 @@ impl ExecutionSession for DefaultExecutionSession {
             .as_ref()
             .map(ResponseExecutionSession::response_headers)
             .unwrap_or_default()
+    }
+
+    fn response_status_code(&self) -> Option<u16> {
+        self.core
+            .as_ref()
+            .and_then(ResponseExecutionSession::response_status_code)
     }
 
     fn commit_downstream(

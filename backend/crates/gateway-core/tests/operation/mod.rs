@@ -1,7 +1,9 @@
+use bytes::Bytes;
 use gateway_core::error::OperationError;
 use gateway_core::operation::{
-    EmbedRequest, Feature, GenerateRequest, ImageRequest, Operation, OperationKind,
-    ProtocolPayload, ProviderSessionState, RerankRequest, RetrySafety, SpeechRequest,
+    EmbedRequest, Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
+    OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload, RerankRequest,
+    RetrySafety, SpeechRequest,
 };
 use serde_json::{Map, Value, json};
 
@@ -9,6 +11,17 @@ fn generate(body: Value) -> GenerateRequest {
     let body = body.as_object().expect("request object").clone();
     GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+    )
+}
+
+fn image(kind: ImageRequestKind, body: Value) -> ImageRequest {
+    ImageRequest::from_raw_json(
+        kind,
+        RawJsonPayload::new(
+            "openai",
+            Bytes::from(serde_json::to_vec(&body).expect("image JSON")),
+        )
+        .expect("OpenAI payload"),
     )
 }
 
@@ -114,10 +127,6 @@ fn non_generate_requests_should_reject_missing_required_fields() {
         OperationError::EmptyField { field: "query" }
     );
     assert_eq!(
-        ImageRequest::new("").expect_err("prompt is required"),
-        OperationError::EmptyField { field: "prompt" }
-    );
-    assert_eq!(
         SpeechRequest::new("hello", "").expect_err("voice is required"),
         OperationError::EmptyField { field: "voice" }
     );
@@ -132,7 +141,10 @@ fn operation_kind_and_retry_safety_should_remain_stable() {
     let rerank = Operation::Rerank(
         RerankRequest::new("query", vec!["document".to_owned()]).expect("rerank request is valid"),
     );
-    let image = Operation::GenerateImage(ImageRequest::new("draw").expect("image request"));
+    let image = Operation::GenerateImage(image(
+        ImageRequestKind::Generation,
+        json!({"model": "gpt-image-2", "prompt": "draw"}),
+    ));
     let speech = Operation::Speech(SpeechRequest::new("hello", "alloy").expect("speech request"));
 
     assert_eq!(generate.kind(), OperationKind::Generate);
@@ -140,5 +152,35 @@ fn operation_kind_and_retry_safety_should_remain_stable() {
     assert_eq!(embed.retry_safety(), RetrySafety::Idempotent);
     assert_eq!(rerank.retry_safety(), RetrySafety::Idempotent);
     assert_eq!(image.kind(), OperationKind::GenerateImage);
+    assert!(image.image_generation_requested());
     assert_eq!(speech.kind(), OperationKind::Speech);
+}
+
+#[test]
+fn image_request_should_preserve_generation_and_edit_payloads_opaque() {
+    let generation_body = json!({
+        "model": "gpt-image-2",
+        "prompt": "draw",
+        "future_official_field": {"keep": true},
+    });
+    let edit_body = json!({
+        "model": "gpt-image-2",
+        "images": [{"image_url": "data:image/png;base64,AAAA"}],
+        "prompt": "edit",
+        "future_official_field": [1, 2, 3],
+    });
+    let generation = image(ImageRequestKind::Generation, generation_body.clone());
+    let edit = image(ImageRequestKind::Edit, edit_body.clone());
+
+    assert_eq!(generation.kind(), ImageRequestKind::Generation);
+    assert_eq!(edit.kind(), ImageRequestKind::Edit);
+    assert_eq!(
+        serde_json::from_slice::<Value>(generation.payload().body()).expect("generation JSON"),
+        generation_body
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(edit.payload().body()).expect("edit JSON"),
+        edit_body
+    );
+    assert!(!format!("{edit:?}").contains("data:image/png"));
 }

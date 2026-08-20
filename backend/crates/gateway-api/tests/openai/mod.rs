@@ -1,5 +1,6 @@
 mod auth;
 mod error;
+mod images;
 mod models;
 mod responses;
 mod router;

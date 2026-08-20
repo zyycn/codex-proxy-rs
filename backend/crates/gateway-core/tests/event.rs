@@ -78,6 +78,17 @@ fn protocol_wire_event_should_preserve_opaque_sse_metadata() {
 }
 
 #[test]
+fn protocol_wire_event_should_preserve_raw_json_body_without_parsing_it() {
+    let raw = Bytes::from_static(
+        br#"{ "created": 1, "data": [{"b64_json":"AAAA"}], "future": 9007199254740993 }"#,
+    );
+    let wire = ProtocolWireEvent::raw_json("openai", raw.clone()).expect("raw JSON event");
+
+    assert_eq!(wire.raw_json_body(), Some(&raw));
+    assert_eq!(wire.into_raw_json_body(), Some(raw));
+}
+
+#[test]
 fn validator_should_accept_started_content_delta_completed_sequence() {
     let mut validator = EventSequenceValidator::new();
     let events = [

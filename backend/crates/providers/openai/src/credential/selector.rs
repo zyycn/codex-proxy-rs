@@ -240,6 +240,12 @@ struct AffinityTelemetry {
     account_switch: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelCatalogEligibility {
+    Required,
+    NotApplicable,
+}
+
 impl CodexCredentialSelector {
     #[must_use]
     // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器。
@@ -275,13 +281,40 @@ impl CodexCredentialSelector {
         &self,
         request: &SelectCodexCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        self.select_with_cyber_policy(request, None).await
+        self.select_inner(request, None, ModelCatalogEligibility::Required)
+            .await
     }
 
     pub(crate) async fn select_with_cyber_policy(
         &self,
         request: &SelectCodexCredential<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
+    ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        self.select_inner(
+            request,
+            cyber_policy_session_key,
+            ModelCatalogEligibility::Required,
+        )
+        .await
+    }
+
+    /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号。
+    ///
+    /// 账号范围、健康度、配额、并发租约、cookie 与认证准备仍走同一套选择链路；
+    /// 唯一差异是不能用文本模型目录成员关系淘汰账号。
+    pub(crate) async fn select_for_provider_endpoint(
+        &self,
+        request: &SelectCodexCredential<'_>,
+    ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        self.select_inner(request, None, ModelCatalogEligibility::NotApplicable)
+            .await
+    }
+
+    async fn select_inner(
+        &self,
+        request: &SelectCodexCredential<'_>,
+        cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
+        model_catalog_eligibility: ModelCatalogEligibility,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
         let accounts = self.repository.list_for_provider().await?;
@@ -294,12 +327,14 @@ impl CodexCredentialSelector {
                             .attempt
                             .account_scope()
                             .is_some_and(|scope| scope.allows(account.id())))
-                    && (diagnostic || {
-                        let observed_support = self
-                            .catalog
-                            .observed_model_support(account, request.upstream_model);
-                        matches!(observed_support, Ok(None | Some(true)))
-                    })
+                    && (diagnostic
+                        || model_catalog_eligibility == ModelCatalogEligibility::NotApplicable
+                        || {
+                            let observed_support = self
+                                .catalog
+                                .observed_model_support(account, request.upstream_model);
+                            matches!(observed_support, Ok(None | Some(true)))
+                        })
             })
             .collect::<Vec<_>>();
         if !diagnostic {

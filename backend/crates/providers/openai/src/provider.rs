@@ -23,12 +23,17 @@ use gateway_core::error::{
     OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{
-    GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseMetadata,
-    ProviderResponseObservation, ProviderResponseTimings, UpstreamHttpVersion, WebSocketPoolKind,
+    FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader,
+    ProviderResponseMetadata, ProviderResponseObservation, ProviderResponseTimings, ResponseMeta,
+    UpstreamHttpVersion, WebSocketPoolKind,
 };
-use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProviderSessionState};
+use gateway_core::operation::{
+    GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind, ProviderSessionState,
+};
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
-use gateway_core::routing::{ModelCapabilities, ModelPresentation, ProviderKind, UpstreamModelId};
+use gateway_core::routing::{
+    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, UpstreamModelId,
+};
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
@@ -73,7 +78,8 @@ use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
-    CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
+    CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH, CODEX_RESPONSES_PATH,
+    CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendJsonResponse,
     CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexRateLimitUpdates,
     CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics, CodexUpstreamDiagnostics,
     CodexWebSocketPool, endpoint_url,
@@ -81,6 +87,7 @@ use crate::transport::{
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
+const HTTP_JSON_TRANSPORT: &str = "http_json";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
 /// 提交边界前最多保留 64 KiB 原始上游 chunk；达到阈值后结束无感换号窗口，
@@ -115,6 +122,8 @@ pub struct CodexProvider {
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
     responses_url: Url,
+    image_generations_url: Url,
+    image_edits_url: Url,
     session_identity: Option<CodexSessionIdentity>,
 }
 
@@ -134,6 +143,11 @@ impl CodexProvider {
     ) -> Result<Self, CodexProviderConfigError> {
         let responses_url = Url::parse(&endpoint_url(&base_url, CODEX_RESPONSES_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let image_generations_url =
+            Url::parse(&endpoint_url(&base_url, CODEX_IMAGE_GENERATIONS_PATH))
+                .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let image_edits_url = Url::parse(&endpoint_url(&base_url, CODEX_IMAGE_EDITS_PATH))
+            .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let client =
             CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
         Ok(Self {
@@ -144,6 +158,8 @@ impl CodexProvider {
             account_feedback,
             client,
             responses_url,
+            image_generations_url,
+            image_edits_url,
             session_identity: None,
         })
     }
@@ -230,6 +246,9 @@ impl Provider for CodexProvider {
                 ProviderErrorKind::Timeout,
                 UpstreamSendState::NotSent,
             ));
+        }
+        if let Operation::GenerateImage(image) = request.operation() {
+            return self.execute_image(image, candidate, context).await;
         }
         let Operation::Generate(generate) = request.operation() else {
             return Err(provider_error(
@@ -401,6 +420,80 @@ impl Provider for CodexProvider {
     }
 }
 
+impl CodexProvider {
+    async fn execute_image(
+        &self,
+        image: &ImageRequest,
+        candidate: &ProviderCandidate,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        if image.payload().protocol() != PROVIDER_NAME {
+            return Err(provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            ));
+        }
+        let (endpoint_path, response_origin) = match image.kind() {
+            ImageRequestKind::Generation => (
+                CODEX_IMAGE_GENERATIONS_PATH,
+                self.image_generations_url.clone(),
+            ),
+            ImageRequestKind::Edit => (CODEX_IMAGE_EDITS_PATH, self.image_edits_url.clone()),
+        };
+        let lease = self
+            .selector
+            .select_for_provider_endpoint(&SelectCodexCredential {
+                upstream_model: candidate.upstream_model().as_str(),
+                request_url: &response_origin,
+                attempt: &context,
+                session_affinity_key: None,
+            })
+            .await
+            .map_err(map_selection_error)?;
+        let lease = Arc::new(lease);
+        let allows_account_state_mutation = lease.allows_account_state_mutation();
+        let provider_kind = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
+        let metadata = ProviderCallMetadata::new(
+            provider_kind,
+            candidate.upstream_model().clone(),
+            ProviderResource::Account {
+                id: lease.account_id().clone(),
+                revision: lease.account().revision(),
+            },
+            UpstreamTransport::new(HTTP_JSON_TRANSPORT).map_err(|_| {
+                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+            })?,
+        );
+        let image_turn_id = image
+            .payload()
+            .context()
+            .get("image_turn_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let events = cold_json_response_stream(ColdJsonResponse {
+            client: self.client.clone(),
+            response_origin,
+            endpoint_path,
+            body: image.payload().body().clone(),
+            image_turn_id,
+            upstream_model: candidate.upstream_model().clone(),
+            context,
+            selector: Arc::clone(&self.selector),
+            quota: Arc::clone(&self.quota),
+            agent_identity: Arc::clone(&self.agent_identity),
+            lease: Arc::clone(&lease),
+            output_started_at: Instant::now(),
+        });
+        let stream = ProviderStream::new(metadata, events, lease);
+        Ok(if allows_account_state_mutation {
+            stream.with_account_feedback(Arc::clone(&self.account_feedback))
+        } else {
+            stream
+        })
+    }
+}
+
 struct ColdResponse {
     client: CodexBackendClient,
     response_origin: Url,
@@ -416,6 +509,21 @@ struct ColdResponse {
     output_started_at: Instant,
     session_affinity_key: Option<ProviderSessionAffinityKey>,
     session_capture: Option<OpenAiSessionCapture>,
+}
+
+struct ColdJsonResponse {
+    client: CodexBackendClient,
+    response_origin: Url,
+    endpoint_path: &'static str,
+    body: Bytes,
+    image_turn_id: Option<String>,
+    upstream_model: UpstreamModelId,
+    context: AttemptContext,
+    selector: Arc<CodexCredentialSelector>,
+    quota: Arc<CodexCredentialQuotaService>,
+    agent_identity: Arc<CodexAgentIdentityTaskService>,
+    lease: Arc<CodexCredentialLease>,
+    output_started_at: Instant,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -567,6 +675,180 @@ fn map_handshake_attempt_error(error: CodexHandshakeAttemptError) -> MappedProvi
             provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::Sent),
         ),
     }
+}
+
+async fn create_json_attempt(
+    request: &ColdJsonResponse,
+    account: &ProviderAccount,
+    installation_id: &str,
+    authorization: &SecretString,
+    cookie_header: Option<&SecretString>,
+    account_selection: CodexAccountSelectionTelemetry<'_>,
+) -> Result<CodexBackendJsonResponse, CodexHandshakeAttemptError> {
+    let Some(handshake_deadline) = remaining(request.context.deadline()) else {
+        return Err(CodexHandshakeAttemptError::Timeout);
+    };
+    let request_id = request.context.request_id().as_str();
+    let mut request_context = CodexRequestContext::auxiliary(
+        authorization.expose_secret(),
+        account.upstream_account_id(),
+        request_id,
+        Some(installation_id),
+    );
+    request_context.cookie_header = cookie_header.map(ExposeSecret::expose_secret);
+    request_context.account_selection = account_selection;
+    tokio::select! {
+        biased;
+        _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
+        _ = tokio::time::sleep(handshake_deadline) => Err(CodexHandshakeAttemptError::Timeout),
+        response = request.client.post_raw_json(
+            request.endpoint_path,
+            request.body.clone(),
+            request.image_turn_id.as_deref(),
+            request_context,
+        ) => response.map_err(CodexHandshakeAttemptError::Client),
+    }
+}
+
+fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
+    Box::pin(async_stream::try_stream! {
+        let allows_account_state_mutation = request.lease.allows_account_state_mutation();
+        let failure_context = OpenAiFailureContext {
+            client: &request.client,
+            selector: &request.selector,
+            quota: &request.quota,
+            response_origin: &request.response_origin,
+            cyber_policy_scope: None,
+            allows_account_state_mutation,
+        };
+        let mut active_account = request.lease.account().clone();
+        let cookie_header = build_cookie_header(request.lease.cookies())?;
+        let mut authorization = request
+            .lease
+            .authentication()
+            .authorization_header(chrono::Utc::now())
+            .map_err(|_| {
+                provider_error(
+                    ProviderErrorKind::Unauthorized,
+                    UpstreamSendState::NotSent,
+                )
+            })?;
+        let account_selection = CodexAccountSelectionTelemetry::new(
+            request.lease.affinity_hit(),
+            request.lease.escape_reason(),
+            request.lease.account_switch(),
+        );
+        let mut response = create_json_attempt(
+            &request,
+            &active_account,
+            request.lease.installation_id(),
+            &authorization,
+            cookie_header.as_ref(),
+            account_selection,
+        )
+        .await;
+        if allows_account_state_mutation
+            && let Err(CodexHandshakeAttemptError::Client(error)) = &response
+        {
+            match request
+                .agent_identity
+                .recover_after_rejected_task(
+                    active_account.id(),
+                    request.lease.authentication(),
+                    error,
+                )
+                .await
+            {
+                Ok(Some(recovered)) => {
+                    authorization = recovered
+                        .credential
+                        .authentication
+                        .authorization_header(chrono::Utc::now())
+                        .map_err(|_| {
+                            provider_error(
+                                ProviderErrorKind::Unauthorized,
+                                UpstreamSendState::NotSent,
+                            )
+                        })?;
+                    active_account = recovered.account;
+                    response = create_json_attempt(
+                        &request,
+                        &active_account,
+                        &recovered.credential.installation_id,
+                        &authorization,
+                        cookie_header.as_ref(),
+                        account_selection,
+                    )
+                    .await;
+                }
+                Ok(None) => {}
+                Err(_) => response = Err(CodexHandshakeAttemptError::AgentIdentityRecovery),
+            }
+        }
+        let response = match response.map_err(map_handshake_attempt_error) {
+            Ok(response) => response,
+            Err(mut failure) => {
+                if let Some(observation) = failure.observation.take() {
+                    yield ProviderEvent::observation(observation);
+                }
+                apply_failure(&failure_context, &active_account, &failure).await;
+                Err(failure.error)?;
+                return;
+            }
+        };
+
+        let mut metrics = response.transport_metrics.clone();
+        metrics.first_event_ms = Some(
+            i64::try_from(request.output_started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+        );
+        if let Some(observation) = codex_response_observation(
+            CodexBackendTransport::HttpJson,
+            &response.diagnostics,
+            &response.response_metadata,
+            &metrics,
+            None,
+            openai_response_timings(&metrics, &response.response_metadata),
+        ) {
+            yield ProviderEvent::observation(observation);
+        }
+        if allows_account_state_mutation {
+            synchronize_passive_quota_headers(
+                &request.quota,
+                &active_account,
+                &response.rate_limit_headers,
+            )
+            .await;
+            if !response.set_cookie_headers.is_empty()
+                && let Err(error) = request
+                    .selector
+                    .capture_response_cookies(
+                        &active_account,
+                        &request.response_origin,
+                        &response.set_cookie_headers,
+                    )
+                    .await
+            {
+                tracing::warn!(
+                    account_id = %active_account.id(),
+                    error = %error,
+                    "Failed to persist OpenAI image response cookies"
+                );
+            }
+        }
+
+        let response_meta = ResponseMeta::new(
+            request.context.request_id().as_str(),
+            request.upstream_model.as_str(),
+        );
+        yield ProviderEvent::canonical(GatewayEvent::Started(response_meta.clone()));
+        let wire = ProtocolWireEvent::raw_json(PROVIDER_NAME, response.body).map_err(|_| {
+            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+        })?;
+        yield ProviderEvent::wire(wire);
+        yield ProviderEvent::canonical(GatewayEvent::Completed(
+            response_meta.with_finish_reason(FinishReason::Stop),
+        ));
+    })
 }
 
 fn cold_response_stream(response: ColdResponse) -> EventStream {
@@ -1603,6 +1885,7 @@ async fn synchronize_passive_quota_headers(
 const fn actual_transport_name(transport: CodexBackendTransport) -> &'static str {
     match transport {
         CodexBackendTransport::HttpSse => HTTP_SSE_TRANSPORT,
+        CodexBackendTransport::HttpJson => HTTP_JSON_TRANSPORT,
         CodexBackendTransport::WebSocket => WEBSOCKET_TRANSPORT,
     }
 }
@@ -2094,7 +2377,9 @@ fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {
 
 fn stream_transport_allows_pre_delivery_retry(error: &CodexClientError) -> bool {
     match error {
-        CodexClientError::Http(_) | CodexClientError::StreamIdleTimeout { .. } => true,
+        CodexClientError::Http(_)
+        | CodexClientError::HttpJson(_)
+        | CodexClientError::StreamIdleTimeout { .. } => true,
         CodexClientError::WebSocket(error) => matches!(
             error,
             CodexWebSocketExchangeError::Transport(_)
@@ -2175,7 +2460,7 @@ fn map_client_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::Sent,
         )),
-        CodexClientError::Http(error) => {
+        CodexClientError::Http(error) | CodexClientError::HttpJson(error) => {
             let send_state = if error.is_connect() {
                 UpstreamSendState::NotSent
             } else {

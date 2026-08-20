@@ -17,7 +17,7 @@ use bytes::Bytes;
 use futures::future::{BoxFuture, pending};
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
-    StartExecution, StartedExecution,
+    StartExecution, StartProviderExecution, StartedExecution,
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, UpstreamSendState};
 use gateway_core::error::{
@@ -187,6 +187,18 @@ impl ExecutionService for ContextCaptureExecution {
             Err(GatewayError::new(
                 GatewayErrorKind::Internal,
                 "context capture completed",
+            ))
+        })
+    }
+
+    fn start_provider_endpoint(
+        &self,
+        _: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async {
+            Err(GatewayError::new(
+                GatewayErrorKind::Internal,
+                "responses context test must not start a provider endpoint",
             ))
         })
     }

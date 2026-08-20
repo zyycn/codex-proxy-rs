@@ -159,6 +159,9 @@ pub enum CodexClientError {
     /// Reqwest 传输失败。
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
+    /// 非流式 JSON 请求的 Reqwest 传输失败。
+    #[error("HTTP JSON transport error: {0}")]
+    HttpJson(#[source] reqwest::Error),
     /// 自定义 CA 构建失败。
     #[error("custom CA transport error: {0}")]
     CustomCa(#[from] CustomCaError),
@@ -222,6 +225,7 @@ impl fmt::Debug for CodexClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
+            Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
             Self::CustomCa(_) => formatter.write_str("CodexClientError::CustomCa([REDACTED])"),
             Self::InvalidHeaderName(_) => {
                 formatter.write_str("CodexClientError::InvalidHeaderName([REDACTED])")
@@ -274,6 +278,7 @@ impl CodexClientError {
             | Self::StreamIdleTimeout { .. }
             | Self::InvalidSse(_)
             | Self::ModelCatalog(_) => Some(CodexBackendTransport::HttpSse),
+            Self::HttpJson(_) => Some(CodexBackendTransport::HttpJson),
             Self::WebSocket(_) => Some(CodexBackendTransport::WebSocket),
             Self::Upstream { transport, .. } => Some(*transport),
             Self::CustomCa(_)
@@ -472,6 +477,8 @@ impl fmt::Debug for CodexRequestContext<'_> {
 pub enum CodexBackendTransport {
     /// HTTP SSE 传输。
     HttpSse,
+    /// 非流式 HTTP JSON 传输。
+    HttpJson,
     /// WebSocket 传输。
     WebSocket,
 }
@@ -551,6 +558,22 @@ pub struct CodexBackendStreamingResponse {
     pub transport_metrics: CodexTransportMetrics,
     /// terminal completed 后是否由池中 WebSocket 保留 connection-local continuation。
     pub connection_local_continuation: bool,
+}
+
+/// Codex 上游非流式 JSON 响应。
+pub struct CodexBackendJsonResponse {
+    /// 未经解析或重编码的完整响应正文。
+    pub body: Bytes,
+    /// 上游透传的 `set-cookie` 列表。
+    pub set_cookie_headers: Vec<String>,
+    /// 上游透传的限流头。
+    pub rate_limit_headers: Vec<(String, String)>,
+    /// 上游诊断元数据。
+    pub diagnostics: CodexUpstreamDiagnostics,
+    /// 已筛选、可交给客户端的响应头。
+    pub response_metadata: CodexResponseMetadata,
+    /// HTTP 阶段耗时与版本。
+    pub transport_metrics: CodexTransportMetrics,
 }
 
 // ---------------------------------------------------------------------------

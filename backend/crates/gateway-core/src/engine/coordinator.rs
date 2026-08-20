@@ -455,6 +455,15 @@ where
             .unwrap_or_default()
     }
 
+    /// 返回最终选中 attempt 观察到的上游 HTTP 状态码。
+    #[must_use]
+    pub fn response_status_code(&self) -> Option<u16> {
+        self.current
+            .as_ref()
+            .and_then(|current| current.response_observation.as_ref())
+            .and_then(ProviderResponseObservation::status_code)
+    }
+
     /// 将已完成响应的账号事实与 Provider 私有状态封装为可丢失的亲和记录。
     ///
     /// Core 不读取 `state` 内容；Provider 将在后续同账号 continuation 时自行解释。
@@ -1482,8 +1491,13 @@ where
     }
 
     fn image_generation_succeeded(&self) -> Option<bool> {
-        self.image_generation_requested
-            .then(|| self.usage.image_output_tokens.unwrap_or_default() > 0)
+        self.image_generation_requested.then(|| {
+            if matches!(self.operation, Operation::GenerateImage(_)) {
+                self.upstream_complete
+            } else {
+                self.usage.image_output_tokens.unwrap_or_default() > 0
+            }
+        })
     }
 
     fn current_send_state(&self) -> UpstreamSendState {

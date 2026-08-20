@@ -55,15 +55,17 @@ Admin API 不暴露全局配置版本，mutation 请求也不要求客户端提�
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | 无 | Core、Store 和后台任务健康时返回 `204`，否则返回 `503` |
 
-## 3. Responses 与模型目录
+## 3. OpenAI 数据面与模型目录
 
-Responses HTTP body、WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定。
+Responses 和 Images HTTP body、WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
 | `POST` | `/v1/responses/review` | 使用同一 Responses 合同发起 review 子代理请求 |
+| `POST` | `/v1/images/generations` | 按当前 Codex Provider 发起图像生成；JSON 请求与响应正文原样转发 |
+| `POST` | `/v1/images/edits` | 按当前 Codex Provider 发起图像编辑；JSON 请求与响应正文原样转发 |
 | `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
 | `GET` | `/v1/models/catalog` | 返回 Codex 客户端使用的模型目录 |
 | `GET` | `/v1/models/{model_id}/info` | 返回 Codex 客户端使用的单模型信息 |
@@ -75,7 +77,9 @@ Responses HTTP body、WebSocket message 和 frame 不设置网关私有长度上
 OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段和字段顺序保持不变（受控模型
 映射除外），HTTP SSE 与 WebSocket 的上游业务事件字节原样转发，response ID 按 opaque 值处理而不
 假设 UUID 或固定长度；OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical
-观测结果重写。xAI 是 Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
+观测结果重写。Images 请求不读取或重建 JSON，只在原始字节之外完成账号选择、鉴权头替换和端点路由；
+成功与失败响应正文同样保持原始字节。xAI 是 Grok wire 与 Responses wire 之间的协议转换层，转换只在
+xAI Provider 内完成。
 上游结构化错误的 message/code/type 会透传给客户端，其中内嵌的账号指纹 UUID 已脱敏。模型映射是
 全局精确映射，未命中时模型名原样交给候选 Provider；分组只限定账号集合，不参与模型改名。
 

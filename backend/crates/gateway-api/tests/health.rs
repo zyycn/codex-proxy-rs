@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use gateway_core::{
     engine::execution::{
         AuthenticatedClient, ClientAuthenticationError, ExecutionService, StartExecution,
-        StartedExecution,
+        StartProviderExecution, StartedExecution,
     },
     error::GatewayError,
     health::{WorkerHealthKey, WorkerHealthSnapshot, WorkerHealthSource, WorkerRuntimeState},
@@ -119,5 +119,12 @@ impl ExecutionService for UnusedExecution {
 
     fn start(&self, _: StartExecution) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async { unreachable!("health check does not execute requests") })
+    }
+
+    fn start_provider_endpoint(
+        &self,
+        _: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async { unreachable!("health check does not execute provider endpoints") })
     }
 }

@@ -137,6 +137,8 @@ curl http://127.0.0.1:8080/v1/responses \
 | `POST /v1/responses`               | JSON 响应或 SSE Responses 流    |
 | `GET /v1/responses`                | Responses WebSocket 升级        |
 | `POST /v1/responses/review`        | review 子代理请求               |
+| `POST /v1/images/generations`      | 图像生成 JSON 透明转发          |
+| `POST /v1/images/edits`            | 图像编辑 JSON 透明转发          |
 | `GET /v1/models`                   | 当前 Client Key 可用的模型列表   |
 | `GET /v1/models/catalog`           | Codex 客户端展示用模型目录      |
 | `GET /v1/models/{model_id}/info`   | Codex 客户端展示用模型详情      |

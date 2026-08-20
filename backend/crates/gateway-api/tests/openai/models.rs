@@ -7,7 +7,7 @@ use axum::{
 use futures::future::BoxFuture;
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, StartExecution,
-    StartedExecution,
+    StartProviderExecution, StartedExecution,
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::routing::{
@@ -96,6 +96,18 @@ impl ExecutionService for ModelsExecution {
             Err(GatewayError::new(
                 GatewayErrorKind::Internal,
                 "models test must not start a response",
+            ))
+        })
+    }
+
+    fn start_provider_endpoint(
+        &self,
+        _: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async {
+            Err(GatewayError::new(
+                GatewayErrorKind::Internal,
+                "models test must not start a provider endpoint",
             ))
         })
     }

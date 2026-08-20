@@ -13,7 +13,7 @@ use futures::{SinkExt, StreamExt, future::BoxFuture};
 use gateway_api::openai::responses::ResponseCreateFrameError;
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
-    StartExecution, StartedExecution,
+    StartExecution, StartProviderExecution, StartedExecution,
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, UpstreamSendState};
 use gateway_core::error::{GatewayError, ProviderError, ProviderErrorKind};
@@ -270,6 +270,13 @@ impl ExecutionService for AtomicFailureExecution {
                 }),
             })
         })
+    }
+
+    fn start_provider_endpoint(
+        &self,
+        _: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async { unreachable!("WebSocket test does not execute provider endpoints") })
     }
 }
 
