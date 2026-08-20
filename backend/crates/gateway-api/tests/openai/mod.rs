@@ -44,9 +44,29 @@ pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Ro
     api_router_with_origins(execution, Vec::new()).await
 }
 
+pub(super) async fn api_router_with_worker_health(
+    execution: Arc<dyn ExecutionService>,
+    worker_health: Arc<dyn WorkerHealthSource>,
+) -> axum::Router {
+    api_router_with_origins_and_worker_health(execution, Vec::new(), worker_health).await
+}
+
 pub(super) async fn api_router_with_origins(
     execution: Arc<dyn ExecutionService>,
     cors_allowed_origins: Vec<String>,
+) -> axum::Router {
+    api_router_with_origins_and_worker_health(
+        execution,
+        cors_allowed_origins,
+        Arc::new(EmptyWorkerHealth),
+    )
+    .await
+}
+
+async fn api_router_with_origins_and_worker_health(
+    execution: Arc<dyn ExecutionService>,
+    cors_allowed_origins: Vec<String>,
+    worker_health: Arc<dyn WorkerHealthSource>,
 ) -> axum::Router {
     let admin = crate::admin::AdminTestFixture::new().await;
     gateway_api::initialize(
@@ -59,7 +79,7 @@ pub(super) async fn api_router_with_origins(
         execution,
         admin.services,
         Vec::new(),
-        Arc::new(EmptyWorkerHealth),
+        worker_health,
         Arc::new(TestLifecycle::default()),
     )
     .expect("API bundle")

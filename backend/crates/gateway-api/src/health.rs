@@ -1,4 +1,4 @@
-//! `/healthz` 对 Core、Store 与 Host worker 健康事实的聚合。
+//! `/healthz` 对 Core、Store 与 Host 关键 worker 健康事实的聚合。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,8 +6,10 @@ use std::time::Duration;
 use axum::{extract::State, http::StatusCode};
 use futures::future::join_all;
 use gateway_core::health::{
-    HealthProbe, HealthState, WorkerHealthSnapshot, WorkerHealthSource, WorkerRuntimeState,
+    HealthProbe, HealthState, WorkerHealthKey, WorkerHealthSnapshot, WorkerHealthSource,
+    WorkerRuntimeState,
 };
+use gateway_core::task::WorkerKind;
 
 use crate::ApiState;
 
@@ -32,7 +34,13 @@ impl HealthStatus {
     }
 
     pub(crate) async fn healthy(&self) -> bool {
-        if !self.workers.snapshot().iter().all(worker_is_healthy) {
+        if !self
+            .workers
+            .snapshot()
+            .iter()
+            .filter(|worker| worker_affects_healthz(worker))
+            .all(worker_is_healthy)
+        {
             return false;
         }
         let checks = self.probes.iter().map(|probe| probe.check());
@@ -52,6 +60,16 @@ pub(crate) async fn healthz(State(state): State<ApiState>) -> StatusCode {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     }
+}
+
+fn worker_affects_healthz(worker: &WorkerHealthSnapshot) -> bool {
+    let WorkerHealthKey::Task(id) = &worker.key else {
+        return false;
+    };
+    !matches!(
+        id.kind(),
+        WorkerKind::OAuthRefresh | WorkerKind::QuotaCatalogHealth
+    )
 }
 
 fn worker_is_healthy(worker: &WorkerHealthSnapshot) -> bool {
