@@ -648,8 +648,9 @@ impl ProviderQuota {
 
     /// 返回 Dashboard 使用的代表性额度比例。
     ///
-    /// 优先使用短周期窗口，再依次使用周、月和其它窗口；同一优先级取较高的已用比例。
-    /// 这里只解释跨 Provider 共享的窗口语义，绝不读取 Provider 私有 JSON。
+    /// 优先使用覆盖账号全部请求的窗口；同一归属范围内再依次使用短周期、周、月
+    /// 和其它窗口，同一优先级取较高的已用比例。这里只解释跨 Provider 共享的窗口
+    /// 语义，绝不读取 Provider 私有 JSON。
     #[must_use]
     pub fn representative_used_percent(&self) -> Option<f64> {
         if self.limit_reached {
@@ -708,7 +709,7 @@ impl ProviderQuota {
                 Some((index, quota_usage_priority(window), used_percent))
             })
             .fold(
-                None::<(usize, u8, f64)>,
+                None::<(usize, (u8, u8), f64)>,
                 |selected, candidate| match selected {
                     Some(current)
                         if current.1 < candidate.1
@@ -723,13 +724,18 @@ impl ProviderQuota {
     }
 }
 
-fn quota_usage_priority(window: &ProviderQuotaWindow) -> u8 {
-    match window.group.as_str() {
+fn quota_usage_priority(window: &ProviderQuotaWindow) -> (u8, u8) {
+    let attribution = match window.local_usage_attribution {
+        QuotaLocalUsageAttribution::AccountWide => 0,
+        QuotaLocalUsageAttribution::Unavailable => 1,
+    };
+    let duration = match window.group.as_str() {
         "shortTerm" if window.window_seconds.is_some_and(is_week_window) => 1,
         "shortTerm" => 0,
         "monthly" => 2,
         _ => 3,
-    }
+    };
+    (attribution, duration)
 }
 
 fn is_week_window(seconds: u64) -> bool {

@@ -137,6 +137,24 @@ fn representative_quota_should_prefer_short_window_and_highest_usage() {
 }
 
 #[test]
+fn representative_quota_should_prefer_account_wide_window_over_model_specific_window() {
+    let mut model_specific = quota_window("shortTerm", Some(18_000), Some(64.0));
+    model_specific.local_usage_attribution = QuotaLocalUsageAttribution::Unavailable;
+    let quota = ProviderQuota {
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![
+            model_specific,
+            quota_window("shortTerm", Some(604_800), Some(5.0)),
+        ],
+        limit_reached: false,
+        provider_data: None,
+    };
+
+    assert_eq!(quota.representative_used_percent(), Some(5.0));
+}
+
+#[test]
 fn representative_window_usage_should_accept_account_wide_rolling_window_without_reset() {
     let usage = AccountUsage {
         account_id: "acct_xai".to_owned(),
