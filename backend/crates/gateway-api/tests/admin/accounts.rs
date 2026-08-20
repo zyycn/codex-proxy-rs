@@ -266,8 +266,8 @@ mod actions {
         AccountActionRequest, AccountConnectionTestEvent, AccountDeletionData,
         AccountDeletionRequest, AccountExportData, AccountExportQuery, AccountIdQuery,
         AccountImportData, AccountImportRequest, AccountMutationData, AccountRefreshRequest,
-        AccountTestQuery, CompleteAccountAuthorizationRequest, RotateAccountRequest,
-        StartAccountAuthorizationRequest,
+        AccountResetCreditConsumeRequest, AccountTestQuery, CompleteAccountAuthorizationRequest,
+        RotateAccountRequest, StartAccountAuthorizationRequest,
     };
     use gateway_core::engine::credential::ProviderAccountId;
     use serde_json::json;
@@ -322,6 +322,44 @@ mod actions {
                 "expectedConfigRevision": 0
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn reset_credit_consume_should_require_canonical_v4_idempotency_key() {
+        let valid: AccountResetCreditConsumeRequest = serde_json::from_value(json!({
+            "accountId": "acct_1",
+            "creditId": "credit_1",
+            "redeemRequestId": "8fbf302d-11df-4bd5-82e4-08e4b3df7874"
+        }))
+        .expect("decode reset-credit consume");
+        valid.validate().expect("validate reset-credit consume");
+
+        for (redeem_request_id, field) in [
+            ("019c0000-0000-7000-8000-000000000000", "redeemRequestId"),
+            ("8FBF302D-11DF-4BD5-82E4-08E4B3DF7874", "redeemRequestId"),
+            ("invalid", "redeemRequestId"),
+        ] {
+            let request: AccountResetCreditConsumeRequest = serde_json::from_value(json!({
+                "accountId": "acct_1",
+                "redeemRequestId": redeem_request_id
+            }))
+            .expect("decode invalid reset-credit consume");
+            assert_eq!(request.validate().expect_err("reject UUID").field(), field);
+        }
+
+        let invalid_credit: AccountResetCreditConsumeRequest = serde_json::from_value(json!({
+            "accountId": "acct_1",
+            "creditId": " ",
+            "redeemRequestId": "8fbf302d-11df-4bd5-82e4-08e4b3df7874"
+        }))
+        .expect("decode invalid credit");
+        assert_eq!(
+            invalid_credit
+                .validate()
+                .expect_err("reject credit")
+                .field(),
+            "creditId"
         );
     }
 

@@ -73,6 +73,19 @@ impl CodexWireProfile {
             self.desktop_version,
         )
     }
+
+    /// 按 Codex Desktop 暴露的稳定桌面 surface 格式构造 User-Agent。
+    ///
+    /// Electron 网络栈会为 renderer 请求附加运行时 User-Agent；非 Electron transport
+    /// 使用同一官方包中 `getDesktopUserAgent` 的稳定格式。它与 bundled Core 请求使用的
+    /// 复合 User-Agent 是两个独立 surface。
+    #[must_use]
+    pub fn desktop_user_agent(&self) -> String {
+        format!(
+            "{}/{} ({}; {})",
+            self.originator, self.desktop_version, self.os_type, self.arch
+        )
+    }
 }
 
 /// 跨 Codex 上游请求共享的运行时请求画像。

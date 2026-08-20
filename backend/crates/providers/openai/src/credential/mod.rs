@@ -47,7 +47,7 @@ pub use oauth::{
 pub use quota::{
     CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexCredentialQuotaService,
     CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary, CodexQuotaWindow,
-    CodexQuotaWindowKind, CodexQuotaWindowRole, parse_codex_quota_usage,
+    CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError, parse_codex_quota_usage,
 };
 pub use refresh::{
     CodexCredentialRefreshError, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,

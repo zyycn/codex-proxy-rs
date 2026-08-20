@@ -12,9 +12,10 @@ use gateway_admin::model::observability::{
 };
 use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, CompleteAuthorization,
-    PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
-    PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
-    ProviderQuotaRequest, ProviderQuotaWindowRole, QuotaLocalUsageAttribution,
+    ConsumeProviderResetCredit, PendingAuthorizationMutation, PrepareCredentialImport,
+    PrepareCredentialRefresh, PrepareCredentialRotation, ProviderDocument,
+    ProviderExportCredentialInput, ProviderQuotaRequest, ProviderQuotaWindowRole,
+    QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
@@ -39,6 +40,9 @@ use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
+use uuid::Uuid;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
@@ -158,6 +162,64 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
     assert_eq!(fast_billing.multiplier_percent, 170);
     assert_eq!(fast_billing.standard_amount.amount.as_str(), "2.5");
     assert_eq!(fast_billing.total_amount.amount.as_str(), "4.25");
+}
+
+#[tokio::test]
+async fn reset_credit_success_with_invalid_body_should_remain_an_unknown_consume_result() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/wham/rate-limit-reset-credits/consume"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (bundle, account_id, _config) = reset_credit_admin(&server).await;
+
+    let error = bundle
+        .admin_provider()
+        .consume_reset_credit(reset_credit_command(account_id))
+        .await
+        .expect_err("invalid success body must be ambiguous");
+
+    assert_eq!(error.kind(), ProviderAdminErrorKind::BadGateway);
+    assert_eq!(
+        error.message(),
+        Some(
+            "OpenAI reset-credit consume result is unknown; refresh the credit list before retrying"
+        )
+    );
+}
+
+#[tokio::test]
+async fn reset_credit_explicit_http_rejection_should_preserve_the_raw_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/wham/rate-limit-reset-credits/consume"))
+        .respond_with(ResponseTemplate::new(409).set_body_raw(
+            r#"{"code":"nothing_to_reset","detail":"window is fresh"}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (bundle, account_id, _config) = reset_credit_admin(&server).await;
+
+    let error = bundle
+        .admin_provider()
+        .consume_reset_credit(reset_credit_command(account_id))
+        .await
+        .expect_err("explicit upstream rejection");
+
+    assert_eq!(error.kind(), ProviderAdminErrorKind::BadGateway);
+    assert_eq!(
+        error.message(),
+        Some(
+            r#"OpenAI reset-credit upstream returned HTTP 409: {"code":"nothing_to_reset","detail":"window is fresh"}"#
+        )
+    );
+    let debug = format!("{error:?}");
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("window is fresh"));
 }
 
 #[tokio::test]
@@ -818,6 +880,45 @@ async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
         .expect("JWT rotation should be prepared");
 
     assert_eq!(prepared.facts().access_token_expires_at, Some(expires_at));
+}
+
+async fn reset_credit_admin(
+    server: &MockServer,
+) -> (
+    provider_openai::ProviderBundle,
+    ProviderAccountId,
+    TestOpenAiConfig,
+) {
+    let account_id = ProviderAccountId::new("acct_reset_credit").expect("account ID");
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_string(),
+            name: "reset credit".to_owned(),
+            secret: secret("reset-credit-access"),
+            verified_account: profile("chatgpt-reset-credit"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI reset-credit bundle");
+    (bundle, account_id, config)
+}
+
+fn reset_credit_command(account_id: ProviderAccountId) -> ConsumeProviderResetCredit {
+    ConsumeProviderResetCredit {
+        account_id,
+        credit_id: Some("credit_1".to_owned()),
+        redeem_request_id: Uuid::parse_str("8fbf302d-11df-4bd5-82e4-08e4b3df7874")
+            .expect("UUID v4"),
+    }
 }
 
 fn provider_ports() -> ProviderStorePorts {

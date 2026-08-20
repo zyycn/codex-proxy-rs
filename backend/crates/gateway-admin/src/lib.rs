@@ -347,7 +347,10 @@ fn map_provider_registry_error(error: ProviderAdminError) -> AdminError {
         }
         ProviderAdminErrorKind::NotFound => AdminErrorKind::NotFound,
         ProviderAdminErrorKind::Conflict => AdminErrorKind::Conflict,
-        ProviderAdminErrorKind::Unavailable => AdminErrorKind::Unavailable,
+        ProviderAdminErrorKind::Unavailable | ProviderAdminErrorKind::CredentialRefreshRequired => {
+            AdminErrorKind::Unavailable
+        }
+        ProviderAdminErrorKind::BadGateway => AdminErrorKind::BadGateway,
         ProviderAdminErrorKind::Internal => AdminErrorKind::Internal,
     };
     AdminError::new(kind, "Provider registry initialization failed")

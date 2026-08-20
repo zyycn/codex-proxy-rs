@@ -13,7 +13,7 @@ pub use snapshot::{
     CodexQuotaWindowRole, parse_codex_quota_usage,
 };
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -36,7 +36,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::transport::profile::CodexWireProfileState;
-use crate::transport::{CodexBackendClient, CodexClientError, CodexRequestContext};
+use crate::transport::{
+    CodexBackendClient, CodexClientError, CodexRateLimitResetCredits,
+    CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
+};
 
 use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
@@ -118,6 +121,54 @@ pub enum CodexCredentialQuotaError {
     Upstream { detail: String },
 }
 
+/// 主动额度重置卡查询/消费失败。
+#[derive(Error)]
+pub enum CodexResetCreditsError {
+    #[error("Codex reset-credit credential data is invalid")]
+    InvalidCredentialData,
+    #[error("Codex OAuth access token must be refreshed before using reset credits")]
+    CredentialRefreshRequired { upstream_body: Option<String> },
+    #[error("Codex reset-credit account was not found")]
+    NotFound,
+    #[error("provider account store is unavailable: {detail}")]
+    Store { detail: String },
+    #[error("Codex reset-credit upstream returned HTTP {status}")]
+    Upstream {
+        status: u16,
+        body: String,
+        retry_after_seconds: Option<u64>,
+    },
+    #[error("Codex reset-credit query transport is unavailable")]
+    TransportUnavailable,
+    #[error("Codex reset-credit consume result is unknown")]
+    ConsumeResultUnknown,
+}
+
+impl std::fmt::Debug for CodexResetCreditsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCredentialData => formatter.write_str("InvalidCredentialData"),
+            Self::CredentialRefreshRequired { .. } => {
+                formatter.write_str("CredentialRefreshRequired { upstream_body: <redacted> }")
+            }
+            Self::NotFound => formatter.write_str("NotFound"),
+            Self::Store { .. } => formatter.write_str("Store { detail: <redacted> }"),
+            Self::Upstream {
+                status,
+                retry_after_seconds,
+                ..
+            } => formatter
+                .debug_struct("Upstream")
+                .field("status", status)
+                .field("body", &"<redacted>")
+                .field("retry_after_seconds", retry_after_seconds)
+                .finish(),
+            Self::TransportUnavailable => formatter.write_str("TransportUnavailable"),
+            Self::ConsumeResultUnknown => formatter.write_str("ConsumeResultUnknown"),
+        }
+    }
+}
+
 impl From<gateway_core::error::StoreError> for CodexCredentialQuotaError {
     fn from(error: gateway_core::error::StoreError) -> Self {
         Self::Store {
@@ -135,6 +186,7 @@ pub struct CodexCredentialQuotaService {
     agent_identity: Arc<CodexAgentIdentityTaskService>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
     scheduling: CodexQuotaSchedulingProjection,
+    reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +239,11 @@ enum CodexQuotaFetchError {
         account: Box<ProviderAccount>,
         error: CodexClientError,
     },
+}
+
+enum ResetCreditAttemptError {
+    InvalidCredential,
+    Upstream(CodexClientError),
 }
 
 impl CodexQuotaSchedulingProjection {
@@ -413,7 +470,127 @@ impl CodexCredentialQuotaService {
             agent_identity,
             cooldowns,
             scheduling: CodexQuotaSchedulingProjection::default(),
+            reset_consume_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 查询当前账号由 Codex Desktop 暴露的主动额度重置卡。
+    pub async fn list_reset_credits(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<CodexRateLimitResetCredits, CodexResetCreditsError> {
+        let account = self.reset_credit_account(account_id).await?;
+        let client = CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        );
+        let mut prepared = self
+            .agent_identity
+            .prepare(&account)
+            .await
+            .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?;
+        let request_id = format!("reset_credits_{}", Uuid::now_v7().simple());
+        let mut result = list_reset_credits_once(&client, &prepared, &request_id).await;
+        if let Err(ResetCreditAttemptError::Upstream(error)) = &result
+            && let Some(recovered) = self
+                .agent_identity
+                .recover_after_rejected_task(
+                    prepared.account.id(),
+                    &prepared.credential.authentication,
+                    error,
+                )
+                .await
+                .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?
+        {
+            prepared = recovered;
+            result = list_reset_credits_once(&client, &prepared, &request_id).await;
+        }
+        result.map_err(|error| map_reset_credit_attempt_error(error, &prepared, false))
+    }
+
+    /// 消费一张主动额度重置卡。相同账号在本进程内串行，且不做传输重试。
+    pub async fn consume_reset_credit(
+        &self,
+        account_id: &ProviderAccountId,
+        credit_id: Option<&str>,
+        redeem_request_id: Uuid,
+    ) -> Result<CodexRateLimitResetCreditsConsumeResult, CodexResetCreditsError> {
+        let lock = {
+            let mut locks = self.reset_consume_locks.lock().await;
+            Arc::clone(
+                locks
+                    .entry(account_id.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _guard = lock.lock().await;
+        let account = self.reset_credit_account(account_id).await?;
+        let client = CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        );
+        let mut prepared = self
+            .agent_identity
+            .prepare(&account)
+            .await
+            .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?;
+        let request_id = format!("reset_credit_consume_{}", Uuid::now_v7().simple());
+        let mut result = consume_reset_credit_once(
+            &client,
+            &prepared,
+            &request_id,
+            credit_id,
+            redeem_request_id,
+        )
+        .await;
+        // Agent Identity task recovery is the only automatic retry below. It keeps the exact
+        // official credit selection and redeem_request_id; generic HTTP/transport failures are
+        // never retried because the debit result may already be committed upstream.
+        if let Err(ResetCreditAttemptError::Upstream(error)) = &result
+            && let Some(recovered) = self
+                .agent_identity
+                .recover_after_rejected_task(
+                    prepared.account.id(),
+                    &prepared.credential.authentication,
+                    error,
+                )
+                .await
+                .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?
+        {
+            prepared = recovered;
+            result = consume_reset_credit_once(
+                &client,
+                &prepared,
+                &request_id,
+                credit_id,
+                redeem_request_id,
+            )
+            .await;
+        }
+        result.map_err(|error| map_reset_credit_attempt_error(error, &prepared, true))
+    }
+
+    async fn reset_credit_account(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderAccount, CodexResetCreditsError> {
+        let account = self
+            .store
+            .get_account(account_id)
+            .await
+            .map_err(|error| CodexResetCreditsError::Store {
+                detail: error.to_string(),
+            })?
+            .filter(|account| account.provider().as_str() == "openai")
+            .ok_or(CodexResetCreditsError::NotFound)?;
+        if !access_token_is_current(&account, SystemTime::now()) {
+            return Err(CodexResetCreditsError::CredentialRefreshRequired {
+                upstream_body: None,
+            });
+        }
+        Ok(account)
     }
 
     /// 真实推理错误只更新额度访问事实，不伪造 Provider JSON 或展示百分比。
@@ -1085,6 +1262,118 @@ impl CodexCredentialQuotaService {
             }
         }
     }
+}
+
+async fn list_reset_credits_once(
+    client: &CodexBackendClient,
+    prepared: &PreparedCodexRuntimeCredential,
+    request_id: &str,
+) -> Result<CodexRateLimitResetCredits, ResetCreditAttemptError> {
+    let authorization = prepared
+        .credential
+        .authentication
+        .authorization_header(Utc::now())
+        .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
+    client
+        .list_rate_limit_reset_credits(CodexRequestContext::auxiliary(
+            authorization.expose_secret(),
+            prepared.account.upstream_account_id(),
+            request_id,
+            None,
+        ))
+        .await
+        .map_err(ResetCreditAttemptError::Upstream)
+}
+
+async fn consume_reset_credit_once(
+    client: &CodexBackendClient,
+    prepared: &PreparedCodexRuntimeCredential,
+    request_id: &str,
+    credit_id: Option<&str>,
+    redeem_request_id: Uuid,
+) -> Result<CodexRateLimitResetCreditsConsumeResult, ResetCreditAttemptError> {
+    let authorization = prepared
+        .credential
+        .authentication
+        .authorization_header(Utc::now())
+        .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
+    client
+        .consume_rate_limit_reset_credit(
+            CodexRequestContext::auxiliary(
+                authorization.expose_secret(),
+                prepared.account.upstream_account_id(),
+                request_id,
+                None,
+            ),
+            credit_id,
+            redeem_request_id,
+        )
+        .await
+        .map_err(ResetCreditAttemptError::Upstream)
+}
+
+fn map_reset_credit_attempt_error(
+    error: ResetCreditAttemptError,
+    prepared: &PreparedCodexRuntimeCredential,
+    consume: bool,
+) -> CodexResetCreditsError {
+    match error {
+        ResetCreditAttemptError::InvalidCredential => CodexResetCreditsError::InvalidCredentialData,
+        ResetCreditAttemptError::Upstream(error) => {
+            map_reset_credit_client_error(error, prepared, consume)
+        }
+    }
+}
+
+fn map_reset_credit_client_error(
+    error: CodexClientError,
+    prepared: &PreparedCodexRuntimeCredential,
+    consume: bool,
+) -> CodexResetCreditsError {
+    match error {
+        CodexClientError::Upstream {
+            status,
+            body,
+            diagnostics,
+            ..
+        } if status == reqwest::StatusCode::UNAUTHORIZED
+            && reset_credit_response_was_explicit_rejection(status, &diagnostics)
+            && prepared.credential.authentication.oauth().is_some() =>
+        {
+            CodexResetCreditsError::CredentialRefreshRequired {
+                upstream_body: Some(body),
+            }
+        }
+        CodexClientError::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+            diagnostics,
+            ..
+        } => {
+            // 2xx 后发生的解码/响应体上限错误使用 synthetic 502 表示，但额度卡
+            // 可能已经消费。只有 transport 记录的真实非成功状态与错误状态一致时，
+            // 才能把它当作确定的上游拒绝并允许前端清除 pending 幂等键。
+            if consume && !reset_credit_response_was_explicit_rejection(status, &diagnostics) {
+                CodexResetCreditsError::ConsumeResultUnknown
+            } else {
+                CodexResetCreditsError::Upstream {
+                    status: status.as_u16(),
+                    body,
+                    retry_after_seconds,
+                }
+            }
+        }
+        _ if consume => CodexResetCreditsError::ConsumeResultUnknown,
+        _ => CodexResetCreditsError::TransportUnavailable,
+    }
+}
+
+fn reset_credit_response_was_explicit_rejection(
+    status: reqwest::StatusCode,
+    diagnostics: &crate::transport::CodexUpstreamDiagnostics,
+) -> bool {
+    !status.is_success() && diagnostics.status_code == Some(status.as_u16())
 }
 
 fn quota_refresh_allows_recovery(

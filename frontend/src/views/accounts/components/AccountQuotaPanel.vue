@@ -7,6 +7,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../constants'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountQuotaPanelEntry from './AccountQuotaPanelEntry.vue'
+import AccountResetCredits from './AccountResetCredits.vue'
 
 const props = defineProps<{
   account: AccountRow
@@ -15,6 +16,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refreshQuota: [accountId: string]
+  accountUpdated: [account: AccountRow]
 }>()
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
@@ -41,22 +43,29 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
           <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>
         </p>
       </div>
-      <BaseIconButton
-        variant="ghost"
-        size="sm"
-        label="刷新额度"
-        :loading="refreshing"
-        :disabled="refreshing"
-        @click="emit('refreshQuota', account.id)"
-      >
-        <template #loading>
-          <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
-        </template>
-        <RefreshCw class="size-3.5" />
-      </BaseIconButton>
+      <div class="flex shrink-0 items-center gap-0.5">
+        <AccountResetCredits
+          v-if="account.provider === 'openai'"
+          :account-id="account.id"
+          @account-updated="emit('accountUpdated', $event)"
+        />
+        <BaseIconButton
+          variant="ghost"
+          size="sm"
+          label="刷新额度"
+          :loading="refreshing"
+          :disabled="refreshing"
+          @click="emit('refreshQuota', account.id)"
+        >
+          <template #loading>
+            <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
+          </template>
+          <RefreshCw class="size-3.5" />
+        </BaseIconButton>
+      </div>
     </div>
 
-    <div class="grid max-h-48 min-h-0 gap-3 overflow-y-auto pr-1">
+    <div class="grid max-h-44 min-h-0 gap-3 overflow-y-auto pr-1">
       <AccountQuotaPanelEntry
         v-for="entry in quotaEntries"
         :key="entry.key"

@@ -56,6 +56,7 @@ mod latency;
 mod profile;
 mod protocol;
 mod request;
+mod reset_credits;
 mod usage;
 mod websocket;
 mod websocket_pool;

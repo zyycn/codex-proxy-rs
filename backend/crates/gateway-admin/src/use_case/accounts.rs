@@ -24,8 +24,9 @@ use crate::{
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-            PrepareCredentialRefresh, ProviderModels, ProviderQuota, ProviderQuotaRequest,
-            ProviderQuotaWindow, QuotaLocalUsageAttribution,
+            ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels, ProviderQuota,
+            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
+            ProviderResetCredits, QuotaLocalUsageAttribution,
         },
     },
     ports::{provider::ProviderAdminRegistry, store::AccountStore},
@@ -79,6 +80,26 @@ pub trait AccountsService: Send + Sync {
         refresh: bool,
     ) -> Result<AccountDirectoryItem, AdminError>;
 
+    async fn reset_credits(
+        &self,
+        _context: &MutationContext,
+        _account_id: ProviderAccountId,
+    ) -> Result<ProviderResetCredits, AdminError> {
+        Err(AdminError::invalid(
+            "Provider reset credits are not supported",
+        ))
+    }
+
+    async fn consume_reset_credit(
+        &self,
+        _context: &MutationContext,
+        _command: ConsumeProviderResetCredit,
+    ) -> Result<ProviderResetCreditResult, AdminError> {
+        Err(AdminError::invalid(
+            "Provider reset credits are not supported",
+        ))
+    }
+
     async fn models(
         &self,
         account_id: &ProviderAccountId,
@@ -97,11 +118,13 @@ pub(crate) struct DefaultAccountsService {
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
+    reset_credit_locks:
+        Arc<futures::lock::Mutex<BTreeMap<ProviderAccountId, Arc<futures::lock::Mutex<()>>>>>,
 }
 
 impl DefaultAccountsService {
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         accounts: Arc<dyn AccountStore>,
         providers: ProviderAdminRegistry,
         snapshot: Arc<dyn SnapshotControl>,
@@ -112,7 +135,20 @@ impl DefaultAccountsService {
             providers,
             snapshot,
             probe,
+            reset_credit_locks: Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
         }
+    }
+
+    async fn reset_credit_lock(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Arc<futures::lock::Mutex<()>> {
+        let mut locks = self.reset_credit_locks.lock().await;
+        Arc::clone(
+            locks
+                .entry(account_id.clone())
+                .or_insert_with(|| Arc::new(futures::lock::Mutex::new(()))),
+        )
     }
 
     async fn load_account(
@@ -502,6 +538,57 @@ impl AccountsService for DefaultAccountsService {
         self.load_directory_item(account_id, refresh).await
     }
 
+    async fn reset_credits(
+        &self,
+        context: &MutationContext,
+        account_id: ProviderAccountId,
+    ) -> Result<ProviderResetCredits, AdminError> {
+        let (_, provider) = self.provider_for_account(&account_id).await?;
+        match provider.reset_credits(&account_id).await {
+            Ok(credits) => Ok(credits),
+            Err(error)
+                if error.kind()
+                    == crate::ports::provider::ProviderAdminErrorKind::CredentialRefreshRequired =>
+            {
+                self.refresh(context, account_id.clone()).await?;
+                let (_, provider) = self.provider_for_account(&account_id).await?;
+                provider
+                    .reset_credits(&account_id)
+                    .await
+                    .map_err(map_reset_credits_error_after_refresh)
+            }
+            Err(error) => Err(map_provider_error(error, "provider reset credits")),
+        }
+    }
+
+    async fn consume_reset_credit(
+        &self,
+        context: &MutationContext,
+        command: ConsumeProviderResetCredit,
+    ) -> Result<ProviderResetCreditResult, AdminError> {
+        let account_id = command.account_id.clone();
+        // 覆盖 credential refresh + 同键重试的完整账号级临界区，避免 401 两次调用
+        // 之间插入另一笔不可逆消费。
+        let lock = self.reset_credit_lock(&account_id).await;
+        let _guard = lock.lock().await;
+        let (_, provider) = self.provider_for_account(&account_id).await?;
+        match provider.consume_reset_credit(command.clone()).await {
+            Ok(result) => Ok(result),
+            Err(error)
+                if error.kind()
+                    == crate::ports::provider::ProviderAdminErrorKind::CredentialRefreshRequired =>
+            {
+                self.refresh(context, account_id.clone()).await?;
+                let (_, provider) = self.provider_for_account(&account_id).await?;
+                provider
+                    .consume_reset_credit(command)
+                    .await
+                    .map_err(map_reset_credits_error_after_refresh)
+            }
+            Err(error) => Err(map_provider_error(error, "provider reset-credit consume")),
+        }
+    }
+
     async fn models(
         &self,
         account_id: &ProviderAccountId,
@@ -580,6 +667,19 @@ impl AccountsService for DefaultAccountsService {
         .flat_map(futures::stream::iter);
         Ok(Box::pin(futures::stream::iter(initial).chain(terminal)))
     }
+}
+
+fn map_reset_credits_error_after_refresh(
+    error: crate::ports::provider::ProviderAdminError,
+) -> AdminError {
+    if error.kind() == crate::ports::provider::ProviderAdminErrorKind::CredentialRefreshRequired {
+        return AdminError::bad_gateway(
+            error
+                .message()
+                .unwrap_or("OpenAI reset-credit upstream rejected the refreshed credential"),
+        );
+    }
+    map_provider_error(error, "provider reset credits")
 }
 
 /// 账号目录中单个账号 quota 读取失败时使用的空额度投影。

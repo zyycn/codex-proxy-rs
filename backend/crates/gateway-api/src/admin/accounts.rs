@@ -25,10 +25,11 @@ use gateway_admin::model::{
     },
     provider_credentials::{
         AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-        AuthorizationStarted, CompleteAuthorization, CredentialDeletion, CredentialDeletionResult,
-        CredentialImportResult, CredentialMutation, CredentialMutationResult, ImportCredentials,
-        ProviderDocument, ProviderModels, ProviderQuota, ProviderQuotaWindow, RotateCredential,
-        StartAuthorization,
+        AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit,
+        CredentialDeletion, CredentialDeletionResult, CredentialImportResult, CredentialMutation,
+        CredentialMutationResult, ImportCredentials, ProviderDocument, ProviderModels,
+        ProviderQuota, ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult,
+        ProviderResetCredits, RotateCredential, StartAuthorization,
     },
 };
 use gateway_core::{
@@ -37,6 +38,7 @@ use gateway_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use uuid::{Uuid, Version};
 
 use super::presenter::{format_compact_number, format_decimal_currency, format_number};
 use super::{
@@ -476,6 +478,48 @@ impl AccountActionRequest {
     }
 }
 
+/// 主动额度重置卡消费请求。幂等键由 UI 生成并在不确定重试时复用，与官方一致。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountResetCreditConsumeRequest {
+    pub account_id: String,
+    #[serde(default)]
+    pub credit_id: Option<String>,
+    pub redeem_request_id: String,
+}
+
+impl AccountResetCreditConsumeRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        require_account_id(&self.account_id, "accountId")?;
+        if self.credit_id.as_deref().is_some_and(|value| {
+            let value = value.trim();
+            value.is_empty() || value.len() > 512 || value.chars().any(char::is_control)
+        }) {
+            return Err(WireValidationError::new("creditId"));
+        }
+        let value = self.redeem_request_id.trim();
+        let redeem_request_id =
+            Uuid::parse_str(value).map_err(|_| WireValidationError::new("redeemRequestId"))?;
+        if redeem_request_id.get_version() != Some(Version::Random)
+            || redeem_request_id.hyphenated().to_string() != value
+        {
+            return Err(WireValidationError::new("redeemRequestId"));
+        }
+        Ok(())
+    }
+
+    fn into_command(self) -> Result<ConsumeProviderResetCredit, WireValidationError> {
+        self.validate()?;
+        Ok(ConsumeProviderResetCredit {
+            account_id: ProviderAccountId::new(self.account_id)
+                .map_err(|_| WireValidationError::new("accountId"))?,
+            credit_id: self.credit_id.map(|value| value.trim().to_owned()),
+            redeem_request_id: Uuid::parse_str(&self.redeem_request_id)
+                .map_err(|_| WireValidationError::new("redeemRequestId"))?,
+        })
+    }
+}
+
 /// 手工 OAuth 刷新会变更持久 credential。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -541,6 +585,67 @@ pub struct AccountRefreshData {
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountQuotaData {
     pub account: AccountView,
+}
+
+/// 主动额度重置卡列表响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountResetCreditsData {
+    pub available_count: u64,
+    pub credits: Vec<AccountResetCreditView>,
+}
+
+/// 一张安全主动额度重置卡视图。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountResetCreditView {
+    pub id: String,
+    pub status: Option<String>,
+    pub title: Option<String>,
+    pub expires_at: Option<String>,
+    pub reset_type: Option<String>,
+}
+
+/// 主动额度重置卡消费响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountResetCreditResultData {
+    pub code: String,
+    pub credit: Option<AccountResetCreditView>,
+}
+
+impl From<ProviderResetCredit> for AccountResetCreditView {
+    fn from(credit: ProviderResetCredit) -> Self {
+        Self {
+            id: credit.id,
+            status: credit.status,
+            title: credit.title,
+            expires_at: credit.expires_at.map(|value| value.to_rfc3339()),
+            reset_type: credit.reset_type,
+        }
+    }
+}
+
+impl From<ProviderResetCredits> for AccountResetCreditsData {
+    fn from(credits: ProviderResetCredits) -> Self {
+        Self {
+            available_count: credits.available_count,
+            credits: credits
+                .credits
+                .into_iter()
+                .map(AccountResetCreditView::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<ProviderResetCreditResult> for AccountResetCreditResultData {
+    fn from(result: ProviderResetCreditResult) -> Self {
+        Self {
+            code: result.code,
+            credit: result.credit.map(AccountResetCreditView::from),
+        }
+    }
 }
 
 /// Provider-owned 明文导出文档；Debug 永远不输出内部 JSON。
@@ -1056,6 +1161,10 @@ where
         )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
+            "/api/admin/accounts/reset-credits",
+            get(account_reset_credits::<S>).post(consume_account_reset_credit::<S>),
+        )
+        .route(
             "/api/admin/accounts/quota/refresh",
             post(refresh_account_quota::<S>),
         )
@@ -1404,6 +1513,48 @@ where
         account: account_view(result, Utc::now()),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+async fn account_reset_credits<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Query(query): Query<AccountIdQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .reset_credits(&auth.context().mutation_context(), account_id)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountResetCreditsData::from(result)),
+    ))
+}
+
+async fn consume_account_reset_credit<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    Json(request): Json<AccountResetCreditConsumeRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .consume_reset_credit(&auth.context().mutation_context(), command)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountResetCreditResultData::from(result)),
+    ))
 }
 
 async fn account_models<S>(

@@ -8,6 +8,7 @@ use gateway_core::{
     engine::credential::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
     routing::{ProviderKind, UpstreamModelId},
 };
+use uuid::Uuid;
 
 use super::{
     AdminError, MutationActor, MutationContext, PageSize, Revision,
@@ -624,6 +625,38 @@ pub struct ProviderQuota {
     /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生。
     pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
+}
+
+/// Provider 返回的一张安全主动额度重置卡。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderResetCredit {
+    pub id: String,
+    pub status: Option<String>,
+    pub title: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub reset_type: Option<String>,
+}
+
+/// Provider 主动额度重置卡列表。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderResetCredits {
+    pub available_count: u64,
+    pub credits: Vec<ProviderResetCredit>,
+}
+
+/// 一次主动额度重置卡消费命令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumeProviderResetCredit {
+    pub account_id: ProviderAccountId,
+    pub credit_id: Option<String>,
+    pub redeem_request_id: Uuid,
+}
+
+/// Provider 返回的主动额度重置卡消费结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderResetCreditResult {
+    pub code: String,
+    pub credit: Option<ProviderResetCredit>,
 }
 
 impl ProviderQuota {

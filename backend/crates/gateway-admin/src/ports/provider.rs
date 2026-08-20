@@ -13,11 +13,11 @@ use crate::model::observability::{
     CalculatedBillingBreakdown, DashboardWireProfile, ProviderBillingInput,
 };
 use crate::model::provider_credentials::{
-    AuthorizationStarted, CompleteAuthorization, PendingAuthorizationMutation,
-    PrepareCredentialImport, PrepareCredentialRefresh, PrepareCredentialRotation,
-    PreparedAuthorizationCommit, PreparedCredentialImport, PreparedCredentialRotation,
-    ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
-    ProviderQuotaRequest,
+    AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit,
+    PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
+    PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
+    PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput, ProviderModels,
+    ProviderQuota, ProviderQuotaRequest, ProviderResetCreditResult, ProviderResetCredits,
 };
 
 /// Provider 管理失败的稳定分类。
@@ -28,6 +28,8 @@ pub enum ProviderAdminErrorKind {
     NotFound,
     Conflict,
     Unavailable,
+    CredentialRefreshRequired,
+    BadGateway,
     Internal,
 }
 
@@ -143,6 +145,22 @@ pub trait ProviderAdmin: Send + Sync {
         &self,
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
+
+    /// 查询 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝。
+    async fn reset_credits(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderResetCredits, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// 消费 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝。
+    async fn consume_reset_credit(
+        &self,
+        _command: ConsumeProviderResetCredit,
+    ) -> Result<ProviderResetCreditResult, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
 
     async fn models(
         &self,

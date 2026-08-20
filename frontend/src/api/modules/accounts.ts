@@ -170,6 +170,24 @@ export interface AccountQuotaResponse {
   account: Account
 }
 
+export interface AccountResetCredit {
+  id: string
+  status: string | null
+  title: string | null
+  expiresAt: string | null
+  resetType: string | null
+}
+
+export interface AccountResetCreditsResponse {
+  availableCount: number
+  credits: AccountResetCredit[]
+}
+
+export interface AccountResetCreditResultResponse {
+  code: string
+  credit: AccountResetCredit | null
+}
+
 export interface AccountModelsResponse {
   models: Array<{ id: string, label: string }>
 }
@@ -218,6 +236,11 @@ interface AccountListParams {
 
 interface AccountIdParam {
   accountId: string
+}
+
+interface AccountResetCreditConsumeParam extends AccountIdParam {
+  creditId?: string
+  redeemRequestId: string
 }
 
 interface AccountUpdateParam {
@@ -306,6 +329,22 @@ export function getAccountQuota(data: AccountIdParam) {
 export function refreshAccountQuota(data: AccountIdParam) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',
+    method: 'POST',
+    data,
+  })
+}
+
+export function getAccountResetCredits(data: AccountIdParam) {
+  return request<AccountResetCreditsResponse>({
+    url: '/api/admin/accounts/reset-credits',
+    method: 'GET',
+    params: data,
+  })
+}
+
+export function consumeAccountResetCredit(data: AccountResetCreditConsumeParam) {
+  return request<AccountResetCreditResultResponse>({
+    url: '/api/admin/accounts/reset-credits',
     method: 'POST',
     data,
   })

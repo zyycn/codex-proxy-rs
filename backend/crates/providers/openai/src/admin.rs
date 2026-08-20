@@ -13,13 +13,14 @@ use gateway_admin::model::observability::{
 };
 use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwner, AuthorizationOwnerBinding,
-    AuthorizationStarted, CompleteAuthorization, CredentialCommitGuard,
+    AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit, CredentialCommitGuard,
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedAuthorizationCredential,
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole, QuotaLocalUsageAttribution,
+    ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole, ProviderResetCredit,
+    ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -47,8 +48,8 @@ use crate::credential::{
     CodexCredentialQuotaError, CodexCredentialQuotaService, CodexOAuthAdmin, CodexOAuthAdminError,
     CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
     CodexPendingAuthorization, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
-    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
-    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
+    CodexResetCreditsError, CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential,
+    ExportManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 use crate::credential::{
     CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
@@ -442,6 +443,37 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(project_quota(snapshot, &account))
     }
 
+    async fn reset_credits(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderResetCredits, ProviderAdminError> {
+        self.account(account_id).await?;
+        self.quota
+            .list_reset_credits(account_id)
+            .await
+            .map(project_reset_credits)
+            .map_err(map_reset_credits_error)
+    }
+
+    async fn consume_reset_credit(
+        &self,
+        command: ConsumeProviderResetCredit,
+    ) -> Result<ProviderResetCreditResult, ProviderAdminError> {
+        self.account(&command.account_id).await?;
+        self.quota
+            .consume_reset_credit(
+                &command.account_id,
+                command.credit_id.as_deref(),
+                command.redeem_request_id,
+            )
+            .await
+            .map(|result| ProviderResetCreditResult {
+                code: result.code,
+                credit: result.credit.map(project_reset_credit),
+            })
+            .map_err(map_reset_credits_error)
+    }
+
     async fn models(
         &self,
         account_id: &ProviderAccountId,
@@ -765,6 +797,31 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(
             provider_data,
         ))),
+    }
+}
+
+fn project_reset_credits(
+    credits: crate::transport::CodexRateLimitResetCredits,
+) -> ProviderResetCredits {
+    ProviderResetCredits {
+        available_count: credits.available_count,
+        credits: credits
+            .credits
+            .into_iter()
+            .map(project_reset_credit)
+            .collect(),
+    }
+}
+
+fn project_reset_credit(
+    credit: crate::transport::CodexRateLimitResetCredit,
+) -> ProviderResetCredit {
+    ProviderResetCredit {
+        id: credit.id,
+        status: credit.status,
+        title: credit.title,
+        expires_at: credit.expires_at,
+        reset_type: credit.reset_type,
     }
 }
 
@@ -1283,6 +1340,8 @@ const fn provider_admin_error_code(kind: ProviderAdminErrorKind) -> &'static str
         ProviderAdminErrorKind::NotFound => "not_found",
         ProviderAdminErrorKind::Conflict => "conflict",
         ProviderAdminErrorKind::Unavailable => "unavailable",
+        ProviderAdminErrorKind::CredentialRefreshRequired => "credential_refresh_required",
+        ProviderAdminErrorKind::BadGateway => "bad_gateway",
         ProviderAdminErrorKind::Internal => "internal",
     }
 }
@@ -1336,6 +1395,58 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
         | Error::Store { .. }
         | Error::Upstream { .. } => ProviderAdminErrorKind::Unavailable,
     })
+}
+
+fn map_reset_credits_error(error: CodexResetCreditsError) -> ProviderAdminError {
+    use CodexResetCreditsError as Error;
+
+    match error {
+        Error::InvalidCredentialData => provider_admin_error(ProviderAdminErrorKind::Invalid),
+        Error::NotFound => provider_admin_error(ProviderAdminErrorKind::NotFound),
+        Error::Store { .. } | Error::TransportUnavailable => {
+            provider_admin_error(ProviderAdminErrorKind::Unavailable)
+        }
+        Error::CredentialRefreshRequired { upstream_body } => {
+            let mut error =
+                provider_admin_error(ProviderAdminErrorKind::CredentialRefreshRequired);
+            if let Some(body) = upstream_body {
+                error = error.with_message(format!(
+                    "OpenAI reset-credit upstream returned HTTP 401: {}",
+                    bounded_upstream_body(&body)
+                ));
+            }
+            error
+        }
+        Error::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+        } => {
+            let retry_after = retry_after_seconds
+                .map(|seconds| format!("; retry-after={seconds}s"))
+                .unwrap_or_default();
+            provider_admin_error(ProviderAdminErrorKind::BadGateway).with_message(format!(
+                "OpenAI reset-credit upstream returned HTTP {status}{retry_after}: {}",
+                bounded_upstream_body(&body)
+            ))
+        }
+        Error::ConsumeResultUnknown => provider_admin_error(ProviderAdminErrorKind::BadGateway)
+            .with_message(
+                "OpenAI reset-credit consume result is unknown; refresh the credit list before retrying",
+            ),
+    }
+}
+
+fn bounded_upstream_body(body: &str) -> String {
+    const MAX_ADMIN_UPSTREAM_BODY_BYTES: usize = 8 * 1024;
+    if body.len() <= MAX_ADMIN_UPSTREAM_BODY_BYTES {
+        return body.to_owned();
+    }
+    let mut end = MAX_ADMIN_UPSTREAM_BODY_BYTES;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    body[..end].to_owned()
 }
 
 fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {

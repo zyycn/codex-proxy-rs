@@ -57,6 +57,8 @@ fn map_provider_error(
         ProviderAdminErrorKind::NotFound => AdminErrorKind::NotFound,
         ProviderAdminErrorKind::Conflict => AdminErrorKind::Conflict,
         ProviderAdminErrorKind::Unavailable => AdminErrorKind::Unavailable,
+        ProviderAdminErrorKind::CredentialRefreshRequired => AdminErrorKind::Unavailable,
+        ProviderAdminErrorKind::BadGateway => AdminErrorKind::BadGateway,
         ProviderAdminErrorKind::Internal => AdminErrorKind::Internal,
     };
     let message = error

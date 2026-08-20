@@ -30,14 +30,16 @@ use gateway_admin::{
         provider_credentials::{
             AuthorizationCommit, AuthorizationCommitGuard, AuthorizationCredentialCommit,
             AuthorizationMutationTarget, AuthorizationStarted, CompleteAuthorization,
-            CredentialCommitGuard, CredentialDetails, CredentialImportCommit,
-            CredentialImportResult, CredentialListQuery, CredentialMutationResult, CredentialPage,
-            CredentialRotationCommit, PendingAuthorizationMutation, PrepareCredentialImport,
-            PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
+            ConsumeProviderResetCredit, CredentialCommitGuard, CredentialDetails,
+            CredentialImportCommit, CredentialImportResult, CredentialListQuery,
+            CredentialMutationResult, CredentialPage, CredentialRotationCommit,
+            PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
+            PrepareCredentialRotation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
             ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
-            ProviderQuotaRequest, ProviderQuotaWindow, QuotaLocalUsageAttribution,
+            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
+            QuotaLocalUsageAttribution,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -69,6 +71,7 @@ pub(super) struct FakeProviderAdmin {
     quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
     quota: Mutex<ProviderQuota>,
     current_credential_revision: Mutex<Revision>,
+    reset_credit_commands: Mutex<Vec<ConsumeProviderResetCredit>>,
 }
 
 impl FakeProviderAdmin {
@@ -85,6 +88,7 @@ impl FakeProviderAdmin {
             quota_requests: Mutex::new(Vec::new()),
             quota: Mutex::new(empty_quota()),
             current_credential_revision: Mutex::new(revision(1)),
+            reset_credit_commands: Mutex::new(Vec::new()),
         })
     }
 
@@ -115,6 +119,13 @@ impl FakeProviderAdmin {
         self.quota_requests
             .lock()
             .expect("provider quota requests")
+            .clone()
+    }
+
+    fn reset_credit_commands(&self) -> Vec<ConsumeProviderResetCredit> {
+        self.reset_credit_commands
+            .lock()
+            .expect("provider reset-credit commands")
             .clone()
     }
 
@@ -347,6 +358,22 @@ impl ProviderAdmin for FakeProviderAdmin {
             return Err(ProviderAdminError::new(kind));
         }
         Ok(self.quota.lock().expect("provider quota").clone())
+    }
+
+    async fn consume_reset_credit(
+        &self,
+        command: ConsumeProviderResetCredit,
+    ) -> Result<ProviderResetCreditResult, ProviderAdminError> {
+        self.record("provider.consume_reset_credit");
+        self.reset_credit_commands
+            .lock()
+            .expect("provider reset-credit commands")
+            .push(command);
+        self.require_available()?;
+        Ok(ProviderResetCreditResult {
+            code: "reset".to_owned(),
+            credit: None,
+        })
     }
 
     async fn models(
@@ -1665,6 +1692,33 @@ async fn accounts_refresh_provider_failure_should_not_call_store_commit() {
         recorded(&events),
         ["store.load_account", "provider.prepare_refresh"]
     );
+}
+
+#[tokio::test]
+async fn reset_credit_oauth_refresh_should_reuse_the_exact_consume_command() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.fail_next(ProviderAdminErrorKind::CredentialRefreshRequired);
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider.clone(), store).await;
+    let redeem_request_id =
+        uuid::Uuid::parse_str("8fbf302d-11df-4bd5-82e4-08e4b3df7874").expect("UUID v4");
+    let command = ConsumeProviderResetCredit {
+        account_id: ProviderAccountId::new("acct_test").expect("account ID"),
+        credit_id: Some("credit_1".to_owned()),
+        redeem_request_id,
+    };
+
+    let result = services
+        .accounts()
+        .consume_reset_credit(&context("reset-credit-refresh"), command.clone())
+        .await
+        .expect("consume after OAuth refresh");
+
+    assert_eq!(result.code, "reset");
+    assert_eq!(provider.reset_credit_commands(), [command.clone(), command]);
+    assert!(recorded(&events).contains(&"provider.prepare_refresh"));
+    assert!(recorded(&events).contains(&"store.commit_refresh"));
 }
 
 #[tokio::test]

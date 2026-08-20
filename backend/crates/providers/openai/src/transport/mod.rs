@@ -11,6 +11,7 @@ pub mod headers;
 pub mod profile;
 pub mod protocol;
 pub mod request;
+pub mod reset_credits;
 mod response_meta;
 pub(crate) mod session;
 mod time;
@@ -34,10 +35,15 @@ pub use self::{
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{
         CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH, CODEX_RESPONSES_PATH,
-        CODEX_USAGE_API_PATH, WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
+        CODEX_USAGE_API_PATH, WHAM_RATE_LIMIT_RESET_CREDITS_CONSUME_PATH,
+        WHAM_RATE_LIMIT_RESET_CREDITS_PATH, WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
     },
     headers::build_codex_base_headers,
     request::{CodexRequestEncodeError, encode_generate_request},
+    reset_credits::{
+        CodexRateLimitResetCredit, CodexRateLimitResetCredits,
+        CodexRateLimitResetCreditsConsumeResult, MAX_CODEX_RESET_CREDITS_BODY_BYTES,
+    },
     response_meta::CodexResponseMetadata,
     usage::{MAX_CODEX_USAGE_BODY_BYTES, OpenAiBillingUsage, openai_billing_breakdown},
     websocket::{

@@ -191,8 +191,11 @@ onBeforeUnmount(() => {
         />
         <section
           ref="panel"
-          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-cp-surface bg-cp-surface shadow-cp-popover sm:max-h-[calc(100dvh-3rem)]"
-          :class="sizeClasses[size]"
+          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 overflow-hidden rounded-cp-surface bg-cp-surface shadow-cp-popover sm:max-h-[calc(100dvh-3rem)]"
+          :class="[
+            sizeClasses[size],
+            $slots.default ? 'grid-rows-[auto_minmax(0,1fr)_auto]' : 'grid-rows-[auto_auto]',
+          ]"
           :role="role"
           aria-modal="true"
           :aria-labelledby="titleId"
@@ -236,7 +239,7 @@ onBeforeUnmount(() => {
               <X :size="16" />
             </BaseIconButton>
           </header>
-          <div class="min-h-0 overflow-hidden px-4 py-4 sm:px-7 sm:py-6">
+          <div v-if="$slots.default" class="min-h-0 overflow-hidden px-4 py-4 sm:px-7 sm:py-6">
             <BaseScrollbar class="h-full">
               <div class="p-0.75">
                 <slot />
