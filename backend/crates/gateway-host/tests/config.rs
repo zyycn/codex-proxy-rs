@@ -35,6 +35,40 @@ fn host_config_resolves_only_host_owned_relative_paths() {
 }
 
 #[test]
+fn host_config_resolves_runtime_data_dir_relative_to_configuration() {
+    let mut config = valid_config();
+    config
+        .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+        .expect("valid host config");
+
+    assert_eq!(
+        config.runtime_data_dir(),
+        PathBuf::from("/srv/gateway/runtime-data")
+    );
+}
+
+#[test]
+fn host_config_derives_update_paths_from_runtime_data_dir() {
+    let mut config = valid_config();
+    config
+        .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+        .expect("valid host config");
+
+    assert_eq!(
+        (
+            config.system_update.update_state_file,
+            config.system_update.update_lock_file,
+            config.system_update.update_temp_dir,
+        ),
+        (
+            PathBuf::from("/srv/gateway/runtime-data/update-state.json"),
+            PathBuf::from("/srv/gateway/runtime-data/update.lock"),
+            PathBuf::from("/srv/gateway/runtime-data/update-tmp"),
+        )
+    );
+}
+
+#[test]
 fn host_config_rejects_zero_drain_window() {
     let mut config = valid_config();
     config.drain_timeout_seconds = 0;
@@ -48,9 +82,9 @@ fn host_config_rejects_zero_drain_window() {
 
 fn valid_config() -> HostConfig {
     let system_update = SystemUpdateConfig {
-        update_state_file: PathBuf::from(".runtime/update-state.json"),
-        update_lock_file: PathBuf::from(".runtime/update-state.lock"),
-        update_temp_dir: PathBuf::from(".runtime/update-tmp"),
+        update_state_file: PathBuf::from("update-state.json"),
+        update_lock_file: PathBuf::from("update.lock"),
+        update_temp_dir: PathBuf::from("update-tmp"),
         ..SystemUpdateConfig::default()
     };
     HostConfig {
@@ -58,6 +92,7 @@ fn valid_config() -> HostConfig {
             host: "127.0.0.1".to_owned(),
             port: 8080,
         },
+        runtime_data_dir: PathBuf::from("runtime-data"),
         logging: LoggingConfig {
             level: "info".to_owned(),
             stdout: true,

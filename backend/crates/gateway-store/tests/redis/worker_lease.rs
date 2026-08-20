@@ -21,11 +21,17 @@ async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
         return;
     };
     let database = TestDatabase::create(&database_url).await;
-    let config = store_config(&database.url, &redis_url);
+    let runtime_data = tempfile::tempdir().expect("Store runtime data");
+    let mut config = store_config(&database.url, &redis_url);
+    config
+        .resolve_and_validate(runtime_data.path())
+        .expect("resolved Store config");
     let mut first = initialize(config.clone())
         .await
         .expect("first Store bundle");
     let second = initialize(config).await.expect("second Store bundle");
+
+    assert!(runtime_data.path().join("backup-staging").is_dir());
 
     let kinds = first
         .take_worker_contributions()

@@ -18,8 +18,16 @@ fn config_loader_should_load_complete_terminal_example() {
 fn config_loader_should_resolve_paths_relative_to_config_file() {
     let (config, _directory) = parse_config(&valid_config()).expect("resolved config");
     let debug = format!("{config:?}");
+    assert!(debug.contains(".runtime/data"));
     assert!(debug.contains(".runtime/logs"));
     assert!(debug.contains("frontend/dist"));
+}
+
+#[test]
+fn config_loader_should_reject_missing_runtime_data_dir() {
+    let config = valid_config().replace("  runtime_data_dir: '../.runtime/data'\n", "");
+
+    assert!(parse_config(&config).is_err());
 }
 
 #[test]

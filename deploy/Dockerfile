@@ -55,7 +55,6 @@ RUN apt-get update \
     && useradd --system --uid 10001 --gid cpr --home-dir /app --shell /usr/sbin/nologin cpr \
     && install -d -o cpr -g cpr \
         /app/bin /app/deploy /app/.runtime/data /app/.runtime/logs /app/web \
-    && install -d -o cpr -g cpr -m 0700 /app/.runtime/data/backup-staging \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=pg-client /usr/lib/postgresql/18/bin/pg_dump /usr/lib/postgresql/18/bin/pg_dump

@@ -36,15 +36,17 @@ pub struct OpenAiConfig {
 }
 
 impl OpenAiConfig {
-    /// 校验 Provider-owned 字段，并定位旧版会话锚点持续使用的身份密钥。
-    pub fn resolve_and_validate(&mut self, source_dir: &Path) -> Result<(), OpenAiConfigError> {
+    /// 校验 Provider-owned 字段，并从统一运行数据目录定位会话身份密钥。
+    pub fn resolve_and_validate(
+        &mut self,
+        runtime_data_dir: &Path,
+    ) -> Result<(), OpenAiConfigError> {
         self.api.validate()?;
         self.ws_pool.validate()?;
         self.quota.validate()?;
         self.auth.validate()?;
         self.wire_profile.validate()?;
-        let project_root = source_dir.parent().unwrap_or(source_dir);
-        self.identity_secret_path = project_root.join(".runtime/data/identity_hmac_secret");
+        self.identity_secret_path = runtime_data_dir.join("identity_hmac_secret");
         Ok(())
     }
 
@@ -101,7 +103,7 @@ impl Default for OpenAiConfig {
             quota: CodexQuotaSettings::default(),
             auth: CodexAuthSettings::default(),
             wire_profile: CodexWireProfileConfig::default(),
-            identity_secret_path: PathBuf::from(".runtime/data/identity_hmac_secret"),
+            identity_secret_path: PathBuf::new(),
         }
     }
 }

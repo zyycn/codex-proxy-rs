@@ -23,6 +23,7 @@ fn logging_requires_at_least_one_sink() {
             host: "127.0.0.1".to_owned(),
             port: 8080,
         },
+        runtime_data_dir: PathBuf::from("/tmp/runtime-data"),
         logging: LoggingConfig {
             level: "info".to_owned(),
             stdout: false,
@@ -98,6 +99,7 @@ fn write_oauth_recovery_log(directory: PathBuf) {
             host: "127.0.0.1".to_owned(),
             port: 8080,
         },
+        runtime_data_dir: PathBuf::from("/tmp/runtime-data"),
         logging: LoggingConfig {
             level: "off".to_owned(),
             stdout: false,

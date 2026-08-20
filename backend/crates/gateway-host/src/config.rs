@@ -41,6 +41,7 @@ pub fn load_config<T: LoadableConfig>() -> Result<T, ConfigError> {
 #[serde(deny_unknown_fields)]
 pub struct HostConfig {
     pub listen: ListenConfig,
+    pub runtime_data_dir: PathBuf,
     pub logging: LoggingConfig,
     #[serde(default)]
     pub system_update: SystemUpdateConfig,
@@ -76,9 +77,19 @@ impl HostConfig {
                 "host.worker_shutdown_timeout_seconds",
             ));
         }
+        if self.runtime_data_dir.as_os_str().is_empty() {
+            return Err(ConfigError::InvalidField("host.runtime_data_dir"));
+        }
+        resolve_relative_path(source_dir, &mut self.runtime_data_dir);
         self.logging.resolve_and_validate(source_dir)?;
-        self.system_update.resolve_and_validate(source_dir)?;
+        self.system_update
+            .resolve_and_validate(source_dir, &self.runtime_data_dir)?;
         Ok(())
+    }
+
+    #[must_use]
+    pub fn runtime_data_dir(&self) -> &Path {
+        &self.runtime_data_dir
     }
 
     #[must_use]

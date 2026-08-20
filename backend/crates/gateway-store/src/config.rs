@@ -1,5 +1,7 @@
 //! Store 启动配置、环境变量解析与校验。
 
+use std::path::{Path, PathBuf};
+
 use super::*;
 
 pub(crate) const DATABASE_URL_ENV: &str = "CPR_DATABASE_URL";
@@ -15,6 +17,8 @@ pub struct StoreConfig {
     pub(crate) redis: StoreConnectionConfig,
     #[serde(default)]
     pub(crate) pool: StorePoolConfig,
+    #[serde(skip)]
+    backup_staging_dir: PathBuf,
 }
 
 /// PostgreSQL 连接池预算；acquire 超时决定池耗尽时快速失败而非排队积压。
@@ -47,7 +51,18 @@ impl StorePoolConfig {
 }
 
 impl StoreConfig {
-    pub fn resolve_and_validate(&mut self, _source_dir: &std::path::Path) -> StoreResult<()> {
+    pub fn resolve_and_validate(&mut self, runtime_data_dir: &Path) -> StoreResult<()> {
+        if runtime_data_dir.as_os_str().is_empty() {
+            return Err(StoreError::InvalidData {
+                entity: "store config",
+                message: "runtime_data_dir must not be empty".to_owned(),
+            });
+        }
+        self.backup_staging_dir = runtime_data_dir.join("backup-staging");
+        self.validate_resolved()
+    }
+
+    pub(crate) fn validate_resolved(&mut self) -> StoreResult<()> {
         if let Some(url) = optional_environment_value(DATABASE_URL_ENV)? {
             self.database.url = url;
         }
@@ -63,6 +78,12 @@ impl StoreConfig {
         self.database.validate("database")?;
         self.redis.validate("redis")?;
         self.pool.validate()?;
+        if self.backup_staging_dir.as_os_str().is_empty() {
+            return Err(StoreError::InvalidData {
+                entity: "store config",
+                message: "runtime_data_dir was not resolved".to_owned(),
+            });
+        }
         Ok(())
     }
 
@@ -72,6 +93,12 @@ impl StoreConfig {
 
     pub(crate) fn redis_url(&self) -> StoreResult<String> {
         self.redis.connection_url("redis")
+    }
+
+    /// 返回由统一运行数据根目录派生的备份暂存目录。
+    #[must_use]
+    pub fn backup_staging_dir(&self) -> &Path {
+        &self.backup_staging_dir
     }
 }
 

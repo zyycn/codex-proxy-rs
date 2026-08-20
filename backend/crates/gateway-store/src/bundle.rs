@@ -50,7 +50,7 @@ impl StoreBundle {
 pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     const REDIS_NAMESPACE: &str = "codex-proxy-rs";
 
-    config.resolve_and_validate(std::path::Path::new("."))?;
+    config.validate_resolved()?;
     let pool = postgres::connect_and_migrate(&config.database_url()?, config.pool).await?;
     let redis_client = ::redis::Client::open(config.redis_url()?)
         .map_err(|_| redis_unavailable("create Redis client"))?;
@@ -209,7 +209,7 @@ pub(crate) fn backup_ports(
     config: &StoreConfig,
 ) -> StoreResult<BackupStorePorts> {
     let staging = Arc::new(backup::staging::StagingArea::open(
-        std::path::PathBuf::from(".runtime/data/backup-staging"),
+        config.backup_staging_dir().to_path_buf(),
         backup::staging::DEFAULT_MAX_ARCHIVE_BYTES,
     )?);
     let repository = Arc::new(postgres::PgBackupRepository::new(pool));

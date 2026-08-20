@@ -81,10 +81,10 @@ impl Default for SystemUpdateConfig {
             });
         let update_state_file = environment_value("CPR_UPDATE_STATE_FILE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/app/.runtime/data/update-state.json"));
+            .unwrap_or_else(|| PathBuf::from("update-state.json"));
         let update_lock_file = environment_value("CPR_UPDATE_LOCK_FILE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| update_state_file.with_extension("lock"));
+            .unwrap_or_else(|| update_state_file.with_file_name("update.lock"));
         let update_temp_dir = environment_value("CPR_UPDATE_TEMP_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| state::default_temp_dir(&update_state_file));
@@ -120,19 +120,26 @@ impl Default for SystemUpdateConfig {
 }
 
 impl SystemUpdateConfig {
-    pub(crate) fn resolve_and_validate(&mut self, source_dir: &Path) -> Result<(), ConfigError> {
-        for path in [
-            self.executable_path.as_mut(),
-            Some(&mut self.web_dist_dir),
-            Some(&mut self.update_state_file),
-            Some(&mut self.update_lock_file),
-            Some(&mut self.update_temp_dir),
-        ]
-        .into_iter()
-        .flatten()
+    pub(crate) fn resolve_and_validate(
+        &mut self,
+        source_dir: &Path,
+        runtime_data_dir: &Path,
+    ) -> Result<(), ConfigError> {
+        for path in [self.executable_path.as_mut(), Some(&mut self.web_dist_dir)]
+            .into_iter()
+            .flatten()
         {
             if path.is_relative() {
                 *path = source_dir.join(&*path);
+            }
+        }
+        for path in [
+            &mut self.update_state_file,
+            &mut self.update_lock_file,
+            &mut self.update_temp_dir,
+        ] {
+            if path.is_relative() {
+                *path = runtime_data_dir.join(&*path);
             }
         }
         if self.version.trim().is_empty() {

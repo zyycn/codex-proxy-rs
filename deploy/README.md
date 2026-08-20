@@ -91,16 +91,17 @@ cd backend
 cargo run -p codex-proxy-rs
 ```
 
-后端会从当前目录向上查找 `deploy/config.yaml`。相对数据和日志目录以该文件所在目录解析；
-Compose 把监听地址和数据库、Redis 地址固定覆盖为容器内部服务名，并把前端静态目录指向
-容器内构建产物。PG/Redis 集成测试所需的 `CPR_TEST_DATABASE_URL` / `CPR_TEST_REDIS_URL`
-约定见 [迁移文档](../backend/migrations/README.md)。
+后端会从当前目录向上查找 `deploy/config.yaml`。`host.runtime_data_dir` 是运行数据的统一根目录，
+相对数据和日志目录均以该配置文件所在目录解析；Compose 把监听地址和数据库、Redis 地址固定
+覆盖为容器内部服务名，并把前端静态目录指向容器内构建产物。PG/Redis 集成测试所需的
+`CPR_TEST_DATABASE_URL` / `CPR_TEST_REDIS_URL` 约定见
+[迁移文档](../backend/migrations/README.md)。
 
 ## 持久化与备份
 
 Compose 使用以下绑定目录：
 
-- `.runtime/data` → OpenAI 会话锚点密钥、更新状态与临时更新目录
+- `.runtime/data` → OpenAI 会话锚点密钥、更新状态、临时更新目录与备份暂存区
 - `.runtime/logs` → 应用文件日志
 - `.runtime/postgres` → PostgreSQL
 - `.runtime/redis` → Redis AOF
@@ -177,8 +178,8 @@ Compose 已显式装配正式发布构建所需的运行参数：
 - `CPR_GITHUB_API_BASE`：正式环境必须为 `https://api.github.com/repos`。
 - `CPR_UPDATE_CHANNEL`：`stable` 会拒绝 prerelease。
 - `CPR_UPDATE_EXE_PATH`、`CPR_WEB_DIST_DIR`：分别指向容器内二进制和前端静态目录。
-- `CPR_UPDATE_TEMP_DIR`、`CPR_UPDATE_STATE_FILE`、`CPR_UPDATE_LOCK_FILE`：全部位于持久化的
-  `.runtime/data`。
+- 更新临时目录、状态文件和锁文件默认由 `host.runtime_data_dir` 派生；
+  `CPR_UPDATE_TEMP_DIR`、`CPR_UPDATE_STATE_FILE`、`CPR_UPDATE_LOCK_FILE` 仅用于显式覆盖。
 - `CPR_ENABLE_SELF_RESTART=true`：更新或回滚完成后允许管理端请求重启；Docker 进程退出后由
   Compose 的 `restart: unless-stopped` 拉起新进程。
 
@@ -201,8 +202,9 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
   `postgres:18-bookworm` 镜像（`Dockerfile` 的 `POSTGRES_IMAGE`）COPY 到
   `/usr/lib/postgresql/18/bin` 并加入容器 PATH，版本与服务端严格一致；运行时只从
   Debian 官方源补 `libpq5` 依赖，不引入第三方 APT 源，也不依赖运行时动态安装。
-- 备份暂存目录为 `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限
-  `0700`（仅 `cpr` 用户可读写）。部署卷至少预留一个最大数据库归档的空间。
+- 备份暂存目录为 `host.runtime_data_dir/backup-staging`；Compose 默认对应
+  `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限 `0700`（仅 `cpr`
+  用户可读写）。部署卷至少预留一个最大数据库归档的空间。
 - OAuth 恢复记录通道使用 `oauth_recovery` 结构化日志事件；当前 OpenAI provider 每次成功取得
   AT/RT 后，都会在账号资料补全、过期时间计算和数据库写入前写入独立的
   `codex-proxy-rs-oath.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，并以 `provider`

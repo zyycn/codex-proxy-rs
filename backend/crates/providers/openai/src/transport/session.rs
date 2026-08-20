@@ -1,6 +1,6 @@
 //! Codex 本地会话锚点的稳定派生。
 //!
-//! 旧版 Redis 会话亲和与 WebSocket 复用以 `.runtime/data/identity_hmac_secret`
+//! 旧版 Redis 会话亲和与 WebSocket 复用以运行数据目录下的 `identity_hmac_secret`
 //! 生成的 `lc_` 值为键。该密钥是持久运行数据，不是账号凭据；保留它可避免
 //! 架构迁移后同一客户端会话全部换键。
 

@@ -27,8 +27,9 @@ impl LoadableConfig for GatewayConfig {
             return Err(ConfigError::InvalidField("schema_version"));
         }
         self.host.resolve_and_validate(source_dir)?;
+        let runtime_data_dir = self.host.runtime_data_dir().to_path_buf();
         self.store
-            .resolve_and_validate(source_dir)
+            .resolve_and_validate(&runtime_data_dir)
             .map_err(|_| ConfigError::InvalidField("store"))?;
         self.admin
             .resolve_and_validate(source_dir)
@@ -37,7 +38,7 @@ impl LoadableConfig for GatewayConfig {
             .resolve_and_validate(source_dir)
             .map_err(|_| ConfigError::InvalidField("api"))?;
         self.openai
-            .resolve_and_validate(source_dir)
+            .resolve_and_validate(&runtime_data_dir)
             .map_err(|_| ConfigError::InvalidField("openai"))?;
         self.xai
             .resolve_and_validate(source_dir)

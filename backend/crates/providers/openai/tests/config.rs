@@ -19,6 +19,16 @@ fn openai_config_builds_the_audited_wire_profile() {
 }
 
 #[test]
+fn openai_config_derives_identity_secret_from_runtime_data_dir() {
+    let mut config = valid_config();
+    config
+        .resolve_and_validate(Path::new("/srv/gateway/runtime-data"))
+        .expect("valid OpenAI config");
+
+    assert!(format!("{config:?}").contains("/srv/gateway/runtime-data/identity_hmac_secret"));
+}
+
+#[test]
 fn openai_config_rejects_noncanonical_versions_and_empty_fields() {
     let mut config = valid_config();
     config.wire_profile.codex_version = "latest".to_owned();
