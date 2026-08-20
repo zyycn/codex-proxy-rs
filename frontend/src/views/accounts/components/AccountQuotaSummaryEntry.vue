@@ -115,7 +115,7 @@ function quotaWindowCode(
     >
       <header
         v-if="detailHeading"
-        class="bg-cp-muted p-3"
+        class="bg-cp-subtle px-3 py-2.5"
       >
         <h3
           class="m-0 truncate text-[13px] leading-5 font-heavy text-cp-primary"
@@ -127,7 +127,7 @@ function quotaWindowCode(
 
       <div
         class="grid gap-4"
-        :class="detailHeading ? 'p-3' : 'p-4'"
+        :class="detailHeading ? 'px-3 pt-3 pb-3' : 'px-4 pt-4 pb-3'"
       >
         <article
           v-for="item in detailItems"

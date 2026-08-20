@@ -517,7 +517,11 @@ function formatDashboardUsd(value: string) {
   if (!normalized.startsWith('$'))
     return value
   const amount = Number(normalized.slice(1).replaceAll(',', ''))
-  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : value
+  if (!Number.isFinite(amount))
+    return value
+  if (amount < 1_000)
+    return `$${amount.toFixed(2)}`
+  return `$${(amount / 1_000).toFixed(3)}k`
 }
 
 function trendState(

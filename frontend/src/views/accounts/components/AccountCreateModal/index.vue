@@ -221,11 +221,11 @@ async function copyText(value: string, successText: string) {
 
       <BaseForm v-else>
         <BaseFormItem
-          :label="view.importFile.label"
+          :label="view.importInput.label"
           required
           :error="fileError || undefined"
         >
-          <template #extra>
+          <template v-if="view.importInput.uploadable" #extra>
             <BaseButton variant="secondary" size="sm" :disabled="saving" @click="openImportFile()">
               <template #icon>
                 <Upload class="size-3.5" />
@@ -235,9 +235,9 @@ async function copyText(value: string, successText: string) {
           </template>
           <BaseTextarea
             v-model="importText"
-            :aria-label="view.importFile.label"
+            :aria-label="view.importInput.label"
             :rows="9"
-            :placeholder="view.importFile.placeholder"
+            :placeholder="view.importInput.placeholder"
             :disabled="saving"
           />
         </BaseFormItem>

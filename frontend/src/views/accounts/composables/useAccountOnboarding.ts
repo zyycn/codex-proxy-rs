@@ -21,6 +21,10 @@ interface MixedImportDocument {
   document: Record<string, unknown>
 }
 
+type OpenAiTokenImportMode = 'access_token' | 'refresh_token'
+
+const MAX_TOKEN_IMPORT_COUNT = 200
+
 export function useAccountOnboarding(options: {
   reload: () => Promise<unknown>
 }) {
@@ -155,9 +159,10 @@ export function useAccountOnboarding(options: {
 
   async function importAccountDocument() {
     const provider = requireImportProvider(createForm.value.provider)
-    const documents = providerImportDocuments(
-      parseImportJson(createForm.value.importText),
+    const documents = accountImportDocuments(
       provider,
+      createForm.value.mode,
+      createForm.value.importText,
     )
     let importedCount = 0
     for (const entry of documents) {
@@ -244,6 +249,42 @@ function requireImportProvider(value: string): ImportProvider {
   if (isSupportedProvider(value))
     return value
   throw new Error('请选择要导入的账号平台')
+}
+
+function accountImportDocuments(
+  provider: ImportProvider,
+  mode: string,
+  value: string,
+): MixedImportDocument[] {
+  if (provider === 'openai' && isOpenAiTokenImportMode(mode)) {
+    return [{
+      provider,
+      document: parseOpenAiTokenImport(value, mode),
+    }]
+  }
+  return providerImportDocuments(parseImportJson(value), provider)
+}
+
+function parseOpenAiTokenImport(value: string, mode: OpenAiTokenImportMode) {
+  const tokens = value
+    .split(/\r?\n/)
+    .map(token => token.trim())
+    .filter(Boolean)
+  const label = mode === 'access_token' ? 'Access Token' : 'Refresh Token'
+
+  if (tokens.length === 0)
+    throw new Error(`请至少粘贴一个 ${label}`)
+  if (tokens.length > MAX_TOKEN_IMPORT_COUNT)
+    throw new Error(`单次最多导入 ${MAX_TOKEN_IMPORT_COUNT} 个 ${label}`)
+
+  const credentialKey = mode === 'access_token' ? 'accessToken' : 'refreshToken'
+  return {
+    accounts: tokens.map(token => ({ [credentialKey]: token })),
+  }
+}
+
+function isOpenAiTokenImportMode(value: string): value is OpenAiTokenImportMode {
+  return value === 'access_token' || value === 'refresh_token'
 }
 
 function providerImportDocuments(value: unknown, provider: ImportProvider): MixedImportDocument[] {

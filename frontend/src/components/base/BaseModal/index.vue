@@ -203,7 +203,7 @@ onBeforeUnmount(() => {
           tabindex="-1"
         >
           <header
-            class="grid shrink-0 items-start gap-3 p-4 pb-0 sm:gap-4 sm:p-7 sm:pb-0"
+            class="grid shrink-0 items-start gap-3 p-4 pb-0 sm:gap-4 sm:p-6 sm:pb-0"
             :class="tone === 'neutral'
               ? 'grid-cols-[minmax(0,1fr)_28px]'
               : 'grid-cols-[auto_minmax(0,1fr)_28px]'"
@@ -239,7 +239,7 @@ onBeforeUnmount(() => {
               <X :size="16" />
             </BaseIconButton>
           </header>
-          <div v-if="$slots.default" class="min-h-0 overflow-hidden px-4 py-4 sm:px-7 sm:py-6">
+          <div v-if="$slots.default" class="min-h-0 overflow-hidden px-3.25 py-3.25 sm:px-5.25 sm:py-5.25">
             <BaseScrollbar class="h-full">
               <div class="p-0.75">
                 <slot />
@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
           </div>
           <footer
             v-if="$slots.footer"
-            class="flex shrink-0 flex-wrap justify-end gap-2 px-4 pb-4 sm:gap-3 sm:px-7 sm:pb-7"
+            class="flex shrink-0 flex-wrap justify-end gap-2 px-4 pb-4 sm:gap-3 sm:px-6 sm:pb-6"
           >
             <slot name="footer" />
           </footer>

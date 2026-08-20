@@ -662,7 +662,7 @@ fn total_record(
         operation: "generate".to_owned(),
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
-        requested_model_id: "gpt-5.5".to_owned(),
+        requested_model_id: Some("gpt-5.5".to_owned()),
         provider_kind: provider_kind.map(str::to_owned),
         provider_account_ref: None,
         provider_account_name: None,
