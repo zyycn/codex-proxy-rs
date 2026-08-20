@@ -14,8 +14,12 @@ export type AccountErrorReason
 export interface AccountQuotaWindow {
   key: string
   group: string
+  limitId: string | null
+  limitName: string | null
+  role: 'primary' | 'secondary' | 'monthly' | null
   windowSeconds: number | null
   labelDisplay: string
+  windowLabelDisplay: string
   usedPercent: number | null
   usedPercentDisplay: string
   limitReached: boolean

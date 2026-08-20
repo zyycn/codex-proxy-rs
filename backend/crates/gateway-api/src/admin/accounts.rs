@@ -305,8 +305,12 @@ pub struct AccountQuotaView {
 pub struct AccountQuotaWindowView {
     pub key: String,
     pub group: String,
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
+    pub role: Option<String>,
     pub window_seconds: Option<u64>,
     pub label_display: String,
+    pub window_label_display: String,
     pub used_percent: Option<f64>,
     pub used_percent_display: String,
     pub limit_reached: bool,
@@ -1603,7 +1607,9 @@ fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
         key,
         group,
         label,
-        source: _,
+        limit_id,
+        limit_name,
+        role,
         local_usage_attribution: _,
         window_seconds,
         used_percent,
@@ -1612,10 +1618,17 @@ fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
         local_usage,
         provider_data: _,
     } = window;
+    let label_display = limit_name
+        .as_ref()
+        .map_or_else(|| label.clone(), |name| format!("{name} · {label}"));
     AccountQuotaWindowView {
-        label_display: label,
+        label_display,
+        window_label_display: label,
         key,
         group,
+        limit_id,
+        limit_name,
+        role: role.map(|value| value.as_str().to_owned()),
         window_seconds,
         used_percent,
         used_percent_display: used_percent

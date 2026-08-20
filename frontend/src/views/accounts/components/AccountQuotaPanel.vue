@@ -4,9 +4,9 @@ import { RefreshCw } from '@lucide/vue'
 
 import { computed } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import { orderedPanelQuotaWindows } from '../constants'
+import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../constants'
 import AccountPlanBadge from './AccountPlanBadge.vue'
-import AccountUsageWindow from './AccountUsageWindow/index.vue'
+import AccountQuotaPanelEntry from './AccountQuotaPanelEntry.vue'
 
 const props = defineProps<{
   account: AccountRow
@@ -17,23 +17,24 @@ const emit = defineEmits<{
   refreshQuota: [accountId: string]
 }>()
 
-const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota.windows))
+const quotaEntries = computed(() => groupedAccountQuotaWindows(
+  orderedPanelQuotaWindows(props.account.quota.windows),
+))
 </script>
 
 <template>
-  <section class="rounded-lg bg-cp-surface p-4 shadow-cp-control">
-    <div class="mb-3 flex items-center justify-between gap-3">
-      <div>
+  <section class="flex min-h-0 flex-col rounded-lg bg-cp-surface p-4 shadow-cp-control">
+    <div class="mb-3 flex shrink-0 items-start justify-between gap-3">
+      <div class="min-w-0">
         <h3 class="m-0 text-[14px] font-heavy text-cp-primary">
           账号额度
         </h3>
         <p
-          class="m-0 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] font-emphasis text-cp-secondary"
+          class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] font-emphasis text-cp-secondary"
         >
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
           <template v-if="account.provider === 'openai'">
             <span>·</span>
-            <span>套餐:</span>
             <AccountPlanBadge :plan-type="account.planType" size="sm" />
           </template>
           <span>·</span>
@@ -55,9 +56,16 @@ const quotaWindows = computed(() => orderedPanelQuotaWindows(props.account.quota
       </BaseIconButton>
     </div>
 
-    <div class="grid gap-3">
-      <AccountUsageWindow v-for="window in quotaWindows" :key="window.key" :window="window" />
-      <AccountUsageWindow v-if="quotaWindows.length === 0" />
+    <div class="grid max-h-48 min-h-0 gap-3 overflow-y-auto pr-1">
+      <AccountQuotaPanelEntry
+        v-for="entry in quotaEntries"
+        :key="entry.key"
+        :label="entry.label"
+        :windows="entry.windows"
+      />
+      <p v-if="quotaEntries.length === 0" class="m-0 text-[12px] font-emphasis text-cp-secondary">
+        额度待观测
+      </p>
     </div>
   </section>
 </template>

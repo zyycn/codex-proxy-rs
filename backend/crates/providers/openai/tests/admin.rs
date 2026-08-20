@@ -14,7 +14,7 @@ use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, CompleteAuthorization,
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, ProviderDocument, ProviderExportCredentialInput,
-    ProviderQuotaRequest, QuotaLocalUsageAttribution,
+    ProviderQuotaRequest, ProviderQuotaWindowRole, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
@@ -566,7 +566,7 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
     assert_eq!(monthly.len(), 1);
     assert!(monthly.iter().any(|window| {
         window.label == "月额度"
-            && window.source.as_deref() == Some("codex")
+            && window.limit_id.as_deref() == Some("codex")
             && window.used_percent == Some(91.0)
     }));
     assert!(
@@ -586,13 +586,15 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
     let review = quota
         .windows
         .iter()
-        .find(|window| window.source.as_deref() == Some("code_review"))
+        .find(|window| window.limit_id.as_deref() == Some("code_review"))
         .expect("code review quota");
-    assert_eq!(review.label, "代码审查 · 周额度");
+    assert_eq!(review.label, "周额度");
+    assert_eq!(review.limit_name.as_deref(), Some("code_review"));
+    assert_eq!(review.role, Some(ProviderQuotaWindowRole::Primary));
     let spark = quota
         .windows
         .iter()
-        .find(|window| window.source.as_deref() == Some("codex_bengalfox"))
+        .find(|window| window.limit_id.as_deref() == Some("codex_bengalfox"))
         .expect("Spark quota");
     assert_eq!(
         (

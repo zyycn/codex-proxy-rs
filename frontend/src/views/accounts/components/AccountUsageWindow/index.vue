@@ -10,10 +10,14 @@ const props = withDefaults(
     window?: AccountQuotaWindow
     variant?: AccountUsageWindowVariant
     showLocalValue?: boolean
+    showPercentage?: boolean
+    showNativeTooltip?: boolean
   }>(),
   {
     variant: 'detail',
     showLocalValue: true,
+    showPercentage: true,
+    showNativeTooltip: true,
   },
 )
 
@@ -33,7 +37,7 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
         <span
           class="min-w-0"
           :class="view.classes.label"
-          :title="view.labelTooltip"
+          :title="showNativeTooltip ? view.labelTooltip : undefined"
         >
           {{ window.labelDisplay }}
         </span>
@@ -45,15 +49,15 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
             v-if="view.quota.localUsageVisible"
             class="text-right text-cp-muted-text"
             :class="view.classes.value"
-            :title="`本地 Token 用量：${view.quota.localUsageDisplay}`"
+            :title="showNativeTooltip ? `窗口消耗：${view.quota.localUsageDisplay}` : undefined"
           >
             {{ view.quota.localUsageDisplay }}
           </span>
           <span
-            v-if="view.quota.valueVisible"
+            v-if="showPercentage && view.quota.valueVisible"
             class="text-right"
             :class="[view.classes.value, view.quota.percentTextClass]"
-            :title="`额度已使用：${window.usedPercentDisplay}`"
+            :title="showNativeTooltip ? `额度已使用：${window.usedPercentDisplay}` : undefined"
           >
             {{ window.usedPercentDisplay }}
           </span>
@@ -70,7 +74,7 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
             {{ view.quota.localUsageDisplay }}
           </span>
           <span
-            v-if="view.quota.valueVisible"
+            v-if="showPercentage && view.quota.valueVisible"
             :class="[view.classes.value, view.quota.percentTextClass]"
           >
             {{ window.usedPercentDisplay }}

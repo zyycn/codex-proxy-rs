@@ -5,6 +5,12 @@ import { formatProviderLabel } from '@/utils/providers'
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
 
+export interface AccountQuotaWindowEntry {
+  key: string
+  label: string | null
+  windows: AccountQuotaWindow[]
+}
+
 const quotaGroupOrder = new Map([
   ['shortTerm', 0],
   ['monthly', 1],
@@ -104,6 +110,37 @@ export function orderedPanelQuotaWindows(windows: AccountQuotaWindow[]) {
   return [...windows].sort(compareQuotaWindows)
 }
 
+export function groupedAccountQuotaWindows(windows: AccountQuotaWindow[]) {
+  const entries: AccountQuotaWindowEntry[] = []
+  const limitEntryIndexes = new Map<string, number>()
+
+  for (const window of windows) {
+    const limitLabel = quotaLimitLabel(window)
+    if (!window.limitId || !limitLabel) {
+      entries.push({ key: window.key, label: null, windows: [window] })
+      continue
+    }
+
+    const existingIndex = limitEntryIndexes.get(window.limitId)
+    if (existingIndex !== undefined) {
+      entries[existingIndex]?.windows.push(window)
+      continue
+    }
+
+    limitEntryIndexes.set(window.limitId, entries.length)
+    entries.push({
+      key: `limit:${window.limitId}`,
+      label: limitLabel,
+      windows: [window],
+    })
+  }
+
+  for (const entry of entries)
+    entry.windows.sort(compareQuotaLimitWindows)
+
+  return entries
+}
+
 export function modelSuccessRateTextClass(successRate: number | null) {
   if (successRate === null)
     return 'text-cp-muted-text'
@@ -121,17 +158,44 @@ function compareQuotaWindows(left: AccountQuotaWindow, right: AccountQuotaWindow
   if (groupDifference !== 0)
     return groupDifference
 
-  const secondsDifference = (left.windowSeconds ?? Number.MAX_SAFE_INTEGER)
-    - (right.windowSeconds ?? Number.MAX_SAFE_INTEGER)
-  if (secondsDifference !== 0)
-    return secondsDifference
-
-  // 同组同周期保留 Provider 的投影顺序，避免内部 key 把 additional 排到 core 前面。
+  // 同组保留 Provider 的投影顺序，避免按窗口时长打散 core 与模型专属额度。
   return 0
 }
 
 function groupOrder(window: AccountQuotaWindow) {
   return quotaGroupOrder.get(window.group) ?? quotaGroupOrder.size
+}
+
+function compareQuotaLimitWindows(left: AccountQuotaWindow, right: AccountQuotaWindow) {
+  const durationDifference = windowDurationOrder(left.windowSeconds)
+    - windowDurationOrder(right.windowSeconds)
+  if (durationDifference !== 0)
+    return durationDifference
+
+  return windowRoleOrder(left.role) - windowRoleOrder(right.role)
+}
+
+function windowDurationOrder(windowSeconds: number | null) {
+  return windowSeconds ?? Number.POSITIVE_INFINITY
+}
+
+function windowRoleOrder(role: AccountQuotaWindow['role']) {
+  switch (role) {
+    case 'primary':
+      return 0
+    case 'secondary':
+      return 1
+    case 'monthly':
+      return 2
+    default:
+      return 3
+  }
+}
+
+function quotaLimitLabel(window: AccountQuotaWindow) {
+  if (window.limitId === 'codex')
+    return '核心额度'
+  return window.limitName
 }
 
 function accountProviderLabel(value?: string | null) {

@@ -2,7 +2,8 @@
 import type { AccountRow } from '../constants'
 
 import { computed } from 'vue'
-import { visibleSummaryQuotaWindows } from '../constants'
+import { groupedAccountQuotaWindows, visibleSummaryQuotaWindows } from '../constants'
+import AccountQuotaSummaryEntry from './AccountQuotaSummaryEntry.vue'
 import AccountUsageWindow from './AccountUsageWindow/index.vue'
 
 const props = defineProps<{
@@ -11,10 +12,11 @@ const props = defineProps<{
 
 const quotaWindows = computed(() => props.account.quota.windows)
 const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindows.value))
+const summaryEntries = computed(() => groupedAccountQuotaWindows(visibleQuotaWindows.value))
 const summaryClass = computed(
   () =>
-    `grid w-full min-w-0 gap-1.5 py-0.5 ${
-      visibleQuotaWindows.value.length <= 1
+    `box-border grid w-full min-w-0 gap-1 py-1.5 ${
+      summaryEntries.value.length <= 1
         ? 'min-h-13 content-center'
         : 'min-h-16.5 content-center'
     }`,
@@ -23,12 +25,12 @@ const summaryClass = computed(
 
 <template>
   <div :class="summaryClass">
-    <AccountUsageWindow
-      v-for="window in visibleQuotaWindows"
-      :key="window.key"
-      :window="window"
-      variant="compact"
+    <AccountQuotaSummaryEntry
+      v-for="entry in summaryEntries"
+      :key="entry.key"
+      :label="entry.label"
+      :windows="entry.windows"
     />
-    <AccountUsageWindow v-if="quotaWindows.length === 0" variant="compact" />
+    <AccountUsageWindow v-if="summaryEntries.length === 0" variant="compact" />
   </div>
 </template>

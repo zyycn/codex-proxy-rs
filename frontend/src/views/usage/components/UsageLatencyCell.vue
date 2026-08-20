@@ -15,7 +15,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
 <template>
   <div class="flex items-center justify-end gap-1.5">
     <div
-      class="grid grid-cols-[auto_auto] items-center justify-end gap-x-2 gap-y-1.5 font-mono text-[12px] leading-none font-heavy tabular-nums"
+      class="grid grid-cols-[auto_auto] items-center justify-end gap-x-2 gap-y-1.5 whitespace-nowrap font-mono text-[12px] leading-none font-heavy tabular-nums"
     >
       <span class="text-[11px] text-cp-muted-text">{{ latencyDetails.firstOutputLabel }}</span>
       <span class="text-cp-secondary">{{ latencyDetails.firstOutputDisplay }}</span>

@@ -119,9 +119,7 @@ export function resolveAccountUsageWindowPresentation(
   const localUsage = accountLocalUsage(input.window?.localUsage)
   const mode = usageWindowMode(input.window, localUsage)
   const quotaLocalUsageDisplay = localTokenDisplay(localUsage)
-  const quotaLocalUsageVisible = input.showLocalValue
-    && typeof localUsage?.totalTokens === 'number'
-    && localUsage.totalTokens > 0
+  const quotaLocalUsageVisible = input.showLocalValue && Boolean(quotaLocalUsageDisplay)
   const localRequestDisplay = requestCountDisplay(localUsage)
   const localRequestValueVisible = input.showLocalValue
     && typeof localUsage?.requestCount === 'number'
@@ -146,7 +144,7 @@ export function resolveAccountUsageWindowPresentation(
     },
     quota: {
       valueVisible: typeof input.window?.usedPercent === 'number'
-        && input.window.usedPercent > 0,
+        && (input.variant !== 'compact' || input.window.usedPercent > 0),
       localUsageDisplay: quotaLocalUsageDisplay,
       localUsageVisible: quotaLocalUsageVisible,
       barStyle: quota?.barStyle,
@@ -221,11 +219,19 @@ function usageWindowMode(
 }
 
 function localTokenDisplay(localUsage: AccountLocalUsage | null) {
+  const total = localUsage?.totalTokens
+  if (typeof total !== 'number' || total <= 0)
+    return ''
+
   const display = localUsage?.totalTokensDisplay
   if (typeof display === 'string' && display.trim())
     return display.trim()
-  const total = localUsage?.totalTokens
-  return typeof total === 'number' && total > 0 ? formatInteger(total) : ''
+  return formatInteger(total)
+}
+
+export function quotaWindowLocalUsageDisplay(window: AccountQuotaWindow) {
+  const localUsage = accountLocalUsage(window.localUsage)
+  return localTokenDisplay(localUsage) || null
 }
 
 function requestCountDisplay(localUsage: AccountLocalUsage | null) {
@@ -236,7 +242,7 @@ function requestCountDisplay(localUsage: AccountLocalUsage | null) {
   return typeof count === 'number' ? formatInteger(count) : '0'
 }
 
-function quotaWindowPresentation(window: AccountQuotaWindow, minimumWidth: string) {
+export function quotaWindowPresentation(window: AccountQuotaWindow, minimumWidth: string) {
   const percent = clamp(window.usedPercent ?? 0, 0, 100)
   const tone = quotaWindowTone(window.usedPercent)
   return {

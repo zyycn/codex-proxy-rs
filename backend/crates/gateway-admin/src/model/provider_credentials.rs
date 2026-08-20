@@ -570,13 +570,34 @@ pub enum QuotaLocalUsageAttribution {
     Unavailable,
 }
 
+/// Provider quota bucket 中窗口的官方位置语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderQuotaWindowRole {
+    Primary,
+    Secondary,
+    Monthly,
+}
+
+impl ProviderQuotaWindowRole {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+            Self::Monthly => "monthly",
+        }
+    }
+}
+
 /// 一个 Provider quota 窗口的公共投影。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuotaWindow {
     pub key: String,
     pub group: String,
     pub label: String,
-    pub source: Option<String>,
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
+    pub role: Option<ProviderQuotaWindowRole>,
     pub local_usage_attribution: QuotaLocalUsageAttribution,
     pub window_seconds: Option<u64>,
     pub used_percent: Option<f64>,

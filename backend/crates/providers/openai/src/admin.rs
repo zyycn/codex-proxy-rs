@@ -19,7 +19,7 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaRequest, ProviderQuotaWindow, QuotaLocalUsageAttribution,
+    ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -734,39 +734,24 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         .windows()
         .iter()
         .filter(|window| should_project_quota_window(window))
-        .map(|window| {
-            let mut data = Map::new();
-            data.insert(
-                "source".to_owned(),
-                Value::String(window.source().to_owned()),
-            );
-            data.insert(
-                "role".to_owned(),
-                Value::String(quota_role(window.role()).to_owned()),
-            );
-            ProviderQuotaWindow {
-                key: window.key().to_owned(),
-                group: quota_group(window.kind()).to_owned(),
-                label: codex_quota_window_label(
-                    window.limit_name(),
-                    window.kind(),
-                    window.role(),
-                    window.source(),
-                    window.window_seconds(),
-                ),
-                source: Some(window.source().to_owned()),
-                local_usage_attribution: if window.is_account_wide() {
-                    QuotaLocalUsageAttribution::AccountWide
-                } else {
-                    QuotaLocalUsageAttribution::Unavailable
-                },
-                window_seconds: window.window_seconds(),
-                used_percent: window.used_percent(),
-                reset_at: window.reset_at(),
-                limit_reached: window.limit_reached(),
-                local_usage: None,
-                provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(data))),
-            }
+        .map(|window| ProviderQuotaWindow {
+            key: window.key().to_owned(),
+            group: quota_group(window.kind()).to_owned(),
+            label: codex_quota_window_label(window.kind(), window.role(), window.window_seconds()),
+            limit_id: Some(window.source().to_owned()),
+            limit_name: window.limit_name().map(str::to_owned),
+            role: Some(quota_role(window.role())),
+            local_usage_attribution: if window.is_account_wide() {
+                QuotaLocalUsageAttribution::AccountWide
+            } else {
+                QuotaLocalUsageAttribution::Unavailable
+            },
+            window_seconds: window.window_seconds(),
+            used_percent: window.used_percent(),
+            reset_at: window.reset_at(),
+            limit_reached: window.limit_reached(),
+            local_usage: None,
+            provider_data: None,
         })
         .collect();
     // 快照级 limit_reached 只看滚动后的窗口触顶：顶层标记是观测事实，不能
@@ -806,23 +791,21 @@ const fn quota_group(kind: CodexQuotaWindowKind) -> &'static str {
     }
 }
 
-const fn quota_role(role: CodexQuotaWindowRole) -> &'static str {
+const fn quota_role(role: CodexQuotaWindowRole) -> ProviderQuotaWindowRole {
     match role {
-        CodexQuotaWindowRole::Primary => "primary",
-        CodexQuotaWindowRole::Secondary => "secondary",
-        CodexQuotaWindowRole::Monthly => "monthly",
+        CodexQuotaWindowRole::Primary => ProviderQuotaWindowRole::Primary,
+        CodexQuotaWindowRole::Secondary => ProviderQuotaWindowRole::Secondary,
+        CodexQuotaWindowRole::Monthly => ProviderQuotaWindowRole::Monthly,
     }
 }
 
-/// 按窗口时长显示汉化额度名；非核心桶补上上游桶名称作为前缀。
+/// 按窗口时长显示汉化额度名；额度桶名称通过独立字段投影。
 fn codex_quota_window_label(
-    limit_name: Option<&str>,
     kind: CodexQuotaWindowKind,
     role: CodexQuotaWindowRole,
-    source: &str,
     window_seconds: Option<u64>,
 ) -> String {
-    let base = match kind {
+    match kind {
         CodexQuotaWindowKind::Monthly => "月额度".to_owned(),
         CodexQuotaWindowKind::Weekly => "周额度".to_owned(),
         CodexQuotaWindowKind::ShortTerm => {
@@ -833,29 +816,7 @@ fn codex_quota_window_label(
             }
         }
         CodexQuotaWindowKind::Other => custom_quota_window_label(window_seconds, role),
-    };
-    if let Some(prefix) = codex_quota_window_prefix(limit_name, source) {
-        return format!("{prefix} · {base}");
     }
-    base
-}
-
-fn codex_quota_window_prefix(limit_name: Option<&str>, source: &str) -> Option<String> {
-    let source_identifier = quota_identifier(source);
-    if matches!(source_identifier.as_str(), "core" | "codex") {
-        return None;
-    }
-    let label = limit_name.unwrap_or(source);
-    match quota_identifier(label).as_str() {
-        "premium" => Some("Premium".to_owned()),
-        "code_review" => Some("代码审查".to_owned()),
-        "spend_control" => Some("消费控制".to_owned()),
-        _ => Some(label.replace('_', " ")),
-    }
-}
-
-fn quota_identifier(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
 }
 
 fn custom_quota_window_label(window_seconds: Option<u64>, role: CodexQuotaWindowRole) -> String {

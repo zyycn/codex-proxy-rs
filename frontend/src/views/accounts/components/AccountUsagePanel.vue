@@ -69,7 +69,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
     </div>
 
     <div
-      class="min-w-0 pt-4 shadow-[inset_0_1px_0_var(--cp-divider-subtle)] xl:pt-0 xl:pl-4 xl:shadow-[inset_1px_0_0_var(--cp-divider-subtle)]"
+      class="min-w-0 pt-4 xl:pt-0 xl:pl-4"
     >
       <div class="mb-3 flex items-center justify-between">
         <h3 class="m-0 text-[14px] font-heavy text-cp-primary">
