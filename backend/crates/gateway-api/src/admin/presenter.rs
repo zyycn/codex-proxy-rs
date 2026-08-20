@@ -1,7 +1,7 @@
 //! Admin API 的展示层辅助：数值格式化。
 //!
-//! 按 docs/project-redundancy-boundary-audit.md BE-02 的目标，display 字段最终
-//! 迁移到前端；过渡期统一由本模块提供，避免 accounts/observability 各自维护。
+//! 当前 wire 仍保留 display 字段；统一由本模块提供，避免 accounts/observability
+//! 各自维护格式化规则。
 
 use gateway_core::accounting::Decimal;
 

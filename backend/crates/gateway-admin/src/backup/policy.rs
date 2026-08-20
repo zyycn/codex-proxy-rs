@@ -119,11 +119,11 @@ pub struct RetentionDecision {
 
 /// 从按完成时间倒序的 completed 计划备份中决定纳入删除流程的记录。
 ///
-/// 规则（`docs/s3-backup-design-audit.md` §4.4）：
+/// 自动保留规则：
 /// - `retentionDays = 0` 时不按天数清理；`retentionCount = 0` 时不按份数清理。
 /// - 自动计划备份满足任一启用阈值即可进入删除。
 /// - 无论阈值如何，至少保留最近一个成功的计划备份（倒序下标 0）。
-/// - 手动备份不受自动阈值影响；无 TTL，仅由管理员手动删除。
+/// - 手动备份不进入本规则；手工/计划记录各自的 `expires_at` 由到期扫描处理。
 #[must_use]
 pub fn decide_retention(
     retention_days: u32,

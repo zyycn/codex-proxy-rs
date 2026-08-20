@@ -1,6 +1,6 @@
 //! 多 Provider 网关的 PostgreSQL 持久化与 Redis 协调 adapter。
 //!
-//! 业务规则与 port 由 `gateway-core` 拥有。本 crate 只负责把终态的七张业务表
+//! 业务规则与 port 由 `gateway-core` / `gateway-admin` 拥有。本 crate 只负责把当前十二张业务表
 //! 和可丢失 Redis 状态映射为明确的基础设施操作。
 
 use std::sync::Arc;

@@ -48,10 +48,11 @@ const modalDescription = computed(() => showConfirm.value
 const triggerLabel = computed(() => {
   if (ambiguous.value)
     return '查看主动重置卡，有一项操作待确认'
-  if (loadError.value)
+  if (loadError.value) {
     return hasSnapshot.value
       ? `查看主动重置卡，查询失败，最近查询 ${availableCount.value} 张可用`
       : '查看主动重置卡，查询失败'
+  }
   return hasSnapshot.value
     ? `查看主动重置卡，最近查询 ${availableCount.value} 张可用`
     : '查看主动重置卡'

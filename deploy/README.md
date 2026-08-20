@@ -112,6 +112,9 @@ PostgreSQL 是账号、Client Key、运行设置、请求记录与审计的权�
 Provider schema 以明文 JSON 保存于 PostgreSQL。Redis 只保存可重建、可过期的协调状态，例如
 会话亲和、lease、cooldown、OAuth pending flow 与套餐模型目录 cache。
 
+OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 PostgreSQL/Redis，也不属于本地备份内容；
+管理端只在当前浏览器会话中保留最近一次查询结果。
+
 备份必须包含 `.runtime/postgres`。要保留 OAuth 的 AT/RT 恢复能力，必须保持
 `host.logging.file.enabled: true` 并备份 `.runtime/logs`；恢复记录位于独立文件集，仍按普通日志的
 `retention_days` 和 `max_files` 分别约束。若希望保留短期 Redis 状态和会话锚点，也同时备份 `.runtime/redis` 与
@@ -205,8 +208,8 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 - 备份暂存目录为 `host.runtime_data_dir/backup-staging`；Compose 默认对应
   `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限 `0700`（仅 `cpr`
   用户可读写）。部署卷至少预留一个最大数据库归档的空间。
-- OAuth 恢复记录通道使用 `oauth_recovery` 结构化日志事件；当前 OpenAI provider 每次成功取得
-  AT/RT 后，都会在账号资料补全、过期时间计算和数据库写入前写入独立的
+- OAuth 恢复记录通道使用 `oauth_recovery` 结构化日志事件；当前 OpenAI Provider 每次成功取得
+  AT（以及存在时的 RT）后，都会在账号资料补全、过期时间计算和数据库写入前写入独立的
   `codex-proxy-rs-oath.YYYY-MM-DD[.N].log` 文件集。事件含原始 AT/RT，并以 `provider`
   字段标记来源，且与普通 `.runtime/logs` 完全相同地按日、按大小分割，并分别按相同 `retention_days` 与 `max_files`
   清理；文件日志开启时不会被普通日志级别筛掉。它遵循普通日志现有的非阻塞写入机制，不会阻断
@@ -214,6 +217,8 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
   `.runtime/logs` 因此属于敏感数据，必须按现有普通日志的访问控制和加密备份策略处理。
 - S3/R2 存储、Cron 计划、保留策略与备份记录都保存在 PostgreSQL（`backup_settings` /
   `backup_records`），备份记录行在删除成功后硬删除，操作历史进入 `admin_audit_events`。
+- 手工备份的 `expiresInDays` 在创建时生成独立 `expires_at`；计划备份按当前 `retentionDays` 生成
+  `expires_at`，并同时受 `retentionCount` 清理规则约束。到期只进入删除流程，不构成在线恢复点。
 
 ### 人工恢复数据库
 
@@ -224,7 +229,7 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 pg_restore --no-owner --no-privileges --dbname=<target> <archive>.dump
 ```
 
-恢复期间与恢复后的边界（见 `docs/s3-backup-design-audit.md` §8）：
+恢复期间与恢复后的边界见 [架构文档](../docs/architecture.md#11-生命周期安全与恢复)。操作顺序为：
 
 1. 恢复期间以维护模式启动，不运行备份 Worker（避免把快照中的中间状态当作当前任务继续处理）。
 2. 恢复完成后清理备份控制记录的非终态（`queued/dumping/uploading/deleting`），并重新计算

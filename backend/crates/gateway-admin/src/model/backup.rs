@@ -288,7 +288,7 @@ pub struct BackupRecord {
     pub error_message: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    /// 手动过期时间；创建时确定，到期自动清理。
+    /// 创建时确定的过期时间；手工和计划备份均可设置，到期自动清理。
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
