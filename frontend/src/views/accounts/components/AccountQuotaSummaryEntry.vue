@@ -6,6 +6,7 @@ import { computed } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { useUiClock } from '@/composables/useUiClock'
 import AccountQuotaWindowGroup from './AccountQuotaWindowGroup.vue'
+import AccountRequestTimeline from './AccountUsageWindow/AccountRequestTimeline.vue'
 import AccountUsageWindow from './AccountUsageWindow/index.vue'
 import { resolveAccountUsageWindowPresentation } from './AccountUsageWindow/presenter'
 
@@ -37,6 +38,12 @@ const detailItems = computed(() => props.windows.map((window) => {
 
   return {
     key: window.key,
+    local: view.mode === 'local',
+    localLabel: view.local.label,
+    requestDisplay: view.local.requestDisplay,
+    requestBars: view.local.requestBars,
+    timelineTitle: view.local.timelineTitle,
+    durationDisplay: view.local.durationDisplay,
     code: quotaWindowCode(window.windowSeconds, window.role),
     label: window.windowLabelDisplay,
     usedPercent: window.usedPercent,
@@ -141,45 +148,69 @@ function quotaWindowCode(
               {{ item.code }}
             </span>
             <h4 class="m-0 min-w-0 truncate text-[12px] leading-4 font-heavy text-cp-secondary">
-              {{ item.label }}
+              {{ item.local ? item.localLabel : item.label }}
             </h4>
             <strong
               class="font-mono text-[11px] leading-none font-heavy tabular-nums"
-              :class="item.percentTextClass"
+              :class="item.local ? 'text-cp-primary' : item.percentTextClass"
             >
-              {{ item.usedPercentDisplay }}
+              {{ item.local ? `${item.requestDisplay} 次` : item.usedPercentDisplay }}
             </strong>
           </div>
 
-          <div
-            class="mt-2 h-1 w-full overflow-hidden rounded-full bg-cp-default-border"
-            role="progressbar"
-            :aria-label="item.label"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-valuenow="item.usedPercent ?? undefined"
-            :aria-valuetext="item.usedPercentDisplay"
-          >
+          <AccountRequestTimeline
+            v-if="item.local"
+            class="mt-2 h-1 w-full"
+            :bars="item.requestBars"
+            :label="item.timelineTitle"
+          />
+          <template v-else>
             <div
-              class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"
-              :class="item.barClass"
-              :style="item.barStyle"
-            />
-          </div>
+              class="mt-2 h-1 w-full overflow-hidden rounded-full bg-cp-default-border"
+              role="progressbar"
+              :aria-label="item.label"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="item.usedPercent ?? undefined"
+              :aria-valuetext="item.usedPercentDisplay"
+            >
+              <div
+                class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"
+                :class="item.barClass"
+                :style="item.barStyle"
+              />
+            </div>
+          </template>
 
           <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[10px] leading-4">
-            <dt class="font-emphasis text-cp-tertiary">
-              窗口消耗
-            </dt>
-            <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-primary">
-              {{ item.localUsageDisplay }}
-            </dd>
-            <dt class="font-emphasis text-cp-tertiary">
-              重置时间
-            </dt>
-            <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-secondary">
-              {{ item.resetAtDisplay }}
-            </dd>
+            <template v-if="item.local">
+              <dt class="font-emphasis text-cp-tertiary">
+                统计方式
+              </dt>
+              <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-primary">
+                滚动窗口
+              </dd>
+              <dt class="font-emphasis text-cp-tertiary">
+                统计范围
+              </dt>
+              <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-secondary">
+                {{ item.durationDisplay }}
+              </dd>
+            </template>
+            <template v-else>
+              <dt class="font-emphasis text-cp-tertiary">
+                窗口消耗
+              </dt>
+              <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-primary">
+                {{ item.localUsageDisplay }}
+              </dd>
+              <dt class="font-emphasis text-cp-tertiary">
+                重置时间
+              </dt>
+              <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-secondary">
+                {{ item.resetAtDisplay }}
+              </dd>
+            </template>
           </dl>
         </article>
       </div>

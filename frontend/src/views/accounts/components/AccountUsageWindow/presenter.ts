@@ -12,6 +12,13 @@ interface AccountRequestBucket {
   requestCount: number
 }
 
+export interface AccountRequestBar {
+  key: string
+  requestCount: number
+  height: string
+  title: string
+}
+
 interface AccountLocalUsage {
   requestCount?: number
   requestCountDisplay?: string
@@ -160,6 +167,7 @@ export function resolveAccountUsageWindowPresentation(
       requestValueVisible: localRequestValueVisible,
       timelineTitle: `${localRequestLabel} ${localRequestDisplay} 次`,
       requestBars: requestTimeline(localUsage?.requestBuckets ?? [], input.now),
+      durationDisplay: rollingWindowDurationDisplay(input.window?.windowSeconds),
     },
   }
 }
@@ -242,6 +250,21 @@ function requestCountDisplay(localUsage: AccountLocalUsage | null) {
   return typeof count === 'number' ? formatInteger(count) : '0'
 }
 
+function rollingWindowDurationDisplay(windowSeconds: number | null | undefined) {
+  if (typeof windowSeconds !== 'number' || !Number.isFinite(windowSeconds) || windowSeconds <= 0)
+    return '—'
+
+  const hourSeconds = 60 * 60
+  const daySeconds = 24 * hourSeconds
+  if (windowSeconds <= daySeconds * 2 && windowSeconds % hourSeconds === 0)
+    return `${formatInteger(windowSeconds / hourSeconds)} 小时`
+  if (windowSeconds % daySeconds === 0)
+    return `${formatInteger(windowSeconds / daySeconds)} 天`
+  if (windowSeconds % hourSeconds === 0)
+    return `${formatInteger(windowSeconds / hourSeconds)} 小时`
+  return `${formatInteger(windowSeconds)} 秒`
+}
+
 export function quotaWindowPresentation(window: AccountQuotaWindow, minimumWidth: string) {
   const percent = clamp(window.usedPercent ?? 0, 0, 100)
   const tone = quotaWindowTone(window.usedPercent)
@@ -268,7 +291,7 @@ function quotaWindowTone(usedPercent: number | null): QuotaWindowTone {
 function requestTimeline(
   buckets: NonNullable<AccountLocalUsage['requestBuckets']>,
   now: number,
-) {
+): AccountRequestBar[] {
   const currentHour = Math.floor(now / hourMilliseconds) * hourMilliseconds
   const bucketCounts = new Map(
     buckets.map((bucket) => {

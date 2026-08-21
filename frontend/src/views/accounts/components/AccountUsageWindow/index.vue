@@ -3,6 +3,7 @@ import type { AccountQuotaWindow } from '../../constants'
 import type { AccountUsageWindowVariant } from './presenter'
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
+import AccountRequestTimeline from './AccountRequestTimeline.vue'
 import { resolveAccountUsageWindowPresentation } from './presenter'
 
 const props = withDefaults(
@@ -116,25 +117,12 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
           {{ view.local.requestDisplay }}
         </strong>
       </div>
-      <div
-        class="flex items-stretch gap-px"
+      <AccountRequestTimeline
+        :bars="view.local.requestBars"
+        :label="view.local.timelineTitle"
+        :show-native-tooltip="showNativeTooltip"
         :class="[view.classes.trackShape, view.classes.trackOffset]"
-        role="img"
-        :aria-label="view.local.timelineTitle"
-        :title="view.local.timelineTitle"
-      >
-        <span
-          v-for="bar in view.local.requestBars"
-          :key="bar.key"
-          class="relative min-w-0 flex-1 bg-cp-default-border"
-          :title="bar.title"
-        >
-          <span
-            class="absolute inset-x-0 bottom-0 bg-cp-success"
-            :style="{ height: bar.height }"
-          />
-        </span>
-      </div>
+      />
     </template>
 
     <div v-else :class="view.classes.header">
