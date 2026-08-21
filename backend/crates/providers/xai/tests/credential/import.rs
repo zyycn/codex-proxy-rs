@@ -225,7 +225,7 @@ fn oauth_account_document_should_reject_api_key_credential_field() {
 fn oauth_account_document_should_ignore_source_wrapper_and_non_auth_metadata() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
-    document["type"] = serde_json::Value::String("sub2api-data".to_owned());
+    document["type"] = serde_json::Value::String("external-oauth-data".to_owned());
     document["version"] = serde_json::Value::from(99);
     document["proxies"] = serde_json::json!([{"url": "http://127.0.0.1:8080"}]);
     document["source_extension"] = serde_json::json!({"opaque": true});

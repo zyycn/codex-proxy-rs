@@ -237,19 +237,19 @@ impl GrokCredentialAdmin {
             let mut secret = decode_secret(&loaded.credential)?;
             let mut credentials = serde_json::Map::new();
             credentials.insert(
-                "access_token".to_owned(),
+                "accessToken".to_owned(),
                 Value::String(std::mem::take(&mut secret.access_token)),
             );
             credentials.insert(
-                "refresh_token".to_owned(),
+                "refreshToken".to_owned(),
                 Value::String(std::mem::take(&mut secret.refresh_token)),
             );
             if let Some(id_token) = secret.id_token.take() {
-                credentials.insert("id_token".to_owned(), Value::String(id_token));
+                credentials.insert("idToken".to_owned(), Value::String(id_token));
             }
-            credentials.insert("token_type".to_owned(), Value::String("Bearer".to_owned()));
+            credentials.insert("tokenType".to_owned(), Value::String("Bearer".to_owned()));
             credentials.insert(
-                "expires_at".to_owned(),
+                "expiresAt".to_owned(),
                 Value::String(
                     loaded
                         .account
@@ -260,11 +260,11 @@ impl GrokCredentialAdmin {
                 ),
             );
             credentials.insert(
-                "base_url".to_owned(),
+                "baseUrl".to_owned(),
                 Value::String(GROK_CLI_BASE_URL.to_owned()),
             );
             credentials.insert(
-                "client_id".to_owned(),
+                "clientId".to_owned(),
                 Value::String(OFFICIAL_CLIENT_ID.to_owned()),
             );
             credentials.insert(
@@ -290,7 +290,7 @@ impl GrokCredentialAdmin {
         Ok(GrokAccountExport(serde_json::json!({
             "version": 1,
             "type": "oauth-account-bundle",
-            "exported_at": exported_at.to_rfc3339(),
+            "exportedAt": exported_at.to_rfc3339(),
             "accounts": exported_accounts,
             "proxies": [],
         })))

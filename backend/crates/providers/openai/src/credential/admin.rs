@@ -1288,9 +1288,9 @@ fn parse_oauth_import_tokens(
             Value::Object(object) => {
                 for (key, value) in object {
                     let token = match key.as_str() {
-                        "accessToken" => &mut access_token,
-                        "refreshToken" => &mut refresh_token,
-                        "idToken" => &mut id_token,
+                        "accessToken" | "access_token" => &mut access_token,
+                        "refreshToken" | "refresh_token" => &mut refresh_token,
+                        "idToken" | "id_token" => &mut id_token,
                         _ => {
                             pending.push(value);
                             continue;

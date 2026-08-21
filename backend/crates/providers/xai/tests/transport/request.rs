@@ -198,7 +198,7 @@ fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
 }
 
 #[test]
-fn encoder_should_strip_sub2api_grok_unsupported_fields() {
+fn encoder_should_strip_grok_unsupported_fields() {
     let request = raw_request(json!({
         "model": "client-model",
         "input": "hello",
@@ -943,7 +943,7 @@ fn custom_apply_patch_declaration_should_use_patch_parameter() {
 }
 
 #[test]
-fn hosted_tool_choice_should_preserve_the_sub2api_specific_choice() {
+fn hosted_tool_choice_should_preserve_normalized_web_search_choice() {
     let request = raw_request(json!({
         "model": "client",
         "input": "search",
@@ -1244,7 +1244,7 @@ fn compaction_history_should_become_plaintext_user_continuation_in_place() {
 }
 
 #[test]
-fn sub2api_compaction_history_should_restore_reasoning_ciphertext_and_visible_summary() {
+fn structured_compaction_history_should_restore_reasoning_ciphertext_and_visible_summary() {
     for item_type in ["compaction", "compaction_summary"] {
         let request = raw_request(json!({
             "model": "client",
@@ -1264,7 +1264,7 @@ fn sub2api_compaction_history_should_restore_reasoning_ciphertext_and_visible_su
         }));
 
         let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
-            .expect("sub2api compaction continuation");
+            .expect("structured compaction continuation");
         let body = Value::Object(encoded.body().clone());
 
         assert_eq!(
@@ -1290,7 +1290,7 @@ fn sub2api_compaction_history_should_restore_reasoning_ciphertext_and_visible_su
 }
 
 #[test]
-fn malformed_compaction_history_should_be_dropped_like_sub2api() {
+fn malformed_compaction_history_should_be_dropped() {
     for encrypted_content in [
         None,
         Some(json!(null)),

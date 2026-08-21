@@ -363,20 +363,48 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
     let value = export.into_value();
     assert_eq!(value["version"], 1);
     assert_eq!(value["type"], "oauth-account-bundle");
+    assert!(value.get("exportedAt").is_some());
+    assert!(value.get("exported_at").is_none());
     assert_eq!(value["accounts"][0]["platform"], "grok");
     assert_eq!(value["accounts"][0]["type"], "oauth");
     assert_eq!(
-        value["accounts"][0]["credentials"]["base_url"],
+        value["accounts"][0]["credentials"]["baseUrl"],
         provider_xai::GROK_CLI_BASE_URL
     );
     assert_eq!(
-        value["accounts"][0]["credentials"]["access_token"],
+        value["accounts"][0]["credentials"]["accessToken"],
         "access-export"
+    );
+    assert_eq!(
+        value["accounts"][0]["credentials"]["refreshToken"],
+        "refresh-export"
+    );
+    assert_eq!(value["accounts"][0]["credentials"]["idToken"], "id-export");
+    assert_eq!(value["accounts"][0]["credentials"]["tokenType"], "Bearer");
+    assert!(
+        value["accounts"][0]["credentials"]["expiresAt"]
+            .as_str()
+            .is_some()
+    );
+    assert_eq!(
+        value["accounts"][0]["credentials"]["clientId"],
+        provider_xai::OFFICIAL_CLIENT_ID
     );
     assert_eq!(
         value["accounts"][0]["credentials"]["scope"],
         "openid profile email offline_access grok-cli:access api:access"
     );
+    for field in [
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "token_type",
+        "expires_at",
+        "base_url",
+        "client_id",
+    ] {
+        assert!(value["accounts"][0]["credentials"].get(field).is_none());
+    }
     assert_eq!(value["proxies"], serde_json::json!([]));
 }
 

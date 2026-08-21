@@ -2076,7 +2076,7 @@ const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTA_CATALOG_INTERVAL: Duration = Duration::from_secs(5 * 60);
 // rolling 24h 描述的是上游用量窗口，不代表从本次观测起封禁 24 小时；
-// 缺少可信 reset 时间时按 sub2api 的短周期探测策略恢复检查。
+// 缺少可信 reset 时间时按短周期探测策略恢复检查。
 const EXHAUSTED_QUOTA_FALLBACK_RECHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL: Duration = QUOTA_CATALOG_INTERVAL;
 const CLI_RELEASE_WORKER_OWNER: &str = "xai-cli-release";

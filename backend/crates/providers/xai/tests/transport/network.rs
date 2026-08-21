@@ -567,7 +567,7 @@ async fn inference_transport_should_classify_free_usage_429_as_account_free_quot
 }
 
 #[tokio::test]
-async fn inference_transport_should_apply_sub2api_body_aware_400_failures() {
+async fn inference_transport_should_apply_body_aware_400_failures() {
     let cases = [
         (
             json!({"error": {"code": "subscription:free-usage-exhausted", "message": "free usage exhausted"}}),

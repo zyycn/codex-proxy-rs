@@ -195,7 +195,7 @@ fn bare_http_429_remains_a_temporary_rate_limit() {
 }
 
 #[test]
-fn sub2api_openai_account_failure_matrix_is_preserved() {
+fn openai_account_failure_matrix_is_preserved() {
     let cases = [
         (
             400,

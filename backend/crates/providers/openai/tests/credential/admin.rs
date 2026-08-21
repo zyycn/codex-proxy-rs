@@ -60,6 +60,48 @@ async fn direct_import_persists_opaque_tokens_without_profile_or_token_validatio
 }
 
 #[tokio::test]
+async fn direct_import_accepts_snake_case_oauth_token_aliases() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let prepared = service
+        .prepare_import_document(serde_json::json!({
+            "accounts": [{
+                "platform": "openai",
+                "type": "oauth",
+                "credentials": {
+                    "access_token": "snake-access-token",
+                    "refresh_token": "snake-refresh-token",
+                    "id_token": "snake-id-token"
+                }
+            }]
+        }))
+        .await
+        .expect("snake_case OAuth token aliases must be accepted");
+
+    let account = prepared.accounts().first().expect("one prepared account");
+    let runtime = CodexCredentialCodec::decode(&account.credential).expect("stored credential");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(
+        (
+            oauth.access_token.expose_secret(),
+            oauth
+                .refresh_token
+                .as_ref()
+                .map(|token| token.expose_secret()),
+            oauth.id_token.as_ref().map(|token| token.expose_secret()),
+        ),
+        (
+            "snake-access-token",
+            Some("snake-refresh-token"),
+            Some("snake-id-token"),
+        )
+    );
+}
+
+#[tokio::test]
 async fn direct_import_projects_access_token_jwt_expiry_without_persisting_refresh_margin() {
     let expires_at = Utc
         .timestamp_opt(2_000_000_000, 0)

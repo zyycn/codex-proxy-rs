@@ -108,7 +108,7 @@ impl GrokCompactionRequest {
         self.reasoning_replay_session_id.as_deref()
     }
 
-    /// 返回经 sub2api 别名表归一化后的 xAI wire 模型。
+    /// 返回归一化后的 xAI wire 模型。
     pub(crate) fn upstream_model(&self) -> Option<&str> {
         self.body.get("model").and_then(Value::as_str)
     }
@@ -286,8 +286,7 @@ pub(crate) fn compaction_wire_events(
         Value::Null,
     );
     let item = compaction_item(summary, encrypted_content);
-    // sub2api 的 compact contract 以真实密文为成功依据，不向客户端延续
-    // 摘要生成阶段的 incomplete 状态。
+    // compact 成功以真实密文为依据，不向客户端延续摘要生成阶段的 incomplete 状态。
     let terminal_response = compaction_response(
         completed,
         terminal_source.or(created_source),

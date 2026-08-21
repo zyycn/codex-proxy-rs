@@ -1534,7 +1534,7 @@ async fn compaction_wire_should_exclude_reasoning_from_summary_content() {
 }
 
 #[tokio::test]
-async fn compaction_stream_should_accept_short_summary_like_sub2api() {
+async fn compaction_stream_should_accept_short_summary() {
     let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(compaction_sse(
         "<summary>too short</summary>",
         None,

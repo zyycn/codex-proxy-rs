@@ -76,7 +76,7 @@ fn encoder_should_preserve_history_order_and_append_summary_prompt() {
 }
 
 #[test]
-fn encoder_should_preserve_sub2api_compaction_constraints() {
+fn encoder_should_preserve_compaction_constraints() {
     let request = encode(json!({
         "model": "client-model",
         "input": [
@@ -190,7 +190,7 @@ fn encoder_should_consume_only_the_terminal_compaction_trigger() {
 }
 
 #[test]
-fn decoder_should_preserve_sub2api_summary_text_after_trimming_edges() {
+fn decoder_should_preserve_summary_text_after_trimming_edges() {
     let raw = valid_summary("checkpoint-only-secret");
     let summary = decode_summary(&format!("  {raw}  \n")).expect("summary");
 
@@ -234,7 +234,7 @@ fn decoder_should_preserve_unclosed_leading_analysis() {
 }
 
 #[test]
-fn decoder_should_preserve_compaction_control_tokens_like_sub2api() {
+fn decoder_should_preserve_compaction_control_tokens() {
     let raw = valid_summary(
         "Quoted <summary> and </summary>, <analysis> and </analysis>, \
          plus <summary_request> and </summary_request>.",
@@ -278,7 +278,7 @@ fn decoder_should_preserve_numbered_sections_that_quote_analysis_close() {
 }
 
 #[test]
-fn decoder_should_accept_short_summary_like_sub2api() {
+fn decoder_should_accept_short_summary() {
     let summary = decode_summary("<summary>too short</summary>").expect("short summary");
 
     assert_eq!(summary, "<summary>too short</summary>");

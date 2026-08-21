@@ -91,7 +91,7 @@ impl GrokResponsesRequest {
         self.reasoning_replay_session_id.as_deref()
     }
 
-    /// 返回经 sub2api 别名表归一化后的 xAI wire 模型。
+    /// 返回归一化后的 xAI wire 模型。
     pub(crate) fn upstream_model(&self) -> Option<&str> {
         self.body.get("model").and_then(Value::as_str)
     }
@@ -1928,8 +1928,8 @@ impl ToolNormalizer {
             "apply_patch" => self.normalize_apply_patch_tool(tool),
             "x_search" | "collections_search" | "file_search" | "code_execution"
             | "code_interpreter" => Ok(vec![Value::Object(without_defer_loading(tool))]),
-            // sub2api 的 xAI Responses 适配层对未获 xAI 接受的工具做静默过滤，
-            // 并在过滤后同步收敛 tool_choice；不要把客户端可选扩展升级成整单 400。
+            // 对未获 xAI 接受的工具做静默过滤，并在过滤后同步收敛 tool_choice；
+            // 不要把客户端可选扩展升级成整单 400。
             "" | "computer_use_preview" | "image_generation" => Ok(Vec::new()),
             _ => Ok(Vec::new()),
         }
@@ -3517,15 +3517,15 @@ fn normalize_compaction_input(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let has_sub2api_shape = item.contains_key("summary")
+    let has_structured_compaction_shape = item.contains_key("summary")
         || item.contains_key("id")
         || item.contains_key("status")
         || string_field(item, "type").trim() == "compaction_summary";
 
     // 旧版 adapter 曾将明文摘要直接写入 encrypted_content，且不带
-    // id/status/summary。仅对这一可识别的历史形态保留明文恢复；新形态严格按
-    // sub2api 回放为 xAI reasoning 密文 + 可见 conversation summary。
-    if !has_sub2api_shape {
+    // id/status/summary。仅对这一可识别的历史形态保留明文恢复；新形态严格回放为
+    // xAI reasoning 密文 + 可见 conversation summary。
+    if !has_structured_compaction_shape {
         let Some(summary) = encrypted else {
             return Ok(Vec::new());
         };
