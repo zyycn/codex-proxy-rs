@@ -729,21 +729,19 @@ pub(crate) fn dashboard_view(
             last_used: relative_time(credential.last_used_at, range.end),
         });
     }
+    let unavailable_accounts = provider_accounts
+        .total
+        .saturating_sub(provider_accounts.normal);
+
     DashboardDataView {
         cards: DashboardCardsView {
             credentials: DashboardCredentialsCardView {
-                total: format_compact_number(provider_accounts.total),
+                total: provider_accounts.total.to_string(),
                 total_value: provider_accounts.total,
-                available: format_compact_number(provider_accounts.normal),
+                available: provider_accounts.normal.to_string(),
                 available_value: provider_accounts.normal,
-                unavailable: format_compact_number(
-                    provider_accounts
-                        .total
-                        .saturating_sub(provider_accounts.normal),
-                ),
-                unavailable_value: provider_accounts
-                    .total
-                    .saturating_sub(provider_accounts.normal),
+                unavailable: unavailable_accounts.to_string(),
+                unavailable_value: unavailable_accounts,
             },
             traffic: DashboardTrafficCardView {
                 today_requests: format_compact_number(today.request_count),

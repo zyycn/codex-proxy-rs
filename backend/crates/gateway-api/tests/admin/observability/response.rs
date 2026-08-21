@@ -221,9 +221,9 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         attempts: AttemptMetrics::default(),
         totals: Default::default(),
         provider_accounts: AccountPoolMetrics {
-            total: 807,
-            normal: 15,
-            quota_exhausted: 785,
+            total: 1002,
+            normal: 943,
+            quota_exhausted: 52,
             rate_limited: 0,
             disabled: 3,
             error: 4,
@@ -259,9 +259,21 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
             &value["data"]["cards"]["credentials"]["unavailableValue"],
         ),
         (
-            &serde_json::json!(807),
-            &serde_json::json!(15),
-            &serde_json::json!(792)
+            &serde_json::json!(1002),
+            &serde_json::json!(943),
+            &serde_json::json!(59)
+        ),
+    );
+    assert_eq!(
+        (
+            &value["data"]["cards"]["credentials"]["total"],
+            &value["data"]["cards"]["credentials"]["available"],
+            &value["data"]["cards"]["credentials"]["unavailable"],
+        ),
+        (
+            &serde_json::json!("1002"),
+            &serde_json::json!("943"),
+            &serde_json::json!("59")
         ),
     );
 }

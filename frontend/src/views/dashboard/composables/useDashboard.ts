@@ -263,7 +263,7 @@ function metricCards(
       title: '账号',
       value: credentials.total,
       valueRaw: credentials.totalValue,
-      valueFormatter: formatCompactNumber,
+      valueFormatter: formatAccountCount,
       icon: Users,
       tone: 'normal',
       details: [
@@ -335,6 +335,10 @@ function metricCards(
       ],
     },
   ]
+}
+
+function formatAccountCount(value: number) {
+  return String(Math.max(0, Math.round(value)))
 }
 
 function sparkline(values: number[], tone: MetricTone) {
