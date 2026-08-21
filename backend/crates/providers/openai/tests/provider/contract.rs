@@ -820,13 +820,13 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
     let cases = [
         (
             ImageRequestKind::Generation,
-            "/images/generations",
+            "/codex/images/generations",
             br#"{ "model":"gpt-image-future", "prompt":"a lighthouse", "background":"transparent", "future_option":{"schema":2}, "future_integer":9007199254740993 }"#.as_slice(),
             br#"{ "created": 1787212800, "data": [{"b64_json":"AAEC"}], "future": 9007199254740993 }"#.as_slice(),
         ),
         (
             ImageRequestKind::Edit,
-            "/images/edits",
+            "/codex/images/edits",
             br#"{"model":"gpt-image-2","images":[{"image_url":"data:image/png;base64,AAEC"}],"prompt":"add fog","prompt":"duplicate remains opaque"}"#.as_slice(),
             br#"{"created":1787212801,"data":[{"b64_json":"AwQF"}],"quality":"high"}"#.as_slice(),
         ),
@@ -918,7 +918,7 @@ async fn image_endpoint_returns_the_exact_upstream_error_response() {
         br#"{ "model":"gpt-image-2", "images":[], "future_invalid":9007199254740993 }"#;
     let response_body = br#"{ "error":{"message":"future image validation","type":"image_error","code":"future_code"}, "future":9007199254740993 }"#;
     Mock::given(method("POST"))
-        .and(path("/images/edits"))
+        .and(path("/codex/images/edits"))
         .and(body_bytes(request_body.to_vec()))
         .respond_with(
             ResponseTemplate::new(422)
