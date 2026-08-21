@@ -519,7 +519,7 @@ function formatDashboardUsd(value: string) {
   const amount = Number(normalized.slice(1).replaceAll(',', ''))
   if (!Number.isFinite(amount))
     return value
-  if (amount < 1_000)
+  if (amount < 10_000)
     return `$${amount.toFixed(2)}`
   return `$${(amount / 1_000).toFixed(3)}k`
 }
