@@ -96,6 +96,11 @@ function creditOptionClasses(creditId: string) {
 function creditOptionLabel(credit: { title: string | null, expiresAt: string | null }) {
   return `${credit.title || 'Codex 主动重置卡'}，${expiryLabel(credit.expiresAt)}`
 }
+
+async function handleConfirmConsume() {
+  if (await confirmConsume())
+    panelOpen.value = false
+}
 </script>
 
 <template>
@@ -254,7 +259,7 @@ function creditOptionLabel(credit: { title: string | null, expiresAt: string | n
         <BaseButton variant="ghost" :disabled="consuming" @click="cancelConsume">
           返回
         </BaseButton>
-        <BaseButton variant="primary" :loading="consuming" @click="confirmConsume">
+        <BaseButton variant="primary" :loading="consuming" @click="handleConfirmConsume">
           {{ ambiguous ? '再次确认' : '确认重置' }}
         </BaseButton>
       </template>

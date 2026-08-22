@@ -160,10 +160,10 @@ export function useAccountResetCredits(options: {
       pendingOperation.value = null
   }
 
-  async function confirmConsume() {
+  async function confirmConsume(): Promise<boolean> {
     const operation = pendingOperation.value
     if (!operation || consuming.value)
-      return
+      return false
 
     consuming.value = true
     try {
@@ -179,7 +179,7 @@ export function useAccountResetCredits(options: {
       if (!confirmed) {
         toast.error(resetResultMessage(result.code))
         await loadCredits()
-        return
+        return false
       }
 
       const successMessage = result.code === 'already_redeemed'
@@ -199,6 +199,7 @@ export function useAccountResetCredits(options: {
           { duration: 5000 },
         )
       }
+      return true
     }
     catch (error: unknown) {
       showConfirm.value = false
@@ -214,6 +215,7 @@ export function useAccountResetCredits(options: {
         toast.error(errorMessage(error, '额度重置失败'))
         await loadCredits()
       }
+      return false
     }
     finally {
       consuming.value = false
