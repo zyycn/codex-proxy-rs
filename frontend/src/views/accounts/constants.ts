@@ -194,7 +194,7 @@ function windowRoleOrder(role: AccountQuotaWindow['role']) {
 
 function quotaLimitLabel(window: AccountQuotaWindow) {
   if (window.limitId === 'codex')
-    return '主额度'
+    return '通用额度'
   return window.limitName
 }
 

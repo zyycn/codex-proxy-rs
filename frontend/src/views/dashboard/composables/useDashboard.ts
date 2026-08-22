@@ -7,7 +7,7 @@ import { computed, onMounted, shallowRef } from 'vue'
 import { getDashboardSummary, getDashboardTrend } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
-import { formatCompactNumber } from '@/utils/number'
+import { formatCompactNumber, formatInteger } from '@/utils/number'
 import { normalizeUsageRecord } from '@/views/usage/utils/records'
 
 export function useDashboard() {
@@ -338,7 +338,7 @@ function metricCards(
 }
 
 function formatAccountCount(value: number) {
-  return String(Math.max(0, Math.round(value)))
+  return formatInteger(Math.max(0, Math.round(value)))
 }
 
 function sparkline(values: number[], tone: MetricTone) {
