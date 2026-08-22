@@ -203,10 +203,13 @@ onBeforeUnmount(() => {
           tabindex="-1"
         >
           <header
-            class="grid shrink-0 items-start gap-3 p-4 pb-0 sm:gap-4 sm:p-6 sm:pb-0"
-            :class="tone === 'neutral'
-              ? 'grid-cols-[minmax(0,1fr)_28px]'
-              : 'grid-cols-[auto_minmax(0,1fr)_28px]'"
+            class="grid shrink-0 gap-3 p-4 pb-0 sm:gap-4 sm:p-6 sm:pb-0"
+            :class="[
+              tone === 'neutral'
+                ? 'grid-cols-[minmax(0,1fr)_28px]'
+                : 'grid-cols-[auto_minmax(0,1fr)_28px]',
+              description ? 'items-start' : 'items-center',
+            ]"
           >
             <span
               v-if="tone !== 'neutral'"

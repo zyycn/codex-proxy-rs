@@ -12,7 +12,8 @@ import { errorMessage } from '@/utils/async'
 
 interface PendingResetCreditOperation {
   accountId: string
-  creditId?: string
+  creditId: string
+  credit: AccountResetCredit
   redeemRequestId: string
   hasTransportFailure: boolean
 }
@@ -36,13 +37,37 @@ export function useAccountResetCredits(options: {
   const consuming = shallowRef(false)
   const loadError = shallowRef('')
   const showConfirm = shallowRef(false)
+  const selectedCreditId = shallowRef('')
   const pendingOperation = shallowRef<PendingResetCreditOperation | null>(null)
   let loadSequence = 0
 
   const availableCredits = computed(() =>
     credits.value.filter(credit => credit.status === 'available'),
   )
+  const selectedCredit = computed(() =>
+    availableCredits.value.find(credit => credit.id === selectedCreditId.value),
+  )
+  const consumptionCredit = computed(() =>
+    pendingOperation.value?.credit ?? selectedCredit.value,
+  )
   const ambiguous = computed(() => pendingOperation.value?.hasTransportFailure === true)
+  const canRequestConsume = computed(() =>
+    ambiguous.value || (availableCount.value > 0 && selectedCredit.value !== undefined),
+  )
+
+  function reconcileSelectedCredit(accountId: string) {
+    if (accountId !== options.accountId())
+      return
+
+    const operation = pendingOperation.value
+    if (operation?.accountId === accountId) {
+      selectedCreditId.value = operation.creditId
+      return
+    }
+
+    if (!selectedCredit.value)
+      selectedCreditId.value = ''
+  }
 
   function applySnapshot(accountId: string, snapshot: ResetCreditsSnapshot) {
     snapshotsByAccountId.set(accountId, snapshot)
@@ -51,6 +76,7 @@ export function useAccountResetCredits(options: {
     credits.value = snapshot.credits
     availableCount.value = snapshot.availableCount
     hasSnapshot.value = true
+    reconcileSelectedCredit(accountId)
   }
 
   function restoreSnapshot(accountId: string) {
@@ -58,15 +84,22 @@ export function useAccountResetCredits(options: {
     credits.value = snapshot?.credits ?? []
     availableCount.value = snapshot?.availableCount ?? 0
     hasSnapshot.value = snapshot !== undefined
+    reconcileSelectedCredit(accountId)
+  }
+
+  function selectCredit(creditId: string) {
+    if (pendingOperation.value || consuming.value)
+      return
+    if (!availableCredits.value.some(credit => credit.id === creditId))
+      return
+    selectedCreditId.value = creditId
   }
 
   function applyConfirmedConsumption(operation: PendingResetCreditOperation) {
     const snapshot = snapshotsByAccountId.get(operation.accountId)
     if (!snapshot)
       return
-    const creditIndex = operation.creditId
-      ? snapshot.credits.findIndex(credit => credit.id === operation.creditId)
-      : snapshot.credits.findIndex(credit => credit.status === 'available')
+    const creditIndex = snapshot.credits.findIndex(credit => credit.id === operation.creditId)
     const nextCredits = creditIndex < 0
       ? snapshot.credits
       : snapshot.credits.filter((_, index) => index !== creditIndex)
@@ -107,9 +140,13 @@ export function useAccountResetCredits(options: {
     if (!existing || existing.accountId !== accountId) {
       if (availableCount.value <= 0)
         return
+      const credit = selectedCredit.value
+      if (!credit)
+        return
       pendingOperation.value = {
         accountId,
-        creditId: availableCredits.value[0]?.id,
+        creditId: credit.id,
+        credit,
         redeemRequestId: globalThis.crypto.randomUUID(),
         hasTransportFailure: false,
       }
@@ -145,21 +182,20 @@ export function useAccountResetCredits(options: {
         return
       }
 
-      toast.success(
-        result.code === 'already_redeemed'
-          ? '已确认上次操作完成'
-          : '额度已重置',
-      )
+      const successMessage = result.code === 'already_redeemed'
+        ? '上次重置已完成'
+        : '额度已重置'
       applyConfirmedConsumption(operation)
       await loadCredits()
       try {
         const quota = await refreshAccountQuota({ accountId: operation.accountId })
         if (operation.accountId === options.accountId())
           options.onAccountUpdated(quota.account)
+        toast.success(successMessage)
       }
       catch (error: unknown) {
         toast.warning(
-          `重置卡已消费，额度快照刷新失败：${errorMessage(error, '请手动刷新额度')}`,
+          `${successMessage}，但最新额度加载失败：${errorMessage(error, '请手动刷新额度')}`,
           { duration: 5000 },
         )
       }
@@ -188,10 +224,11 @@ export function useAccountResetCredits(options: {
     options.accountId,
     (accountId) => {
       loadSequence += 1
+      pendingOperation.value = null
+      selectedCreditId.value = ''
       restoreSnapshot(accountId)
       loading.value = false
       loadError.value = ''
-      pendingOperation.value = null
       showConfirm.value = false
     },
     { immediate: true },
@@ -201,6 +238,9 @@ export function useAccountResetCredits(options: {
     credits,
     availableCredits,
     availableCount,
+    selectedCreditId,
+    consumptionCredit,
+    canRequestConsume,
     hasSnapshot,
     loading,
     consuming,
@@ -208,6 +248,7 @@ export function useAccountResetCredits(options: {
     ambiguous,
     showConfirm,
     loadCredits,
+    selectCredit,
     requestConsume,
     cancelConsume,
     confirmConsume,

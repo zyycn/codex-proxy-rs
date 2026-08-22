@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { Account } from '@/api'
-import { AlertTriangle, RefreshCw, RotateCcw, TicketCheck } from '@lucide/vue'
+import { AlertTriangle, RefreshCw, TicketCheck } from '@lucide/vue'
 import dayjs from 'dayjs'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef, useId, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseRadio from '@/components/base/BaseRadio.vue'
 import { useAccountResetCredits } from '../composables/useAccountResetCredits'
 
 const props = defineProps<{
@@ -21,6 +22,9 @@ const emit = defineEmits<{
 const {
   availableCredits,
   availableCount,
+  selectedCreditId,
+  consumptionCredit,
+  canRequestConsume,
   hasSnapshot,
   loading,
   consuming,
@@ -28,6 +32,7 @@ const {
   ambiguous,
   showConfirm,
   loadCredits,
+  selectCredit,
   requestConsume,
   cancelConsume,
   confirmConsume,
@@ -37,14 +42,15 @@ const {
 })
 
 const panelOpen = shallowRef(false)
-const confirmTitle = computed(() => ambiguous.value ? '确认上次重置结果？' : '立即重置额度？')
-const confirmDescription = computed(() => ambiguous.value
-  ? '上次请求的结果不确定。本次会复用同一个请求标识，只用于确认或完成原操作。'
-  : '这会消费一张上游主动重置卡。操作完成后将立即重新读取额度窗口。')
-const modalTitle = computed(() => showConfirm.value ? confirmTitle.value : '主动重置额度')
-const modalDescription = computed(() => showConfirm.value
-  ? confirmDescription.value
-  : '查看可用重置卡，并按需提前开启新的 Codex 额度窗口。')
+const creditRadioName = `account-reset-credit-${useId()}`
+const modalTitle = computed(() => {
+  if (!showConfirm.value)
+    return '主动重置额度'
+  return ambiguous.value ? '确认上次重置' : '确认重置额度'
+})
+const modalDescription = computed(() =>
+  showConfirm.value ? undefined : '选择一张重置卡后继续',
+)
 const triggerLabel = computed(() => {
   if (ambiguous.value)
     return '查看主动重置卡，有一项操作待确认'
@@ -59,7 +65,7 @@ const triggerLabel = computed(() => {
 })
 const showTriggerCount = computed(() => hasSnapshot.value && availableCount.value > 0)
 const confirmCreditTitle = computed(() =>
-  availableCredits.value[0]?.title || 'Codex 主动重置卡',
+  consumptionCredit.value?.title || 'Codex 主动重置卡',
 )
 
 watch(panelOpen, (isOpen) => {
@@ -76,6 +82,19 @@ function expiryLabel(value: string | null) {
     return '有效期由上游决定'
   const expiry = dayjs(value)
   return expiry.isValid() ? `${expiry.format('YYYY-MM-DD HH:mm')} 到期` : '到期时间未知'
+}
+
+function creditOptionClasses(creditId: string) {
+  return [
+    'w-full min-w-0 rounded-cp-control px-4 py-3 outline-none transition-colors duration-150 motion-reduce:transition-none',
+    selectedCreditId.value === creditId
+      ? 'bg-cp-info-bg'
+      : 'bg-cp-subtle hover:bg-cp-default-hover',
+  ]
+}
+
+function creditOptionLabel(credit: { title: string | null, expiresAt: string | null }) {
+  return `${credit.title || 'Codex 主动重置卡'}，${expiryLabel(credit.expiresAt)}`
 }
 </script>
 
@@ -115,8 +134,11 @@ function expiryLabel(value: string | null) {
         <p class="mt-1.5 mb-0 text-[14px] leading-snug font-heavy text-cp-primary">
           {{ confirmCreditTitle }}
         </p>
-        <p class="mt-2 mb-0 text-[12px] leading-[1.55] font-emphasis text-cp-secondary">
-          只消费上游重置卡；完成后系统会回读官方额度，不会直接改写本地重置时间。
+        <p
+          v-if="consumptionCredit"
+          class="mt-1 mb-0 font-mono text-[10px] leading-normal font-emphasis text-cp-muted-text"
+        >
+          {{ expiryLabel(consumptionCredit.expiresAt) }}
         </p>
       </section>
     </div>
@@ -133,7 +155,7 @@ function expiryLabel(value: string | null) {
             上次操作结果待确认
           </p>
           <p class="mt-1 mb-0 text-[11px] leading-normal font-emphasis text-cp-secondary">
-            再次确认会复用原请求标识，不会创建新的消费操作。
+            再确认一次即可。
           </p>
         </div>
       </section>
@@ -162,7 +184,7 @@ function expiryLabel(value: string | null) {
       <section class="grid gap-2.5">
         <div class="flex min-h-8 items-center justify-between gap-3">
           <h3 class="m-0 text-[12px] font-heavy text-cp-muted-text">
-            卡片明细
+            选择重置卡
           </h3>
           <BaseIconButton
             variant="ghost"
@@ -187,22 +209,32 @@ function expiryLabel(value: string | null) {
           {{ loadError }}，请刷新重试。
         </p>
 
-        <div v-else-if="availableCredits.length" class="grid gap-2">
-          <article
+        <div
+          v-else-if="availableCredits.length"
+          class="grid gap-2"
+          role="radiogroup"
+          aria-label="选择要使用的重置卡"
+        >
+          <BaseRadio
             v-for="credit in availableCredits"
             :key="credit.id"
-            class="flex min-w-0 items-center gap-3 rounded-cp-control bg-cp-subtle px-4 py-3"
+            :model-value="selectedCreditId"
+            :value="credit.id"
+            :name="creditRadioName"
+            :label="creditOptionLabel(credit)"
+            :disabled="ambiguous || consuming"
+            :class="creditOptionClasses(credit.id)"
+            @update:model-value="selectCredit"
           >
-            <span class="size-1.5 shrink-0 rounded-full bg-cp-info" aria-hidden="true" />
-            <div class="min-w-0">
-              <p class="m-0 truncate text-[12px] font-heavy text-cp-primary">
+            <span class="block min-w-0">
+              <span class="block truncate text-[12px] font-heavy text-cp-primary">
                 {{ credit.title || 'Codex 主动重置卡' }}
-              </p>
-              <p class="mt-1 mb-0 truncate font-mono text-[10px] font-emphasis text-cp-muted-text">
+              </span>
+              <span class="mt-1 block truncate font-mono text-[10px] font-emphasis text-cp-muted-text">
                 {{ expiryLabel(credit.expiresAt) }}
-              </p>
-            </div>
-          </article>
+              </span>
+            </span>
+          </BaseRadio>
         </div>
 
         <div v-else class="overflow-hidden rounded-cp-control bg-cp-subtle">
@@ -223,7 +255,7 @@ function expiryLabel(value: string | null) {
           返回
         </BaseButton>
         <BaseButton variant="primary" :loading="consuming" @click="confirmConsume">
-          {{ ambiguous ? '确认原操作' : '消费并重置' }}
+          {{ ambiguous ? '再次确认' : '确认重置' }}
         </BaseButton>
       </template>
       <template v-else>
@@ -232,13 +264,10 @@ function expiryLabel(value: string | null) {
         </BaseButton>
         <BaseButton
           variant="primary"
-          :disabled="loading || consuming || (!ambiguous && availableCount <= 0)"
+          :disabled="loading || consuming || !canRequestConsume"
           @click="requestConsume"
         >
-          <template #icon>
-            <RotateCcw class="size-3.5" />
-          </template>
-          {{ ambiguous ? '确认原操作' : '立即重置' }}
+          {{ ambiguous ? '继续确认' : '下一步' }}
         </BaseButton>
       </template>
     </template>
