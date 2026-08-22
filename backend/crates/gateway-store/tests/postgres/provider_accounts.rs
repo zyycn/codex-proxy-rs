@@ -10,7 +10,12 @@ use gateway_admin::{
             UpdateAccount,
         },
         observability::TimeRange,
-        provider_credentials::{CredentialListQuery, CredentialListWindow, CredentialStateFilter},
+        provider_credentials::{
+            AuthorizationCommit, AuthorizationCredentialCommit, AuthorizationMutationTarget,
+            AuthorizationOwnerBinding, CredentialListQuery, CredentialListWindow,
+            CredentialStateFilter, PendingAuthorizationMutation, PreparedCredentialCreate,
+            ProviderDocument,
+        },
     },
     ports::store::AccountStore,
 };
@@ -1323,6 +1328,75 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         .expect_err("an existing account ID must not be rebound");
     assert_eq!(current_revision(&database.pool).await, 3);
 
+    database.close().await;
+}
+
+#[tokio::test]
+async fn authorization_create_returns_existing_account_id_when_identity_is_upserted() {
+    let Some(database) = TestDatabase::create("provider_account_authorization_upsert").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account(
+            "acct_authorization_existing",
+            "user-authorization-upsert",
+        ))
+        .await
+        .expect("seed existing authorized identity");
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "request_authorization_upsert".to_owned(),
+    };
+    let provider_kind = ProviderKind::new("openai").expect("OpenAI Provider kind");
+    let serde_json::Value::Object(provider_material) =
+        json!({ "access_token": "authorized-secret" })
+    else {
+        unreachable!("credential fixture must be an object");
+    };
+
+    let result = PgAdminAccountStore::new(database.pool.clone(), None)
+        .commit_authorization(
+            AuthorizationCommit {
+                pending: PendingAuthorizationMutation::new(
+                    provider_kind.clone(),
+                    AuthorizationMutationTarget::Create {
+                        name: "authorized account".to_owned(),
+                    },
+                    AuthorizationOwnerBinding::from_context(&context),
+                ),
+                credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
+                    account_id: ProviderAccountId::new("acct_authorization_candidate")
+                        .expect("candidate account ID"),
+                    provider_kind,
+                    name: "authorized account".to_owned(),
+                    email: Some("authorized@example.invalid".to_owned()),
+                    upstream_user_id: Some("user-authorization-upsert".to_owned()),
+                    upstream_account_id: None,
+                    plan_type: Some("free".to_owned()),
+                    authentication_kind: "oauth".to_owned(),
+                    provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                        provider_material,
+                    )),
+                    has_refresh_token: true,
+                    access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
+                    next_refresh_at: None,
+                    enabled: true,
+                    credential_state: CredentialState::Ready,
+                    credential_observed_at: Utc::now(),
+                }),
+            },
+            &context,
+        )
+        .await
+        .expect("authorize existing identity");
+
+    assert_eq!(
+        (
+            result.account_id.as_str(),
+            result.credential_revision.map(|revision| revision.get()),
+        ),
+        ("acct_authorization_existing", Some(2)),
+    );
     database.close().await;
 }
 

@@ -682,8 +682,10 @@ impl AccountStore for PgAdminAccountStore {
     ) -> AdminStoreResult<CredentialMutationResult> {
         match command.credential {
             AuthorizationCredentialCommit::Create(credential) => {
-                let account_id = credential.account_id.clone();
-                let result = self
+                let CredentialImportResult {
+                    config_revision,
+                    credential_ids,
+                } = self
                     .commit_prepared_import(
                         PreparedCredentialImport {
                             provider_kind: credential.provider_kind.clone(),
@@ -693,6 +695,14 @@ impl AccountStore for PgAdminAccountStore {
                         "authorize",
                     )
                     .await?;
+                let [account_id]: [CoreProviderAccountId; 1] =
+                    credential_ids.try_into().map_err(|_| {
+                        AdminStoreError::new(
+                            AdminStoreErrorKind::Unavailable,
+                            ENTITY,
+                            "authorization import returned an unexpected account count",
+                        )
+                    })?;
                 let details = self
                     .accounts
                     .load_provider_account(account_id.as_str())
@@ -706,7 +716,7 @@ impl AccountStore for PgAdminAccountStore {
                         )
                     })?;
                 Ok(CredentialMutationResult {
-                    config_revision: result.config_revision,
+                    config_revision,
                     account_id,
                     credential_revision: Some(admin_revision(details.summary.credential_revision)?),
                 })
