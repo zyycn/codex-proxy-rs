@@ -70,7 +70,7 @@ watch(
 </script>
 
 <template>
-  <div class="relative flex h-dvh overflow-hidden bg-cp-page">
+  <div class="relative flex h-dvh overflow-hidden bg-cp-bg-layout">
     <AppSidebar
       :collapsed="sidebarCollapsed"
       @toggle="toggleSidebar"

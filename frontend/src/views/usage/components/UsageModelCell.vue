@@ -15,16 +15,16 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
 <template>
   <div class="inline-grid max-w-full gap-1">
     <code
-      class="block max-w-full truncate font-mono text-[12px] leading-none font-heavy text-cp-primary"
+      class="block max-w-full truncate font-mono text-cp-sm leading-none font-heavy text-cp-text"
     >
       {{ modelDisplay.primary }}
     </code>
     <div
       v-if="modelDisplay.secondary"
-      class="flex min-w-0 items-center gap-1.25 text-cp-secondary"
+      class="flex min-w-0 items-center gap-1.25 text-cp-text-secondary"
     >
       <CornerDownRight class="size-3.25 shrink-0 text-cp-info" stroke-width="2.4" />
-      <code class="block truncate font-mono text-[11px] leading-none font-bold">
+      <code class="block truncate font-mono text-cp-xs leading-none font-bold">
         {{ modelDisplay.secondary }}
       </code>
     </div>

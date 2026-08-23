@@ -50,7 +50,7 @@ function overviewIconClass(tone: string) {
     return 'bg-cp-warning-bg text-cp-warning-text'
   }
   if (tone === 'danger') {
-    return 'bg-cp-danger-bg text-cp-danger-text'
+    return 'bg-cp-error-bg text-cp-error-text'
   }
   return 'bg-cp-info-bg text-cp-info-text'
 }
@@ -66,15 +66,15 @@ function overviewIconClass(tone: string) {
     >
       <div class="flex items-stretch justify-between gap-3">
         <div class="flex min-w-0 flex-col">
-          <p class="m-0 text-[12px] leading-none font-heavy text-cp-secondary">
+          <p class="m-0 text-cp-sm leading-none font-heavy text-cp-text-secondary">
             {{ item.label }}
           </p>
           <strong
-            class="my-2 block font-mono text-[26px] leading-none font-extrabold text-cp-primary"
+            class="my-2 block font-mono text-[26px] leading-none font-extrabold text-cp-text"
           >
             {{ item.value }}
           </strong>
-          <p class="m-0 truncate text-[12px] leading-none font-emphasis text-cp-muted-text">
+          <p class="m-0 truncate text-cp-sm leading-none font-emphasis text-cp-text-quaternary">
             {{ item.caption }}
           </p>
         </div>

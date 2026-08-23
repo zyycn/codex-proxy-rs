@@ -29,14 +29,14 @@ const outcomeMeta = computed(() => [
   {
     label: '服务失败',
     value: props.point.failedRequests,
-    dotClass: 'bg-cp-danger',
-    valueClass: 'text-cp-danger-text',
+    dotClass: 'bg-cp-error',
+    valueClass: 'text-cp-error-text',
   },
   {
     label: '客户端取消',
     value: props.point.cancelledRequests,
-    dotClass: 'bg-cp-normal',
-    valueClass: 'text-cp-normal-text',
+    dotClass: 'bg-cp-status-normal',
+    valueClass: 'text-cp-status-normal-text',
   },
   {
     label: '调用方错误',
@@ -65,12 +65,12 @@ const metricItems = outcomeMeta
   <section
     role="dialog"
     :aria-label="`${point.time} 请求健康详情`"
-    class="overflow-hidden rounded-cp-overlay"
+    class="overflow-hidden rounded-cp-lg"
   >
-    <header class="flex items-center justify-between gap-3 bg-cp-subtle px-3.5 py-3">
+    <header class="flex items-center justify-between gap-3 bg-cp-fill-quaternary px-3.5 py-3">
       <div class="flex min-w-0 items-center gap-2">
         <span class="size-2 shrink-0 rounded-full" :class="status.cellClass" />
-        <strong class="font-mono text-[13px] leading-none font-heavy text-cp-primary">
+        <strong class="font-mono text-cp leading-none font-heavy text-cp-text">
           {{ point.time }}
         </strong>
         <span
@@ -80,7 +80,7 @@ const metricItems = outcomeMeta
           {{ status.label }}
         </span>
       </div>
-      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-muted-text">
+      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary">
         15 分钟
       </span>
     </header>
@@ -88,7 +88,7 @@ const metricItems = outcomeMeta
     <div class="grid gap-3.5 px-3.5 py-3.5">
       <div class="flex items-end justify-between gap-4">
         <div>
-          <p class="m-0 text-[11px] leading-none font-emphasis text-cp-muted-text">
+          <p class="m-0 text-cp-xs leading-none font-emphasis text-cp-text-quaternary">
             有效请求可用性
           </p>
           <strong
@@ -99,11 +99,11 @@ const metricItems = outcomeMeta
           </strong>
         </div>
         <div class="text-right">
-          <span class="block text-[10px] leading-none font-emphasis text-cp-muted-text">
+          <span class="block text-[10px] leading-none font-emphasis text-cp-text-quaternary">
             有效请求
           </span>
           <strong
-            class="mt-2 block font-mono text-[15px] leading-none font-heavy tabular-nums text-cp-primary"
+            class="mt-2 block font-mono text-cp-xl leading-none font-heavy tabular-nums text-cp-text"
           >
             {{ formatHealthCount(eligibleRequests) }}
           </strong>
@@ -111,7 +111,7 @@ const metricItems = outcomeMeta
       </div>
 
       <div
-        class="flex h-1.5 w-full overflow-hidden rounded-full bg-cp-muted"
+        class="flex h-1.5 w-full overflow-hidden rounded-full bg-cp-fill-tertiary"
         aria-hidden="true"
       >
         <span
@@ -127,14 +127,14 @@ const metricItems = outcomeMeta
         <div
           v-for="item in metricItems"
           :key="item.label"
-          class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-cp-control bg-cp-subtle px-2.5 py-2.5"
+          class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-cp bg-cp-fill-quaternary px-2.5 py-2.5"
         >
           <span class="size-1.5 rounded-full" :class="item.dotClass" />
-          <span class="truncate text-[10px] leading-none font-emphasis text-cp-secondary">
+          <span class="truncate text-[10px] leading-none font-emphasis text-cp-text-secondary">
             {{ item.label }}
           </span>
           <strong
-            class="font-mono text-[12px] leading-none font-heavy tabular-nums"
+            class="font-mono text-cp-sm leading-none font-heavy tabular-nums"
             :class="item.valueClass"
           >
             {{ formatHealthCount(item.value) }}
@@ -143,7 +143,7 @@ const metricItems = outcomeMeta
       </div>
 
       <p
-        class="m-0 border-t border-cp-divider pt-3 text-[10px] leading-[1.45] font-emphasis text-cp-muted-text"
+        class="m-0 border-t border-cp-split pt-3 text-[10px] leading-[1.45] font-emphasis text-cp-text-quaternary"
       >
         客户端取消与调用方错误单独记录，不计入可用性。
       </p>

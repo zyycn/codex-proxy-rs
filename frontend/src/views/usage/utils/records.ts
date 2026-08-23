@@ -213,7 +213,7 @@ export function usageRecordTypeClass(record: UsageDisplayRecord) {
     return 'bg-cp-success-bg text-cp-success-text'
   if (type === 'Chat')
     return 'bg-cp-warning-bg text-cp-warning-text'
-  return 'bg-cp-muted text-cp-info-text'
+  return 'bg-cp-fill-tertiary text-cp-info-text'
 }
 
 export function usageAccountText(record: UsageDisplayRecord) {

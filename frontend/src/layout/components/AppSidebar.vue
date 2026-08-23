@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -29,11 +30,12 @@ import {
 } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import AppBrandMark from '@/components/AppBrandMark.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
-import { useUiStore } from '@/stores/modules/ui'
+import { useThemeStore } from '@/stores/modules/theme'
 
 const props = withDefaults(
   defineProps<{
@@ -56,10 +58,10 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const systemUpdateStore = useSystemUpdateStore()
-const uiStore = useUiStore()
+const themeStore = useThemeStore()
 const { version, hasUpdate } = storeToRefs(systemUpdateStore)
-const { effectiveTheme } = storeToRefs(uiStore)
-const { toggleTheme } = uiStore
+const { effectiveTheme } = storeToRefs(themeStore)
+const { toggleTheme } = themeStore
 const preferredMotion = usePreferredReducedMotion()
 
 const navItems = [
@@ -68,6 +70,7 @@ const navItems = [
   { label: '分组管理', icon: FolderTree, path: '/account-groups' },
   { label: 'API 密钥', icon: KeyRound, path: '/api-keys' },
   { label: '使用统计', icon: ChartNoAxesColumn, path: '/usage' },
+  { label: '主题设置', icon: Palette, path: '/theme' },
   { label: '系统设置', icon: Settings, path: '/settings' },
 ]
 
@@ -328,7 +331,7 @@ onBeforeUnmount(() => {
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-cp-surface px-4 shadow-cp-sidebar"
+    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-layout-sider-bg) px-4 shadow-cp-layout-sider"
     :class="[
       mobile ? 'flex' : 'hidden min-[961px]:flex',
       isCollapsed ? 'w-22 basis-22 items-center' : 'w-62.75 basis-62.75',
@@ -341,35 +344,30 @@ onBeforeUnmount(() => {
       <BaseMotionIcon
         aria-hidden="true"
         variant="brand"
-        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-cp-control"
+        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-cp"
       >
-        <img
-          src="/favicon.svg"
-          alt=""
-          class="block size-11 select-none"
-          draggable="false"
-        >
+        <AppBrandMark class="block size-11 select-none" />
       </BaseMotionIcon>
       <span
         v-show="brandLabelVisible"
         ref="brandLabelEl"
         class="grid min-w-33 content-center overflow-hidden"
       >
-        <strong class="text-base leading-[1.1] font-heavy text-cp-primary">
+        <strong class="text-base leading-[1.1] font-heavy text-cp-text">
           Codex Proxy
         </strong>
         <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
-          <span class="shrink-0 text-xs leading-none font-emphasis text-cp-secondary">
+          <span class="shrink-0 text-xs leading-none font-emphasis text-cp-text-secondary">
             Rust build
           </span>
           <button
             v-if="hasVersionLabel"
             type="button"
-            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-cp-control-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface"
+            class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-cp-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
             :class="[
               hasUpdate
                 ? 'bg-cp-success-bg text-cp-success-text hover:bg-cp-success-bg-hover'
-                : 'bg-cp-subtle text-cp-muted-text hover:bg-cp-muted hover:text-cp-secondary',
+                : 'bg-cp-fill-quaternary text-cp-text-quaternary hover:bg-cp-fill-tertiary hover:text-cp-text-secondary',
             ]"
             :title="updateButtonLabel"
             @click="openSystemUpdate"
@@ -388,7 +386,7 @@ onBeforeUnmount(() => {
     >
       <span
         aria-hidden="true"
-        class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp-control bg-cp-nav-active transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
         :style="activeNavIndicatorStyle"
       >
         <span ref="navSignal" class="sidebar-active-signal absolute inset-y-0 left-0 w-2/3" />
@@ -397,16 +395,16 @@ onBeforeUnmount(() => {
         v-for="item in navItems"
         :key="item.label"
         type="button"
-        class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp-control border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface"
+        class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
         :class="[
           isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
           isActive(item.path)
             ? navFeedbackMuted
-              ? 'bg-transparent font-bold text-cp-primary transition-none'
-              : 'bg-transparent font-bold text-cp-primary transition-colors duration-200'
+              ? 'bg-transparent font-bold text-cp-text transition-none'
+              : 'bg-transparent font-bold text-cp-text transition-colors duration-200'
             : navFeedbackMuted
-              ? 'bg-transparent font-semibold text-cp-secondary transition-none'
-              : 'bg-transparent font-semibold text-cp-secondary transition-colors duration-200 hover:bg-cp-subtle hover:text-cp-primary',
+              ? 'bg-transparent font-semibold text-cp-text-secondary transition-none'
+              : 'bg-transparent font-semibold text-cp-text-secondary transition-colors duration-200 hover:bg-cp-fill-quaternary hover:text-cp-text',
         ]"
         @click="navigate(item.path)"
       >
@@ -422,11 +420,11 @@ onBeforeUnmount(() => {
 
     <div class="mt-auto mb-6" :class="isCollapsed ? 'w-11' : 'w-full'">
       <div
-        class="bg-cp-subtle"
+        class="bg-cp-fill-quaternary"
         :class="
           isCollapsed
-            ? 'grid gap-1 rounded-cp-control p-1'
-            : 'flex h-11 items-center justify-between rounded-cp-overlay px-2'
+            ? 'grid gap-1 rounded-cp p-1'
+            : 'flex h-11 items-center justify-between rounded-cp-lg px-2'
         "
       >
         <span
@@ -505,6 +503,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .sidebar-active-signal {
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--cp-info) 9%, transparent), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--cp-color-info) 9%, transparent),
+    transparent
+  );
 }
 </style>

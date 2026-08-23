@@ -27,7 +27,7 @@ const status = defineModel<string>('status', { required: true })
       placeholder="搜索分组名称..."
     >
       <template #prefix>
-        <Search class="size-4.5 text-cp-tertiary" />
+        <Search class="size-4.5 text-cp-text-tertiary" />
       </template>
     </BaseInput>
     <BaseSelect

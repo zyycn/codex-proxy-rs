@@ -76,18 +76,18 @@ const sizeConfig: Record<
 > = {
   md: {
     trigger:
-      'h-cp-control-md px-3.5 pr-9 text-[13px] rounded-cp-control',
-    option: 'h-8.5 px-3 text-[13px]',
+      'h-cp-control px-3.5 pr-9 text-cp rounded-cp',
+    option: 'h-8.5 px-3 text-cp',
     icon: 16,
   },
   sm: {
-    trigger: 'h-cp-control-sm px-2.5 pr-7 text-xs rounded-cp-control',
+    trigger: 'h-cp-control-sm px-2.5 pr-7 text-xs rounded-cp',
     option: 'h-8 px-2.5 text-xs',
     icon: 14,
   },
   lg: {
-    trigger: 'h-cp-control-lg px-4 pr-10 text-[14px] rounded-cp-control',
-    option: 'h-10 px-3.5 text-[14px]',
+    trigger: 'h-cp-control-lg px-4 pr-10 text-cp-lg rounded-cp',
+    option: 'h-10 px-3.5 text-cp-lg',
     icon: 17,
   },
 }
@@ -98,20 +98,20 @@ const triggerClasses = computed(() => [
   'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-emphasis leading-none shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
   sizeConfig[props.size].trigger,
   props.disabled
-    ? 'cursor-not-allowed bg-cp-disabled text-cp-disabled-text shadow-none'
+    ? 'cursor-not-allowed bg-cp-bg-container-disabled text-cp-text-disabled shadow-none'
     : invalid.value
-      ? 'cursor-pointer bg-(--cp-input-error-soft-bg) text-cp-danger-text shadow-cp-input-error'
+      ? 'cursor-pointer bg-(--cp-input-error-active-bg) text-cp-error-text shadow-cp-input-error-active'
       : open.value
-        ? 'cursor-pointer bg-(--cp-input-soft-bg-focus) text-cp-primary shadow-cp-input-focus'
+        ? 'cursor-pointer bg-(--cp-input-active-bg) text-cp-text shadow-cp-input-active'
         : [
-            'cursor-pointer bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] text-cp-primary',
-            'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-cp-input-hover',
-            'focus-visible:bg-(--cp-input-soft-bg-focus) focus-visible:shadow-cp-input-focus',
+            'cursor-pointer bg-[var(--cp-input-bg)] text-cp-text',
+            'hover:bg-[var(--cp-input-hover-bg)] hover:shadow-cp-input-hover',
+            'focus-visible:bg-(--cp-input-active-bg) focus-visible:shadow-cp-input-active',
           ],
 ])
 
 const popoverClasses = computed(() => [
-  'fixed z-50 flex flex-col gap-1 rounded-cp-overlay border-0 bg-cp-surface p-1 shadow-cp-popover',
+  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-container p-1 shadow-cp',
   props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
 ])
 
@@ -255,15 +255,15 @@ function handleTriggerKeydown(event: KeyboardEvent) {
 
 function optionClasses(option: SelectOption, index: number) {
   return [
-    'flex w-full touch-manipulation items-center gap-2 rounded-cp-control-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
+    'flex w-full touch-manipulation items-center gap-2 rounded-cp-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
     sizeConfig[props.size].option,
     option.disabled
-      ? 'cursor-not-allowed bg-transparent text-cp-disabled-text'
+      ? 'cursor-not-allowed bg-transparent text-cp-text-disabled'
       : option.value === model.value
-        ? 'cursor-pointer bg-cp-info-bg text-cp-info-text'
+        ? 'cursor-pointer bg-cp-control-item-bg-active text-cp-primary-text'
         : activeIndex.value === index
-          ? 'cursor-pointer bg-cp-default-hover text-cp-primary'
-          : 'cursor-pointer bg-transparent text-cp-primary hover:bg-cp-default-hover',
+          ? 'cursor-pointer bg-cp-bg-text-hover text-cp-text'
+          : 'cursor-pointer bg-transparent text-cp-text hover:bg-cp-bg-text-hover',
   ]
 }
 
@@ -316,10 +316,10 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
         class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 transition-transform"
         :class="
           disabled
-            ? 'text-cp-disabled-icon'
+            ? 'text-cp-text-disabled'
             : open
-              ? 'rotate-180 text-cp-info'
-              : 'text-cp-muted-text'
+              ? 'rotate-180 text-cp-primary-text'
+              : 'text-cp-text-quaternary'
         "
         :size="sizeConfig[size].icon"
         aria-hidden="true"
@@ -346,7 +346,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
         >
           <div
             v-if="options.length === 0"
-            class="flex h-8.5 items-center rounded-cp-control-sm px-3 text-[13px] leading-none font-emphasis text-cp-muted-text"
+            class="flex h-8.5 items-center rounded-cp-sm px-3 text-cp leading-none font-emphasis text-cp-text-quaternary"
           >
             {{ emptyText }}
           </div>
@@ -369,7 +369,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
               <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
               <Check
                 v-if="option.value === model"
-                class="shrink-0 text-cp-info"
+                class="shrink-0 text-cp-primary-text"
                 :size="size === 'sm' ? 13 : size === 'lg' ? 17 : 15"
                 aria-hidden="true"
               />

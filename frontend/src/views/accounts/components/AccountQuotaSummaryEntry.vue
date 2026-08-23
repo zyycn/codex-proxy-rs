@@ -94,7 +94,7 @@ function quotaWindowCode(
     <template #trigger="{ open }">
       <button
         type="button"
-        class="block w-full cursor-help rounded-sm border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
+        class="block w-full cursor-help rounded-sm border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
         :aria-label="`查看${detailTitle}详情`"
         :aria-expanded="open"
         aria-haspopup="dialog"
@@ -116,16 +116,16 @@ function quotaWindowCode(
     </template>
 
     <section
-      class="w-84 overflow-hidden rounded-cp-overlay"
+      class="w-84 overflow-hidden rounded-cp-lg"
       role="dialog"
       :aria-label="`${detailTitle}详情`"
     >
       <header
         v-if="detailHeading"
-        class="bg-cp-subtle px-3 py-2.5"
+        class="bg-cp-fill-quaternary px-3 py-2.5"
       >
         <h3
-          class="m-0 truncate text-[13px] leading-5 font-heavy text-cp-primary"
+          class="m-0 truncate text-cp leading-5 font-heavy text-cp-text"
           :title="detailHeading"
         >
           {{ detailHeading }}
@@ -142,17 +142,17 @@ function quotaWindowCode(
         >
           <div class="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2.5">
             <span
-              class="grid h-5 w-8 place-items-center rounded-sm bg-cp-muted font-mono text-[9px] leading-none font-heavy tracking-[0.04em] text-cp-info-text"
+              class="grid h-5 w-8 place-items-center rounded-sm bg-cp-fill-tertiary font-mono text-[9px] leading-none font-heavy tracking-[0.04em] text-cp-info-text"
               aria-hidden="true"
             >
               {{ item.code }}
             </span>
-            <h4 class="m-0 min-w-0 truncate text-[12px] leading-4 font-heavy text-cp-secondary">
+            <h4 class="m-0 min-w-0 truncate text-cp-sm leading-4 font-heavy text-cp-text-secondary">
               {{ item.local ? item.localLabel : item.label }}
             </h4>
             <strong
-              class="font-mono text-[11px] leading-none font-heavy tabular-nums"
-              :class="item.local ? 'text-cp-primary' : item.percentTextClass"
+              class="font-mono text-cp-xs leading-none font-heavy tabular-nums"
+              :class="item.local ? 'text-cp-text' : item.percentTextClass"
             >
               {{ item.local ? `${item.requestDisplay} 次` : item.usedPercentDisplay }}
             </strong>
@@ -166,7 +166,7 @@ function quotaWindowCode(
           />
           <template v-else>
             <div
-              class="mt-2 h-1 w-full overflow-hidden rounded-full bg-cp-default-border"
+              class="mt-2 h-1 w-full overflow-hidden rounded-full bg-cp-border-secondary"
               role="progressbar"
               :aria-label="item.label"
               aria-valuemin="0"
@@ -184,30 +184,30 @@ function quotaWindowCode(
 
           <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[10px] leading-4">
             <template v-if="item.local">
-              <dt class="font-emphasis text-cp-tertiary">
+              <dt class="font-emphasis text-cp-text-tertiary">
                 统计方式
               </dt>
-              <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-primary">
+              <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-text">
                 滚动窗口
               </dd>
-              <dt class="font-emphasis text-cp-tertiary">
+              <dt class="font-emphasis text-cp-text-tertiary">
                 统计范围
               </dt>
-              <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-secondary">
+              <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-text-secondary">
                 {{ item.durationDisplay }}
               </dd>
             </template>
             <template v-else>
-              <dt class="font-emphasis text-cp-tertiary">
+              <dt class="font-emphasis text-cp-text-tertiary">
                 窗口消耗
               </dt>
-              <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-primary">
+              <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-text">
                 {{ item.localUsageDisplay }}
               </dd>
-              <dt class="font-emphasis text-cp-tertiary">
+              <dt class="font-emphasis text-cp-text-tertiary">
                 重置时间
               </dt>
-              <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-secondary">
+              <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-text-secondary">
                 {{ item.resetAtDisplay }}
               </dd>
             </template>

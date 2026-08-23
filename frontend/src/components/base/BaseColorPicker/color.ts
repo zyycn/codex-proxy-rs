@@ -1,9 +1,9 @@
-import { normalizeRgbaHexColor } from '@/utils/color'
+import { normalizeHexColor, normalizeRgbaHexColor } from '@/utils/color'
 
 const RGBA_COLOR_PATTERN
   = /^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*\)$/i
 
-interface HsvColor {
+export interface HsvaColor {
   h: number
   s: number
   v: number
@@ -17,8 +17,23 @@ interface RgbaColor {
   a: number
 }
 
-export function hexToHsv(value: string): HsvColor | null {
-  const normalized = normalizeRgbaHexColor(value)
+export function normalizePickerHexColor(value: string, allowAlpha: boolean) {
+  if (allowAlpha) {
+    const rgba = normalizeRgbaHexColor(value)
+    if (rgba)
+      return rgba
+    const rgb = normalizeHexColor(value)
+    return rgb ? `${rgb}FF` : null
+  }
+
+  const rgb = normalizeHexColor(value)
+  if (rgb)
+    return rgb
+  return normalizeRgbaHexColor(value)?.slice(0, 7) ?? null
+}
+
+export function hexToHsva(value: string): HsvaColor | null {
+  const normalized = normalizePickerHexColor(value, true)
   if (!normalized)
     return null
 
@@ -48,7 +63,7 @@ export function hexToHsv(value: string): HsvColor | null {
   }
 }
 
-export function hsvToHex(color: HsvColor) {
+export function hsvaToHex(color: HsvaColor, allowAlpha: boolean) {
   const hue = ((color.h % 360) + 360) % 360
   const saturation = clamp(color.s, 0, 100) / 100
   const brightness = clamp(color.v, 0, 100) / 100
@@ -71,7 +86,9 @@ export function hsvToHex(color: HsvColor) {
   const rgb = [red, green, blue]
     .map(channel => Math.round((channel + offset) * 255).toString(16).padStart(2, '0'))
     .join('')
-  const alpha = Math.round(clamp(color.a, 0, 1) * 255).toString(16).padStart(2, '0')
+  const alpha = allowAlpha
+    ? Math.round(clamp(color.a, 0, 1) * 255).toString(16).padStart(2, '0')
+    : ''
   return `#${rgb}${alpha}`.toUpperCase()
 }
 
@@ -97,7 +114,7 @@ export function rgbaToHexColor(color: RgbaColor) {
 }
 
 export function formatRgbaColor(value: string) {
-  const normalized = normalizeRgbaHexColor(value)
+  const normalized = normalizePickerHexColor(value, true)
   if (!normalized)
     return null
 

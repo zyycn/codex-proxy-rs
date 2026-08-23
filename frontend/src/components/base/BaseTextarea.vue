@@ -47,17 +47,17 @@ const controlAttrs = computed(() => Object.fromEntries(
 
 const sizeClasses: Record<TextareaSize, string> = {
   sm: 'px-3 py-2.5 text-xs',
-  md: 'px-3.5 py-3 text-[13px]',
-  lg: 'px-4 py-3.5 text-[14px]',
+  md: 'px-3.5 py-3 text-cp',
+  lg: 'px-4 py-3.5 text-cp-lg',
 }
 
 const textareaClasses = computed(() => [
-  'cp-scrollbar w-full resize-none rounded-cp-control border-0 bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] text-cp-primary shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-160 placeholder:text-cp-muted-text motion-reduce:transition-none',
-  'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-cp-input-hover focus:bg-(--cp-input-soft-bg-focus) focus:shadow-cp-input-focus',
-  'disabled:cursor-not-allowed disabled:bg-cp-disabled disabled:text-cp-disabled-text disabled:shadow-none',
+  'cp-scrollbar w-full resize-none rounded-cp border-0 bg-[var(--cp-input-bg)] text-cp-text shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-160 placeholder:text-cp-text-quaternary motion-reduce:transition-none',
+  'hover:bg-[var(--cp-input-hover-bg)] hover:shadow-cp-input-hover focus:bg-(--cp-input-active-bg) focus:shadow-cp-input-active',
+  'disabled:cursor-not-allowed disabled:bg-cp-bg-container-disabled disabled:text-cp-text-disabled disabled:shadow-none',
   'leading-[1.55] font-emphasis',
   sizeClasses[props.size],
-  invalid.value ? 'bg-(--cp-input-error-soft-bg) shadow-cp-input-error' : undefined,
+  invalid.value ? 'bg-(--cp-input-error-active-bg) shadow-cp-input-error-active' : undefined,
 ])
 </script>
 

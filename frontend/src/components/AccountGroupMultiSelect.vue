@@ -90,7 +90,7 @@ function providerSummary(group: AccountGroup) {
       :disabled="disabled || loading"
     >
       <template #prefix>
-        <Search class="size-4 text-cp-tertiary" />
+        <Search class="size-4 text-cp-text-tertiary" />
       </template>
     </BaseInput>
 
@@ -102,10 +102,10 @@ function providerSummary(group: AccountGroup) {
         <div
           v-for="group in visibleGroups"
           :key="group.id"
-          class="flex w-full items-start gap-3 rounded-cp-control border-0 px-3 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-cp-info-border"
+          class="flex w-full items-start gap-3 rounded-cp border-0 px-3 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-cp-control-outline"
           :class="selectedIds.includes(group.id)
-            ? 'bg-cp-info-bg'
-            : 'bg-cp-subtle hover:bg-cp-default-hover'"
+            ? 'bg-cp-control-item-bg-active'
+            : 'bg-cp-fill-quaternary hover:bg-cp-bg-text-hover'"
         >
           <BaseCheckbox
             :model-value="selectedIds.includes(group.id)"
@@ -115,7 +115,7 @@ function providerSummary(group: AccountGroup) {
           />
           <span class="min-w-0 flex-1">
             <span class="flex min-w-0 items-center gap-2">
-              <strong class="min-w-0 truncate text-[13px] text-cp-primary">
+              <strong class="min-w-0 truncate text-cp text-cp-text">
                 {{ group.name }}
               </strong>
               <span
@@ -125,7 +125,7 @@ function providerSummary(group: AccountGroup) {
                 已禁用
               </span>
             </span>
-            <span class="mt-1 block text-[11px] font-emphasis text-cp-secondary">
+            <span class="mt-1 block text-cp-xs font-emphasis text-cp-text-secondary">
               {{ group.memberCount }} 个账号<template v-if="providerSummary(group)"> · {{ providerSummary(group) }}</template>
             </span>
           </span>
@@ -148,15 +148,15 @@ function providerSummary(group: AccountGroup) {
 
     <div
       v-if="selectedIds.length === 0"
-      class="rounded-cp-control px-3.5 py-3"
+      class="rounded-cp px-3.5 py-3"
       :class="emptyCopy.tone === 'warning'
         ? 'bg-cp-warning-bg text-cp-warning-text'
-        : 'bg-cp-subtle text-cp-secondary'"
+        : 'bg-cp-fill-quaternary text-cp-text-secondary'"
     >
-      <p class="m-0 text-[12px] font-bold">
+      <p class="m-0 text-cp-sm font-bold">
         {{ emptyCopy.title }}
       </p>
-      <p class="mt-1 mb-0 text-[11px] leading-normal font-emphasis">
+      <p class="mt-1 mb-0 text-cp-xs leading-normal font-emphasis">
         {{ emptyCopy.description }}
       </p>
     </div>

@@ -60,23 +60,23 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
     size="xl"
   >
     <template v-if="record">
-      <section class="rounded-cp-surface bg-cp-subtle px-4 py-3.5">
+      <section class="rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5">
         <div class="flex flex-wrap items-center gap-3">
           <UsageStatusCodeBadge :status-code="record.clientStatusCode" />
-          <span class="text-[12px] font-bold text-cp-secondary">
+          <span class="text-cp-sm font-bold text-cp-text-secondary">
             客户端 {{ displayValue(record.clientStatusCode) }}
           </span>
-          <span class="text-[12px] font-bold text-cp-secondary">
+          <span class="text-cp-sm font-bold text-cp-text-secondary">
             上游 {{ displayValue(record.upstreamStatusCode) }}
           </span>
         </div>
-        <p class="mt-3 mb-0 text-[13px] leading-relaxed font-bold text-cp-primary">
+        <p class="mt-3 mb-0 text-cp leading-relaxed font-bold text-cp-text">
           {{ displayValue(record.message) }}
         </p>
       </section>
 
       <dl
-        class="mt-3 grid grid-cols-1 gap-3 rounded-cp-surface bg-cp-subtle px-4 py-3.5 sm:grid-cols-2"
+        class="mt-3 grid grid-cols-1 gap-3 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5 sm:grid-cols-2"
       >
         <div
           v-for="field in fields"
@@ -84,11 +84,11 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
           class="min-w-0"
           :class="field.wide ? 'sm:col-span-2' : undefined"
         >
-          <dt class="text-[11px] leading-none font-bold text-cp-muted-text">
+          <dt class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
             {{ field.label }}
           </dt>
           <dd
-            class="mt-1.5 mb-0 truncate font-mono text-[12px] leading-normal font-emphasis text-cp-primary"
+            class="mt-1.5 mb-0 truncate font-mono text-cp-sm leading-normal font-emphasis text-cp-text"
             :title="displayValue(field.value)"
           >
             {{ displayValue(field.value) }}
@@ -98,7 +98,7 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
 
       <section
         v-if="metadataText"
-        class="mt-3 rounded-cp-surface bg-cp-subtle px-4 py-3.5"
+        class="mt-3 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5"
       >
         <UsageDetailCodePanel title="Metadata" max-height="260px" :content="metadataText" />
       </section>

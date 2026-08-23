@@ -25,14 +25,14 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-col rounded-lg bg-cp-surface p-4 shadow-cp-control">
+  <section class="flex min-h-0 flex-col rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary">
     <div class="mb-3 flex shrink-0 items-start justify-between gap-3">
       <div class="min-w-0">
-        <h3 class="m-0 text-[14px] font-heavy text-cp-primary">
+        <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
           账号额度
         </h3>
         <p
-          class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] font-emphasis text-cp-secondary"
+          class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
         >
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
           <template v-if="account.provider === 'openai'">
@@ -72,7 +72,7 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
         :label="entry.label"
         :windows="entry.windows"
       />
-      <p v-if="quotaEntries.length === 0" class="m-0 text-[12px] font-emphasis text-cp-secondary">
+      <p v-if="quotaEntries.length === 0" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">
         额度待观测
       </p>
     </div>

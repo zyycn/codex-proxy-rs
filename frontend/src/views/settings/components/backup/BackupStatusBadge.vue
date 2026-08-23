@@ -39,13 +39,13 @@ const textClass = computed(() => {
     case 'success':
       return 'text-cp-success-text'
     case 'danger':
-      return 'text-cp-danger-text'
+      return 'text-cp-error-text'
     case 'warning':
       return 'text-cp-warning-text'
     case 'info':
       return 'text-cp-info-text'
     default:
-      return 'text-cp-secondary'
+      return 'text-cp-text-secondary'
   }
 })
 
@@ -54,13 +54,13 @@ const dotClass = computed(() => {
     case 'success':
       return 'bg-cp-success'
     case 'danger':
-      return 'bg-cp-danger'
+      return 'bg-cp-error'
     case 'warning':
       return 'bg-cp-warning'
     case 'info':
       return 'bg-cp-info'
     default:
-      return 'bg-cp-muted-text'
+      return 'bg-cp-text-quaternary'
   }
 })
 </script>
@@ -68,14 +68,14 @@ const dotClass = computed(() => {
 <template>
   <span
     v-if="variant === 'pill'"
-    class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] font-heavy"
+    class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-cp-sm font-heavy"
     :class="textClass"
   >
     {{ label }}
   </span>
   <span
     v-else
-    class="inline-flex min-w-16 items-center gap-1.5 text-[12px] leading-none font-emphasis"
+    class="inline-flex min-w-16 items-center gap-1.5 text-cp-sm leading-none font-emphasis"
     :class="textClass"
   >
     <span class="size-1.5 rounded-full" :class="dotClass" />

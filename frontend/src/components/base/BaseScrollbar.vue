@@ -9,12 +9,14 @@ const props = withDefaults(
     height?: string
     horizontal?: boolean
     vertical?: boolean
+    alwaysVisible?: boolean
   }>(),
   {
     maxHeight: undefined,
     height: undefined,
     horizontal: false,
     vertical: true,
+    alwaysVisible: false,
   },
 )
 
@@ -64,10 +66,10 @@ const { start: startHideTimer, stop: stopHideTimer } = useTimeoutFn(hideScrollba
 const canScrollY = computed(() => thumbHeight.value > 0)
 const canScrollX = computed(() => horizontalThumbWidth.value > 0)
 const verticalScrollbarVisible = computed(
-  () => dragging.value || verticalTrackHovering.value || visible.value,
+  () => props.alwaysVisible || dragging.value || verticalTrackHovering.value || visible.value,
 )
 const horizontalScrollbarVisible = computed(
-  () => horizontalDragging.value || horizontalTrackHovering.value || visible.value,
+  () => props.alwaysVisible || horizontalDragging.value || horizontalTrackHovering.value || visible.value,
 )
 const thumbStyle = computed(() => ({
   height: `${thumbHeight.value}px`,
@@ -510,8 +512,8 @@ defineExpose({
       ]"
     >
       <div
-        class="w-1.5 rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
-        :class="dragging ? 'bg-(--cp-scrollbar-thumb-hover)' : ''"
+        class="w-1.5 rounded-full bg-(--cp-scrollbar-thumb-bg) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover-bg)"
+        :class="dragging ? 'bg-(--cp-scrollbar-thumb-hover-bg)' : ''"
         :style="thumbStyle"
         @pointerdown="handleThumbPointerDown"
       />
@@ -528,8 +530,8 @@ defineExpose({
       ]"
     >
       <div
-        class="h-1.5 rounded-full bg-(--cp-scrollbar-thumb) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover)"
-        :class="horizontalDragging ? 'bg-(--cp-scrollbar-thumb-hover)' : ''"
+        class="h-1.5 rounded-full bg-(--cp-scrollbar-thumb-bg) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover-bg)"
+        :class="horizontalDragging ? 'bg-(--cp-scrollbar-thumb-hover-bg)' : ''"
         :style="horizontalThumbStyle"
         @pointerdown="handleHorizontalThumbPointerDown"
       />
@@ -549,6 +551,6 @@ defineExpose({
 }
 
 .base-scrollbar-track-y {
-  top: var(--cp-scrollbar-track-top, 0.25rem);
+  top: var(--cp-scrollbar-track-inset-block-start, 0.25rem);
 }
 </style>

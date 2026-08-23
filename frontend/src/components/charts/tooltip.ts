@@ -30,7 +30,7 @@ export function chartTooltipStyle(
       fontFamily: options.fontFamily ?? 'Inter Variable, Inter, system-ui, sans-serif',
       fontWeight: options.fontWeight ?? 650,
     },
-    extraCssText: 'border-radius: 12px; box-shadow: var(--cp-shadow-popover);',
+    extraCssText: 'border-radius: 12px; box-shadow: var(--cp-box-shadow);',
   }
 
   if (!options.axisPointer)

@@ -110,17 +110,17 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     size="md"
   >
     <div class="flex flex-col gap-4">
-      <div class="rounded-cp-control border border-cp-warning-border bg-cp-warning-bg px-4 py-3">
-        <p class="m-0 text-[13px] font-semibold text-cp-warning-text">
+      <div class="rounded-cp border border-cp-warning-border bg-cp-warning-bg px-4 py-3">
+        <p class="m-0 text-cp font-semibold text-cp-warning-text">
           该密钥具有网关访问权限，请仅发送给可信调用方
         </p>
       </div>
       <div>
-        <p class="mb-2 text-[13px] font-medium text-cp-secondary">
+        <p class="mb-2 text-cp font-medium text-cp-text-secondary">
           API Key
         </p>
         <div class="flex items-center gap-2">
-          <code class="flex-1 rounded-cp-control bg-cp-subtle px-3 py-2.5 font-mono text-[13px] break-all text-cp-primary">
+          <code class="flex-1 rounded-cp bg-cp-fill-quaternary px-3 py-2.5 font-mono text-cp break-all text-cp-text">
             {{ createdKey }}
           </code>
           <BaseIconButton size="md" label="复制" @click="emit('copy', createdKey)">

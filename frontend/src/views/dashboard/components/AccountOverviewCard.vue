@@ -151,8 +151,8 @@ const statusBars = computed(() => {
   return [
     { pct: (counts.normal / counts.total) * 100, cls: 'bg-cp-success' },
     { pct: (counts.quotaExhausted / counts.total) * 100, cls: 'bg-cp-warning' },
-    { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-cp-normal' },
-    { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-cp-danger' },
+    { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-cp-status-normal' },
+    { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-cp-error' },
   ].filter(b => b.pct > 0)
 })
 </script>
@@ -163,25 +163,25 @@ const statusBars = computed(() => {
       class="grid xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.28fr)_minmax(280px,0.9fr)] xl:gap-7"
     >
       <section class="min-w-0 w-full pb-6 xl:h-100.5 xl:pb-0">
-        <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-primary">
+        <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
           账号调度
         </h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-cp-secondary">
+        <p class="mt-1.75 mb-0 text-cp leading-[1.15] font-semibold text-cp-text-secondary">
           容量、并发与分配策略
         </p>
 
         <div class="mt-6.75 grid gap-4 xl:h-82.5 xl:grid-rows-[122px_90px_minmax(0,1fr)]">
-          <div class="grid h-30.5 content-between rounded-cp-overlay bg-cp-subtle p-4 xl:h-auto">
-            <span class="block h-3.5 text-xs leading-[1.15] font-emphasis text-cp-secondary">槽位占用</span>
+          <div class="grid h-30.5 content-between rounded-cp-lg bg-cp-bg-elevated p-4 xl:h-auto">
+            <span class="block h-3.5 text-xs leading-[1.15] font-emphasis text-cp-text-secondary">槽位占用</span>
             <div>
               <div class="h-8.5">
                 <strong
-                  class="font-mono text-[32px] leading-[1.05] font-heavy tabular-nums text-cp-primary"
+                  class="font-mono text-[32px] leading-[1.05] font-heavy tabular-nums text-cp-text"
                 >
                   {{ usedRatio }}
                 </strong>
               </div>
-              <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-cp-progress">
+              <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-cp-progress-remaining">
                 <i
                   class="block h-2.5 rounded-full bg-cp-success"
                   :style="usedProgressStyle"
@@ -191,21 +191,21 @@ const statusBars = computed(() => {
           </div>
 
           <div
-            class="grid h-22.5 grid-cols-3 gap-4 rounded-cp-overlay bg-cp-subtle p-4 xl:h-auto"
+            class="grid h-22.5 grid-cols-3 gap-4 rounded-cp-lg bg-cp-bg-elevated p-4 xl:h-auto"
           >
             <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
-              <span class="text-xs leading-[1.15] font-emphasis text-cp-secondary">{{ stat.label }}</span>
+              <span class="text-xs leading-[1.15] font-emphasis text-cp-text-secondary">{{ stat.label }}</span>
               <strong
-                class="block font-mono text-[21px] leading-[1.1] font-heavy tabular-nums text-cp-primary"
+                class="block font-mono text-[21px] leading-[1.1] font-heavy tabular-nums text-cp-text"
               >
                 {{ stat.value }}
               </strong>
             </div>
           </div>
 
-          <div class="grid h-20.5 content-between rounded-cp-overlay bg-cp-subtle p-4 xl:h-auto">
-            <span class="text-xs leading-[1.15] font-emphasis text-cp-secondary">分配策略</span>
-            <strong class="block text-[17px] leading-[1.15] font-emphasis text-cp-primary">
+          <div class="grid h-20.5 content-between rounded-cp-lg bg-cp-bg-elevated p-4 xl:h-auto">
+            <span class="text-xs leading-[1.15] font-emphasis text-cp-text-secondary">分配策略</span>
+            <strong class="block text-[17px] leading-[1.15] font-emphasis text-cp-text">
               {{ strategyLabel }}
             </strong>
           </div>
@@ -213,10 +213,10 @@ const statusBars = computed(() => {
       </section>
 
       <section class="min-w-0 w-full">
-        <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-primary">
+        <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
           活跃账号用量
         </h2>
-        <p class="mt-1.75 mb-0 text-[13px] leading-[1.15] font-semibold text-cp-secondary">
+        <p class="mt-1.75 mb-0 text-cp leading-[1.15] font-semibold text-cp-text-secondary">
           最近使用排序
         </p>
 
@@ -232,7 +232,7 @@ const statusBars = computed(() => {
             <article
               v-for="account in accounts"
               :key="account.id"
-              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-subtle px-3.5 py-3.5 transition-colors xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
+              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-bg-elevated px-3.5 py-3.5 transition-colors xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
             >
               <AccountIdentityCell
                 :account="account"
@@ -253,20 +253,20 @@ const statusBars = computed(() => {
                 class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-start gap-3 xl:contents"
               >
                 <span class="grid min-w-0 gap-1">
-                  <span class="text-[11px] leading-none font-bold text-cp-muted-text">
+                  <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
                     {{ account.metricLabel }}
                   </span>
                   <strong
-                    class="font-mono text-sm leading-[1.15] font-heavy tabular-nums text-cp-primary"
+                    class="font-mono text-sm leading-[1.15] font-heavy tabular-nums text-cp-text"
                   >
                     {{ account.metricValue }}
                   </strong>
                 </span>
 
                 <span class="grid min-w-0 gap-1">
-                  <span class="text-[11px] leading-none font-bold text-cp-muted-text">最近</span>
+                  <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">最近</span>
                   <span
-                    class="min-w-0 truncate text-xs leading-[1.15] font-bold text-cp-secondary xl:whitespace-nowrap"
+                    class="min-w-0 truncate text-xs leading-[1.15] font-bold text-cp-text-secondary xl:whitespace-nowrap"
                   >
                     {{ account.lastUsed }}
                   </span>
@@ -286,10 +286,10 @@ const statusBars = computed(() => {
       <section class="min-w-0 w-full pt-6 xl:h-100.5 xl:pt-0">
         <header class="flex h-12.5 items-start justify-between">
           <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-primary">
+            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
               账号状态
             </h2>
-            <p class="mt-1 mb-0 text-[13px] leading-[1.15] font-emphasis text-cp-secondary">
+            <p class="mt-1 mb-0 text-cp leading-[1.15] font-emphasis text-cp-text-secondary">
               账号池健康结构
             </p>
           </div>
@@ -299,16 +299,16 @@ const statusBars = computed(() => {
             >
               {{ normalRate }}
             </strong>
-            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-cp-secondary">正常率</span>
+            <span class="mt-0.5 text-xs leading-[1.15] font-bold text-cp-text-secondary">正常率</span>
           </div>
         </header>
 
         <div class="mt-5.5 h-10.5 w-full">
           <div class="flex h-4 items-center justify-between">
-            <span class="text-xs leading-[1.15] font-emphasis text-cp-secondary">状态分布</span>
-            <span class="text-xs leading-[1.15] font-emphasis text-cp-danger-text">不可用 {{ accountStatusCounts?.unavailable ?? '—' }}</span>
+            <span class="text-xs leading-[1.15] font-emphasis text-cp-text-secondary">状态分布</span>
+            <span class="text-xs leading-[1.15] font-emphasis text-cp-error-text">不可用 {{ accountStatusCounts?.unavailable ?? '—' }}</span>
           </div>
-          <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-cp-muted">
+          <div class="mt-2.5 flex h-3 w-full overflow-hidden rounded-full bg-cp-fill-tertiary">
             <i
               v-for="(bar, bi) in statusBars"
               :key="bi"
@@ -323,19 +323,19 @@ const statusBars = computed(() => {
           <div
             v-for="row in statusRows"
             :key="row.label"
-            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-cp-overlay bg-cp-subtle px-3.5"
+            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-cp-lg bg-cp-bg-elevated px-3.5"
           >
             <span
-              class="inline-flex size-7 items-center justify-center rounded-cp-control"
+              class="inline-flex size-7 items-center justify-center rounded-cp"
               :class="toneIconClass(row.tone)"
             >
               <component :is="row.icon" :size="16" />
             </span>
             <span class="col-start-3 grid gap-1">
-              <strong class="text-sm leading-[1.15] font-emphasis text-cp-primary">
+              <strong class="text-sm leading-[1.15] font-emphasis text-cp-text">
                 {{ row.label }}
               </strong>
-              <span class="text-xs leading-[1.15] font-emphasis text-cp-secondary">{{ row.description }}</span>
+              <span class="text-xs leading-[1.15] font-emphasis text-cp-text-secondary">{{ row.description }}</span>
             </span>
             <strong
               class="col-start-4 text-right font-mono text-[17px] leading-[1.15] font-heavy tabular-nums"

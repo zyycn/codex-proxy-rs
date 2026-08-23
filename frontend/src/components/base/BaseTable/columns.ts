@@ -83,7 +83,7 @@ const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
     size: 'lg',
     align: 'left',
     truncate: true,
-    contentClass: 'text-cp-secondary',
+    contentClass: 'text-cp-text-secondary',
   },
   status: {
     size: 'md',
@@ -94,25 +94,25 @@ const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
     size: 'md',
     align: 'right',
     truncate: false,
-    contentClass: 'font-mono tabular-nums text-cp-secondary',
+    contentClass: 'font-mono tabular-nums text-cp-text-secondary',
   },
   datetime: {
     size: 'xl',
     align: 'left',
     truncate: false,
-    contentClass: 'whitespace-nowrap font-mono text-[12px] tabular-nums text-cp-secondary',
+    contentClass: 'whitespace-nowrap font-mono text-cp-sm tabular-nums text-cp-text-secondary',
   },
   mono: {
     size: 'xl',
     align: 'left',
     truncate: true,
-    contentClass: 'font-mono text-[12px] font-emphasis',
+    contentClass: 'font-mono text-cp-sm font-emphasis',
   },
   index: {
     size: 'xs',
     align: 'center',
     truncate: false,
-    contentClass: 'font-mono tabular-nums text-cp-secondary',
+    contentClass: 'font-mono tabular-nums text-cp-text-secondary',
   },
   selection: {
     size: 'xs',

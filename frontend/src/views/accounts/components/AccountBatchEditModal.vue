@@ -36,7 +36,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
   >
     <div class="grid gap-5">
       <div class="flex min-h-6 items-center justify-between gap-3">
-        <span class="text-[13px] leading-none font-medium text-cp-secondary">调度</span>
+        <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>
         <BaseSwitch
           v-model="enabled"
           label="切换所选账号调度"

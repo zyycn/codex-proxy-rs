@@ -99,10 +99,10 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
             </template>
             <template #identity="{ row }">
               <div class="grid min-w-0 gap-1">
-                <strong class="truncate text-[13px] text-cp-primary">
+                <strong class="truncate text-cp text-cp-text">
                   {{ row.name }}
                 </strong>
-                <span class="truncate text-[11px] font-emphasis text-cp-muted-text">
+                <span class="truncate text-cp-xs font-emphasis text-cp-text-quaternary">
                   {{ row.description || '未填写描述' }}
                 </span>
               </div>
@@ -119,10 +119,10 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
             <template #enabled="{ row }">
               <span
-                class="inline-flex h-6 items-center rounded-lg px-2 text-[11px] font-bold"
+                class="inline-flex h-6 items-center rounded-lg px-2 text-cp-xs font-bold"
                 :class="row.enabled
                   ? 'bg-cp-success-bg text-cp-success-text'
-                  : 'bg-cp-muted text-cp-muted-text'"
+                  : 'bg-cp-fill-tertiary text-cp-text-quaternary'"
               >
                 {{ row.enabled ? '已启用' : '已禁用' }}
               </span>

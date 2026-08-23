@@ -26,7 +26,7 @@ const search = defineModel<string>('search', { required: true })
     <div class="min-w-0 flex-1 md:w-96 md:flex-none">
       <BaseInput v-model="search" placeholder="搜索名称、标签或 ID" class="w-full">
         <template #prefix>
-          <Search class="size-4.5 text-cp-tertiary" />
+          <Search class="size-4.5 text-cp-text-tertiary" />
         </template>
       </BaseInput>
     </div>

@@ -190,7 +190,7 @@ const {
       <template #body>
         <div class="flex h-full min-h-0 flex-col">
           <BaseTable
-            class="min-h-0 flex-1 [--cp-table-row-min-height:72px]"
+            class="min-h-0 flex-1 [--cp-table-row-height:72px]"
             :columns="accountColumns"
             :rows="accounts"
             :loading="loading"
@@ -203,7 +203,7 @@ const {
             <template #expander="{ row }">
               <button
                 type="button"
-                class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-cp-secondary transition hover:bg-cp-default-hover hover:text-cp-primary"
+                class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-cp-text-secondary transition hover:bg-cp-bg-text-hover hover:text-cp-text"
                 :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
                 @click.stop="toggleExpanded(row.id)"
               >

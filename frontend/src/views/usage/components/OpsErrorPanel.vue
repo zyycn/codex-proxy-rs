@@ -56,7 +56,7 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
             class="min-w-0 sm:col-span-2 lg:min-w-64 lg:flex-1 lg:max-w-96"
           >
             <template #prefix>
-              <Search class="size-4.5 text-cp-tertiary" />
+              <Search class="size-4.5 text-cp-text-tertiary" />
             </template>
           </BaseInput>
           <BaseInput v-model="failureClass" placeholder="失败分类（精确）" class="min-w-0" />
@@ -100,13 +100,13 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
           />
         </template>
         <template #failureClass="{ row }">
-          <span class="font-mono text-[12px] font-bold text-cp-danger-text">
+          <span class="font-mono text-cp-sm font-bold text-cp-error-text">
             {{ row.failureClass || '—' }}
           </span>
         </template>
         <template #accountId="{ row }">
           <span
-            class="block max-w-full truncate font-mono text-[12px] font-bold text-cp-primary"
+            class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"
             :title="row.accountId || ''"
           >
             {{ row.metadata.accountLabel || '—' }}

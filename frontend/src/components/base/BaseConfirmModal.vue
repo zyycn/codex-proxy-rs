@@ -52,7 +52,7 @@ function handleConfirm() {
   >
     <div
       v-if="$slots.default"
-      class="text-[14px] leading-[1.55] font-emphasis text-cp-secondary"
+      class="text-cp-lg leading-[1.55] font-emphasis text-cp-text-secondary"
     >
       <slot />
     </div>

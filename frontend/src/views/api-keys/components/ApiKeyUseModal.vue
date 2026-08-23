@@ -83,11 +83,11 @@ const visibleFiles = computed(() => [
         <section
           v-for="file in visibleFiles"
           :key="file.path"
-          class="overflow-hidden rounded-cp-surface bg-cp-subtle shadow-cp-control"
+          class="overflow-hidden rounded-cp-card bg-cp-fill-quaternary shadow-cp-tertiary"
         >
           <div class="flex items-center justify-between gap-3 px-4 py-2.5">
             <span
-              class="min-w-0 truncate font-mono text-[12px] font-emphasis text-cp-secondary"
+              class="min-w-0 truncate font-mono text-cp-sm font-emphasis text-cp-text-secondary"
             >
               {{ file.path }}
             </span>
@@ -103,9 +103,9 @@ const visibleFiles = computed(() => [
           <BaseScrollbar
             max-height="360px"
           >
-            <div class="mx-3 mb-3 rounded-cp-control bg-cp-surface px-3.5 py-3 shadow-cp-input">
+            <div class="mx-3 mb-3 rounded-cp bg-cp-bg-container px-3.5 py-3 shadow-cp-input">
               <pre
-                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.65] font-emphasis text-cp-primary"
+                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-sm leading-[1.65] font-emphasis text-cp-text"
                 v-text="file.content"
               />
             </div>

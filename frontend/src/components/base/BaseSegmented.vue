@@ -45,13 +45,13 @@ const indicatorStyle = computed(() => ({
 
 const rootClasses: Record<SegmentedSize, string> = {
   sm: 'h-cp-control-sm',
-  md: 'h-cp-control-md',
+  md: 'h-cp-control',
   lg: 'h-cp-control-lg',
 }
 const optionClasses: Record<SegmentedSize, string> = {
-  sm: 'h-6.5 px-2 text-[11px]',
+  sm: 'h-6.5 px-2 text-cp-xs',
   md: 'h-8 px-3 text-xs',
-  lg: 'h-9.5 px-4 text-[13px]',
+  lg: 'h-9.5 px-4 text-cp',
 }
 
 function enabledIndexes() {
@@ -97,7 +97,7 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
 
 <template>
   <div
-    class="relative inline-grid items-center rounded-cp-control bg-cp-muted p-0.75"
+    class="relative inline-grid items-center rounded-cp bg-cp-fill-tertiary p-0.75"
     :class="rootClasses[size]"
     :style="gridStyle"
     role="radiogroup"
@@ -106,20 +106,20 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
   >
     <span
       v-if="options.length > 0"
-      class="pointer-events-none absolute inset-y-0.75 left-0.75 rounded-cp-control bg-cp-surface shadow-cp-control transition-transform duration-200 ease-out motion-reduce:transition-none"
+      class="pointer-events-none absolute inset-y-0.75 left-0.75 rounded-cp bg-cp-bg-container shadow-cp-tertiary transition-transform duration-200 ease-out motion-reduce:transition-none"
       :style="indicatorStyle"
       aria-hidden="true"
     />
     <button
       v-for="(option, index) in options"
       :key="option.value"
-      class="relative z-10 inline-flex min-w-0 touch-manipulation items-center justify-center gap-1.5 rounded-cp-control border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-accent-border motion-reduce:transition-none"
+      class="relative z-10 inline-flex min-w-0 touch-manipulation items-center justify-center gap-1.5 rounded-cp border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
       :class="[
         optionClasses[size],
         model === option.value
-          ? 'text-cp-primary'
-          : 'text-cp-secondary hover:text-cp-primary',
-        disabled || option.disabled ? 'cursor-not-allowed opacity-60 hover:text-cp-secondary' : undefined,
+          ? 'text-cp-text'
+          : 'text-cp-text-secondary hover:text-cp-text',
+        disabled || option.disabled ? 'cursor-not-allowed opacity-60 hover:text-cp-text-secondary' : undefined,
         display === 'icon' ? 'px-0' : undefined,
       ]"
       type="button"

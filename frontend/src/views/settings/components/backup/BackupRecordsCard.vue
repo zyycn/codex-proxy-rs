@@ -135,7 +135,7 @@ function canDelete(record: BackupRecord): boolean {
         empty-text="暂无备份记录"
       >
         <template #id="{ row }">
-          <span class="text-cp-secondary" :title="row.id">{{ shortId(row.id) }}</span>
+          <span class="text-cp-text-secondary" :title="row.id">{{ shortId(row.id) }}</span>
         </template>
 
         <template #status="{ row }">
@@ -143,27 +143,27 @@ function canDelete(record: BackupRecord): boolean {
         </template>
 
         <template #fileName="{ row }">
-          <span class="text-cp-secondary" :title="row.objectKey">{{ formatFileName(row) }}</span>
+          <span class="text-cp-text-secondary" :title="row.objectKey">{{ formatFileName(row) }}</span>
         </template>
 
         <template #sizeBytes="{ row }">
-          <span class="text-cp-secondary">{{ formatSize(row.sizeBytes) }}</span>
+          <span class="text-cp-text-secondary">{{ formatSize(row.sizeBytes) }}</span>
         </template>
 
         <template #expiresAt="{ row }">
-          <span class="text-cp-secondary">
+          <span class="text-cp-text-secondary">
             {{ row.expiresAt ? formatDateTime(row.expiresAt) : '—' }}
           </span>
         </template>
 
         <template #trigger="{ row }">
-          <span class="text-cp-secondary">
+          <span class="text-cp-text-secondary">
             {{ triggerLabel(row.triggerKind) }}
           </span>
         </template>
 
         <template #startedAt="{ row }">
-          <span class="text-cp-secondary">
+          <span class="text-cp-text-secondary">
             {{ row.startedAt ? formatDateTime(row.startedAt) : '—' }}
           </span>
         </template>

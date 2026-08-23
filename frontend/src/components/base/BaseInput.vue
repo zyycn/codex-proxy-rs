@@ -48,31 +48,31 @@ const controlAttrs = computed(() => Object.fromEntries(
 
 const sizeClasses: Record<InputSize, string> = {
   sm: 'h-cp-control-sm gap-2 px-3 text-xs',
-  md: 'h-cp-control-md gap-2.5 px-3.5 text-[13px]',
-  lg: 'h-cp-control-lg gap-3 px-4 text-[14px]',
+  md: 'h-cp-control gap-2.5 px-3.5 text-cp',
+  lg: 'h-cp-control-lg gap-3 px-4 text-cp-lg',
 }
 
 const containerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp-control border-0 text-cp-primary shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] motion-reduce:transition-none',
+  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp border-0 text-cp-text shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] motion-reduce:transition-none',
   sizeClasses[props.size],
   props.disabled
-    ? 'cursor-not-allowed bg-cp-disabled text-cp-disabled-text shadow-none'
+    ? 'cursor-not-allowed bg-cp-bg-container-disabled text-cp-text-disabled shadow-none'
     : invalid.value
-      ? 'bg-(--cp-input-error-soft-bg) shadow-cp-input-error'
+      ? 'bg-(--cp-input-error-active-bg) shadow-cp-input-error-active'
       : [
-          'bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))]',
-          'hover:bg-[var(--cp-input-current-bg-hover,var(--cp-input-context-bg-hover))] hover:shadow-cp-input-hover',
-          'focus-within:bg-(--cp-input-soft-bg-focus) focus-within:shadow-cp-input-focus',
+          'bg-[var(--cp-input-bg)]',
+          'hover:bg-[var(--cp-input-hover-bg)] hover:shadow-cp-input-hover',
+          'focus-within:bg-(--cp-input-active-bg) focus-within:shadow-cp-input-active',
         ],
 ])
 
 const iconClasses = computed(() => [
   'inline-flex shrink-0',
   props.disabled
-    ? 'text-cp-disabled-icon'
+    ? 'text-cp-text-disabled'
     : invalid.value
-      ? 'text-cp-danger'
-      : 'text-cp-muted-text',
+      ? 'text-cp-error'
+      : 'text-cp-text-quaternary',
 ])
 
 function updateModel(event: Event) {
@@ -90,7 +90,7 @@ function updateModel(event: Event) {
         v-bind="controlAttrs"
         :id="controlId"
         :value="model"
-        class="base-input__field h-full min-w-0 flex-1 border-0 bg-transparent font-emphasis leading-[1.15] text-cp-primary outline-0 placeholder:text-cp-muted-text disabled:cursor-not-allowed disabled:text-cp-disabled-text"
+        class="base-input__field h-full min-w-0 flex-1 border-0 bg-transparent font-emphasis leading-[1.15] text-cp-text outline-0 placeholder:text-cp-text-quaternary disabled:cursor-not-allowed disabled:text-cp-text-disabled"
         :placeholder="placeholder"
         :type="type"
         :disabled="disabled"
@@ -109,24 +109,35 @@ function updateModel(event: Event) {
 
 <style scoped>
 .base-input__control {
-  --base-input-autofill-bg: var(--cp-input-current-bg, var(--cp-input-context-bg));
+  --base-input-autofill-bg: var(--cp-input-bg);
 }
 
 .base-input__control:hover {
-  --base-input-autofill-bg: var(--cp-input-current-bg-hover, var(--cp-input-context-bg-hover));
+  --base-input-autofill-bg: var(--cp-input-hover-bg);
 }
 
 .base-input__control:focus-within {
-  --base-input-autofill-bg: var(--cp-input-soft-bg-focus);
+  --base-input-autofill-bg: var(--cp-input-active-bg);
 }
 
 .base-input__field:-webkit-autofill,
 .base-input__field:-webkit-autofill:hover,
 .base-input__field:-webkit-autofill:focus,
 .base-input__field:autofill {
-  caret-color: var(--cp-text-primary);
-  -webkit-text-fill-color: var(--cp-text-primary) !important;
+  caret-color: var(--cp-color-text);
+  -webkit-text-fill-color: var(--cp-color-text) !important;
   -webkit-box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
   box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
+}
+
+/* 普通数字表单保留键盘步进，但不混入浏览器原生微调器外观。 */
+.base-input__field[type='number'] {
+  appearance: textfield;
+}
+
+.base-input__field[type='number']::-webkit-inner-spin-button,
+.base-input__field[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
 }
 </style>

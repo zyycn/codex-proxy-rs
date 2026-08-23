@@ -24,10 +24,10 @@ const checked = computed(() => model.value === props.value)
 const indicatorClasses = computed(() => [
   'relative inline-grid size-4 shrink-0 place-items-center rounded-full transition-colors duration-150 motion-reduce:transition-none',
   props.disabled
-    ? 'bg-cp-disabled text-cp-disabled-icon'
+    ? 'bg-cp-bg-container-disabled text-cp-text-disabled'
     : checked.value
-      ? 'bg-cp-accent text-cp-accent-on'
-      : 'bg-cp-muted text-transparent group-hover:bg-cp-default-active',
+      ? 'bg-cp-primary text-(--cp-button-primary-color)'
+      : 'bg-cp-fill-tertiary text-transparent group-hover:bg-cp-bg-text-active',
 ])
 </script>
 
@@ -49,7 +49,7 @@ const indicatorClasses = computed(() => [
     >
     <span
       :class="indicatorClasses"
-      class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-accent-border peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-surface"
+      class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-control-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-bg-container"
       aria-hidden="true"
     >
       <span class="size-1.5 rounded-full bg-current" />
@@ -57,7 +57,7 @@ const indicatorClasses = computed(() => [
     <span v-if="$slots.default" class="min-w-0 flex-1">
       <slot />
     </span>
-    <span v-else-if="showLabel" class="text-[13px] leading-none font-emphasis">
+    <span v-else-if="showLabel" class="text-cp leading-none font-emphasis">
       {{ label }}
     </span>
   </label>

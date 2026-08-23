@@ -18,15 +18,15 @@ defineProps<{
     <template #trigger>
       <button
         type="button"
-        class="inline-flex size-4 items-center justify-center rounded-full bg-cp-info-bg text-cp-info outline-none hover:bg-cp-default-hover"
+        class="inline-flex size-4 items-center justify-center rounded-full bg-cp-primary-bg text-cp-primary-text outline-none hover:bg-cp-primary-bg-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline"
         :aria-label="triggerLabel"
       >
         <Info class="size-3" />
       </button>
     </template>
 
-    <div class="grid w-60 gap-2 p-3 text-[12px] leading-none">
-      <p class="m-0 font-heavy text-cp-primary">
+    <div class="grid w-60 gap-2 p-3 text-cp-sm leading-none">
+      <p class="m-0 font-heavy text-cp-text">
         {{ title }}
       </p>
       <slot />

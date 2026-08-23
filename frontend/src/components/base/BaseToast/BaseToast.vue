@@ -24,8 +24,8 @@ const colorClasses = {
     icon: 'text-cp-success',
   },
   error: {
-    iconBg: 'bg-cp-danger-bg',
-    icon: 'text-cp-danger',
+    iconBg: 'bg-cp-error-bg',
+    icon: 'text-cp-error',
   },
   warning: {
     iconBg: 'bg-cp-warning-bg',
@@ -45,12 +45,12 @@ const colorClasses = {
         <article
           v-for="message in toast.messages"
           :key="message.id"
-          class="pointer-events-auto flex min-h-16 w-90 max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-cp-surface bg-cp-surface px-3.5 py-3 shadow-cp-popover"
+          class="pointer-events-auto flex min-h-16 w-90 max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-cp-card bg-cp-bg-container px-3.5 py-3 shadow-cp"
           :role="message.type === 'error' ? 'alert' : 'status'"
           aria-atomic="true"
         >
           <div
-            class="flex size-8.5 shrink-0 items-center justify-center rounded-cp-control"
+            class="flex size-8.5 shrink-0 items-center justify-center rounded-cp"
             :class="colorClasses[message.type].iconBg"
           >
             <component
@@ -61,11 +61,11 @@ const colorClasses = {
           </div>
 
           <div class="flex min-w-0 flex-1 flex-col gap-1">
-            <p class="m-0 truncate text-[13px] leading-[1.15] font-bold text-cp-primary">
+            <p class="m-0 truncate text-cp leading-[1.15] font-bold text-cp-text">
               {{ message.title ?? titleMap[message.type] }}
             </p>
             <p
-              class="m-0 max-h-8 overflow-hidden text-xs leading-tight font-semibold text-cp-secondary"
+              class="m-0 max-h-8 overflow-hidden text-xs leading-tight font-semibold text-cp-text-secondary"
             >
               {{ message.message }}
             </p>
@@ -77,7 +77,7 @@ const colorClasses = {
             :label="`关闭${message.title ?? titleMap[message.type]}通知`"
             @click="toast.remove(message.id)"
           >
-            <X :size="16" class="text-cp-muted-text" />
+            <X :size="16" class="text-cp-text-quaternary" />
           </BaseIconButton>
         </article>
       </TransitionGroup>

@@ -9,7 +9,7 @@ defineProps<{
 function valueClass(item: { mono?: boolean, wrap?: boolean }) {
   if (item.wrap) {
     return [
-      'mt-1.5 mb-0 min-w-0 text-[12px] leading-snug font-bold text-cp-primary',
+      'mt-1.5 mb-0 min-w-0 text-cp-sm leading-snug font-bold text-cp-text',
       item.mono ? 'font-mono tabular-nums break-words' : undefined,
     ]
   }

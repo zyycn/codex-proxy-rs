@@ -5,7 +5,7 @@ defineProps<{
 
 function statusClass(statusCode?: number | null) {
   if (statusCode === undefined || statusCode === null) {
-    return 'bg-cp-subtle text-cp-secondary'
+    return 'bg-cp-fill-quaternary text-cp-text-secondary'
   }
 
   if (statusCode >= 200 && statusCode < 300) {
@@ -16,13 +16,13 @@ function statusClass(statusCode?: number | null) {
     return 'bg-cp-warning-bg text-cp-warning-text'
   }
 
-  return 'bg-cp-danger-bg text-cp-danger-text'
+  return 'bg-cp-error-bg text-cp-error-text'
 }
 </script>
 
 <template>
   <span
-    class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 font-mono text-[12px] leading-none font-bold"
+    class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 font-mono text-cp-sm leading-none font-bold"
     :class="statusClass(statusCode)"
   >
     {{ statusCode ?? '—' }}

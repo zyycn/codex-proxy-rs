@@ -129,9 +129,9 @@ async function copyText(value: string, successText: string) {
     :dismissible="!saving"
   >
     <template #icon>
-      <LayoutGrid v-if="view.isBatch" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
-      <Xai v-else-if="view.isXai" class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
-      <Openai v-else class="text-cp-primary" aria-hidden="true" :width="20" :height="20" />
+      <LayoutGrid v-if="view.isBatch" class="text-cp-text" aria-hidden="true" :width="20" :height="20" />
+      <Xai v-else-if="view.isXai" class="text-cp-text" aria-hidden="true" :width="20" :height="20" />
+      <Openai v-else class="text-cp-text" aria-hidden="true" :width="20" :height="20" />
     </template>
 
     <AccountProviderChooser
@@ -150,18 +150,18 @@ async function copyText(value: string, successText: string) {
       />
 
       <div v-if="mode === 'oauth'" class="flex flex-col gap-4">
-        <div class="rounded-cp-control bg-cp-subtle px-4 py-3">
+        <div class="rounded-cp bg-cp-fill-quaternary px-4 py-3">
           <div class="flex items-start gap-3">
             <div
-              class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-cp-control bg-cp-surface text-cp-info"
+              class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-cp bg-cp-bg-container text-cp-primary-text"
             >
               <KeyRound class="size-4" />
             </div>
             <div class="min-w-0 flex-1">
-              <p class="m-0 text-[13px] font-bold text-cp-primary">
+              <p class="m-0 text-cp font-bold text-cp-text">
                 {{ view.oauth.panelTitle }}
               </p>
-              <p class="m-0 mt-1 text-[12px] leading-[1.55] font-medium text-cp-secondary">
+              <p class="m-0 mt-1 text-cp-sm leading-[1.55] font-medium text-cp-text-secondary">
                 {{ view.oauth.panelDescription }}
               </p>
             </div>
@@ -196,9 +196,9 @@ async function copyText(value: string, successText: string) {
             <BaseScrollbar
               max-height="92px"
             >
-              <div class="rounded-cp-control bg-[var(--cp-input-current-bg,var(--cp-input-context-bg))] px-3.5 py-3 shadow-cp-input">
+              <div class="rounded-cp bg-[var(--cp-input-bg)] px-3.5 py-3 shadow-cp-input">
                 <pre
-                  class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[12px] leading-[1.6] font-emphasis text-cp-secondary"
+                  class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-sm leading-[1.6] font-emphasis text-cp-text-secondary"
                   v-text="view.oauth.authUrl"
                 />
               </div>

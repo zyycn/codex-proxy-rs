@@ -53,7 +53,7 @@ const {
     <template #body>
       <div class="grid gap-3.5">
         <div
-          class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-cp-subtle/45 p-1.5"
+          class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-cp-fill-quaternary/45 p-1.5"
         >
           <button
             v-for="item in props.summary"
@@ -61,7 +61,7 @@ const {
             type="button"
             :aria-label="`突出显示${item.label}曲线`"
             :aria-pressed="pinnedSummaryLabel === item.label"
-            class="group grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg border-0 bg-transparent px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
+            class="group grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg border-0 bg-transparent px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
             @click="toggleSummarySeries(item.label)"
           >
             <i
@@ -74,17 +74,17 @@ const {
                   'bg-cp-info': item.tone === 'info',
                   'bg-cp-success': item.tone === 'success',
                   'bg-cp-warning': item.tone === 'warning',
-                  'bg-cp-danger': item.tone === 'danger',
-                  'bg-cp-normal': item.tone === 'normal',
+                  'bg-cp-error': item.tone === 'danger',
+                  'bg-cp-status-normal': item.tone === 'normal',
                 },
               ]"
             />
             <span class="grid min-w-0 gap-1">
-              <span class="truncate text-[10px] leading-none font-bold text-cp-secondary">
+              <span class="truncate text-[10px] leading-none font-bold text-cp-text-secondary">
                 {{ item.label }}
               </span>
               <strong
-                class="truncate font-mono text-[15px] leading-none font-heavy tabular-nums text-cp-primary"
+                class="truncate font-mono text-cp-xl leading-none font-heavy tabular-nums text-cp-text"
                 :title="item.value"
               >
                 {{ item.value }}

@@ -36,8 +36,18 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/usage/index.vue'),
       },
       {
-        path: 'settings/:section?',
+        path: 'theme',
+        name: 'theme',
+        component: () => import('@/views/theme/index.vue'),
+      },
+      {
+        path: 'settings',
         name: 'settings',
+        component: () => import('@/views/settings/index.vue'),
+      },
+      {
+        path: 'settings/backup',
+        name: 'settings-backup',
         component: () => import('@/views/settings/index.vue'),
       },
     ],

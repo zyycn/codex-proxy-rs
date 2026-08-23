@@ -1,16 +1,5 @@
 <script setup lang="ts">
-import { RefreshCw } from '@lucide/vue'
-
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BasePageHeader from '@/components/base/BasePageHeader.vue'
-
-import AccountOverviewCard from './components/AccountOverviewCard.vue'
-import DashboardHeartbeat from './components/DashboardHeartbeat.vue'
-import MetricCard from './components/MetricCard.vue'
-import RequestHealthTimelineCard from './components/RequestHealthTimelineCard.vue'
-import RequestTrendCard from './components/RequestTrendCard.vue'
-import UsageRecordCard from './components/UsageRecordCard.vue'
-import WireProfileCard from './components/WireProfileCard.vue'
+import DashboardContent from './components/DashboardContent.vue'
 import { useDashboard } from './composables/useDashboard'
 
 const {
@@ -34,58 +23,22 @@ const {
 </script>
 
 <template>
-  <div class="w-full">
-    <BasePageHeader title="系统概览">
-      <template #description>
-        <span>当日统计</span>
-        <DashboardHeartbeat :updated-at="lastRefreshedAt" />
-      </template>
-      <template #actions>
-        <BaseIconButton
-          class="text-cp-normal"
-          size="md"
-          label="刷新概览"
-          :loading="loading || refreshing"
-          :disabled="loading || refreshing"
-          @click="refresh"
-        >
-          <template #loading>
-            <RefreshCw class="animate-spin motion-reduce:animate-none" :size="19" />
-          </template>
-          <RefreshCw :size="19" />
-        </BaseIconButton>
-      </template>
-    </BasePageHeader>
-
-    <section
-      class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4 2xl:gap-6"
-      aria-label="核心指标"
-    >
-      <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
-    </section>
-
-    <section
-      class="mt-6 grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,948fr)_minmax(0,608fr)] 2xl:gap-7"
-    >
-      <RequestTrendCard
-        v-model:kind="activeTrendKind"
-        :points="trendPoints"
-        :summary="trendSummary"
-        @trend-change="loadTrend"
-      />
-      <WireProfileCard :profiles="wireProfiles" />
-    </section>
-
-    <AccountOverviewCard
-      :accounts="accountUsage"
-      :pool="poolSummary"
-      :capacity="capacityInfo"
-      :rotation-strategy="rotationStrategy"
-      class="mt-6"
-    />
-
-    <RequestHealthTimelineCard :timeline="healthTimeline" class="mt-6" />
-
-    <UsageRecordCard :rows="usageRecords" class="mt-6" />
-  </div>
+  <DashboardContent
+    v-model:trend-kind="activeTrendKind"
+    :loading="loading"
+    :refreshing="refreshing"
+    :last-refreshed-at="lastRefreshedAt"
+    :metrics="metrics"
+    :trend-points="trendPoints"
+    :trend-summary="trendSummary"
+    :health-timeline="healthTimeline"
+    :account-usage="accountUsage"
+    :wire-profiles="wireProfiles"
+    :usage-records="usageRecords"
+    :pool-summary="poolSummary"
+    :capacity-info="capacityInfo"
+    :rotation-strategy="rotationStrategy"
+    @refresh="refresh"
+    @trend-change="loadTrend"
+  />
 </template>

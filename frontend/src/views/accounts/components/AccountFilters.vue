@@ -48,10 +48,10 @@ const groupOptions = computed(() => [
       <BaseInput
         v-model="search"
         placeholder="搜索账号"
-        class="min-w-0 flex-1 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-80 md:flex-none"
+        class="min-w-0 flex-1 md:w-80 md:flex-none"
       >
         <template #prefix>
-          <Search class="size-4.5 text-cp-tertiary" />
+          <Search class="size-4.5 text-cp-text-tertiary" />
         </template>
       </BaseInput>
 
@@ -59,7 +59,7 @@ const groupOptions = computed(() => [
         v-model="status"
         :options="accountStatusFilterOptions"
         aria-label="按账号状态筛选"
-        class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
+        class="w-34 shrink-0 md:w-40"
       />
 
       <BaseSelect
@@ -67,7 +67,7 @@ const groupOptions = computed(() => [
         :options="groupOptions"
         :disabled="groupsLoading"
         aria-label="按账号分组筛选"
-        class="w-34 shrink-0 [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] md:w-40"
+        class="w-34 shrink-0 md:w-40"
       />
 
       <ProviderFilterSegmented
@@ -85,7 +85,7 @@ const groupOptions = computed(() => [
         class="w-full whitespace-nowrap md:w-auto"
         @click="emit('editSelected')"
       >
-        <Pencil class="size-4 text-cp-info" />
+        <Pencil class="size-4 text-cp-link" />
         批量编辑账号
       </BaseButton>
       <BaseButton

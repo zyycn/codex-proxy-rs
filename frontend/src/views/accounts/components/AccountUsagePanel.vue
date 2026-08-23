@@ -25,43 +25,43 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
 
 <template>
   <section
-    class="grid gap-4 rounded-lg bg-cp-surface p-4 shadow-cp-control xl:grid-cols-[0.52fr_1.48fr]"
+    class="grid gap-4 rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary xl:grid-cols-[0.52fr_1.48fr]"
   >
     <div>
       <div class="mb-3 flex items-baseline justify-between gap-3">
-        <h3 class="m-0 text-[14px] font-heavy text-cp-primary">
+        <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
           Token 结构
         </h3>
-        <span class="text-[11px] font-emphasis text-cp-muted-text">当前额度窗口</span>
+        <span class="text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
       </div>
       <div class="grid gap-2">
         <div class="flex items-center justify-between rounded-lg bg-cp-success-bg px-3 py-2">
-          <span class="text-[12px] font-bold text-cp-success-text">输入 Tokens</span>
-          <strong class="font-mono text-[13px] text-cp-primary">
+          <span class="text-cp-sm font-bold text-cp-success-text">输入 Tokens</span>
+          <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.inputTokensDisplay }}
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-cp-warning-bg px-3 py-2">
-          <span class="text-[12px] font-bold text-cp-warning-text">输出 Tokens</span>
-          <strong class="font-mono text-[13px] text-cp-primary">
+          <span class="text-cp-sm font-bold text-cp-warning-text">输出 Tokens</span>
+          <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.outputTokensDisplay }}
           </strong>
         </div>
-        <div class="flex items-center justify-between rounded-lg bg-cp-normal-bg px-3 py-2">
-          <span class="text-[12px] font-bold text-cp-normal-text">缓存 Tokens</span>
-          <strong class="font-mono text-[13px] text-cp-primary">
+        <div class="flex items-center justify-between rounded-lg bg-cp-status-normal-bg px-3 py-2">
+          <span class="text-cp-sm font-bold text-cp-status-normal-text">缓存 Tokens</span>
+          <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.cachedTokensDisplay }}
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-cp-info-bg px-3 py-2">
-          <span class="text-[12px] font-bold text-cp-info-text">创建</span>
-          <strong class="font-mono text-[13px] text-cp-primary">
+          <span class="text-cp-sm font-bold text-cp-info-text">创建</span>
+          <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.createdTokensDisplay }}
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-cp-info-bg px-3 py-2">
-          <span class="text-[12px] font-bold text-cp-info-text">读取</span>
-          <strong class="font-mono text-[13px] text-cp-primary">
+          <span class="text-cp-sm font-bold text-cp-info-text">读取</span>
+          <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.readTokensDisplay }}
           </strong>
         </div>
@@ -72,10 +72,10 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
       class="min-w-0 pt-4 xl:pt-0 xl:pl-4"
     >
       <div class="mb-3 flex items-center justify-between">
-        <h3 class="m-0 text-[14px] font-heavy text-cp-primary">
+        <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
           模型使用排行
         </h3>
-        <span class="text-[11px] font-emphasis text-cp-muted-text">当前额度窗口</span>
+        <span class="text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
       </div>
 
       <div class="h-52 min-w-0">

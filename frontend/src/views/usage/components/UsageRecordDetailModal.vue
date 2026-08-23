@@ -47,8 +47,8 @@ const tokenDetails = computed(() => props.record ? usageTokenDetails(props.recor
 const billing = computed(() => props.record ? usageBilling(props.record) : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
 
-const panelClass = 'rounded-cp-surface bg-cp-subtle px-4 py-3.5'
-const panelTitleClass = 'm-0 text-[12px] leading-none font-heavy text-cp-secondary'
+const panelClass = 'rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5'
+const panelTitleClass = 'm-0 text-cp-sm leading-none font-heavy text-cp-text-secondary'
 
 const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
 const finalAttemptIndex = computed(() => {
@@ -164,8 +164,8 @@ function attemptOutcomeClass(outcome: string) {
   if (outcome === 'succeeded')
     return 'text-cp-success-text'
   if (outcome === 'failed')
-    return 'text-cp-danger-text'
-  return 'text-cp-secondary'
+    return 'text-cp-error-text'
+  return 'text-cp-text-secondary'
 }
 
 const billingItems = computed(() => {
@@ -289,7 +289,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         <div class="min-w-0">
           <span :class="fieldLabelClass">账号</span>
           <p
-            class="mt-1.5 mb-0 truncate font-mono text-[13px] leading-none font-heavy text-cp-primary"
+            class="mt-1.5 mb-0 truncate font-mono text-cp leading-none font-heavy text-cp-text"
             :title="displayValue(accountDisplay)"
           >
             {{ displayValue(accountDisplay) }}
@@ -344,11 +344,11 @@ const tokenDonutOption = computed<EChartsOption>(() => {
                 <BaseChart :option="tokenDonutOption" :height="152" />
                 <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div class="grid text-center">
-                    <span class="text-[11px] leading-none font-bold text-cp-muted-text">
+                    <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
                       总计
                     </span>
                     <strong
-                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-cp-primary"
+                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-cp-text"
                     >
                       {{ tokenDetails?.totalTokensDisplay ?? '—' }}
                     </strong>
@@ -400,7 +400,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
             尝试链路
           </h3>
           <span
-            class="text-[11px] leading-none font-emphasis text-cp-muted-text"
+            class="text-cp-xs leading-none font-emphasis text-cp-text-quaternary"
             title="中间尝试可能有缺口，仅展示可观测到的记录"
           >
             尽力观测
@@ -425,14 +425,14 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           </template>
           <template #accountLabel="{ row }">
             <span
-              class="block max-w-full truncate font-mono text-[12px] font-bold text-cp-primary"
+              class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"
               :title="row.accountId || ''"
             >
               {{ row.accountLabel }}
             </span>
           </template>
           <template #latencyMs="{ row }">
-            <span class="font-mono font-bold tabular-nums text-cp-primary">
+            <span class="font-mono font-bold tabular-nums text-cp-text">
               {{ formatDuration(row.latencyMs) }}
             </span>
           </template>
@@ -480,6 +480,6 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 }
 
 .attempt-table :deep(tbody td) {
-  background-color: var(--cp-bg-muted);
+  background-color: var(--cp-color-fill-tertiary);
 }
 </style>

@@ -149,8 +149,8 @@ export function useRequestTrendChart(options: {
           axisLabel: {
             show: activeKind.value !== 'latency',
             color: activeKind.value === 'usage'
-              ? trendColor('输出', '--cp-success', '#10B981')
-              : trendColor('成功', '--cp-success', '#10B981'),
+              ? trendColor('输出', '--cp-color-success', '#10B981')
+              : trendColor('成功', '--cp-color-success', '#10B981'),
             fontSize: 9,
             fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
             formatter: formatSecondaryAxisValue,
@@ -182,17 +182,17 @@ export function useRequestTrendChart(options: {
     if (activeKind.value === 'usage') {
       return [
         title,
-        tooltipItem('输入', point?.inputTokens, trendColor('输入', '--cp-info', '#2563EB')),
-        tooltipItem('输出', point?.outputTokens, trendColor('输出', '--cp-success', '#10B981')),
+        tooltipItem('输入', point?.inputTokens, trendColor('输入', '--cp-color-info', '#2563EB')),
+        tooltipItem('输出', point?.outputTokens, trendColor('输出', '--cp-color-success', '#10B981')),
         tooltipItem(
           '缓存',
           point?.cachedTokens,
-          trendColor('缓存', '--cp-text-tertiary', '#94A3B8'),
+          trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem(
           '缓存命中',
           trendPointText(point, 'cacheHitRate'),
-          trendColor('缓存', '--cp-text-tertiary', '#94A3B8'),
+          trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem('请求', point?.requests, palette.value.textSecondary),
       ]
@@ -237,9 +237,9 @@ export function useRequestTrendChart(options: {
 
   function getSeries() {
     if (activeKind.value === 'usage') {
-      const cacheColor = trendColor('缓存', '--cp-text-tertiary', '#94A3B8')
-      const inputColor = trendColor('输入', '--cp-info', '#2563EB')
-      const outputColor = trendColor('输出', '--cp-success', '#10B981')
+      const cacheColor = trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8')
+      const inputColor = trendColor('输入', '--cp-color-info', '#2563EB')
+      const outputColor = trendColor('输出', '--cp-color-success', '#10B981')
       return [
         lineSeries('缓存', activeSeriesValues('cachedTokensValue'), cacheColor, {
           area: true,
@@ -274,7 +274,7 @@ export function useRequestTrendChart(options: {
         lineSeries(
           '最低',
           activeSeriesValues('minLatencyValue'),
-          trendColor('最低', '--cp-success', '#10B981'),
+          trendColor('最低', '--cp-color-success', '#10B981'),
           {
             lineType: 'dotted',
             smooth: 0.2,
@@ -286,7 +286,7 @@ export function useRequestTrendChart(options: {
         lineSeries(
           '最高',
           latencyRangeValues(),
-          trendColor('最高', '--cp-warning', '#F59E0B'),
+          trendColor('最高', '--cp-color-warning', '#F59E0B'),
           {
             area: true,
             areaStartAlpha: '26',
@@ -301,7 +301,7 @@ export function useRequestTrendChart(options: {
         lineSeries(
           '平均',
           activeSeriesValues('latencyValue'),
-          trendColor('平均', '--cp-normal', '#0F9F9A'),
+          trendColor('平均', '--cp-color-status-normal', '#0F9F9A'),
           { smooth: 0.24, width: 2.5, z: 4 },
         ),
       ]
@@ -311,18 +311,18 @@ export function useRequestTrendChart(options: {
       barSeries(
         '错误数',
         seriesValues('errorsValue'),
-        trendColor('错误', '--cp-danger', '#EF4444'),
+        trendColor('错误', '--cp-color-error', '#EF4444'),
       ),
       lineSeries(
         '成功率',
         seriesValues('successRateValue'),
-        trendColor('成功', '--cp-success', '#10B981'),
+        trendColor('成功', '--cp-color-success', '#10B981'),
         { width: 2.4, yAxisIndex: 1 },
       ),
       lineSeries(
         '总请求',
         seriesValues('requestsValue'),
-        trendColor('请求', '--cp-info', '#2563EB'),
+        trendColor('请求', '--cp-color-info', '#2563EB'),
         { lineType: 'dashed', width: 1.8 },
       ),
     ]

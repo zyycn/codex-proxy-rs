@@ -55,9 +55,9 @@ const variantDefinitions: Record<
 > = {
   metric: {
     rootClass: 'grid min-w-0 grid-rows-[14px_14px] gap-1',
-    headerClass: 'flex items-center justify-between gap-2 text-[11px] leading-[14px] font-bold',
-    labelClass: 'truncate text-cp-muted-text',
-    valueClass: 'text-[11px] leading-none font-bold',
+    headerClass: 'flex items-center justify-between gap-2 text-cp-xs leading-[14px] font-bold',
+    labelClass: 'truncate text-cp-text-quaternary',
+    valueClass: 'text-cp-xs leading-none font-bold',
     trackOffsetClass: 'self-center',
     trackShapeClass: 'h-1.5 w-full overflow-hidden rounded-full',
     minimumBarWidth: '6px',
@@ -67,8 +67,8 @@ const variantDefinitions: Record<
   },
   compact: {
     rootClass: 'flex min-w-0 flex-col',
-    headerClass: 'mb-1 flex items-baseline justify-between gap-2 text-[11px] leading-[14px] font-bold',
-    labelClass: 'truncate text-cp-muted-text',
+    headerClass: 'mb-1 flex items-baseline justify-between gap-2 text-cp-xs leading-[14px] font-bold',
+    labelClass: 'truncate text-cp-text-quaternary',
     valueClass: 'text-[10px] leading-[14px] font-heavy',
     trackOffsetClass: 'mt-auto',
     trackShapeClass: 'h-[3px] w-full overflow-hidden rounded-full',
@@ -78,10 +78,10 @@ const variantDefinitions: Record<
     showResetTime: false,
   },
   detail: {
-    rootClass: 'rounded-lg bg-cp-subtle p-2',
-    headerClass: 'flex items-center justify-between gap-3 text-[12px] font-bold',
-    labelClass: 'text-cp-secondary',
-    valueClass: 'text-[12px] font-heavy',
+    rootClass: 'rounded-lg bg-cp-fill-quaternary p-2',
+    headerClass: 'flex items-center justify-between gap-3 text-cp-sm font-bold',
+    labelClass: 'text-cp-text-secondary',
+    valueClass: 'text-cp-sm font-heavy',
     trackOffsetClass: 'mt-2',
     trackShapeClass: 'h-2 overflow-hidden rounded-full',
     minimumBarWidth: '8px',
@@ -102,12 +102,12 @@ const quotaToneClasses: Record<
   { bar: string, text: string }
 > = {
   unknown: {
-    bar: 'bg-cp-default-border-hover',
-    text: 'text-cp-muted-text',
+    bar: 'bg-cp-border',
+    text: 'text-cp-text-quaternary',
   },
   danger: {
-    bar: 'bg-cp-danger',
-    text: 'text-cp-danger-text',
+    bar: 'bg-cp-error',
+    text: 'text-cp-error-text',
   },
   warning: {
     bar: 'bg-cp-warning',
@@ -147,7 +147,7 @@ export function resolveAccountUsageWindowPresentation(
       value: definition.valueClass,
       trackOffset: definition.trackOffsetClass,
       trackShape: definition.trackShapeClass,
-      track: `${definition.trackShapeClass} bg-cp-default-border`,
+      track: `${definition.trackShapeClass} bg-cp-border-secondary`,
     },
     quota: {
       valueVisible: typeof input.window?.usedPercent === 'number'

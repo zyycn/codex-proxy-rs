@@ -85,14 +85,14 @@ watch([() => displayRows.value.length, () => props.columns], async () => {
 })
 
 const headerRowClass = computed(() => [
-  props.density === 'compact' ? 'h-8 text-[11px]' : 'h-10 text-[12px]',
-  'font-bold text-cp-secondary',
+  props.density === 'compact' ? 'h-8 text-cp-xs' : 'h-10 text-cp-sm',
+  'font-bold text-cp-text-secondary',
 ])
 const bodyRowClass = computed(() =>
-  props.density === 'compact' ? 'h-cp-table-row-min-compact' : 'h-cp-table-row-min',
+  props.density === 'compact' ? 'h-cp-table-row-sm' : 'h-cp-table-row',
 )
 const cellPaddingClass = computed(() => props.density === 'compact' ? 'px-3' : 'px-4')
-const bodyTextClass = computed(() => props.density === 'compact' ? 'text-[12px]' : 'text-[13px]')
+const bodyTextClass = computed(() => props.density === 'compact' ? 'text-cp-sm' : 'text-cp')
 const bodyCellFrameClass = computed(() => props.density === 'compact'
   ? 'border-y-2 border-transparent bg-clip-padding'
   : 'border-y-[3px] border-transparent bg-clip-padding')
@@ -100,8 +100,8 @@ const firstRowTopGapClass = computed(() =>
   props.density === 'compact' ? 'border-t-4' : 'border-t-[6px]',
 )
 const bodyCellContentClass = computed(() => props.density === 'compact'
-  ? 'min-h-[calc(var(--cp-table-row-min-height-compact)-4px)]'
-  : 'min-h-[calc(var(--cp-table-row-min-height)-6px)]')
+  ? 'min-h-[calc(var(--cp-table-row-height-sm)-4px)]'
+  : 'min-h-[calc(var(--cp-table-row-height)-6px)]')
 
 function getRowKey(row: Row, index: number) {
   if (typeof props.rowKey === 'function')
@@ -120,16 +120,16 @@ function isRowExpanded(row: Row, index: number) {
 
 function rowBackgroundClass(row: Row, index: number) {
   if (isRowSelected(row, index))
-    return 'bg-cp-tertiary-bg'
+    return 'bg-(--cp-table-row-selected-bg)'
   if (index % 2 === 1)
-    return 'bg-cp-subtle'
-  return 'bg-cp-surface'
+    return 'bg-(--cp-table-row-stripe-bg)'
+  return 'bg-(--cp-table-row-bg)'
 }
 
 function rowClass() {
   return [
     bodyRowClass.value,
-    'hover:[&>td]:bg-cp-default-hover',
+    'hover:[&>td]:bg-(--cp-table-row-hover-bg)',
   ]
 }
 
@@ -142,8 +142,8 @@ function stickyClass(column: ResolvedTableColumn<Row>, header = false) {
     header ? 'z-40' : 'z-20',
     showShadow
       ? column.sticky === 'left'
-        ? 'shadow-[8px_0_14px_-14px_var(--cp-shadow-sticky)]'
-        : 'shadow-[-8px_0_14px_-14px_var(--cp-shadow-sticky)]'
+        ? 'shadow-[8px_0_14px_-14px_var(--cp-color-shadow)]'
+        : 'shadow-[-8px_0_14px_-14px_var(--cp-color-shadow)]'
       : undefined,
   ]
 }
@@ -194,8 +194,8 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
         ref="scrollbar"
         class="min-h-0 flex-1"
         :class="density === 'compact'
-          ? '[--cp-scrollbar-track-top:2.25rem]'
-          : '[--cp-scrollbar-track-top:2.75rem]'"
+          ? '[--cp-scrollbar-track-inset-block-start:2.25rem]'
+          : '[--cp-scrollbar-track-inset-block-start:2.75rem]'"
         horizontal
         @scroll="handleTableScroll"
       >
@@ -216,12 +216,12 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
               <th
                 v-for="(column, columnIndex) in computedColumns"
                 :key="column.key"
-                class="sticky top-0 z-30 whitespace-nowrap bg-cp-muted shadow-[0_10px_16px_-18px_var(--cp-shadow-sticky)]"
+                class="sticky top-0 z-30 whitespace-nowrap bg-(--cp-table-header-bg) shadow-[0_10px_16px_-18px_var(--cp-color-shadow)]"
                 :class="[
                   column.paddingClass ?? cellPaddingClass,
                   alignClass(column),
-                  columnIndex === 0 ? 'rounded-l-cp-control' : undefined,
-                  columnIndex === computedColumns.length - 1 ? 'rounded-r-cp-control' : undefined,
+                  columnIndex === 0 ? 'rounded-l-cp' : undefined,
+                  columnIndex === computedColumns.length - 1 ? 'rounded-r-cp' : undefined,
                   columnIndex === computedColumns.length - 1 ? 'pr-6' : undefined,
                   stickyClass(column, true),
                 ]"
@@ -233,7 +233,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
                   <button
                     v-if="column.sortable"
                     type="button"
-                    class="inline-flex max-w-full touch-manipulation items-center gap-1 border-0 bg-transparent p-0 text-inherit outline-none transition-colors hover:text-cp-primary focus-visible:text-cp-accent motion-reduce:transition-none"
+                    class="inline-flex max-w-full touch-manipulation items-center gap-1 border-0 bg-transparent p-0 text-inherit outline-none transition-colors hover:text-cp-text focus-visible:text-cp-primary-text motion-reduce:transition-none"
                     :aria-label="sortButtonLabel(column)"
                     :title="sortButtonLabel(column)"
                     @click="toggleColumnSort(column)"
@@ -244,12 +244,12 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
                     <span class="inline-flex shrink-0 -translate-y-px flex-col gap-px" aria-hidden="true">
                       <Triangle
                         class="size-1.25 fill-current"
-                        :class="columnSortDirection(column) === 'asc' ? 'text-cp-accent' : 'text-cp-tertiary'"
+                        :class="columnSortDirection(column) === 'asc' ? 'text-cp-primary-text' : 'text-cp-text-tertiary'"
                         :stroke-width="0"
                       />
                       <Triangle
                         class="size-1.25 rotate-180 fill-current"
-                        :class="columnSortDirection(column) === 'desc' ? 'text-cp-accent' : 'text-cp-tertiary'"
+                        :class="columnSortDirection(column) === 'desc' ? 'text-cp-primary-text' : 'text-cp-text-tertiary'"
                         :stroke-width="0"
                       />
                     </span>
@@ -275,8 +275,8 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
                     column.contentClass,
                     alignClass(column),
                     index === 0 ? firstRowTopGapClass : undefined,
-                    columnIndex === 0 ? 'rounded-l-cp-control' : undefined,
-                    columnIndex === computedColumns.length - 1 ? 'rounded-r-cp-control pr-6' : undefined,
+                    columnIndex === 0 ? 'rounded-l-cp' : undefined,
+                    columnIndex === computedColumns.length - 1 ? 'rounded-r-cp pr-6' : undefined,
                     stickyClass(column),
                     rowBackgroundClass(row, index),
                   ]"
@@ -300,7 +300,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
               <tr v-if="isRowExpanded(row, index)">
                 <td
                   :colspan="computedColumns.length"
-                  class="rounded-cp-control border-y-transparent bg-cp-subtle bg-clip-padding p-0"
+                  class="rounded-cp border-y-transparent bg-cp-fill-quaternary bg-clip-padding p-0"
                   :class="bodyCellFrameClass"
                 >
                   <slot name="expanded" :row="row" :index="index" />

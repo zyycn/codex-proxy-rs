@@ -3,10 +3,8 @@ import type { EChartsOption } from 'echarts'
 import type { EChartsType } from 'echarts/core'
 import { useRafFn, useResizeObserver } from '@vueuse/core'
 import { init } from 'echarts/core'
-import { storeToRefs } from 'pinia'
-import { computed, nextTick, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 
-import { useUiStore } from '@/stores/modules/ui'
 import '@/plugins/echarts'
 
 const props = withDefaults(
@@ -23,7 +21,6 @@ const chartElement = useTemplateRef<HTMLElement>('chart')
 const chartOption = shallowRef<EChartsOption>(props.option)
 const chart = shallowRef<EChartsType>()
 const pendingInitElement = shallowRef<HTMLElement>()
-const { themeRevision } = storeToRefs(useUiStore())
 
 const style = computed(() => ({
   height: `${props.height}px`,
@@ -71,18 +68,6 @@ function applyOption(option: EChartsOption) {
   chart.value.setOption(option, true)
 }
 
-async function recreateChartAfterThemeChange() {
-  await nextTick()
-  requestAnimationFrame(() => {
-    const element = chartElement.value
-    if (!element)
-      return
-    dispose()
-    ensureChart(element)
-    resize()
-  })
-}
-
 function dispose() {
   cancelPendingInit()
   chart.value?.dispose()
@@ -100,14 +85,6 @@ watch(
     if (chartElement.value) {
       scheduleInit(chartElement.value)
     }
-  },
-  { flush: 'post' },
-)
-
-watch(
-  themeRevision,
-  () => {
-    recreateChartAfterThemeChange()
   },
   { flush: 'post' },
 )

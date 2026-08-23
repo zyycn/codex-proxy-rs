@@ -198,18 +198,18 @@ watch(
     :dismissible="!updating && !restarting"
   >
     <div class="grid gap-3.5">
-      <section class="grid gap-4 rounded-cp-surface bg-cp-subtle px-4 py-4">
+      <section class="grid gap-4 rounded-cp-card bg-cp-fill-quaternary px-4 py-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
-            <p class="m-0 text-[11px] leading-none font-heavy text-cp-muted-text">
+            <p class="m-0 text-cp-xs leading-none font-heavy text-cp-text-quaternary">
               Codex Proxy RS
             </p>
-            <p class="mt-2 mb-0 text-lg leading-none font-heavy text-cp-primary">
+            <p class="mt-2 mb-0 text-lg leading-none font-heavy text-cp-text">
               应用包更新
             </p>
           </div>
           <span
-            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-heavy"
+            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-cp-sm font-heavy"
             :class="presentation.status.badge"
           >
             <component
@@ -225,10 +225,10 @@ watch(
           <div
             v-for="item in presentation.summaryItems"
             :key="item.key"
-            class="min-w-0 rounded-cp-control bg-cp-surface px-3 py-2.5"
+            class="min-w-0 rounded-cp bg-cp-bg-container px-3 py-2.5"
           >
             <div class="flex min-w-0 items-center justify-between gap-2">
-              <p class="m-0 truncate text-[11px] leading-none font-heavy text-cp-muted-text">
+              <p class="m-0 truncate text-cp-xs leading-none font-heavy text-cp-text-quaternary">
                 {{ item.label }}
               </p>
               <a
@@ -236,14 +236,14 @@ watch(
                 :href="item.releaseUrl"
                 target="_blank"
                 rel="noreferrer"
-                class="inline-flex shrink-0 items-center gap-1 text-[11px] leading-none font-bold text-cp-info-text transition-colors hover:text-cp-info"
+                class="inline-flex shrink-0 items-center gap-1 text-cp-xs leading-none font-bold text-cp-link transition-colors hover:text-cp-link-hover"
               >
                 发布页
                 <ExternalLink class="size-3" />
               </a>
             </div>
             <p
-              class="mt-2 mb-0 truncate font-mono text-[13px] leading-none font-bold text-cp-primary"
+              class="mt-2 mb-0 truncate font-mono text-cp leading-none font-bold text-cp-text"
               :title="item.title || item.value"
             >
               {{ item.value }}
@@ -253,7 +253,7 @@ watch(
 
         <p
           v-if="updateError || updateInfo?.warning"
-          class="m-0 rounded-cp-control bg-cp-danger-bg px-3 py-2 text-[12px] leading-normal font-bold text-cp-danger-text"
+          class="m-0 rounded-cp bg-cp-error-bg px-3 py-2 text-cp-sm leading-normal font-bold text-cp-error-text"
         >
           {{ updateError || updateInfo?.warning }}
         </p>
@@ -261,13 +261,13 @@ watch(
 
       <section
         v-if="renderedReleaseNotes"
-        class="grid gap-2 rounded-cp-surface bg-cp-subtle px-4 py-3.5"
+        class="grid gap-2 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5"
       >
         <div class="flex items-center justify-between gap-3">
-          <p class="m-0 text-[13px] font-heavy text-cp-primary">
+          <p class="m-0 text-cp font-heavy text-cp-text">
             发布说明
           </p>
-          <span class="font-mono text-[11px] font-emphasis text-cp-muted-text">
+          <span class="font-mono text-cp-xs font-emphasis text-cp-text-quaternary">
             {{ presentation.releaseVersion }}
           </span>
         </div>
@@ -280,22 +280,22 @@ watch(
 
       <section
         v-if="showUpdateProgress"
-        class="overflow-hidden rounded-cp-surface bg-cp-subtle"
+        class="overflow-hidden rounded-cp-card bg-cp-fill-quaternary"
       >
         <header class="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-cp-success" />
-            <p class="m-0 text-[13px] leading-none font-heavy text-cp-primary">
+            <p class="m-0 text-cp leading-none font-heavy text-cp-text">
               更新进度
             </p>
           </div>
           <span
-            class="inline-flex h-6 items-center gap-1.5 rounded-full bg-cp-subtle px-2 text-[11px] leading-none font-bold text-cp-secondary"
+            class="inline-flex h-6 items-center gap-1.5 rounded-full bg-cp-fill-quaternary px-2 text-cp-xs leading-none font-bold text-cp-text-secondary"
             :title="updateStreamError || presentation.streamStatusLabel"
           >
             <i
               class="size-1.5 rounded-full"
-              :class="updateStreaming ? 'bg-cp-success' : 'bg-cp-muted-text'"
+              :class="updateStreaming ? 'bg-cp-success' : 'bg-cp-text-quaternary'"
             />
             {{ presentation.streamStatusLabel }}
           </span>
@@ -310,16 +310,16 @@ watch(
             <div
               v-for="log in updateLogRows"
               :key="log.id"
-              class="grid grid-cols-[68px_14px_minmax(0,1fr)] items-start gap-2 rounded-cp-control bg-cp-surface px-3 py-2 font-mono text-[11px] leading-[1.55]"
+              class="grid grid-cols-[68px_14px_minmax(0,1fr)] items-start gap-2 rounded-cp bg-cp-bg-container px-3 py-2 font-mono text-cp-xs leading-[1.55]"
             >
-              <span class="tabular-nums text-cp-muted-text">{{ log.time }}</span>
+              <span class="tabular-nums text-cp-text-quaternary">{{ log.time }}</span>
               <Circle
                 class="mt-1 size-2.5"
                 :class="log.classes.marker"
                 fill="currentColor"
               />
               <p class="m-0 min-w-0 wrap-break-word" :class="log.classes.text">
-                <span v-if="log.step" class="mr-1 text-cp-muted-text">[{{ log.step }}]</span>
+                <span v-if="log.step" class="mr-1 text-cp-text-quaternary">[{{ log.step }}]</span>
                 {{ log.message }}
               </p>
             </div>
@@ -383,23 +383,23 @@ watch(
     @confirm="handleConfirmUpdate"
   >
     <div class="grid gap-3">
-      <div class="grid gap-2 rounded-cp-control bg-cp-subtle p-3">
+      <div class="grid gap-2 rounded-cp bg-cp-fill-quaternary p-3">
         <div
           v-for="item in presentation.confirmRows"
           :key="item.key"
           class="flex min-w-0 items-center justify-between gap-3"
         >
-          <span class="text-[12px] leading-none font-bold text-cp-muted-text">
+          <span class="text-cp-sm leading-none font-bold text-cp-text-quaternary">
             {{ item.label }}
           </span>
           <span
-            class="truncate font-mono text-[13px] leading-none font-heavy text-cp-primary"
+            class="truncate font-mono text-cp leading-none font-heavy text-cp-text"
           >
             {{ item.value }}
           </span>
         </div>
       </div>
-      <p class="m-0 text-[12px] leading-relaxed font-emphasis text-cp-muted-text">
+      <p class="m-0 text-cp-sm leading-relaxed font-emphasis text-cp-text-quaternary">
         点击确认后弹窗会关闭，并按远端最新目标版本开始更新
       </p>
     </div>
@@ -408,7 +408,7 @@ watch(
 
 <style scoped>
 .release-notes {
-  color: var(--cp-text-primary);
+  color: var(--cp-color-text);
   font-size: 12px;
   font-weight: var(--font-weight-emphasis);
   line-height: 1.65;
@@ -432,7 +432,7 @@ watch(
 .release-notes :deep(h3),
 .release-notes :deep(h4) {
   margin: 12px 0 6px;
-  color: var(--cp-text-primary);
+  color: var(--cp-color-text);
   font-size: 12px;
   font-weight: var(--font-weight-heavy);
   line-height: 1.4;
@@ -453,19 +453,19 @@ watch(
 }
 
 .release-notes :deep(a) {
-  color: var(--cp-info-text);
+  color: var(--cp-color-link);
   font-weight: 700;
   text-decoration: none;
 }
 
 .release-notes :deep(a:hover) {
-  color: var(--cp-info);
+  color: var(--cp-color-link-hover);
 }
 
 .release-notes :deep(code) {
   border-radius: 5px;
-  background: var(--cp-bg-muted);
-  color: var(--cp-text-primary);
+  background: var(--cp-color-fill-tertiary);
+  color: var(--cp-color-text);
   font-family: var(--font-mono);
   font-size: 11px;
   padding: 1px 5px;
@@ -474,8 +474,8 @@ watch(
 .release-notes :deep(pre) {
   margin: 8px 0;
   overflow-x: auto;
-  border-radius: var(--cp-radius-control);
-  background: var(--cp-bg-surface);
+  border-radius: var(--cp-border-radius);
+  background: var(--cp-color-bg-container);
   padding: 8px 10px;
 }
 
@@ -486,8 +486,8 @@ watch(
 
 .release-notes :deep(blockquote) {
   margin: 8px 0;
-  border-left: 3px solid var(--cp-divider-subtle);
-  color: var(--cp-text-secondary);
+  border-left: 3px solid var(--cp-color-split);
+  color: var(--cp-color-text-secondary);
   padding-left: 10px;
 }
 </style>

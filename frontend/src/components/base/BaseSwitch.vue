@@ -18,10 +18,10 @@ const model = defineModel<boolean>({ default: false })
 const trackClasses = computed(() => [
   'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-[background-color,box-shadow] duration-180 motion-reduce:transition-none',
   props.disabled
-    ? 'bg-cp-disabled shadow-none'
+    ? 'bg-cp-bg-container-disabled shadow-none'
     : model.value
-      ? 'bg-cp-accent shadow-cp-control group-hover:bg-cp-accent-hover'
-      : 'bg-cp-muted shadow-cp-control group-hover:bg-cp-default-active',
+      ? 'bg-cp-primary shadow-cp-tertiary group-hover:bg-cp-primary-hover'
+      : 'bg-cp-fill-tertiary shadow-cp-tertiary group-hover:bg-cp-bg-text-active',
 ])
 </script>
 
@@ -42,14 +42,14 @@ const trackClasses = computed(() => [
     >
     <span
       :class="trackClasses"
-      class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-accent-border peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-surface"
+      class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-control-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-bg-container"
       aria-hidden="true"
     >
       <span
-        class="size-5 rounded-full bg-cp-surface shadow-cp-control transition-transform duration-180 ease-out motion-reduce:transition-none"
+        class="size-5 rounded-full bg-cp-bg-container shadow-cp-tertiary transition-transform duration-180 ease-out motion-reduce:transition-none"
         :class="model ? 'translate-x-5' : 'translate-x-0'"
       />
     </span>
-    <span v-if="showLabel" class="text-[13px] font-emphasis text-cp-primary">{{ label }}</span>
+    <span v-if="showLabel" class="text-cp font-emphasis text-cp-text">{{ label }}</span>
   </label>
 </template>

@@ -23,7 +23,7 @@ withDefaults(
     <span
       v-for="bar in bars"
       :key="bar.key"
-      class="relative min-w-0 flex-1 bg-cp-default-border"
+      class="relative min-w-0 flex-1 bg-cp-border-secondary"
       :title="showNativeTooltip ? bar.title : undefined"
     >
       <span

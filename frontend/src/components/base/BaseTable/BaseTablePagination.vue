@@ -51,10 +51,10 @@ function goToPage(page: number) {
 
 function paginationPageClass(page: number) {
   return [
-    'inline-flex size-8 items-center justify-center rounded-cp-control border-0 text-xs font-bold leading-none transition-colors duration-150 outline-none',
+    'inline-flex size-8 items-center justify-center rounded-cp border-0 text-xs font-bold leading-none transition-colors duration-150 outline-none',
     page === currentPage.value
-      ? 'cursor-default bg-cp-accent text-cp-accent-on'
-      : 'cursor-pointer bg-cp-subtle text-cp-primary hover:bg-cp-default-hover focus-visible:ring-2 focus-visible:ring-cp-accent-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface',
+      ? 'cursor-default bg-(--cp-button-primary-bg) text-(--cp-button-primary-color)'
+      : 'cursor-pointer bg-cp-fill-quaternary text-cp-text hover:bg-cp-bg-text-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container',
   ]
 }
 </script>
@@ -64,7 +64,7 @@ function paginationPageClass(page: number) {
     class="mt-2 flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-3 px-0 py-1"
   >
     <div
-      class="flex min-w-0 items-center gap-2.5 text-[12px] font-emphasis text-cp-secondary"
+      class="flex min-w-0 items-center gap-2.5 text-cp-sm font-emphasis text-cp-text-secondary"
     >
       <span class="whitespace-nowrap">共 {{ pagination.total }} 条</span>
     </div>
@@ -93,7 +93,7 @@ function paginationPageClass(page: number) {
         <template v-for="(item, index) in pagerItems" :key="`${item}-${index}`">
           <span
             v-if="item === 'ellipsis'"
-            class="inline-flex size-8 items-center justify-center text-xs font-bold text-cp-muted-text"
+            class="inline-flex size-8 items-center justify-center text-xs font-bold text-cp-text-quaternary"
           >
             …
           </span>

@@ -32,20 +32,20 @@ defineSlots<{
 
 const variantClasses: Record<IconButtonVariant, string> = {
   primary:
-    'bg-cp-accent text-cp-accent-on shadow-cp-control hover:bg-cp-accent-hover active:bg-cp-accent-pressed',
+    'bg-(--cp-button-primary-bg) text-(--cp-button-primary-color) shadow-cp-tertiary hover:bg-(--cp-button-primary-hover-bg) active:bg-(--cp-button-primary-active-bg)',
   secondary:
-    'bg-cp-surface text-cp-secondary shadow-cp-control hover:bg-cp-default-hover hover:text-cp-primary active:bg-cp-default-active',
+    'bg-cp-bg-container text-cp-text-secondary shadow-cp-tertiary hover:bg-cp-bg-text-hover hover:text-cp-text active:bg-cp-bg-text-active',
   success:
     'bg-cp-success-bg text-cp-success-text shadow-none hover:bg-cp-success-bg-hover active:bg-cp-success-bg-active',
   ghost:
-    'bg-transparent text-cp-secondary shadow-none hover:bg-cp-subtle hover:text-cp-primary active:bg-cp-muted',
+    'bg-transparent text-cp-text-secondary shadow-none hover:bg-cp-fill-quaternary hover:text-cp-text active:bg-cp-fill-tertiary',
   destructive:
-    'bg-transparent text-cp-danger-text shadow-none hover:bg-cp-danger-bg-hover active:bg-cp-danger-bg-active',
+    'bg-transparent text-cp-error-text shadow-none hover:bg-cp-error-bg-hover active:bg-cp-error-bg-active',
 }
 
 const sizeClasses: Record<IconButtonSize, string> = {
   sm: 'size-cp-control-sm [&>svg]:size-3.5',
-  md: 'size-cp-control-md [&>svg]:size-4',
+  md: 'size-cp-control [&>svg]:size-4',
   lg: 'size-cp-control-lg [&>svg]:size-4.5',
 }
 
@@ -56,12 +56,12 @@ const spinnerSizes: Record<IconButtonSize, number> = {
 }
 
 const classes = computed(() => [
-  'inline-grid shrink-0 touch-manipulation place-items-center rounded-cp-control border-0 leading-none outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 motion-safe:active:scale-[0.96] motion-reduce:transition-none',
-  'focus-visible:ring-2 focus-visible:ring-cp-accent-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface',
-  'disabled:cursor-not-allowed disabled:transform-none disabled:bg-cp-disabled disabled:text-cp-disabled-text disabled:shadow-none',
+  'inline-grid shrink-0 touch-manipulation place-items-center rounded-cp border-0 leading-none outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 motion-safe:active:scale-[0.96] motion-reduce:transition-none',
+  'focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container',
+  'disabled:cursor-not-allowed disabled:transform-none disabled:bg-cp-bg-container-disabled disabled:text-cp-text-disabled disabled:shadow-none',
   sizeClasses[props.size],
   variantClasses[props.variant],
-  props.pressed ? 'bg-cp-default-active text-cp-primary' : undefined,
+  props.pressed ? 'bg-cp-bg-text-active text-cp-text' : undefined,
 ])
 </script>
 

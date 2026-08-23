@@ -35,28 +35,28 @@ const emit = defineEmits<{
           </template>
           添加映射
         </BaseButton>
-        <span v-if="error" class="text-xs font-emphasis text-cp-danger-text">{{ error }}</span>
+        <span v-if="error" class="text-xs font-emphasis text-cp-error-text">{{ error }}</span>
       </div>
 
-      <div class="flex items-center gap-2 text-[12px] font-emphasis text-cp-secondary">
-        <GitBranch class="size-4 text-cp-info" />
+      <div class="flex items-center gap-2 text-cp-sm font-emphasis text-cp-text-secondary">
+        <GitBranch class="size-4 text-cp-primary-text" />
         全局模型映射
       </div>
 
       <div
         v-if="loading"
-        class="rounded-cp-control bg-cp-subtle px-4 py-4 text-[13px] font-emphasis text-cp-muted-text"
+        class="rounded-cp bg-cp-fill-quaternary px-4 py-4 text-cp font-emphasis text-cp-text-quaternary"
       >
         正在加载模型映射...
       </div>
       <div
         v-else-if="mappings.length === 0"
-        class="rounded-cp-control bg-cp-subtle px-4 py-4 text-[13px] font-emphasis text-cp-muted-text"
+        class="rounded-cp bg-cp-fill-quaternary px-4 py-4 text-cp font-emphasis text-cp-text-quaternary"
       >
         暂无模型映射
       </div>
       <div v-else class="grid gap-3">
-        <div class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 px-1 text-[12px] font-bold text-cp-muted-text">
+        <div class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 px-1 text-cp-sm font-bold text-cp-text-quaternary">
           <span>请求模型</span>
           <span />
           <span>上游模型</span>
@@ -65,7 +65,7 @@ const emit = defineEmits<{
         <div
           v-for="(row, index) in mappings"
           :key="index"
-          class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 rounded-cp-surface bg-cp-subtle p-3"
+          class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 rounded-cp-card bg-cp-fill-quaternary p-3"
         >
           <BaseInput
             :model-value="row.requestedModel"
@@ -73,7 +73,7 @@ const emit = defineEmits<{
             aria-label="请求模型"
             @update:model-value="emit('updateMapping', index, 'requestedModel', $event)"
           />
-          <span class="text-cp-muted-text">→</span>
+          <span class="text-cp-text-quaternary">→</span>
           <BaseInput
             :model-value="row.upstreamModel"
             placeholder="gpt-5.5"
@@ -85,7 +85,7 @@ const emit = defineEmits<{
             label="删除映射"
             @click="emit('removeMapping', index)"
           >
-            <Trash2 class="size-4 text-cp-danger" />
+            <Trash2 class="size-4 text-cp-error" />
           </BaseIconButton>
         </div>
       </div>

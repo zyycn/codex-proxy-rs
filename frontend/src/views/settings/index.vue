@@ -20,10 +20,19 @@ import { rotationOptions } from './constants'
 const route = useRoute()
 const router = useRouter()
 
-const section = computed(() => (route.params.section === 'backup' ? 'backup' : 'runtime'))
+type SettingsSection = 'runtime' | 'backup'
+
+const section = computed<SettingsSection>(() =>
+  route.name === 'settings-backup' ? 'backup' : 'runtime',
+)
 
 function switchSection(value: string): void {
-  void router.push(value === 'backup' ? '/settings/backup' : '/settings')
+  const paths: Record<SettingsSection, string> = {
+    runtime: '/settings',
+    backup: '/settings/backup',
+  }
+  const nextSection: SettingsSection = value === 'backup' ? 'backup' : 'runtime'
+  void router.push(paths[nextSection])
 }
 
 const {
@@ -71,13 +80,13 @@ watch(
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="系统设置" description="管理运行参数、调度策略、模型映射与备份配置" />
+    <BasePageHeader title="系统设置" description="管理运行参数、管理员凭据与备份配置" />
 
-    <div class="mt-4 flex min-h-cp-control-md flex-wrap items-center justify-between gap-3">
+    <div class="mt-4 flex min-h-cp-control flex-wrap items-center justify-between gap-3">
       <BaseSegmented
         :model-value="section"
         label="设置分区"
-        class="bg-(--cp-input-soft-bg)!"
+        class="bg-(--cp-input-bg)!"
         :options="[
           { label: '运行设置', value: 'runtime' },
           { label: '备份', value: 'backup' },
@@ -98,7 +107,7 @@ watch(
       </BaseButton>
     </div>
 
-    <div v-show="section === 'runtime'" class="mt-5 grid w-full gap-5">
+    <div v-if="section === 'runtime'" class="mt-5 grid w-full gap-5">
       <AdminApiKeyCard
         :status="adminApiKeyStatus"
         :loading="adminKeyLoading"
@@ -143,7 +152,7 @@ watch(
       </BaseConfirmModal>
     </div>
 
-    <div v-show="section === 'backup'" class="mt-5">
+    <div v-else class="mt-5">
       <SettingsBackupSection :active="section === 'backup'" />
     </div>
   </div>

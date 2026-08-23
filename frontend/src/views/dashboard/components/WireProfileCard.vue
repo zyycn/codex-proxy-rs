@@ -103,14 +103,14 @@ const releaseStatus = computed(() => {
     return {
       label: '检查失败',
       title: current.release.error || '官方版本检查失败',
-      tone: 'bg-cp-danger-bg text-cp-danger-text',
+      tone: 'bg-cp-error-bg text-cp-error-text',
       icon: TriangleAlert,
     }
   }
   return {
     label: '待检查',
     title: '尚未检查官方发布渠道',
-    tone: 'bg-cp-normal-bg text-cp-normal-text',
+    tone: 'bg-cp-status-normal-bg text-cp-status-normal-text',
     icon: RefreshCw,
   }
 })
@@ -205,22 +205,22 @@ function providerLabel(provider: string) {
       <div v-else class="flex flex-1">
         <section
           aria-label="请求身份组成"
-          class="grid min-w-0 flex-1 content-between gap-6 rounded-cp-overlay bg-cp-subtle px-5 py-5.5 sm:px-6 sm:py-5"
+          class="grid min-w-0 flex-1 content-between gap-6 rounded-cp-lg bg-cp-bg-elevated px-5 py-5.5 sm:px-6 sm:py-5"
           :class="verifiedLabel || checkedLabel
             ? 'sm:grid-rows-[auto_minmax(0,1fr)_auto_auto]'
             : 'sm:grid-rows-[auto_minmax(0,1fr)_auto]'"
         >
           <div class="flex min-w-0 items-center justify-between gap-3">
-            <div class="flex min-w-0 items-center gap-2 text-cp-primary">
+            <div class="flex min-w-0 items-center gap-2 text-cp-text">
               <span
-                class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-cp-muted"
+                class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-cp-fill-tertiary"
               >
-                <Box aria-hidden="true" class="size-3.75 text-cp-secondary" />
+                <Box aria-hidden="true" class="size-3.75 text-cp-text-secondary" />
               </span>
-              <span class="truncate text-[11px] leading-none font-heavy">{{ profile.product }}</span>
+              <span class="truncate text-cp-xs leading-none font-heavy">{{ profile.product }}</span>
             </div>
             <span
-              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] leading-none font-bold"
+              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-cp-sm leading-none font-bold"
               :class="releaseStatus.tone"
               :title="releaseStatus.title"
             >
@@ -236,20 +236,20 @@ function providerLabel(provider: string) {
                 class="inline-flex max-w-full min-w-0 items-baseline gap-2 font-mono leading-none tabular-nums"
                 :title="profile.version"
               >
-                <span class="wrap-break-word text-[27px] leading-[1.05] font-heavy text-cp-primary">
+                <span class="wrap-break-word text-[27px] leading-[1.05] font-heavy text-cp-text">
                   {{ versionParts.release }}
                 </span>
                 <span
                   v-if="versionParts.prerelease"
                   aria-hidden="true"
-                  class="truncate text-[12px] font-bold text-cp-secondary"
+                  class="truncate text-cp-sm font-bold text-cp-text-secondary"
                 >
                   {{ versionParts.prerelease }}
                 </span>
               </strong>
               <span
                 v-if="profile.build"
-                class="shrink-0 font-mono text-[10px] leading-none font-emphasis tabular-nums text-cp-muted-text"
+                class="shrink-0 font-mono text-[10px] leading-none font-emphasis tabular-nums text-cp-text-quaternary"
               >
                 Build {{ profile.build }}
               </span>
@@ -264,13 +264,13 @@ function providerLabel(provider: string) {
           >
             <div v-if="profile.provider === 'xai'" class="min-w-0">
               <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-muted-text"
+                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
               >
                 <ShieldCheck aria-hidden="true" class="size-3.25 text-cp-info" />
                 认证协议
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[14px] leading-none font-bold tabular-nums text-cp-primary"
+                class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"
                 :title="authProtocol"
               >
                 {{ authProtocol }}
@@ -279,19 +279,19 @@ function providerLabel(provider: string) {
 
             <div class="min-w-0">
               <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-muted-text"
+                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
               >
-                <Monitor aria-hidden="true" class="size-3.25 text-cp-normal" />
+                <Monitor aria-hidden="true" class="size-3.25 text-cp-status-normal" />
                 {{ profile.provider === 'openai' ? '模拟运行环境' : '运行环境' }}
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[14px] leading-none font-bold tabular-nums text-cp-primary"
+                class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"
                 :title="runtimeEnvironment.title"
               >
                 {{ runtimeEnvironment.primary }}
                 <span
                   v-if="runtimeEnvironment.details.length"
-                  class="text-[11px] font-emphasis text-cp-secondary"
+                  class="text-cp-xs font-emphasis text-cp-text-secondary"
                 >
                   <template v-for="detail in runtimeEnvironment.details" :key="detail">
                     · {{ detail }}
@@ -302,13 +302,13 @@ function providerLabel(provider: string) {
 
             <div class="min-w-0">
               <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-muted-text"
+                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
               >
                 <Terminal aria-hidden="true" class="size-3.25 text-cp-info" />
                 客户端标识
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[16px] leading-none font-heavy tabular-nums text-cp-primary"
+                class="mt-2 mb-0 truncate font-mono text-[16px] leading-none font-heavy tabular-nums text-cp-text"
                 :title="clientIdentity"
               >
                 {{ clientIdentity }}
@@ -318,7 +318,7 @@ function providerLabel(provider: string) {
 
           <footer
             v-if="verifiedLabel || checkedLabel"
-            class="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] leading-none font-emphasis text-cp-muted-text"
+            class="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] leading-none font-emphasis text-cp-text-quaternary"
           >
             <span v-if="verifiedLabel" :title="profile.userAgent">{{ verifiedLabel }}</span>
             <span v-if="checkedLabel">{{ checkedLabel }}</span>

@@ -22,12 +22,12 @@ defineSlots<{
 }>()
 
 const classes = computed(() => [
-  'flex min-h-9 w-full touch-manipulation items-center gap-2 rounded-cp-control-sm border-0 bg-transparent px-3 text-left text-[13px] leading-none font-emphasis outline-none transition-[background-color,color] duration-150 motion-reduce:transition-none',
-  'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-accent-border',
-  'disabled:cursor-not-allowed disabled:text-cp-disabled-text',
+  'flex min-h-9 w-full touch-manipulation items-center gap-2 rounded-cp-sm border-0 bg-transparent px-3 text-left text-cp leading-none font-emphasis outline-none transition-[background-color,color] duration-150 motion-reduce:transition-none',
+  'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-control-outline',
+  'disabled:cursor-not-allowed disabled:text-cp-text-disabled',
   props.tone === 'destructive'
-    ? 'text-cp-danger-text hover:bg-cp-danger-bg-hover'
-    : 'text-cp-primary hover:bg-cp-default-hover',
+    ? 'text-cp-error-text hover:bg-cp-error-bg-hover'
+    : 'text-cp-text hover:bg-cp-bg-text-hover',
 ])
 </script>
 

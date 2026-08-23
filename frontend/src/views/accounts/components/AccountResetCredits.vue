@@ -86,10 +86,10 @@ function expiryLabel(value: string | null) {
 
 function creditOptionClasses(creditId: string) {
   return [
-    'w-full min-w-0 rounded-cp-control px-4 py-3 outline-none transition-colors duration-150 motion-reduce:transition-none',
+    'w-full min-w-0 rounded-cp px-4 py-3 outline-none transition-colors duration-150 motion-reduce:transition-none',
     selectedCreditId.value === creditId
-      ? 'bg-cp-info-bg'
-      : 'bg-cp-subtle hover:bg-cp-default-hover',
+      ? 'bg-cp-control-item-bg-active'
+      : 'bg-cp-fill-quaternary hover:bg-cp-bg-text-hover',
   ]
 }
 
@@ -106,7 +106,7 @@ async function handleConfirmConsume() {
 <template>
   <button
     type="button"
-    class="inline-flex shrink-0 touch-manipulation items-center justify-center rounded-cp-control border-0 bg-transparent text-cp-secondary outline-none transition-[background-color,color,opacity,transform] duration-150 hover:bg-cp-subtle hover:text-cp-primary active:bg-cp-muted focus-visible:ring-2 focus-visible:ring-cp-accent-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface motion-safe:active:scale-[0.96] motion-reduce:transition-none"
+    class="inline-flex shrink-0 touch-manipulation items-center justify-center rounded-cp border-0 bg-transparent text-cp-text-secondary outline-none transition-[background-color,color,opacity,transform] duration-150 hover:bg-cp-fill-quaternary hover:text-cp-text active:bg-cp-fill-tertiary focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container motion-safe:active:scale-[0.96] motion-reduce:transition-none"
     :class="showTriggerCount ? 'h-cp-control-sm gap-1 px-2' : 'size-cp-control-sm'"
     :aria-label="triggerLabel"
     :aria-pressed="panelOpen || undefined"
@@ -132,16 +132,16 @@ async function handleConfirmConsume() {
     :dismissible="!consuming"
   >
     <div v-if="showConfirm" class="grid gap-3">
-      <section class="rounded-cp-control bg-cp-subtle px-4 py-3.5">
-        <p class="m-0 text-[11px] font-heavy text-cp-muted-text">
+      <section class="rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
+        <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
           本次使用
         </p>
-        <p class="mt-1.5 mb-0 text-[14px] leading-snug font-heavy text-cp-primary">
+        <p class="mt-1.5 mb-0 text-cp-lg leading-snug font-heavy text-cp-text">
           {{ confirmCreditTitle }}
         </p>
         <p
           v-if="consumptionCredit"
-          class="mt-1 mb-0 font-mono text-[10px] leading-normal font-emphasis text-cp-muted-text"
+          class="mt-1 mb-0 font-mono text-[10px] leading-normal font-emphasis text-cp-text-quaternary"
         >
           {{ expiryLabel(consumptionCredit.expiresAt) }}
         </p>
@@ -151,44 +151,44 @@ async function handleConfirmConsume() {
     <div v-else class="grid gap-4">
       <section
         v-if="ambiguous"
-        class="flex items-start gap-3 rounded-cp-control bg-cp-warning-bg px-4 py-3.5"
+        class="flex items-start gap-3 rounded-cp bg-cp-warning-bg px-4 py-3.5"
         role="status"
       >
         <AlertTriangle class="mt-0.5 size-4 shrink-0 text-cp-warning-text" />
         <div class="min-w-0">
-          <p class="m-0 text-[12px] font-heavy text-cp-warning-text">
+          <p class="m-0 text-cp-sm font-heavy text-cp-warning-text">
             上次操作结果待确认
           </p>
-          <p class="mt-1 mb-0 text-[11px] leading-normal font-emphasis text-cp-secondary">
+          <p class="mt-1 mb-0 text-cp-xs leading-normal font-emphasis text-cp-text-secondary">
             再确认一次即可。
           </p>
         </div>
       </section>
 
-      <section class="flex items-center gap-3 rounded-cp-control bg-cp-subtle px-4 py-3.5">
+      <section class="flex items-center gap-3 rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
         <span
-          class="inline-grid size-9 shrink-0 place-items-center rounded-cp-control bg-cp-muted text-cp-info-text"
+          class="inline-grid size-9 shrink-0 place-items-center rounded-cp bg-cp-fill-tertiary text-cp-primary-text"
           aria-hidden="true"
         >
           <TicketCheck class="size-4" />
         </span>
         <div class="min-w-0">
-          <p class="m-0 text-[12px] font-heavy text-cp-primary">
+          <p class="m-0 text-cp-sm font-heavy text-cp-text">
             可用重置卡
           </p>
-          <p class="mt-1 mb-0 text-[11px] leading-none font-emphasis text-cp-secondary">
+          <p class="mt-1 mb-0 text-cp-xs leading-none font-emphasis text-cp-text-secondary">
             每次操作消费一张
           </p>
         </div>
-        <strong class="ml-auto font-mono text-[22px] leading-none font-extrabold text-cp-primary">
+        <strong class="ml-auto font-mono text-[22px] leading-none font-extrabold text-cp-text">
           {{ availableCount }}
-          <span class="ml-0.5 text-[11px] font-heavy text-cp-muted-text">张</span>
+          <span class="ml-0.5 text-cp-xs font-heavy text-cp-text-quaternary">张</span>
         </strong>
       </section>
 
       <section class="grid gap-2.5">
         <div class="flex min-h-8 items-center justify-between gap-3">
-          <h3 class="m-0 text-[12px] font-heavy text-cp-muted-text">
+          <h3 class="m-0 text-cp-sm font-heavy text-cp-text-quaternary">
             选择重置卡
           </h3>
           <BaseIconButton
@@ -208,7 +208,7 @@ async function handleConfirmConsume() {
 
         <p
           v-if="loadError"
-          class="m-0 rounded-cp-control bg-cp-danger-bg px-4 py-3 text-[11px] leading-normal font-emphasis text-cp-danger-text"
+          class="m-0 rounded-cp bg-cp-error-bg px-4 py-3 text-cp-xs leading-normal font-emphasis text-cp-error-text"
           role="status"
         >
           {{ loadError }}，请刷新重试。
@@ -232,17 +232,17 @@ async function handleConfirmConsume() {
             @update:model-value="selectCredit"
           >
             <span class="block min-w-0">
-              <span class="block truncate text-[12px] font-heavy text-cp-primary">
+              <span class="block truncate text-cp-sm font-heavy text-cp-text">
                 {{ credit.title || 'Codex 主动重置卡' }}
               </span>
-              <span class="mt-1 block truncate font-mono text-[10px] font-emphasis text-cp-muted-text">
+              <span class="mt-1 block truncate font-mono text-[10px] font-emphasis text-cp-text-quaternary">
                 {{ expiryLabel(credit.expiresAt) }}
               </span>
             </span>
           </BaseRadio>
         </div>
 
-        <div v-else class="overflow-hidden rounded-cp-control bg-cp-subtle">
+        <div v-else class="overflow-hidden rounded-cp bg-cp-fill-quaternary">
           <BaseEmpty
             :icon="TicketCheck"
             size="sm"

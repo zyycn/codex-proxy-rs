@@ -36,9 +36,9 @@ export function resolveSystemUpdateLogClasses(level: string) {
     case 'warning':
       return { marker: 'text-cp-warning', text: 'text-cp-warning' }
     case 'error':
-      return { marker: 'text-cp-danger', text: 'text-cp-danger' }
+      return { marker: 'text-cp-error', text: 'text-cp-error' }
     default:
-      return { marker: 'text-cp-info', text: 'text-cp-primary' }
+      return { marker: 'text-cp-info', text: 'text-cp-text' }
   }
 }
 
@@ -55,8 +55,8 @@ function resolveStatus(input: SystemUpdatePresentationInput) {
     return {
       label: '异常',
       icon: XCircle,
-      badge: 'bg-cp-danger-bg text-cp-danger-text',
-      iconClass: 'text-cp-danger',
+      badge: 'bg-cp-error-bg text-cp-error-text',
+      iconClass: 'text-cp-error',
     }
   }
   if (input.updateSuccess || input.hasUpdate || input.updateInfo) {
@@ -70,8 +70,8 @@ function resolveStatus(input: SystemUpdatePresentationInput) {
   return {
     label: '未检查',
     icon: CheckCircle2,
-    badge: 'bg-cp-muted text-cp-secondary',
-    iconClass: 'text-cp-muted-text',
+    badge: 'bg-cp-fill-tertiary text-cp-text-secondary',
+    iconClass: 'text-cp-text-quaternary',
   }
 }
 

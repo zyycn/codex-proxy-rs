@@ -55,11 +55,11 @@ function toggleSecretVisible(): void {
     title="S3 存储配置"
   >
     <template #description>
-      <span class="text-cp-secondary">
+      <span class="text-cp-text-secondary">
         配置 S3 兼容存储（支持
         <button
           type="button"
-          class="cursor-pointer border-0 bg-transparent p-0 text-cp-info underline underline-offset-2"
+          class="cursor-pointer border-0 bg-transparent p-0 text-cp-link underline underline-offset-2 hover:text-cp-link-hover"
           @click="emit('openR2Guide')"
         >
           Cloudflare R2

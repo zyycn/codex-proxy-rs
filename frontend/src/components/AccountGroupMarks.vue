@@ -27,5 +27,5 @@ const fullNames = computed(() => props.groups
       aria-hidden="true"
     />
   </div>
-  <span v-else class="text-xs text-cp-muted-text">—</span>
+  <span v-else class="text-xs text-cp-text-quaternary">—</span>
 </template>

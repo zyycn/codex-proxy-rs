@@ -28,7 +28,7 @@ const OVERLAY_BASE_CLASS = [
   'place-items-center',
   'rounded-[inherit]',
 ].join(' ')
-const OVERLAY_MASK_CLASS = 'bg-cp-surface/82 backdrop-blur-[4px]'
+const OVERLAY_MASK_CLASS = 'bg-cp-bg-container/82 backdrop-blur-[4px]'
 const PANEL_CLASS = [
   'inline-flex',
   'min-h-10',
@@ -41,14 +41,14 @@ const PANEL_CLASS = [
   'text-xs',
   'leading-[1.15]',
   'font-heavy',
-  'text-cp-secondary',
+  'text-cp-text-secondary',
 ].join(' ')
 const MARK_CLASS = [
   'inline-block',
   'size-4',
   'rounded-full',
   'animate-spin',
-  'bg-[radial-gradient(circle_at_center,var(--cp-bg-surface)_0_44%,transparent_46%),conic-gradient(from_0deg,var(--cp-normal)_0deg_105deg,var(--cp-info)_105deg_200deg,var(--cp-bg-muted)_200deg_360deg)]',
+  'bg-[radial-gradient(circle_at_center,var(--cp-color-bg-container)_0_44%,transparent_46%),conic-gradient(from_0deg,var(--cp-color-status-normal)_0deg_105deg,var(--cp-color-info)_105deg_200deg,var(--cp-color-fill-tertiary)_200deg_360deg)]',
 ].join(' ')
 const LABEL_CLASS = 'whitespace-nowrap'
 

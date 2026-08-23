@@ -43,10 +43,10 @@ provide(formFieldKey, {
       <!-- eslint-disable-next-line vue-a11y/label-has-for -->
       <label
         :for="resolvedControlId"
-        class="flex min-w-0 items-center gap-1.5 text-[13px] leading-none font-medium text-cp-secondary"
+        class="flex min-w-0 items-center gap-1.5 text-cp leading-none font-medium text-cp-text-secondary"
       >
         <slot name="label">{{ label }}</slot>
-        <span v-if="required" class="font-bold text-cp-danger" aria-hidden="true">*</span>
+        <span v-if="required" class="font-bold text-cp-error" aria-hidden="true">*</span>
         <span v-if="required" class="sr-only">必填</span>
       </label>
       <div v-if="$slots.extra" class="inline-flex shrink-0 items-center">
@@ -56,7 +56,7 @@ provide(formFieldKey, {
     <p
       v-if="description"
       :id="descriptionId"
-      class="mt-0 mb-2 text-xs leading-[1.35] font-emphasis text-cp-muted-text"
+      class="mt-0 mb-2 text-xs leading-[1.35] font-emphasis text-cp-text-quaternary"
     >
       {{ description }}
     </p>
@@ -66,7 +66,7 @@ provide(formFieldKey, {
     <p
       v-if="error"
       :id="errorId"
-      class="mt-2 mb-0 text-xs leading-[1.35] font-emphasis text-cp-danger-text"
+      class="mt-2 mb-0 text-xs leading-[1.35] font-emphasis text-cp-error-text"
       aria-live="polite"
     >
       {{ error }}

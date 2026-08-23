@@ -3,14 +3,15 @@ import { Check, ChevronDown } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 
-import { normalizeRgbaHexColor } from '@/utils/color'
+import { normalizeHexColor } from '@/utils/color'
 import BaseButton from '../BaseButton.vue'
 import BaseInput from '../BaseInput.vue'
 import BasePopover from '../BasePopover.vue'
 import {
   formatRgbaColor,
-  hexToHsv,
-  hsvToHex,
+  hexToHsva,
+  hsvaToHex,
+  normalizePickerHexColor,
   parseRgbaColor,
   rgbaToHexColor,
 } from './color'
@@ -20,11 +21,13 @@ const props = withDefaults(
     presets?: readonly string[]
     disabled?: boolean
     label?: string
+    allowAlpha?: boolean
   }>(),
   {
     presets: () => [],
     disabled: false,
     label: '选择颜色',
+    allowAlpha: true,
   },
 )
 
@@ -39,13 +42,22 @@ const svPanel = useTemplateRef<HTMLElement>('svPanel')
 const hueSlider = useTemplateRef<HTMLElement>('hueSlider')
 const alphaSlider = useTemplateRef<HTMLElement>('alphaSlider')
 
-const normalizedModel = computed(() => normalizeRgbaHexColor(model.value) ?? '#60A5FA80')
-const draftColor = computed(() => hsvToHex({
+const normalizedModel = computed(() =>
+  normalizePickerHexColor(model.value, props.allowAlpha)
+  ?? (props.allowAlpha ? '#60A5FA80' : '#2563EB'),
+)
+const triggerSwatchStyle = computed(() => props.allowAlpha
+  ? {
+      backgroundImage: `linear-gradient(${normalizedModel.value}, ${normalizedModel.value}), conic-gradient(#d8dee8 25%, #fff 0 50%, #d8dee8 0 75%, #fff 0)`,
+      backgroundSize: '100% 100%, 8px 8px',
+    }
+  : { backgroundColor: normalizedModel.value })
+const draftColor = computed(() => hsvaToHex({
   h: hue.value,
   s: saturation.value,
   v: brightness.value,
   a: alpha.value,
-}))
+}, props.allowAlpha))
 const hueColor = computed(() => `hsl(${hue.value} 100% 50%)`)
 const svCursorStyle = computed(() => ({
   left: `${saturation.value}%`,
@@ -63,8 +75,11 @@ const alphaTrackStyle = computed(() => {
     backgroundSize: '100% 100%, 8px 8px',
   }
 })
-const inputError = computed(() => customInput.value && !parseRgbaColor(customInput.value)
-  ? '请输入 rgba(r, g, b, a)'
+const inputValid = computed(() => props.allowAlpha
+  ? Boolean(parseRgbaColor(customInput.value))
+  : Boolean(normalizeHexColor(customInput.value)))
+const inputError = computed(() => customInput.value && !inputValid.value
+  ? props.allowAlpha ? '请输入 rgba(r, g, b, a)' : '请输入六位 HEX 颜色，例如 #2563EB'
   : undefined)
 
 watch(open, (isOpen) => {
@@ -78,16 +93,19 @@ watch(model, (value) => {
 })
 
 function resetDraft(value: string) {
-  const color = hexToHsv(value) ?? { h: 213, s: 62, v: 98, a: 0.5 }
+  const color = hexToHsva(normalizePickerHexColor(value, props.allowAlpha) ?? '')
+    ?? { h: 213, s: 62, v: 98, a: props.allowAlpha ? 0.5 : 1 }
   hue.value = color.h
   saturation.value = color.s
   brightness.value = color.v
-  alpha.value = color.a
-  customInput.value = formatRgbaColor(hsvToHex(color)) ?? ''
+  alpha.value = props.allowAlpha ? color.a : 1
+  syncInput()
 }
 
 function syncInput() {
-  customInput.value = formatRgbaColor(draftColor.value) ?? ''
+  customInput.value = props.allowAlpha
+    ? formatRgbaColor(draftColor.value) ?? ''
+    : normalizeHexColor(draftColor.value) ?? ''
 }
 
 function updateSaturationBrightness(event: PointerEvent) {
@@ -189,31 +207,31 @@ function handleAlphaKeydown(event: KeyboardEvent) {
 }
 
 function updateFromInput() {
-  const rgba = parseRgbaColor(customInput.value)
-  const color = rgba ? hexToHsv(rgbaToHexColor(rgba)) : null
+  const inputColor = normalizedInputColor()
+  const color = inputColor ? hexToHsva(inputColor) : null
   if (!color)
     return
 
   hue.value = color.h
   saturation.value = color.s
   brightness.value = color.v
-  alpha.value = color.a
-  customInput.value = formatRgbaColor(hsvToHex(color)) ?? ''
+  alpha.value = props.allowAlpha ? color.a : 1
+  syncInput()
 }
 
 function choosePreset(value: string) {
-  const normalized = normalizeRgbaHexColor(value)
+  const normalized = normalizePickerHexColor(value, props.allowAlpha)
   if (normalized)
     resetDraft(normalized)
 }
 
 function isPresetSelected(value: string) {
-  const normalized = normalizeRgbaHexColor(value)
+  const normalized = normalizePickerHexColor(value, props.allowAlpha)
   return normalized?.slice(0, 7) === draftColor.value.slice(0, 7)
 }
 
 function presetCheckClass(value: string) {
-  const normalized = normalizeRgbaHexColor(value)
+  const normalized = normalizePickerHexColor(value, props.allowAlpha)
   if (!normalized)
     return 'text-white'
 
@@ -227,12 +245,20 @@ function presetCheckClass(value: string) {
 
 function confirm() {
   updateFromInput()
-  const rgba = parseRgbaColor(customInput.value)
-  if (!rgba)
+  const normalized = normalizedInputColor()
+  if (!normalized)
     return
 
-  model.value = rgbaToHexColor(rgba)
+  model.value = normalized
   open.value = false
+}
+
+function normalizedInputColor() {
+  if (!props.allowAlpha)
+    return normalizeHexColor(customInput.value)
+
+  const rgba = parseRgbaColor(customInput.value)
+  return rgba ? rgbaToHexColor(rgba) : null
 }
 </script>
 
@@ -246,14 +272,17 @@ function confirm() {
     <template #trigger>
       <button
         type="button"
-        class="group inline-flex size-8 items-center justify-center rounded-sm border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-cp-info-border disabled:cursor-not-allowed disabled:opacity-60"
+        class="group inline-flex size-8 items-center justify-center rounded-sm border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="props.disabled"
         :aria-label="props.label"
         aria-haspopup="dialog"
         :aria-expanded="open"
       >
-        <span class="base-color-picker__checker relative flex size-full items-center justify-center overflow-hidden rounded-sm" aria-hidden="true">
-          <span class="absolute inset-0" :style="{ backgroundColor: normalizedModel }" />
+        <span
+          class="relative flex size-full items-center justify-center overflow-hidden rounded-sm"
+          :style="triggerSwatchStyle"
+          aria-hidden="true"
+        >
           <ChevronDown class="relative size-3.5 text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.65)]" />
         </span>
       </button>
@@ -263,7 +292,7 @@ function confirm() {
       <div class="grid h-43 grid-cols-[1fr_14px] gap-2">
         <div
           ref="svPanel"
-          class="base-color-picker__sv relative touch-none overflow-hidden rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
+          class="base-color-picker__sv relative touch-none overflow-hidden rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
           :style="{ backgroundColor: hueColor }"
           role="slider"
           tabindex="0"
@@ -285,7 +314,7 @@ function confirm() {
 
         <div
           ref="hueSlider"
-          class="base-color-picker__hue relative touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
+          class="base-color-picker__hue relative touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
           role="slider"
           tabindex="0"
           aria-label="色相"
@@ -305,10 +334,10 @@ function confirm() {
         </div>
       </div>
 
-      <div class="grid grid-cols-[1fr_36px] items-center gap-2">
+      <div v-if="props.allowAlpha" class="grid grid-cols-[1fr_36px] items-center gap-2">
         <div
           ref="alphaSlider"
-          class="base-color-picker__alpha relative h-3 touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-info-border"
+          class="base-color-picker__alpha relative h-3 touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
           :style="alphaTrackStyle"
           role="slider"
           tabindex="0"
@@ -328,7 +357,7 @@ function confirm() {
             aria-hidden="true"
           />
         </div>
-        <span class="text-right font-mono text-[11px] tabular-nums text-cp-secondary">
+        <span class="text-right font-mono text-cp-xs tabular-nums text-cp-text-secondary">
           {{ Math.round(alpha * 100) }}%
         </span>
       </div>
@@ -343,7 +372,7 @@ function confirm() {
           v-for="color in props.presets"
           :key="color"
           type="button"
-          class="relative flex size-6.5 items-center justify-center rounded-sm border-0 outline-none transition-transform duration-150 hover:scale-105 focus-visible:ring-2 focus-visible:ring-cp-info-border focus-visible:ring-offset-2 focus-visible:ring-offset-cp-surface"
+          class="relative flex size-6.5 items-center justify-center rounded-sm border-0 outline-none transition-transform duration-150 hover:scale-105 focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
           :style="{ backgroundColor: color }"
           role="radio"
           :aria-label="color"
@@ -364,8 +393,9 @@ function confirm() {
         <div class="min-w-0 flex-1">
           <BaseInput
             v-model="customInput"
-            aria-label="RGBA 颜色"
-            placeholder="rgba(96, 165, 250, 1)"
+            class="bg-cp-fill-tertiary!"
+            :aria-label="props.allowAlpha ? 'RGBA 颜色' : 'HEX 颜色'"
+            :placeholder="props.allowAlpha ? 'rgba(96, 165, 250, 1)' : '#2563EB'"
             autocomplete="off"
             :disabled="props.disabled"
             :aria-invalid="Boolean(inputError) || undefined"
@@ -376,13 +406,13 @@ function confirm() {
           <p
             v-if="inputError"
             id="color-input-error"
-            class="mt-1.5 mb-0 text-xs font-emphasis text-cp-danger-text"
+            class="mt-1.5 mb-0 text-xs font-emphasis text-cp-error-text"
             aria-live="polite"
           >
             {{ inputError }}
           </p>
         </div>
-        <BaseButton size="md" variant="secondary" :disabled="!parseRgbaColor(customInput)" @click="confirm">
+        <BaseButton size="md" variant="secondary" :disabled="!inputValid" @click="confirm">
           确定
         </BaseButton>
       </div>
@@ -391,16 +421,6 @@ function confirm() {
 </template>
 
 <style scoped>
-.base-color-picker__checker,
-.base-color-picker__hue,
-.base-color-picker__sv {
-  --cp-color-picker-checker: conic-gradient(#d8dee8 25%, #fff 0 50%, #d8dee8 0 75%, #fff 0) 0 / 8px 8px;
-}
-
-.base-color-picker__checker {
-  background: var(--cp-color-picker-checker);
-}
-
 .base-color-picker__sv::before,
 .base-color-picker__sv::after {
   position: absolute;

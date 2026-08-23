@@ -143,14 +143,14 @@ export function groupedAccountQuotaWindows(windows: AccountQuotaWindow[]) {
 
 export function modelSuccessRateTextClass(successRate: number | null) {
   if (successRate === null)
-    return 'text-cp-muted-text'
+    return 'text-cp-text-quaternary'
   if (successRate >= 99.5)
     return 'text-cp-success-text'
   if (successRate >= 98)
-    return 'text-cp-normal-text'
+    return 'text-cp-status-normal-text'
   if (successRate >= 95)
     return 'text-cp-warning-text'
-  return 'text-cp-danger-text'
+  return 'text-cp-error-text'
 }
 
 function compareQuotaWindows(left: AccountQuotaWindow, right: AccountQuotaWindow) {

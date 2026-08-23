@@ -24,7 +24,7 @@ const trackGridStyle = computed(() => ({
 
 <template>
   <div class="flex min-w-0 flex-col">
-    <div class="mb-1 min-w-0 truncate text-[11px] leading-3.5 font-bold text-cp-muted-text">
+    <div class="mb-1 min-w-0 truncate text-cp-xs leading-3.5 font-bold text-cp-text-quaternary">
       {{ label }}
     </div>
 
@@ -32,7 +32,7 @@ const trackGridStyle = computed(() => ({
       <div
         v-for="item in windowItems"
         :key="item.key"
-        class="h-0.75 w-full overflow-hidden rounded-full bg-cp-default-border"
+        class="h-0.75 w-full overflow-hidden rounded-full bg-cp-border-secondary"
         role="progressbar"
         :aria-label="item.labelTooltip"
         aria-valuemin="0"

@@ -23,7 +23,7 @@ const routeClusters: readonly RouteCluster[] = [
     <div class="login-bg-grain" />
 
     <span
-      class="login-watermark absolute top-[9.63%] left-[6.15%] whitespace-nowrap font-mono text-[13px] leading-none font-medium text-(--login-watermark)"
+      class="login-watermark absolute top-[9.63%] left-[6.15%] whitespace-nowrap font-mono text-cp leading-none font-medium text-(--cp-login-watermark-color)"
     >
       CODEX_PROXY_RS // ROUTE_TOPOLOGY // AUTH_GATEWAY
     </span>
@@ -32,7 +32,7 @@ const routeClusters: readonly RouteCluster[] = [
       <span
         v-for="protocol in ingressProtocols"
         :key="protocol"
-        class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--login-stack-bg) px-2.5 py-1.75 opacity-(--login-stack-item-opacity) before:size-1.5 before:shrink-0 before:rounded-full before:bg-(--login-stack-dot) before:content-['']"
+        class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--cp-login-stack-bg) px-2.5 py-1.75 opacity-(--cp-login-stack-item-opacity) before:size-1.5 before:shrink-0 before:rounded-full before:bg-(--cp-login-stack-dot-color) before:content-['']"
       >
         {{ protocol }}
       </span>
@@ -42,7 +42,7 @@ const routeClusters: readonly RouteCluster[] = [
       <span
         v-for="protocol in upstreamProtocols"
         :key="protocol"
-        class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--login-stack-bg) px-2.5 py-1.75 opacity-(--login-stack-item-opacity) before:size-1.5 before:shrink-0 before:rounded-full before:bg-(--login-stack-dot) before:content-['']"
+        class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--cp-login-stack-bg) px-2.5 py-1.75 opacity-(--cp-login-stack-item-opacity) before:size-1.5 before:shrink-0 before:rounded-full before:bg-(--cp-login-stack-dot-color) before:content-['']"
       >
         {{ protocol }}
       </span>
@@ -182,16 +182,16 @@ const routeClusters: readonly RouteCluster[] = [
     <div
       v-for="cluster in routeClusters"
       :key="cluster.id"
-      class="login-route-cluster absolute grid gap-1.5 font-mono text-[10px] leading-none font-medium text-(--login-cluster-text)"
+      class="login-route-cluster absolute grid gap-1.5 font-mono text-[10px] leading-none font-medium text-(--cp-login-cluster-text-color)"
       :class="cluster.className"
     >
       <span
         v-for="label in cluster.labels"
         :key="label"
-        class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--login-cluster-bg) px-2 py-1"
+        class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--cp-login-cluster-bg) px-2 py-1"
       >
         <i
-          class="inline-block h-0.5 w-4.5 rounded-xs bg-(--login-cluster-pulse)"
+          class="inline-block h-0.5 w-4.5 rounded-xs bg-(--cp-login-cluster-pulse-color)"
           aria-hidden="true"
         />
         {{ label }}
@@ -215,11 +215,11 @@ const routeClusters: readonly RouteCluster[] = [
   background:
     radial-gradient(
       ellipse 59% 48% at 55% 48%,
-      var(--login-base-a) 0%,
-      var(--login-base-b) 50%,
-      var(--login-base-c) 100%
+      var(--cp-login-canvas-bg-start) 0%,
+      var(--cp-login-canvas-bg-middle) 50%,
+      var(--cp-login-canvas-bg-end) 100%
     ),
-    var(--login-base-c);
+    var(--cp-login-canvas-bg-end);
 }
 
 .login-bg-base::after {
@@ -227,44 +227,52 @@ const routeClusters: readonly RouteCluster[] = [
   background: radial-gradient(
     ellipse 52.5% 44% at 54% 47%,
     transparent 0%,
-    var(--login-edge-mid) 72%,
-    var(--login-edge-end) 100%
+    var(--cp-login-edge-color-middle) 72%,
+    var(--cp-login-edge-color-end) 100%
   );
 }
 
 .login-bg-grid {
   background:
-    repeating-linear-gradient(90deg, var(--login-grid) 0 1px, transparent 1px 80px),
-    repeating-linear-gradient(180deg, var(--login-grid) 0 1px, transparent 1px 80px);
+    repeating-linear-gradient(90deg, var(--cp-login-grid-color) 0 1px, transparent 1px 80px),
+    repeating-linear-gradient(180deg, var(--cp-login-grid-color) 0 1px, transparent 1px 80px);
 }
 
 .login-bg-striations {
   background:
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 126px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 214px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 338px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 462px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 586px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 714px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 846px / 100% 1px no-repeat,
-    linear-gradient(var(--login-striation), var(--login-striation)) 0 982px / 100% 1px no-repeat;
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 126px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 214px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 338px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 462px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 586px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 714px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 846px / 100% 1px no-repeat,
+    linear-gradient(var(--cp-login-striation-color), var(--cp-login-striation-color)) 0 982px / 100% 1px no-repeat;
 }
 
 .login-bg-grain {
   opacity: 0.68;
   background-image:
-    linear-gradient(var(--login-grain), var(--login-grain)) 139px 109px / 3px 2px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 288px 192px / 1px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 437px 275px / 1px 1px no-repeat,
-    linear-gradient(var(--login-grain), var(--login-grain)) 586px 358px / 2px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 735px 441px / 1px 2px no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 884px 524px / 3px 1px no-repeat,
-    linear-gradient(var(--login-grain), var(--login-grain)) 1033px 607px / 2px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 1182px 690px / 1px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 1331px 773px / 1px 2px no-repeat,
-    linear-gradient(var(--login-grain), var(--login-grain)) 1480px 856px / 2px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-a), var(--login-grain-alt-a)) 1629px 939px / 3px 1px no-repeat,
-    linear-gradient(var(--login-grain-alt-b), var(--login-grain-alt-b)) 1778px 67px / 1px 1px no-repeat;
+    linear-gradient(var(--cp-login-grain-color), var(--cp-login-grain-color)) 139px 109px / 3px 2px no-repeat,
+    linear-gradient(var(--cp-login-grain-primary-color), var(--cp-login-grain-primary-color)) 288px 192px / 1px 1px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-secondary-color), var(--cp-login-grain-secondary-color)) 437px 275px / 1px 1px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-color), var(--cp-login-grain-color)) 586px 358px / 2px 1px no-repeat,
+    linear-gradient(var(--cp-login-grain-primary-color), var(--cp-login-grain-primary-color)) 735px 441px / 1px 2px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-secondary-color), var(--cp-login-grain-secondary-color)) 884px 524px / 3px 1px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-color), var(--cp-login-grain-color)) 1033px 607px / 2px 1px no-repeat,
+    linear-gradient(var(--cp-login-grain-primary-color), var(--cp-login-grain-primary-color)) 1182px 690px / 1px 1px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-secondary-color), var(--cp-login-grain-secondary-color)) 1331px 773px / 1px 2px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-color), var(--cp-login-grain-color)) 1480px 856px / 2px 1px no-repeat,
+    linear-gradient(var(--cp-login-grain-primary-color), var(--cp-login-grain-primary-color)) 1629px 939px / 3px 1px
+      no-repeat,
+    linear-gradient(var(--cp-login-grain-secondary-color), var(--cp-login-grain-secondary-color)) 1778px 67px / 1px 1px
+      no-repeat;
 }
 
 .login-protocol-stack {
@@ -272,7 +280,7 @@ const routeClusters: readonly RouteCluster[] = [
   display: grid;
   gap: 8px;
   width: 156px;
-  color: var(--login-stack-text);
+  color: var(--cp-login-stack-text-color);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
@@ -282,13 +290,13 @@ const routeClusters: readonly RouteCluster[] = [
 .login-protocol-stack--ingress {
   top: 36.1111%;
   left: 6.5625%;
-  --login-stack-item-opacity: var(--login-stack-opacity);
+  --cp-login-stack-item-opacity: var(--cp-login-stack-opacity);
 }
 
 .login-protocol-stack--upstream {
   top: 36.1111%;
   right: 3.4375%;
-  --login-stack-item-opacity: var(--login-stack-upstream-opacity);
+  --cp-login-stack-item-opacity: var(--cp-login-stack-upstream-opacity);
 }
 
 .login-topology {
@@ -309,15 +317,15 @@ const routeClusters: readonly RouteCluster[] = [
 }
 
 .login-route-line--bundle {
-  stroke: var(--login-route-bundle);
+  stroke: var(--cp-login-route-bundle-color);
 }
 
 .login-route-line--stream {
-  stroke: var(--login-route-stream);
+  stroke: var(--cp-login-route-stream-color);
 }
 
 .login-route-line--audit {
-  stroke: var(--login-route-audit);
+  stroke: var(--cp-login-route-audit-color);
 }
 
 .login-particle-tracks path {
@@ -327,15 +335,15 @@ const routeClusters: readonly RouteCluster[] = [
 
 .login-particle {
   opacity: 0;
-  filter: drop-shadow(0 0 8px var(--login-particle-glow));
+  filter: drop-shadow(0 0 8px var(--cp-login-particle-glow-color));
 }
 
 .login-particle circle {
-  fill: var(--login-particle);
+  fill: var(--cp-login-particle-color);
 }
 
 .login-packets--semantic circle {
-  fill: var(--login-semantic);
+  fill: var(--cp-login-semantic-color);
 }
 
 .login-route-cluster--edge {

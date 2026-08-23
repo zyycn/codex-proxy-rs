@@ -72,8 +72,8 @@ const toneClasses: Record<ModalTone, { iconBg: string, icon: string }> = {
     icon: 'text-cp-warning',
   },
   danger: {
-    iconBg: 'bg-cp-danger-bg',
-    icon: 'text-cp-danger',
+    iconBg: 'bg-cp-error-bg',
+    icon: 'text-cp-error',
   },
   success: {
     iconBg: 'bg-cp-success-bg',
@@ -186,12 +186,12 @@ onBeforeUnmount(() => {
           type="button"
           tabindex="-1"
           aria-label="关闭弹窗"
-          class="absolute inset-0 cursor-default border-0 bg-cp-overlay p-0"
+          class="absolute inset-0 cursor-default border-0 bg-cp-bg-mask p-0"
           @click="closeModal"
         />
         <section
           ref="panel"
-          class="cp-modal-panel [--cp-input-current-bg:var(--cp-input-soft-bg)] [--cp-input-current-bg-hover:var(--cp-input-soft-bg-hover)] relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 overflow-hidden rounded-cp-surface bg-cp-surface shadow-cp-popover sm:max-h-[calc(100dvh-3rem)]"
+          class="cp-modal-panel relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 overflow-hidden rounded-cp-card bg-cp-bg-container shadow-cp sm:max-h-[calc(100dvh-3rem)]"
           :class="[
             sizeClasses[size],
             $slots.default ? 'grid-rows-[auto_minmax(0,1fr)_auto]' : 'grid-rows-[auto_auto]',
@@ -213,21 +213,21 @@ onBeforeUnmount(() => {
           >
             <span
               v-if="tone !== 'neutral'"
-              class="inline-flex size-11 items-center justify-center rounded-cp-control"
-              :class="$slots.icon ? 'bg-cp-subtle' : toneClasses[tone].iconBg"
+              class="inline-flex size-11 items-center justify-center rounded-cp"
+              :class="$slots.icon ? 'bg-cp-fill-quaternary' : toneClasses[tone].iconBg"
             >
               <slot name="icon">
                 <component :is="iconMap[tone]" :size="18" :class="toneClasses[tone].icon" />
               </slot>
             </span>
             <div class="min-w-0">
-              <h2 :id="titleId" class="m-0 text-lg leading-[1.15] font-heavy text-cp-primary">
+              <h2 :id="titleId" class="m-0 text-lg leading-[1.15] font-heavy text-cp-text">
                 {{ title }}
               </h2>
               <p
                 v-if="description"
                 :id="descriptionId"
-                class="mt-2 mb-0 text-[13px] leading-[1.45] font-semibold text-cp-secondary"
+                class="mt-2 mb-0 text-cp leading-[1.45] font-semibold text-cp-text-secondary"
               >
                 {{ description }}
               </p>

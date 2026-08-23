@@ -30,7 +30,7 @@ const emit = defineEmits<{
       label="编辑密钥"
       @click.stop="emit('edit', apiKey)"
     >
-      <Pencil class="size-3.5 text-cp-info" />
+      <Pencil class="size-3.5 text-cp-link" />
     </BaseIconButton>
     <BaseIconButton
       variant="ghost"
@@ -40,7 +40,7 @@ const emit = defineEmits<{
       :disabled="revealing"
       @click.stop="emit('use', apiKey)"
     >
-      <Terminal class="size-3.5 text-cp-normal" />
+      <Terminal class="size-3.5 text-cp-status-normal" />
     </BaseIconButton>
 
     <BaseIconButton
@@ -50,7 +50,7 @@ const emit = defineEmits<{
       :disabled="revealing"
       @click.stop="emit('importCcs', apiKey)"
     >
-      <Upload class="size-3.5 text-cp-info" />
+      <Upload class="size-3.5 text-cp-link" />
     </BaseIconButton>
 
     <BaseIconButton
@@ -73,7 +73,7 @@ const emit = defineEmits<{
       :disabled="deleting"
       @click.stop="emit('delete', apiKey)"
     >
-      <Trash2 class="size-3.5 text-cp-danger" />
+      <Trash2 class="size-3.5 text-cp-error" />
     </BaseIconButton>
   </div>
 </template>

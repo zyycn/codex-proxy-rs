@@ -50,7 +50,7 @@ withDefaults(
 
     <template #accountEmail="{ row }">
       <span
-        class="block max-w-full truncate font-mono text-[12px] leading-none font-bold text-cp-primary"
+        class="block max-w-full truncate font-mono text-cp-sm leading-none font-bold text-cp-text"
         :title="usageAccountText(row)"
       >
         {{ usageAccountText(row) }}
@@ -62,7 +62,7 @@ withDefaults(
     </template>
 
     <template #userAgent="{ row }">
-      <span class="block max-w-full wrap-break-word whitespace-normal font-mono text-[12px] leading-[1.4] font-emphasis text-cp-secondary">
+      <span class="block max-w-full wrap-break-word whitespace-normal font-mono text-cp-sm leading-[1.4] font-emphasis text-cp-text-secondary">
         {{ usageUserAgent(row) }}
       </span>
     </template>
@@ -77,7 +77,7 @@ withDefaults(
 
     <template #route="{ row }">
       <div class="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap">
-        <code class="font-mono text-[12px] font-emphasis">{{ row.route || '—' }}</code>
+        <code class="font-mono text-cp-sm font-emphasis">{{ row.route || '—' }}</code>
         <span
           v-if="usageIsCompact(row)"
           class="inline-flex shrink-0 text-cp-warning-text"
@@ -91,7 +91,7 @@ withDefaults(
 
     <template #recordType="{ row }">
       <span
-        class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-[12px] leading-none font-bold"
+        class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-cp-sm leading-none font-bold"
         :class="usageRecordTypeClass(row)"
       >
         {{ usageRecordType(row) }}

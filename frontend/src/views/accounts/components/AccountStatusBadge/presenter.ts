@@ -57,10 +57,10 @@ const statusStyles: Record<AccountStatusTone, AccountStatusStyle> = {
     icon: 'bg-cp-success-bg text-cp-success-text',
   },
   danger: {
-    text: 'text-cp-danger-text',
-    dot: 'bg-cp-danger',
-    badge: 'bg-cp-danger-bg text-cp-danger-text',
-    icon: 'bg-cp-danger-bg text-cp-danger-text',
+    text: 'text-cp-error-text',
+    dot: 'bg-cp-error',
+    badge: 'bg-cp-error-bg text-cp-error-text',
+    icon: 'bg-cp-error-bg text-cp-error-text',
   },
   warning: {
     text: 'text-cp-warning-text',
@@ -75,10 +75,10 @@ const statusStyles: Record<AccountStatusTone, AccountStatusStyle> = {
     icon: 'bg-cp-info-bg text-cp-info-text',
   },
   normal: {
-    text: 'text-cp-secondary',
-    dot: 'bg-cp-muted-text',
-    badge: 'bg-cp-subtle text-cp-secondary',
-    icon: 'bg-cp-subtle text-cp-secondary',
+    text: 'text-cp-text-secondary',
+    dot: 'bg-cp-text-quaternary',
+    badge: 'bg-cp-fill-quaternary text-cp-text-secondary',
+    icon: 'bg-cp-fill-quaternary text-cp-text-secondary',
   },
 }
 

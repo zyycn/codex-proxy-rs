@@ -32,7 +32,7 @@ const emit = defineEmits<{
       label="编辑账号"
       @click.stop="emit('edit', account)"
     >
-      <Pencil class="size-3.5 text-cp-info" />
+      <Pencil class="size-3.5 text-cp-link" />
     </BaseIconButton>
 
     <BaseIconButton
@@ -42,7 +42,7 @@ const emit = defineEmits<{
       :disabled="deleting"
       @click.stop="emit('delete', account)"
     >
-      <Trash2 class="size-3.5 text-cp-danger" />
+      <Trash2 class="size-3.5 text-cp-error" />
     </BaseIconButton>
 
     <BasePopover placement="bottom-end">
@@ -60,7 +60,7 @@ const emit = defineEmits<{
             @click.stop="(close(), emit('test', account))"
           >
             <template #icon>
-              <Wifi class="size-3.5 text-cp-muted-text" />
+              <Wifi class="size-3.5 text-cp-text-quaternary" />
             </template>
             测试连接
           </BaseMenuItem>
@@ -70,16 +70,16 @@ const emit = defineEmits<{
             @click.stop="(close(), emit('refresh', account.id))"
           >
             <template #loading>
-              <RefreshCw class="size-3.5 animate-spin text-cp-muted-text motion-reduce:animate-none" />
+              <RefreshCw class="size-3.5 animate-spin text-cp-text-quaternary motion-reduce:animate-none" />
             </template>
             <template #icon>
-              <RefreshCw class="size-3.5 text-cp-muted-text" />
+              <RefreshCw class="size-3.5 text-cp-text-quaternary" />
             </template>
             刷新令牌
           </BaseMenuItem>
           <BaseMenuItem @click.stop="(close(), emit('reauthorize', account))">
             <template #icon>
-              <KeyRound class="size-3.5 text-cp-muted-text" />
+              <KeyRound class="size-3.5 text-cp-text-quaternary" />
             </template>
             重新授权
           </BaseMenuItem>
@@ -89,7 +89,7 @@ const emit = defineEmits<{
             @click.stop="(close(), emit('recover', account.id))"
           >
             <template #icon>
-              <RotateCcw class="size-3.5 text-cp-muted-text" />
+              <RotateCcw class="size-3.5 text-cp-text-quaternary" />
             </template>
             恢复状态
           </BaseMenuItem>

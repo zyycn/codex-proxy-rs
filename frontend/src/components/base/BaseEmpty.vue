@@ -28,22 +28,22 @@ const resolvedIcon = computed(() => props.icon ?? Inbox)
   <div
     class="grid justify-items-center text-center"
     :class="[
-      surface === 'none' ? 'bg-transparent' : 'rounded-cp-overlay bg-cp-subtle',
+      surface === 'none' ? 'bg-transparent' : 'rounded-cp-lg bg-cp-bg-elevated',
       size === 'sm' ? 'gap-2 px-4 py-5' : 'gap-3 px-6 py-8',
     ]"
   >
     <span
-      class="inline-flex items-center justify-center rounded-cp-control bg-cp-muted text-cp-muted-text"
+      class="inline-flex items-center justify-center rounded-cp bg-cp-fill-tertiary text-cp-text-quaternary"
       :class="size === 'sm' ? 'size-8' : 'size-10'"
     >
       <component :is="resolvedIcon" :size="size === 'sm' ? 16 : 18" />
     </span>
-    <p class="m-0 text-[13px] leading-[1.15] font-heavy text-cp-primary">
+    <p class="m-0 text-cp leading-[1.15] font-heavy text-cp-text">
       {{ resolvedTitle }}
     </p>
     <p
       v-if="description"
-      class="m-0 max-w-72 text-xs leading-[1.45] font-semibold text-cp-secondary"
+      class="m-0 max-w-72 text-xs leading-[1.45] font-semibold text-cp-text-secondary"
     >
       {{ description }}
     </p>

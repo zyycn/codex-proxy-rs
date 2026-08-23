@@ -11,7 +11,7 @@ defineProps<{
 
 <template>
   <span
-    class="inline-flex items-center gap-1 whitespace-nowrap text-[12px] font-bold text-cp-primary"
+    class="inline-flex items-center gap-1 whitespace-nowrap text-cp-sm font-bold text-cp-text"
   >
     <span>{{ usageReasoningEffort(record) }}</span>
     <span

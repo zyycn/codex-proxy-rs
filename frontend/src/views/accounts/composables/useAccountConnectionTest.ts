@@ -110,16 +110,16 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         label: '测试失败',
         description: '请求未完成，请在下方查看上游错误与事件轨迹',
         icon: XCircle,
-        badge: 'bg-cp-danger-bg text-cp-danger-text',
-        iconClass: 'text-cp-danger',
+        badge: 'bg-cp-error-bg text-cp-error-text',
+        iconClass: 'text-cp-error',
       }
     }
     return {
       label: '准备测试',
       description: '选择模型后，点击“开始测试”发送真实请求',
       icon: Wifi,
-      badge: 'bg-cp-subtle text-cp-secondary',
-      iconClass: 'text-cp-muted-text',
+      badge: 'bg-cp-fill-quaternary text-cp-text-secondary',
+      iconClass: 'text-cp-text-quaternary',
     }
   })
 

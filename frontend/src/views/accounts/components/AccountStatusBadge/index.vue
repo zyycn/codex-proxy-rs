@@ -53,14 +53,14 @@ const presentation = computed(() => resolveAccountStatusPresentation({
       >
         <span
           v-if="variant === 'pill'"
-          class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[12px] leading-none font-heavy transition-colors duration-150 motion-reduce:transition-none"
+          class="inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-cp-sm leading-none font-heavy transition-colors duration-150 motion-reduce:transition-none"
           :class="presentation.statusStyle.text"
         >
           {{ presentation.label }}
         </span>
         <span
           v-else
-          class="inline-flex min-w-16 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] leading-none font-emphasis transition-colors duration-150 motion-reduce:transition-none"
+          class="inline-flex min-w-16 items-center gap-1.5 rounded-md px-1.5 py-1 text-cp-sm leading-none font-emphasis transition-colors duration-150 motion-reduce:transition-none"
           :class="presentation.statusStyle.text"
         >
           <span aria-hidden="true" class="size-1.5 rounded-full" :class="presentation.statusStyle.dot" />
@@ -69,21 +69,21 @@ const presentation = computed(() => resolveAccountStatusPresentation({
       </component>
     </template>
 
-    <section class="w-88 overflow-hidden rounded-cp-overlay">
-      <header class="flex items-start gap-3 bg-cp-subtle px-4 py-3">
+    <section class="w-88 overflow-hidden rounded-cp-lg">
+      <header class="flex items-start gap-3 bg-cp-fill-quaternary px-4 py-3">
         <span
           aria-hidden="true"
-          class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp-control"
+          class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp"
           :class="presentation.statusStyle.icon"
         >
           <component :is="presentation.icon" class="size-4.5" />
         </span>
 
         <div class="min-w-0 flex-1">
-          <p class="m-0 text-[11px] leading-none font-heavy tracking-[0.08em] text-cp-tertiary">
+          <p class="m-0 text-cp-xs leading-none font-heavy tracking-[0.08em] text-cp-text-tertiary">
             账号状态
           </p>
-          <h3 class="mt-1.5 mb-0 text-[14px] leading-5 font-heavy text-cp-primary text-balance">
+          <h3 class="mt-1.5 mb-0 text-cp-lg leading-5 font-heavy text-cp-text text-balance">
             {{ presentation.title }}
           </h3>
         </div>
@@ -96,51 +96,51 @@ const presentation = computed(() => resolveAccountStatusPresentation({
         </span>
       </header>
 
-      <div class="grid gap-3 px-4 py-3 text-[12px] leading-5">
-        <p class="m-0 text-pretty font-emphasis text-cp-secondary">
+      <div class="grid gap-3 px-4 py-3 text-cp-sm leading-5">
+        <p class="m-0 text-pretty font-emphasis text-cp-text-secondary">
           {{ presentation.description }}
         </p>
 
         <div
           v-if="presentation.rateLimitRecovery"
-          class="flex items-center justify-between gap-3 rounded-cp-control bg-cp-subtle px-3 py-2"
+          class="flex items-center justify-between gap-3 rounded-cp bg-cp-fill-quaternary px-3 py-2"
         >
-          <span class="font-heavy text-cp-tertiary">预计恢复</span>
-          <span class="font-mono font-emphasis tabular-nums text-cp-primary">
+          <span class="font-heavy text-cp-text-tertiary">预计恢复</span>
+          <span class="font-mono font-emphasis tabular-nums text-cp-text">
             {{ presentation.rateLimitRecovery }}
           </span>
         </div>
 
         <div
           v-if="presentation.nextRefreshDisplay"
-          class="flex items-center justify-between gap-3 rounded-cp-control bg-cp-subtle px-3 py-2"
+          class="flex items-center justify-between gap-3 rounded-cp bg-cp-fill-quaternary px-3 py-2"
         >
-          <span class="font-heavy text-cp-tertiary">下次尝试</span>
-          <span class="font-mono font-emphasis tabular-nums text-cp-primary">
+          <span class="font-heavy text-cp-text-tertiary">下次尝试</span>
+          <span class="font-mono font-emphasis tabular-nums text-cp-text">
             {{ presentation.nextRefreshDisplay }}
           </span>
         </div>
 
-        <div class="rounded-cp-control bg-cp-subtle px-3 py-2.5">
-          <p class="m-0 text-[11px] leading-none font-heavy text-cp-tertiary">
+        <div class="rounded-cp bg-cp-fill-quaternary px-3 py-2.5">
+          <p class="m-0 text-cp-xs leading-none font-heavy text-cp-text-tertiary">
             建议操作
           </p>
-          <p class="mt-1.5 mb-0 text-pretty font-emphasis text-cp-primary">
+          <p class="mt-1.5 mb-0 text-pretty font-emphasis text-cp-text">
             {{ presentation.recoveryHint }}
           </p>
         </div>
 
         <div
           v-if="presentation.errorText"
-          class="overflow-hidden rounded-cp-control bg-cp-muted"
+          class="overflow-hidden rounded-cp bg-cp-fill-tertiary"
         >
           <div class="flex items-center justify-between gap-3 px-3 pt-2.5 pb-1.5">
-            <span class="text-[11px] leading-none font-heavy text-cp-tertiary">上游原始反馈</span>
-            <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-muted-text">仅供排查</span>
+            <span class="text-cp-xs leading-none font-heavy text-cp-text-tertiary">上游原始反馈</span>
+            <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary">仅供排查</span>
           </div>
-          <BaseScrollbar class="bg-cp-subtle" max-height="124px">
+          <BaseScrollbar class="bg-cp-fill-quaternary" max-height="124px">
             <div class="px-3 py-2">
-              <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-[11px] leading-[1.55] font-emphasis text-cp-secondary">{{ presentation.errorText }}</pre>
+              <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-xs leading-[1.55] font-emphasis text-cp-text-secondary">{{ presentation.errorText }}</pre>
             </div>
           </BaseScrollbar>
         </div>

@@ -139,20 +139,20 @@ function diagnosticNameDisplay(name: string) {
         <template #nameDisplay="{ row }">
           <div class="inline-grid max-w-full min-w-0 gap-1" :title="row.nameDisplay.full">
             <code
-              class="block max-w-full truncate font-mono text-[12px] leading-none font-heavy text-cp-primary"
+              class="block max-w-full truncate font-mono text-cp-sm leading-none font-heavy text-cp-text"
             >
               {{ row.nameDisplay.primary }}
             </code>
             <div
               v-if="row.nameDisplay.secondary"
-              class="flex min-w-0 items-center gap-1.25 text-cp-secondary"
+              class="flex min-w-0 items-center gap-1.25 text-cp-text-secondary"
             >
               <CornerDownRight
                 v-if="resultDimension !== 'account'"
                 class="size-3.25 shrink-0 text-cp-info"
                 stroke-width="2.4"
               />
-              <code class="block truncate font-mono text-[11px] leading-none font-bold">
+              <code class="block truncate font-mono text-cp-xs leading-none font-bold">
                 {{ row.nameDisplay.secondary }}
               </code>
             </div>
@@ -164,10 +164,10 @@ function diagnosticNameDisplay(name: string) {
             class="grid justify-items-end gap-1 font-mono leading-none tabular-nums"
             :title="`成功 ${formatCompactNumber(row.successCount)}`"
           >
-            <strong class="font-bold text-cp-primary">
+            <strong class="font-bold text-cp-text">
               {{ formatCompactNumber(row.requestCount) }}
             </strong>
-            <small class="text-[10px] font-emphasis text-cp-muted-text">
+            <small class="text-[10px] font-emphasis text-cp-text-quaternary">
               {{ formatPercent(row.requestShare) }}
             </small>
           </span>
@@ -177,13 +177,13 @@ function diagnosticNameDisplay(name: string) {
           <span class="grid justify-items-end gap-1 font-mono leading-none tabular-nums">
             <strong
               class="font-bold"
-              :class="row.errorCount > 0 ? 'text-cp-danger-text' : 'text-cp-primary'"
+              :class="row.errorCount > 0 ? 'text-cp-error-text' : 'text-cp-text'"
             >
               {{ formatCompactNumber(row.errorCount) }}
             </strong>
             <small
               class="text-[10px] font-emphasis"
-              :class="row.errorRate > 0 ? 'text-cp-danger-text' : 'text-cp-muted-text'"
+              :class="row.errorRate > 0 ? 'text-cp-error-text' : 'text-cp-text-quaternary'"
             >
               {{ formatPercent(row.errorRate) }}
             </small>

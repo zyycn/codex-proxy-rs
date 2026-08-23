@@ -214,7 +214,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <div class="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div
-          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-none font-emphasis text-cp-muted-text"
+          class="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-cp-xs leading-none font-emphasis text-cp-text-quaternary"
         >
           <span
             v-for="item in healthLegend"
@@ -277,11 +277,11 @@ onBeforeUnmount(() => {
                 <span
                   aria-hidden="true"
                   data-health-timeline-cell
-                  class="block h-3.5 w-full origin-bottom rounded-xs transition-[filter,box-shadow] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none group-focus-visible:shadow-[0_0_0_2px_var(--cp-bg-surface),0_0_0_4px_var(--cp-info-border)]"
+                  class="block h-3.5 w-full origin-bottom rounded-xs transition-[filter,box-shadow] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none group-focus-visible:shadow-[0_0_0_2px_var(--cp-color-bg-container),0_0_0_4px_var(--cp-control-outline)]"
                   :class="[
                     healthStatusMeta[point.status].cellClass,
                     isActivePoint(point)
-                      ? 'brightness-105 shadow-[0_5px_10px_-5px_var(--cp-shadow-sticky)]'
+                      ? 'brightness-105 shadow-[0_5px_10px_-5px_var(--cp-color-shadow)]'
                       : isInteractivePoint(point)
                         ? 'group-hover:brightness-95'
                         : undefined,
@@ -291,7 +291,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <div class="w-72 overflow-hidden rounded-cp-overlay">
+          <div class="w-72 overflow-hidden rounded-cp-lg">
             <HealthTimelinePointPopover v-if="activePoint" :point="activePoint" />
           </div>
         </BasePopover>

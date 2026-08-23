@@ -26,12 +26,12 @@ watchEffect(() => {
 })
 
 const boxClasses = computed(() => [
-  'relative inline-flex size-4 shrink-0 items-center justify-center rounded-cp-control-sm border-0 transition-[background-color,box-shadow,color] duration-150 motion-reduce:transition-none',
+  'relative inline-flex size-4 shrink-0 items-center justify-center rounded-cp-sm border-0 transition-[background-color,box-shadow,color] duration-150 motion-reduce:transition-none',
   props.disabled
-    ? 'bg-cp-disabled text-cp-disabled-icon'
+    ? 'bg-cp-bg-container-disabled text-cp-text-disabled'
     : checked.value
-      ? 'bg-cp-accent text-cp-accent-on'
-      : 'bg-cp-surface text-transparent shadow-[inset_0_0_0_1px_var(--cp-default-border-hover)]',
+      ? 'bg-cp-primary text-(--cp-button-primary-color)'
+      : 'bg-cp-bg-container text-transparent shadow-[inset_0_0_0_1px_var(--cp-color-border)]',
 ])
 </script>
 
@@ -39,7 +39,7 @@ const boxClasses = computed(() => [
   <!-- The native checkbox is nested; the rule does not resolve this Vue template pattern. -->
   <!-- eslint-disable-next-line vue-a11y/label-has-for -->
   <label
-    class="group relative inline-flex min-h-4 min-w-4 items-center gap-2.5 text-[13px] leading-none font-emphasis"
+    class="group relative inline-flex min-h-4 min-w-4 items-center gap-2.5 text-cp leading-none font-emphasis"
     :class="disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'"
   >
     <input
@@ -52,7 +52,7 @@ const boxClasses = computed(() => [
     >
     <span
       :class="boxClasses"
-      class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-accent-border peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-surface"
+      class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-control-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-bg-container"
       aria-hidden="true"
     >
       <Minus
@@ -64,6 +64,6 @@ const boxClasses = computed(() => [
         :class="!indeterminate && model ? 'opacity-100' : 'opacity-0'"
       />
     </span>
-    <span v-if="showLabel" class="text-[13px] leading-none font-emphasis">{{ label }}</span>
+    <span v-if="showLabel" class="text-cp leading-none font-emphasis">{{ label }}</span>
   </label>
 </template>

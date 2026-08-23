@@ -6,87 +6,127 @@
   --font-sans:
     'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  /* 界面字重刻度：正文强调 650 / 加粗 700(font-bold) / 重标题 760 / 极重 800(font-extrabold)。
-     新代码从这四档取值，不再使用任意字重。 */
+  /* 界面字重刻度：正文强调 650 / 加粗 700(font-bold) / 重标题 760 / 极重 800(font-extrabold)。 */
   --font-weight-emphasis: 650;
   --font-weight-heavy: 760;
-  --color-cp-page: var(--cp-bg-page);
-  --color-cp-surface: var(--cp-bg-surface);
-  --color-cp-subtle: var(--cp-bg-subtle);
-  --color-cp-muted: var(--cp-bg-muted);
-  --color-cp-tertiary-bg: var(--cp-bg-tertiary);
-  --color-cp-nav-active: var(--cp-bg-nav-active);
-  --color-cp-primary: var(--cp-text-primary);
-  --color-cp-strong: var(--cp-text-strong);
-  --color-cp-secondary: var(--cp-text-secondary);
-  --color-cp-tertiary: var(--cp-text-tertiary);
-  --color-cp-muted-text: var(--cp-text-muted);
-  --color-cp-accent: var(--cp-accent);
-  --color-cp-accent-hover: var(--cp-accent-hover);
-  --color-cp-accent-pressed: var(--cp-accent-pressed);
-  --color-cp-accent-border: var(--cp-accent-border);
-  --color-cp-accent-on: var(--cp-accent-on);
-  --color-cp-default-hover: var(--cp-default-bg-hover);
-  --color-cp-default-active: var(--cp-default-bg-active);
-  --color-cp-default-border: var(--cp-default-border);
-  --color-cp-default-border-hover: var(--cp-default-border-hover);
-  --color-cp-border: var(--cp-border-primary);
-  --color-cp-divider: var(--cp-divider-subtle);
-  --color-cp-progress: var(--cp-progress-track);
-  --color-cp-overlay: var(--cp-overlay-scrim);
-  --color-cp-disabled: var(--cp-disabled-bg);
-  --color-cp-disabled-text: var(--cp-disabled-text);
-  --color-cp-disabled-icon: var(--cp-disabled-icon);
-  --color-cp-info: var(--cp-info);
-  --color-cp-info-hover: var(--cp-info-hover);
-  --color-cp-info-pressed: var(--cp-info-pressed);
-  --color-cp-info-bg: var(--cp-info-bg);
-  --color-cp-info-border: var(--cp-info-border);
-  --color-cp-info-text: var(--cp-info-text);
-  --color-cp-info-on: var(--cp-info-on);
-  --color-cp-normal: var(--cp-normal);
-  --color-cp-normal-hover: var(--cp-normal-hover);
-  --color-cp-normal-pressed: var(--cp-normal-pressed);
-  --color-cp-normal-bg: var(--cp-normal-bg);
-  --color-cp-normal-border: var(--cp-normal-border);
-  --color-cp-normal-text: var(--cp-normal-text);
-  --color-cp-success: var(--cp-success);
-  --color-cp-success-bg: var(--cp-success-bg);
-  --color-cp-success-bg-hover: var(--cp-success-bg-hover);
-  --color-cp-success-bg-active: var(--cp-success-bg-active);
-  --color-cp-success-border: var(--cp-success-border);
-  --color-cp-success-text: var(--cp-success-text);
-  --color-cp-warning: var(--cp-warning);
-  --color-cp-warning-bg: var(--cp-warning-bg);
-  --color-cp-warning-bg-hover: var(--cp-warning-bg-hover);
-  --color-cp-warning-bg-active: var(--cp-warning-bg-active);
-  --color-cp-warning-border: var(--cp-warning-border);
-  --color-cp-warning-text: var(--cp-warning-text);
-  --color-cp-danger: var(--cp-danger);
-  --color-cp-danger-bg: var(--cp-danger-bg);
-  --color-cp-danger-bg-hover: var(--cp-danger-bg-hover);
-  --color-cp-danger-bg-active: var(--cp-danger-bg-active);
-  --color-cp-danger-border: var(--cp-danger-border);
-  --color-cp-danger-text: var(--cp-danger-text);
-  --color-cp-plan-pro-bg: var(--cp-plan-pro-bg);
-  --color-cp-plan-pro-text: var(--cp-plan-pro-text);
-  --color-cp-plan-prolite-bg: var(--cp-plan-prolite-bg);
-  --color-cp-plan-prolite-text: var(--cp-plan-prolite-text);
-  --radius-cp-control-sm: var(--cp-radius-control-sm);
-  --radius-cp-control: var(--cp-radius-control);
-  --radius-cp-overlay: var(--cp-radius-overlay);
-  --radius-cp-surface: var(--cp-radius-surface);
-  --shadow-cp-card: var(--cp-shadow-card);
-  --shadow-cp-control: var(--cp-shadow-control);
-  --shadow-cp-popover: var(--cp-shadow-popover);
-  --shadow-cp-input: var(--cp-shadow-input);
-  --shadow-cp-input-hover: var(--cp-shadow-input-hover);
-  --shadow-cp-input-focus: var(--cp-shadow-input-focus);
-  --shadow-cp-input-error: var(--cp-shadow-input-error);
-  --shadow-cp-sidebar: var(--cp-shadow-sidebar);
+  --animate-cp-skeleton: cp-skeleton-breathe 2.8s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+
+  --text-cp-xs: var(--cp-font-size-xs);
+  --text-cp-sm: var(--cp-font-size-sm);
+  --text-cp: var(--cp-font-size);
+  --text-cp-lg: var(--cp-font-size-lg);
+  --text-cp-xl: var(--cp-font-size-xl);
+
+  --color-cp-white: var(--cp-color-white);
+  --color-cp-transparent: var(--cp-color-transparent);
+  --color-cp-bg-layout: var(--cp-color-bg-layout);
+  --color-cp-bg-container: var(--cp-color-bg-container);
+  --color-cp-bg-elevated: var(--cp-color-bg-elevated);
+  --color-cp-bg-spotlight: var(--cp-color-bg-spotlight);
+  --color-cp-bg-mask: var(--cp-color-bg-mask);
+  --color-cp-bg-text-hover: var(--cp-color-bg-text-hover);
+  --color-cp-bg-text-active: var(--cp-color-bg-text-active);
+  --color-cp-bg-container-disabled: var(--cp-color-bg-container-disabled);
+  --color-cp-fill-secondary: var(--cp-color-fill-secondary);
+  --color-cp-fill-tertiary: var(--cp-color-fill-tertiary);
+  --color-cp-fill-quaternary: var(--cp-color-fill-quaternary);
+  --color-cp-border: var(--cp-color-border);
+  --color-cp-border-secondary: var(--cp-color-border-secondary);
+  --color-cp-split: var(--cp-color-split);
+  --color-cp-text: var(--cp-color-text);
+  --color-cp-text-heading: var(--cp-color-text-heading);
+  --color-cp-text-secondary: var(--cp-color-text-secondary);
+  --color-cp-text-tertiary: var(--cp-color-text-tertiary);
+  --color-cp-text-quaternary: var(--cp-color-text-quaternary);
+  --color-cp-text-disabled: var(--cp-color-text-disabled);
+  --color-cp-text-light-solid: var(--cp-color-text-light-solid);
+
+  --color-cp-primary-bg: var(--cp-color-primary-bg);
+  --color-cp-primary-bg-hover: var(--cp-color-primary-bg-hover);
+  --color-cp-primary-border: var(--cp-color-primary-border);
+  --color-cp-primary-border-hover: var(--cp-color-primary-border-hover);
+  --color-cp-primary-hover: var(--cp-color-primary-hover);
+  --color-cp-primary: var(--cp-color-primary);
+  --color-cp-primary-active: var(--cp-color-primary-active);
+  --color-cp-primary-text-hover: var(--cp-color-primary-text-hover);
+  --color-cp-primary-text: var(--cp-color-primary-text);
+  --color-cp-primary-text-active: var(--cp-color-primary-text-active);
+  --color-cp-link: var(--cp-color-link);
+  --color-cp-link-hover: var(--cp-color-link-hover);
+  --color-cp-link-active: var(--cp-color-link-active);
+  --color-cp-control-item-bg-active: var(--cp-control-item-bg-active);
+  --color-cp-control-item-bg-active-hover: var(--cp-control-item-bg-active-hover);
+  --color-cp-control-outline: var(--cp-control-outline);
+  --color-cp-menu-item-selected-bg: var(--cp-menu-item-selected-bg);
+  --color-cp-progress-remaining: var(--cp-progress-remaining-color);
+
+  --color-cp-info: var(--cp-color-info);
+  --color-cp-info-hover: var(--cp-color-info-hover);
+  --color-cp-info-active: var(--cp-color-info-active);
+  --color-cp-info-bg: var(--cp-color-info-bg);
+  --color-cp-info-border: var(--cp-color-info-border);
+  --color-cp-info-text: var(--cp-color-info-text);
+  --color-cp-status-normal: var(--cp-color-status-normal);
+  --color-cp-status-normal-hover: var(--cp-color-status-normal-hover);
+  --color-cp-status-normal-active: var(--cp-color-status-normal-active);
+  --color-cp-status-normal-bg: var(--cp-color-status-normal-bg);
+  --color-cp-status-normal-border: var(--cp-color-status-normal-border);
+  --color-cp-status-normal-text: var(--cp-color-status-normal-text);
+  --color-cp-success: var(--cp-color-success);
+  --color-cp-success-bg: var(--cp-color-success-bg);
+  --color-cp-success-bg-hover: var(--cp-color-success-bg-hover);
+  --color-cp-success-bg-active: var(--cp-color-success-bg-active);
+  --color-cp-success-border: var(--cp-color-success-border);
+  --color-cp-success-text: var(--cp-color-success-text);
+  --color-cp-warning: var(--cp-color-warning);
+  --color-cp-warning-bg: var(--cp-color-warning-bg);
+  --color-cp-warning-bg-hover: var(--cp-color-warning-bg-hover);
+  --color-cp-warning-bg-active: var(--cp-color-warning-bg-active);
+  --color-cp-warning-border: var(--cp-color-warning-border);
+  --color-cp-warning-text: var(--cp-color-warning-text);
+  --color-cp-error: var(--cp-color-error);
+  --color-cp-error-bg: var(--cp-color-error-bg);
+  --color-cp-error-bg-hover: var(--cp-color-error-bg-hover);
+  --color-cp-error-bg-active: var(--cp-color-error-bg-active);
+  --color-cp-error-border: var(--cp-color-error-border);
+  --color-cp-error-text: var(--cp-color-error-text);
+  --color-cp-reasoning: var(--cp-color-reasoning);
+
+  --color-cp-account-plan-pro-bg: var(--cp-account-plan-pro-bg);
+  --color-cp-account-plan-pro: var(--cp-account-plan-pro-color);
+  --color-cp-account-plan-pro-lite-bg: var(--cp-account-plan-pro-lite-bg);
+  --color-cp-account-plan-pro-lite: var(--cp-account-plan-pro-lite-color);
+
+  --radius-cp-sm: var(--cp-border-radius-sm);
+  --radius-cp: var(--cp-border-radius);
+  --radius-cp-lg: var(--cp-border-radius-lg);
+  --radius-cp-card: var(--cp-card-border-radius);
+
+  --shadow-cp: var(--cp-box-shadow);
+  --shadow-cp-secondary: var(--cp-box-shadow-secondary);
+  --shadow-cp-tertiary: var(--cp-box-shadow-tertiary);
+  --shadow-cp-card: var(--cp-card-shadow);
+  --shadow-cp-input: var(--cp-input-shadow);
+  --shadow-cp-input-hover: var(--cp-input-hover-shadow);
+  --shadow-cp-input-active: var(--cp-input-active-shadow);
+  --shadow-cp-input-error-active: var(--cp-input-error-active-shadow);
+  --shadow-cp-layout-sider: var(--cp-layout-sider-shadow);
+
   --spacing-cp-control-sm: var(--cp-control-height-sm);
-  --spacing-cp-control-md: var(--cp-control-height-md);
+  --spacing-cp-control: var(--cp-control-height);
   --spacing-cp-control-lg: var(--cp-control-height-lg);
-  --spacing-cp-table-row-min: var(--cp-table-row-min-height);
-  --spacing-cp-table-row-min-compact: var(--cp-table-row-min-height-compact);
+  --spacing-cp-size-step: var(--cp-size-step);
+  --spacing-cp-table-row: var(--cp-table-row-height);
+  --spacing-cp-table-row-sm: var(--cp-table-row-height-sm);
+}
+
+@keyframes cp-skeleton-breathe {
+  0%,
+  100% {
+    background-color: var(--cp-color-fill-tertiary);
+  }
+
+  50% {
+    background-color: var(--cp-color-fill-secondary);
+  }
 }

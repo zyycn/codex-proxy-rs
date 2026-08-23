@@ -40,7 +40,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
   >
     <div v-if="account" class="grid gap-5">
       <div
-        class="flex flex-wrap items-center justify-between gap-4 rounded-cp-control bg-cp-subtle px-4 py-3.5"
+        class="flex flex-wrap items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5"
       >
         <AccountIdentityCell
           class="min-w-0 flex-1"
@@ -57,7 +57,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       </div>
 
       <div class="flex min-h-6 items-center justify-between gap-3">
-        <span class="text-[13px] leading-none font-medium text-cp-secondary">调度</span>
+        <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>
         <BaseSwitch
           v-model="enabled"
           label="切换账号调度"
