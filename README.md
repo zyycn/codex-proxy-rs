@@ -16,9 +16,6 @@
 
 </div>
 
-Codex Proxy RS 在一个网关中管理 OpenAI 与 xAI 账号，为客户端提供统一鉴权、模型路由、额度状态、
-请求观测和管理控制面。
-
 > [!NOTE]
 > 数据面支持 OpenAI Responses、Images 和模型目录协议，不提供 `/v1/chat/completions`。
 
