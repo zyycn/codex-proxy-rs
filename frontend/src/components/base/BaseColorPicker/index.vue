@@ -393,7 +393,7 @@ function normalizedInputColor() {
         <div class="min-w-0 flex-1">
           <BaseInput
             v-model="customInput"
-            class="bg-cp-fill-tertiary!"
+            class="rounded-cp bg-cp-fill-tertiary!"
             :aria-label="props.allowAlpha ? 'RGBA 颜色' : 'HEX 颜色'"
             :placeholder="props.allowAlpha ? 'rgba(96, 165, 250, 1)' : '#2563EB'"
             autocomplete="off"

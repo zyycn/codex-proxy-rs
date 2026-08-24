@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import {
   Check,
-  Moon,
   RotateCcw,
   Save,
   Search,
-  Sun,
   Undo2,
 } from '@lucide/vue'
 
@@ -52,10 +50,6 @@ const scopeOptions = [
   { label: '全局', value: 'global' },
   { label: '组件', value: 'component' },
 ]
-const previewThemeOptions = [
-  { label: '浅色预览', value: 'light', icon: Sun },
-  { label: '深色预览', value: 'dark', icon: Moon },
-]
 
 function switchScope(value: string) {
   scope.value = value === 'component' ? 'component' : 'global'
@@ -94,13 +88,6 @@ function saveTheme(event: MouseEvent) {
             :options="scopeOptions"
             size="sm"
             @update:model-value="switchScope"
-          />
-          <BaseSegmented
-            v-model="previewTheme"
-            label="预览明暗模式"
-            display="icon"
-            :options="previewThemeOptions"
-            size="sm"
           />
           <BaseButton size="sm" variant="ghost" :disabled="!dirty" @click="resetDraft">
             <template #icon>
