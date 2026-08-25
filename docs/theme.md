@@ -21,7 +21,8 @@ CSS Variables 与 Tailwind CSS 4 utilities 消费主题。
 
 ## 设计原则
 
-- **所选即所得**：`colorPrimary` 始终保留用户选择的 Seed 原色；只有 Hover、Active、弱背景和文字色使用派生值。
+- **所选即所得**：`colorPrimary` 始终保留用户选择的 Seed 原色；浅色功能基础色沿用 Ant Design P6，
+  同样等于 Seed。只有深色适配、Hover、Active、弱背景和文字色使用派生值。
 - **主色与表面分离**：品牌色负责交互和强调，页面、容器、浮层与文字由独立的背景和文本 Seed 派生。
 - **语义独立**：`success`、`warning`、`error`、`info` 与 `link` 拥有各自 Seed，不随品牌色隐式改变。
 - **无边设计**：默认依靠表面色差、间距和轻阴影表达层级；边框只用于焦点、错误和必要分隔。
@@ -110,6 +111,10 @@ interface ThemeCustomization {
 | 弱背景 | 从当前容器表面与主色混合，避免低亮度 Seed 产生脏灰色块 |
 | 文字与描边 | 从色板取值后，对相邻 Surface 执行对比度校正 |
 
+功能色的基础 Map 对齐 Ant Design：`info`、`success`、`warning`、`error` 均固定取十阶色板 P6。浅色 P6
+就是用户选择的 Seed，因此 `--cp-color-info / success / warning / error` 不再经过额外对比度改写；深色 P6
+继续使用暗色色板对当前 Surface 做主题适配。功能色的 Hover、Active、弱背景、文字和描边仍按各自角色派生。
+
 背景与文本 Seed 进入独立的 Surface Map，生成：
 
 - `colorBgLayout / Container / Elevated / Spotlight / Mask`
@@ -141,7 +146,7 @@ Alias 层执行以下保护：
 - 普通文字与背景的目标对比度为 4.5:1。
 - 控件边界与相邻 Surface 的目标对比度为 3:1。
 - 极亮的实心按钮背景自动切换为深色文字，避免白底白字。
-- 校正只修改最终 Alias，不反写用户保存的 Seed。
+- 校正只修改文字、描边和状态等具体角色 Alias，不反写用户保存的 Seed，也不改写基础功能色 Alias。
 
 ### Component Token
 

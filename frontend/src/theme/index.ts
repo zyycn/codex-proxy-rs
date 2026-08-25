@@ -744,7 +744,9 @@ function deriveFunctionalColorMap(
   const palette = generate(seed, theme === 'dark'
     ? { theme: 'dark', backgroundColor: containerBg }
     : undefined).map(color => normalizeHexColor(color) ?? seed)
-  const color = palette[theme === 'dark' ? 6 : 5]!
+  // 与 Ant Design 的功能色 Map 保持一致：基础功能色固定取 P6。
+  // 浅色 P6 即用户选择的 Seed；深色 P6 由暗色色板适配。对比度保护只作用于具体角色 Token。
+  const color = palette[5]!
   const hover = palette[theme === 'dark' ? 7 : 4]!
   const active = palette[theme === 'dark' ? 5 : 6]!
   const backgroundMix = theme === 'dark' ? 0.18 : 0.08
@@ -753,7 +755,7 @@ function deriveFunctionalColorMap(
   const text = baselineText ?? palette[theme === 'dark' ? 8 : 5]!
 
   return {
-    color: ensureContrast(color, containerBg, 3),
+    color,
     hover: ensureContrast(hover, containerBg, 3),
     active: ensureContrast(active, containerBg, 3),
     background: mix(containerBg, color, backgroundMix),
