@@ -614,29 +614,3 @@ fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn thread_spawn_children_should_keep_distinct_transport_anchors() {
-        let request = |thread_id: &str| {
-            let mut request = CodexResponsesRequest::from_body(Map::from_iter([
-                ("model".to_owned(), json!("gpt-5.4")),
-                ("input".to_owned(), json!("child task")),
-            ]));
-            request.client_session_id = Some("root-session".to_owned());
-            request.client_thread_id = Some(thread_id.to_owned());
-            request.turn_metadata = Some(r#"{"subagent_kind":"thread_spawn"}"#.to_owned());
-            request
-        };
-
-        assert_ne!(
-            derive_conversation_anchor(&request("child-one")),
-            derive_conversation_anchor(&request("child-two"))
-        );
-    }
-}

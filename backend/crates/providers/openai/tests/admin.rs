@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone as _, Utc};
-use futures::future::BoxFuture;
+use futures::{StreamExt, future::BoxFuture};
 use gateway_admin::model::accounts::AccountRecord;
 use gateway_admin::model::observability::{
     CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
@@ -23,7 +23,12 @@ use gateway_core::engine::credential::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
     ProviderAccountStore, QuotaAccessChange, QuotaEvidence, QuotaObservation, QuotaState,
 };
+use gateway_core::engine::provider::ProviderRequest;
+use gateway_core::engine::{
+    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
+};
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
     OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
@@ -32,7 +37,11 @@ use gateway_core::provider_ports::{
     ProviderCredentialState, ProviderCredentialStatePort, ProviderRefreshPolicy,
     ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError, ProviderStorePorts,
 };
-use gateway_core::routing::{ProviderKind, UpstreamModelId};
+use gateway_core::routing::{
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
+    RuntimeSnapshot, UpstreamModelId,
+};
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
 use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
 use provider_openai::credential::{CodexCredentialCodec, ImportCodexOAuthCredential};
@@ -46,8 +55,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
     MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
-    profile, secret,
+    account_policy, profile, secret,
 };
+
+const COMPLETED_SESSION_SSE: &str = concat!(
+    "event: response.completed\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_initialized_session\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+);
 
 #[tokio::test]
 async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions_once() {
@@ -95,6 +109,84 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
         )
     }));
     assert!(bundle.take_worker_contributions().is_empty());
+}
+
+#[tokio::test]
+async fn initialized_provider_keeps_thread_spawn_transport_conversations_distinct() {
+    let account_id = "acct_initialized_thread_spawn";
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: account_id.to_owned(),
+            secret: secret("at-initialized-thread-spawn"),
+            verified_account: profile("chatgpt-initialized-thread-spawn"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_SESSION_SSE),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("initialized OpenAI provider");
+    let provider = bundle.core_provider();
+    let thread_spawn = r#"{"subagent_kind":"thread_spawn"}"#;
+    let mut conversation_ids = Vec::new();
+
+    for (request_id, thread_id) in [
+        ("req_initialized_thread_spawn_first", "child-one"),
+        ("req_initialized_thread_spawn_second", "child-two"),
+    ] {
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("child task")),
+                ("session_id".to_owned(), json!("parent-session")),
+                ("thread_id".to_owned(), json!(thread_id)),
+                ("turnMetadata".to_owned(), json!(thread_spawn)),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))]));
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+        let mut stream = provider
+            .execute(
+                initialized_provider_request(operation, account_id),
+                initialized_attempt_context(request_id, account_id),
+            )
+            .await
+            .expect("prepare child provider stream");
+        let mut conversation_id = None;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("child provider response");
+            if let Some(update) = event.session_update() {
+                conversation_id = update
+                    .payload()
+                    .get("conversation_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+            }
+        }
+        conversation_ids.push(conversation_id.expect("child transport conversation id"));
+    }
+
+    assert_ne!(conversation_ids[0], conversation_ids[1]);
 }
 
 #[tokio::test]
@@ -919,6 +1011,63 @@ fn reset_credit_command(account_id: ProviderAccountId) -> ConsumeProviderResetCr
         redeem_request_id: Uuid::parse_str("8fbf302d-11df-4bd5-82e4-08e4b3df7874")
             .expect("UUID v4"),
     }
+}
+
+fn initialized_provider_request(operation: Operation, account_id: &str) -> ProviderRequest {
+    let provider = ProviderKind::new("openai").expect("provider");
+    let upstream_model = UpstreamModelId::new("gpt-5.4").expect("upstream model");
+    let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
+    let account_scope = initialized_account_scope(account_id);
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("revision"),
+        account_policy(),
+        vec![provider.clone()],
+        vec![ProviderModel::new(
+            provider,
+            upstream_model,
+            ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
+                .with_upstream_feature_validation(),
+        )],
+        Vec::new(),
+    )
+    .expect("runtime snapshot");
+    let plan = snapshot
+        .plan(
+            &public_model,
+            &operation,
+            account_scope,
+            &RoutingContext::default(),
+        )
+        .expect("routing plan");
+
+    ProviderRequest::new(operation, plan.candidates()[0].clone())
+}
+
+fn initialized_attempt_context(request_id: &str, account_id: &str) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_initialized").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(initialized_account_scope(account_id)),
+        None,
+        CancellationToken::new(),
+    )
+}
+
+fn initialized_account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
+    let provider = ProviderKind::new("openai").expect("provider");
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new(account_id).expect("account id"),
+            RuntimeAccount::new(provider, BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ))
 }
 
 fn provider_ports() -> ProviderStorePorts {
