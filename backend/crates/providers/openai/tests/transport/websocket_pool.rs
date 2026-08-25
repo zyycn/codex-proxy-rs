@@ -35,7 +35,7 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
         }
         websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -97,7 +97,7 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
         format!("http://{addr}"),
         profile.clone(),
     )
-    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(1, Duration::from_mins(1))));
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
     let first_request = pooled_websocket_request("wire-profile-continuation");
     let first = backend
         .create_response(
@@ -401,7 +401,7 @@ async fn codex_backend_client_stream_should_keep_reused_socket_after_structural_
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_use_http_when_pool_is_at_cap() {
+async fn codex_backend_client_stream_should_use_http_when_connecting_limit_is_exhausted() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -414,7 +414,7 @@ async fn codex_backend_client_stream_should_use_http_when_pool_is_at_cap() {
         write_completed_sse_response(&mut first_stream).await;
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        max_per_account: 0,
+        max_connecting: 0,
         initial_event_timeout: Some(Duration::from_millis(30)),
         ..websocket_pool_config_for_tests(None, None, None)
     }));
@@ -432,7 +432,7 @@ async fn codex_backend_client_stream_should_use_http_when_pool_is_at_cap() {
             request_context("req_structural_bypass", Some("chatgpt-account")),
         )
         .await
-        .expect("pool cap should select HTTP before sending payload");
+        .expect("exhausted connection-opening limit should select HTTP before sending payload");
     assert_eq!(response.transport, CodexBackendTransport::HttpSse);
     assert_eq!(
         response.transport_metrics.decision,
@@ -472,7 +472,7 @@ async fn codex_backend_client_should_not_reuse_pooled_websocket_across_local_acc
             websocket.close(None).await.unwrap();
         }
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -841,140 +841,32 @@ async fn websocket_pool_shutdown_should_cancel_and_join_active_stream() {
 }
 
 #[tokio::test]
-async fn websocket_pool_should_use_http_for_new_keys_after_account_cap() {
+async fn websocket_pool_should_keep_sixty_fifth_conversation_on_same_account_on_websocket() {
+    const REQUEST_COUNT: usize = 65;
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
     let server = tokio::spawn(async move {
-        let (first_stream, _) = listener.accept().await.unwrap();
-        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-        let mut first_websocket = accept_codex_test_websocket(first_stream).await;
-        let _first_message = first_websocket.next().await.unwrap().unwrap();
-        first_websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_cap_first", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-
-        for _ in 0..2 {
-            let (mut stream, _) = listener.accept().await.unwrap();
+        let mut websockets = Vec::with_capacity(REQUEST_COUNT);
+        for index in 0..REQUEST_COUNT {
+            let (stream, _) = listener.accept().await.unwrap();
             accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-            let request = read_http_request(&mut stream).await;
-            assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
-            write_completed_sse_response(&mut stream).await;
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _message = websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Text(
+                    completed_websocket_response(&format!("resp_same_account_{index}"), 2, 1)
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            websockets.push(websocket);
         }
-        drop(first_websocket);
-    });
-    let pool = Arc::new(CodexWebSocketPool::new(1, Duration::from_mins(1)));
-    let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
-        test_wire_profile(),
-    )
-    .with_websocket_pool(pool);
-    let first_request = pooled_websocket_request("conversation-cap-one");
-    let second_request = pooled_websocket_request("conversation-cap-two");
-
-    let first = backend
-        .create_response(
-            &first_request,
-            request_context("req_cap_first", Some("chatgpt-account")),
-        )
-        .await
-        .expect("first capped websocket response should succeed");
-    let second = backend
-        .create_response(
-            &second_request,
-            request_context("req_cap_second", Some("chatgpt-account")),
-        )
-        .await
-        .expect("new key over account cap should use HTTP");
-    let third = backend
-        .create_response(
-            &second_request,
-            request_context("req_cap_third", Some("chatgpt-account")),
-        )
-        .await
-        .expect("capped key should keep using HTTP instead of opening one-shot sockets");
-    server.await.unwrap();
-
-    assert!(first.body.contains("resp_cap_first"));
-    assert!(second.body.contains("response.completed"));
-    assert!(third.body.contains("response.completed"));
-    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
-    assert_eq!(
-        second.transport_metrics.decision,
-        Some(CodexTransportDecision::Http2PoolUnavailable)
-    );
-    assert_eq!(
-        third.transport_metrics.decision,
-        Some(CodexTransportDecision::Http2PoolUnavailable)
-    );
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 3);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn websocket_pool_should_bound_concurrent_openings_across_accounts() {
-    let (websockets, http) = concurrent_pool_transport_counts(8, 2).await;
-
-    assert_eq!((websockets, http), (2, 6));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn websocket_pool_should_bound_total_slots_across_accounts() {
-    let (websockets, http) = concurrent_pool_transport_counts(3, 8).await;
-
-    assert_eq!((websockets, http), (3, 5));
-}
-
-#[tokio::test]
-async fn websocket_pool_should_evict_lru_idle_connection_at_total_cap() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (first_stream, _) = listener.accept().await.unwrap();
-        let mut first = accept_codex_test_websocket(first_stream).await;
-        let _ = first.next().await.unwrap().unwrap();
-        first
-            .send(Message::Text(
-                completed_websocket_response("resp_global_lru_first", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-
-        let (second_stream, _) = listener.accept().await.unwrap();
-        let mut second = accept_codex_test_websocket(second_stream).await;
-        let _ = second.next().await.unwrap().unwrap();
-        second
-            .send(Message::Text(
-                completed_websocket_response("resp_global_lru_second", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
-
-        let close = timeout(Duration::from_secs(2), first.next())
-            .await
-            .expect("global LRU eviction should close the oldest idle socket")
-            .expect("oldest idle socket should emit a close frame")
-            .expect("oldest idle socket close should be valid");
-        std::assert_matches!(close, Message::Close(_));
-
-        let (third_stream, _) = listener.accept().await.unwrap();
-        let mut third = accept_codex_test_websocket(third_stream).await;
-        let _ = third.next().await.unwrap().unwrap();
-        third
-            .send(Message::Text(
-                completed_websocket_response("resp_global_lru_third", 2, 1).into(),
-            ))
-            .await
-            .unwrap();
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        max_per_account: 8,
-        max_total: 2,
-        max_connecting: 2,
+        max_connecting: 1,
         ..websocket_pool_config_for_tests(None, None, None)
     }));
     let backend = CodexBackendClient::new(
@@ -983,36 +875,52 @@ async fn websocket_pool_should_evict_lru_idle_connection_at_total_cap() {
         test_wire_profile(),
     )
     .with_websocket_pool(Arc::clone(&pool));
-
-    let mut responses = Vec::new();
-    for index in 0..3 {
-        let request = pooled_websocket_request(&format!("conversation-global-lru-{index}"));
-        let account_id = format!("account-global-lru-{index}");
-        let request_id = format!("req_global_lru_{index}");
+    let mut responses = Vec::with_capacity(REQUEST_COUNT);
+    for index in 0..REQUEST_COUNT {
+        let request = pooled_websocket_request(&format!("conversation-same-account-{index}"));
         responses.push(
             backend
-                .create_response(&request, request_context(&request_id, Some(&account_id)))
+                .create_response(
+                    &request,
+                    request_context(
+                        &format!("req_same_account_{index}"),
+                        Some("chatgpt-account"),
+                    ),
+                )
                 .await
-                .expect("global LRU request should keep using websocket"),
+                .expect("same-account conversation should use websocket"),
         );
     }
     server.await.unwrap();
 
-    assert!(responses[0].body.contains("resp_global_lru_first"));
-    assert!(responses[1].body.contains("resp_global_lru_second"));
-    assert!(responses[2].body.contains("resp_global_lru_third"));
-    assert!(
-        responses
-            .iter()
-            .all(|response| response.transport == CodexBackendTransport::WebSocket)
+    assert_eq!(
+        (
+            responses
+                .iter()
+                .filter(|response| response.transport == CodexBackendTransport::WebSocket)
+                .count(),
+            accepted_connections.load(Ordering::SeqCst),
+        ),
+        (REQUEST_COUNT, REQUEST_COUNT)
     );
     pool.shutdown().await;
 }
 
-async fn concurrent_pool_transport_counts(
-    max_total: usize,
-    max_connecting: usize,
-) -> (usize, usize) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_pool_should_bound_concurrent_openings_across_accounts() {
+    let (websockets, http) = concurrent_pool_transport_counts(2).await;
+
+    assert_eq!((websockets, http), (2, 6));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_pool_should_allow_all_openings_when_connect_permits_are_available() {
+    let (websockets, http) = concurrent_pool_transport_counts(8).await;
+
+    assert_eq!((websockets, http), (8, 0));
+}
+
+async fn concurrent_pool_transport_counts(max_connecting: usize) -> (usize, usize) {
     const REQUEST_COUNT: usize = 8;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1051,7 +959,7 @@ async fn concurrent_pool_transport_counts(
             websocket
                 .send(Message::Text(
                     completed_websocket_response(
-                        &format!("resp_global_cap_{max_total}_{max_connecting}_{index}"),
+                        &format!("resp_connecting_cap_{max_connecting}_{index}"),
                         2,
                         1,
                     )
@@ -1063,8 +971,6 @@ async fn concurrent_pool_transport_counts(
         (websocket_count, http_count)
     });
     let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        max_per_account: REQUEST_COUNT,
-        max_total,
         max_connecting,
         ..websocket_pool_config_for_tests(None, None, None)
     }));
@@ -1096,7 +1002,7 @@ async fn concurrent_pool_transport_counts(
         let response = request
             .await
             .unwrap()
-            .expect("globally capped request should complete");
+            .expect("concurrent request should complete");
         if response.transport == CodexBackendTransport::WebSocket {
             websocket_responses += 1;
         }
@@ -1910,7 +1816,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_error_termin
             .unwrap();
         second_websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -1987,7 +1893,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unknown_resp
             .unwrap();
         second_websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),

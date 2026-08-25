@@ -300,7 +300,7 @@ async fn account_eviction_should_cancel_a_background_websocket_opening() {
             .await
             .unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -354,7 +354,7 @@ async fn pool_shutdown_should_cancel_and_join_a_background_websocket_opening() {
             .unwrap();
         assert_eq!(read, 0);
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -733,7 +733,7 @@ async fn concurrent_multi_conversation_continuations_should_select_each_exact_so
         tokio::join!(first_continuation, second_continuation);
     });
 
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -1190,7 +1190,7 @@ async fn cancelled_half_open_opening_should_allow_another_probe() {
             .await
             .unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -1325,7 +1325,7 @@ async fn fast_path_miss_and_late_failure_should_count_as_one_breaker_failure() {
             write_completed_sse_response(&mut second_http).await;
         }
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),

@@ -10,13 +10,13 @@ use std::{
     time::Duration,
 };
 
-use tokio::{sync::Semaphore, time::Instant};
+use tokio::sync::Semaphore;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use self::state::{
-    WebSocketPoolConnecting, WebSocketPoolSlot, WebSocketPoolState, account_slot_count,
-    close_pooled_connection, close_pooled_connections, take_lru_idle_connection,
+    WebSocketPoolConnecting, WebSocketPoolSlot, WebSocketPoolState, close_pooled_connection,
+    close_pooled_connections,
 };
 use super::pump::PumpKeepalive;
 
@@ -31,8 +31,6 @@ pub(crate) use self::{
     },
 };
 
-const DEFAULT_MAX_PER_ACCOUNT: usize = 8;
-const DEFAULT_MAX_TOTAL: usize = 64;
 const DEFAULT_MAX_CONNECTING: usize = 16;
 const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(25);
@@ -64,10 +62,6 @@ pub struct CodexWebSocketPoolConfig {
     pub enabled: bool,
     /// 单个 socket 的最大生命周期。
     pub max_age: Duration,
-    /// 单个账号允许占用的最大池 slot 数。
-    pub max_per_account: usize,
-    /// 所有账号合计允许占用的最大池 slot 数。
-    pub max_total: usize,
     /// 所有账号合计允许并发执行的 opening 数。
     pub max_connecting: usize,
     /// 后台维护间隔；`None` 表示不启动后台任务。
@@ -87,8 +81,6 @@ impl Default for CodexWebSocketPoolConfig {
         Self {
             enabled: true,
             max_age: DEFAULT_MAX_AGE,
-            max_per_account: DEFAULT_MAX_PER_ACCOUNT,
-            max_total: DEFAULT_MAX_TOTAL,
             max_connecting: DEFAULT_MAX_CONNECTING,
             maintenance_interval: Some(DEFAULT_MAINTENANCE_INTERVAL),
             ping_interval: Some(DEFAULT_PING_INTERVAL),
@@ -113,10 +105,9 @@ impl CodexWebSocketPoolConfig {
 }
 
 impl CodexWebSocketPool {
-    /// 构造连接池策略和状态。
-    pub fn new(max_per_account: usize, max_age: Duration) -> Self {
+    /// 构造不限制累计 slot 数的连接池策略和状态。
+    pub fn new(max_age: Duration) -> Self {
         Self::with_config(CodexWebSocketPoolConfig {
-            max_per_account: max_per_account.max(1),
             max_age,
             maintenance_interval: None,
             ping_interval: None,
@@ -218,43 +209,25 @@ impl CodexWebSocketPool {
 
             let acquire = if required_response_id.is_some() {
                 WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::ContinuationNotFound)
-            } else if self.config.max_per_account == 0
-                || account_slot_count(&state.slots, key.account_id()) >= self.config.max_per_account
-            {
-                WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap)
             } else {
                 let connect_permit = self.connect_semaphore.clone().try_acquire_owned().ok();
                 match connect_permit {
                     Some(connect_permit) => {
-                        let has_total_capacity = if self.config.max_total == 0 {
-                            false
-                        } else if state.slots.len() < self.config.max_total {
-                            true
-                        } else if let Some(connection) = take_lru_idle_connection(&mut state) {
-                            connections_to_close.push(connection);
-                            true
-                        } else {
-                            false
-                        };
-                        if has_total_capacity {
-                            let lease = WebSocketPoolConnectLease::reserve(
-                                self.clone(),
-                                key.clone(),
-                                connect_permit,
-                            );
-                            state.slots.insert(
-                                key,
-                                WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
-                                    id: lease.id,
-                                    started_at: lease.started_at,
-                                    outcome: lease.outcome.clone(),
-                                    cancellation: lease.cancellation.clone(),
-                                }),
-                            );
-                            WebSocketPoolAcquire::Connect(lease)
-                        } else {
-                            WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap)
-                        }
+                        let lease = WebSocketPoolConnectLease::reserve(
+                            self.clone(),
+                            key.clone(),
+                            connect_permit,
+                        );
+                        state.slots.insert(
+                            key,
+                            WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
+                                id: lease.id,
+                                started_at: lease.started_at,
+                                outcome: lease.outcome.clone(),
+                                cancellation: lease.cancellation.clone(),
+                            }),
+                        );
+                        WebSocketPoolAcquire::Connect(lease)
                     }
                     None => WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Cap),
                 }
@@ -292,7 +265,6 @@ impl CodexWebSocketPool {
                     key.clone(),
                     WebSocketPoolSlot::Idle {
                         connection: Box::new(connection),
-                        last_used_at: Instant::now(),
                     },
                 );
             }

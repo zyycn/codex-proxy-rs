@@ -495,8 +495,6 @@ fn websocket_pool_config_for_tests(
     CodexWebSocketPoolConfig {
         enabled: true,
         max_age: Duration::from_mins(1),
-        max_per_account: 8,
-        max_total: 64,
         max_connecting: 16,
         maintenance_interval,
         ping_interval,

@@ -126,7 +126,7 @@ async fn codex_backend_client_should_decode_permessage_deflate_context_takeover_
             websocket.send(Message::Text(payload.into())).await.unwrap();
         }
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -932,7 +932,7 @@ async fn codex_backend_client_should_not_reuse_websocket_rate_limit_headers() {
             .unwrap();
         websocket.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -1914,7 +1914,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
     let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),

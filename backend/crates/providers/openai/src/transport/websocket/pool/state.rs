@@ -108,7 +108,6 @@ impl WebSocketContinuationState {
 pub(super) enum WebSocketPoolSlot {
     Idle {
         connection: Box<PooledWebSocketConnection>,
-        last_used_at: Instant,
     },
     Busy(WebSocketPoolReservation),
     Connecting(WebSocketPoolConnecting),
@@ -136,34 +135,6 @@ pub(super) struct WebSocketPoolReservation {
     pub(super) id: Uuid,
     pub(super) reserved_at: Instant,
     pub(super) latest_response_id: Option<String>,
-}
-
-pub(super) fn account_slot_count(
-    slots: &HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
-    account_id: &str,
-) -> usize {
-    slots
-        .keys()
-        .filter(|key| key.account_id() == account_id)
-        .count()
-}
-
-pub(super) fn take_lru_idle_connection(
-    state: &mut WebSocketPoolState,
-) -> Option<PooledWebSocketConnection> {
-    let key = state
-        .slots
-        .iter()
-        .filter_map(|(key, slot)| match slot {
-            WebSocketPoolSlot::Idle { last_used_at, .. } => Some((key, *last_used_at)),
-            WebSocketPoolSlot::Busy(_) | WebSocketPoolSlot::Connecting(_) => None,
-        })
-        .min_by_key(|(_, last_used_at)| *last_used_at)
-        .map(|(key, _)| key.clone())?;
-    let Some(WebSocketPoolSlot::Idle { connection, .. }) = state.slots.remove(&key) else {
-        return None;
-    };
-    Some(*connection)
 }
 
 pub(super) async fn close_pooled_connection(connection: PooledWebSocketConnection) {

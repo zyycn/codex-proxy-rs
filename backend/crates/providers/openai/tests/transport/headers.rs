@@ -265,7 +265,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         format!("http://{address}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1))));
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
 
     let response = backend
         .create_response(
@@ -480,7 +480,7 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
         format!("http://{address}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1))));
+    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
 
     client
         .create_response(
@@ -932,7 +932,7 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
     });
 
     let profile = test_wire_profile();
-    let pool = Arc::new(CodexWebSocketPool::new(8, Duration::from_mins(1)));
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()

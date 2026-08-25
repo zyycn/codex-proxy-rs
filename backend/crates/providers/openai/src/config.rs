@@ -155,8 +155,6 @@ impl CodexApiConfig {
 pub struct CodexWebSocketPoolSettings {
     pub enabled: bool,
     pub max_age_ms: u64,
-    pub max_per_account: usize,
-    pub max_total: usize,
     pub max_connecting: usize,
     pub initial_event_timeout_ms: u64,
 }
@@ -166,8 +164,6 @@ impl Default for CodexWebSocketPoolSettings {
         Self {
             enabled: true,
             max_age_ms: 55 * 60 * 1000,
-            max_per_account: 8,
-            max_total: 64,
             max_connecting: 8,
             initial_event_timeout_ms: 20_000,
         }
@@ -176,12 +172,7 @@ impl Default for CodexWebSocketPoolSettings {
 
 impl CodexWebSocketPoolSettings {
     fn validate(&self) -> Result<(), OpenAiConfigError> {
-        if self.max_age_ms == 0
-            || self.max_per_account == 0
-            || self.max_total == 0
-            || self.max_connecting == 0
-            || self.max_connecting > self.max_total
-        {
+        if self.max_age_ms == 0 || self.max_connecting == 0 {
             return Err(OpenAiConfigError::InvalidField("openai.ws_pool"));
         }
         Ok(())
@@ -191,8 +182,6 @@ impl CodexWebSocketPoolSettings {
         CodexWebSocketPoolConfig {
             enabled: self.enabled,
             max_age: Duration::from_millis(self.max_age_ms),
-            max_per_account: self.max_per_account,
-            max_total: self.max_total,
             max_connecting: self.max_connecting,
             initial_event_timeout: (self.initial_event_timeout_ms != 0)
                 .then(|| Duration::from_millis(self.initial_event_timeout_ms)),
