@@ -3,7 +3,7 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use gateway_core::{
     engine::credential::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
     routing::{ProviderKind, UpstreamModelId},
@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::{
     AdminError, MutationActor, MutationContext, PageSize, Revision,
     accounts::{AccountRecord, AccountSummary, AccountUsage, CredentialState},
+    observability::CurrencyCost,
 };
 
 /// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
@@ -625,6 +626,122 @@ pub struct ProviderQuota {
     /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生。
     pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
+}
+
+/// Provider 官方用量统计的账号形态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderUsageStatisticsMode {
+    Workspace,
+    Personal,
+}
+
+impl ProviderUsageStatisticsMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Personal => "personal",
+        }
+    }
+}
+
+/// Provider 官方用量统计的目标额度周期。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageStatisticsCycle {
+    pub offset: i8,
+    pub start_at: DateTime<Utc>,
+    pub end_at: DateTime<Utc>,
+    pub window_seconds: u64,
+    pub used_percent: Option<f64>,
+    pub is_current: bool,
+    pub can_go_previous: bool,
+    pub can_go_next: bool,
+}
+
+/// Provider 官方用量统计查询。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderUsageStatisticsRequest {
+    pub account_id: ProviderAccountId,
+    /// `0` 为当前周期，负数为历史周期。
+    pub cycle_offset: i8,
+    /// 客户端相对 UTC 的分钟偏移，例如 UTC+8 为 `480`。
+    pub utc_offset_minutes: i16,
+}
+
+/// 官方用量统计中的 Token 分类。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderUsageStatisticsTokens {
+    pub uncached_input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub total: u64,
+}
+
+/// 官方模型报表中的服务档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderUsageStatisticsServiceTier {
+    Standard,
+    Fast,
+}
+
+impl ProviderUsageStatisticsServiceTier {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Fast => "fast",
+        }
+    }
+}
+
+/// 一个模型与服务档位在目标周期内的统计行。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageStatisticsModel {
+    pub key: String,
+    pub model: String,
+    pub service_tier: ProviderUsageStatisticsServiceTier,
+    pub credit_share: Option<f64>,
+    pub quota_share: Option<f64>,
+    pub tokens: ProviderUsageStatisticsTokens,
+    pub estimated_cost: Option<CurrencyCost>,
+    pub has_unknown_pricing: bool,
+    pub has_estimated_allocation: bool,
+    pub has_rate_fallback: bool,
+    pub has_missing_token_data: bool,
+}
+
+/// 目标周期内的一天；官方日报只能提供本地日粒度。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageStatisticsDay {
+    pub date: NaiveDate,
+    pub credit_share: Option<f64>,
+    pub tokens: ProviderUsageStatisticsTokens,
+    pub estimated_cost: Option<CurrencyCost>,
+    pub has_unknown_pricing: bool,
+    pub has_missing_token_data: bool,
+    pub is_boundary_day: bool,
+}
+
+/// 目标周期汇总。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageStatisticsSummary {
+    pub tokens: ProviderUsageStatisticsTokens,
+    pub estimated_cost: Option<CurrencyCost>,
+    pub projected_tokens: Option<u64>,
+    pub projected_cost: Option<CurrencyCost>,
+    pub day_count: u32,
+    pub has_unknown_pricing: bool,
+    pub has_missing_token_data: bool,
+}
+
+/// Provider 已解释、计算并排序的官方用量统计。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageStatistics {
+    pub mode: ProviderUsageStatisticsMode,
+    pub cycle: ProviderUsageStatisticsCycle,
+    pub summary: ProviderUsageStatisticsSummary,
+    pub models: Vec<ProviderUsageStatisticsModel>,
+    pub daily: Vec<ProviderUsageStatisticsDay>,
 }
 
 /// Provider 返回的一张安全主动额度重置卡。

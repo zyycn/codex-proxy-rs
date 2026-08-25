@@ -26,6 +26,7 @@ const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
   density: 'default',
   loading: false,
   emptyText: '暂无数据',
+  scrollbarAlwaysVisible: false,
   sort: undefined,
 })
 
@@ -196,6 +197,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
         :class="density === 'compact'
           ? '[--cp-scrollbar-track-inset-block-start:2.25rem]'
           : '[--cp-scrollbar-track-inset-block-start:2.75rem]'"
+        :always-visible="scrollbarAlwaysVisible"
         horizontal
         @scroll="handleTableScroll"
       >

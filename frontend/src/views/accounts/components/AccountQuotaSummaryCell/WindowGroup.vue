@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { AccountQuotaWindow } from '../constants'
+import type { AccountQuotaWindow } from '../../constants'
 
 import { computed } from 'vue'
-import { quotaWindowPresentation } from './AccountUsageWindow/presenter'
+import { quotaWindowPresentation } from '../AccountUsageWindow/presenter'
 
 const props = defineProps<{
   label: string

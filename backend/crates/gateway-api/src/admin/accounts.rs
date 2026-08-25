@@ -29,7 +29,10 @@ use gateway_admin::model::{
         CredentialDeletion, CredentialDeletionResult, CredentialImportResult, CredentialMutation,
         CredentialMutationResult, ImportCredentials, ProviderDocument, ProviderModels,
         ProviderQuota, ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult,
-        ProviderResetCredits, RotateCredential, StartAuthorization,
+        ProviderResetCredits, ProviderUsageStatistics, ProviderUsageStatisticsDay,
+        ProviderUsageStatisticsModel, ProviderUsageStatisticsRequest,
+        ProviderUsageStatisticsSummary, ProviderUsageStatisticsTokens, RotateCredential,
+        StartAuthorization,
     },
 };
 use gateway_core::{
@@ -58,6 +61,8 @@ const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 64 * 1024;
 const MAX_ACCOUNT_DELETE_BATCH: usize = 200;
 const MAX_ACCOUNT_GROUP_BATCH: usize = 1000;
+const MAX_USAGE_CYCLE_OFFSET: i8 = 8;
+const MAX_UTC_OFFSET_MINUTES: i16 = 14 * 60;
 
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -420,6 +425,35 @@ impl AccountIdQuery {
     }
 }
 
+/// 官方每日用量统计查询。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountUsageStatisticsQuery {
+    pub account_id: String,
+    pub cycle_offset: Option<i8>,
+    pub utc_offset_minutes: Option<i16>,
+}
+
+impl AccountUsageStatisticsQuery {
+    pub fn into_request(self) -> Result<ProviderUsageStatisticsRequest, WireValidationError> {
+        require_account_id(&self.account_id, "accountId")?;
+        let cycle_offset = self.cycle_offset.unwrap_or_default();
+        if !(-MAX_USAGE_CYCLE_OFFSET..=0).contains(&cycle_offset) {
+            return Err(WireValidationError::new("cycleOffset"));
+        }
+        let utc_offset_minutes = self.utc_offset_minutes.unwrap_or_default();
+        if !(-MAX_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&utc_offset_minutes) {
+            return Err(WireValidationError::new("utcOffsetMinutes"));
+        }
+        Ok(ProviderUsageStatisticsRequest {
+            account_id: ProviderAccountId::new(self.account_id)
+                .map_err(|_| WireValidationError::new("accountId"))?,
+            cycle_offset,
+            utc_offset_minutes,
+        })
+    }
+}
+
 /// 敏感导出的固定 query；IDs 使用逗号分隔，禁止隐式导出全部账号。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -585,6 +619,185 @@ pub struct AccountRefreshData {
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountQuotaData {
     pub account: AccountView,
+}
+
+/// Provider 官方每日用量统计响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsData {
+    pub mode: String,
+    pub cycle: AccountUsageStatisticsCycleView,
+    pub summary: AccountUsageStatisticsSummaryView,
+    pub models: Vec<AccountUsageStatisticsModelView>,
+    pub daily: Vec<AccountUsageStatisticsDayView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsCycleView {
+    pub offset: i8,
+    pub start_at: String,
+    pub end_at: String,
+    pub window_seconds: u64,
+    pub used_percent: Option<f64>,
+    pub is_current: bool,
+    pub can_go_previous: bool,
+    pub can_go_next: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsTokensView {
+    pub uncached_input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsCostView {
+    pub currency: String,
+    pub amount: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsSummaryView {
+    pub tokens: AccountUsageStatisticsTokensView,
+    pub estimated_cost: Option<AccountUsageStatisticsCostView>,
+    pub projected_tokens: Option<u64>,
+    pub projected_cost: Option<AccountUsageStatisticsCostView>,
+    pub day_count: u32,
+    pub has_unknown_pricing: bool,
+    pub has_missing_token_data: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsModelView {
+    pub key: String,
+    pub model: String,
+    pub service_tier: String,
+    pub credit_share: Option<f64>,
+    pub quota_share: Option<f64>,
+    pub tokens: AccountUsageStatisticsTokensView,
+    pub estimated_cost: Option<AccountUsageStatisticsCostView>,
+    pub has_unknown_pricing: bool,
+    pub has_estimated_allocation: bool,
+    pub has_rate_fallback: bool,
+    pub has_missing_token_data: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageStatisticsDayView {
+    pub date: String,
+    pub credit_share: Option<f64>,
+    pub tokens: AccountUsageStatisticsTokensView,
+    pub estimated_cost: Option<AccountUsageStatisticsCostView>,
+    pub has_unknown_pricing: bool,
+    pub has_missing_token_data: bool,
+    pub is_boundary_day: bool,
+}
+
+impl From<ProviderUsageStatistics> for AccountUsageStatisticsData {
+    fn from(statistics: ProviderUsageStatistics) -> Self {
+        Self {
+            mode: statistics.mode.as_str().to_owned(),
+            cycle: AccountUsageStatisticsCycleView {
+                offset: statistics.cycle.offset,
+                start_at: statistics.cycle.start_at.to_rfc3339(),
+                end_at: statistics.cycle.end_at.to_rfc3339(),
+                window_seconds: statistics.cycle.window_seconds,
+                used_percent: statistics.cycle.used_percent,
+                is_current: statistics.cycle.is_current,
+                can_go_previous: statistics.cycle.can_go_previous,
+                can_go_next: statistics.cycle.can_go_next,
+            },
+            summary: account_usage_statistics_summary_view(statistics.summary),
+            models: statistics
+                .models
+                .into_iter()
+                .map(account_usage_statistics_model_view)
+                .collect(),
+            daily: statistics
+                .daily
+                .into_iter()
+                .map(account_usage_statistics_day_view)
+                .collect(),
+        }
+    }
+}
+
+fn account_usage_statistics_tokens_view(
+    tokens: ProviderUsageStatisticsTokens,
+) -> AccountUsageStatisticsTokensView {
+    AccountUsageStatisticsTokensView {
+        uncached_input: tokens.uncached_input,
+        cached_input: tokens.cached_input,
+        output: tokens.output,
+        total: tokens.total,
+    }
+}
+
+fn account_usage_statistics_cost_view(
+    cost: gateway_admin::model::observability::CurrencyCost,
+) -> AccountUsageStatisticsCostView {
+    AccountUsageStatisticsCostView {
+        currency: cost.currency,
+        amount: cost.amount.to_string(),
+    }
+}
+
+fn account_usage_statistics_summary_view(
+    summary: ProviderUsageStatisticsSummary,
+) -> AccountUsageStatisticsSummaryView {
+    AccountUsageStatisticsSummaryView {
+        tokens: account_usage_statistics_tokens_view(summary.tokens),
+        estimated_cost: summary
+            .estimated_cost
+            .map(account_usage_statistics_cost_view),
+        projected_tokens: summary.projected_tokens,
+        projected_cost: summary
+            .projected_cost
+            .map(account_usage_statistics_cost_view),
+        day_count: summary.day_count,
+        has_unknown_pricing: summary.has_unknown_pricing,
+        has_missing_token_data: summary.has_missing_token_data,
+    }
+}
+
+fn account_usage_statistics_model_view(
+    model: ProviderUsageStatisticsModel,
+) -> AccountUsageStatisticsModelView {
+    AccountUsageStatisticsModelView {
+        key: model.key,
+        model: model.model,
+        service_tier: model.service_tier.as_str().to_owned(),
+        credit_share: model.credit_share,
+        quota_share: model.quota_share,
+        tokens: account_usage_statistics_tokens_view(model.tokens),
+        estimated_cost: model.estimated_cost.map(account_usage_statistics_cost_view),
+        has_unknown_pricing: model.has_unknown_pricing,
+        has_estimated_allocation: model.has_estimated_allocation,
+        has_rate_fallback: model.has_rate_fallback,
+        has_missing_token_data: model.has_missing_token_data,
+    }
+}
+
+fn account_usage_statistics_day_view(
+    day: ProviderUsageStatisticsDay,
+) -> AccountUsageStatisticsDayView {
+    AccountUsageStatisticsDayView {
+        date: day.date.to_string(),
+        credit_share: day.credit_share,
+        tokens: account_usage_statistics_tokens_view(day.tokens),
+        estimated_cost: day.estimated_cost.map(account_usage_statistics_cost_view),
+        has_unknown_pricing: day.has_unknown_pricing,
+        has_missing_token_data: day.has_missing_token_data,
+        is_boundary_day: day.is_boundary_day,
+    }
 }
 
 /// 主动额度重置卡列表响应。
@@ -1161,6 +1374,10 @@ where
         )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
+            "/api/admin/accounts/usage-statistics",
+            get(account_usage_statistics::<S>),
+        )
+        .route(
             "/api/admin/accounts/reset-credits",
             get(account_reset_credits::<S>).post(consume_account_reset_credit::<S>),
         )
@@ -1492,6 +1709,27 @@ where
         account: account_view(result, Utc::now()),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+async fn account_usage_statistics<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    Query(query): Query<AccountUsageStatisticsQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let request = query.into_request().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .usage_statistics(request)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountUsageStatisticsData::from(result)),
+    ))
 }
 
 async fn refresh_account_quota<S>(

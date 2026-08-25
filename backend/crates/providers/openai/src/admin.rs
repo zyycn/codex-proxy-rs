@@ -20,7 +20,11 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
     ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole, ProviderResetCredit,
-    ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
+    ProviderResetCreditResult, ProviderResetCredits, ProviderUsageStatistics,
+    ProviderUsageStatisticsCycle, ProviderUsageStatisticsDay, ProviderUsageStatisticsMode,
+    ProviderUsageStatisticsModel, ProviderUsageStatisticsRequest,
+    ProviderUsageStatisticsServiceTier, ProviderUsageStatisticsSummary,
+    ProviderUsageStatisticsTokens, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -48,8 +52,10 @@ use crate::credential::{
     CodexCredentialQuotaError, CodexCredentialQuotaService, CodexOAuthAdmin, CodexOAuthAdminError,
     CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
     CodexPendingAuthorization, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
-    CodexResetCreditsError, CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential,
-    ExportManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
+    CodexResetCreditsError, CodexUsageStatistics, CodexUsageStatisticsError,
+    CodexUsageStatisticsMode, CodexUsageStatisticsServiceTier, CodexUsageStatisticsTokens,
+    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
+    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 use crate::credential::{
     CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
@@ -443,6 +449,23 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(project_quota(snapshot, &account))
     }
 
+    async fn usage_statistics(
+        &self,
+        request: ProviderUsageStatisticsRequest,
+    ) -> Result<ProviderUsageStatistics, ProviderAdminError> {
+        self.account(&request.account_id).await?;
+        let statistics = self
+            .quota
+            .usage_statistics(
+                &request.account_id,
+                request.cycle_offset,
+                request.utc_offset_minutes,
+            )
+            .await
+            .map_err(map_usage_statistics_error)?;
+        project_usage_statistics(statistics)
+    }
+
     async fn reset_credits(
         &self,
         account_id: &ProviderAccountId,
@@ -797,6 +820,98 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(
             provider_data,
         ))),
+    }
+}
+
+fn project_usage_statistics(
+    statistics: CodexUsageStatistics,
+) -> Result<ProviderUsageStatistics, ProviderAdminError> {
+    let models = statistics
+        .models
+        .into_iter()
+        .map(|model| {
+            Ok(ProviderUsageStatisticsModel {
+                key: model.key,
+                model: model.model,
+                service_tier: project_usage_service_tier(model.service_tier),
+                credit_share: model.credit_share,
+                quota_share: model.quota_share,
+                tokens: project_usage_tokens(model.tokens),
+                estimated_cost: model.estimated_cost.map(currency_cost).transpose()?,
+                has_unknown_pricing: model.has_unknown_pricing,
+                has_estimated_allocation: model.has_estimated_allocation,
+                has_rate_fallback: model.has_rate_fallback,
+                has_missing_token_data: model.has_missing_token_data,
+            })
+        })
+        .collect::<Result<Vec<_>, ProviderAdminError>>()?;
+    let daily = statistics
+        .daily
+        .into_iter()
+        .map(|day| {
+            Ok(ProviderUsageStatisticsDay {
+                date: day.date,
+                credit_share: day.credit_share,
+                tokens: project_usage_tokens(day.tokens),
+                estimated_cost: day.estimated_cost.map(currency_cost).transpose()?,
+                has_unknown_pricing: day.has_unknown_pricing,
+                has_missing_token_data: day.has_missing_token_data,
+                is_boundary_day: day.is_boundary_day,
+            })
+        })
+        .collect::<Result<Vec<_>, ProviderAdminError>>()?;
+    Ok(ProviderUsageStatistics {
+        mode: match statistics.mode {
+            CodexUsageStatisticsMode::Workspace => ProviderUsageStatisticsMode::Workspace,
+            CodexUsageStatisticsMode::Personal => ProviderUsageStatisticsMode::Personal,
+        },
+        cycle: ProviderUsageStatisticsCycle {
+            offset: statistics.cycle.offset,
+            start_at: statistics.cycle.start_at,
+            end_at: statistics.cycle.end_at,
+            window_seconds: statistics.cycle.window_seconds,
+            used_percent: statistics.cycle.used_percent,
+            is_current: statistics.cycle.is_current,
+            can_go_previous: statistics.cycle.can_go_previous,
+            can_go_next: statistics.cycle.can_go_next,
+        },
+        summary: ProviderUsageStatisticsSummary {
+            tokens: project_usage_tokens(statistics.summary.tokens),
+            estimated_cost: statistics
+                .summary
+                .estimated_cost
+                .map(currency_cost)
+                .transpose()?,
+            projected_tokens: statistics.summary.projected_tokens,
+            projected_cost: statistics
+                .summary
+                .projected_cost
+                .map(currency_cost)
+                .transpose()?,
+            day_count: statistics.summary.day_count,
+            has_unknown_pricing: statistics.summary.has_unknown_pricing,
+            has_missing_token_data: statistics.summary.has_missing_token_data,
+        },
+        models,
+        daily,
+    })
+}
+
+const fn project_usage_tokens(tokens: CodexUsageStatisticsTokens) -> ProviderUsageStatisticsTokens {
+    ProviderUsageStatisticsTokens {
+        uncached_input: tokens.uncached_input,
+        cached_input: tokens.cached_input,
+        output: tokens.output,
+        total: tokens.total,
+    }
+}
+
+const fn project_usage_service_tier(
+    service_tier: CodexUsageStatisticsServiceTier,
+) -> ProviderUsageStatisticsServiceTier {
+    match service_tier {
+        CodexUsageStatisticsServiceTier::Standard => ProviderUsageStatisticsServiceTier::Standard,
+        CodexUsageStatisticsServiceTier::Fast => ProviderUsageStatisticsServiceTier::Fast,
     }
 }
 
@@ -1395,6 +1510,45 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
         | Error::Store { .. }
         | Error::Upstream { .. } => ProviderAdminErrorKind::Unavailable,
     })
+}
+
+fn map_usage_statistics_error(error: CodexUsageStatisticsError) -> ProviderAdminError {
+    use CodexUsageStatisticsError as Error;
+
+    match error {
+        Error::InvalidRequest | Error::InvalidCredentialData => {
+            provider_admin_error(ProviderAdminErrorKind::Invalid)
+        }
+        Error::NotFound => provider_admin_error(ProviderAdminErrorKind::NotFound),
+        Error::Store { .. } | Error::TransportUnavailable => {
+            provider_admin_error(ProviderAdminErrorKind::Unavailable)
+        }
+        Error::QuotaWindowUnavailable => provider_admin_error(ProviderAdminErrorKind::Conflict)
+            .with_message("OpenAI did not expose a resettable quota window for usage statistics"),
+        Error::CredentialRefreshRequired { upstream_body } => {
+            let mut error = provider_admin_error(ProviderAdminErrorKind::CredentialRefreshRequired);
+            if let Some(body) = upstream_body {
+                error = error.with_message(format!(
+                    "OpenAI usage-statistics upstream returned HTTP 401: {}",
+                    bounded_upstream_body(&body)
+                ));
+            }
+            error
+        }
+        Error::Upstream {
+            status,
+            body,
+            retry_after_seconds,
+        } => {
+            let retry_after = retry_after_seconds
+                .map(|seconds| format!("; retry-after={seconds}s"))
+                .unwrap_or_default();
+            provider_admin_error(ProviderAdminErrorKind::BadGateway).with_message(format!(
+                "OpenAI usage-statistics upstream returned HTTP {status}{retry_after}: {}",
+                bounded_upstream_body(&body)
+            ))
+        }
+    }
 }
 
 fn map_reset_credits_error(error: CodexResetCreditsError) -> ProviderAdminError {

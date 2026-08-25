@@ -190,7 +190,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageRecord {
       outputPriceDisplay: '$10.00 / 1M',
       cacheReadPriceDisplay: '$0.125 / 1M',
       cacheWritePriceDisplay: '$0.00 / 1M',
-      serviceTierDisplay: options.provider === 'openai' ? 'Priority' : 'Standard',
+      serviceTierDisplay: options.provider === 'openai' ? 'Fast' : 'Standard',
       multiplierDisplay: '1.0x',
     },
     costs: [{ currency: 'USD', estimatedAmount: options.estimatedCost }],

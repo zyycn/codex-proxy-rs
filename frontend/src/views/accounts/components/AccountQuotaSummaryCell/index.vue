@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { AccountRow } from '../constants'
+import type { AccountRow } from '../../constants'
 
 import { computed } from 'vue'
-import { groupedAccountQuotaWindows, visibleSummaryQuotaWindows } from '../constants'
-import AccountQuotaSummaryEntry from './AccountQuotaSummaryEntry.vue'
-import AccountUsageWindow from './AccountUsageWindow/index.vue'
+import { groupedAccountQuotaWindows, visibleSummaryQuotaWindows } from '../../constants'
+import AccountUsageWindow from '../AccountUsageWindow/index.vue'
+import AccountQuotaSummaryEntry from './Entry.vue'
 
 const props = defineProps<{
   account: AccountRow

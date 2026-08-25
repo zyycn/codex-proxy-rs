@@ -413,6 +413,30 @@ pub fn openai_billing_breakdown(
     usage: OpenAiBillingUsage,
     service_tier: Option<&str>,
 ) -> Option<CalculatedCostBreakdown> {
+    openai_billing_breakdown_with_context(
+        model,
+        usage,
+        service_tier,
+        usage.input_tokens > LONG_CONTEXT_THRESHOLD,
+    )
+}
+
+/// 官方日报没有单次请求边界，不能把整日输入量套用长上下文阶梯。
+/// 聚合统计固定使用公开的短上下文价格，其余价格规则与请求级计费共用。
+pub(crate) fn openai_aggregate_billing_breakdown(
+    model: &str,
+    usage: OpenAiBillingUsage,
+    service_tier: Option<&str>,
+) -> Option<CalculatedCostBreakdown> {
+    openai_billing_breakdown_with_context(model, usage, service_tier, false)
+}
+
+fn openai_billing_breakdown_with_context(
+    model: &str,
+    usage: OpenAiBillingUsage,
+    service_tier: Option<&str>,
+    long_context: bool,
+) -> Option<CalculatedCostBreakdown> {
     if usage.cached_tokens > usage.input_tokens
         || usage.image_input_tokens > 0
         || usage.image_output_tokens > 0
@@ -421,7 +445,6 @@ pub fn openai_billing_breakdown(
     }
     let web_search_ticks = web_search_amount_ticks(usage)?;
     let pricing = model_pricing(model)?;
-    let long_context = usage.input_tokens > LONG_CONTEXT_THRESHOLD;
     let normalized_tier = normalize_service_tier(service_tier);
     let tier = pricing_tier(normalized_tier.as_deref())?;
     let standard_rates = pricing.rates(PricingTier::Standard, long_context)?;

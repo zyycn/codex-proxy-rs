@@ -44,6 +44,7 @@ export interface BaseTableProps<Row extends TableRow> {
   density?: 'compact' | 'default'
   loading?: boolean
   emptyText?: string
+  scrollbarAlwaysVisible?: boolean
   sort?: BaseTableSort
 }
 

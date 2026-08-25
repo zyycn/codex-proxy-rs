@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import type { AccountRow } from '../constants'
-import { RefreshCw } from '@lucide/vue'
+import type { AccountRow } from '../../constants'
+import { ChartNoAxesColumnIncreasing, RefreshCw } from '@lucide/vue'
 
-import { computed } from 'vue'
+import { computed, shallowRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../constants'
-import AccountPlanBadge from './AccountPlanBadge.vue'
-import AccountQuotaPanelEntry from './AccountQuotaPanelEntry.vue'
-import AccountResetCredits from './AccountResetCredits.vue'
+import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
+import AccountPlanBadge from '../AccountPlanBadge.vue'
+import AccountUsageStatisticsModal from '../AccountUsageStatisticsModal/index.vue'
+import AccountQuotaPanelEntry from './Entry.vue'
+import AccountResetCredits from './ResetCredits.vue'
 
 const props = defineProps<{
   account: AccountRow
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
   orderedPanelQuotaWindows(props.account.quota.windows),
 ))
+const statisticsOpen = shallowRef(false)
 </script>
 
 <template>
@@ -44,6 +46,16 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-0.5">
+        <BaseIconButton
+          v-if="account.provider === 'openai'"
+          label="查看官方用量统计"
+          size="sm"
+          variant="ghost"
+          :pressed="statisticsOpen"
+          @click="statisticsOpen = true"
+        >
+          <ChartNoAxesColumnIncreasing class="size-3.5" />
+        </BaseIconButton>
         <AccountResetCredits
           v-if="account.provider === 'openai'"
           :account-id="account.id"
@@ -77,4 +89,10 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
       </p>
     </div>
   </section>
+
+  <AccountUsageStatisticsModal
+    v-if="account.provider === 'openai'"
+    v-model="statisticsOpen"
+    :account="account"
+  />
 </template>

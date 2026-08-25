@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
+
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { modelSuccessRateTextClass } from '../constants'

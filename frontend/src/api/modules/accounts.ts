@@ -170,6 +170,69 @@ export interface AccountQuotaResponse {
   account: Account
 }
 
+export type AccountUsageStatisticsMode = 'workspace' | 'personal'
+
+export interface AccountUsageStatisticsTokens {
+  uncachedInput: number
+  cachedInput: number
+  output: number
+  total: number
+}
+
+export interface AccountUsageStatisticsCost {
+  currency: string
+  amount: string
+}
+
+export interface AccountUsageStatisticsModel {
+  key: string
+  model: string
+  serviceTier: 'standard' | 'fast'
+  creditShare: number | null
+  quotaShare: number | null
+  tokens: AccountUsageStatisticsTokens
+  estimatedCost: AccountUsageStatisticsCost | null
+  hasUnknownPricing: boolean
+  hasEstimatedAllocation: boolean
+  hasRateFallback: boolean
+  hasMissingTokenData: boolean
+}
+
+export interface AccountUsageStatisticsDay {
+  date: string
+  creditShare: number | null
+  tokens: AccountUsageStatisticsTokens
+  estimatedCost: AccountUsageStatisticsCost | null
+  hasUnknownPricing: boolean
+  hasMissingTokenData: boolean
+  isBoundaryDay: boolean
+}
+
+export interface AccountUsageStatisticsResponse {
+  mode: AccountUsageStatisticsMode
+  cycle: {
+    offset: number
+    startAt: string
+    endAt: string
+    windowSeconds: number
+    usedPercent: number | null
+    isCurrent: boolean
+    canGoPrevious: boolean
+    canGoNext: boolean
+  }
+  summary: {
+    tokens: AccountUsageStatisticsTokens
+    estimatedCost: AccountUsageStatisticsCost | null
+    projectedTokens: number | null
+    projectedCost: AccountUsageStatisticsCost | null
+    dayCount: number
+    hasUnknownPricing: boolean
+    hasMissingTokenData: boolean
+  }
+  models: AccountUsageStatisticsModel[]
+  daily: AccountUsageStatisticsDay[]
+}
+
 export interface AccountResetCredit {
   id: string
   status: string | null
@@ -236,6 +299,11 @@ interface AccountListParams {
 
 interface AccountIdParam {
   accountId: string
+}
+
+interface AccountUsageStatisticsParam extends AccountIdParam {
+  cycleOffset?: number
+  utcOffsetMinutes?: number
 }
 
 interface AccountResetCreditConsumeParam extends AccountIdParam {
@@ -321,6 +389,14 @@ export function recoverAccount(data: AccountIdParam) {
 export function getAccountQuota(data: AccountIdParam) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota',
+    method: 'GET',
+    params: data,
+  })
+}
+
+export function getAccountUsageStatistics(data: AccountUsageStatisticsParam) {
+  return request<AccountUsageStatisticsResponse>({
+    url: '/api/admin/accounts/usage-statistics',
     method: 'GET',
     params: data,
   })

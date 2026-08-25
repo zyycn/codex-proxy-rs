@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { AccountQuotaWindow } from '../constants'
+import type { AccountQuotaWindow } from '../../constants'
 
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
-import AccountRequestTimeline from './AccountUsageWindow/AccountRequestTimeline.vue'
+import AccountRequestTimeline from '../AccountUsageWindow/AccountRequestTimeline.vue'
 import {
   quotaWindowLocalUsageDisplay,
   quotaWindowPresentation,
   resolveAccountUsageWindowPresentation,
-} from './AccountUsageWindow/presenter'
+} from '../AccountUsageWindow/presenter'
 
 const props = defineProps<{
   label: string | null

@@ -142,9 +142,17 @@ pub(crate) fn format_service_tier(service_tier: Option<&str>) -> String {
     match service_tier {
         Some("priority" | "fast") => "Fast".to_owned(),
         Some("flex") => "Flex".to_owned(),
-        Some("default") | None => "Default".to_owned(),
-        Some(other) => other.to_owned(),
+        Some("default" | "standard") | None => "Standard".to_owned(),
+        Some(other) => capitalize_first(other),
     }
+}
+
+fn capitalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<BillingView> {

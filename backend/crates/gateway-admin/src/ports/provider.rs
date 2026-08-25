@@ -18,6 +18,7 @@ use crate::model::provider_credentials::{
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
     PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput, ProviderModels,
     ProviderQuota, ProviderQuotaRequest, ProviderResetCreditResult, ProviderResetCredits,
+    ProviderUsageStatistics, ProviderUsageStatisticsRequest,
 };
 
 /// Provider 管理失败的稳定分类。
@@ -145,6 +146,14 @@ pub trait ProviderAdmin: Send + Sync {
         &self,
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
+
+    /// 查询 Provider 官方用量统计；不支持该能力的 Provider 使用默认拒绝。
+    async fn usage_statistics(
+        &self,
+        _request: ProviderUsageStatisticsRequest,
+    ) -> Result<ProviderUsageStatistics, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
 
     /// 查询 Provider 主动额度重置卡；不支持该能力的 Provider 使用默认拒绝。
     async fn reset_credits(

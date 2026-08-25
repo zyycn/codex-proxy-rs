@@ -102,7 +102,7 @@ const detailGroups = computed(() => [
       { label: '传输方式', value: props.record?.transport, mono: true },
       { label: '事件类型', value: props.record?.kind, mono: true },
       { label: '尝试序号', value: finalAttemptIndex.value },
-      { label: '服务层级', value: props.record?.serviceTier, mono: true },
+      { label: '服务档位', value: props.record?.serviceTier, mono: true },
       { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true },
     ],
   },
@@ -189,7 +189,7 @@ const billingItems = computed(() => {
     { label: '输出单价', value: value.outputPriceDisplay, mono: true },
     { label: '缓存单价', value: value.cacheReadPriceDisplay, mono: true },
     { label: '缓存写入单价', value: value.cacheWritePriceDisplay, mono: true },
-    { label: '服务层级', value: value.serviceTierDisplay },
+    { label: '服务档位', value: value.serviceTierDisplay },
     { label: '倍率', value: value.multiplierDisplay, mono: true },
   ]
 })

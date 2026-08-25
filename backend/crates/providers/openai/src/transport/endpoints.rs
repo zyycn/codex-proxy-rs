@@ -8,6 +8,14 @@ pub const CODEX_IMAGE_EDITS_PATH: &str = "/codex/images/edits";
 pub const CODEX_USAGE_API_PATH: &str = "/api/codex/usage";
 /// `/wham/usage`
 pub const WHAM_USAGE_PATH: &str = "/wham/usage";
+/// Workspace 账号每日模型 Token 明细。
+pub const WHAM_DAILY_WORKSPACE_USER_TOKEN_USAGE_PATH: &str =
+    "/wham/usage/daily-workspace-user-token-usage-breakdown";
+/// 个人账号每日模型额度权重。
+pub const WHAM_DAILY_TOKEN_USAGE_PATH: &str = "/wham/usage/daily-token-usage-breakdown";
+/// 个人账号每日 Token 总量。
+pub const WHAM_DAILY_WORKSPACE_USAGE_COUNTS_PATH: &str =
+    "/wham/analytics/daily-workspace-usage-counts";
 /// Codex Desktop 主动额度重置卡列表。
 pub const WHAM_RATE_LIMIT_RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 /// Codex Desktop 主动消费额度重置卡。

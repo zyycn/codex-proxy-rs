@@ -26,7 +26,8 @@ use crate::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
             ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels, ProviderQuota,
             ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
-            ProviderResetCredits, QuotaLocalUsageAttribution,
+            ProviderResetCredits, ProviderUsageStatistics, ProviderUsageStatisticsRequest,
+            QuotaLocalUsageAttribution,
         },
     },
     ports::{provider::ProviderAdminRegistry, store::AccountStore},
@@ -79,6 +80,15 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
         refresh: bool,
     ) -> Result<AccountDirectoryItem, AdminError>;
+
+    async fn usage_statistics(
+        &self,
+        _request: ProviderUsageStatisticsRequest,
+    ) -> Result<ProviderUsageStatistics, AdminError> {
+        Err(AdminError::invalid(
+            "Provider usage statistics are not supported",
+        ))
+    }
 
     async fn reset_credits(
         &self,
@@ -536,6 +546,17 @@ impl AccountsService for DefaultAccountsService {
         refresh: bool,
     ) -> Result<AccountDirectoryItem, AdminError> {
         self.load_directory_item(account_id, refresh).await
+    }
+
+    async fn usage_statistics(
+        &self,
+        request: ProviderUsageStatisticsRequest,
+    ) -> Result<ProviderUsageStatistics, AdminError> {
+        let (_, provider) = self.provider_for_account(&request.account_id).await?;
+        provider
+            .usage_statistics(request)
+            .await
+            .map_err(|error| map_provider_error(error, "provider usage statistics"))
     }
 
     async fn reset_credits(

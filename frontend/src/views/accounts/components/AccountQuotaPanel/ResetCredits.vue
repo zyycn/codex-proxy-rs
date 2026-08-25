@@ -9,7 +9,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseRadio from '@/components/base/BaseRadio.vue'
-import { useAccountResetCredits } from '../composables/useAccountResetCredits'
+import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
 
 const props = defineProps<{
   accountId: string

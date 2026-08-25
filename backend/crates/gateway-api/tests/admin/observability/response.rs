@@ -832,7 +832,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             upstream_transport: Some("http_sse".to_owned()),
             http_version: Some("h2".to_owned()),
             websocket_pool: Some("reuse".to_owned()),
-            service_tier: Some("priority".to_owned()),
+            service_tier: Some("default".to_owned()),
             provider_metadata_json: Some(
                 serde_json::json!({
                     "effectiveModel": "grok-4.5",
@@ -877,7 +877,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
                     output_price_per_million: usd("60.0000"),
                     cache_read_price_per_million: usd("1.0000"),
                     cache_write_price_per_million: usd("12.5000"),
-                    service_tier: Some("priority".to_owned()),
+                    service_tier: Some("default".to_owned()),
                     multiplier_percent: 100,
                 },
             ))),
@@ -933,6 +933,10 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
         value["data"]["items"][0]["billing"]["cacheWritePriceDisplay"],
         "$12.5 / 1M Token"
     );
+    assert_eq!(
+        value["data"]["items"][0]["billing"]["serviceTierDisplay"],
+        "Standard"
+    );
 
     assert_eq!(
         serde_json::json!({
@@ -973,7 +977,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             "routingScope": "groups",
             "routingGroupRefs": ["grp_usage"],
             "routingGroupNamesSnapshot": ["Usage group"],
-            "serviceTier": "priority",
+            "serviceTier": "default",
             "accountId": "acct_snapshot",
             "accountName": "Snapshot Alpha",
             "accountEmail": "alpha@example.invalid",

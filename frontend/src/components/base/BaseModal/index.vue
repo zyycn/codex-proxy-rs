@@ -243,7 +243,9 @@ onBeforeUnmount(() => {
             </BaseIconButton>
           </header>
           <div v-if="$slots.default" class="min-h-0 overflow-hidden px-3.25 py-3.25 sm:px-5.25 sm:py-5.25">
-            <BaseScrollbar class="h-full">
+            <BaseScrollbar
+              class="h-full -mr-2 pr-2 sm:-mr-3 sm:pr-3"
+            >
               <div class="p-0.75">
                 <slot />
               </div>

@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { AccountQuotaWindow } from '../constants'
+import type { AccountQuotaWindow } from '../../constants'
 
 import { computed } from 'vue'
 
 import BasePopover from '@/components/base/BasePopover.vue'
 import { useUiClock } from '@/composables/useUiClock'
-import AccountQuotaWindowGroup from './AccountQuotaWindowGroup.vue'
-import AccountRequestTimeline from './AccountUsageWindow/AccountRequestTimeline.vue'
-import AccountUsageWindow from './AccountUsageWindow/index.vue'
-import { resolveAccountUsageWindowPresentation } from './AccountUsageWindow/presenter'
+import AccountRequestTimeline from '../AccountUsageWindow/AccountRequestTimeline.vue'
+import AccountUsageWindow from '../AccountUsageWindow/index.vue'
+import { resolveAccountUsageWindowPresentation } from '../AccountUsageWindow/presenter'
+import AccountQuotaWindowGroup from './WindowGroup.vue'
 
 const props = defineProps<{
   label: string | null
