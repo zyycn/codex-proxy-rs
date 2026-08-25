@@ -525,11 +525,6 @@ impl CodexResponsesRequest {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// 替换输入条目（仅用于代理持有完整历史时的换号重放）。
-    pub fn set_input(&mut self, input: Vec<Value>) {
-        self.body.insert("input".to_string(), Value::Array(input));
-    }
-
     /// 是否流式返回。
     pub fn stream(&self) -> bool {
         self.body
@@ -617,11 +612,12 @@ impl CodexResponsesRequest {
         )
     }
 
-    /// 返回会话亲和所用的子代理区分值。
+    /// 返回请求语义与 child transport 隔离所用的子代理区分值。
     ///
     /// Codex 原生请求在 turn metadata 中声明 `subagent_kind`；网关的
     /// `/responses/review` 等入口则通过 `client_metadata.x-openai-subagent`
-    /// 传递给上游。该可选值仅参与会话亲和键派生。
+    /// 传递给上游。它不拆分根会话的账号首选项；`thread_spawn` 仍用它派生独立
+    /// WebSocket/continuation transport identity。
     pub fn subagent_kind(&self) -> Option<String> {
         self.semantics()
             .subagent_kind

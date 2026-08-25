@@ -344,6 +344,8 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_local_affinity",
         "acct_metadata_new",
         "acct_metadata_old",
+        "acct_unknown_continuation",
+        "acct_unknown_turn_state",
         "acct_prefetch_limit",
         "acct_presentation",
         "acct_provider_contract",
@@ -352,7 +354,8 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_scope_same",
         "acct_semantic_failure",
         "acct_session_affinity",
-        "acct_subagent",
+        "acct_subagent_a",
+        "acct_subagent_b",
         "acct_success_exhausted",
         "acct_thread_spawn_affinity",
         "acct_truncated_stream",
@@ -454,6 +457,24 @@ fn replay_any_context(request_id: &str, owner_account_id: &str) -> AttemptContex
         CancellationToken::new(),
     )
     .with_continuation_attempt(ContinuationAttempt::ReplayAny)
+}
+
+fn external_continuation_context(request_id: &str) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        Some(ContinuationBinding::External(PreviousResponseId::new(
+            "external-previous-response",
+        ))),
+        CancellationToken::new(),
+    )
 }
 
 async fn capture_scoped_http_request(
@@ -1320,6 +1341,53 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
 }
 
 #[tokio::test]
+async fn cross_account_full_replay_should_preserve_the_complete_transcript() {
+    let transcript = json!([
+        {
+            "type": "reasoning",
+            "id": "reasoning-item-id",
+            "encrypted_content": "reasoning-ciphertext",
+            "summary": []
+        },
+        {
+            "type": "compaction",
+            "id": "compaction-item-id",
+            "encrypted_content": "compaction-ciphertext"
+        },
+        {
+            "type": "agent_message",
+            "id": "agent-message-id",
+            "content": [
+                {"type": "output_text", "text": "visible"},
+                {"type": "encrypted_content", "encrypted_content": "nested-ciphertext"}
+            ]
+        },
+        {
+            "type": "function_call",
+            "id": "function-call-id",
+            "call_id": "call-id",
+            "name": "tool",
+            "arguments": "{}",
+            "encrypted_function_args": "function-args-ciphertext"
+        }
+    ]);
+    let request = capture_scoped_http_request(
+        "req_scope_transcript",
+        "acct_scope_new",
+        "acct_scope_old",
+        Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            ("input".to_owned(), transcript.clone()),
+        ]),
+        Map::new(),
+    )
+    .await;
+    let body: Value = captured_request_body(&request);
+
+    assert_eq!(body.get("input"), Some(&transcript));
+}
+
+#[tokio::test]
 async fn cross_account_scope_sanitizes_only_known_turn_metadata_fields() {
     let request = capture_scoped_http_request(
         "req_scope_metadata",
@@ -1359,40 +1427,19 @@ async fn cross_account_scope_sanitizes_only_known_turn_metadata_fields() {
 }
 
 #[tokio::test]
-async fn cross_account_continuation_probe_should_preserve_delta_input_and_previous_response() {
+async fn cross_account_continuation_should_require_client_replay_without_an_upstream_probe() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_scope_new").await;
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/codex/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(CAPTURE_COMPLETED_SSE),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    let delta_input = json!([
-        {
-            "type": "message",
-            "id": "delta-message-id",
-            "encrypted_content": "opaque-delta-ciphertext",
-            "role": "user",
-            "content": "current turn only"
-        },
-        {
-            "type": "compaction",
-            "id": "delta-compaction-id",
-            "encrypted_content": "opaque-compaction-ciphertext"
-        }
-    ]);
     let generation = GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
             "openai",
             Map::from_iter([
                 ("model".to_owned(), json!("gpt-5.4")),
-                ("input".to_owned(), delta_input.clone()),
+                (
+                    "input".to_owned(),
+                    json!([{"role": "user", "content": "delta"}]),
+                ),
                 (
                     "previous_response_id".to_owned(),
                     json!("client-previous-response"),
@@ -1432,41 +1479,137 @@ async fn cross_account_continuation_probe_should_preserve_delta_input_and_previo
         )
         .expect("provider session state"),
     );
-    let mut stream = provider_with_base_url(&store, server.uri())
+    let result = provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", Operation::Generate(generation)),
             replay_any_context("req_cross_account_probe", "acct_scope_old"),
         )
+        .await;
+    let Err(error) = result else {
+        panic!("cross-account continuation must require a full client replay");
+    };
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("client replay error detail");
+    let requests = server
+        .received_requests()
         .await
-        .expect("prepare continuation probe stream");
+        .expect("captured upstream requests");
+
+    assert_eq!(
+        (
+            error.kind(),
+            error.send_state(),
+            error.continuation_failure(),
+            detail.code(),
+            detail.error_type(),
+        ),
+        (
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+            Some(ContinuationFailure::HistoryUnavailable),
+            Some("previous_response_not_found"),
+            Some("invalid_request_error"),
+        )
+    );
+    assert!(requests.is_empty());
+}
+
+#[tokio::test]
+async fn missing_affinity_continuation_should_require_client_replay_without_an_upstream_probe() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_unknown_continuation").await;
+    let server = MockServer::start().await;
+    let generation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                (
+                    "input".to_owned(),
+                    json!([{"role": "user", "content": "delta"}]),
+                ),
+                (
+                    "previous_response_id".to_owned(),
+                    json!("external-previous-response"),
+                ),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([
+            ("use_websocket".to_owned(), json!(false)),
+            ("session_id".to_owned(), json!("expired-affinity-session")),
+        ])),
+    );
+    let result = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", Operation::Generate(generation)),
+            external_continuation_context("req_unknown_continuation"),
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("unowned continuation must require a full client replay");
+    };
+    let requests = server
+        .received_requests()
+        .await
+        .expect("captured upstream requests");
+
+    assert_eq!(
+        error
+            .client_visible_upstream_error()
+            .and_then(|detail| detail.code()),
+        Some("previous_response_not_found")
+    );
+    assert!(requests.is_empty());
+}
+
+#[tokio::test]
+async fn missing_affinity_full_request_should_clear_unowned_turn_state() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_unknown_turn_state").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let generation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("full transcript")),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([
+            ("use_websocket".to_owned(), json!(false)),
+            ("session_id".to_owned(), json!("expired-turn-state-session")),
+            ("turn_id".to_owned(), json!("turn-after-affinity-expiry")),
+            ("turn_state".to_owned(), json!("unowned-turn-state")),
+        ])),
+    );
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", Operation::Generate(generation)),
+            context("req_unknown_turn_state", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare full replay stream");
     while let Some(event) = stream.next().await {
-        event.expect("continuation probe response");
+        event.expect("full replay response");
     }
     let requests = server
         .received_requests()
         .await
-        .expect("captured continuation probe request");
-    let body: Value = captured_request_body(&requests[0]);
+        .expect("captured full replay request");
 
-    assert_eq!(body.get("input"), Some(&delta_input));
-    assert_eq!(
-        body.get("previous_response_id"),
-        Some(&json!("upstream-previous-response"))
-    );
-    assert!(body.get("authorization").is_none());
-    assert!(body.get("turnMetadata").is_none());
-    assert!(
-        body.pointer("/client_metadata/x-codex-turn-state")
-            .is_none()
-    );
-    assert!(
-        body.pointer("/client_metadata/x-codex-turn-metadata")
-            .is_none()
-    );
-    assert_eq!(
-        body.pointer("/client_metadata/future"),
-        Some(&json!("keep"))
-    );
     assert!(captured_header_values(&requests[0], "x-codex-turn-state").is_empty());
 }
 
@@ -1637,9 +1780,10 @@ async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() 
 }
 
 #[tokio::test]
-async fn subagent_requests_should_use_an_affinity_key_isolated_from_the_root_session() {
+async fn subagent_requests_should_share_the_root_session_account_affinity_key() {
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_subagent").await;
+    create_account(&store, "acct_subagent_a").await;
+    create_account(&store, "acct_subagent_b").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1689,10 +1833,25 @@ async fn subagent_requests_should_use_an_affinity_key_isolated_from_the_root_ses
 
     let keys = affinity.lookup_keys();
     assert_eq!(keys.len(), 3);
-    assert_ne!(keys[0], keys[1], "subagent must not inherit the root key");
-    assert_eq!(
-        keys[1], keys[2],
-        "the same subagent should retain its own key"
+    assert!(
+        keys.iter().all(|key| key == &keys[0]),
+        "root and derived subagent requests must prefer the same account"
+    );
+    let requests = server
+        .received_requests()
+        .await
+        .expect("captured root and subagent requests");
+    let selected_accounts = requests
+        .iter()
+        .filter_map(|request| request.headers.get("chatgpt-account-id"))
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(selected_accounts.len(), 3);
+    assert!(
+        selected_accounts
+            .iter()
+            .all(|account| account == &selected_accounts[0]),
+        "root and subagents should route to the same preferred account"
     );
 }
 
@@ -1867,7 +2026,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
 }
 
 #[tokio::test]
-async fn thread_spawn_children_should_have_independent_session_affinity_keys() {
+async fn thread_spawn_children_should_share_the_parent_account_affinity_key() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_thread_spawn_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -1912,10 +2071,10 @@ async fn thread_spawn_children_should_have_independent_session_affinity_keys() {
 
     let keys = affinity.lookup_keys();
     assert_eq!(keys.len(), 5);
-    assert_ne!(keys[0], keys[1]);
-    assert_eq!(keys[0], keys[2]);
-    assert_ne!(keys[3], keys[4]);
-    assert_ne!(keys[0], keys[3]);
+    assert!(
+        keys.iter().all(|key| key == &keys[0]),
+        "child thread transport identities must not split parent account affinity"
+    );
 }
 
 #[tokio::test]
@@ -2539,7 +2698,7 @@ async fn bare_response_failed_should_remain_an_atomic_replay_safe_failure() {
 }
 
 #[tokio::test]
-async fn previous_response_not_found_should_remain_client_visible_without_internal_replay_proof() {
+async fn same_account_previous_response_not_found_should_remain_client_visible() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_client_history").await;
     let server = MockServer::start().await;
@@ -2578,7 +2737,7 @@ async fn previous_response_not_found_should_remain_client_visible_without_intern
                 "openai",
                 Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
             ),
-            context("req_history_missing", CancellationToken::new()),
+            context_with_state_owner("req_history_missing", "acct_client_history"),
         )
         .await
         .expect("prepare missing-history stream");

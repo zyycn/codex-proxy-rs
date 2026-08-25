@@ -476,14 +476,16 @@ impl CodexCredentialSelector {
         {
             affinity.escape(AffinityEscapeReason::PinnedAccount);
         }
-        let preferred = pinned_account
-            .clone()
-            .or_else(|| affinity.preferred_account().cloned());
+        let mut observed_affinity_account = affinity.bound_account().cloned();
         let mut shortest_retry = None;
+        let policy = request.attempt.account_selection_policy();
 
         loop {
+            let preferred = pinned_account
+                .clone()
+                .or_else(|| affinity.preferred_account().cloned());
             let context = AccountSelectionContext {
-                policy: request.attempt.account_selection_policy(),
+                policy,
                 now: SystemTime::now(),
                 excluded_accounts: excluded.clone(),
                 preferred_account: preferred.clone(),
@@ -511,7 +513,6 @@ impl CodexCredentialSelector {
                 .map(|candidate| candidate.account.clone())
                 .ok_or(CredentialSelectionError::InvalidCredential)?;
             let allows_account_state_mutation = !diagnostic || account.enabled();
-            let policy = request.attempt.account_selection_policy();
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -532,6 +533,40 @@ impl CodexCredentialSelector {
                     excluded.insert(account.id().clone());
                 }
                 ProviderLeaseAcquisition::Acquired(guard) => {
+                    let initial_affinity_claim = if !diagnostic
+                        && observed_affinity_account.is_none()
+                        && let Some(key) = request.session_affinity_key
+                    {
+                        self.claim_initial_session_affinity(key, account.id()).await
+                    } else {
+                        None
+                    };
+                    // 原生 continuation/required account 比根亲和绑定更严格；它可以
+                    // 使用 owner 账号，但不能把已经迁移的根会话拉回旧号。
+                    if pinned_account.is_none()
+                        && let Some(effective_account) = initial_affinity_claim
+                        && &effective_account != account.id()
+                    {
+                        drop(guard);
+                        observed_affinity_account = Some(effective_account.clone());
+                        affinity = affinity_selection_for_bound_account(
+                            effective_account,
+                            &candidates,
+                            SystemTime::now(),
+                        );
+                        continue;
+                    }
+                    let affinity_expected_account_id = if pinned_account
+                        .as_ref()
+                        .zip(observed_affinity_account.as_ref())
+                        .is_some_and(|(pinned, bound)| pinned != bound)
+                    {
+                        account.id().clone()
+                    } else {
+                        observed_affinity_account
+                            .clone()
+                            .unwrap_or_else(|| account.id().clone())
+                    };
                     let affinity_telemetry = affinity.telemetry(account.id());
                     tracing::info!(
                         request_id = %request.attempt.request_id(),
@@ -583,6 +618,7 @@ impl CodexCredentialSelector {
                         cyber_policy_scope,
                         allows_account_state_mutation,
                         affinity_telemetry,
+                        affinity_expected_account_id,
                         _guard: guard,
                     });
                 }
@@ -603,24 +639,7 @@ impl CodexCredentialSelector {
         else {
             return AffinitySelection::default();
         };
-        let Some(candidate) = candidates
-            .iter()
-            .find(|candidate| candidate.account.id() == &account_id)
-        else {
-            self.clear_session_affinity(key).await;
-            return AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable);
-        };
-        if candidate
-            .account
-            .status_projection(now, candidate.signals.rate_limited_until)
-            .status
-            == AccountStatus::Normal
-        {
-            return AffinitySelection::preferred(account_id);
-        }
-        let reason = affinity_unavailable_reason(candidate, now);
-        self.clear_session_affinity(key).await;
-        AffinitySelection::escaped(account_id, reason)
+        affinity_selection_for_bound_account(account_id, candidates, now)
     }
 
     async fn lookup_session_affinity(
@@ -649,22 +668,38 @@ impl CodexCredentialSelector {
         }
     }
 
-    async fn clear_session_affinity(&self, key: &ProviderSessionAffinityKey) {
+    async fn claim_initial_session_affinity(
+        &self,
+        key: &ProviderSessionAffinityKey,
+        selected_account_id: &ProviderAccountId,
+    ) -> Option<ProviderAccountId> {
         match tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
-            self.session_affinity.clear(&self.provider_kind, key),
+            self.session_affinity.claim_or_load(
+                &self.provider_kind,
+                key,
+                selected_account_id,
+                SESSION_AFFINITY_TTL,
+            ),
         )
         .await
         {
-            Ok(Ok(_)) => {}
+            Ok(Ok(account_id)) => Some(account_id),
             Ok(Err(error)) => {
-                tracing::warn!(error = %error, "OpenAI stale session affinity clear failed open");
+                tracing::warn!(
+                    account_id = %selected_account_id,
+                    error = %error,
+                    "OpenAI initial session affinity claim failed open"
+                );
+                None
             }
             Err(_) => {
                 tracing::warn!(
+                    account_id = %selected_account_id,
                     timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
-                    "OpenAI stale session affinity clear timed out"
+                    "OpenAI initial session affinity claim timed out"
                 );
+                None
             }
         }
     }
@@ -901,6 +936,7 @@ impl CodexCredentialSelector {
         &self,
         account: &ProviderAccount,
         session_affinity_key: Option<&ProviderSessionAffinityKey>,
+        expected_affinity_account_id: &ProviderAccountId,
     ) {
         self.restore_recoverable_account_state(account).await;
         self.risk_recovery
@@ -910,24 +946,26 @@ impl CodexCredentialSelector {
         let Some(key) = session_affinity_key else {
             return;
         };
-        if matches!(
-            self.lookup_session_affinity(key).await,
-            SessionAffinityLookup::Unavailable
-        ) {
-            return;
-        }
         match tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
-            self.session_affinity.bind(
+            self.session_affinity.compare_and_bind(
                 &self.provider_kind,
                 key,
+                expected_affinity_account_id,
                 account.id(),
                 SESSION_AFFINITY_TTL,
             ),
         )
         .await
         {
-            Ok(Ok(())) => {}
+            Ok(Ok(effective_account)) if &effective_account == account.id() => {}
+            Ok(Ok(effective_account)) => {
+                tracing::debug!(
+                    account_id = %account.id(),
+                    effective_account_id = %effective_account,
+                    "OpenAI late success left the newer session affinity binding unchanged"
+                );
+            }
             Ok(Err(error)) => {
                 tracing::warn!(
                     account_id = %account.id(),
@@ -1104,6 +1142,32 @@ impl CodexCredentialSelector {
     }
 }
 
+fn affinity_selection_for_bound_account(
+    account_id: ProviderAccountId,
+    candidates: &[AccountCandidate],
+    now: SystemTime,
+) -> AffinitySelection {
+    let Some(candidate) = candidates
+        .iter()
+        .find(|candidate| candidate.account.id() == &account_id)
+    else {
+        return AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable);
+    };
+    match candidate
+        .account
+        .status_projection(now, candidate.signals.rate_limited_until)
+        .status
+    {
+        AccountStatus::Normal => AffinitySelection::preferred(account_id),
+        AccountStatus::QuotaExhausted
+        | AccountStatus::RateLimited
+        | AccountStatus::Disabled
+        | AccountStatus::Error => {
+            AffinitySelection::escaped(account_id, affinity_unavailable_reason(candidate, now))
+        }
+    }
+}
+
 fn affinity_unavailable_reason(
     candidate: &AccountCandidate,
     now: SystemTime,
@@ -1159,6 +1223,7 @@ pub struct CodexCredentialLease {
     cyber_policy_scope: Option<CodexCyberPolicyScope>,
     allows_account_state_mutation: bool,
     affinity_telemetry: AffinityTelemetry,
+    affinity_expected_account_id: ProviderAccountId,
     _guard: Box<dyn ProviderLeaseGuard>,
 }
 
@@ -1215,6 +1280,12 @@ impl CodexCredentialLease {
     #[must_use]
     pub const fn account_switch(&self) -> bool {
         self.affinity_telemetry.account_switch
+    }
+
+    /// 成功反馈只能从选择时观察到的绑定迁移，避免迟到请求覆盖较新 winner。
+    #[must_use]
+    pub(crate) const fn affinity_expected_account_id(&self) -> &ProviderAccountId {
+        &self.affinity_expected_account_id
     }
 }
 

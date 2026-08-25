@@ -713,6 +713,27 @@ impl ProviderSessionAffinityPort for TestSessionAffinity {
         Box::pin(async { Ok(()) })
     }
 
+    fn claim_or_load<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+        candidate_account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
+        Box::pin(async move { Ok(candidate_account_id.clone()) })
+    }
+
+    fn compare_and_bind<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+        _expected_account_id: &'a ProviderAccountId,
+        replacement_account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
+        Box::pin(async move { Ok(replacement_account_id.clone()) })
+    }
+
     fn clear<'a>(
         &'a self,
         _provider_kind: &'a ProviderKind,

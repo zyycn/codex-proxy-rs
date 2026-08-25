@@ -446,6 +446,74 @@ fn selector_round_robin_cursor_advances_across_requests() {
 }
 
 #[tokio::test]
+async fn selector_should_claim_the_initial_session_account_before_upstream_send() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::clone(&affinity),
+    );
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("initial-claim").expect("affinity key");
+    let request_attempt = attempt(BTreeSet::new());
+
+    let selected = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
+                .expect("request URL"),
+            attempt: &request_attempt,
+            session_affinity_key: Some(&key),
+        })
+        .await
+        .expect("select initial account");
+
+    assert_eq!(
+        affinity
+            .load(&provider, &key)
+            .await
+            .expect("load claimed affinity"),
+        Some(selected.account_id().clone())
+    );
+}
+
+#[tokio::test]
+async fn record_success_should_not_overwrite_a_newer_session_winner() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::clone(&affinity),
+    );
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("late-success").expect("affinity key");
+    let first = store.account("acct_first").expect("first account");
+    let second = ProviderAccountId::new("acct_second").expect("second account");
+    affinity
+        .bind(&provider, &key, &second, Duration::from_secs(60))
+        .await
+        .expect("seed newer affinity");
+
+    selector
+        .record_success(&first, Some(&key), first.id())
+        .await;
+
+    assert_eq!(
+        affinity
+            .load(&provider, &key)
+            .await
+            .expect("load preserved affinity"),
+        Some(second)
+    );
+}
+
+#[tokio::test]
 async fn selector_should_reuse_the_account_bound_to_the_same_session() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
@@ -469,7 +537,9 @@ async fn selector_should_reuse_the_account_bound_to_the_same_session() {
         })
         .await
         .expect("select first account");
-    selector.record_success(first.account(), Some(&key)).await;
+    selector
+        .record_success(first.account(), Some(&key), first.account_id())
+        .await;
     let first_account = first.account_id().clone();
 
     let second_attempt = attempt(BTreeSet::new());
@@ -535,7 +605,7 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
         .await
         .expect("select fallback account");
     selector
-        .record_success(selected.account(), Some(&key))
+        .record_success(selected.account(), Some(&key), &bound)
         .await;
 
     assert_eq!(
@@ -1005,7 +1075,7 @@ fn successful_upstream_response_recovers_non_quota_terminal_states() {
         let current = store.account("acct_primary").expect("stale account");
         let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
-        block_on(selector.record_success(&current, None));
+        block_on(selector.record_success(&current, None, current.id()));
 
         assert_eq!(
             store
@@ -1289,7 +1359,7 @@ fn cloudflare_challenge_does_not_change_persisted_account_facts() {
             .credential_state(),
         CredentialState::Ready
     );
-    block_on(selector.record_success(lease.account(), None));
+    block_on(selector.record_success(lease.account(), None, lease.account_id()));
 }
 
 #[test]

@@ -63,18 +63,14 @@ const INSTALLATION_ID_KEYS: &[&str] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RequestAccountScope {
-    SameAccount,
-    CrossAccountFullRequest,
-    CrossAccountContinuationProbe,
+    Same,
+    Different,
+    Unknown,
 }
 
 impl RequestAccountScope {
-    const fn is_cross_account(self) -> bool {
-        !matches!(self, Self::SameAccount)
-    }
-
-    const fn preserves_continuation(self) -> bool {
-        matches!(self, Self::CrossAccountContinuationProbe)
+    pub(crate) const fn can_reuse_account_state(self) -> bool {
+        matches!(self, Self::Same)
     }
 }
 
@@ -205,8 +201,9 @@ pub(crate) fn derive_conversation_anchor(
     })
 }
 
-/// A `thread_spawn` shares its parent session but is a separate child execution.
-/// Its child thread must therefore own the affinity and WebSocket pool identity.
+/// `thread_spawn` 与父任务共享根会话，但它本身是独立的子任务执行。
+/// 因此子线程必须拥有独立的 continuation/WebSocket 传输身份；账号亲和则从共享的
+/// 根会话单独派生。
 fn thread_spawn_conversation_anchor(
     request: &CodexResponsesRequest,
 ) -> Option<(&'static str, String)> {
@@ -306,21 +303,17 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
 ///
 /// 真实 account ID 与 installation ID 由随后构造的 `CodexRequestContext` 注入
 /// 请求头；正文只替换客户端原本声明过的 installation 字段，绝不接受客户端
-/// 提供的 token、cookie 或账号身份。Continuation probe 保留 canonical
-/// previous-response 和原始增量 input，不能把它们误当成完整请求清理。
+/// 提供的 token、cookie 或账号身份。`input` 是 Responses 的可回放会话正文，
+/// item ID、encrypted content 和 compaction 都必须原样保留。
 pub(crate) fn scope_request_to_account(
     request: &mut CodexResponsesRequest,
     installation_id: &str,
     account_scope: RequestAccountScope,
 ) {
-    let cross_account = account_scope.is_cross_account();
-    let continuation = account_scope
-        .preserves_continuation()
-        .then(|| request.previous_response_id().map(ToOwned::to_owned))
-        .flatten();
+    let reset_account_state = !account_scope.can_reuse_account_state();
     let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
-    let preserve_turn_state =
-        !cross_account && (request.turn_state.is_some() || client_metadata_turn_state.is_some());
+    let preserve_turn_state = !reset_account_state
+        && (request.turn_state.is_some() || client_metadata_turn_state.is_some());
     let turn_state = preserve_turn_state
         .then(|| request.turn_state.clone())
         .flatten();
@@ -329,37 +322,21 @@ pub(crate) fn scope_request_to_account(
     } else {
         None
     };
-    let turn_metadata = (!account_scope.preserves_continuation())
-        .then(|| {
-            request
-                .turn_metadata
-                .as_deref()
-                .and_then(|metadata| scope_turn_metadata(metadata, installation_id, cross_account))
-        })
-        .flatten();
-    let client_metadata_turn_metadata = (!account_scope.preserves_continuation())
-        .then(|| {
-            metadata_string(request, "x-codex-turn-metadata")
-                .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, cross_account))
-        })
-        .flatten();
+    let turn_metadata = request
+        .turn_metadata
+        .as_deref()
+        .and_then(|metadata| scope_turn_metadata(metadata, installation_id, reset_account_state));
+    let client_metadata_turn_metadata = metadata_string(request, "x-codex-turn-metadata")
+        .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, reset_account_state));
 
-    if cross_account {
+    if reset_account_state {
         request.passthrough_headers.remove("x-codex-turn-state");
         request.passthrough_headers.remove("x-codex-turn-metadata");
-        if !account_scope.preserves_continuation() {
-            sanitize_cross_account_input(request);
-        }
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()
             .chain(ACCOUNT_BOUND_STATE_KEYS)
         {
             request.body_mut().remove(*key);
-        }
-        if account_scope.preserves_continuation() {
-            for key in TURN_METADATA_KEYS {
-                request.body_mut().remove(*key);
-            }
         }
     }
 
@@ -371,7 +348,7 @@ pub(crate) fn scope_request_to_account(
             .body()
             .get(*key)
             .and_then(Value::as_str)
-            .and_then(|value| scope_turn_metadata(value, installation_id, cross_account));
+            .and_then(|value| scope_turn_metadata(value, installation_id, reset_account_state));
         replace_existing_body_string(request, key, scoped.as_deref());
     }
 
@@ -383,21 +360,16 @@ pub(crate) fn scope_request_to_account(
                         (
                             key,
                             metadata.get(key).and_then(Value::as_str).and_then(|value| {
-                                scope_turn_metadata(value, installation_id, cross_account)
+                                scope_turn_metadata(value, installation_id, reset_account_state)
                             }),
                         )
                     });
-                if cross_account {
+                if reset_account_state {
                     for key in CROSS_ACCOUNT_IDENTITY_KEYS
                         .iter()
                         .chain(ACCOUNT_BOUND_STATE_KEYS)
                     {
                         metadata.remove(*key);
-                    }
-                    if account_scope.preserves_continuation() {
-                        for key in TURN_METADATA_KEYS {
-                            metadata.remove(*key);
-                        }
                     }
                 }
                 metadata.insert(
@@ -436,36 +408,6 @@ pub(crate) fn scope_request_to_account(
 
     request.turn_state = turn_state;
     request.turn_metadata = turn_metadata;
-    if let Some(continuation) = continuation {
-        request.set_previous_response_id(Some(continuation));
-    }
-}
-
-fn sanitize_cross_account_input(request: &mut CodexResponsesRequest) {
-    if request.input().is_empty() {
-        return;
-    }
-    let input = request
-        .input()
-        .iter()
-        .cloned()
-        .filter_map(sanitize_cross_account_item)
-        .collect();
-    request.set_input(input);
-}
-
-pub(crate) fn sanitize_cross_account_item(mut item: Value) -> Option<Value> {
-    if let Value::Object(object) = &mut item {
-        if matches!(
-            object.get("type").and_then(Value::as_str),
-            Some("compaction" | "compaction_summary" | "context_compaction")
-        ) {
-            return None;
-        }
-        object.remove("id");
-        object.remove("encrypted_content");
-    }
-    Some(item)
 }
 
 fn metadata_string(request: &CodexResponsesRequest, key: &str) -> Option<String> {
@@ -671,4 +613,30 @@ fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
         .get(field)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn thread_spawn_children_should_keep_distinct_transport_anchors() {
+        let request = |thread_id: &str| {
+            let mut request = CodexResponsesRequest::from_body(Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("child task")),
+            ]));
+            request.client_session_id = Some("root-session".to_owned());
+            request.client_thread_id = Some(thread_id.to_owned());
+            request.turn_metadata = Some(r#"{"subagent_kind":"thread_spawn"}"#.to_owned());
+            request
+        };
+
+        assert_ne!(
+            derive_conversation_anchor(&request("child-one")),
+            derive_conversation_anchor(&request("child-two"))
+        );
+    }
 }

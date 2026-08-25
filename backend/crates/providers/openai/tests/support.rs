@@ -678,6 +678,55 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         })
     }
 
+    fn claim_or_load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        candidate_account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut bindings = self.bindings.lock().expect("session affinity lock");
+            Ok(bindings
+                .entry((
+                    provider_kind.as_str().to_owned(),
+                    key.expose_to_store().to_owned(),
+                ))
+                .or_insert_with(|| candidate_account_id.clone())
+                .clone())
+        })
+    }
+
+    fn compare_and_bind<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected_account_id: &'a ProviderAccountId,
+        replacement_account_id: &'a ProviderAccountId,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
+        Box::pin(async move {
+            let binding_key = (
+                provider_kind.as_str().to_owned(),
+                key.expose_to_store().to_owned(),
+            );
+            let mut bindings = self.bindings.lock().expect("session affinity lock");
+            if bindings
+                .get(&binding_key)
+                .is_none_or(|current| current == expected_account_id)
+            {
+                bindings.insert(binding_key, replacement_account_id.clone());
+                return Ok(replacement_account_id.clone());
+            }
+            bindings.get(&binding_key).cloned().ok_or_else(|| {
+                ProviderStoreError::new(
+                    gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                    "resolve in-memory provider session affinity",
+                )
+            })
+        })
+    }
+
     fn clear<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,

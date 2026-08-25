@@ -71,6 +71,9 @@ use crate::transport::profile::{
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals,
 };
+use crate::transport::protocol::websocket::{
+    PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
+};
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
 };
@@ -318,8 +321,14 @@ impl Provider for CodexProvider {
                 .is_some_and(|state| state.account_id != lease.account_id().as_str());
         let has_explicit_state_owner =
             context.account_state_owner().is_some() || previous_session.is_some();
-        let cross_account =
-            state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch());
+        let account_scope =
+            if state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch()) {
+                RequestAccountScope::Different
+            } else if has_explicit_state_owner || lease.affinity_hit() {
+                RequestAccountScope::Same
+            } else {
+                RequestAccountScope::Unknown
+            };
         if context.continuation_attempt() != ContinuationAttempt::None
             && let Some(continuation) = context.continuation()
         {
@@ -366,13 +375,11 @@ impl Provider for CodexProvider {
                 }
             }
         }
-        let account_scope = if !cross_account {
-            RequestAccountScope::SameAccount
-        } else if upstream_request.previous_response_id().is_some() {
-            RequestAccountScope::CrossAccountContinuationProbe
-        } else {
-            RequestAccountScope::CrossAccountFullRequest
-        };
+        if upstream_request.previous_response_id().is_some()
+            && !account_scope.can_reuse_account_state()
+        {
+            return Err(continuation_replay_required_error());
+        }
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
@@ -1178,7 +1185,11 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
                 // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
                 selector
-                    .record_success(&active_account, session_affinity_key.as_ref())
+                    .record_success(
+                        &active_account,
+                        session_affinity_key.as_ref(),
+                        lease.affinity_expected_account_id(),
+                    )
                     .await;
                 selector
                     .observe_cyber_policy_success(cyber_policy_scope.as_ref())
@@ -1282,7 +1293,11 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         if allows_account_state_mutation && completed && terminal_failure.is_none() {
             // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield。
             selector
-                .record_success(&active_account, session_affinity_key.as_ref())
+                .record_success(
+                    &active_account,
+                    session_affinity_key.as_ref(),
+                    lease.affinity_expected_account_id(),
+                )
                 .await;
             selector
                 .observe_cyber_policy_success(cyber_policy_scope.as_ref())
@@ -2362,6 +2377,19 @@ fn schedule_authoritative_quota_refresh_after_failure(
 
 fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
     map_client_error(error, UpstreamSendState::Ambiguous, true)
+}
+
+fn continuation_replay_required_error() -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::InvalidRequest,
+        UpstreamSendState::NotSent,
+    )
+    .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
+        Some(PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned()),
+        Some("invalid_request_error".to_owned()),
+    ))
 }
 
 fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {

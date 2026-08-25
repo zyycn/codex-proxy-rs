@@ -5,7 +5,9 @@ use serde_json::{Map, Value};
 use crate::transport::protocol::responses::{CodexResponsesRequest, transport_requirement};
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
-const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
+pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
+pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
+    "Previous response was not found. Retrying the full request.";
 const INVALID_PREVIOUS_RESPONSE_ID_MESSAGE: &str = "Invalid `previous_response_id`.";
 
 /// WebSocket 握手审计快照。

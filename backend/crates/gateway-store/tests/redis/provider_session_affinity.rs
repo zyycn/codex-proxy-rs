@@ -66,6 +66,55 @@ async fn session_affinity_should_overwrite_the_previous_account() {
 }
 
 #[tokio::test]
+async fn session_affinity_claim_should_keep_the_first_account() {
+    let Some((repository, _connection, _namespace)) = affinity_repository().await else {
+        return;
+    };
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("claim-session").expect("affinity key");
+    let first = ProviderAccountId::new("acct_first").expect("first account");
+    let second = ProviderAccountId::new("acct_second").expect("second account");
+
+    let first_winner = repository
+        .claim_or_load(&provider, &key, &first, Duration::from_secs(60))
+        .await
+        .expect("claim first affinity");
+    let second_winner = repository
+        .claim_or_load(&provider, &key, &second, Duration::from_secs(60))
+        .await
+        .expect("load existing affinity");
+
+    assert_eq!((first_winner, second_winner), (first.clone(), first));
+}
+
+#[tokio::test]
+async fn session_affinity_compare_should_not_replace_a_newer_winner() {
+    let Some((repository, _connection, _namespace)) = affinity_repository().await else {
+        return;
+    };
+    let provider = ProviderKind::new("openai").expect("provider");
+    let key = ProviderSessionAffinityKey::try_new("compare-session").expect("affinity key");
+    let first = ProviderAccountId::new("acct_first").expect("first account");
+    let second = ProviderAccountId::new("acct_second").expect("second account");
+    let stale = ProviderAccountId::new("acct_stale").expect("stale account");
+    repository
+        .bind(&provider, &key, &first, Duration::from_secs(60))
+        .await
+        .expect("seed affinity");
+
+    let migrated = repository
+        .compare_and_bind(&provider, &key, &first, &second, Duration::from_secs(60))
+        .await
+        .expect("migrate expected affinity");
+    let stale_result = repository
+        .compare_and_bind(&provider, &key, &first, &stale, Duration::from_secs(60))
+        .await
+        .expect("reject stale affinity migration");
+
+    assert_eq!((migrated, stale_result), (second.clone(), second));
+}
+
+#[tokio::test]
 async fn session_affinity_should_apply_ttl_and_support_explicit_clear() {
     let Some((repository, mut connection, namespace)) = affinity_repository().await else {
         return;
