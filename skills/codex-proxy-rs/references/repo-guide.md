@@ -114,8 +114,7 @@ OpenAI continuation 按 native/replay-owner/replay-any 推进，xAI 使用客户
 
 ## 存储与迁移
 
-PostgreSQL 的十二张业务表全部在 `0001_initial.sql` 建立；`0002_nullable_requested_model.sql` 让
-`model_requests.requested_model_id` 可空，以记录 Images 等无模型端点。`.frozen-sha256` 覆盖全部迁移，
+PostgreSQL 业务 schema 由 `0001_initial.sql` 建立。`.frozen-sha256` 覆盖全部迁移，
 已应用文件不可回改。
 
 主要状态边界：

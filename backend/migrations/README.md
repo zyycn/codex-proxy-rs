@@ -4,8 +4,7 @@ sqlx 在服务启动时（`serve` 监听之前）按编号顺序执行本目录�
 文件的 checksum 记入 `_sqlx_migrations`。此后每次启动都会重新校验：**已应用
 迁移的文件字节与记录不一致时，服务直接拒绝启动**。
 
-当前大版本只有两份冻结迁移：`0001_initial.sql` 建立十二张业务表的完整新库基线，
-`0002_nullable_requested_model.sql` 允许 Images 等无模型端点把请求模型保存为 `NULL`。
+当前大版本只有一份冻结迁移：`0001_initial.sql` 作为完整的新库基线。
 
 ## 冻结规则
 

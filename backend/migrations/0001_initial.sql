@@ -315,7 +315,7 @@ create table model_requests (
   operation text not null,
   endpoint text not null,
   client_transport text not null,
-  requested_model_id text not null,
+  requested_model_id text,
   provider_kind text,
   upstream_model_id text,
   service_tier text,

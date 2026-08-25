@@ -52,8 +52,7 @@ README 保持用户导向；不要把上游 URL、重试常量、数据库字段
 - 主动额度重置卡只由 OpenAI 上游持有。查询由用户显式触发，消费使用 UUIDv4 幂等键；不得写本地卡库存
   或直接改 quota reset 时间。
 - credential 与 quota 是独立事实；刷新 token 不等于刷新额度，quota 401/403 也不等于 RT 永久失效。
-- 当前业务 schema 是 `0001_initial.sql` 的十二张表，加 `0002_nullable_requested_model.sql` 的无模型请求
-  兼容变更。
+- 当前业务 schema 由 `0001_initial.sql` 建立。
 - 运行拓扑是单副本；worker lease 不是完整多副本 leader election，自更新也只替换当前进程。
 
 ## 前端约束
