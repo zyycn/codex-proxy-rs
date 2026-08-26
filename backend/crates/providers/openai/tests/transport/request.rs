@@ -70,7 +70,7 @@ fn encoder_should_never_hash_prompt_content_into_an_accountless_pool_identity() 
 }
 
 #[test]
-fn encoder_should_only_patch_model_and_preserve_raw_generate_semantics() {
+fn encoder_should_patch_model_and_preserve_supported_generate_semantics() {
     let request = request(Map::from_iter([
         ("model".to_owned(), json!("client-model")),
         ("input".to_owned(), json!("secret prompt")),
@@ -78,7 +78,6 @@ fn encoder_should_only_patch_model_and_preserve_raw_generate_semantics() {
             "tools".to_owned(),
             json!([{"type": "function", "name": "lookup", "strict": true}]),
         ),
-        ("max_output_tokens".to_owned(), json!(512)),
         ("store".to_owned(), json!(false)),
         (
             "reasoning".to_owned(),
@@ -89,12 +88,33 @@ fn encoder_should_only_patch_model_and_preserve_raw_generate_semantics() {
     let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
     assert_eq!(encoded.body().get("model"), Some(&json!("gpt-test")));
     assert!(encoded.body().get("stream").is_none());
-    assert_eq!(encoded.body().get("max_output_tokens"), Some(&json!(512)));
     assert_eq!(encoded.body().get("store"), Some(&json!(false)));
     let body = Value::Object(encoded.body().clone());
     assert_eq!(body.pointer("/tools/0/strict"), Some(&json!(true)));
     assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("high")));
     assert!(!encoded.force_http_sse);
+}
+
+#[test]
+fn encoder_should_remove_unsupported_fields_from_upstream_body() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("hello")),
+        ("max_output_tokens".to_owned(), json!(512)),
+        ("max_tokens".to_owned(), json!(256)),
+        ("temperature".to_owned(), json!(0.2)),
+    ]));
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(
+        Value::Object(encoded.body().clone()),
+        json!({
+            "model": "gpt-test",
+            "input": "hello",
+            "max_tokens": 256,
+        })
+    );
 }
 
 #[test]

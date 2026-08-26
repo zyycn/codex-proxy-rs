@@ -12,6 +12,7 @@ use crate::transport::protocol::responses::CodexResponsesRequest;
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
+const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] = &["max_output_tokens", "temperature"];
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
@@ -90,13 +91,20 @@ pub fn encode_generate_request(
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
     }
     let mut body = payload.body().clone();
-    body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
+    adapt_codex_responses_body(&mut body, upstream_model);
 
     let mut encoded = CodexResponsesRequest::from_body(body);
     encoded.explicit_prompt_cache_key = encoded.prompt_cache_key().is_some();
     extract_request_context(&mut encoded);
     apply_protocol_context(&mut encoded, payload.context());
     Ok(encoded)
+}
+
+fn adapt_codex_responses_body(body: &mut Map<String, Value>, upstream_model: &str) {
+    body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
+    for field in UNSUPPORTED_CODEX_RESPONSES_FIELDS {
+        body.remove(*field);
+    }
 }
 
 fn extract_request_context(request: &mut CodexResponsesRequest) {
