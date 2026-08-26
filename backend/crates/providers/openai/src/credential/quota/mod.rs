@@ -15,8 +15,8 @@ pub use snapshot::{
 };
 pub use usage_statistics::{
     CodexUsageStatistics, CodexUsageStatisticsCycle, CodexUsageStatisticsDay,
-    CodexUsageStatisticsMode, CodexUsageStatisticsModel, CodexUsageStatisticsServiceTier,
-    CodexUsageStatisticsSummary, CodexUsageStatisticsTokens,
+    CodexUsageStatisticsModel, CodexUsageStatisticsServiceTier, CodexUsageStatisticsSummary,
+    CodexUsageStatisticsTokens,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -320,9 +320,8 @@ enum DailyUsageFetchError {
 }
 
 struct FetchedDailyUsage {
-    mode: CodexUsageStatisticsMode,
     model_breakdown: Value,
-    daily_totals: Option<Value>,
+    daily_totals: Value,
 }
 
 impl CodexQuotaSchedulingProjection {
@@ -684,13 +683,12 @@ impl CodexCredentialQuotaService {
 
         Ok(usage_statistics::build_usage_statistics(
             usage_statistics::BuildUsageStatistics {
-                mode: fetched.mode,
                 period,
                 timezone,
                 current_used_percent: window.used_percent(),
                 now,
                 model_breakdown: &fetched.model_breakdown,
-                daily_totals: fetched.daily_totals.as_ref(),
+                daily_totals: &fetched.daily_totals,
                 max_cycle_offset: MAX_CYCLE_OFFSET,
             },
         ))
@@ -1501,32 +1499,6 @@ async fn fetch_daily_usage_once(
         .authentication
         .authorization_header(Utc::now())
         .map_err(|_| DailyUsageAttemptError::InvalidCredential)?;
-    let workspace_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
-    let workspace = client
-        .fetch_daily_usage(
-            CodexRequestContext::auxiliary(
-                authorization.expose_secret(),
-                prepared.account.upstream_account_id(),
-                &workspace_request_id,
-                None,
-            ),
-            CodexDailyUsageReport::WorkspaceModelTokens,
-            start_date,
-            end_date,
-        )
-        .await;
-    match workspace {
-        Ok(model_breakdown) => {
-            return Ok(FetchedDailyUsage {
-                mode: CodexUsageStatisticsMode::Workspace,
-                model_breakdown,
-                daily_totals: None,
-            });
-        }
-        Err(error) if workspace_is_unavailable_for_account(&error) => {}
-        Err(error) => return Err(DailyUsageAttemptError::Upstream(error)),
-    }
-
     let model_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
     let totals_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
     let model_breakdown = client.fetch_daily_usage(
@@ -1554,19 +1526,9 @@ async fn fetch_daily_usage_once(
     let (model_breakdown, daily_totals) = tokio::try_join!(model_breakdown, daily_totals)
         .map_err(DailyUsageAttemptError::Upstream)?;
     Ok(FetchedDailyUsage {
-        mode: CodexUsageStatisticsMode::Personal,
         model_breakdown,
-        daily_totals: Some(daily_totals),
+        daily_totals,
     })
-}
-
-fn workspace_is_unavailable_for_account(error: &CodexClientError) -> bool {
-    matches!(
-        error,
-        CodexClientError::Upstream { status, body, .. }
-            if *status == reqwest::StatusCode::BAD_REQUEST
-                && body.to_ascii_lowercase().contains("no active workspace")
-    )
 }
 
 fn map_statistics_quota_fetch_error(error: CodexQuotaFetchError) -> CodexUsageStatisticsError {

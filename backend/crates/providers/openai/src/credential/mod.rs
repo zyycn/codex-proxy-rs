@@ -49,8 +49,8 @@ pub use quota::{
     CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary, CodexQuotaWindow,
     CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError, CodexUsageStatistics,
     CodexUsageStatisticsCycle, CodexUsageStatisticsDay, CodexUsageStatisticsError,
-    CodexUsageStatisticsMode, CodexUsageStatisticsModel, CodexUsageStatisticsServiceTier,
-    CodexUsageStatisticsSummary, CodexUsageStatisticsTokens, parse_codex_quota_usage,
+    CodexUsageStatisticsModel, CodexUsageStatisticsServiceTier, CodexUsageStatisticsSummary,
+    CodexUsageStatisticsTokens, parse_codex_quota_usage,
 };
 pub use refresh::{
     CodexCredentialRefreshError, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,

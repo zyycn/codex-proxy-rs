@@ -625,7 +625,6 @@ pub struct AccountQuotaData {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageStatisticsData {
-    pub mode: String,
     pub cycle: AccountUsageStatisticsCycleView,
     pub summary: AccountUsageStatisticsSummaryView,
     pub models: Vec<AccountUsageStatisticsModelView>,
@@ -704,7 +703,6 @@ pub struct AccountUsageStatisticsDayView {
 impl From<ProviderUsageStatistics> for AccountUsageStatisticsData {
     fn from(statistics: ProviderUsageStatistics) -> Self {
         Self {
-            mode: statistics.mode.as_str().to_owned(),
             cycle: AccountUsageStatisticsCycleView {
                 offset: statistics.cycle.offset,
                 start_at: statistics.cycle.start_at.to_rfc3339(),

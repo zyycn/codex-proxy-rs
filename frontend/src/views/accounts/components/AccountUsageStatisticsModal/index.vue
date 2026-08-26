@@ -35,7 +35,6 @@ const accountIdentity = computed(() =>
   || props.account.id,
 )
 const title = computed(() => `用量统计 · ${accountIdentity.value}`)
-const modeLabel = computed(() => view.value?.mode === 'personal' ? '个人模式' : '工作区模式')
 const quotaRailStyle = computed(() => ({
   width: `${view.value?.cycle.usedPercent ?? 0}%`,
 }))
@@ -120,9 +119,6 @@ function formatProjectedTokens(value: number | null) {
           </span>
           <span class="rounded-full bg-cp-info-bg px-2 py-0.75 text-cp-xs font-bold text-cp-info-text">
             {{ cycleLabel }}
-          </span>
-          <span class="rounded-full bg-cp-fill-tertiary px-2 py-0.75 text-cp-xs font-bold text-cp-text-secondary">
-            {{ modeLabel }}
           </span>
         </div>
 

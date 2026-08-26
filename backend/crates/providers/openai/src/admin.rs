@@ -21,10 +21,9 @@ use gateway_admin::model::provider_credentials::{
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
     ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole, ProviderResetCredit,
     ProviderResetCreditResult, ProviderResetCredits, ProviderUsageStatistics,
-    ProviderUsageStatisticsCycle, ProviderUsageStatisticsDay, ProviderUsageStatisticsMode,
-    ProviderUsageStatisticsModel, ProviderUsageStatisticsRequest,
-    ProviderUsageStatisticsServiceTier, ProviderUsageStatisticsSummary,
-    ProviderUsageStatisticsTokens, QuotaLocalUsageAttribution,
+    ProviderUsageStatisticsCycle, ProviderUsageStatisticsDay, ProviderUsageStatisticsModel,
+    ProviderUsageStatisticsRequest, ProviderUsageStatisticsServiceTier,
+    ProviderUsageStatisticsSummary, ProviderUsageStatisticsTokens, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -53,9 +52,9 @@ use crate::credential::{
     CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
     CodexPendingAuthorization, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
     CodexResetCreditsError, CodexUsageStatistics, CodexUsageStatisticsError,
-    CodexUsageStatisticsMode, CodexUsageStatisticsServiceTier, CodexUsageStatisticsTokens,
-    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
-    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
+    CodexUsageStatisticsServiceTier, CodexUsageStatisticsTokens, CompleteCodexOAuthAuthorization,
+    CompletedCodexOAuthCredential, ExportManagedCodexCredential, StartCodexOAuthAuthorization,
+    StoredCodexPendingAuthorization,
 };
 use crate::credential::{
     CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
@@ -861,10 +860,6 @@ fn project_usage_statistics(
         })
         .collect::<Result<Vec<_>, ProviderAdminError>>()?;
     Ok(ProviderUsageStatistics {
-        mode: match statistics.mode {
-            CodexUsageStatisticsMode::Workspace => ProviderUsageStatisticsMode::Workspace,
-            CodexUsageStatisticsMode::Personal => ProviderUsageStatisticsMode::Personal,
-        },
         cycle: ProviderUsageStatisticsCycle {
             offset: statistics.cycle.offset,
             start_at: statistics.cycle.start_at,

@@ -78,9 +78,8 @@ mod usage_statistics {
         observability::{CurrencyCost, DecimalAmount},
         provider_credentials::{
             ProviderUsageStatistics, ProviderUsageStatisticsCycle, ProviderUsageStatisticsDay,
-            ProviderUsageStatisticsMode, ProviderUsageStatisticsModel,
-            ProviderUsageStatisticsServiceTier, ProviderUsageStatisticsSummary,
-            ProviderUsageStatisticsTokens,
+            ProviderUsageStatisticsModel, ProviderUsageStatisticsServiceTier,
+            ProviderUsageStatisticsSummary, ProviderUsageStatisticsTokens,
         },
     };
     use gateway_api::admin::accounts::{AccountUsageStatisticsData, AccountUsageStatisticsQuery};
@@ -148,7 +147,6 @@ mod usage_statistics {
             .single()
             .expect("cycle end");
         let response = AccountUsageStatisticsData::from(ProviderUsageStatistics {
-            mode: ProviderUsageStatisticsMode::Personal,
             cycle: ProviderUsageStatisticsCycle {
                 offset: 0,
                 start_at,
@@ -193,6 +191,7 @@ mod usage_statistics {
         });
         let value = serde_json::to_value(response).expect("serialize usage statistics");
 
+        assert!(value.get("mode").is_none());
         assert_eq!(value["cycle"]["offset"], 0);
         assert_eq!(
             value["summary"]["estimatedCost"],

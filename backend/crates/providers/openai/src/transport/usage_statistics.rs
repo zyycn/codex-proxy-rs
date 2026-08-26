@@ -13,8 +13,7 @@ use super::{
     },
     diagnostics::CodexUpstreamSendPhase,
     endpoints::{
-        WHAM_DAILY_TOKEN_USAGE_PATH, WHAM_DAILY_WORKSPACE_USAGE_COUNTS_PATH,
-        WHAM_DAILY_WORKSPACE_USER_TOKEN_USAGE_PATH, endpoint_url,
+        WHAM_DAILY_TOKEN_USAGE_PATH, WHAM_DAILY_WORKSPACE_USAGE_COUNTS_PATH, endpoint_url,
     },
     response_meta,
 };
@@ -23,7 +22,6 @@ const MAX_CODEX_DAILY_USAGE_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CodexDailyUsageReport {
-    WorkspaceModelTokens,
     PersonalModelCredits,
     PersonalTokenTotals,
 }
@@ -31,7 +29,6 @@ pub(crate) enum CodexDailyUsageReport {
 impl CodexDailyUsageReport {
     const fn path(self) -> &'static str {
         match self {
-            Self::WorkspaceModelTokens => WHAM_DAILY_WORKSPACE_USER_TOKEN_USAGE_PATH,
             Self::PersonalModelCredits => WHAM_DAILY_TOKEN_USAGE_PATH,
             Self::PersonalTokenTotals => WHAM_DAILY_WORKSPACE_USAGE_COUNTS_PATH,
         }

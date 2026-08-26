@@ -628,23 +628,6 @@ pub struct ProviderQuota {
     pub provider_data: Option<ProviderDocument>,
 }
 
-/// Provider 官方用量统计的账号形态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderUsageStatisticsMode {
-    Workspace,
-    Personal,
-}
-
-impl ProviderUsageStatisticsMode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Workspace => "workspace",
-            Self::Personal => "personal",
-        }
-    }
-}
-
 /// Provider 官方用量统计的目标额度周期。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderUsageStatisticsCycle {
@@ -737,7 +720,6 @@ pub struct ProviderUsageStatisticsSummary {
 /// Provider 已解释、计算并排序的官方用量统计。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderUsageStatistics {
-    pub mode: ProviderUsageStatisticsMode,
     pub cycle: ProviderUsageStatisticsCycle,
     pub summary: ProviderUsageStatisticsSummary,
     pub models: Vec<ProviderUsageStatisticsModel>,

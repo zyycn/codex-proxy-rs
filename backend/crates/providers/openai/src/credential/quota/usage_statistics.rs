@@ -11,12 +11,6 @@ use crate::transport::{OpenAiBillingUsage, openai_aggregate_billing_breakdown};
 
 const EPSILON: f64 = 1e-9;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexUsageStatisticsMode {
-    Workspace,
-    Personal,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CodexUsageStatisticsServiceTier {
     Standard,
@@ -113,7 +107,6 @@ pub struct CodexUsageStatisticsSummary {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodexUsageStatistics {
-    pub mode: CodexUsageStatisticsMode,
     pub cycle: CodexUsageStatisticsCycle,
     pub summary: CodexUsageStatisticsSummary,
     pub models: Vec<CodexUsageStatisticsModel>,
@@ -162,19 +155,17 @@ pub fn statistics_period(
 }
 
 pub(super) struct BuildUsageStatistics<'a> {
-    pub mode: CodexUsageStatisticsMode,
     pub period: CodexUsageStatisticsPeriod,
     pub timezone: FixedOffset,
     pub current_used_percent: Option<f64>,
     pub now: DateTime<Utc>,
     pub model_breakdown: &'a Value,
-    pub daily_totals: Option<&'a Value>,
+    pub daily_totals: &'a Value,
     pub max_cycle_offset: u8,
 }
 
 pub(super) fn build_usage_statistics(input: BuildUsageStatistics<'_>) -> CodexUsageStatistics {
     let BuildUsageStatistics {
-        mode,
         period,
         timezone,
         current_used_percent,
@@ -183,12 +174,7 @@ pub(super) fn build_usage_statistics(input: BuildUsageStatistics<'_>) -> CodexUs
         daily_totals,
         max_cycle_offset,
     } = input;
-    let all_days = match mode {
-        CodexUsageStatisticsMode::Workspace => build_workspace_days(model_breakdown),
-        CodexUsageStatisticsMode::Personal => {
-            build_personal_days(daily_totals.unwrap_or(&Value::Null), model_breakdown)
-        }
-    };
+    let all_days = build_personal_days(daily_totals, model_breakdown);
     let selected_days = select_cycle_days(
         &all_days,
         period.start_at,
@@ -227,7 +213,6 @@ pub(super) fn build_usage_statistics(input: BuildUsageStatistics<'_>) -> CodexUs
     daily.sort_by_key(|day| Reverse(day.date));
 
     CodexUsageStatistics {
-        mode,
         cycle: CodexUsageStatisticsCycle {
             offset: period.cycle_offset,
             start_at: period.start_at,
@@ -298,46 +283,6 @@ impl MoneySum {
     fn finish(self) -> Option<Money> {
         (!self.overflowed).then_some(self.value).flatten()
     }
-}
-
-fn build_workspace_days(payload: &Value) -> Vec<DailyUsage> {
-    extract_daily_list(payload)
-        .into_iter()
-        .filter_map(|row| {
-            let date = date_value(row.get("date")?)?;
-            let mut models = value_array(row.get("models"))
-                .iter()
-                .filter_map(direct_model_usage)
-                .collect::<Vec<_>>();
-            let model_tokens = sum_tokens(models.iter().map(|model| model.tokens));
-            let fallback_tokens = token_parts(row.get("totals").unwrap_or(row));
-            let tokens = if model_tokens.is_empty() {
-                fallback_tokens
-            } else {
-                model_tokens
-            };
-            let credit_weight = day_credit_weight(row);
-            if tokens.is_empty() && credit_weight <= EPSILON {
-                return None;
-            }
-            let has_missing_token_data = tokens.is_empty() && credit_weight > EPSILON;
-            if models.is_empty() && !tokens.is_empty() {
-                models.push(unknown_model(tokens, false));
-            }
-            if has_missing_token_data {
-                for model in &mut models {
-                    model.has_missing_token_data = true;
-                }
-            }
-            Some(finalize_day(
-                date,
-                credit_weight,
-                tokens,
-                models,
-                has_missing_token_data,
-            ))
-        })
-        .collect()
 }
 
 fn build_personal_days(totals_payload: &Value, breakdown_payload: &Value) -> Vec<DailyUsage> {
@@ -428,47 +373,6 @@ fn build_personal_days(totals_payload: &Value, breakdown_payload: &Value) -> Vec
             Some(finalize_day(date, credit_weight, totals, models, false))
         })
         .collect()
-}
-
-fn direct_model_usage(value: &Value) -> Option<DailyModelUsage> {
-    let tokens = token_parts(value);
-    let credits = non_negative_f64(value.get("credits"));
-    if tokens.is_empty() && credits <= EPSILON {
-        return None;
-    }
-    let model = model_name(value);
-    let service_tier = model_service_tier(value.get("speed").or_else(|| value.get("mode")));
-    let estimated_cost = (!tokens.is_empty())
-        .then(|| aggregate_cost(&model, service_tier, tokens))
-        .flatten();
-    Some(DailyModelUsage {
-        model,
-        service_tier,
-        credits,
-        tokens,
-        has_unknown_pricing: estimated_cost.is_none() && !tokens.is_empty(),
-        estimated_cost,
-        has_estimated_allocation: false,
-        has_rate_fallback: false,
-        has_missing_token_data: tokens.is_empty() && credits > EPSILON,
-    })
-}
-
-fn unknown_model(
-    tokens: CodexUsageStatisticsTokens,
-    estimated_allocation: bool,
-) -> DailyModelUsage {
-    DailyModelUsage {
-        model: "unknown".to_owned(),
-        service_tier: CodexUsageStatisticsServiceTier::Standard,
-        credits: 0.0,
-        tokens,
-        estimated_cost: None,
-        has_unknown_pricing: !tokens.is_empty(),
-        has_estimated_allocation: estimated_allocation,
-        has_rate_fallback: estimated_allocation,
-        has_missing_token_data: false,
-    }
 }
 
 fn finalize_day(

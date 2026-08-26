@@ -170,8 +170,6 @@ export interface AccountQuotaResponse {
   account: Account
 }
 
-export type AccountUsageStatisticsMode = 'workspace' | 'personal'
-
 export interface AccountUsageStatisticsTokens {
   uncachedInput: number
   cachedInput: number
@@ -209,7 +207,6 @@ export interface AccountUsageStatisticsDay {
 }
 
 export interface AccountUsageStatisticsResponse {
-  mode: AccountUsageStatisticsMode
   cycle: {
     offset: number
     startAt: string

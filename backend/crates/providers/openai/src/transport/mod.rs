@@ -37,8 +37,8 @@ pub use self::{
     endpoints::{
         CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH, CODEX_RESPONSES_PATH,
         CODEX_USAGE_API_PATH, WHAM_DAILY_TOKEN_USAGE_PATH, WHAM_DAILY_WORKSPACE_USAGE_COUNTS_PATH,
-        WHAM_DAILY_WORKSPACE_USER_TOKEN_USAGE_PATH, WHAM_RATE_LIMIT_RESET_CREDITS_CONSUME_PATH,
-        WHAM_RATE_LIMIT_RESET_CREDITS_PATH, WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
+        WHAM_RATE_LIMIT_RESET_CREDITS_CONSUME_PATH, WHAM_RATE_LIMIT_RESET_CREDITS_PATH,
+        WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
     },
     headers::build_codex_base_headers,
     request::{CodexRequestEncodeError, encode_generate_request},
