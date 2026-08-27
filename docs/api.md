@@ -131,7 +131,7 @@ Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provide
 导入的 `data` 必须是 JSON object，Admin API 请求上限为 64 MiB；Provider 可以收紧限制，
 当前 xAI 导入上限为 16 MiB。内部 schema 由目标 Provider 独占解释：
 
-- OpenAI 接受单账号 OAuth 文档、`accounts` 数组（最多 200 项）、CPR 账号 bundle 和 Agent Identity；
+- OpenAI 接受单账号 OAuth 文档、`accounts` 数组（最多 200 项）和 CPR 账号 bundle；
 - OpenAI OAuth token 字段只识别 `accessToken`、`refreshToken`、`idToken`，可以嵌套在账号 object 内；
   每项至少包含 AT 或 RT。RT-only 会在导入时换取 AT，AT-only 不具备自动续期能力；
 - xAI 从单账号 object 或 `accounts` 数组中提取 OAuth token；包装中的代理、并发、优先级等字段不参与认证；
@@ -160,25 +160,7 @@ RT-only 使用同一形状，只提交 `refreshToken`。不得把真实 token �
 重新授权以及普通 credential refresh/rotation 均保留已有分组。分组关系只通过账号编辑维护。
 账号列表的每个 item 返回轻量 `groups: [{ id, name, enabled }]`。
 
-OpenAI 的 CPR 导出保持 OAuth 账号的既有字段；Agent Identity 账号则输出
-`authMode: "agentIdentity"`、`agentRuntimeId`、`agentPrivateKey` 和可选的
-`taskId`，不伪造 OAuth token 或过期时间。一个 `sourceFormat: "cpr"` 文档可以包含两种
-认证类型，导入时按每个账号的认证模式分别解析。
-
-```json
-{
-  "sourceFormat": "cpr",
-  "accounts": [{
-    "id": "acct_...",
-    "accountId": "...",
-    "userId": "...",
-    "authMode": "agentIdentity",
-    "agentRuntimeId": "...",
-    "agentPrivateKey": "...",
-    "taskId": "..."
-  }]
-}
-```
+OpenAI 的 CPR 导出保持 OAuth 账号的既有 token 与过期时间字段。
 
 OpenAI rotation 请求字段为：
 

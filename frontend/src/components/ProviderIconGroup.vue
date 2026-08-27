@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Key, Openai, Robot, Xai } from '@boxicons/vue'
+import { Key, Openai, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
 import { formatProviderLabel } from '@/utils/providers'
 
@@ -28,8 +28,6 @@ const iconClass = computed(() => (props.size === 'sm' ? 'size-3' : 'size-4'))
 const providerLabel = computed(() => formatProviderLabel(props.provider, '未知平台'))
 
 const authenticationLabel = computed(() => {
-  if (normalizedAuthenticationKind.value === 'agent_identity')
-    return 'Agent Identity'
   if (normalizedAuthenticationKind.value === 'oauth')
     return 'OAuth'
   return props.authenticationKind?.trim() || '未知认证类型'
@@ -56,11 +54,6 @@ const authenticationLabel = computed(() => {
     >
       <Key
         v-if="normalizedAuthenticationKind === 'oauth'"
-        :class="iconClass"
-        aria-hidden="true"
-      />
-      <Robot
-        v-else-if="normalizedAuthenticationKind === 'agent_identity'"
         :class="iconClass"
         aria-hidden="true"
       />

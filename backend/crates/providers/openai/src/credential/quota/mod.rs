@@ -48,9 +48,8 @@ use crate::transport::{
     CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
 };
 
-use super::agent_identity::{CodexAgentIdentityTaskService, PreparedCodexRuntimeCredential};
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
-use super::types::CODEX_AUTHENTICATION_KIND_OAUTH;
+use super::security::CodexRuntimeCredential;
 use document::{
     DEFAULT_CODEX_LIMIT_ID, RATE_LIMITS_BY_LIMIT_ID, RateLimitSnapshotsByLimitId,
     canonicalize_rate_limit_document,
@@ -242,7 +241,6 @@ pub struct CodexCredentialQuotaService {
     profile: CodexWireProfileState,
     http: Client,
     base_url: String,
-    agent_identity: Arc<CodexAgentIdentityTaskService>,
     cooldowns: Arc<dyn ProviderCooldownPort>,
     scheduling: CodexQuotaSchedulingProjection,
     reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
@@ -286,6 +284,11 @@ struct FetchedCodexQuota {
     value: Value,
 }
 
+struct PreparedCodexRuntimeCredential {
+    account: ProviderAccount,
+    credential: CodexRuntimeCredential,
+}
+
 enum CodexQuotaFetchAttemptError {
     InvalidCredential,
     Upstream(CodexClientError),
@@ -293,7 +296,6 @@ enum CodexQuotaFetchAttemptError {
 
 enum CodexQuotaFetchError {
     InvalidCredential,
-    Recovery,
     Upstream {
         account: Box<ProviderAccount>,
         error: CodexClientError,
@@ -312,11 +314,7 @@ enum DailyUsageAttemptError {
 
 enum DailyUsageFetchError {
     InvalidCredential,
-    Recovery,
-    Upstream {
-        prepared: Box<PreparedCodexRuntimeCredential>,
-        error: CodexClientError,
-    },
+    Upstream(CodexClientError),
 }
 
 struct FetchedDailyUsage {
@@ -536,7 +534,6 @@ impl CodexCredentialQuotaService {
         profile: CodexWireProfileState,
         http: Client,
         base_url: String,
-        agent_identity: Arc<CodexAgentIdentityTaskService>,
         cooldowns: Arc<dyn ProviderCooldownPort>,
     ) -> Self {
         Self {
@@ -545,7 +542,6 @@ impl CodexCredentialQuotaService {
             profile,
             http,
             base_url,
-            agent_identity,
             cooldowns,
             scheduling: CodexQuotaSchedulingProjection::default(),
             reset_consume_locks: Mutex::new(HashMap::new()),
@@ -563,28 +559,19 @@ impl CodexCredentialQuotaService {
             self.base_url.clone(),
             self.profile.clone(),
         );
-        let mut prepared = self
-            .agent_identity
-            .prepare(&account)
+        let credential = self
+            .repository
+            .load_runtime_credential(&account)
             .await
             .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?;
+        let prepared = PreparedCodexRuntimeCredential {
+            account,
+            credential,
+        };
         let request_id = format!("reset_credits_{}", Uuid::now_v7().simple());
-        let mut result = list_reset_credits_once(&client, &prepared, &request_id).await;
-        if let Err(ResetCreditAttemptError::Upstream(error)) = &result
-            && let Some(recovered) = self
-                .agent_identity
-                .recover_after_rejected_task(
-                    prepared.account.id(),
-                    &prepared.credential.authentication,
-                    error,
-                )
-                .await
-                .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?
-        {
-            prepared = recovered;
-            result = list_reset_credits_once(&client, &prepared, &request_id).await;
-        }
-        result.map_err(|error| map_reset_credit_attempt_error(error, &prepared, false))
+        list_reset_credits_once(&client, &prepared, &request_id)
+            .await
+            .map_err(|error| map_reset_credit_attempt_error(error, false))
     }
 
     /// 查询当前账号的官方每日用量报表，并把报表范围锚定到最接近七天的额度窗口。
@@ -624,7 +611,7 @@ impl CodexCredentialQuotaService {
             self.profile.clone(),
         );
         let FetchedCodexQuota { account, value } = self
-            .fetch_usage_with_recovery(&client, &account)
+            .fetch_usage(&client, &account)
             .await
             .map_err(map_statistics_quota_fetch_error)?;
         let snapshot = parse_account_quota_snapshot(
@@ -672,7 +659,7 @@ impl CodexCredentialQuotaService {
         )
         .ok_or(CodexUsageStatisticsError::InvalidRequest)?;
         let fetched = self
-            .fetch_daily_usage_with_recovery(
+            .fetch_daily_usage(
                 &client,
                 &account,
                 period.query_start_date,
@@ -716,45 +703,25 @@ impl CodexCredentialQuotaService {
             self.base_url.clone(),
             self.profile.clone(),
         );
-        let mut prepared = self
-            .agent_identity
-            .prepare(&account)
+        let credential = self
+            .repository
+            .load_runtime_credential(&account)
             .await
             .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?;
+        let prepared = PreparedCodexRuntimeCredential {
+            account,
+            credential,
+        };
         let request_id = format!("reset_credit_consume_{}", Uuid::now_v7().simple());
-        let mut result = consume_reset_credit_once(
+        consume_reset_credit_once(
             &client,
             &prepared,
             &request_id,
             credit_id,
             redeem_request_id,
         )
-        .await;
-        // Agent Identity task recovery is the only automatic retry below. It keeps the exact
-        // official credit selection and redeem_request_id; generic HTTP/transport failures are
-        // never retried because the debit result may already be committed upstream.
-        if let Err(ResetCreditAttemptError::Upstream(error)) = &result
-            && let Some(recovered) = self
-                .agent_identity
-                .recover_after_rejected_task(
-                    prepared.account.id(),
-                    &prepared.credential.authentication,
-                    error,
-                )
-                .await
-                .map_err(|_| CodexResetCreditsError::InvalidCredentialData)?
-        {
-            prepared = recovered;
-            result = consume_reset_credit_once(
-                &client,
-                &prepared,
-                &request_id,
-                credit_id,
-                redeem_request_id,
-            )
-            .await;
-        }
-        result.map_err(|error| map_reset_credit_attempt_error(error, &prepared, true))
+        .await
+        .map_err(|error| map_reset_credit_attempt_error(error, true))
     }
 
     async fn reset_credit_account(
@@ -903,7 +870,7 @@ impl CodexCredentialQuotaService {
         );
         for account in accounts {
             let observed_at = SystemTime::now();
-            match self.fetch_usage_with_recovery(&client, &account).await {
+            match self.fetch_usage(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
                     // 单账号解析或落库失败只影响该账号；其余账号继续同步。
                     if let Err(error) = self
@@ -920,13 +887,6 @@ impl CodexCredentialQuotaService {
                 }
                 Err(CodexQuotaFetchError::InvalidCredential) => {
                     summary.stale += 1;
-                }
-                Err(CodexQuotaFetchError::Recovery) => {
-                    summary.transient += 1;
-                    tracing::warn!(
-                        account_id = %account.id(),
-                        "OpenAI quota credential recovery failed; refresh cycle will retry later"
-                    );
                 }
                 Err(CodexQuotaFetchError::Upstream { account, error }) => {
                     match classify_quota_endpoint_failure(&error) {
@@ -1286,34 +1246,28 @@ impl CodexCredentialQuotaService {
             self.base_url.clone(),
             self.profile.clone(),
         );
-        let FetchedCodexQuota { account, value } =
-            match self.fetch_usage_with_recovery(&client, &account).await {
-                Ok(fetched) => fetched,
-                Err(CodexQuotaFetchError::InvalidCredential) => {
-                    return Err(CodexCredentialQuotaError::InvalidCredentialData);
-                }
-                Err(CodexQuotaFetchError::Recovery) => {
-                    return Err(CodexCredentialQuotaError::Upstream {
-                        detail: "credential recovery failed".to_owned(),
-                    });
-                }
-                Err(CodexQuotaFetchError::Upstream { account, error }) => {
-                    match classify_quota_endpoint_failure(&error) {
-                        Some(QuotaEndpointFailure::Exhausted(evidence)) => {
-                            self.record_confirmed_exhaustion(&account, evidence, None, observed_at)
-                                .await?;
-                        }
-                        Some(QuotaEndpointFailure::Credential { state, reason }) => {
-                            self.persist_credential_failure(&account, state, reason, observed_at)
-                                .await;
-                        }
-                        None => {}
+        let FetchedCodexQuota { account, value } = match self.fetch_usage(&client, &account).await {
+            Ok(fetched) => fetched,
+            Err(CodexQuotaFetchError::InvalidCredential) => {
+                return Err(CodexCredentialQuotaError::InvalidCredentialData);
+            }
+            Err(CodexQuotaFetchError::Upstream { account, error }) => {
+                match classify_quota_endpoint_failure(&error) {
+                    Some(QuotaEndpointFailure::Exhausted(evidence)) => {
+                        self.record_confirmed_exhaustion(&account, evidence, None, observed_at)
+                            .await?;
                     }
-                    return Err(CodexCredentialQuotaError::Upstream {
-                        detail: error.to_string(),
-                    });
+                    Some(QuotaEndpointFailure::Credential { state, reason }) => {
+                        self.persist_credential_failure(&account, state, reason, observed_at)
+                            .await;
+                    }
+                    None => {}
                 }
-            };
+                return Err(CodexCredentialQuotaError::Upstream {
+                    detail: error.to_string(),
+                });
+            }
+        };
         let object = normalize_quota_window_placeholders(
             value
                 .as_object()
@@ -1406,31 +1360,21 @@ impl CodexCredentialQuotaService {
         }
     }
 
-    async fn fetch_usage_with_recovery(
+    async fn fetch_usage(
         &self,
         client: &CodexBackendClient,
         account: &ProviderAccount,
     ) -> Result<FetchedCodexQuota, CodexQuotaFetchError> {
-        let mut prepared = self
-            .agent_identity
-            .prepare(account)
+        let credential = self
+            .repository
+            .load_runtime_credential(account)
             .await
             .map_err(|_| CodexQuotaFetchError::InvalidCredential)?;
-        let mut result = fetch_usage_with_5xx_retry(client, &prepared).await;
-        if let Err(CodexQuotaFetchAttemptError::Upstream(error)) = &result
-            && let Some(recovered) = self
-                .agent_identity
-                .recover_after_rejected_task(
-                    prepared.account.id(),
-                    &prepared.credential.authentication,
-                    error,
-                )
-                .await
-                .map_err(|_| CodexQuotaFetchError::Recovery)?
-        {
-            prepared = recovered;
-            result = fetch_usage_with_5xx_retry(client, &prepared).await;
-        }
+        let prepared = PreparedCodexRuntimeCredential {
+            account: account.clone(),
+            credential,
+        };
+        let result = fetch_usage_with_5xx_retry(client, &prepared).await;
         match result {
             Ok(value) => Ok(FetchedCodexQuota {
                 account: prepared.account,
@@ -1448,42 +1392,31 @@ impl CodexCredentialQuotaService {
         }
     }
 
-    async fn fetch_daily_usage_with_recovery(
+    async fn fetch_daily_usage(
         &self,
         client: &CodexBackendClient,
         account: &ProviderAccount,
         start_date: chrono::NaiveDate,
         end_date: chrono::NaiveDate,
     ) -> Result<FetchedDailyUsage, DailyUsageFetchError> {
-        let mut prepared = self
-            .agent_identity
-            .prepare(account)
+        let credential = self
+            .repository
+            .load_runtime_credential(account)
             .await
             .map_err(|_| DailyUsageFetchError::InvalidCredential)?;
-        let mut result = fetch_daily_usage_once(client, &prepared, start_date, end_date).await;
-        if let Err(DailyUsageAttemptError::Upstream(error)) = &result
-            && let Some(recovered) = self
-                .agent_identity
-                .recover_after_rejected_task(
-                    prepared.account.id(),
-                    &prepared.credential.authentication,
-                    error,
-                )
-                .await
-                .map_err(|_| DailyUsageFetchError::Recovery)?
-        {
-            prepared = recovered;
-            result = fetch_daily_usage_once(client, &prepared, start_date, end_date).await;
-        }
+        let prepared = PreparedCodexRuntimeCredential {
+            account: account.clone(),
+            credential,
+        };
+        let result = fetch_daily_usage_once(client, &prepared, start_date, end_date).await;
         match result {
             Ok(value) => Ok(value),
             Err(DailyUsageAttemptError::InvalidCredential) => {
                 Err(DailyUsageFetchError::InvalidCredential)
             }
-            Err(DailyUsageAttemptError::Upstream(error)) => Err(DailyUsageFetchError::Upstream {
-                prepared: Box::new(prepared),
-                error,
-            }),
+            Err(DailyUsageAttemptError::Upstream(error)) => {
+                Err(DailyUsageFetchError::Upstream(error))
+            }
         }
     }
 }
@@ -1497,7 +1430,7 @@ async fn fetch_daily_usage_once(
     let authorization = prepared
         .credential
         .authentication
-        .authorization_header(Utc::now())
+        .authorization_header()
         .map_err(|_| DailyUsageAttemptError::InvalidCredential)?;
     let model_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
     let totals_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
@@ -1534,31 +1467,21 @@ async fn fetch_daily_usage_once(
 fn map_statistics_quota_fetch_error(error: CodexQuotaFetchError) -> CodexUsageStatisticsError {
     match error {
         CodexQuotaFetchError::InvalidCredential => CodexUsageStatisticsError::InvalidCredentialData,
-        CodexQuotaFetchError::Recovery => CodexUsageStatisticsError::TransportUnavailable,
-        CodexQuotaFetchError::Upstream { account, error } => map_statistics_client_error(
-            error,
-            account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH,
-        ),
+        CodexQuotaFetchError::Upstream { error, .. } => map_statistics_client_error(error),
     }
 }
 
 fn map_daily_usage_fetch_error(error: DailyUsageFetchError) -> CodexUsageStatisticsError {
     match error {
         DailyUsageFetchError::InvalidCredential => CodexUsageStatisticsError::InvalidCredentialData,
-        DailyUsageFetchError::Recovery => CodexUsageStatisticsError::TransportUnavailable,
-        DailyUsageFetchError::Upstream { prepared, error } => {
-            map_statistics_client_error(error, prepared.credential.authentication.oauth().is_some())
-        }
+        DailyUsageFetchError::Upstream(error) => map_statistics_client_error(error),
     }
 }
 
-fn map_statistics_client_error(
-    error: CodexClientError,
-    credential_can_refresh: bool,
-) -> CodexUsageStatisticsError {
+fn map_statistics_client_error(error: CodexClientError) -> CodexUsageStatisticsError {
     match error {
         CodexClientError::Upstream { status, body, .. }
-            if status == reqwest::StatusCode::UNAUTHORIZED && credential_can_refresh =>
+            if status == reqwest::StatusCode::UNAUTHORIZED =>
         {
             CodexUsageStatisticsError::CredentialRefreshRequired {
                 upstream_body: Some(body),
@@ -1586,7 +1509,7 @@ async fn list_reset_credits_once(
     let authorization = prepared
         .credential
         .authentication
-        .authorization_header(Utc::now())
+        .authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
         .list_rate_limit_reset_credits(CodexRequestContext::auxiliary(
@@ -1609,7 +1532,7 @@ async fn consume_reset_credit_once(
     let authorization = prepared
         .credential
         .authentication
-        .authorization_header(Utc::now())
+        .authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
         .consume_rate_limit_reset_credit(
@@ -1628,22 +1551,15 @@ async fn consume_reset_credit_once(
 
 fn map_reset_credit_attempt_error(
     error: ResetCreditAttemptError,
-    prepared: &PreparedCodexRuntimeCredential,
     consume: bool,
 ) -> CodexResetCreditsError {
     match error {
         ResetCreditAttemptError::InvalidCredential => CodexResetCreditsError::InvalidCredentialData,
-        ResetCreditAttemptError::Upstream(error) => {
-            map_reset_credit_client_error(error, prepared, consume)
-        }
+        ResetCreditAttemptError::Upstream(error) => map_reset_credit_client_error(error, consume),
     }
 }
 
-fn map_reset_credit_client_error(
-    error: CodexClientError,
-    prepared: &PreparedCodexRuntimeCredential,
-    consume: bool,
-) -> CodexResetCreditsError {
+fn map_reset_credit_client_error(error: CodexClientError, consume: bool) -> CodexResetCreditsError {
     match error {
         CodexClientError::Upstream {
             status,
@@ -1651,8 +1567,7 @@ fn map_reset_credit_client_error(
             diagnostics,
             ..
         } if status == reqwest::StatusCode::UNAUTHORIZED
-            && reset_credit_response_was_explicit_rejection(status, &diagnostics)
-            && prepared.credential.authentication.oauth().is_some() =>
+            && reset_credit_response_was_explicit_rejection(status, &diagnostics) =>
         {
             CodexResetCreditsError::CredentialRefreshRequired {
                 upstream_body: Some(body),
@@ -1735,7 +1650,7 @@ async fn fetch_usage_once(
     let authorization = prepared
         .credential
         .authentication
-        .authorization_header(Utc::now())
+        .authorization_header()
         .map_err(|_| CodexQuotaFetchAttemptError::InvalidCredential)?;
     let request_id = format!("quota_{}", Uuid::now_v7().simple());
     client

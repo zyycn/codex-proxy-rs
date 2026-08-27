@@ -2,7 +2,6 @@
 
 mod admin;
 mod affinity;
-mod agent_identity;
 mod catalog;
 mod cookie;
 mod oauth;
@@ -20,12 +19,6 @@ pub(crate) use affinity::{
 };
 pub(crate) use oauth::oauth_owner_ref;
 pub(crate) use types::parse_access_token_expiration;
-
-pub use agent_identity::{
-    CodexAgentIdentityError, CodexAgentIdentitySecret, CodexAgentIdentityTaskRegistrar,
-    CodexAgentIdentityTaskService, OfficialCodexAgentIdentityTaskRegistrar,
-    PreparedCodexRuntimeCredential, is_agent_identity_task_invalid_response,
-};
 
 pub use admin::{
     CodexCprExportDocument, CodexCredentialAdmin, CodexCredentialAdminError,
@@ -67,9 +60,7 @@ pub use selector::{
 };
 pub(crate) use selector::{CodexCyberPolicyScope, SelectCodexProviderEndpointCredential};
 pub use types::{
-    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile,
-    CodexAgentIdentityAuthMode, CodexAgentIdentityCredentialData, CodexCookie,
-    CodexCookieCaptureOutcome, CodexCredentialData, CodexCredentialPrincipal,
-    CodexOAuthCredentialData, CodexOAuthSecret, RotateCodexCredential, RuntimeCodexCookie,
-    UpsertCodexCookie,
+    CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile, CodexCookie, CodexCookieCaptureOutcome,
+    CodexCredentialData, CodexCredentialPrincipal, CodexOAuthCredentialData, CodexOAuthSecret,
+    RotateCodexCredential, RuntimeCodexCookie, UpsertCodexCookie,
 };

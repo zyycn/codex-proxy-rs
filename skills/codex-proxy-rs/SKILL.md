@@ -47,7 +47,7 @@ README 保持用户导向；不要把上游 URL、重试常量、数据库字段
 - 数据面公开 Responses JSON/SSE/WS、review、Images generation/edit 和模型目录；不提供 Chat Completions。
 - OpenAI Responses/Images 保持业务 wire 透明；xAI 在 Provider 内完成 Grok/Responses 转换。
 - Images 固定走 OpenAI Provider 自有端点，不要求模型，也不参与文本模型映射。
-- OpenAI 账号支持 OAuth、AT/RT、OAuth JSON 和 Agent Identity；xAI 只接受 OAuth session/账号 JSON，
+- OpenAI 账号支持 OAuth、AT/RT 和 OAuth JSON；xAI 只接受 OAuth session/账号 JSON，
   不接受 API Key。
 - 主动额度重置卡只由 OpenAI 上游持有。查询由用户显式触发，消费使用 UUIDv4 幂等键；不得写本地卡库存
   或直接改 quota reset 时间。

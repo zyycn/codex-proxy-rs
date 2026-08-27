@@ -49,12 +49,12 @@ use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::credential::{
-    CodexAccountFailure, CodexAgentIdentityTaskService, CodexCredentialCatalogError,
-    CodexCredentialCatalogService, CodexCredentialLease, CodexCredentialQuotaService,
-    CodexCredentialRefreshOutcome, CodexCredentialRefreshService, CodexCredentialSelector,
-    CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie,
-    SelectCodexCredential, SelectCodexProviderEndpointCredential,
-    derive_codex_cyber_policy_session_key, derive_codex_session_affinity_key,
+    CodexAccountFailure, CodexCredentialCatalogError, CodexCredentialCatalogService,
+    CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
+    CodexCredentialRefreshService, CodexCredentialSelector, CodexCyberPolicyScope,
+    CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie, SelectCodexCredential,
+    SelectCodexProviderEndpointCredential, derive_codex_cyber_policy_session_key,
+    derive_codex_session_affinity_key,
 };
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
@@ -121,7 +121,6 @@ pub struct CodexProvider {
     selector: Arc<CodexCredentialSelector>,
     catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
-    agent_identity: Arc<CodexAgentIdentityTaskService>,
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
     responses_url: Url,
@@ -137,7 +136,6 @@ impl CodexProvider {
         selector: Arc<CodexCredentialSelector>,
         catalog: Arc<CodexCredentialCatalogService>,
         quota: Arc<CodexCredentialQuotaService>,
-        agent_identity: Arc<CodexAgentIdentityTaskService>,
         account_feedback: Arc<AccountFeedbackStats>,
         http: Client,
         profile: CodexWireProfileState,
@@ -157,7 +155,6 @@ impl CodexProvider {
             selector,
             catalog,
             quota,
-            agent_identity,
             account_feedback,
             client,
             responses_url,
@@ -417,7 +414,6 @@ impl Provider for CodexProvider {
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
             catalog: Arc::clone(&self.catalog),
-            agent_identity: Arc::clone(&self.agent_identity),
             lease: Arc::clone(&lease),
             output_started_at,
             session_affinity_key,
@@ -489,7 +485,6 @@ impl CodexProvider {
             context,
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
-            agent_identity: Arc::clone(&self.agent_identity),
             lease: Arc::clone(&lease),
             output_started_at: Instant::now(),
         });
@@ -512,7 +507,6 @@ struct ColdResponse {
     selector: Arc<CodexCredentialSelector>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
-    agent_identity: Arc<CodexAgentIdentityTaskService>,
     lease: Arc<CodexCredentialLease>,
     output_started_at: Instant,
     session_affinity_key: Option<ProviderSessionAffinityKey>,
@@ -528,7 +522,6 @@ struct ColdJsonResponse {
     context: AttemptContext,
     selector: Arc<CodexCredentialSelector>,
     quota: Arc<CodexCredentialQuotaService>,
-    agent_identity: Arc<CodexAgentIdentityTaskService>,
     lease: Arc<CodexCredentialLease>,
     output_started_at: Instant,
 }
@@ -641,7 +634,6 @@ enum CodexHandshakeAttemptError {
     Client(CodexClientError),
     Cancelled,
     Timeout,
-    AgentIdentityRecovery,
 }
 
 async fn create_response_attempt(
@@ -678,9 +670,6 @@ fn map_handshake_attempt_error(error: CodexHandshakeAttemptError) -> MappedProvi
             ProviderErrorKind::Timeout,
             UpstreamSendState::Ambiguous,
         )),
-        CodexHandshakeAttemptError::AgentIdentityRecovery => MappedProviderFailure::plain(
-            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::Sent),
-        ),
     }
 }
 
@@ -728,12 +717,12 @@ fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
             cyber_policy_scope: None,
             allows_account_state_mutation,
         };
-        let mut active_account = request.lease.account().clone();
+        let active_account = request.lease.account().clone();
         let cookie_header = build_cookie_header(request.lease.cookies())?;
-        let mut authorization = request
+        let authorization = request
             .lease
             .authentication()
-            .authorization_header(chrono::Utc::now())
+            .authorization_header()
             .map_err(|_| {
                 provider_error(
                     ProviderErrorKind::Unauthorized,
@@ -745,7 +734,7 @@ fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
             request.lease.escape_reason(),
             request.lease.account_switch(),
         );
-        let mut response = create_json_attempt(
+        let response = create_json_attempt(
             &request,
             &active_account,
             request.lease.installation_id(),
@@ -754,44 +743,6 @@ fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
             account_selection,
         )
         .await;
-        if allows_account_state_mutation
-            && let Err(CodexHandshakeAttemptError::Client(error)) = &response
-        {
-            match request
-                .agent_identity
-                .recover_after_rejected_task(
-                    active_account.id(),
-                    request.lease.authentication(),
-                    error,
-                )
-                .await
-            {
-                Ok(Some(recovered)) => {
-                    authorization = recovered
-                        .credential
-                        .authentication
-                        .authorization_header(chrono::Utc::now())
-                        .map_err(|_| {
-                            provider_error(
-                                ProviderErrorKind::Unauthorized,
-                                UpstreamSendState::NotSent,
-                            )
-                        })?;
-                    active_account = recovered.account;
-                    response = create_json_attempt(
-                        &request,
-                        &active_account,
-                        &recovered.credential.installation_id,
-                        &authorization,
-                        cookie_header.as_ref(),
-                        account_selection,
-                    )
-                    .await;
-                }
-                Ok(None) => {}
-                Err(_) => response = Err(CodexHandshakeAttemptError::AgentIdentityRecovery),
-            }
-        }
         let response = match response.map_err(map_handshake_attempt_error) {
             Ok(response) => response,
             Err(mut failure) => {
@@ -867,7 +818,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         selector,
         quota,
         catalog,
-        agent_identity,
         lease,
         output_started_at,
         session_affinity_key,
@@ -886,9 +836,9 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         };
         let mut active_account = lease.account().clone();
         let cookie_header = build_cookie_header(lease.cookies())?;
-        let mut authorization = lease
+        let authorization = lease
             .authentication()
-            .authorization_header(chrono::Utc::now())
+            .authorization_header()
             .map_err(|_| {
                 provider_error(
                     ProviderErrorKind::Unauthorized,
@@ -902,7 +852,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             lease.escape_reason(),
             lease.account_switch(),
         );
-        let mut response = create_response_attempt(
+        let response = create_response_attempt(
             &client,
             &request,
             codex_request_context(
@@ -919,51 +869,6 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             &cancellation,
         )
         .await;
-        if allows_account_state_mutation
-            && let Err(CodexHandshakeAttemptError::Client(error)) = &response
-        {
-            match agent_identity
-                .recover_after_rejected_task(
-                    active_account.id(),
-                    lease.authentication(),
-                    error,
-                )
-                .await
-            {
-                Ok(Some(recovered)) => {
-                    authorization = recovered
-                        .credential
-                        .authentication
-                        .authorization_header(chrono::Utc::now())
-                        .map_err(|_| {
-                            provider_error(
-                                ProviderErrorKind::Unauthorized,
-                                UpstreamSendState::NotSent,
-                            )
-                        })?;
-                    active_account = recovered.account;
-                    response = create_response_attempt(
-                        &client,
-                        &request,
-                        codex_request_context(
-                            &request,
-                            &request_id,
-                            &active_account,
-                            &recovered.credential.installation_id,
-                            &authorization,
-                            cookie_header.as_ref(),
-                            account_selection,
-                        ),
-                        active_account.id().as_str(),
-                        context.deadline(),
-                        &cancellation,
-                    )
-                    .await;
-                }
-                Ok(None) => {}
-                Err(_) => response = Err(CodexHandshakeAttemptError::AgentIdentityRecovery),
-            }
-        }
         let response = response.map_err(map_handshake_attempt_error);
         let response = match response {
             Ok(response) => response,

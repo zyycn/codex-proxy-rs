@@ -13,7 +13,7 @@ use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileStat
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-use crate::support::{MemoryAccountStore, agent_identity_service, catalog_cache, profile, secret};
+use crate::support::{MemoryAccountStore, catalog_cache, profile, secret};
 
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../transport/fixtures/official_models_snapshot.json");
@@ -84,7 +84,6 @@ fn service_with_catalog_cache(
             .build()
             .expect("client"),
         base_url,
-        agent_identity_service(store),
         catalog_cache,
     )
 }

@@ -5,15 +5,13 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use thiserror::Error;
 
-use super::agent_identity::{CodexAgentIdentityError, CodexAgentIdentitySecret};
 use super::types::{
-    CodexAccountProfile, CodexAgentIdentityCredentialData, CodexCookie, CodexCredentialData,
-    CodexCredentialPrincipal, CodexOAuthCredentialData, CodexOAuthSecret, RuntimeCodexCookie,
+    CodexAccountProfile, CodexCookie, CodexCredentialData, CodexCredentialPrincipal,
+    CodexOAuthCredentialData, CodexOAuthSecret, RuntimeCodexCookie,
 };
 
 const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 const MAX_CREDENTIAL_BYTES: usize = 256 * 1024;
-const MAX_TOKEN_BYTES: usize = 128 * 1024;
 const MAX_COOKIES: usize = 128;
 
 /// 已解析且只在 Provider 内可见的认证材料。
@@ -42,27 +40,15 @@ impl std::fmt::Debug for CodexRuntimeCredential {
 
 pub enum CodexRuntimeAuthentication {
     OAuth(CodexOAuthSecret),
-    AgentIdentity(Box<CodexAgentIdentitySecret>),
 }
 
 impl CodexRuntimeAuthentication {
-    #[must_use]
-    pub const fn is_agent_identity(&self) -> bool {
-        matches!(self, Self::AgentIdentity(_))
-    }
-
-    pub fn authorization_header(
-        &self,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<SecretString, CodexCredentialDataError> {
+    pub fn authorization_header(&self) -> Result<SecretString, CodexCredentialDataError> {
         match self {
             Self::OAuth(secret) => Ok(SecretString::from(format!(
                 "Bearer {}",
                 secret.access_token.expose_secret()
             ))),
-            Self::AgentIdentity(secret) => secret
-                .authorization_header(now)
-                .map_err(|_| CodexCredentialDataError::Invalid),
         }
     }
 
@@ -70,7 +56,6 @@ impl CodexRuntimeAuthentication {
     pub const fn oauth(&self) -> Option<&CodexOAuthSecret> {
         match self {
             Self::OAuth(secret) => Some(secret),
-            Self::AgentIdentity(_) => None,
         }
     }
 }
@@ -79,7 +64,6 @@ impl std::fmt::Debug for CodexRuntimeAuthentication {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OAuth(secret) => secret.fmt(formatter),
-            Self::AgentIdentity(secret) => secret.fmt(formatter),
         }
     }
 }
@@ -147,12 +131,6 @@ impl CodexCredentialCodec {
         }))
     }
 
-    pub fn encode_agent_identity(
-        data: CodexAgentIdentityCredentialData,
-    ) -> Result<PlaintextCredential, CodexCredentialDataError> {
-        Self::encode_complete(CodexCredentialData::AgentIdentity(data))
-    }
-
     pub fn encode_complete(
         data: CodexCredentialData,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
@@ -200,21 +178,6 @@ impl CodexCredentialCodec {
                     data.oauth_client_id,
                     data.oauth_scope,
                 ),
-                CodexCredentialData::AgentIdentity(data) => (
-                    CodexRuntimeAuthentication::AgentIdentity(Box::new(
-                        CodexAgentIdentitySecret::from_pkcs8(
-                            data.agent_runtime_id,
-                            &data.agent_private_key,
-                            data.task_id,
-                        )
-                        .map_err(map_agent_identity_error)?,
-                    )),
-                    None,
-                    data.installation_id,
-                    data.cookies,
-                    None,
-                    None,
-                ),
             };
         Ok(CodexRuntimeCredential {
             authentication,
@@ -257,21 +220,6 @@ impl CodexCredentialCodec {
             (CodexCredentialData::OAuth(incoming), CodexCredentialData::OAuth(existing)) => {
                 incoming.installation_id = existing.installation_id;
             }
-            (
-                CodexCredentialData::AgentIdentity(incoming),
-                CodexCredentialData::AgentIdentity(existing),
-            ) => {
-                if incoming.agent_runtime_id != existing.agent_runtime_id {
-                    return Err(CodexCredentialDataError::Invalid);
-                }
-                incoming.installation_id = existing.installation_id;
-                if incoming.task_id.is_none()
-                    && incoming.agent_private_key == existing.agent_private_key
-                {
-                    incoming.task_id = existing.task_id;
-                }
-            }
-            _ => return Err(CodexCredentialDataError::Invalid),
         }
         Self::encode_complete(incoming)
     }
@@ -281,25 +229,6 @@ fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> 
     let (installation_id, cookies) = match data {
         CodexCredentialData::OAuth(data) => {
             if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION {
-                return Err(CodexCredentialDataError::Invalid);
-            }
-            (&data.installation_id, &data.cookies)
-        }
-        CodexCredentialData::AgentIdentity(data) => {
-            if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION
-                || !valid_identity(&data.agent_runtime_id)
-                || !valid_secret(&data.agent_private_key)
-                || data
-                    .task_id
-                    .as_deref()
-                    .is_some_and(|value| !valid_identity(value))
-                || CodexAgentIdentitySecret::from_pkcs8(
-                    data.agent_runtime_id.clone(),
-                    &data.agent_private_key,
-                    data.task_id.clone(),
-                )
-                .is_err()
-            {
                 return Err(CodexCredentialDataError::Invalid);
             }
             (&data.installation_id, &data.cookies)
@@ -323,20 +252,8 @@ fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> 
     Ok(())
 }
 
-const fn map_agent_identity_error(_: CodexAgentIdentityError) -> CodexCredentialDataError {
-    CodexCredentialDataError::Invalid
-}
-
-fn valid_identity(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 2_048 && !value.chars().any(char::is_control)
-}
-
 fn valid_installation_id(value: &str) -> bool {
     uuid::Uuid::parse_str(value)
         .ok()
         .is_some_and(|uuid| uuid.get_version_num() == 4)
-}
-
-fn valid_secret(value: &str) -> bool {
-    !value.is_empty() && value.len() <= MAX_TOKEN_BYTES && !value.chars().any(char::is_control)
 }

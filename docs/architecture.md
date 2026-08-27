@@ -59,7 +59,7 @@ flowchart LR
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin wire、静态管理端；不直接访问 Store 或具体 Provider |
 | `gateway-store` | PostgreSQL、Redis、S3/R2、`pg_dump` 适配器；不拥有业务策略 |
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督和系统更新 |
-| `providers/openai` | OpenAI OAuth/Agent Identity、账号选择、目录、额度、Responses/Images transport |
+| `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
 | `frontend` | Vue 管理端，仅通过 Admin API 读写状态 |
 
@@ -189,7 +189,7 @@ PostgreSQL 周期对账才是正确性基础。
 credential 与 quota 是两组独立事实：credential refresh 不等于 quota refresh，额度接口的 401/403
 也不能单独证明 refresh token 永久失效。
 
-- OpenAI 支持 OAuth、AT/RT、OAuth JSON 与 Agent Identity；RT-only 导入先换取 AT，AT-only 导入没有
+- OpenAI 支持 OAuth、AT/RT 与 OAuth JSON；RT-only 导入先换取 AT，AT-only 导入没有
   自动续期能力。OAuth 身份只从官方 JWT claims 投影，不信任导入文档顶层身份字段。
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。
 - 新账号导入和首次 OAuth 在 credential 提交后尽力读取一次额度；失败只留下观测，不回滚账号事务。

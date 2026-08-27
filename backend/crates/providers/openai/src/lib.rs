@@ -16,10 +16,9 @@ use gateway_core::task::WorkerContribution;
 use crate::admin::{OpenAiAdminProvider, OpenAiAdminServices, OpenAiOAuthPendingStore};
 use crate::credential::token_client::{AuthorizationCodeExchanger, TokenRefresher};
 use crate::credential::{
-    CodexAgentIdentityTaskService, CodexCookiePolicy, CodexCredentialAdmin,
-    CodexCredentialAdminService, CodexCredentialCatalogService, CodexCredentialQuotaService,
-    CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
-    CodexOAuthAdmin, CodexOAuthAdminService, OfficialCodexAgentIdentityTaskRegistrar,
+    CodexCookiePolicy, CodexCredentialAdmin, CodexCredentialAdminService,
+    CodexCredentialCatalogService, CodexCredentialQuotaService, CodexCredentialRefreshService,
+    CodexCredentialRepository, CodexCredentialSelector, CodexOAuthAdmin, CodexOAuthAdminService,
 };
 use crate::transport::profile::{
     CodexArtifactProfileCache, CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport,
@@ -97,20 +96,11 @@ pub async fn initialize(
     let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
         config.websocket_pool_config(),
     ));
-    let agent_identity = Arc::new(CodexAgentIdentityTaskService::new(
-        repository.clone(),
-        Arc::new(
-            OfficialCodexAgentIdentityTaskRegistrar::new(http.clone(), profile.clone())
-                .map_err(|_| OpenAiInitializeError::AgentIdentity)?,
-        ),
-        Arc::clone(&websocket_pool),
-    ));
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         repository.clone(),
         profile.clone(),
         http.clone(),
         config.base_url().to_owned(),
-        Arc::clone(&agent_identity),
         ports.catalog_cache(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
@@ -118,7 +108,6 @@ pub async fn initialize(
         profile.clone(),
         http.clone(),
         config.base_url().to_owned(),
-        Arc::clone(&agent_identity),
         ports.cooldowns(),
     ));
     let selector = Arc::new(CodexCredentialSelector::new(
@@ -129,7 +118,6 @@ pub async fn initialize(
         session_exclusions,
         Arc::clone(&catalog),
         Arc::clone(&quota),
-        Arc::clone(&agent_identity),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
     ));
@@ -138,7 +126,6 @@ pub async fn initialize(
             selector,
             Arc::clone(&catalog),
             Arc::clone(&quota),
-            agent_identity,
             account_feedback,
             http,
             profile.clone(),
@@ -246,8 +233,6 @@ pub enum OpenAiInitializeError {
     CookiePolicy,
     #[error("OpenAI token client could not initialize")]
     TokenClient,
-    #[error("OpenAI Agent Identity service could not initialize")]
-    AgentIdentity,
     #[error("OpenAI credential administration could not initialize")]
     CredentialAdmin,
     #[error("OpenAI credential refresh could not initialize")]

@@ -27,11 +27,9 @@ use gateway_core::provider_ports::{
 };
 use gateway_core::routing::ProviderKind;
 use provider_openai::credential::{
-    CodexAccountProfile, CodexAgentIdentityTaskService, CodexCredentialAdmin,
-    CodexCredentialRepository, CodexOAuthSecret, ImportCodexOAuthCredential,
-    OfficialCodexAgentIdentityTaskRegistrar,
+    CodexAccountProfile, CodexCredentialAdmin, CodexCredentialRepository, CodexOAuthSecret,
+    ImportCodexOAuthCredential,
 };
-use provider_openai::transport::CodexWebSocketPool;
 use secrecy::SecretString;
 
 #[derive(Clone)]
@@ -508,32 +506,6 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
-}
-
-pub(crate) fn agent_identity_service(
-    store: &Arc<MemoryAccountStore>,
-) -> Arc<CodexAgentIdentityTaskService> {
-    agent_identity_service_with_pool(store, Arc::new(CodexWebSocketPool::default()))
-}
-
-pub(crate) fn agent_identity_service_with_pool(
-    store: &Arc<MemoryAccountStore>,
-    websocket_pool: Arc<CodexWebSocketPool>,
-) -> Arc<CodexAgentIdentityTaskService> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .expect("agent task client");
-    let registrar = OfficialCodexAgentIdentityTaskRegistrar::new(
-        client,
-        provider_openai::OpenAiConfig::default().wire_profile_state(),
-    )
-    .expect("agent task registrar");
-    Arc::new(CodexAgentIdentityTaskService::new(
-        store.repository(),
-        Arc::new(registrar),
-        websocket_pool,
-    ))
 }
 
 #[derive(Default)]

@@ -17,7 +17,6 @@ const modeOptions = {
     { label: 'AT', value: 'access_token' },
     { label: 'RT', value: 'refresh_token' },
     { label: '账号文件', value: 'json' },
-    { label: 'Agent 身份', value: 'agent_identity' },
   ],
   xai: [
     { label: 'OAuth', value: 'oauth' },
@@ -89,8 +88,6 @@ function resolveModal(
     description = '逐行粘贴 Access Token；未包含 Refresh Token 时无法自动续期'
   else if (input.form.mode === 'refresh_token')
     description = '逐行粘贴 Refresh Token，导入时将自动换取 Access Token'
-  else if (input.form.mode === 'agent_identity')
-    description = '粘贴或上传 Agent 身份文件，匹配已有账号时更新凭据'
 
   return {
     title: '导入账号',
@@ -148,13 +145,6 @@ function resolveImportInput(
       label: 'Refresh Token',
       placeholder: '每行粘贴一个 Refresh Token',
       uploadable: false,
-    }
-  }
-  if (form.mode === 'agent_identity') {
-    return {
-      label: 'Agent 身份文件',
-      placeholder: '粘贴 Agent 身份文件内容',
-      uploadable: true,
     }
   }
   if (provider === 'batch') {

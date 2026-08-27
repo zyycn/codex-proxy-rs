@@ -27,7 +27,7 @@
 | Provider | 固定 `openai`、`xai` 两个 Provider，各自拥有 OAuth、credential、额度、目录与 transport |
 | 路由 | Client Key 限定账号分组；按模型能力编译 Provider 候选；支持全局精确模型映射、会话亲和和安全 fallback |
 | 透明边界 | OpenAI 保留未知请求字段及字段顺序，并原样转发 SSE、WebSocket 与 Images 业务字节；xAI 在 Provider 内转换协议 |
-| 账号 | OAuth、OpenAI AT/RT、账号文件与 Agent Identity 导入，credential/额度刷新、账号恢复及主动额度重置卡 |
+| 账号 | OAuth、OpenAI AT/RT 与账号文件导入，credential/额度刷新、账号恢复及主动额度重置卡 |
 | 管理 | 账号与分组、Client Key、运行设置、用量/错误观测、S3/R2 备份、系统更新与回滚 |
 | 计量 | Token、图片、费用、延迟、账号与 Provider 归因，并记录上游响应确认的实际 `service_tier` |
 
@@ -90,7 +90,7 @@ curl -i http://127.0.0.1:8080/healthz
 ### 3. 初始化网关
 
 1. 使用 `admin@cpr.local` 与初始密码登录。
-2. 导入或授权 Provider 账号：OpenAI 支持 OAuth、逐行 AT/RT、OAuth JSON 与 Agent Identity；
+2. 导入或授权 Provider 账号：OpenAI 支持 OAuth、逐行 AT/RT 与 OAuth JSON；
    xAI 支持 OAuth 和账号 JSON。
 3. 创建账号分组并按需配置全局模型映射。未命中的模型名原样交给候选 Provider。
 4. 创建 `sk_...` Client Key，选择可用账号分组，并设置速率和并发限制；空分组范围表示全部账号。

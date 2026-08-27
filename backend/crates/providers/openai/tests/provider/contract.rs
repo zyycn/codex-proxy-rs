@@ -53,8 +53,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::support::{
     MemoryAccountStore, MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions,
-    TestLeaseCoordinator, account_policy, agent_identity_service_with_pool, catalog_cache, profile,
-    secret,
+    TestLeaseCoordinator, account_policy, catalog_cache, profile, secret,
 };
 use crate::transport::accept_codex_test_websocket;
 
@@ -146,13 +145,11 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         .build()
         .expect("client");
     let websocket_pool = Arc::new(CodexWebSocketPool::default());
-    let agent_identity = agent_identity_service_with_pool(store, Arc::clone(&websocket_pool));
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
         base_url.clone(),
-        Arc::clone(&agent_identity),
         catalog_cache(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
@@ -160,7 +157,6 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         profile.clone(),
         http.clone(),
         base_url.clone(),
-        Arc::clone(&agent_identity),
         Arc::new(MemoryCooldownPort::new()),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
@@ -172,7 +168,6 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         Arc::new(MemorySessionExclusions::default()),
         Arc::clone(&catalog),
         Arc::clone(&quota),
-        Arc::clone(&agent_identity),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),
     ));
@@ -181,7 +176,6 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         selector,
         catalog,
         Arc::clone(&quota),
-        agent_identity,
         account_feedback,
         http,
         profile,

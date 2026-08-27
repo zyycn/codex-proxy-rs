@@ -19,7 +19,6 @@ use thiserror::Error;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-use super::agent_identity::CodexAgentIdentityTaskService;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContext};
@@ -182,7 +181,6 @@ pub struct CodexCredentialCatalogService {
     profile: CodexWireProfileState,
     http: reqwest::Client,
     base_url: String,
-    agent_identity: Arc<CodexAgentIdentityTaskService>,
     plan_catalog_cache: Arc<dyn ProviderCatalogCachePort>,
     cache: Arc<RwLock<CatalogCacheState>>,
     etags: Arc<Mutex<CatalogEtagState>>,
@@ -195,7 +193,6 @@ impl CodexCredentialCatalogService {
         profile: CodexWireProfileState,
         http: reqwest::Client,
         base_url: String,
-        agent_identity: Arc<CodexAgentIdentityTaskService>,
         plan_catalog_cache: Arc<dyn ProviderCatalogCachePort>,
     ) -> Self {
         Self {
@@ -203,7 +200,6 @@ impl CodexCredentialCatalogService {
             profile,
             http,
             base_url,
-            agent_identity,
             plan_catalog_cache,
             cache: Arc::new(RwLock::new(CatalogCacheState::default())),
             etags: Arc::new(Mutex::new(CatalogEtagState::default())),
@@ -429,52 +425,24 @@ impl CodexCredentialCatalogService {
         client: &CodexBackendClient,
         account: &ProviderAccount,
     ) -> Result<FetchedAccountModels, CodexCredentialCatalogError> {
-        let mut prepared = self
-            .agent_identity
-            .prepare(account)
+        let credential = self
+            .repository
+            .load_runtime_credential(account)
             .await
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-        let mut request_id = format!("catalog_{}", Uuid::now_v7().simple());
-        let mut authorization = prepared
-            .credential
+        let request_id = format!("catalog_{}", Uuid::now_v7().simple());
+        let authorization = credential
             .authentication
-            .authorization_header(chrono::Utc::now())
+            .authorization_header()
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-        let mut result = client
+        let result = client
             .fetch_models_with_context(CodexRequestContext::auxiliary(
                 authorization.expose_secret(),
-                prepared.account.upstream_account_id(),
+                account.upstream_account_id(),
                 &request_id,
                 None,
             ))
             .await;
-        if let Err(error) = &result
-            && let Some(recovered) = self
-                .agent_identity
-                .recover_after_rejected_task(
-                    prepared.account.id(),
-                    &prepared.credential.authentication,
-                    error,
-                )
-                .await
-                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
-        {
-            prepared = recovered;
-            request_id = format!("catalog_{}", Uuid::now_v7().simple());
-            authorization = prepared
-                .credential
-                .authentication
-                .authorization_header(chrono::Utc::now())
-                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-            result = client
-                .fetch_models_with_context(CodexRequestContext::auxiliary(
-                    authorization.expose_secret(),
-                    prepared.account.upstream_account_id(),
-                    &request_id,
-                    None,
-                ))
-                .await;
-        }
         let snapshot = result.map_err(|error| CodexCredentialCatalogError::Upstream {
             detail: error.to_string(),
         })?;

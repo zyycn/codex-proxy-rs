@@ -22,7 +22,6 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 use url::Url;
 
-use super::agent_identity::CodexAgentIdentityTaskService;
 use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
@@ -30,8 +29,7 @@ use super::refresh::refresh_recovery_deadline;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::security::CodexRuntimeAuthentication;
 use super::types::{
-    CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY, CODEX_AUTHENTICATION_KIND_OAUTH, CodexCookie,
-    CodexCookieCaptureOutcome, RuntimeCodexCookie,
+    CODEX_AUTHENTICATION_KIND_OAUTH, CodexCookie, CodexCookieCaptureOutcome, RuntimeCodexCookie,
 };
 
 const CLOUDFLARE_RECOVERY_STALE_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -120,7 +118,6 @@ pub struct CodexCredentialSelector {
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
     catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
-    agent_identity: Arc<CodexAgentIdentityTaskService>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
@@ -269,7 +266,6 @@ impl CodexCredentialSelector {
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
         catalog: Arc<CodexCredentialCatalogService>,
         quota: Arc<CodexCredentialQuotaService>,
-        agent_identity: Arc<CodexAgentIdentityTaskService>,
         account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
     ) -> Self {
@@ -281,7 +277,6 @@ impl CodexCredentialSelector {
             session_exclusions,
             catalog,
             quota,
-            agent_identity,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
             account_feedback,
@@ -580,20 +575,7 @@ impl CodexCredentialSelector {
                         account_switch = affinity_telemetry.account_switch,
                         "OpenAI account selected"
                     );
-                    let (account, runtime) = if account.authentication_kind()
-                        == CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY
-                    {
-                        let prepared = if allows_account_state_mutation {
-                            self.agent_identity.prepare(&account).await
-                        } else {
-                            self.agent_identity.load_current(account.id()).await
-                        }
-                        .map_err(|_| CredentialSelectionError::InvalidCredential)?;
-                        (prepared.account, prepared.credential)
-                    } else {
-                        let runtime = self.repository.load_runtime_credential(&account).await?;
-                        (account, runtime)
-                    };
+                    let runtime = self.repository.load_runtime_credential(&account).await?;
                     let cookies = runtime
                         .cookies
                         .into_iter()

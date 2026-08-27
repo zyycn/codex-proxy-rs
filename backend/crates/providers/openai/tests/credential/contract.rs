@@ -37,7 +37,7 @@ use url::Url;
 
 use crate::support::{
     MemoryAccountStore, MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions,
-    TestLeaseCoordinator, account_policy, agent_identity_service, catalog_cache, profile, secret,
+    TestLeaseCoordinator, account_policy, catalog_cache, profile, secret,
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
@@ -162,13 +162,11 @@ fn selector_with_runtime(
         verified_at: chrono::Utc::now(),
     });
     let http = reqwest::Client::builder().build().expect("HTTP client");
-    let agent_identity = agent_identity_service(store);
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
         OFFICIAL_CODEX_BASE_URL.to_owned(),
-        Arc::clone(&agent_identity),
         catalog_cache(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
@@ -176,7 +174,6 @@ fn selector_with_runtime(
         profile,
         http,
         OFFICIAL_CODEX_BASE_URL.to_owned(),
-        Arc::clone(&agent_identity),
         cooldowns,
     ));
     CodexCredentialSelector::new(
@@ -187,7 +184,6 @@ fn selector_with_runtime(
         Arc::new(MemorySessionExclusions::default()),
         catalog,
         quota,
-        agent_identity,
         account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),
     )

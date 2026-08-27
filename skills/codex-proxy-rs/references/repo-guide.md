@@ -90,7 +90,7 @@ OpenAI continuation 按 native/replay-owner/replay-any 推进，xAI 使用客户
 ### 导入与授权
 
 - 公共导入合同始终是 `{ provider, data }`，其中 `data` 为 Provider-owned JSON object。
-- OpenAI 支持 OAuth JSON、`accounts` 数组、AT-only、RT-only、AT+RT+可选 ID Token 和 Agent Identity；
+- OpenAI 支持 OAuth JSON、`accounts` 数组、AT-only、RT-only 和 AT+RT+可选 ID Token；
   最多 200 项。RT-only 先交换 AT，AT-only 不会凭空获得刷新能力。
 - OpenAI OAuth 身份来自 `parse_chatgpt_jwt_claims`，不信任导入 object 顶层的 user/account ID。
 - 前端 AT/RT 标签只把“每行一个 token”转换成 `accounts` JSON，没有第二条导入 API。

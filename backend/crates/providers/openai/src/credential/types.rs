@@ -280,7 +280,6 @@ impl fmt::Debug for CodexCookie {
 }
 
 pub const CODEX_AUTHENTICATION_KIND_OAUTH: &str = "oauth";
-pub const CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY: &str = "agent_identity";
 
 /// Codex OAuth 对 `provider_credentials_json` 的完整明文 schema。
 #[derive(Clone, Serialize, Deserialize)]
@@ -323,49 +322,11 @@ impl fmt::Debug for CodexOAuthCredentialData {
     }
 }
 
-/// Agent Identity 文档的固定认证模式。
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CodexAgentIdentityAuthMode {
-    #[serde(rename = "agentIdentity")]
-    AgentIdentity,
-}
-
-/// OpenAI Agent Identity 对 `provider_credentials_json` 的完整明文 schema。
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CodexAgentIdentityCredentialData {
-    pub schema_version: u32,
-    pub auth_mode: CodexAgentIdentityAuthMode,
-    pub installation_id: String,
-    pub agent_runtime_id: String,
-    pub agent_private_key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-    #[serde(default)]
-    pub cookies: Vec<CodexCookie>,
-}
-
-impl fmt::Debug for CodexAgentIdentityCredentialData {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CodexAgentIdentityCredentialData")
-            .field("schema_version", &self.schema_version)
-            .field("auth_mode", &self.auth_mode)
-            .field("installation_id", &"<pseudonymous>")
-            .field("agent_runtime_id", &"<redacted>")
-            .field("agent_private_key", &"<redacted>")
-            .field("task_id", &self.task_id.as_ref().map(|_| "<redacted>"))
-            .field("cookies", &self.cookies)
-            .finish()
-    }
-}
-
-/// OpenAI Provider 支持的两种规范化凭据形态。
+/// OpenAI Provider 的规范化 OAuth 凭据形态。
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CodexCredentialData {
     OAuth(CodexOAuthCredentialData),
-    AgentIdentity(CodexAgentIdentityCredentialData),
 }
 
 impl CodexCredentialData {
@@ -373,7 +334,6 @@ impl CodexCredentialData {
     pub const fn authentication_kind(&self) -> &'static str {
         match self {
             Self::OAuth(_) => CODEX_AUTHENTICATION_KIND_OAUTH,
-            Self::AgentIdentity(_) => CODEX_AUTHENTICATION_KIND_AGENT_IDENTITY,
         }
     }
 
@@ -381,14 +341,12 @@ impl CodexCredentialData {
     pub fn installation_id(&self) -> &str {
         match self {
             Self::OAuth(data) => &data.installation_id,
-            Self::AgentIdentity(data) => &data.installation_id,
         }
     }
 
     pub fn set_installation_id(&mut self, installation_id: String) {
         match self {
             Self::OAuth(data) => data.installation_id = installation_id,
-            Self::AgentIdentity(data) => data.installation_id = installation_id,
         }
     }
 
@@ -396,14 +354,12 @@ impl CodexCredentialData {
     pub fn cookies(&self) -> &[CodexCookie] {
         match self {
             Self::OAuth(data) => &data.cookies,
-            Self::AgentIdentity(data) => &data.cookies,
         }
     }
 
     pub fn cookies_mut(&mut self) -> &mut Vec<CodexCookie> {
         match self {
             Self::OAuth(data) => &mut data.cookies,
-            Self::AgentIdentity(data) => &mut data.cookies,
         }
     }
 
@@ -411,29 +367,12 @@ impl CodexCredentialData {
     pub fn oauth(&self) -> Option<&CodexOAuthCredentialData> {
         match self {
             Self::OAuth(data) => Some(data),
-            Self::AgentIdentity(_) => None,
         }
     }
 
     pub fn oauth_mut(&mut self) -> Option<&mut CodexOAuthCredentialData> {
         match self {
             Self::OAuth(data) => Some(data),
-            Self::AgentIdentity(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub fn agent_identity(&self) -> Option<&CodexAgentIdentityCredentialData> {
-        match self {
-            Self::OAuth(_) => None,
-            Self::AgentIdentity(data) => Some(data),
-        }
-    }
-
-    pub fn agent_identity_mut(&mut self) -> Option<&mut CodexAgentIdentityCredentialData> {
-        match self {
-            Self::OAuth(_) => None,
-            Self::AgentIdentity(data) => Some(data),
         }
     }
 
@@ -448,7 +387,6 @@ impl fmt::Debug for CodexCredentialData {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OAuth(data) => data.fmt(formatter),
-            Self::AgentIdentity(data) => data.fmt(formatter),
         }
     }
 }
