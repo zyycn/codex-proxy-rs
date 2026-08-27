@@ -52,9 +52,9 @@ use crate::credential::{
     CodexAccountFailure, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
     CodexCredentialRefreshService, CodexCredentialSelector, CodexCyberPolicyScope,
-    CodexQuotaRefreshPolicy, CredentialSelectionError, RuntimeCodexCookie, SelectCodexCredential,
-    SelectCodexProviderEndpointCredential, derive_codex_cyber_policy_session_key,
-    derive_codex_session_affinity_key,
+    CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError, RuntimeCodexCookie,
+    SelectCodexCredential, SelectCodexProviderEndpointCredential,
+    derive_codex_cyber_policy_session_key, derive_codex_session_affinity,
 };
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
@@ -285,8 +285,8 @@ impl Provider for CodexProvider {
                 .as_ref()
                 .and_then(|state| state.turn_state.clone());
         }
-        let session_affinity_key =
-            derive_codex_session_affinity_key(&upstream_request, context.client_api_key_ref());
+        let session_affinity =
+            derive_codex_session_affinity(&upstream_request, context.client_api_key_ref());
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
         let transport = selected_transport(&upstream_request);
@@ -299,9 +299,10 @@ impl Provider for CodexProvider {
                     upstream_model: upstream_model.as_str(),
                     request_url: &self.responses_url,
                     attempt: &context,
-                    session_affinity_key: session_affinity_key.as_ref(),
+                    session_affinity_key: session_affinity.as_ref().map(|affinity| affinity.key()),
                 },
                 cyber_policy_session_key.as_ref(),
+                session_affinity.as_ref(),
             )
             .await
             .map_err(map_selection_error)?;
@@ -404,6 +405,7 @@ impl Provider for CodexProvider {
                 continuation_scope: None,
             });
         let allows_account_state_mutation = lease.allows_account_state_mutation();
+        let session_affinity_key = session_affinity.map(CodexSessionAffinity::into_key);
         let events = cold_response_stream(ColdResponse {
             client: self.client.clone(),
             response_origin: self.responses_url.clone(),

@@ -22,6 +22,7 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 use url::Url;
 
+use super::affinity::CodexSessionAffinity;
 use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
@@ -102,6 +103,7 @@ struct CredentialSelectionInput<'a> {
     request_url: &'a Url,
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
+    session_affinity_observation: Option<&'a CodexSessionAffinity>,
 }
 
 #[derive(Clone)]
@@ -291,6 +293,7 @@ impl CodexCredentialSelector {
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
+            session_affinity_observation: None,
         };
         self.select_inner(
             &input,
@@ -304,11 +307,13 @@ impl CodexCredentialSelector {
         &self,
         request: &SelectCodexCredential<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
+        session_affinity_observation: Option<&CodexSessionAffinity>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
+            session_affinity_observation,
         };
         self.select_inner(
             &input,
@@ -330,6 +335,7 @@ impl CodexCredentialSelector {
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: None,
+            session_affinity_observation: None,
         };
         self.select_inner(&input, None, ModelCatalogEligibility::NotApplicable)
             .await
@@ -563,6 +569,7 @@ impl CodexCredentialSelector {
                             .unwrap_or_else(|| account.id().clone())
                     };
                     let affinity_telemetry = affinity.telemetry(account.id());
+                    let affinity_observation = request.session_affinity_observation;
                     tracing::info!(
                         request_id = %request.attempt.request_id(),
                         attempt_index = request.attempt.attempt_index().get(),
@@ -573,6 +580,17 @@ impl CodexCredentialSelector {
                             .escape_reason
                             .map_or("", AffinityEscapeReason::as_str),
                         account_switch = affinity_telemetry.account_switch,
+                        affinity_key_hash = affinity_observation
+                            .map_or("", CodexSessionAffinity::key_hash),
+                        affinity_anchor_source = affinity_observation
+                            .map_or("", CodexSessionAffinity::anchor_source),
+                        affinity_anchor = affinity_observation
+                            .map_or("", CodexSessionAffinity::anchor),
+                        session_id = affinity_observation
+                            .and_then(CodexSessionAffinity::session_id)
+                            .unwrap_or(""),
+                        session_id_present = affinity_observation
+                            .is_some_and(CodexSessionAffinity::session_id_present),
                         "OpenAI account selected"
                     );
                     let runtime = self.repository.load_runtime_credential(&account).await?;

@@ -1,4 +1,4 @@
-//! OpenAI 根会话锚点到 Store 不透明账号亲和键的单向派生。
+//! OpenAI 根会话锚点到 Store 不透明账号亲和键及诊断上下文的单向派生。
 
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
@@ -7,20 +7,82 @@ use sha2::{Digest, Sha256};
 use crate::transport::protocol::responses::CodexResponsesRequest;
 use crate::transport::request::derive_conversation_anchor;
 
-pub(crate) fn derive_codex_session_affinity_key(
+const AFFINITY_KEY_HASH_LENGTH: usize = 12;
+
+/// 一次请求派生出的账号亲和键及其结构化日志上下文。
+pub(crate) struct CodexSessionAffinity {
+    key: ProviderSessionAffinityKey,
+    key_hash: String,
+    anchor_source: &'static str,
+    anchor: String,
+    session_id: Option<String>,
+}
+
+impl CodexSessionAffinity {
+    #[must_use]
+    pub(crate) const fn key(&self) -> &ProviderSessionAffinityKey {
+        &self.key
+    }
+
+    #[must_use]
+    pub(crate) fn key_hash(&self) -> &str {
+        &self.key_hash
+    }
+
+    #[must_use]
+    pub(crate) const fn anchor_source(&self) -> &'static str {
+        self.anchor_source
+    }
+
+    #[must_use]
+    pub(crate) fn anchor(&self) -> &str {
+        &self.anchor
+    }
+
+    #[must_use]
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    #[must_use]
+    pub(crate) const fn session_id_present(&self) -> bool {
+        self.session_id.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn into_key(self) -> ProviderSessionAffinityKey {
+        self.key
+    }
+}
+
+pub(crate) fn derive_codex_session_affinity(
     request: &CodexResponsesRequest,
     client_api_key_id: &ClientApiKeyId,
-) -> Option<ProviderSessionAffinityKey> {
-    let (domain, value) = derive_account_affinity_anchor(request)?;
-    let session_key = opaque_affinity_key(domain, &value)?;
-    opaque_affinity_key(
+) -> Option<CodexSessionAffinity> {
+    let session_id = non_empty(request.client_session_id.as_deref()).map(str::to_owned);
+    let (anchor_source, anchor) = derive_account_affinity_anchor(request)?;
+    let session_key = opaque_affinity_key(anchor_source, &anchor)?;
+    let key = opaque_affinity_key(
         "client-session",
         &format!(
             "{}\0{}",
             client_api_key_id.as_str(),
             session_key.expose_to_store()
         ),
-    )
+    )?;
+    // 亲和键本身已经是 SHA-256；日志沿用 WebSocket 诊断的 12 位短哈希长度。
+    let key_hash = key
+        .expose_to_store()
+        .chars()
+        .take(AFFINITY_KEY_HASH_LENGTH)
+        .collect();
+    Some(CodexSessionAffinity {
+        key,
+        key_hash,
+        anchor_source,
+        anchor,
+        session_id,
+    })
 }
 
 /// 账号选择优先使用根会话事实；`local_conversation_id` 仍可按 child thread 隔离
