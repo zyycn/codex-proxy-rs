@@ -18,12 +18,11 @@ use gateway_admin::model::provider_credentials::{
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedAuthorizationCredential,
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
-    ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
-    ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole, ProviderResetCredit,
-    ProviderResetCreditResult, ProviderResetCredits, ProviderUsageStatistics,
-    ProviderUsageStatisticsCycle, ProviderUsageStatisticsDay, ProviderUsageStatisticsModel,
-    ProviderUsageStatisticsRequest, ProviderUsageStatisticsServiceTier,
-    ProviderUsageStatisticsSummary, ProviderUsageStatisticsTokens, QuotaLocalUsageAttribution,
+    ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderProfileActivityInsights,
+    ProviderProfileDailyUsage, ProviderProfileInvocation, ProviderProfileStatistics,
+    ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
+    ProviderQuotaWindowRole, ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
+    QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -48,13 +47,12 @@ use serde_json::{Map, Number, Value};
 use crate::credential::{
     CodexAccountQuotaSnapshot, CodexCredentialAdmin, CodexCredentialAdminError,
     CodexCredentialAdminService, CodexCredentialCatalogError, CodexCredentialCatalogService,
-    CodexCredentialQuotaError, CodexCredentialQuotaService, CodexOAuthAdmin, CodexOAuthAdminError,
-    CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore, CodexOAuthPendingStoreError,
-    CodexPendingAuthorization, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
-    CodexResetCreditsError, CodexUsageStatistics, CodexUsageStatisticsError,
-    CodexUsageStatisticsServiceTier, CodexUsageStatisticsTokens, CompleteCodexOAuthAuthorization,
-    CompletedCodexOAuthCredential, ExportManagedCodexCredential, StartCodexOAuthAuthorization,
-    StoredCodexPendingAuthorization,
+    CodexCredentialProfileService, CodexCredentialQuotaError, CodexCredentialQuotaService,
+    CodexOAuthAdmin, CodexOAuthAdminError, CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore,
+    CodexOAuthPendingStoreError, CodexPendingAuthorization, CodexProfileStatisticsError,
+    CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError,
+    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
+    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 use crate::credential::{
     CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
@@ -63,7 +61,7 @@ use crate::transport::CodexWebSocketPool;
 use crate::transport::profile::{
     CodexDesktopReleaseSnapshot, CodexDesktopReleaseStatus, CodexWireProfile, CodexWireProfileState,
 };
-use crate::transport::{OpenAiBillingUsage, openai_billing_breakdown};
+use crate::transport::{CodexProfileStatistics, OpenAiBillingUsage, openai_billing_breakdown};
 
 const PROVIDER_NAME: &str = "openai";
 const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
@@ -75,6 +73,7 @@ pub(crate) struct OpenAiAdminProvider {
     accounts: Arc<dyn ProviderAccountStore>,
     credentials: Arc<CodexCredentialAdminService>,
     oauth: Arc<dyn CodexOAuthAdmin>,
+    profile_statistics: Arc<CodexCredentialProfileService>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
     websocket_pool: Arc<CodexWebSocketPool>,
@@ -84,6 +83,7 @@ pub(crate) struct OpenAiAdminProvider {
 pub(crate) struct OpenAiAdminServices {
     pub(crate) credentials: Arc<CodexCredentialAdminService>,
     pub(crate) oauth: Arc<dyn CodexOAuthAdmin>,
+    pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
 }
@@ -104,6 +104,7 @@ impl OpenAiAdminProvider {
             accounts,
             credentials: services.credentials,
             oauth: services.oauth,
+            profile_statistics: services.profile_statistics,
             quota: services.quota,
             catalog: services.catalog,
             websocket_pool,
@@ -448,21 +449,17 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(project_quota(snapshot, &account))
     }
 
-    async fn usage_statistics(
+    async fn profile_statistics(
         &self,
-        request: ProviderUsageStatisticsRequest,
-    ) -> Result<ProviderUsageStatistics, ProviderAdminError> {
-        self.account(&request.account_id).await?;
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileStatistics, ProviderAdminError> {
+        self.account(account_id).await?;
         let statistics = self
-            .quota
-            .usage_statistics(
-                &request.account_id,
-                request.cycle_offset,
-                request.utc_offset_minutes,
-            )
+            .profile_statistics
+            .profile_statistics(account_id)
             .await
-            .map_err(map_usage_statistics_error)?;
-        project_usage_statistics(statistics)
+            .map_err(map_profile_statistics_error)?;
+        Ok(project_profile_statistics(statistics))
     }
 
     async fn reset_credits(
@@ -822,91 +819,49 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     }
 }
 
-fn project_usage_statistics(
-    statistics: CodexUsageStatistics,
-) -> Result<ProviderUsageStatistics, ProviderAdminError> {
-    let models = statistics
-        .models
-        .into_iter()
-        .map(|model| {
-            Ok(ProviderUsageStatisticsModel {
-                key: model.key,
-                model: model.model,
-                service_tier: project_usage_service_tier(model.service_tier),
-                credit_share: model.credit_share,
-                quota_share: model.quota_share,
-                tokens: project_usage_tokens(model.tokens),
-                estimated_cost: model.estimated_cost.map(currency_cost).transpose()?,
-                has_unknown_pricing: model.has_unknown_pricing,
-                has_estimated_allocation: model.has_estimated_allocation,
-                has_rate_fallback: model.has_rate_fallback,
-                has_missing_token_data: model.has_missing_token_data,
-            })
-        })
-        .collect::<Result<Vec<_>, ProviderAdminError>>()?;
-    let daily = statistics
-        .daily
-        .into_iter()
-        .map(|day| {
-            Ok(ProviderUsageStatisticsDay {
-                date: day.date,
-                credit_share: day.credit_share,
-                tokens: project_usage_tokens(day.tokens),
-                estimated_cost: day.estimated_cost.map(currency_cost).transpose()?,
-                has_unknown_pricing: day.has_unknown_pricing,
-                has_missing_token_data: day.has_missing_token_data,
-                is_boundary_day: day.is_boundary_day,
-            })
-        })
-        .collect::<Result<Vec<_>, ProviderAdminError>>()?;
-    Ok(ProviderUsageStatistics {
-        cycle: ProviderUsageStatisticsCycle {
-            offset: statistics.cycle.offset,
-            start_at: statistics.cycle.start_at,
-            end_at: statistics.cycle.end_at,
-            window_seconds: statistics.cycle.window_seconds,
-            used_percent: statistics.cycle.used_percent,
-            is_current: statistics.cycle.is_current,
-            can_go_previous: statistics.cycle.can_go_previous,
-            can_go_next: statistics.cycle.can_go_next,
+fn project_profile_statistics(statistics: CodexProfileStatistics) -> ProviderProfileStatistics {
+    ProviderProfileStatistics {
+        display_name: statistics.display_name,
+        username: statistics.username,
+        image_url: statistics.image_url,
+        has_stats_error: statistics.has_stats_error,
+        summary: ProviderProfileStatisticsSummary {
+            total_text_tokens: statistics.summary.total_text_tokens,
+            peak_tokens: statistics.summary.peak_tokens,
+            longest_task_duration_ms: statistics.summary.longest_task_duration_ms,
+            current_streak_days: statistics.summary.current_streak_days,
+            longest_streak_days: statistics.summary.longest_streak_days,
         },
-        summary: ProviderUsageStatisticsSummary {
-            tokens: project_usage_tokens(statistics.summary.tokens),
-            estimated_cost: statistics
-                .summary
-                .estimated_cost
-                .map(currency_cost)
-                .transpose()?,
-            projected_tokens: statistics.summary.projected_tokens,
-            projected_cost: statistics
-                .summary
-                .projected_cost
-                .map(currency_cost)
-                .transpose()?,
-            day_count: statistics.summary.day_count,
-            has_unknown_pricing: statistics.summary.has_unknown_pricing,
-            has_missing_token_data: statistics.summary.has_missing_token_data,
+        daily_usage: statistics.daily_usage.map(|daily| {
+            daily
+                .into_iter()
+                .map(|entry| ProviderProfileDailyUsage {
+                    date: entry.date,
+                    tokens: entry.tokens,
+                })
+                .collect()
+        }),
+        activity_insights: ProviderProfileActivityInsights {
+            fast_mode_percent: statistics.activity_insights.fast_mode_percent,
+            reasoning_effort: statistics.activity_insights.reasoning_effort,
+            reasoning_effort_percent: statistics.activity_insights.reasoning_effort_percent,
+            skills_explored: statistics.activity_insights.skills_explored,
+            total_skills_used: statistics.activity_insights.total_skills_used,
+            total_threads: statistics.activity_insights.total_threads,
+            invocations: statistics.activity_insights.invocations.map(|invocations| {
+                invocations
+                    .into_iter()
+                    .map(|invocation| ProviderProfileInvocation {
+                        invocation_type: invocation.invocation_type,
+                        plugin_id: invocation.plugin_id,
+                        plugin_name: invocation.plugin_name,
+                        skill_id: invocation.skill_id,
+                        skill_name: invocation.skill_name,
+                        usage_count: invocation.usage_count,
+                    })
+                    .collect()
+            }),
         },
-        models,
-        daily,
-    })
-}
-
-const fn project_usage_tokens(tokens: CodexUsageStatisticsTokens) -> ProviderUsageStatisticsTokens {
-    ProviderUsageStatisticsTokens {
-        uncached_input: tokens.uncached_input,
-        cached_input: tokens.cached_input,
-        output: tokens.output,
-        total: tokens.total,
-    }
-}
-
-const fn project_usage_service_tier(
-    service_tier: CodexUsageStatisticsServiceTier,
-) -> ProviderUsageStatisticsServiceTier {
-    match service_tier {
-        CodexUsageStatisticsServiceTier::Standard => ProviderUsageStatisticsServiceTier::Standard,
-        CodexUsageStatisticsServiceTier::Fast => ProviderUsageStatisticsServiceTier::Fast,
     }
 }
 
@@ -1507,24 +1462,20 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
     })
 }
 
-fn map_usage_statistics_error(error: CodexUsageStatisticsError) -> ProviderAdminError {
-    use CodexUsageStatisticsError as Error;
+fn map_profile_statistics_error(error: CodexProfileStatisticsError) -> ProviderAdminError {
+    use CodexProfileStatisticsError as Error;
 
     match error {
-        Error::InvalidRequest | Error::InvalidCredentialData => {
-            provider_admin_error(ProviderAdminErrorKind::Invalid)
-        }
+        Error::InvalidCredentialData => provider_admin_error(ProviderAdminErrorKind::Invalid),
         Error::NotFound => provider_admin_error(ProviderAdminErrorKind::NotFound),
         Error::Store { .. } | Error::TransportUnavailable => {
             provider_admin_error(ProviderAdminErrorKind::Unavailable)
         }
-        Error::QuotaWindowUnavailable => provider_admin_error(ProviderAdminErrorKind::Conflict)
-            .with_message("OpenAI did not expose a resettable quota window for usage statistics"),
         Error::CredentialRefreshRequired { upstream_body } => {
             let mut error = provider_admin_error(ProviderAdminErrorKind::CredentialRefreshRequired);
             if let Some(body) = upstream_body {
                 error = error.with_message(format!(
-                    "OpenAI usage-statistics upstream returned HTTP 401: {}",
+                    "OpenAI profile-statistics upstream returned HTTP 401: {}",
                     bounded_upstream_body(&body)
                 ));
             }
@@ -1539,7 +1490,7 @@ fn map_usage_statistics_error(error: CodexUsageStatisticsError) -> ProviderAdmin
                 .map(|seconds| format!("; retry-after={seconds}s"))
                 .unwrap_or_default();
             provider_admin_error(ProviderAdminErrorKind::BadGateway).with_message(format!(
-                "OpenAI usage-statistics upstream returned HTTP {status}{retry_after}: {}",
+                "OpenAI profile-statistics upstream returned HTTP {status}{retry_after}: {}",
                 bounded_upstream_body(&body)
             ))
         }

@@ -17,8 +17,9 @@ use crate::admin::{OpenAiAdminProvider, OpenAiAdminServices, OpenAiOAuthPendingS
 use crate::credential::token_client::{AuthorizationCodeExchanger, TokenRefresher};
 use crate::credential::{
     CodexCookiePolicy, CodexCredentialAdmin, CodexCredentialAdminService,
-    CodexCredentialCatalogService, CodexCredentialQuotaService, CodexCredentialRefreshService,
-    CodexCredentialRepository, CodexCredentialSelector, CodexOAuthAdmin, CodexOAuthAdminService,
+    CodexCredentialCatalogService, CodexCredentialProfileService, CodexCredentialQuotaService,
+    CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
+    CodexOAuthAdmin, CodexOAuthAdminService,
 };
 use crate::transport::profile::{
     CodexArtifactProfileCache, CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport,
@@ -110,6 +111,12 @@ pub async fn initialize(
         config.base_url().to_owned(),
         ports.cooldowns(),
     ));
+    let profile_statistics = Arc::new(CodexCredentialProfileService::new(
+        repository.clone(),
+        profile.clone(),
+        http.clone(),
+        config.base_url().to_owned(),
+    ));
     let selector = Arc::new(CodexCredentialSelector::new(
         provider_kind.clone(),
         repository.clone(),
@@ -174,6 +181,7 @@ pub async fn initialize(
         OpenAiAdminServices {
             credentials: credential_admin,
             oauth: oauth_admin,
+            profile_statistics,
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
         },

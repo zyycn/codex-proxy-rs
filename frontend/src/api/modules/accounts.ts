@@ -170,64 +170,46 @@ export interface AccountQuotaResponse {
   account: Account
 }
 
-export interface AccountUsageStatisticsTokens {
-  uncachedInput: number
-  cachedInput: number
-  output: number
-  total: number
+export interface AccountProfileStatisticsSummary {
+  totalTextTokens: number | null
+  peakTokens: number | null
+  longestTaskDurationMs: number | null
+  currentStreakDays: number | null
+  longestStreakDays: number | null
 }
 
-export interface AccountUsageStatisticsCost {
-  currency: string
-  amount: string
-}
-
-export interface AccountUsageStatisticsModel {
-  key: string
-  model: string
-  serviceTier: 'standard' | 'fast'
-  creditShare: number | null
-  quotaShare: number | null
-  tokens: AccountUsageStatisticsTokens
-  estimatedCost: AccountUsageStatisticsCost | null
-  hasUnknownPricing: boolean
-  hasEstimatedAllocation: boolean
-  hasRateFallback: boolean
-  hasMissingTokenData: boolean
-}
-
-export interface AccountUsageStatisticsDay {
+export interface AccountProfileDailyUsage {
   date: string
-  creditShare: number | null
-  tokens: AccountUsageStatisticsTokens
-  estimatedCost: AccountUsageStatisticsCost | null
-  hasUnknownPricing: boolean
-  hasMissingTokenData: boolean
-  isBoundaryDay: boolean
+  tokens: number
 }
 
-export interface AccountUsageStatisticsResponse {
-  cycle: {
-    offset: number
-    startAt: string
-    endAt: string
-    windowSeconds: number
-    usedPercent: number | null
-    isCurrent: boolean
-    canGoPrevious: boolean
-    canGoNext: boolean
-  }
-  summary: {
-    tokens: AccountUsageStatisticsTokens
-    estimatedCost: AccountUsageStatisticsCost | null
-    projectedTokens: number | null
-    projectedCost: AccountUsageStatisticsCost | null
-    dayCount: number
-    hasUnknownPricing: boolean
-    hasMissingTokenData: boolean
-  }
-  models: AccountUsageStatisticsModel[]
-  daily: AccountUsageStatisticsDay[]
+export interface AccountProfileInvocation {
+  type: string
+  pluginId: string | null
+  pluginName: string | null
+  skillId: string | null
+  skillName: string | null
+  usageCount: number | null
+}
+
+export interface AccountProfileActivityInsights {
+  fastModePercent: number | null
+  reasoningEffort: string | null
+  reasoningEffortPercent: number | null
+  skillsExplored: number | null
+  totalSkillsUsed: number | null
+  totalThreads: number | null
+  invocations: AccountProfileInvocation[] | null
+}
+
+export interface AccountProfileStatisticsResponse {
+  displayName: string | null
+  username: string | null
+  imageUrl: string | null
+  hasStatsError: boolean
+  summary: AccountProfileStatisticsSummary
+  dailyUsage: AccountProfileDailyUsage[] | null
+  activityInsights: AccountProfileActivityInsights
 }
 
 export interface AccountResetCredit {
@@ -296,11 +278,6 @@ interface AccountListParams {
 
 interface AccountIdParam {
   accountId: string
-}
-
-interface AccountUsageStatisticsParam extends AccountIdParam {
-  cycleOffset?: number
-  utcOffsetMinutes?: number
 }
 
 interface AccountResetCreditConsumeParam extends AccountIdParam {
@@ -391,9 +368,9 @@ export function getAccountQuota(data: AccountIdParam) {
   })
 }
 
-export function getAccountUsageStatistics(data: AccountUsageStatisticsParam) {
-  return request<AccountUsageStatisticsResponse>({
-    url: '/api/admin/accounts/usage-statistics',
+export function getAccountProfileStatistics(data: AccountIdParam) {
+  return request<AccountProfileStatisticsResponse>({
+    url: '/api/admin/accounts/profile-statistics',
     method: 'GET',
     params: data,
   })

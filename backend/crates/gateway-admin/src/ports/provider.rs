@@ -17,8 +17,8 @@ use crate::model::provider_credentials::{
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
     PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput, ProviderModels,
-    ProviderQuota, ProviderQuotaRequest, ProviderResetCreditResult, ProviderResetCredits,
-    ProviderUsageStatistics, ProviderUsageStatisticsRequest,
+    ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest, ProviderResetCreditResult,
+    ProviderResetCredits,
 };
 
 /// Provider 管理失败的稳定分类。
@@ -147,11 +147,11 @@ pub trait ProviderAdmin: Send + Sync {
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
 
-    /// 查询 Provider 官方用量统计；不支持该能力的 Provider 使用默认拒绝。
-    async fn usage_statistics(
+    /// 查询 Provider 官方个人资料统计；不支持该能力的 Provider 使用默认拒绝。
+    async fn profile_statistics(
         &self,
-        _request: ProviderUsageStatisticsRequest,
-    ) -> Result<ProviderUsageStatistics, ProviderAdminError> {
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileStatistics, ProviderAdminError> {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 

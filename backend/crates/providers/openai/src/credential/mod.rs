@@ -5,6 +5,7 @@ mod affinity;
 mod catalog;
 mod cookie;
 mod oauth;
+mod profile_statistics;
 mod quota;
 mod recovery_log;
 mod refresh;
@@ -37,13 +38,11 @@ pub use oauth::{
     CodexPendingAuthorization, CompleteCodexOAuthAuthorization, CompletedCodexOAuthAuthorization,
     CompletedCodexOAuthCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
+pub use profile_statistics::{CodexCredentialProfileService, CodexProfileStatisticsError};
 pub use quota::{
     CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexCredentialQuotaService,
     CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary, CodexQuotaWindow,
-    CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError, CodexUsageStatistics,
-    CodexUsageStatisticsCycle, CodexUsageStatisticsDay, CodexUsageStatisticsError,
-    CodexUsageStatisticsModel, CodexUsageStatisticsServiceTier, CodexUsageStatisticsSummary,
-    CodexUsageStatisticsTokens, parse_codex_quota_usage,
+    CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError, parse_codex_quota_usage,
 };
 pub use refresh::{
     CodexCredentialRefreshError, CodexCredentialRefreshOutcome, CodexCredentialRefreshService,

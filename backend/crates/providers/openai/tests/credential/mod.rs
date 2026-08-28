@@ -3,6 +3,7 @@ mod catalog;
 mod contract;
 mod cookie;
 mod oauth;
+mod profile_statistics;
 mod quota;
 mod refresh;
 mod token_client;

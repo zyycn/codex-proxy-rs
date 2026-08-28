@@ -1,15 +1,27 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 
+import { CircleDollarSign, Sigma } from '@lucide/vue'
+import { computed } from 'vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { modelSuccessRateTextClass } from '../constants'
 
-defineProps<{
+const props = defineProps<{
   account: AccountRow
 }>()
 
 type AccountModelUsage = AccountRow['usage']['models'][number]
+
+const totalBilling = computed(() =>
+  props.account.usage.costs.find(cost => cost.currency.toUpperCase() === 'USD'),
+)
+const totalBillingDisplay = computed(() =>
+  totalBilling.value?.estimatedAmountDisplay ?? '—',
+)
+const hasUsageSummary = computed(() =>
+  (props.account.usage.totalTokens ?? 0) > 0 || totalBilling.value !== undefined,
+)
 
 const modelUsageColumns = defineTableColumns<AccountModelUsage>([
   { key: 'model', label: '模型', kind: 'text', size: 'lg' },
@@ -72,11 +84,42 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
     <div
       class="min-w-0 pt-4 xl:pt-0 xl:pl-4"
     >
-      <div class="mb-3 flex items-center justify-between">
-        <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
+      <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h3 class="m-0 shrink-0 text-cp-lg font-heavy text-cp-text">
           模型使用排行
         </h3>
-        <span class="text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
+
+        <div class="ml-auto flex items-center gap-4">
+          <dl v-if="hasUsageSummary" class="m-0 flex items-center gap-4">
+            <div class="flex items-center gap-1.5 whitespace-nowrap" title="总 Token">
+              <dt class="sr-only">
+                总 Token
+              </dt>
+              <Sigma
+                class="size-3.5 text-cp-text-tertiary"
+                :stroke-width="1.75"
+                aria-hidden="true"
+              />
+              <dd class="m-0 font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
+                {{ account.usage.totalTokensDisplay }}
+              </dd>
+            </div>
+            <div class="flex items-center gap-1.5 whitespace-nowrap" title="总计费">
+              <dt class="sr-only">
+                总计费
+              </dt>
+              <CircleDollarSign
+                class="size-3.5 text-cp-success-text"
+                :stroke-width="1.75"
+                aria-hidden="true"
+              />
+              <dd class="m-0 font-mono text-cp-sm font-heavy tabular-nums text-cp-success-text">
+                {{ totalBillingDisplay }}
+              </dd>
+            </div>
+          </dl>
+          <span class="whitespace-nowrap text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
+        </div>
       </div>
 
       <div class="h-52 min-w-0">

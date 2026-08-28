@@ -339,6 +339,30 @@ pub(crate) fn admin_account_usage_window_model_cost(
     ))
 }
 
+pub(crate) fn admin_account_usage_window_cost(
+    row: &sqlx::postgres::PgRow,
+) -> AdminStoreResult<((String, String), AccountCost)> {
+    let key = (
+        window_usage_value(row, "account_id")?,
+        window_usage_value(row, "window_key")?,
+    );
+    let amount = window_usage_value::<String>(row, "amount")?;
+    let amount = AdminDecimalAmount::from_str(&amount).map_err(|_| {
+        AdminStoreError::new(
+            AdminStoreErrorKind::Invalid,
+            ENTITY,
+            "persisted account cost is invalid",
+        )
+    })?;
+    Ok((
+        key,
+        AccountCost {
+            currency: window_usage_value(row, "cost_currency")?,
+            amount,
+        },
+    ))
+}
+
 pub(crate) fn window_usage_count(
     row: &sqlx::postgres::PgRow,
     column: &'static str,

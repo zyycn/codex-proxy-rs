@@ -2,7 +2,6 @@
 
 mod recovery;
 mod snapshot;
-mod usage_statistics;
 
 use std::sync::Arc;
 use std::time::SystemTime;

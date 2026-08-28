@@ -70,144 +70,69 @@ mod query {
     }
 }
 
-mod usage_statistics {
-    use std::str::FromStr as _;
-
-    use chrono::{NaiveDate, TimeZone as _, Utc};
-    use gateway_admin::model::{
-        observability::{CurrencyCost, DecimalAmount},
-        provider_credentials::{
-            ProviderUsageStatistics, ProviderUsageStatisticsCycle, ProviderUsageStatisticsDay,
-            ProviderUsageStatisticsModel, ProviderUsageStatisticsServiceTier,
-            ProviderUsageStatisticsSummary, ProviderUsageStatisticsTokens,
-        },
+mod profile_statistics {
+    use chrono::NaiveDate;
+    use gateway_admin::model::provider_credentials::{
+        ProviderProfileActivityInsights, ProviderProfileDailyUsage, ProviderProfileInvocation,
+        ProviderProfileStatistics, ProviderProfileStatisticsSummary,
     };
-    use gateway_api::admin::accounts::{AccountUsageStatisticsData, AccountUsageStatisticsQuery};
+    use gateway_api::admin::accounts::AccountProfileStatisticsData;
     use serde_json::json;
 
-    fn tokens(total: u64) -> ProviderUsageStatisticsTokens {
-        ProviderUsageStatisticsTokens {
-            uncached_input: total / 4,
-            cached_input: total / 2,
-            output: total / 4,
-            total,
-        }
-    }
-
-    fn usd(amount: &str) -> CurrencyCost {
-        CurrencyCost {
-            currency: "USD".to_owned(),
-            amount: DecimalAmount::from_str(amount).expect("USD amount"),
-        }
-    }
-
     #[test]
-    fn usage_statistics_query_accepts_only_current_or_bounded_history_offsets() {
-        let query: AccountUsageStatisticsQuery = serde_json::from_value(json!({
-            "accountId": "acct_openai",
-            "cycleOffset": -3,
-            "utcOffsetMinutes": 480
-        }))
-        .expect("decode usage-statistics query");
-        let request = query.into_request().expect("valid cycle offset");
-        assert_eq!(request.cycle_offset, -3);
-        assert_eq!(request.utc_offset_minutes, 480);
-
-        for (cycle_offset, field) in [(-9, "cycleOffset"), (1, "cycleOffset")] {
-            let query: AccountUsageStatisticsQuery = serde_json::from_value(json!({
-                "accountId": "acct_openai",
-                "cycleOffset": cycle_offset
-            }))
-            .expect("decode bounded integer");
-            assert_eq!(
-                query
-                    .into_request()
-                    .expect_err("reject cycle offset")
-                    .field(),
-                field
-            );
-        }
-        assert!(
-            serde_json::from_value::<AccountUsageStatisticsQuery>(json!({
-                "accountId": "acct_openai",
-                "historyCycles": 8
-            }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn usage_statistics_response_serializes_calculated_rows_without_raw_documents() {
-        let start_at = Utc
-            .with_ymd_and_hms(2026, 8, 24, 7, 50, 0)
-            .single()
-            .expect("cycle start");
-        let end_at = Utc
-            .with_ymd_and_hms(2026, 8, 31, 7, 50, 0)
-            .single()
-            .expect("cycle end");
-        let response = AccountUsageStatisticsData::from(ProviderUsageStatistics {
-            cycle: ProviderUsageStatisticsCycle {
-                offset: 0,
-                start_at,
-                end_at,
-                window_seconds: 604_800,
-                used_percent: Some(20.0),
-                is_current: true,
-                can_go_previous: true,
-                can_go_next: false,
+    fn profile_statistics_response_preserves_nullable_official_fields() {
+        let response = AccountProfileStatisticsData::from(ProviderProfileStatistics {
+            display_name: Some("Ada".to_owned()),
+            username: Some("ada".to_owned()),
+            image_url: Some("https://example.test/avatar.png".to_owned()),
+            has_stats_error: false,
+            summary: ProviderProfileStatisticsSummary {
+                total_text_tokens: Some(409_500_000),
+                peak_tokens: Some(267_000_000),
+                longest_task_duration_ms: Some(51_900_000),
+                current_streak_days: Some(16),
+                longest_streak_days: Some(32),
             },
-            summary: ProviderUsageStatisticsSummary {
-                tokens: tokens(100),
-                estimated_cost: Some(usd("1.25")),
-                projected_tokens: Some(500),
-                projected_cost: Some(usd("6.25")),
-                day_count: 1,
-                has_unknown_pricing: false,
-                has_missing_token_data: false,
+            daily_usage: Some(vec![ProviderProfileDailyUsage {
+                date: NaiveDate::from_ymd_opt(2026, 8, 25).expect("usage date"),
+                tokens: 42,
+            }]),
+            activity_insights: ProviderProfileActivityInsights {
+                fast_mode_percent: Some(0.0),
+                reasoning_effort: Some("high".to_owned()),
+                reasoning_effort_percent: Some(48.0),
+                skills_explored: Some(8),
+                total_skills_used: Some(61),
+                total_threads: Some(2_391),
+                invocations: Some(vec![ProviderProfileInvocation {
+                    invocation_type: "plugin".to_owned(),
+                    plugin_id: Some("plugin_1".to_owned()),
+                    plugin_name: Some("example".to_owned()),
+                    skill_id: None,
+                    skill_name: None,
+                    usage_count: Some(29),
+                }]),
             },
-            models: vec![ProviderUsageStatisticsModel {
-                key: "gpt-5.6-sol::standard".to_owned(),
-                model: "gpt-5.6-sol".to_owned(),
-                service_tier: ProviderUsageStatisticsServiceTier::Standard,
-                credit_share: Some(1.0),
-                quota_share: Some(0.2),
-                tokens: tokens(100),
-                estimated_cost: Some(usd("1.25")),
-                has_unknown_pricing: false,
-                has_estimated_allocation: true,
-                has_rate_fallback: false,
-                has_missing_token_data: false,
-            }],
-            daily: vec![ProviderUsageStatisticsDay {
-                date: NaiveDate::from_ymd_opt(2026, 8, 25).expect("report date"),
-                credit_share: Some(1.0),
-                tokens: tokens(100),
-                estimated_cost: Some(usd("1.25")),
-                has_unknown_pricing: false,
-                has_missing_token_data: false,
-                is_boundary_day: true,
-            }],
         });
-        let value = serde_json::to_value(response).expect("serialize usage statistics");
+        let value = serde_json::to_value(response).expect("serialize profile statistics");
 
-        assert!(value.get("mode").is_none());
-        assert_eq!(value["cycle"]["offset"], 0);
+        assert_eq!(value["displayName"], "Ada");
+        assert_eq!(value["summary"]["totalTextTokens"], 409_500_000);
         assert_eq!(
-            value["summary"]["estimatedCost"],
-            json!({
-                "currency": "USD",
-                "amount": "1.25"
-            })
+            value["dailyUsage"][0],
+            json!({"date": "2026-08-25", "tokens": 42})
         );
-        assert_eq!(value["models"][0]["serviceTier"], "standard");
-        assert!(value["models"][0].get("mode").is_none());
-        assert_eq!(value["daily"][0]["tokens"]["total"], 100);
-        assert_eq!(value["daily"][0]["isBoundaryDay"], true);
-        assert!(value["cycle"].get("deltaPercent").is_none());
-        assert!(value.get("modelBreakdown").is_none());
-        assert!(value.get("dailyTotals").is_none());
-        assert!(value.get("usage").is_none());
+        assert_eq!(
+            value["activityInsights"]["invocations"][0]["type"],
+            "plugin"
+        );
+        assert_eq!(
+            value["activityInsights"]["invocations"][0]["usageCount"],
+            29
+        );
+        assert!(value.get("cycle").is_none());
+        assert!(value.get("models").is_none());
+        assert!(value.get("estimatedCost").is_none());
     }
 }
 

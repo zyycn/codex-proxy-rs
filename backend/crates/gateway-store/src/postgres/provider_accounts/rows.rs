@@ -51,6 +51,28 @@ pub(crate) const ACCOUNT_USAGE_BY_WINDOWS_SQL: &str = "with requested_windows as
       group by requested.account_id, requested.window_key
       order by requested.account_id, requested.window_key";
 
+pub(crate) const ACCOUNT_USAGE_COSTS_BY_WINDOWS_SQL: &str = "with requested_windows as (
+         select *
+         from unnest($1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[])
+           as requested(account_id, window_key, window_start, window_end)
+     )
+     select requested.account_id,
+            requested.window_key,
+            mr.cost_currency,
+            sum(mr.cost_amount)::text as amount
+       from requested_windows requested
+       join model_requests mr
+         on mr.provider_account_ref = requested.account_id
+        and mr.started_at >= requested.window_start
+        and mr.started_at < requested.window_end
+        and mr.outcome = 'succeeded'
+        and mr.downstream_committed_at is not null
+        and mr.client_status_code between 200 and 399
+        and mr.cost_amount is not null
+        and mr.cost_currency is not null
+      group by requested.account_id, requested.window_key, mr.cost_currency
+      order by requested.account_id, requested.window_key, mr.cost_currency";
+
 pub(crate) const ACCOUNT_USAGE_MODELS_BY_WINDOWS_SQL: &str = "with requested_windows as (
          select *
          from unnest($1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[])

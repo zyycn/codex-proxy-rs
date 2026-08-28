@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { AccountRow } from '../../constants'
-import { ChartNoAxesColumnIncreasing, RefreshCw } from '@lucide/vue'
+import { RefreshCw, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
-import AccountUsageStatisticsModal from '../AccountUsageStatisticsModal/index.vue'
+import AccountProfileModal from '../AccountProfileModal/index.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import AccountResetCredits from './ResetCredits.vue'
 
@@ -23,7 +23,7 @@ const emit = defineEmits<{
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
   orderedPanelQuotaWindows(props.account.quota.windows),
 ))
-const statisticsOpen = shallowRef(false)
+const profileOpen = shallowRef(false)
 </script>
 
 <template>
@@ -48,13 +48,13 @@ const statisticsOpen = shallowRef(false)
       <div class="flex shrink-0 items-center gap-0.5">
         <BaseIconButton
           v-if="account.provider === 'openai'"
-          label="查看官方用量统计"
+          label="查看个人资料"
           size="sm"
           variant="ghost"
-          :pressed="statisticsOpen"
-          @click="statisticsOpen = true"
+          :pressed="profileOpen"
+          @click="profileOpen = true"
         >
-          <ChartNoAxesColumnIncreasing class="size-3.5" />
+          <UserRound class="size-3.5" />
         </BaseIconButton>
         <AccountResetCredits
           v-if="account.provider === 'openai'"
@@ -90,9 +90,9 @@ const statisticsOpen = shallowRef(false)
     </div>
   </section>
 
-  <AccountUsageStatisticsModal
+  <AccountProfileModal
     v-if="account.provider === 'openai'"
-    v-model="statisticsOpen"
+    v-model="profileOpen"
     :account="account"
   />
 </template>

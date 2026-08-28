@@ -887,10 +887,16 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
             ("gpt-window-recent", Some(700)),
         ],
     );
+    assert_eq!(usage[0].usage.costs.len(), 1);
+    assert_eq!(usage[0].usage.costs[0].currency, "USD");
+    assert_eq!(usage[0].usage.costs[0].amount.as_str(), "3.75");
     assert_eq!(usage[0].usage.models[0].costs[0].amount.as_str(), "2.5");
     assert_eq!(usage[0].usage.models[1].costs[0].amount.as_str(), "1.25");
     assert_eq!(usage[1].key, "short");
     assert_eq!(usage[1].usage.total_tokens, Some(700));
+    assert_eq!(usage[1].usage.costs.len(), 1);
+    assert_eq!(usage[1].usage.costs[0].currency, "USD");
+    assert_eq!(usage[1].usage.costs[0].amount.as_str(), "1.25");
     assert_eq!(usage[1].usage.models.len(), 1);
     assert_eq!(usage[1].usage.models[0].model, "gpt-window-recent");
     assert_eq!(usage[1].usage.models[0].total_tokens, Some(700));

@@ -13,7 +13,6 @@ use uuid::Uuid;
 use super::{
     AdminError, MutationActor, MutationContext, PageSize, Revision,
     accounts::{AccountRecord, AccountSummary, AccountUsage, CredentialState},
-    observability::CurrencyCost,
 };
 
 /// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
@@ -628,102 +627,56 @@ pub struct ProviderQuota {
     pub provider_data: Option<ProviderDocument>,
 }
 
-/// Provider 官方用量统计的目标额度周期。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderUsageStatisticsCycle {
-    pub offset: i8,
-    pub start_at: DateTime<Utc>,
-    pub end_at: DateTime<Utc>,
-    pub window_seconds: u64,
-    pub used_percent: Option<f64>,
-    pub is_current: bool,
-    pub can_go_previous: bool,
-    pub can_go_next: bool,
-}
-
-/// Provider 官方用量统计查询。
+/// Provider 官方个人资料中的累计摘要。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderUsageStatisticsRequest {
-    pub account_id: ProviderAccountId,
-    /// `0` 为当前周期，负数为历史周期。
-    pub cycle_offset: i8,
-    /// 客户端相对 UTC 的分钟偏移，例如 UTC+8 为 `480`。
-    pub utc_offset_minutes: i16,
+pub struct ProviderProfileStatisticsSummary {
+    pub total_text_tokens: Option<u64>,
+    pub peak_tokens: Option<u64>,
+    pub longest_task_duration_ms: Option<u64>,
+    pub current_streak_days: Option<u64>,
+    pub longest_streak_days: Option<u64>,
 }
 
-/// 官方用量统计中的 Token 分类。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ProviderUsageStatisticsTokens {
-    pub uncached_input: u64,
-    pub cached_input: u64,
-    pub output: u64,
-    pub total: u64,
-}
-
-/// 官方模型报表中的服务档位。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderUsageStatisticsServiceTier {
-    Standard,
-    Fast,
-}
-
-impl ProviderUsageStatisticsServiceTier {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Standard => "standard",
-            Self::Fast => "fast",
-        }
-    }
-}
-
-/// 一个模型与服务档位在目标周期内的统计行。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderUsageStatisticsModel {
-    pub key: String,
-    pub model: String,
-    pub service_tier: ProviderUsageStatisticsServiceTier,
-    pub credit_share: Option<f64>,
-    pub quota_share: Option<f64>,
-    pub tokens: ProviderUsageStatisticsTokens,
-    pub estimated_cost: Option<CurrencyCost>,
-    pub has_unknown_pricing: bool,
-    pub has_estimated_allocation: bool,
-    pub has_rate_fallback: bool,
-    pub has_missing_token_data: bool,
-}
-
-/// 目标周期内的一天；官方日报只能提供本地日粒度。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderUsageStatisticsDay {
+/// Provider 官方个人资料中的单日 Token bucket。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderProfileDailyUsage {
     pub date: NaiveDate,
-    pub credit_share: Option<f64>,
-    pub tokens: ProviderUsageStatisticsTokens,
-    pub estimated_cost: Option<CurrencyCost>,
-    pub has_unknown_pricing: bool,
-    pub has_missing_token_data: bool,
-    pub is_boundary_day: bool,
+    pub tokens: u64,
 }
 
-/// 目标周期汇总。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderUsageStatisticsSummary {
-    pub tokens: ProviderUsageStatisticsTokens,
-    pub estimated_cost: Option<CurrencyCost>,
-    pub projected_tokens: Option<u64>,
-    pub projected_cost: Option<CurrencyCost>,
-    pub day_count: u32,
-    pub has_unknown_pricing: bool,
-    pub has_missing_token_data: bool,
+/// Provider 官方个人资料中的插件或 Skill 调用排行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderProfileInvocation {
+    pub invocation_type: String,
+    pub plugin_id: Option<String>,
+    pub plugin_name: Option<String>,
+    pub skill_id: Option<String>,
+    pub skill_name: Option<String>,
+    pub usage_count: Option<u64>,
 }
 
-/// Provider 已解释、计算并排序的官方用量统计。
+/// Provider 官方个人资料中的活动洞察。
 #[derive(Debug, Clone, PartialEq)]
-pub struct ProviderUsageStatistics {
-    pub cycle: ProviderUsageStatisticsCycle,
-    pub summary: ProviderUsageStatisticsSummary,
-    pub models: Vec<ProviderUsageStatisticsModel>,
-    pub daily: Vec<ProviderUsageStatisticsDay>,
+pub struct ProviderProfileActivityInsights {
+    pub fast_mode_percent: Option<f64>,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_effort_percent: Option<f64>,
+    pub skills_explored: Option<u64>,
+    pub total_skills_used: Option<u64>,
+    pub total_threads: Option<u64>,
+    pub invocations: Option<Vec<ProviderProfileInvocation>>,
+}
+
+/// Provider 已解释的官方个人资料统计。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderProfileStatistics {
+    pub display_name: Option<String>,
+    pub username: Option<String>,
+    pub image_url: Option<String>,
+    pub has_stats_error: bool,
+    pub summary: ProviderProfileStatisticsSummary,
+    pub daily_usage: Option<Vec<ProviderProfileDailyUsage>>,
+    pub activity_insights: ProviderProfileActivityInsights,
 }
 
 /// Provider 返回的一张安全主动额度重置卡。

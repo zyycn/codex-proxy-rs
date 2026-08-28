@@ -24,10 +24,9 @@ use crate::{
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-            ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels, ProviderQuota,
-            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
-            ProviderResetCredits, ProviderUsageStatistics, ProviderUsageStatisticsRequest,
-            QuotaLocalUsageAttribution,
+            ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels,
+            ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
+            ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
         },
     },
     ports::{provider::ProviderAdminRegistry, store::AccountStore},
@@ -81,12 +80,12 @@ pub trait AccountsService: Send + Sync {
         refresh: bool,
     ) -> Result<AccountDirectoryItem, AdminError>;
 
-    async fn usage_statistics(
+    async fn profile_statistics(
         &self,
-        _request: ProviderUsageStatisticsRequest,
-    ) -> Result<ProviderUsageStatistics, AdminError> {
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileStatistics, AdminError> {
         Err(AdminError::invalid(
-            "Provider usage statistics are not supported",
+            "Provider profile statistics are not supported",
         ))
     }
 
@@ -548,15 +547,15 @@ impl AccountsService for DefaultAccountsService {
         self.load_directory_item(account_id, refresh).await
     }
 
-    async fn usage_statistics(
+    async fn profile_statistics(
         &self,
-        request: ProviderUsageStatisticsRequest,
-    ) -> Result<ProviderUsageStatistics, AdminError> {
-        let (_, provider) = self.provider_for_account(&request.account_id).await?;
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileStatistics, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
         provider
-            .usage_statistics(request)
+            .profile_statistics(account_id)
             .await
-            .map_err(|error| map_provider_error(error, "provider usage statistics"))
+            .map_err(|error| map_provider_error(error, "provider profile statistics"))
     }
 
     async fn reset_credits(

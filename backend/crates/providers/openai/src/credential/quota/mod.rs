@@ -7,23 +7,15 @@
 mod document;
 pub(crate) mod evidence;
 pub(crate) mod snapshot;
-mod usage_statistics;
 
 pub use snapshot::{
     CodexAccountQuotaSnapshot, CodexQuotaFact, CodexQuotaWindow, CodexQuotaWindowKind,
     CodexQuotaWindowRole, parse_codex_quota_usage,
 };
-pub use usage_statistics::{
-    CodexUsageStatistics, CodexUsageStatisticsCycle, CodexUsageStatisticsDay,
-    CodexUsageStatisticsModel, CodexUsageStatisticsServiceTier, CodexUsageStatisticsSummary,
-    CodexUsageStatisticsTokens,
-};
-
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{DateTime, FixedOffset, Utc};
 use gateway_core::engine::credential::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
@@ -42,7 +34,6 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::transport::profile::CodexWireProfileState;
-use crate::transport::usage_statistics::CodexDailyUsageReport;
 use crate::transport::{
     CodexBackendClient, CodexClientError, CodexRateLimitResetCredits,
     CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
@@ -151,57 +142,6 @@ pub enum CodexResetCreditsError {
     ConsumeResultUnknown,
 }
 
-/// 官方每日用量统计查询失败。
-#[derive(Error)]
-pub enum CodexUsageStatisticsError {
-    #[error("Codex usage-statistics request is invalid")]
-    InvalidRequest,
-    #[error("Codex usage-statistics credential data is invalid")]
-    InvalidCredentialData,
-    #[error("Codex OAuth access token must be refreshed before querying usage statistics")]
-    CredentialRefreshRequired { upstream_body: Option<String> },
-    #[error("Codex usage-statistics account was not found")]
-    NotFound,
-    #[error("provider account store is unavailable: {detail}")]
-    Store { detail: String },
-    #[error("Codex usage-statistics quota window is unavailable")]
-    QuotaWindowUnavailable,
-    #[error("Codex usage-statistics upstream returned HTTP {status}")]
-    Upstream {
-        status: u16,
-        body: String,
-        retry_after_seconds: Option<u64>,
-    },
-    #[error("Codex usage-statistics query transport is unavailable")]
-    TransportUnavailable,
-}
-
-impl std::fmt::Debug for CodexUsageStatisticsError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidRequest => formatter.write_str("InvalidRequest"),
-            Self::InvalidCredentialData => formatter.write_str("InvalidCredentialData"),
-            Self::CredentialRefreshRequired { .. } => {
-                formatter.write_str("CredentialRefreshRequired { upstream_body: <redacted> }")
-            }
-            Self::NotFound => formatter.write_str("NotFound"),
-            Self::Store { .. } => formatter.write_str("Store { detail: <redacted> }"),
-            Self::QuotaWindowUnavailable => formatter.write_str("QuotaWindowUnavailable"),
-            Self::Upstream {
-                status,
-                retry_after_seconds,
-                ..
-            } => formatter
-                .debug_struct("Upstream")
-                .field("status", status)
-                .field("body", &"<redacted>")
-                .field("retry_after_seconds", retry_after_seconds)
-                .finish(),
-            Self::TransportUnavailable => formatter.write_str("TransportUnavailable"),
-        }
-    }
-}
-
 impl std::fmt::Debug for CodexResetCreditsError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -305,21 +245,6 @@ enum CodexQuotaFetchError {
 enum ResetCreditAttemptError {
     InvalidCredential,
     Upstream(CodexClientError),
-}
-
-enum DailyUsageAttemptError {
-    InvalidCredential,
-    Upstream(CodexClientError),
-}
-
-enum DailyUsageFetchError {
-    InvalidCredential,
-    Upstream(CodexClientError),
-}
-
-struct FetchedDailyUsage {
-    model_breakdown: Value,
-    daily_totals: Value,
 }
 
 impl CodexQuotaSchedulingProjection {
@@ -572,113 +497,6 @@ impl CodexCredentialQuotaService {
         list_reset_credits_once(&client, &prepared, &request_id)
             .await
             .map_err(|error| map_reset_credit_attempt_error(error, false))
-    }
-
-    /// 查询当前账号的官方每日用量报表，并把报表范围锚定到最接近七天的额度窗口。
-    pub async fn usage_statistics(
-        &self,
-        account_id: &ProviderAccountId,
-        cycle_offset: i8,
-        utc_offset_minutes: i16,
-    ) -> Result<CodexUsageStatistics, CodexUsageStatisticsError> {
-        const MAX_CYCLE_OFFSET: u8 = 8;
-        const MAX_UTC_OFFSET_MINUTES: i16 = 14 * 60;
-        const TARGET_WINDOW_SECONDS: u64 = 7 * 24 * 60 * 60;
-
-        if !(-(MAX_CYCLE_OFFSET as i8)..=0).contains(&cycle_offset)
-            || !(-MAX_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&utc_offset_minutes)
-        {
-            return Err(CodexUsageStatisticsError::InvalidRequest);
-        }
-        let account = self
-            .store
-            .get_account(account_id)
-            .await
-            .map_err(|error| CodexUsageStatisticsError::Store {
-                detail: error.to_string(),
-            })?
-            .filter(|account| account.provider().as_str() == "openai")
-            .ok_or(CodexUsageStatisticsError::NotFound)?;
-        let observed_at = SystemTime::now();
-        if !access_token_is_current(&account, observed_at) {
-            return Err(CodexUsageStatisticsError::CredentialRefreshRequired {
-                upstream_body: None,
-            });
-        }
-        let client = CodexBackendClient::new(
-            self.http.clone(),
-            self.base_url.clone(),
-            self.profile.clone(),
-        );
-        let FetchedCodexQuota { account, value } = self
-            .fetch_usage(&client, &account)
-            .await
-            .map_err(map_statistics_quota_fetch_error)?;
-        let snapshot = parse_account_quota_snapshot(
-            account.id().clone(),
-            account.revision(),
-            observed_at,
-            &value,
-        )
-        .map_err(|_| CodexUsageStatisticsError::InvalidCredentialData)?;
-        let window = snapshot
-            .windows()
-            .iter()
-            .filter(|window| window.is_account_wide())
-            .filter_map(|window| {
-                Some((
-                    window,
-                    window.window_seconds()?.abs_diff(TARGET_WINDOW_SECONDS),
-                ))
-            })
-            .min_by_key(|(_, distance)| *distance)
-            .map(|(window, _)| window)
-            .ok_or(CodexUsageStatisticsError::QuotaWindowUnavailable)?;
-        let window_seconds = window
-            .window_seconds()
-            .filter(|seconds| *seconds > 0)
-            .ok_or(CodexUsageStatisticsError::QuotaWindowUnavailable)?;
-        let end_at = window
-            .reset_at()
-            .ok_or(CodexUsageStatisticsError::QuotaWindowUnavailable)?;
-        let window_delta = chrono::TimeDelta::seconds(
-            i64::try_from(window_seconds)
-                .map_err(|_| CodexUsageStatisticsError::QuotaWindowUnavailable)?,
-        );
-        let current_start_at = end_at - window_delta;
-        let timezone = FixedOffset::east_opt(i32::from(utc_offset_minutes) * 60)
-            .ok_or(CodexUsageStatisticsError::InvalidRequest)?;
-        let now = DateTime::<Utc>::from(observed_at);
-        let period = usage_statistics::statistics_period(
-            current_start_at,
-            end_at,
-            window_seconds,
-            cycle_offset,
-            timezone,
-            now,
-        )
-        .ok_or(CodexUsageStatisticsError::InvalidRequest)?;
-        let fetched = self
-            .fetch_daily_usage(
-                &client,
-                &account,
-                period.query_start_date,
-                period.query_end_date,
-            )
-            .await
-            .map_err(map_daily_usage_fetch_error)?;
-
-        Ok(usage_statistics::build_usage_statistics(
-            usage_statistics::BuildUsageStatistics {
-                period,
-                timezone,
-                current_used_percent: window.used_percent(),
-                now,
-                model_breakdown: &fetched.model_breakdown,
-                daily_totals: &fetched.daily_totals,
-                max_cycle_offset: MAX_CYCLE_OFFSET,
-            },
-        ))
     }
 
     /// 消费一张主动额度重置卡。相同账号在本进程内串行，且不做传输重试。
@@ -1390,114 +1208,6 @@ impl CodexCredentialQuotaService {
                 })
             }
         }
-    }
-
-    async fn fetch_daily_usage(
-        &self,
-        client: &CodexBackendClient,
-        account: &ProviderAccount,
-        start_date: chrono::NaiveDate,
-        end_date: chrono::NaiveDate,
-    ) -> Result<FetchedDailyUsage, DailyUsageFetchError> {
-        let credential = self
-            .repository
-            .load_runtime_credential(account)
-            .await
-            .map_err(|_| DailyUsageFetchError::InvalidCredential)?;
-        let prepared = PreparedCodexRuntimeCredential {
-            account: account.clone(),
-            credential,
-        };
-        let result = fetch_daily_usage_once(client, &prepared, start_date, end_date).await;
-        match result {
-            Ok(value) => Ok(value),
-            Err(DailyUsageAttemptError::InvalidCredential) => {
-                Err(DailyUsageFetchError::InvalidCredential)
-            }
-            Err(DailyUsageAttemptError::Upstream(error)) => {
-                Err(DailyUsageFetchError::Upstream(error))
-            }
-        }
-    }
-}
-
-async fn fetch_daily_usage_once(
-    client: &CodexBackendClient,
-    prepared: &PreparedCodexRuntimeCredential,
-    start_date: chrono::NaiveDate,
-    end_date: chrono::NaiveDate,
-) -> Result<FetchedDailyUsage, DailyUsageAttemptError> {
-    let authorization = prepared
-        .credential
-        .authentication
-        .authorization_header()
-        .map_err(|_| DailyUsageAttemptError::InvalidCredential)?;
-    let model_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
-    let totals_request_id = format!("usage_statistics_{}", Uuid::now_v7().simple());
-    let model_breakdown = client.fetch_daily_usage(
-        CodexRequestContext::auxiliary(
-            authorization.expose_secret(),
-            prepared.account.upstream_account_id(),
-            &model_request_id,
-            None,
-        ),
-        CodexDailyUsageReport::PersonalModelCredits,
-        start_date,
-        end_date,
-    );
-    let daily_totals = client.fetch_daily_usage(
-        CodexRequestContext::auxiliary(
-            authorization.expose_secret(),
-            prepared.account.upstream_account_id(),
-            &totals_request_id,
-            None,
-        ),
-        CodexDailyUsageReport::PersonalTokenTotals,
-        start_date,
-        end_date,
-    );
-    let (model_breakdown, daily_totals) = tokio::try_join!(model_breakdown, daily_totals)
-        .map_err(DailyUsageAttemptError::Upstream)?;
-    Ok(FetchedDailyUsage {
-        model_breakdown,
-        daily_totals,
-    })
-}
-
-fn map_statistics_quota_fetch_error(error: CodexQuotaFetchError) -> CodexUsageStatisticsError {
-    match error {
-        CodexQuotaFetchError::InvalidCredential => CodexUsageStatisticsError::InvalidCredentialData,
-        CodexQuotaFetchError::Upstream { error, .. } => map_statistics_client_error(error),
-    }
-}
-
-fn map_daily_usage_fetch_error(error: DailyUsageFetchError) -> CodexUsageStatisticsError {
-    match error {
-        DailyUsageFetchError::InvalidCredential => CodexUsageStatisticsError::InvalidCredentialData,
-        DailyUsageFetchError::Upstream(error) => map_statistics_client_error(error),
-    }
-}
-
-fn map_statistics_client_error(error: CodexClientError) -> CodexUsageStatisticsError {
-    match error {
-        CodexClientError::Upstream { status, body, .. }
-            if status == reqwest::StatusCode::UNAUTHORIZED =>
-        {
-            CodexUsageStatisticsError::CredentialRefreshRequired {
-                upstream_body: Some(body),
-            }
-        }
-        CodexClientError::Upstream {
-            status,
-            body,
-            retry_after_seconds,
-            ..
-        } => CodexUsageStatisticsError::Upstream {
-            status: status.as_u16(),
-            body,
-            retry_after_seconds,
-        },
-        _ => CodexUsageStatisticsError::TransportUnavailable,
     }
 }
 

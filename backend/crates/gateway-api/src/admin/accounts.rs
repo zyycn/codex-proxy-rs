@@ -28,11 +28,10 @@ use gateway_admin::model::{
         AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit,
         CredentialDeletion, CredentialDeletionResult, CredentialImportResult, CredentialMutation,
         CredentialMutationResult, ImportCredentials, ProviderDocument, ProviderModels,
-        ProviderQuota, ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult,
-        ProviderResetCredits, ProviderUsageStatistics, ProviderUsageStatisticsDay,
-        ProviderUsageStatisticsModel, ProviderUsageStatisticsRequest,
-        ProviderUsageStatisticsSummary, ProviderUsageStatisticsTokens, RotateCredential,
-        StartAuthorization,
+        ProviderProfileActivityInsights, ProviderProfileDailyUsage, ProviderProfileInvocation,
+        ProviderProfileStatistics, ProviderProfileStatisticsSummary, ProviderQuota,
+        ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
+        RotateCredential, StartAuthorization,
     },
 };
 use gateway_core::{
@@ -61,8 +60,6 @@ const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 64 * 1024;
 const MAX_ACCOUNT_DELETE_BATCH: usize = 200;
 const MAX_ACCOUNT_GROUP_BATCH: usize = 1000;
-const MAX_USAGE_CYCLE_OFFSET: i8 = 8;
-const MAX_UTC_OFFSET_MINUTES: i16 = 14 * 60;
 
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -425,35 +422,6 @@ impl AccountIdQuery {
     }
 }
 
-/// 官方每日用量统计查询。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountUsageStatisticsQuery {
-    pub account_id: String,
-    pub cycle_offset: Option<i8>,
-    pub utc_offset_minutes: Option<i16>,
-}
-
-impl AccountUsageStatisticsQuery {
-    pub fn into_request(self) -> Result<ProviderUsageStatisticsRequest, WireValidationError> {
-        require_account_id(&self.account_id, "accountId")?;
-        let cycle_offset = self.cycle_offset.unwrap_or_default();
-        if !(-MAX_USAGE_CYCLE_OFFSET..=0).contains(&cycle_offset) {
-            return Err(WireValidationError::new("cycleOffset"));
-        }
-        let utc_offset_minutes = self.utc_offset_minutes.unwrap_or_default();
-        if !(-MAX_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&utc_offset_minutes) {
-            return Err(WireValidationError::new("utcOffsetMinutes"));
-        }
-        Ok(ProviderUsageStatisticsRequest {
-            account_id: ProviderAccountId::new(self.account_id)
-                .map_err(|_| WireValidationError::new("accountId"))?,
-            cycle_offset,
-            utc_offset_minutes,
-        })
-    }
-}
-
 /// 敏感导出的固定 query；IDs 使用逗号分隔，禁止隐式导出全部账号。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -621,180 +589,122 @@ pub struct AccountQuotaData {
     pub account: AccountView,
 }
 
-/// Provider 官方每日用量统计响应。
+/// Provider 官方个人资料统计响应。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsData {
-    pub cycle: AccountUsageStatisticsCycleView,
-    pub summary: AccountUsageStatisticsSummaryView,
-    pub models: Vec<AccountUsageStatisticsModelView>,
-    pub daily: Vec<AccountUsageStatisticsDayView>,
+pub struct AccountProfileStatisticsData {
+    pub display_name: Option<String>,
+    pub username: Option<String>,
+    pub image_url: Option<String>,
+    pub has_stats_error: bool,
+    pub summary: AccountProfileStatisticsSummaryView,
+    pub daily_usage: Option<Vec<AccountProfileDailyUsageView>>,
+    pub activity_insights: AccountProfileActivityInsightsView,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsCycleView {
-    pub offset: i8,
-    pub start_at: String,
-    pub end_at: String,
-    pub window_seconds: u64,
-    pub used_percent: Option<f64>,
-    pub is_current: bool,
-    pub can_go_previous: bool,
-    pub can_go_next: bool,
+pub struct AccountProfileStatisticsSummaryView {
+    pub total_text_tokens: Option<u64>,
+    pub peak_tokens: Option<u64>,
+    pub longest_task_duration_ms: Option<u64>,
+    pub current_streak_days: Option<u64>,
+    pub longest_streak_days: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsTokensView {
-    pub uncached_input: u64,
-    pub cached_input: u64,
-    pub output: u64,
-    pub total: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsCostView {
-    pub currency: String,
-    pub amount: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsSummaryView {
-    pub tokens: AccountUsageStatisticsTokensView,
-    pub estimated_cost: Option<AccountUsageStatisticsCostView>,
-    pub projected_tokens: Option<u64>,
-    pub projected_cost: Option<AccountUsageStatisticsCostView>,
-    pub day_count: u32,
-    pub has_unknown_pricing: bool,
-    pub has_missing_token_data: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsModelView {
-    pub key: String,
-    pub model: String,
-    pub service_tier: String,
-    pub credit_share: Option<f64>,
-    pub quota_share: Option<f64>,
-    pub tokens: AccountUsageStatisticsTokensView,
-    pub estimated_cost: Option<AccountUsageStatisticsCostView>,
-    pub has_unknown_pricing: bool,
-    pub has_estimated_allocation: bool,
-    pub has_rate_fallback: bool,
-    pub has_missing_token_data: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountUsageStatisticsDayView {
+pub struct AccountProfileDailyUsageView {
     pub date: String,
-    pub credit_share: Option<f64>,
-    pub tokens: AccountUsageStatisticsTokensView,
-    pub estimated_cost: Option<AccountUsageStatisticsCostView>,
-    pub has_unknown_pricing: bool,
-    pub has_missing_token_data: bool,
-    pub is_boundary_day: bool,
+    pub tokens: u64,
 }
 
-impl From<ProviderUsageStatistics> for AccountUsageStatisticsData {
-    fn from(statistics: ProviderUsageStatistics) -> Self {
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProfileActivityInsightsView {
+    pub fast_mode_percent: Option<f64>,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_effort_percent: Option<f64>,
+    pub skills_explored: Option<u64>,
+    pub total_skills_used: Option<u64>,
+    pub total_threads: Option<u64>,
+    pub invocations: Option<Vec<AccountProfileInvocationView>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProfileInvocationView {
+    #[serde(rename = "type")]
+    pub invocation_type: String,
+    pub plugin_id: Option<String>,
+    pub plugin_name: Option<String>,
+    pub skill_id: Option<String>,
+    pub skill_name: Option<String>,
+    pub usage_count: Option<u64>,
+}
+
+impl From<ProviderProfileStatistics> for AccountProfileStatisticsData {
+    fn from(statistics: ProviderProfileStatistics) -> Self {
         Self {
-            cycle: AccountUsageStatisticsCycleView {
-                offset: statistics.cycle.offset,
-                start_at: statistics.cycle.start_at.to_rfc3339(),
-                end_at: statistics.cycle.end_at.to_rfc3339(),
-                window_seconds: statistics.cycle.window_seconds,
-                used_percent: statistics.cycle.used_percent,
-                is_current: statistics.cycle.is_current,
-                can_go_previous: statistics.cycle.can_go_previous,
-                can_go_next: statistics.cycle.can_go_next,
-            },
-            summary: account_usage_statistics_summary_view(statistics.summary),
-            models: statistics
-                .models
-                .into_iter()
-                .map(account_usage_statistics_model_view)
-                .collect(),
-            daily: statistics
-                .daily
-                .into_iter()
-                .map(account_usage_statistics_day_view)
-                .collect(),
+            display_name: statistics.display_name,
+            username: statistics.username,
+            image_url: statistics.image_url,
+            has_stats_error: statistics.has_stats_error,
+            summary: profile_statistics_summary_view(statistics.summary),
+            daily_usage: statistics
+                .daily_usage
+                .map(|daily| daily.into_iter().map(profile_daily_usage_view).collect()),
+            activity_insights: profile_activity_insights_view(statistics.activity_insights),
         }
     }
 }
 
-fn account_usage_statistics_tokens_view(
-    tokens: ProviderUsageStatisticsTokens,
-) -> AccountUsageStatisticsTokensView {
-    AccountUsageStatisticsTokensView {
-        uncached_input: tokens.uncached_input,
-        cached_input: tokens.cached_input,
-        output: tokens.output,
-        total: tokens.total,
+const fn profile_statistics_summary_view(
+    summary: ProviderProfileStatisticsSummary,
+) -> AccountProfileStatisticsSummaryView {
+    AccountProfileStatisticsSummaryView {
+        total_text_tokens: summary.total_text_tokens,
+        peak_tokens: summary.peak_tokens,
+        longest_task_duration_ms: summary.longest_task_duration_ms,
+        current_streak_days: summary.current_streak_days,
+        longest_streak_days: summary.longest_streak_days,
     }
 }
 
-fn account_usage_statistics_cost_view(
-    cost: gateway_admin::model::observability::CurrencyCost,
-) -> AccountUsageStatisticsCostView {
-    AccountUsageStatisticsCostView {
-        currency: cost.currency,
-        amount: cost.amount.to_string(),
+fn profile_daily_usage_view(daily: ProviderProfileDailyUsage) -> AccountProfileDailyUsageView {
+    AccountProfileDailyUsageView {
+        date: daily.date.to_string(),
+        tokens: daily.tokens,
     }
 }
 
-fn account_usage_statistics_summary_view(
-    summary: ProviderUsageStatisticsSummary,
-) -> AccountUsageStatisticsSummaryView {
-    AccountUsageStatisticsSummaryView {
-        tokens: account_usage_statistics_tokens_view(summary.tokens),
-        estimated_cost: summary
-            .estimated_cost
-            .map(account_usage_statistics_cost_view),
-        projected_tokens: summary.projected_tokens,
-        projected_cost: summary
-            .projected_cost
-            .map(account_usage_statistics_cost_view),
-        day_count: summary.day_count,
-        has_unknown_pricing: summary.has_unknown_pricing,
-        has_missing_token_data: summary.has_missing_token_data,
+fn profile_activity_insights_view(
+    insights: ProviderProfileActivityInsights,
+) -> AccountProfileActivityInsightsView {
+    AccountProfileActivityInsightsView {
+        fast_mode_percent: insights.fast_mode_percent,
+        reasoning_effort: insights.reasoning_effort,
+        reasoning_effort_percent: insights.reasoning_effort_percent,
+        skills_explored: insights.skills_explored,
+        total_skills_used: insights.total_skills_used,
+        total_threads: insights.total_threads,
+        invocations: insights.invocations.map(|invocations| {
+            invocations
+                .into_iter()
+                .map(profile_invocation_view)
+                .collect()
+        }),
     }
 }
 
-fn account_usage_statistics_model_view(
-    model: ProviderUsageStatisticsModel,
-) -> AccountUsageStatisticsModelView {
-    AccountUsageStatisticsModelView {
-        key: model.key,
-        model: model.model,
-        service_tier: model.service_tier.as_str().to_owned(),
-        credit_share: model.credit_share,
-        quota_share: model.quota_share,
-        tokens: account_usage_statistics_tokens_view(model.tokens),
-        estimated_cost: model.estimated_cost.map(account_usage_statistics_cost_view),
-        has_unknown_pricing: model.has_unknown_pricing,
-        has_estimated_allocation: model.has_estimated_allocation,
-        has_rate_fallback: model.has_rate_fallback,
-        has_missing_token_data: model.has_missing_token_data,
-    }
-}
-
-fn account_usage_statistics_day_view(
-    day: ProviderUsageStatisticsDay,
-) -> AccountUsageStatisticsDayView {
-    AccountUsageStatisticsDayView {
-        date: day.date.to_string(),
-        credit_share: day.credit_share,
-        tokens: account_usage_statistics_tokens_view(day.tokens),
-        estimated_cost: day.estimated_cost.map(account_usage_statistics_cost_view),
-        has_unknown_pricing: day.has_unknown_pricing,
-        has_missing_token_data: day.has_missing_token_data,
-        is_boundary_day: day.is_boundary_day,
+fn profile_invocation_view(invocation: ProviderProfileInvocation) -> AccountProfileInvocationView {
+    AccountProfileInvocationView {
+        invocation_type: invocation.invocation_type,
+        plugin_id: invocation.plugin_id,
+        plugin_name: invocation.plugin_name,
+        skill_id: invocation.skill_id,
+        skill_name: invocation.skill_name,
+        usage_count: invocation.usage_count,
     }
 }
 
@@ -1372,8 +1282,8 @@ where
         )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
-            "/api/admin/accounts/usage-statistics",
-            get(account_usage_statistics::<S>),
+            "/api/admin/accounts/profile-statistics",
+            get(account_profile_statistics::<S>),
         )
         .route(
             "/api/admin/accounts/reset-credits",
@@ -1709,24 +1619,24 @@ where
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
-async fn account_usage_statistics<S>(
+async fn account_profile_statistics<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountUsageStatisticsQuery>,
+    Query(query): Query<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    let request = query.into_request().map_err(map_wire_error)?;
+    let account_id = query.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .accounts()
-        .usage_statistics(request)
+        .profile_statistics(&account_id)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountUsageStatisticsData::from(result)),
+        AdminEnvelope::ok(AccountProfileStatisticsData::from(result)),
     ))
 }
 
@@ -2172,7 +2082,7 @@ fn account_currency_cost_view(cost: &AccountCost) -> CurrencyCostView {
     CurrencyCostView {
         currency: cost.currency.clone(),
         estimated_amount: cost.amount.as_str().to_owned(),
-        estimated_amount_display: format!("{} {}", cost.currency, cost.amount.as_str()),
+        estimated_amount_display: format_decimal_currency(cost.amount.as_str(), &cost.currency),
     }
 }
 

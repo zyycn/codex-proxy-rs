@@ -97,8 +97,14 @@ impl PgAdminAccountStore {
             .iter()
             .map(|window| window.account_id.clone())
             .collect::<Vec<_>>();
-        let (usage_rows, model_rows, model_cost_rows) = futures::try_join!(
+        let (usage_rows, cost_rows, model_rows, model_cost_rows) = futures::try_join!(
             sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
+                .bind(account_ids.clone())
+                .bind(keys.clone())
+                .bind(starts.clone())
+                .bind(ends.clone())
+                .fetch_all(&self.pool),
+            sqlx::query(ACCOUNT_USAGE_COSTS_BY_WINDOWS_SQL)
                 .bind(account_ids.clone())
                 .bind(keys.clone())
                 .bind(starts.clone())
@@ -123,6 +129,11 @@ impl PgAdminAccountStore {
                 postgres_unavailable("load provider account quota window usage"),
             )
         })?;
+        let mut costs_by_window = BTreeMap::<(String, String), Vec<AccountCost>>::new();
+        for row in &cost_rows {
+            let (key, cost) = admin_account_usage_window_cost(row)?;
+            costs_by_window.entry(key).or_default().push(cost);
+        }
         let mut model_costs = BTreeMap::<(String, String, String), Vec<AccountCost>>::new();
         for row in &model_cost_rows {
             let (key, cost) = admin_account_usage_window_model_cost(row)?;
@@ -145,6 +156,9 @@ impl PgAdminAccountStore {
             .map(admin_account_usage_window)
             .collect::<AdminStoreResult<Vec<_>>>()?;
         for result in &mut results {
+            result.usage.costs = costs_by_window
+                .remove(&(result.account_id.clone(), result.key.clone()))
+                .unwrap_or_default();
             result.usage.models = models_by_window
                 .remove(&(result.account_id.clone(), result.key.clone()))
                 .unwrap_or_default();
