@@ -56,7 +56,7 @@ const hoverOpenTimer = shallowRef<number>()
 const viewportTarget = computed(() => (open.value && typeof window !== 'undefined' ? window : null))
 
 const popoverClasses = computed(() => [
-  'fixed z-50 overflow-visible rounded-cp-lg border-0 bg-cp-bg-container text-left text-cp-text shadow-cp',
+  'fixed z-50 overflow-visible rounded-cp-lg border-0 bg-cp-bg-elevated text-left text-cp-text shadow-cp',
   props.animatePosition
     ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
     : undefined,

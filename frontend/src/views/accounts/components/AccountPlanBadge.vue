@@ -13,15 +13,15 @@ const props = withDefaults(
 )
 
 const fallbackPalettes = [
-  'bg-cp-info-bg text-cp-info-text shadow-cp-input',
-  'bg-cp-success-bg text-cp-success-text shadow-cp-input',
-  'bg-cp-status-normal-bg text-cp-status-normal-text shadow-cp-input',
-  'bg-cp-warning-bg text-cp-warning-text shadow-cp-input',
+  'bg-cp-info-bg text-cp-info-text shadow-cp-tertiary',
+  'bg-cp-success-bg text-cp-success-text shadow-cp-tertiary',
+  'bg-cp-status-normal-bg text-cp-status-normal-text shadow-cp-tertiary',
+  'bg-cp-warning-bg text-cp-warning-text shadow-cp-tertiary',
 ]
 
 const usageTierPalettes: Record<string, string> = {
-  pro: 'bg-cp-account-plan-pro-bg text-cp-account-plan-pro shadow-cp-input',
-  prolite: 'bg-cp-account-plan-pro-lite-bg text-cp-account-plan-pro-lite shadow-cp-input',
+  pro: 'bg-cp-account-plan-pro-bg text-cp-account-plan-pro shadow-cp-tertiary',
+  prolite: 'bg-cp-account-plan-pro-lite-bg text-cp-account-plan-pro-lite shadow-cp-tertiary',
 }
 
 const label = computed(() => props.planType?.trim() || 'Free')

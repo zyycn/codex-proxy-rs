@@ -28,7 +28,7 @@ const resolvedIcon = computed(() => props.icon ?? Inbox)
   <div
     class="grid justify-items-center text-center"
     :class="[
-      surface === 'none' ? 'bg-transparent' : 'rounded-cp-lg bg-cp-bg-elevated',
+      surface === 'none' ? 'bg-transparent' : 'rounded-cp-lg bg-cp-fill-alter',
       size === 'sm' ? 'gap-2 px-4 py-5' : 'gap-3 px-6 py-8',
     ]"
   >

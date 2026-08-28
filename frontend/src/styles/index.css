@@ -30,6 +30,7 @@
   --color-cp-fill-secondary: var(--cp-color-fill-secondary);
   --color-cp-fill-tertiary: var(--cp-color-fill-tertiary);
   --color-cp-fill-quaternary: var(--cp-color-fill-quaternary);
+  --color-cp-fill-alter: var(--cp-color-fill-alter);
   --color-cp-border: var(--cp-color-border);
   --color-cp-border-secondary: var(--cp-color-border-secondary);
   --color-cp-split: var(--cp-color-split);
@@ -59,6 +60,7 @@
   --color-cp-control-outline: var(--cp-control-outline);
   --color-cp-menu-item-selected-bg: var(--cp-menu-item-selected-bg);
   --color-cp-progress-remaining: var(--cp-progress-remaining-color);
+  --color-cp-modal-bg: var(--cp-modal-bg);
 
   --color-cp-info: var(--cp-color-info);
   --color-cp-info-hover: var(--cp-color-info-hover);
@@ -66,6 +68,11 @@
   --color-cp-info-bg: var(--cp-color-info-bg);
   --color-cp-info-border: var(--cp-color-info-border);
   --color-cp-info-text: var(--cp-color-info-text);
+  --color-cp-activity-level-0: var(--cp-activity-level-0);
+  --color-cp-activity-level-1: var(--cp-activity-level-1);
+  --color-cp-activity-level-2: var(--cp-activity-level-2);
+  --color-cp-activity-level-3: var(--cp-activity-level-3);
+  --color-cp-activity-level-4: var(--cp-activity-level-4);
   --color-cp-status-normal: var(--cp-color-status-normal);
   --color-cp-status-normal-hover: var(--cp-color-status-normal-hover);
   --color-cp-status-normal-active: var(--cp-color-status-normal-active);

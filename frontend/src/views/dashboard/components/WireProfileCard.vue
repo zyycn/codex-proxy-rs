@@ -205,7 +205,7 @@ function providerLabel(provider: string) {
       <div v-else class="flex flex-1">
         <section
           aria-label="请求身份组成"
-          class="grid min-w-0 flex-1 content-between gap-6 rounded-cp-lg bg-cp-bg-elevated px-5 py-5.5 sm:px-6 sm:py-5"
+          class="grid min-w-0 flex-1 content-between gap-6 rounded-cp-lg bg-cp-fill-alter px-5 py-5.5 sm:px-6 sm:py-5"
           :class="verifiedLabel || checkedLabel
             ? 'sm:grid-rows-[auto_minmax(0,1fr)_auto_auto]'
             : 'sm:grid-rows-[auto_minmax(0,1fr)_auto]'"

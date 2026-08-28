@@ -21,11 +21,11 @@ const modeOptions = [
   { label: '累计', value: 'cumulative' },
 ]
 const levelClasses: Record<ProfileActivityLevel, string> = {
-  0: 'bg-cp-fill-quaternary',
-  1: 'bg-cp-info-bg',
-  2: 'bg-cp-info-border',
-  3: 'bg-cp-info-hover',
-  4: 'bg-cp-info',
+  0: 'bg-cp-activity-level-0',
+  1: 'bg-cp-activity-level-1',
+  2: 'bg-cp-activity-level-2',
+  3: 'bg-cp-activity-level-3',
+  4: 'bg-cp-activity-level-4',
 }
 const grid = computed(() => buildProfileActivityGrid(props.dailyUsage ?? [], mode.value))
 const rangeLabel = computed(() => `${grid.value.rangeStart} 至 ${grid.value.rangeEnd}`)

@@ -111,7 +111,7 @@ const triggerClasses = computed(() => [
 ])
 
 const popoverClasses = computed(() => [
-  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-container p-1 shadow-cp',
+  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-elevated p-1 shadow-cp',
   props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
 ])
 

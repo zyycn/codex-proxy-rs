@@ -7,7 +7,7 @@ import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
     <span class="sr-only">正在加载官方个人资料</span>
 
     <section
-      class="grid gap-4 rounded-cp-lg bg-cp-bg-elevated p-4 shadow-cp-input sm:p-5 lg:grid-cols-[minmax(310px,1.05fr)_minmax(0,1.95fr)] lg:items-center lg:gap-4"
+      class="grid gap-4 rounded-cp-lg bg-cp-fill-alter p-4 sm:p-5 lg:grid-cols-[minmax(310px,1.05fr)_minmax(0,1.95fr)] lg:items-center lg:gap-4"
       aria-hidden="true"
     >
       <div class="flex min-w-0 items-center gap-3.5">

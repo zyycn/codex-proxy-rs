@@ -103,7 +103,7 @@ const visibleFiles = computed(() => [
           <BaseScrollbar
             max-height="360px"
           >
-            <div class="mx-3 mb-3 rounded-cp bg-cp-bg-container px-3.5 py-3 shadow-cp-input">
+            <div class="mx-3 mb-3 rounded-cp bg-cp-bg-container px-3.5 py-3 shadow-cp-tertiary">
               <pre
                 class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-sm leading-[1.65] font-emphasis text-cp-text"
                 v-text="file.content"

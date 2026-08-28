@@ -45,7 +45,7 @@ const colorClasses = {
         <article
           v-for="message in toast.messages"
           :key="message.id"
-          class="pointer-events-auto flex min-h-16 w-90 max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-cp-card bg-cp-bg-container px-3.5 py-3 shadow-cp"
+          class="pointer-events-auto flex min-h-16 w-90 max-w-[calc(100vw-1.5rem)] items-center gap-3 rounded-cp-card bg-cp-bg-elevated px-3.5 py-3 shadow-cp"
           :role="message.type === 'error' ? 'alert' : 'status'"
           aria-atomic="true"
         >

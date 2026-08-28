@@ -65,6 +65,7 @@ export type ThemeTokenName
     | '--cp-color-fill-secondary'
     | '--cp-color-fill-tertiary'
     | '--cp-color-fill-quaternary'
+    | '--cp-color-fill-alter'
     | '--cp-color-border'
     | '--cp-color-border-secondary'
     | '--cp-color-split'
@@ -103,6 +104,7 @@ export type ThemeTokenName
     | '--cp-button-primary-active-bg'
     | '--cp-brand-mark-bg'
     | '--cp-card-bg'
+    | '--cp-modal-bg'
     | '--cp-table-header-bg'
     | '--cp-table-row-bg'
     | '--cp-table-row-stripe-bg'
@@ -127,6 +129,11 @@ export type ThemeTokenName
     | '--cp-color-info-bg'
     | '--cp-color-info-border'
     | '--cp-color-info-text'
+    | '--cp-activity-level-0'
+    | '--cp-activity-level-1'
+    | '--cp-activity-level-2'
+    | '--cp-activity-level-3'
+    | '--cp-activity-level-4'
     | '--cp-color-success'
     | '--cp-color-success-bg'
     | '--cp-color-success-bg-hover'
@@ -270,6 +277,11 @@ interface ThemeSurfaceMap {
   colorShadow: string
 }
 
+/** Map Token 经过视觉角色映射后供通用组件消费的 Alias。 */
+interface ThemeAliasMap {
+  colorFillAlter: string
+}
+
 interface ThemeShadowMap {
   boxShadow: string
   boxShadowSecondary: string
@@ -288,6 +300,7 @@ interface ThemeComponentMap {
   buttonPrimaryActiveBg: string
   brandMarkBg: string
   cardBg: string
+  modalBg: string
   tableHeaderBg: string
   tableRowBg: string
   tableRowStripeBg: string
@@ -321,6 +334,14 @@ interface ThemeSemanticMap {
   success: FunctionalColorMap
   warning: FunctionalColorMap
   error: FunctionalColorMap
+}
+
+interface ThemeDataMap {
+  activityLevel0: string
+  activityLevel1: string
+  activityLevel2: string
+  activityLevel3: string
+  activityLevel4: string
 }
 
 interface ThemeDimensionMap {
@@ -377,21 +398,34 @@ export function resolveTheme(
     appearance,
   )
   const surfaces = deriveThemeSurfaceMap(name, seedTokens)
+  const aliases = deriveThemeAliasMap(surfaces)
   const primary = deriveThemePrimaryMap(seed, name, surfaces.colorBgContainer)
   const link = seedTokens.colorLink === seed
     ? primary
     : deriveThemePrimaryMap(seedTokens.colorLink, name, surfaces.colorBgContainer)
   const semantics = deriveThemeSemanticMap(name, surfaces.colorBgContainer, seedTokens)
+  const data = deriveThemeDataMap(aliases, semantics)
   const shadows = deriveThemeShadowMap(name, seedTokens.shadowStrength)
   const components = deriveThemeComponentMap(
     name,
     surfaces,
+    aliases,
     primary,
     semantics.error,
     seedTokens.shadowStrength,
   )
   const dimensions = deriveThemeDimensionMap(seedTokens, normalizedCustomization.component)
-  const tokens = toThemeTokens(surfaces, primary, link, semantics, shadows, components, dimensions)
+  const tokens = toThemeTokens(
+    surfaces,
+    aliases,
+    primary,
+    link,
+    semantics,
+    data,
+    shadows,
+    components,
+    dimensions,
+  )
   const mergedTokens: ThemeTokens = {
     ...tokens,
     ...normalizedCustomization.tokenOverrides,
@@ -600,9 +634,7 @@ function deriveNeutralLightSurfaceMap(seedTokens: ResolvedThemeSeedTokens): Them
       ? NEUTRAL_LIGHT_SURFACES.colorBgLayout
       : mix(background, colorText, 0.035),
     colorBgContainer: background,
-    colorBgElevated: baselineBackground
-      ? NEUTRAL_LIGHT_SURFACES.colorBgElevated
-      : mix(background, colorText, 0.018),
+    colorBgElevated: baselineBackground ? NEUTRAL_LIGHT_SURFACES.colorBgElevated : background,
     colorBgSpotlight: baselineBackground
       ? NEUTRAL_LIGHT_SURFACES.colorBgSpotlight
       : mix(colorText, BLACK, 0.08),
@@ -641,6 +673,12 @@ function deriveNeutralLightSurfaceMap(seedTokens: ResolvedThemeSeedTokens): Them
       ? NEUTRAL_LIGHT_SURFACES.colorTextDisabled
       : mix(colorText, background, 0.62),
     colorShadow: withAlpha(colorText, 0.38),
+  }
+}
+
+function deriveThemeAliasMap(surfaces: ThemeSurfaceMap): ThemeAliasMap {
+  return {
+    colorFillAlter: surfaces.colorFillQuaternary,
   }
 }
 
@@ -767,6 +805,19 @@ function deriveFunctionalColorMap(
   }
 }
 
+function deriveThemeDataMap(
+  aliases: ThemeAliasMap,
+  semantics: ThemeSemanticMap,
+): ThemeDataMap {
+  return {
+    activityLevel0: aliases.colorFillAlter,
+    activityLevel1: semantics.info.background,
+    activityLevel2: semantics.info.backgroundHover,
+    activityLevel3: semantics.info.backgroundActive,
+    activityLevel4: semantics.info.color,
+  }
+}
+
 function deriveThemeDimensionMap(
   seedTokens: ResolvedThemeSeedTokens,
   componentOverrides: ThemeComponentOverrides | undefined,
@@ -820,6 +871,7 @@ function deriveThemeShadowMap(theme: ThemeName, shadowStrength: number): ThemeSh
 function deriveThemeComponentMap(
   theme: ThemeName,
   surfaces: ThemeSurfaceMap,
+  aliases: ThemeAliasMap,
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
@@ -845,9 +897,10 @@ function deriveThemeComponentMap(
       buttonPrimaryActiveBg: primary.colorPrimarySolidActive,
       brandMarkBg: surfaces.colorBgElevated,
       cardBg: surfaces.colorBgContainer,
+      modalBg: surfaces.colorBgContainer,
       tableHeaderBg: surfaces.colorFillTertiary,
       tableRowBg: surfaces.colorBgContainer,
-      tableRowStripeBg: surfaces.colorBgElevated,
+      tableRowStripeBg: aliases.colorFillAlter,
       tableRowHoverBg: surfaces.colorBgTextHover,
       tableRowSelectedBg: primary.colorPrimaryBg,
       progressRemainingColor: mix(surfaces.colorBgContainer, surfaces.colorBorderSecondary, 0.92),
@@ -876,7 +929,7 @@ function deriveThemeComponentMap(
     inputHoverBg: usesNeutralInput
       ? NEUTRAL_LIGHT_INPUT.hoverBg
       : mix(surfaces.colorBgContainer, surfaces.colorFillTertiary, 0.88),
-    inputActiveBg: usesNeutralInput ? NEUTRAL_LIGHT_INPUT.activeBg : surfaces.colorBgElevated,
+    inputActiveBg: usesNeutralInput ? NEUTRAL_LIGHT_INPUT.activeBg : aliases.colorFillAlter,
     inputErrorActiveBg: error.background,
     buttonPrimaryColor: solidControlTextColor(primary.colorPrimarySolid),
     buttonPrimaryBg: primary.colorPrimarySolid,
@@ -884,9 +937,10 @@ function deriveThemeComponentMap(
     buttonPrimaryActiveBg: primary.colorPrimarySolidActive,
     brandMarkBg: surfaces.colorBgSpotlight,
     cardBg: surfaces.colorBgContainer,
+    modalBg: surfaces.colorBgContainer,
     tableHeaderBg: surfaces.colorFillTertiary,
     tableRowBg: surfaces.colorBgContainer,
-    tableRowStripeBg: surfaces.colorBgElevated,
+    tableRowStripeBg: aliases.colorFillAlter,
     tableRowHoverBg: surfaces.colorBgTextHover,
     tableRowSelectedBg: primary.colorPrimaryBg,
     progressRemainingColor: surfaces.colorBorderSecondary,
@@ -907,9 +961,11 @@ function deriveThemeComponentMap(
 
 function toThemeTokens(
   surfaces: ThemeSurfaceMap,
+  aliases: ThemeAliasMap,
   primary: ThemePrimaryMap,
   link: ThemePrimaryMap,
   semantics: ThemeSemanticMap,
+  data: ThemeDataMap,
   shadows: ThemeShadowMap,
   components: ThemeComponentMap,
   dimensions: ThemeDimensionMap,
@@ -926,6 +982,7 @@ function toThemeTokens(
     '--cp-color-fill-secondary': surfaces.colorFillSecondary,
     '--cp-color-fill-tertiary': surfaces.colorFillTertiary,
     '--cp-color-fill-quaternary': surfaces.colorFillQuaternary,
+    '--cp-color-fill-alter': aliases.colorFillAlter,
     '--cp-color-border': surfaces.colorBorder,
     '--cp-color-border-secondary': surfaces.colorBorderSecondary,
     '--cp-color-split': surfaces.colorSplit,
@@ -964,6 +1021,7 @@ function toThemeTokens(
     '--cp-button-primary-active-bg': components.buttonPrimaryActiveBg,
     '--cp-brand-mark-bg': components.brandMarkBg,
     '--cp-card-bg': components.cardBg,
+    '--cp-modal-bg': components.modalBg,
     '--cp-table-header-bg': components.tableHeaderBg,
     '--cp-table-row-bg': components.tableRowBg,
     '--cp-table-row-stripe-bg': components.tableRowStripeBg,
@@ -988,6 +1046,11 @@ function toThemeTokens(
     '--cp-color-info-bg': semantics.info.background,
     '--cp-color-info-border': semantics.info.border,
     '--cp-color-info-text': semantics.info.text,
+    '--cp-activity-level-0': data.activityLevel0,
+    '--cp-activity-level-1': data.activityLevel1,
+    '--cp-activity-level-2': data.activityLevel2,
+    '--cp-activity-level-3': data.activityLevel3,
+    '--cp-activity-level-4': data.activityLevel4,
     '--cp-color-success': semantics.success.color,
     '--cp-color-success-bg': semantics.success.background,
     '--cp-color-success-bg-hover': semantics.success.backgroundHover,

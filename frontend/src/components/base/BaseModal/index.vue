@@ -5,6 +5,7 @@ import { nextTick, onBeforeUnmount, useId, useTemplateRef, watch } from 'vue'
 import BaseIconButton from '../BaseIconButton.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
 import { lockBodyScroll, unlockBodyScroll } from './bodyScrollLock'
+import { useModalDrag } from './useModalDrag'
 
 type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 type ModalTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
@@ -16,6 +17,7 @@ const props = withDefaults(
     size?: ModalSize
     tone?: ModalTone
     dismissible?: boolean
+    draggable?: boolean
     role?: 'dialog' | 'alertdialog'
   }>(),
   {
@@ -23,6 +25,7 @@ const props = withDefaults(
     size: 'md',
     tone: 'neutral',
     dismissible: true,
+    draggable: true,
     role: 'dialog',
   },
 )
@@ -31,6 +34,10 @@ const open = defineModel<boolean>({ default: false })
 const panel = useTemplateRef<HTMLElement>('panel')
 const titleId = useId()
 const descriptionId = useId()
+const { cancelDrag, handlePointerDown, isDragging, resetPosition } = useModalDrag(
+  panel,
+  () => props.draggable,
+)
 let previouslyFocused: HTMLElement | null = null
 let ownsScrollLock = false
 
@@ -161,6 +168,7 @@ watch(
       return
     }
 
+    cancelDrag()
     releaseScrollLock()
     restorePreviousFocus()
   },
@@ -175,7 +183,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <Transition name="cp-modal">
+    <Transition name="cp-modal" @after-leave="resetPosition">
       <div
         v-if="open"
         class="fixed inset-0 z-50 grid place-items-center overflow-hidden p-3 sm:p-6"
@@ -191,10 +199,11 @@ onBeforeUnmount(() => {
         />
         <section
           ref="panel"
-          class="cp-modal-panel relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 overflow-hidden rounded-cp-card bg-cp-bg-container shadow-cp sm:max-h-[calc(100dvh-3rem)]"
+          class="cp-modal-panel relative grid max-h-[calc(100dvh-1.5rem)] w-full min-w-0 overflow-hidden rounded-cp-card bg-cp-modal-bg shadow-cp sm:max-h-[calc(100dvh-3rem)]"
           :class="[
             sizeClasses[size],
             $slots.default ? 'grid-rows-[auto_minmax(0,1fr)_auto]' : 'grid-rows-[auto_auto]',
+            isDragging ? 'cp-modal-panel--dragging' : undefined,
           ]"
           :role="role"
           aria-modal="true"
@@ -203,13 +212,15 @@ onBeforeUnmount(() => {
           tabindex="-1"
         >
           <header
-            class="grid shrink-0 gap-3 p-4 pb-0 sm:gap-4 sm:p-6 sm:pb-0"
+            class="cp-modal-header grid shrink-0 gap-3 p-4 pb-0 sm:gap-4 sm:p-6 sm:pb-0"
             :class="[
               tone === 'neutral'
                 ? 'grid-cols-[minmax(0,1fr)_28px]'
                 : 'grid-cols-[auto_minmax(0,1fr)_28px]',
               description ? 'items-start' : 'items-center',
+              draggable ? 'cp-modal-header--draggable' : undefined,
             ]"
+            @pointerdown="handlePointerDown"
           >
             <span
               v-if="tone !== 'neutral'"
@@ -289,6 +300,16 @@ onBeforeUnmount(() => {
 .cp-modal-leave-to .cp-modal-panel {
   opacity: 0;
   transform: translate3d(0, 4px, 0) scale(0.99);
+}
+
+.cp-modal-header--draggable {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.cp-modal-panel--dragging .cp-modal-header {
+  cursor: grabbing;
 }
 
 @media (prefers-reduced-motion: reduce) {

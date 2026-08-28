@@ -75,7 +75,9 @@ const viewOptions = [
   { label: '受限', value: 'limited' },
 ]
 const themeSwatches = [
-  { label: 'Surface', className: 'bg-cp-bg-container' },
+  { label: 'Container', className: 'bg-cp-bg-container' },
+  { label: 'Fill Alter', className: 'bg-cp-fill-alter' },
+  { label: 'Elevated', className: 'bg-cp-bg-elevated' },
   { label: 'Accent', className: 'bg-cp-primary' },
   { label: 'Success', className: 'bg-cp-success' },
   { label: 'Warning', className: 'bg-cp-warning' },

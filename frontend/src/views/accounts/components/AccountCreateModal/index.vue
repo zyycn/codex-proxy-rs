@@ -196,7 +196,7 @@ async function copyText(value: string, successText: string) {
             <BaseScrollbar
               max-height="92px"
             >
-              <div class="rounded-cp bg-[var(--cp-input-bg)] px-3.5 py-3 shadow-cp-input">
+              <div class="rounded-cp bg-[var(--cp-input-bg)] px-3.5 py-3 shadow-cp-tertiary">
                 <pre
                   class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-sm leading-[1.6] font-emphasis text-cp-text-secondary"
                   v-text="view.oauth.authUrl"
