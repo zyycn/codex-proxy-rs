@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 
-import { CircleDollarSign, Sigma } from '@lucide/vue'
+import { Sigma } from '@lucide/vue'
 import { computed } from 'vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
@@ -90,34 +90,29 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
         </h3>
 
         <div class="ml-auto flex items-center gap-4">
-          <dl v-if="hasUsageSummary" class="m-0 flex items-center gap-4">
-            <div class="flex items-center gap-1.5 whitespace-nowrap" title="总 Token">
-              <dt class="sr-only">
-                总 Token
-              </dt>
-              <Sigma
-                class="size-3.5 text-cp-text-tertiary"
-                :stroke-width="1.75"
-                aria-hidden="true"
-              />
-              <dd class="m-0 font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
+          <div v-if="hasUsageSummary" class="flex items-baseline gap-1.5 whitespace-nowrap">
+            <Sigma
+              class="size-3.5 self-center text-cp-text-tertiary"
+              :stroke-width="1.75"
+              aria-hidden="true"
+            />
+            <span title="总 Token">
+              <span class="sr-only">总 Token：</span>
+              <span class="font-mono text-cp-sm font-emphasis tabular-nums text-cp-text">
                 {{ account.usage.totalTokensDisplay }}
-              </dd>
-            </div>
-            <div class="flex items-center gap-1.5 whitespace-nowrap" title="总计费">
-              <dt class="sr-only">
-                总计费
-              </dt>
-              <CircleDollarSign
-                class="size-3.5 text-cp-success-text"
-                :stroke-width="1.75"
-                aria-hidden="true"
-              />
-              <dd class="m-0 font-mono text-cp-sm font-heavy tabular-nums text-cp-success-text">
+              </span>
+            </span>
+            <span
+              class="mx-0.5 text-[10px] leading-none font-emphasis text-cp-text-quaternary"
+              aria-hidden="true"
+            >/</span>
+            <span title="总计费">
+              <span class="sr-only">总计费：</span>
+              <span class="font-mono text-cp-sm font-heavy tabular-nums text-cp-success-text">
                 {{ totalBillingDisplay }}
-              </dd>
-            </div>
-          </dl>
+              </span>
+            </span>
+          </div>
           <span class="whitespace-nowrap text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
         </div>
       </div>

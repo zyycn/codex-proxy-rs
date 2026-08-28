@@ -171,7 +171,7 @@ const statusBars = computed(() => {
         </p>
 
         <div class="mt-6.75 grid gap-4 xl:h-82.5 xl:grid-rows-[122px_90px_minmax(0,1fr)]">
-          <div class="grid h-30.5 content-between rounded-cp-lg bg-cp-fill-alter p-4 xl:h-auto">
+          <div class="grid h-30.5 content-between rounded-cp-lg bg-cp-fill-alter/70 p-4 xl:h-auto">
             <span class="block h-3.5 text-xs leading-[1.15] font-emphasis text-cp-text-secondary">槽位占用</span>
             <div>
               <div class="h-8.5">
@@ -191,7 +191,7 @@ const statusBars = computed(() => {
           </div>
 
           <div
-            class="grid h-22.5 grid-cols-3 gap-4 rounded-cp-lg bg-cp-fill-alter p-4 xl:h-auto"
+            class="grid h-22.5 grid-cols-3 gap-4 rounded-cp-lg bg-cp-fill-alter/70 p-4 xl:h-auto"
           >
             <div v-for="stat in scheduleStats" :key="stat.label" class="grid content-between">
               <span class="text-xs leading-[1.15] font-emphasis text-cp-text-secondary">{{ stat.label }}</span>
@@ -203,7 +203,7 @@ const statusBars = computed(() => {
             </div>
           </div>
 
-          <div class="grid h-20.5 content-between rounded-cp-lg bg-cp-fill-alter p-4 xl:h-auto">
+          <div class="grid h-20.5 content-between rounded-cp-lg bg-cp-fill-alter/70 p-4 xl:h-auto">
             <span class="text-xs leading-[1.15] font-emphasis text-cp-text-secondary">分配策略</span>
             <strong class="block text-[17px] leading-[1.15] font-emphasis text-cp-text">
               {{ strategyLabel }}
@@ -232,7 +232,7 @@ const statusBars = computed(() => {
             <article
               v-for="account in accounts"
               :key="account.id"
-              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-fill-alter px-3.5 py-3.5 transition-colors xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
+              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-fill-alter/70 px-3.5 py-3.5 transition-colors xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
             >
               <AccountIdentityCell
                 :account="account"
@@ -323,7 +323,7 @@ const statusBars = computed(() => {
           <div
             v-for="row in statusRows"
             :key="row.label"
-            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-cp-lg bg-cp-fill-alter px-3.5"
+            class="grid h-14.5 grid-cols-[28px_14px_minmax(0,1fr)_76px] items-center rounded-cp-lg bg-cp-fill-alter/70 px-3.5"
           >
             <span
               class="inline-flex size-7 items-center justify-center rounded-cp"

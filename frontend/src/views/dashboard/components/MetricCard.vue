@@ -73,7 +73,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
     <div class="flex items-start gap-3">
       <BaseMotionIcon
         aria-hidden="true"
-        class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-cp-lg"
+        class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-cp-lg bg-cp-fill-alter/70!"
         :class="metricToneIconClasses[metric.tone]"
       >
         <component :is="metric.icon" :size="18" />
@@ -108,7 +108,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
     </div>
 
     <div
-      class="mt-3 grid h-7.5 w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center rounded-cp-lg bg-cp-fill-quaternary px-3"
+      class="mt-3 grid h-7.5 w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center rounded-cp-lg bg-cp-fill-alter/70 px-3"
     >
       <span
         class="inline-grid min-w-0 w-full grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2.5"
