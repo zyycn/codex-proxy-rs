@@ -105,7 +105,9 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
             <span
               class="mx-0.5 text-[10px] leading-none font-emphasis text-cp-text-quaternary"
               aria-hidden="true"
-            >/</span>
+            >
+              /
+            </span>
             <span title="总计费">
               <span class="sr-only">总计费：</span>
               <span class="font-mono text-cp-sm font-heavy tabular-nums text-cp-success-text">
