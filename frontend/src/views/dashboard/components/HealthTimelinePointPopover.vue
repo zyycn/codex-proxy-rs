@@ -113,7 +113,7 @@ const metricItems = outcomeMeta
         <div
           v-for="item in metricItems"
           :key="item.label"
-          class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-cp bg-cp-fill-quaternary px-2.5 py-2.5"
+          class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-cp bg-cp-fill-tertiary px-2.5 py-2.5"
         >
           <span class="size-1.5 rounded-full" :class="item.dotClass" />
           <span class="truncate text-[10px] leading-none font-emphasis text-cp-text-secondary">

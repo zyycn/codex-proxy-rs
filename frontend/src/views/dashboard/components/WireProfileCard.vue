@@ -108,7 +108,7 @@ const releaseStatus = computed(() => {
   return {
     label: '待检查',
     title: '尚未检查官方发布渠道',
-    tone: 'bg-cp-info-bg text-cp-info-text',
+    tone: 'bg-cp-cyan-bg text-cp-cyan-text-on-bg',
     icon: RefreshCw,
   }
 })

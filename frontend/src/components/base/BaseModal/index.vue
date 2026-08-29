@@ -238,7 +238,7 @@ onBeforeUnmount(() => {
               <p
                 v-if="description"
                 :id="descriptionId"
-                class="mt-2 mb-0 text-cp leading-[1.45] font-semibold text-cp-text-secondary"
+                class="mt-1 mb-0 text-cp leading-[1.45] font-semibold text-cp-text-secondary"
               >
                 {{ description }}
               </p>

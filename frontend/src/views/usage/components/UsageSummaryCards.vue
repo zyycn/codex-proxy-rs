@@ -45,7 +45,7 @@ const items = computed(() => [
     icon: Timer,
     value: averageLatencyDisplay(props.summary.averageLatencyMs),
     detail: '成功请求平均值',
-    tone: 'bg-cp-primary-bg text-cp-primary-text',
+    tone: 'bg-cp-cyan-bg text-cp-cyan-text-on-bg',
   },
 ])
 </script>

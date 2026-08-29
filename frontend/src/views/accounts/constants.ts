@@ -147,7 +147,7 @@ export function modelSuccessRateTextClass(successRate: number | null) {
   if (successRate >= 99.5)
     return 'text-cp-success-text'
   if (successRate >= 98)
-    return 'text-cp-info-text'
+    return 'text-cp-cyan-text'
   if (successRate >= 95)
     return 'text-cp-warning-text'
   return 'text-cp-error-text'

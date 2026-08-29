@@ -197,6 +197,10 @@ watch(
     size="lg"
     :dismissible="!updating && !restarting"
   >
+    <template #icon>
+      <ArrowUpCircle class="size-4.5 text-cp-success" />
+    </template>
+
     <div class="grid gap-3.5">
       <section class="grid gap-4 rounded-cp-card bg-cp-fill-quaternary px-4 py-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
