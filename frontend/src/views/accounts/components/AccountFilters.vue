@@ -40,15 +40,17 @@ const groupOptions = computed(() => [
 
 <template>
   <div
-    class="flex w-full flex-col gap-3 md:flex-row md:flex-wrap md:items-center"
+    class="flex w-full flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-center"
     role="group"
     aria-label="账号筛选与操作"
   >
-    <div class="flex min-w-0 flex-wrap items-center gap-2 md:flex-none md:gap-3">
+    <div
+      class="grid w-full min-w-0 grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_7.75rem] xl:flex xl:w-auto xl:flex-none xl:flex-wrap xl:gap-3"
+    >
       <BaseInput
         v-model="search"
         placeholder="搜索账号"
-        class="min-w-0 flex-1 md:w-80 md:flex-none"
+        class="col-span-2 min-w-0 sm:col-span-3 xl:w-80 xl:flex-none"
       >
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
@@ -59,7 +61,7 @@ const groupOptions = computed(() => [
         v-model="status"
         :options="accountStatusFilterOptions"
         aria-label="按账号状态筛选"
-        class="w-34 shrink-0 md:w-40"
+        class="w-full min-w-0 xl:w-40 xl:shrink-0"
       />
 
       <BaseSelect
@@ -67,22 +69,22 @@ const groupOptions = computed(() => [
         :options="groupOptions"
         :disabled="groupsLoading"
         aria-label="按账号分组筛选"
-        class="w-34 shrink-0 md:w-40"
+        class="w-full min-w-0 xl:w-40 xl:shrink-0"
       />
 
       <ProviderFilterSegmented
         v-model="provider"
-        class="w-31 shrink-0"
+        class="col-span-2 w-full sm:col-span-1 xl:w-31 xl:shrink-0"
       />
     </div>
 
     <div
-      class="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:flex-wrap md:shrink-0 md:self-end md:items-center md:justify-end md:ml-auto"
+      class="grid w-full grid-cols-2 gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
     >
       <BaseButton
         v-if="selectedCount > 0"
         variant="secondary"
-        class="w-full whitespace-nowrap md:w-auto"
+        class="w-full whitespace-nowrap xl:w-auto"
         @click="emit('editSelected')"
       >
         <Pencil class="size-4 text-cp-link" />
@@ -91,7 +93,7 @@ const groupOptions = computed(() => [
       <BaseButton
         v-if="selectedCount > 0"
         variant="destructive"
-        class="w-full whitespace-nowrap md:w-auto"
+        class="w-full whitespace-nowrap xl:w-auto"
         :disabled="batchDeleting"
         @click="emit('deleteSelected')"
       >
@@ -101,7 +103,7 @@ const groupOptions = computed(() => [
       <BaseButton
         v-if="selectedCount > 0"
         variant="secondary"
-        class="w-full whitespace-nowrap md:w-auto"
+        class="w-full whitespace-nowrap xl:w-auto"
         :loading="exportingAccounts"
         @click="emit('exportSelected')"
       >
@@ -112,7 +114,7 @@ const groupOptions = computed(() => [
       </BaseButton>
       <BaseButton
         variant="primary"
-        class="whitespace-nowrap md:w-auto"
+        class="whitespace-nowrap xl:w-auto"
         :class="selectedCount > 0 ? 'col-span-2 w-full' : 'col-span-2 justify-self-end'"
         @click="emit('create')"
       >

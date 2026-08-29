@@ -18,7 +18,7 @@ function valueClass(item: { mono?: boolean, wrap?: boolean }) {
 </script>
 
 <template>
-  <dl class="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+  <dl class="mt-3 grid min-w-0 grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
     <div v-for="item in items" :key="item.label" class="min-w-0">
       <dt :class="fieldLabelClass">
         {{ item.label }}

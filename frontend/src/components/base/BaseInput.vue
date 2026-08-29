@@ -52,7 +52,7 @@ const sizeClasses: Record<InputSize, string> = {
 }
 
 const containerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp border-0 text-cp-text shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] [--base-input-autofill-bg:var(--cp-input-bg)] hover:[--base-input-autofill-bg:var(--cp-input-hover-bg)] focus-within:[--base-input-autofill-bg:var(--cp-input-active-bg)] motion-reduce:transition-none',
+  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp border-0 text-cp-text shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] motion-reduce:transition-none',
   sizeClasses[props.size],
   props.disabled
     ? 'cursor-not-allowed bg-cp-bg-container-disabled text-cp-text-disabled shadow-none'
@@ -72,6 +72,11 @@ const iconClasses = computed(() => [
 
 function updateModel(event: Event) {
   model.value = (event.target as HTMLInputElement).value
+}
+
+function syncAutofill(event: AnimationEvent) {
+  if (event.animationName === 'base-input-autofill-sync')
+    updateModel(event)
 }
 </script>
 
@@ -93,6 +98,8 @@ function updateModel(event: Event) {
         :aria-describedby="describedBy"
         :aria-invalid="invalid || undefined"
         :aria-required="field?.required.value || undefined"
+        @animationstart="syncAutofill"
+        @change="updateModel"
         @input="updateModel"
       >
       <span v-if="$slots.suffix" :class="iconClasses">
@@ -107,9 +114,23 @@ function updateModel(event: Event) {
 .base-input__field:-webkit-autofill:hover,
 .base-input__field:-webkit-autofill:focus,
 .base-input__field:autofill {
+  animation-name: base-input-autofill-sync;
+  animation-duration: 1ms;
+  background-clip: text !important;
   caret-color: var(--cp-color-text);
+  -webkit-background-clip: text !important;
   -webkit-text-fill-color: var(--cp-color-text) !important;
-  -webkit-box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
-  box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
+  -webkit-box-shadow: none !important;
+  box-shadow: none !important;
+}
+
+@keyframes base-input-autofill-sync {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 </style>

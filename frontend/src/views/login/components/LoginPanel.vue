@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, CircleAlert, Eye, EyeOff, KeyRound, Mail, Moon, Sun } from '@lucide/vue'
+import { CircleAlert, Eye, EyeOff, KeyRound, Mail, Moon, Sun } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
 
 import AppBrandMark from '@/components/AppBrandMark.vue'
@@ -45,7 +45,7 @@ function togglePasswordVisible(): void {
   <BaseCard
     as="form"
     padding="none"
-    class="login-form relative grid min-h-129.25 w-[min(440px,100%)] gap-2.5 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-2.5 max-[560px]:p-5.5"
+    class="login-form relative grid min-h-120 w-[min(440px,100%)] gap-2.5 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-4 max-[560px]:p-5.5"
     @submit.prevent="emit('submit')"
   >
     <div class="login-form-line" />
@@ -81,14 +81,14 @@ function togglePasswordVisible(): void {
       </button>
     </header>
 
-    <section class="grid min-w-0 gap-1" aria-labelledby="login-title">
+    <section class="grid min-w-0 gap-1 max-[560px]:gap-2" aria-labelledby="login-title">
       <h1
         id="login-title"
         class="m-0 text-[34px] leading-[1.02] font-semibold text-(--cp-login-title-color) max-[560px]:text-[30px]"
       >
         控制台登录
       </h1>
-      <p class="m-0 -ml-2 text-sm leading-[1.45] font-normal text-(--cp-login-description-color)">
+      <p class="m-0 -ml-2 text-sm leading-[1.45] font-normal text-(--cp-login-description-color) max-[560px]:py-2">
         「 欢迎回来，登录以开始您的数据之旅 」
       </p>
     </section>
@@ -153,7 +153,6 @@ function togglePasswordVisible(): void {
           :disabled="props.submitDisabled"
         >
           <span>{{ submitLabel }}</span>
-          <ArrowRight v-if="!props.loading" :size="18" />
         </BaseButton>
       </div>
     </div>

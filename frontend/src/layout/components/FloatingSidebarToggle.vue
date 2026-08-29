@@ -31,7 +31,7 @@ const emit = defineEmits<{
 }>()
 
 const edgeGap = 12
-const defaultButtonSize = 44
+const defaultButtonSize = 48
 const dragClickThreshold = 6
 const storageKey = 'codex-proxy:mobile-sidebar-toggle-position'
 
@@ -220,7 +220,7 @@ onScopeDispose(() => {
   >
     <button
       type="button"
-      class="inline-flex size-11.5 items-center justify-center rounded-cp border-0 bg-cp-bg-container text-cp-text shadow-[0_18px_34px_-18px_var(--cp-color-shadow)] outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 hover:bg-cp-bg-text-hover hover:text-cp-primary-text active:scale-95 focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-layout"
+      class="inline-flex size-12 touch-none select-none items-center justify-center rounded-cp border-0 bg-cp-bg-elevated text-cp-primary-text shadow-cp outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 [-webkit-tap-highlight-color:transparent] hover:bg-cp-fill-tertiary hover:text-cp-text active:scale-95 active:bg-cp-control-item-bg-active focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-layout"
       :class="
         isDragging
           ? 'scale-95 cursor-grabbing shadow-[0_14px_28px_-20px_var(--cp-color-shadow)]'

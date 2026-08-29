@@ -47,7 +47,7 @@ const tokenDetails = computed(() => props.record ? usageTokenDetails(props.recor
 const billing = computed(() => props.record ? usageBilling(props.record) : null)
 const latencyDetails = computed(() => props.record ? usageLatencyDetails(props.record) : null)
 
-const panelClass = 'rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5'
+const panelClass = 'min-w-0 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5'
 const panelTitleClass = 'm-0 text-cp-sm leading-none font-heavy text-cp-text-secondary'
 
 const accountDisplay = computed(() => props.record ? usageAccountText(props.record) : '—')
@@ -284,7 +284,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     tone="info"
     size="xl"
   >
-    <div v-if="record" class="grid gap-3">
+    <div v-if="record" class="grid min-w-0 gap-3">
       <section :class="panelClass">
         <div class="min-w-0">
           <span :class="fieldLabelClass">账号</span>
@@ -324,8 +324,8 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         </dl>
       </section>
 
-      <section class="grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <div class="flex min-h-0 flex-col gap-3">
+      <section class="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div class="flex min-h-0 min-w-0 flex-col gap-3">
           <section :class="panelClass">
             <h3 :class="panelTitleClass">
               {{ modelRouteGroup.title }}
@@ -338,7 +338,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
               Token
             </h3>
             <div
-              class="mt-3 grid min-h-38 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
+              class="mt-3 grid min-h-38 min-w-0 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
             >
               <div class="relative mx-auto w-38 sm:mx-0">
                 <BaseChart :option="tokenDonutOption" :height="152" />
@@ -356,7 +356,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
                 </div>
               </div>
 
-              <dl class="grid grid-cols-2 gap-x-4 gap-y-3">
+              <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
                 <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
                   <dt class="flex min-w-0 items-center gap-1.5" :class="fieldLabelClass">
                     <i
@@ -377,7 +377,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
           </section>
         </div>
 
-        <div class="flex min-h-0 flex-col gap-3">
+        <div class="flex min-h-0 min-w-0 flex-col gap-3">
           <section class="flex-1" :class="[panelClass]">
             <h3 :class="panelTitleClass">
               {{ clientUpstreamGroup.title }}
