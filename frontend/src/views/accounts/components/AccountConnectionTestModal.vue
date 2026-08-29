@@ -193,6 +193,12 @@ function connectionLogClass(tone: string) {
                       {{ item.text }}
                     </p>
                     <div v-if="item.detail" class="mt-2 rounded-lg bg-cp-fill-quaternary px-3 py-2">
+                      <p
+                        v-if="item.tone === 'danger'"
+                        class="mt-0 mb-2 text-cp-xs font-heavy text-cp-text-quaternary"
+                      >
+                        原始诊断
+                      </p>
                       <BaseScrollbar max-height="138px">
                         <div>
                           <pre

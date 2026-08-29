@@ -199,12 +199,12 @@ fn hash_admin_password(password: &str) -> Result<String, AdminError> {
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(|_| AdminError::internal("Failed to hash administrator password"))
+        .map_err(|_| AdminError::internal("管理员密码哈希失败"))
 }
 
 fn verify_admin_password(password: &str, encoded: &str) -> Result<bool, AdminError> {
     let hash = PasswordHash::new(encoded)
-        .map_err(|_| AdminError::internal("Stored administrator password hash is invalid"))?;
+        .map_err(|_| AdminError::internal("已保存的管理员密码哈希不合法"))?;
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &hash)
         .is_ok())

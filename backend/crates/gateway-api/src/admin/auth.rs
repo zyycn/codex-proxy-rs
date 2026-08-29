@@ -3,7 +3,7 @@
 use std::fmt;
 
 use axum::{
-    Json, Router,
+    Router,
     extract::{FromRequestParts, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE, request::Parts},
     response::{IntoResponse, Response},
@@ -16,7 +16,7 @@ use gateway_admin::{
 use serde::{Deserialize, Serialize};
 use tower_http::request_id::RequestId;
 
-use super::{AdminEnvelope, AdminError, AdminResponse};
+use super::{AdminEnvelope, AdminError, AdminJson, AdminResponse};
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";
@@ -52,8 +52,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let principal = require_admin_auth(state, &parts.headers).await?;
-        let request_id = admin_request_id(parts)
-            .ok_or_else(|| AdminError::internal("Missing admin request context"))?;
+        let request_id = admin_request_id(parts).ok_or_else(AdminError::internal)?;
         Ok(Self {
             context: AdminRequestContext {
                 principal,
@@ -90,7 +89,7 @@ where
     {
         Ok(Some(admin_user_id)) => Ok(admin_user_id),
         Ok(None) => Err(AdminError::admin_session_required()),
-        Err(_) => Err(AdminError::internal("Failed to validate admin session")),
+        Err(_) => Err(AdminError::internal()),
     }
 }
 
@@ -107,7 +106,7 @@ where
         {
             Ok(true) => Ok(AdminPrincipal::ApiKey),
             Ok(false) => Err(AdminError::invalid_admin_api_key()),
-            Err(_) => Err(AdminError::internal("Failed to validate admin API key")),
+            Err(_) => Err(AdminError::internal()),
         };
     }
 
@@ -209,7 +208,7 @@ where
 
 async fn login<S>(
     State(state): State<S>,
-    Json(payload): Json<AdminLoginRequest>,
+    AdminJson(payload): AdminJson<AdminLoginRequest>,
 ) -> Result<Response, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -232,8 +231,7 @@ where
     );
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_str(&cookie)
-            .map_err(|_| AdminError::internal("Failed to create admin session cookie"))?,
+        HeaderValue::from_str(&cookie).map_err(|_| AdminError::internal())?,
     );
     Ok(response)
 }
@@ -250,7 +248,7 @@ where
         .auth()
         .validate_session(admin_session_cookie(&headers).as_deref())
         .await
-        .map_err(|_| AdminError::internal("Failed to validate admin session"))?;
+        .map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AdminSessionStatusData::new(authenticated)),
@@ -270,8 +268,7 @@ where
     let cookie = format!("{ADMIN_SESSION_COOKIE}=; {ADMIN_SESSION_COOKIE_ATTRS}; Max-Age=0");
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_str(&cookie)
-            .map_err(|_| AdminError::internal("Failed to clear admin session cookie"))?,
+        HeaderValue::from_str(&cookie).map_err(|_| AdminError::internal())?,
     );
     Ok(response)
 }
@@ -287,6 +284,6 @@ fn admin_session_cookie(headers: &HeaderMap) -> Option<String> {
 fn map_login_error(error: LoginError) -> AdminError {
     match error {
         LoginError::InvalidCredentials => AdminError::invalid_admin_credentials(),
-        LoginError::Unavailable => AdminError::internal("Failed to create admin session"),
+        LoginError::Unavailable => AdminError::internal(),
     }
 }

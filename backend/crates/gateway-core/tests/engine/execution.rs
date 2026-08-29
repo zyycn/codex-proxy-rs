@@ -25,7 +25,7 @@ use gateway_core::engine::execution::{
     ExecutionService, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
     StartExecution, StartProviderExecution, provider_failure_affects_circuit,
 };
-use gateway_core::engine::probe::{AccountProbe, AccountProbeRequest};
+use gateway_core::engine::probe::{AccountProbe, AccountProbeErrorSource, AccountProbeRequest};
 use gateway_core::engine::provider::{
     Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
     ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream, UpstreamTransport,
@@ -87,6 +87,8 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
     .expect_err("empty Provider registry should stop the probe after it starts");
 
     assert_eq!(error.kind(), GatewayErrorKind::NoAvailableProvider);
+    assert_eq!(error.source(), AccountProbeErrorSource::Gateway);
+    assert_eq!(error.send_state(), None);
     assert!(!store.touched.load(Ordering::SeqCst));
 }
 
@@ -114,6 +116,8 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
     .expect_err("the provider rejects every probe");
 
     assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
+    assert_eq!(error.source(), AccountProbeErrorSource::Upstream);
+    assert_eq!(error.send_state(), Some(UpstreamSendState::NotSent));
     let upstream = error
         .upstream_response()
         .expect("probe must preserve its request-local upstream response");
@@ -129,6 +133,34 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
     assert!(!format!("{error:?}").contains("source upstream failure"));
     assert!(!store.touched.load(Ordering::SeqCst));
     assert_eq!(store.probe_failures(), vec!["transport".to_owned()]);
+}
+
+#[test]
+fn provider_local_probe_failure_should_remain_distinct_from_upstream() {
+    let store = Arc::new(TrackingExecutionStore::default());
+    let providers = ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>])
+        .expect("provider registry");
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(probe_snapshot()),
+        store,
+        providers,
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+
+    let error = block_on(service.probe(AccountProbeRequest {
+        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
+        provider_kind: ProviderKind::new("openai").expect("provider kind"),
+        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+        operation: probe_operation(),
+    }))
+    .expect_err("the Provider rejects the probe before sending it");
+
+    assert_eq!(error.source(), AccountProbeErrorSource::Provider);
+    assert_eq!(error.send_state(), Some(UpstreamSendState::NotSent));
+    assert!(error.upstream_response().is_none());
 }
 
 #[test]
@@ -193,6 +225,36 @@ impl Provider for FailingProvider {
                     Bytes::from_static(br#"{"error":{"message":"source upstream failure"}}"#),
                 )),
         )
+    }
+}
+
+struct LocalFailingProvider;
+
+#[async_trait]
+impl Provider for LocalFailingProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        _: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        Err(ProviderError::new(
+            ProviderErrorKind::Unsupported,
+            UpstreamSendState::NotSent,
+        ))
     }
 }
 

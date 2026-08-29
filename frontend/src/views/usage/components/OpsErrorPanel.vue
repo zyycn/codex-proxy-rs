@@ -10,6 +10,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
+import { presentOpsError } from '../utils/opsErrorPresentation'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
@@ -38,6 +39,14 @@ const detailOpen = shallowRef(false)
 function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
   selectedRecord.value = record
   detailOpen.value = true
+}
+
+function failureClassText(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
+  return presentOpsError(record).failureClassLabel
+}
+
+function errorSummary(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
+  return presentOpsError(record).summary
 }
 </script>
 
@@ -101,7 +110,12 @@ function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][nu
         </template>
         <template #failureClass="{ row }">
           <span class="font-mono text-cp-sm font-bold text-cp-error-text">
-            {{ row.failureClass || '—' }}
+            {{ failureClassText(row) }}
+          </span>
+        </template>
+        <template #message="{ row }">
+          <span class="block max-w-full truncate text-cp-sm font-emphasis text-cp-text" :title="errorSummary(row)">
+            {{ errorSummary(row) }}
           </span>
         </template>
         <template #accountId="{ row }">

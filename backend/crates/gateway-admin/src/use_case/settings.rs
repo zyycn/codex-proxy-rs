@@ -123,6 +123,6 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
     if valid {
         Ok(())
     } else {
-        Err(AdminError::invalid("Runtime settings violate constraints"))
+        Err(AdminError::invalid("运行时设置不满足约束"))
     }
 }

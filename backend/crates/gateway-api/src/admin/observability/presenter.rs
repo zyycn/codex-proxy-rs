@@ -1001,21 +1001,21 @@ pub(crate) fn diagnostics_view(
 }
 
 pub(crate) fn map_wire_error(error: WireValidationError) -> AdminError {
+    if error.field() == "timeRange" {
+        return AdminError::invalid_time_range();
+    }
     let message = match error.field() {
-        "timeRange" => "Invalid time range",
-        "statusCode" => "Status code must be between 100 and 599",
-        "attemptIndex" => "Attempt index is out of range",
-        "kind" => "Invalid dashboard trend kind",
-        "dimension" => "Invalid diagnostics dimension",
-        "outcome" => "Invalid Observability query",
-        "id" => "Usage record ID is required",
-        "page" | "pageSize" => "Invalid Observability query",
-        "cursor" => "Invalid observability cursor",
-        _ => "Invalid observability query",
+        "statusCode" => "statusCode 必须在 100 到 599 之间",
+        "attemptIndex" => "attemptIndex 超出有效范围",
+        "kind" => "Dashboard 趋势类型不合法",
+        "dimension" => "诊断维度不合法",
+        "id" => "用量记录 ID 不能为空",
+        "cursor" => "观测数据游标不合法",
+        _ => "观测查询参数不合法",
     };
     AdminError::bad_request(message)
 }
 
 pub(crate) fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
-    map_admin_service_error(error, "Observability repository unavailable")
+    map_admin_service_error(error)
 }

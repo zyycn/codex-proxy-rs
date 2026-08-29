@@ -4,6 +4,7 @@ import type { getOpsErrors } from '@/api'
 import { computed } from 'vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { displayValue } from '../utils/detail'
+import { presentOpsError } from '../utils/opsErrorPresentation'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
@@ -13,11 +14,14 @@ const props = defineProps<{
 
 const open = defineModel<boolean>({ default: false })
 
+const presentation = computed(() => props.record ? presentOpsError(props.record) : null)
+
 const fields = computed(() => [
   { label: '账号', value: props.record?.metadata.accountLabel },
   { label: '时间', value: props.record?.createdAtDisplay },
-  { label: '事件', value: props.record?.kind },
-  { label: '失败分类', value: props.record?.failureClass },
+  { label: '记录来源', value: presentation.value?.sourceLabel },
+  { label: '组件', value: presentation.value?.componentLabel },
+  { label: '失败分类', value: presentation.value?.failureClassLabel },
   { label: '平台/类型', value: providerKindLabel(props.record) },
   { label: '端点', value: props.record?.route },
   { label: '模型', value: props.record?.model },
@@ -71,7 +75,7 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
           </span>
         </div>
         <p class="mt-3 mb-0 text-cp leading-relaxed font-bold text-cp-text">
-          {{ displayValue(record.message) }}
+          {{ displayValue(presentation?.summary) }}
         </p>
       </section>
 
@@ -95,6 +99,10 @@ function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['ite
           </dd>
         </div>
       </dl>
+
+      <section class="mt-3 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5">
+        <UsageDetailCodePanel title="原始诊断" max-height="260px" :content="record.message" />
+      </section>
 
       <section
         v-if="metadataText"

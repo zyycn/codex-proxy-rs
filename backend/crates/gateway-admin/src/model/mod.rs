@@ -21,11 +21,12 @@ pub enum AdminErrorKind {
     Conflict,
     RateLimited,
     BadGateway,
+    UpstreamResultUnknown,
     Unavailable,
     Internal,
 }
 
-/// 不携带基础设施细节的管理用例错误。
+/// 不携带基础设施细节、可安全返回给管理员的管理用例错误。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct AdminError {
@@ -45,6 +46,12 @@ impl AdminError {
     #[must_use]
     pub const fn kind(&self) -> AdminErrorKind {
         self.kind
+    }
+
+    /// 返回已脱敏、可公开给管理员的文案。
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 
     #[must_use]
@@ -70,6 +77,11 @@ impl AdminError {
     #[must_use]
     pub fn bad_gateway(message: impl Into<String>) -> Self {
         Self::new(AdminErrorKind::BadGateway, message)
+    }
+
+    #[must_use]
+    pub fn upstream_result_unknown(message: impl Into<String>) -> Self {
+        Self::new(AdminErrorKind::UpstreamResultUnknown, message)
     }
 
     #[must_use]

@@ -20,8 +20,8 @@ use crate::engine::continuation::{
 };
 use crate::engine::coordinator::ResponseExecutionSession;
 use crate::engine::probe::{
-    AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult,
-    AccountProbeUpstreamResponse,
+    AccountProbe, AccountProbeError, AccountProbeErrorSource, AccountProbeRequest,
+    AccountProbeResult, AccountProbeUpstreamResponse,
 };
 use crate::engine::provider::ProviderRegistry;
 use crate::engine::{
@@ -726,11 +726,24 @@ impl DefaultExecutionService {
         started_at: SystemTime,
         error: &EngineError,
     ) -> AccountProbeError {
-        let upstream_response = match error {
-            EngineError::Provider(provider_error) => provider_error
-                .client_visible_upstream_response()
-                .map(AccountProbeUpstreamResponse::from_client_response),
-            _ => None,
+        let (source, send_state, upstream_response) = match error {
+            EngineError::Provider(provider_error) => {
+                let upstream_response = provider_error
+                    .client_visible_upstream_response()
+                    .map(AccountProbeUpstreamResponse::from_client_response);
+                let has_upstream_facts = provider_error.send_state() != UpstreamSendState::NotSent
+                    || provider_error.upstream_status().is_some()
+                    || provider_error.upstream_code().is_some()
+                    || provider_error.client_visible_upstream_error().is_some()
+                    || upstream_response.is_some();
+                let source = if has_upstream_facts {
+                    AccountProbeErrorSource::Upstream
+                } else {
+                    AccountProbeErrorSource::Provider
+                };
+                (source, Some(provider_error.send_state()), upstream_response)
+            }
+            _ => (AccountProbeErrorSource::Gateway, None, None),
         };
         if let EngineError::Provider(provider_error) = error {
             let latency = started_at.elapsed().unwrap_or_default();
@@ -767,7 +780,12 @@ impl DefaultExecutionService {
                 );
             }
         }
-        AccountProbeError::new(gateway_error_from_engine(error), upstream_response)
+        AccountProbeError::new(
+            gateway_error_from_engine(error),
+            source,
+            send_state,
+            upstream_response,
+        )
     }
 }
 

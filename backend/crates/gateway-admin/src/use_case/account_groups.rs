@@ -84,7 +84,7 @@ impl AccountGroupService for DefaultAccountGroupService {
         command: CreateAccountGroup,
     ) -> Result<AccountGroupMutation, AdminError> {
         let id = AccountGroupId::new(format!("grp_{}", Uuid::now_v7().simple()))
-            .map_err(|_| AdminError::internal("Failed to create account group ID"))?;
+            .map_err(|_| AdminError::internal("创建账号组 ID 失败"))?;
         self.publish(
             self.store
                 .create_account_group(

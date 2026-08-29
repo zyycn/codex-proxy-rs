@@ -5,7 +5,11 @@ use std::pin::Pin;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 
-use gateway_core::routing::ProviderKind;
+use gateway_core::{
+    engine::{UpstreamSendState, probe::AccountProbeErrorSource},
+    error::GatewayErrorKind,
+    routing::ProviderKind,
+};
 
 use super::{PageSize, Revision, account_groups::AccountGroupRef, observability::TimeRange};
 
@@ -249,6 +253,9 @@ pub enum AccountConnectionTestEvent {
     },
     Completed,
     Failed {
+        source: AccountProbeErrorSource,
+        gateway_error_code: GatewayErrorKind,
+        send_state: Option<UpstreamSendState>,
         message: String,
         provider_error_code: Option<String>,
         provider_error_type: Option<String>,

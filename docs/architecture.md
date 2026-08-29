@@ -124,6 +124,21 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 - 请求画像以配置为启动基线。OpenAI Desktop 与 xAI CLI 的官方版本检查只更新各自负责的运行时画像，
   不回写 `config.yaml`。
 
+### 错误与诊断三层边界
+
+错误信息按用途分成三层，不能用同一个 `message` 同时承担协议、界面和诊断职责：
+
+1. **数据面协议错误**：`/v1/*` 继续遵守 OpenAI/xAI wire 合同。可交付原始上游响应时保留其状态、headers、
+   content type 和 body；本地 fallback 使用数据面稳定机器码与安全英文，不受管理端中文化影响。
+2. **控制面展示错误**：`/api/admin/*` 由 API 统一 HTTP 状态与数值业务码，由 Admin/API owner 提供安全中文
+   文案。extractor rejection、namespace 404 和 method 405 也使用同一 JSON 信封；任意 Store、Serde、
+   Provider `Display` 不得直接跨越 HTTP 边界。
+3. **原始上游诊断**：只在连接测试、运维错误详情等明确诊断界面展示已经捕获的原始字段，不翻译、不补造，
+   也不塞入普通 Admin 错误信封。原始 body 不进入 Debug、普通日志或持久化错误消息。
+
+连接测试的 `gateway` / `provider` / `upstream` 来源以及 `not_sent` / `sent` / `ambiguous` 发送状态由 Core 在
+仍持有完整执行错误时一次判定；Vue 只能根据稳定字段生成摘要，不能匹配英文错误句子反推来源。
+
 ## 6. 路由、账号范围与 continuation
 
 Client Key 与账号分组形成授权范围：

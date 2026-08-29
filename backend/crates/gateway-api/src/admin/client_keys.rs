@@ -17,16 +17,16 @@ use gateway_core::{
 use serde::{Deserialize, Serialize};
 
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    Router,
+    extract::State,
     http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
-    wire::map_admin_service_error,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
+    WireValidationError, wire::map_admin_service_error,
 };
 
 const MAX_CURSOR_BYTES: usize = 512;
@@ -669,7 +669,7 @@ where
 async fn list_client_keys<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<ListClientKeysQuery>,
+    AdminQuery(query): AdminQuery<ListClientKeysQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -680,15 +680,14 @@ where
         .list(query.into_command().map_err(map_wire_error)?)
         .await
         .map_err(map_service_error)?;
-    let data = ClientKeyListData::try_from(result)
-        .map_err(|_| AdminError::internal("Failed to encode client key cursor"))?;
+    let data = ClientKeyListData::try_from(result).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
 async fn create_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<CreateClientKeyRequest>,
+    AdminJson(payload): AdminJson<CreateClientKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -709,7 +708,7 @@ where
 async fn reveal_client_key<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<ClientKeyIdQuery>,
+    AdminQuery(query): AdminQuery<ClientKeyIdQuery>,
 ) -> Result<Response, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -735,7 +734,7 @@ where
 async fn update_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<UpdateClientKeyRequest>,
+    AdminJson(payload): AdminJson<UpdateClientKeyRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -753,7 +752,7 @@ where
 async fn disable_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<ClientKeyMutationRequest>,
+    AdminJson(payload): AdminJson<ClientKeyMutationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -774,7 +773,7 @@ where
 async fn enable_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<ClientKeyMutationRequest>,
+    AdminJson(payload): AdminJson<ClientKeyMutationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -795,7 +794,7 @@ where
 async fn delete_client_key<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(payload): Json<ClientKeyMutationRequest>,
+    AdminJson(payload): AdminJson<ClientKeyMutationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -822,13 +821,14 @@ fn mutation_response(
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
     match error.field() {
-        "cursor" => AdminError::bad_request("Invalid client key cursor"),
-        "clientKeyRevealNotFound" => AdminError::not_found("Client API key was not found"),
-        "clientKeyMutationNotFound" => AdminError::not_found("client API key was not found"),
-        _ => AdminError::bad_request("Invalid client API key request"),
+        "cursor" => AdminError::bad_request("Client API Key 游标不合法"),
+        "clientKeyRevealNotFound" | "clientKeyMutationNotFound" => {
+            AdminError::not_found("Client API Key 不存在")
+        }
+        _ => AdminError::bad_request("Client API Key 请求不合法"),
     }
 }
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
-    map_admin_service_error(error, "Configuration repository unavailable")
+    map_admin_service_error(error)
 }

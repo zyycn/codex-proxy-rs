@@ -335,7 +335,12 @@ mod actions {
         AccountResetCreditConsumeRequest, AccountTestQuery, CompleteAccountAuthorizationRequest,
         RotateAccountRequest, StartAccountAuthorizationRequest,
     };
-    use gateway_core::engine::credential::ProviderAccountId;
+    use gateway_core::{
+        engine::{
+            UpstreamSendState, credential::ProviderAccountId, probe::AccountProbeErrorSource,
+        },
+        error::GatewayErrorKind,
+    };
     use serde_json::json;
 
     #[test]
@@ -620,6 +625,9 @@ mod actions {
             },
             DomainConnectionTestEvent::Completed {},
             DomainConnectionTestEvent::Failed {
+                source: AccountProbeErrorSource::Upstream,
+                gateway_error_code: GatewayErrorKind::RateLimited,
+                send_state: Some(UpstreamSendState::Sent),
                 message: "upstream unavailable".to_owned(),
                 provider_error_code: Some("usage_exhausted".to_owned()),
                 provider_error_type: Some("invalid_request_error".to_owned()),
@@ -653,6 +661,9 @@ mod actions {
                 json!({ "type": "test_complete", "success": true }),
                 json!({
                     "type": "error",
+                    "source": "upstream",
+                    "gatewayErrorCode": "rate_limited",
+                    "sendState": "sent",
                     "error": "upstream unavailable",
                     "providerErrorCode": "usage_exhausted",
                     "providerErrorType": "invalid_request_error",

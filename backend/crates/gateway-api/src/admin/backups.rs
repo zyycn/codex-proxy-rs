@@ -3,8 +3,8 @@
 //! 路径统一位于 `/api/admin/settings/backups/*`，内部由独立 `BackupService` 承担业务。
 
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    Router,
+    extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -18,8 +18,8 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminPageData, AdminResponse, AdminSessionState,
-    PageMeta, wire::map_admin_service_error,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminPageData, AdminQuery, AdminResponse,
+    AdminSessionState, PageMeta, wire::map_admin_service_error,
 };
 
 /// 备份设置视图；`secretAccessKey` 返回已保存的明文凭据，由前端掩码显示。
@@ -256,7 +256,7 @@ where
 async fn update_backup_storage<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<UpdateBackupStorageRequest>,
+    AdminJson(request): AdminJson<UpdateBackupStorageRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -304,7 +304,7 @@ where
 async fn update_backup_schedule<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<UpdateBackupScheduleRequest>,
+    AdminJson(request): AdminJson<UpdateBackupScheduleRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -331,28 +331,28 @@ where
 async fn backup_records<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<BackupRecordsQuery>,
+    AdminQuery(query): AdminQuery<BackupRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
     let page_size = gateway_admin::model::PageSize::new(query.page_size.unwrap_or(20))
-        .map_err(|_| AdminError::bad_request("Invalid pageSize"))?;
+        .map_err(|_| AdminError::bad_request("pageSize 不合法"))?;
     let page = query.page.unwrap_or(1);
     if page == 0 {
-        return Err(AdminError::bad_request("Invalid page"));
+        return Err(AdminError::bad_request("page 不合法"));
     }
     let status = match query.status.as_deref() {
         None => None,
         Some(value) => BackupStatus::parse(value)
             .map(Some)
-            .ok_or_else(|| AdminError::bad_request("Invalid status"))?,
+            .ok_or_else(|| AdminError::bad_request("status 不合法"))?,
     };
     let trigger = match query.trigger.as_deref() {
         None => None,
         Some(value) => BackupTriggerKind::parse(value)
             .map(Some)
-            .ok_or_else(|| AdminError::bad_request("Invalid trigger"))?,
+            .ok_or_else(|| AdminError::bad_request("trigger 不合法"))?,
     };
     let domain_query = gateway_admin::model::backup::BackupRecordListQuery {
         page,
@@ -386,7 +386,7 @@ where
 async fn create_backup<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    body: Option<Json<CreateBackupRequest>>,
+    body: Option<AdminJson<CreateBackupRequest>>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -417,7 +417,7 @@ pub struct CreateBackupRequest {
 async fn download_backup_url<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<BackupIdRequest>,
+    AdminJson(request): AdminJson<BackupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -437,7 +437,7 @@ where
 async fn delete_backup<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<BackupIdRequest>,
+    AdminJson(request): AdminJson<BackupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -455,5 +455,5 @@ where
 }
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
-    map_admin_service_error(error, "Backup service unavailable")
+    map_admin_service_error(error)
 }

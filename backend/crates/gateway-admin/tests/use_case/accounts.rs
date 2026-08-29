@@ -5,11 +5,15 @@ use chrono::{TimeDelta, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::{
     engine::{
+        UpstreamSendState,
         credential::{
             AccountStatusFacts, CredentialState, OpaqueProviderData, ProviderAccountId,
             QuotaEvidence, QuotaState, resolve_account_status,
         },
-        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
+        probe::{
+            AccountProbe, AccountProbeError, AccountProbeErrorSource, AccountProbeRequest,
+            AccountProbeResult,
+        },
     },
     error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
     operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -950,6 +954,9 @@ async fn connection_test_should_probe_unavailable_account() {
     assert!(matches!(
         events.last(),
         Some(AccountConnectionTestEvent::Failed {
+            source: AccountProbeErrorSource::Upstream,
+            gateway_error_code: GatewayErrorKind::RateLimited,
+            send_state: Some(UpstreamSendState::NotSent),
             message,
             provider_error_code: Some(code),
             provider_error_type: Some(error_type),
@@ -984,6 +991,9 @@ async fn connection_test_rate_limited_probe_returns_provider_failure() {
     assert!(matches!(
         events.last(),
         Some(AccountConnectionTestEvent::Failed {
+            source: AccountProbeErrorSource::Provider,
+            gateway_error_code: GatewayErrorKind::RateLimited,
+            send_state: Some(UpstreamSendState::NotSent),
             message,
             ..
         })
@@ -1722,7 +1732,37 @@ async fn reset_credit_oauth_refresh_should_reuse_the_exact_consume_command() {
 }
 
 #[tokio::test]
-async fn accounts_refresh_should_preserve_the_provider_failure_message() {
+async fn reset_credit_unknown_result_should_keep_a_stable_admin_kind() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.fail_next(ProviderAdminErrorKind::Ambiguous);
+    let store = FakeAccountStore::new("openai", events);
+    let services = accounts_service(provider, store).await;
+    let command = ConsumeProviderResetCredit {
+        account_id: ProviderAccountId::new("acct_test").expect("account ID"),
+        credit_id: Some("credit_1".to_owned()),
+        redeem_request_id: uuid::Uuid::parse_str("244e790c-42a3-4ec9-a45d-a32b218bc8ac")
+            .expect("UUID v4"),
+    };
+
+    let error = services
+        .accounts()
+        .consume_reset_credit(&context("reset-credit-ambiguous"), command)
+        .await
+        .expect_err("ambiguous consume result must remain classified");
+
+    assert_eq!(
+        error.kind(),
+        gateway_admin::model::AdminErrorKind::UpstreamResultUnknown
+    );
+    assert_eq!(
+        error.to_string(),
+        "上游执行结果未知，请刷新状态后再决定是否重试"
+    );
+}
+
+#[tokio::test]
+async fn accounts_refresh_should_not_expose_the_provider_failure_message() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());
     let upstream_message = "Your refresh token has already been used.";
@@ -1740,7 +1780,8 @@ async fn accounts_refresh_should_preserve_the_provider_failure_message() {
         .expect_err("Provider preparation must fail");
 
     assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Conflict);
-    assert_eq!(error.to_string(), upstream_message);
+    assert_eq!(error.to_string(), "Provider 资源状态冲突，请刷新后重试");
+    assert!(!error.to_string().contains(upstream_message));
     assert_eq!(
         recorded(&events),
         ["store.load_account", "provider.prepare_refresh"]
@@ -1950,12 +1991,16 @@ impl AccountProbe for FailingAccountProbe {
                 Some("usage_exhausted".to_owned()),
                 Some("invalid_request_error".to_owned()),
             );
-            Err(GatewayError::new(
-                GatewayErrorKind::RateLimited,
-                "upstream capacity is temporarily unavailable",
-            )
-            .with_client_visible_upstream_error(detail)
-            .into())
+            Err(AccountProbeError::new(
+                GatewayError::new(
+                    GatewayErrorKind::RateLimited,
+                    "upstream capacity is temporarily unavailable",
+                )
+                .with_client_visible_upstream_error(detail),
+                AccountProbeErrorSource::Upstream,
+                Some(UpstreamSendState::NotSent),
+                None,
+            ))
         })
     }
 }
@@ -1971,11 +2016,15 @@ impl AccountProbe for FreeModelQuotaProbe {
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
             self.store.set_account_after_probe(account_record("xai"));
-            Err(GatewayError::new(
-                GatewayErrorKind::RateLimited,
-                "xAI free model quota is exhausted",
-            )
-            .into())
+            Err(AccountProbeError::new(
+                GatewayError::new(
+                    GatewayErrorKind::RateLimited,
+                    "xAI free model quota is exhausted",
+                ),
+                AccountProbeErrorSource::Provider,
+                Some(UpstreamSendState::NotSent),
+                None,
+            ))
         })
     }
 }

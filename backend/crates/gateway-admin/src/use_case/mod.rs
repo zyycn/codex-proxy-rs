@@ -42,7 +42,15 @@ fn map_store_error(error: AdminStoreError, resource: &'static str) -> AdminError
         }
         AdminStoreErrorKind::Unavailable => AdminErrorKind::Unavailable,
     };
-    AdminError::new(kind, format!("{resource} operation failed"))
+    tracing::warn!(resource, error_kind = ?error.kind(), "admin store operation failed");
+    let message = match kind {
+        AdminErrorKind::Invalid => "请求参数不合法",
+        AdminErrorKind::NotFound => "请求的资源不存在",
+        AdminErrorKind::Conflict => "当前资源状态冲突，请刷新后重试",
+        AdminErrorKind::Unavailable => "依赖服务暂不可用",
+        _ => "服务内部错误",
+    };
+    AdminError::new(kind, message)
 }
 
 fn map_provider_error(
@@ -56,15 +64,23 @@ fn map_provider_error(
         ProviderAdminErrorKind::Unsupported => AdminErrorKind::Invalid,
         ProviderAdminErrorKind::NotFound => AdminErrorKind::NotFound,
         ProviderAdminErrorKind::Conflict => AdminErrorKind::Conflict,
+        ProviderAdminErrorKind::Ambiguous => AdminErrorKind::UpstreamResultUnknown,
         ProviderAdminErrorKind::Unavailable => AdminErrorKind::Unavailable,
         ProviderAdminErrorKind::CredentialRefreshRequired => AdminErrorKind::Unavailable,
         ProviderAdminErrorKind::BadGateway => AdminErrorKind::BadGateway,
         ProviderAdminErrorKind::Internal => AdminErrorKind::Internal,
     };
-    let message = error
-        .message()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{resource} operation failed"));
+    tracing::warn!(resource, error_kind = ?error.kind(), "admin provider operation failed");
+    let message = match kind {
+        AdminErrorKind::Invalid => "Provider 请求不合法",
+        AdminErrorKind::NotFound => "Provider 资源不存在",
+        AdminErrorKind::Conflict => "Provider 资源状态冲突，请刷新后重试",
+        AdminErrorKind::BadGateway => "上游服务请求失败",
+        AdminErrorKind::UpstreamResultUnknown => "上游执行结果未知，请刷新状态后再决定是否重试",
+        AdminErrorKind::Unavailable => "Provider 服务暂不可用",
+        AdminErrorKind::Internal => "服务内部错误",
+        _ => "Provider 操作失败",
+    };
     AdminError::new(kind, message)
 }
 
@@ -73,7 +89,7 @@ async fn publish_committed(
     revision: crate::model::Revision,
 ) -> Result<(), AdminError> {
     let revision = ConfigRevision::new(revision.get())
-        .map_err(|_| AdminError::internal("Committed configuration revision is invalid"))?;
+        .map_err(|_| AdminError::internal("已提交的配置版本不合法"))?;
     snapshot.publish_committed(revision).await;
     Ok(())
 }
@@ -88,7 +104,7 @@ async fn required_credential(
         .credential_details(provider_kind, account_id)
         .await
         .map_err(|error| map_store_error(error, resource))?
-        .ok_or_else(|| AdminError::not_found(format!("{resource} was not found")))
+        .ok_or_else(|| AdminError::not_found("Provider 凭据不存在"))
 }
 
 async fn pending_authorization(
@@ -120,7 +136,7 @@ async fn pending_authorization(
 fn validate_prepared_import(
     provider_kind: &ProviderKind,
     prepared: &PreparedCredentialImport,
-    resource: &'static str,
+    _resource: &'static str,
 ) -> Result<(), AdminError> {
     if prepared.provider_kind != *provider_kind
         || prepared
@@ -128,9 +144,7 @@ fn validate_prepared_import(
             .iter()
             .any(|credential| credential.provider_kind != *provider_kind)
     {
-        return Err(AdminError::conflict(format!(
-            "{resource} prepared facts do not match the requested Provider scope"
-        )));
+        return Err(AdminError::conflict("Provider 准备结果与请求范围不一致"));
     }
     Ok(())
 }
@@ -138,15 +152,13 @@ fn validate_prepared_import(
 fn validate_prepared_rotation(
     account: &crate::model::accounts::AccountRecord,
     prepared: &PreparedCredentialRotation,
-    resource: &'static str,
+    _resource: &'static str,
 ) -> Result<(), AdminError> {
     let facts = prepared.facts();
     if facts.account_id.as_str() != account.id.as_str()
         || facts.provider_kind != account.provider_kind
     {
-        return Err(AdminError::conflict(format!(
-            "{resource} prepared facts do not match the current credential"
-        )));
+        return Err(AdminError::conflict("Provider 准备结果与当前凭据不一致"));
     }
     Ok(())
 }
@@ -160,9 +172,7 @@ async fn validate_authorization_commit(
     if prepared.pending.provider_kind() != provider_kind
         || !prepared.pending.owner_binding().matches_context(context)
     {
-        let validation_error = AdminError::conflict(format!(
-            "{resource} pending authorization binding is invalid"
-        ));
+        let validation_error = AdminError::conflict("OAuth 授权绑定已失效，请重新发起授权");
         if let Err(error) = prepared.abort().await {
             tracing::warn!(
                 resource,
@@ -188,9 +198,7 @@ async fn validate_authorization_commit(
         _ => false,
     };
     if !matches_target {
-        let validation_error = AdminError::conflict(format!(
-            "{resource} prepared credential does not match its pending target"
-        ));
+        let validation_error = AdminError::conflict("OAuth 凭据与待提交目标不一致");
         if let Err(error) = prepared.abort().await {
             tracing::warn!(
                 resource,

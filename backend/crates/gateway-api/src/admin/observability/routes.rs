@@ -32,7 +32,7 @@ where
 pub(crate) async fn dashboard_summary<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<DashboardQuery>,
+    AdminQuery(query): AdminQuery<DashboardQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -56,7 +56,7 @@ where
 pub(crate) async fn dashboard_trend<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<DashboardQuery>,
+    AdminQuery(query): AdminQuery<DashboardQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -79,7 +79,7 @@ where
 pub(crate) async fn usage_records<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<UsageQuery>,
+    AdminQuery(query): AdminQuery<UsageQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -91,15 +91,14 @@ where
         .usage_records(command)
         .await
         .map_err(map_service_error)?;
-    let data = usage_page_view(result, page, page_size)
-        .map_err(|_| AdminError::internal("Failed to encode observability cursor"))?;
+    let data = usage_page_view(result, page, page_size).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
 pub(crate) async fn usage_record_detail<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<DetailQuery>,
+    AdminQuery(query): AdminQuery<DetailQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -120,7 +119,7 @@ where
 pub(crate) async fn usage_records_summary<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<UsageQuery>,
+    AdminQuery(query): AdminQuery<UsageQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -143,7 +142,7 @@ where
 pub(crate) async fn usage_insights_overview<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<UsageQuery>,
+    AdminQuery(query): AdminQuery<UsageQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -166,7 +165,7 @@ where
 pub(crate) async fn usage_insights_diagnostics<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<DiagnosticsQuery>,
+    AdminQuery(query): AdminQuery<DiagnosticsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -196,7 +195,7 @@ where
 pub(crate) async fn ops_errors<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<OpsQuery>,
+    AdminQuery(query): AdminQuery<OpsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -208,7 +207,6 @@ where
         .ops_errors(command)
         .await
         .map_err(map_service_error)?;
-    let data = ops_page_view(result, page, page_size)
-        .map_err(|_| AdminError::internal("Failed to encode observability cursor"))?;
+    let data = ops_page_view(result, page, page_size).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

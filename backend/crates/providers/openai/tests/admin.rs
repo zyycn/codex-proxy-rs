@@ -273,7 +273,7 @@ async fn reset_credit_success_with_invalid_body_should_remain_an_unknown_consume
         .await
         .expect_err("invalid success body must be ambiguous");
 
-    assert_eq!(error.kind(), ProviderAdminErrorKind::BadGateway);
+    assert_eq!(error.kind(), ProviderAdminErrorKind::Ambiguous);
     assert_eq!(
         error.message(),
         Some(

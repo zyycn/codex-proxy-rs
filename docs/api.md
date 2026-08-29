@@ -41,9 +41,36 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 }
 ```
 
-错误响应仍使用 `code`、`message`、`data`，其中 `data` 为 `null`。稳定业务码包括参数错误
-`40001`、会话缺失 `40101`、登录凭据错误 `40102`、管理 API Key 错误 `40103`、资源不存在
-`40401`、业务冲突 `40901`、内部错误 `50001`、上游失败 `50201` 和依赖不可用 `50301`。
+所有 `/api/admin/*` 错误（包括 JSON/Query rejection、未知路由和错误 HTTP method）统一返回
+`application/json`：
+
+```json
+{
+  "code": 40001,
+  "message": "请求参数不合法",
+  "data": null
+}
+```
+
+管理端本地产生的 `message` 是可安全展示的中文文案；Store、Serde、Provider 内部 `Display` 和原始上游
+body 不进入这个通用信封。稳定业务码如下：
+
+| HTTP | `code` | 含义 |
+| ---: | ---: | --- |
+| 400 | `40000` | 请求体不是合法 JSON |
+| 400 / 405 / 415 / 422 | `40001` | 通用请求、方法、Content-Type 或字段错误；HTTP 状态保留具体语义 |
+| 400 | `40002` | 时间范围不合法 |
+| 401 | `40101` / `40102` / `40103` | 缺少管理员会话 / 登录凭据错误 / 管理 API Key 错误 |
+| 404 | `40401` | 资源或管理接口不存在 |
+| 409 | `40901` | 资源状态冲突 |
+| 429 | `42901` | 登录尝试过多 |
+| 500 | `50001` | 服务内部错误 |
+| 502 | `50201` | 上游服务请求失败 |
+| 502 | `50202` | 不可逆上游操作的执行结果未知；刷新状态后再决定是否重试 |
+| 503 | `50301` | 依赖服务暂不可用 |
+
+未知 `/api/admin/*` 路径使用 `40401`，不会落入 SPA；已存在路径使用错误 method 时返回 `405`、
+`40001`，并保留标准 `Allow` header。request ID 继续通过配置的响应 header 返回。
 
 ### 管理写入一致性
 
@@ -128,6 +155,33 @@ Grok wire 与 Responses wire 之间的协议转换层，转换只在 xAI Provide
 - `status`: `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`；
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
+
+### 账号连接测试 SSE
+
+`GET /api/admin/accounts/connection-test` 固定探测请求指定的账号，不参与普通账号轮换。成功流沿用
+`test_start`、`request`、`content`、`test_complete` 事件；失败事件为：
+
+```json
+{
+  "type": "error",
+  "source": "upstream",
+  "gatewayErrorCode": "rate_limited",
+  "sendState": "sent",
+  "error": "upstream unavailable",
+  "providerErrorCode": "usage_exhausted",
+  "providerErrorType": "invalid_request_error",
+  "upstreamStatus": 429,
+  "upstreamContentType": "application/json",
+  "upstreamBody": "{\"error\":{...}}"
+}
+```
+
+- `source` 为 `gateway`、`provider` 或 `upstream`：分别表示尚未进入 Provider、Provider 本地且未发送、
+  已发送/可能已发送或已经捕获到上游事实。
+- `gatewayErrorCode` 是 `GatewayErrorKind` 的稳定机器值，管理端据此生成中文摘要。
+- `sendState` 为 `not_sent`、`sent`、`ambiguous`，非 Provider 错误为 `null`。
+- `error`、`providerErrorCode`、`providerErrorType`、`upstreamStatus`、`upstreamContentType` 和
+  `upstreamBody` 是实际捕获的原始诊断字段；缺失时为 `null`，不会由本地猜测或翻译。
 
 导入的 `data` 必须是 JSON object，Admin API 请求上限为 64 MiB；Provider 可以收紧限制，
 当前 xAI 导入上限为 16 MiB。内部 schema 由目标 Provider 独占解释：
@@ -265,6 +319,9 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 可用卡。一次请求发出后若传输结果不明确，重试必须复用完全相同的 `redeemRequestId`、`creditId` 和
 账号。服务在单副本进程内按账号串行消费，并在 credential 需要刷新时以同一命令重试一次；它不会对不明
 结果自动创建新消费。
+
+若服务无法确认不可逆消费是否完成，返回 HTTP `502` / 业务码 `50202`；客户端应先刷新卡片与额度状态，
+并在确需重试时复用原 `redeemRequestId`。明确的上游 HTTP 拒绝仍使用 `50201`，不会误标为结果未知。
 
 ```json
 {

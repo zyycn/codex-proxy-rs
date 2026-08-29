@@ -36,19 +36,118 @@ interface ConnectionTestRequestPayload {
   input?: Array<{ content?: Array<{ type?: string, text?: string }> }>
 }
 
-interface ConnectionTestEvent {
-  type: string
+interface ConnectionTestStartEvent {
+  type: 'test_start'
   text?: string
   model?: string
+}
+
+interface ConnectionTestRequestEvent {
+  type: 'request'
   payload?: ConnectionTestRequestPayload
-  success?: boolean
+}
+
+interface ConnectionTestStatusEvent {
+  type: 'status'
+  text?: string
+}
+
+interface ConnectionTestContentEvent {
+  type: 'content'
+  text?: string
+}
+
+interface ConnectionTestCompleteEvent {
+  type: 'test_complete'
+  success: boolean
   error?: string
 }
 
-function connectionTestErrorText(event: ConnectionTestEvent) {
-  if (typeof event.error === 'string' && event.error.trim().length > 0)
-    return event.error
-  return '测试连接失败'
+type ConnectionTestFailureSource = 'gateway' | 'provider' | 'upstream'
+type ConnectionTestSendState = 'not_sent' | 'sent' | 'ambiguous'
+
+interface ConnectionTestFailureEvent {
+  type: 'error'
+  source?: ConnectionTestFailureSource
+  gatewayErrorCode?: string
+  sendState?: ConnectionTestSendState | null
+  error?: string
+  providerErrorCode?: string | null
+  providerErrorType?: string | null
+  upstreamStatus?: number | null
+  upstreamContentType?: string | null
+  upstreamBody?: string | null
+}
+
+type ConnectionTestEvent
+  = | ConnectionTestStartEvent
+    | ConnectionTestRequestEvent
+    | ConnectionTestStatusEvent
+    | ConnectionTestContentEvent
+    | ConnectionTestCompleteEvent
+    | ConnectionTestFailureEvent
+
+const CONNECTION_TEST_EVENT_TYPES = new Set<ConnectionTestEvent['type']>([
+  'test_start',
+  'request',
+  'status',
+  'content',
+  'test_complete',
+  'error',
+])
+
+const CONNECTION_TEST_FAILURE_TEXT: Record<string, string> = {
+  invalid_request: '测试请求不合法',
+  unsupported: '当前 Provider 不支持连接测试',
+  unauthorized: '账号凭据无效',
+  policy_denied: '测试请求被网关策略拒绝',
+  model_not_found: '测试模型不存在',
+  no_available_provider: '指定账号当前不可用于连接测试',
+  account_capacity_unavailable: '指定账号当前没有可用容量',
+  provider_infrastructure_unavailable: 'Provider 本地基础设施暂不可用',
+  rate_limited: '上游请求过于频繁',
+  upstream_unavailable: '上游服务暂不可用',
+  timeout: '上游请求超时',
+  cancelled: '测试请求已取消',
+  internal_error: '网关内部错误',
+}
+
+const CONNECTION_TEST_SOURCE_LABEL: Record<ConnectionTestFailureSource, string> = {
+  gateway: '网关校验',
+  provider: 'Provider 本地准备',
+  upstream: '上游响应',
+}
+
+function parseConnectionTestEvent(raw: string): ConnectionTestEvent | null {
+  const value: unknown = JSON.parse(raw)
+  if (!value || typeof value !== 'object' || !('type' in value) || typeof value.type !== 'string')
+    throw new TypeError('invalid connection-test event')
+  if (!CONNECTION_TEST_EVENT_TYPES.has(value.type as ConnectionTestEvent['type']))
+    return null
+  return value as ConnectionTestEvent
+}
+
+function connectionTestFailureText(event: ConnectionTestFailureEvent) {
+  return event.gatewayErrorCode
+    ? CONNECTION_TEST_FAILURE_TEXT[event.gatewayErrorCode] || '未分类错误'
+    : '测试连接失败'
+}
+
+function connectionTestFailureLabel(event: ConnectionTestFailureEvent) {
+  return event.source ? CONNECTION_TEST_SOURCE_LABEL[event.source] || '测试失败' : '测试失败'
+}
+
+function connectionTestFailureDiagnostics(event: ConnectionTestFailureEvent) {
+  return {
+    error: event.error ?? null,
+    gatewayErrorCode: event.gatewayErrorCode ?? null,
+    sendState: event.sendState ?? null,
+    upstreamStatus: event.upstreamStatus ?? null,
+    providerErrorCode: event.providerErrorCode ?? null,
+    providerErrorType: event.providerErrorType ?? null,
+    upstreamContentType: event.upstreamContentType ?? null,
+    upstreamBody: event.upstreamBody ?? null,
+  }
 }
 
 export function useAccountConnectionTest(options: { reload: () => Promise<unknown> }) {
@@ -108,7 +207,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (connectionTestStatus.value === 'error') {
       return {
         label: '测试失败',
-        description: '请求未完成，请在下方查看上游错误与事件轨迹',
+        description: '请求未完成，请在下方查看失败来源与原始诊断',
         icon: XCircle,
         badge: 'bg-cp-error-bg text-cp-error-text',
         iconClass: 'text-cp-error',
@@ -231,9 +330,14 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     clearConnectionTestRun()
   }
 
-  function recordConnectionTestFailure(key: string, label: string, message: string) {
+  function recordConnectionTestFailure(
+    key: string,
+    label: string,
+    message: string,
+    detail?: unknown,
+  ) {
     connectionTestError.value = message
-    setConnectionTestLog(key, label, 'danger', message)
+    setConnectionTestLog(key, `${label}：${message}`, 'danger', detail)
     finishConnectionTest('error')
   }
 
@@ -266,9 +370,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       }
       else {
         recordConnectionTestFailure(
-          'upstream-response',
-          '上游响应',
-          connectionTestErrorText(event),
+          'test-complete-failure',
+          '测试失败',
+          '测试连接失败',
+          { error: event.error ?? null },
         )
       }
       clearConnectionTestRun()
@@ -277,9 +382,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
     if (event.type === 'error') {
       recordConnectionTestFailure(
-        'upstream-response',
-        '上游响应',
-        connectionTestErrorText(event),
+        `failure-${event.source || 'unknown'}`,
+        connectionTestFailureLabel(event),
+        connectionTestFailureText(event),
+        connectionTestFailureDiagnostics(event),
       )
       clearConnectionTestRun()
       void options.reload()
@@ -404,7 +510,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (!message?.raw || !connectionTestRun)
       return
     try {
-      handleConnectionTestEvent(JSON.parse(message.raw))
+      const event = parseConnectionTestEvent(message.raw)
+      if (event)
+        handleConnectionTestEvent(event)
     }
     catch {
       failConnectionTest('测试响应解析失败')

@@ -134,9 +134,9 @@ impl fmt::Debug for AdminConfig {
 /// Admin-owned 启动配置错误；不回显任何配置值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AdminConfigError {
-    #[error("configuration field `{0}` is invalid")]
+    #[error("配置字段 `{0}` 不合法")]
     InvalidField(&'static str),
-    #[error("admin.default_password does not meet the initial password policy")]
+    #[error("admin.default_password 不符合初始密码策略")]
     WeakInitialPassword,
 }
 
@@ -322,9 +322,9 @@ fn backup_worker_contribution(
     task: backup::task::BackupTask,
 ) -> Result<Vec<WorkerContribution>, AdminError> {
     let id = WorkerId::try_new(WorkerKind::Backup, BACKUP_WORKER_OWNER)
-        .map_err(|_| AdminError::internal("Backup worker id is invalid"))?;
+        .map_err(|_| AdminError::internal("备份 Worker ID 不合法"))?;
     let restart = DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
-        .map_err(|_| AdminError::internal("Backup worker restart policy is invalid"))?;
+        .map_err(|_| AdminError::internal("备份 Worker 重启策略不合法"))?;
     let registration = WorkerRegistration::try_new(
         id,
         WorkerRunnable::Daemon {
@@ -332,12 +332,12 @@ fn backup_worker_contribution(
             task: Box::new(task),
         },
     )
-    .map_err(|_| AdminError::internal("Backup worker registration is invalid"))?;
+    .map_err(|_| AdminError::internal("备份 Worker 注册信息不合法"))?;
     Ok(vec![WorkerContribution::Registration(registration)])
 }
 
 fn provider_kind(value: &'static str) -> Result<ProviderKind, AdminError> {
-    ProviderKind::new(value).map_err(|_| AdminError::internal("Built-in Provider kind is invalid"))
+    ProviderKind::new(value).map_err(|_| AdminError::internal("内置 Provider 类型不合法"))
 }
 
 fn map_provider_registry_error(error: ProviderAdminError) -> AdminError {
@@ -347,11 +347,12 @@ fn map_provider_registry_error(error: ProviderAdminError) -> AdminError {
         }
         ProviderAdminErrorKind::NotFound => AdminErrorKind::NotFound,
         ProviderAdminErrorKind::Conflict => AdminErrorKind::Conflict,
+        ProviderAdminErrorKind::Ambiguous => AdminErrorKind::UpstreamResultUnknown,
         ProviderAdminErrorKind::Unavailable | ProviderAdminErrorKind::CredentialRefreshRequired => {
             AdminErrorKind::Unavailable
         }
         ProviderAdminErrorKind::BadGateway => AdminErrorKind::BadGateway,
         ProviderAdminErrorKind::Internal => AdminErrorKind::Internal,
     };
-    AdminError::new(kind, "Provider registry initialization failed")
+    AdminError::new(kind, "Provider 注册表初始化失败")
 }

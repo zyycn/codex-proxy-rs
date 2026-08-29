@@ -7,18 +7,9 @@ import type {
 import axios from 'axios'
 
 import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
+import { normalizeApiError } from './error'
 
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-    public readonly code?: number,
-    public readonly requestId?: string,
-  ) {
-    super(message)
-    this.name = 'ApiError'
-  }
-}
+export { ApiError } from './error'
 
 const http: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -54,19 +45,16 @@ http.interceptors.response.use(
   (response: AxiosResponse) => {
     return response
   },
-  (error: AxiosError<any>) => {
+  (error: AxiosError<unknown>) => {
     const { response } = error
 
-    const status = response?.status || 0
-    const message = response?.data?.message || error.message || '请求失败'
-    const code = response?.data?.code
-    const requestId = response?.headers?.['x-request-id']
+    const status = response?.status ?? 0
 
     if (status === 401 && !isAuthenticationRequest(error.config?.url)) {
       handleUnauthorizedOnce()
     }
 
-    return Promise.reject(new ApiError(message, status, code, requestId))
+    return Promise.reject(normalizeApiError(error))
   },
 )
 

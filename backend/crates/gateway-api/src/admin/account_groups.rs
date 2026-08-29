@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    Router,
+    extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -22,8 +22,8 @@ use gateway_core::routing::AccountGroupId;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
-    WireValidationError, wire::map_admin_service_error,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
+    PageMeta, WireValidationError, wire::map_admin_service_error,
 };
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
@@ -235,7 +235,7 @@ where
 async fn list<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<ListAccountGroupsQuery>,
+    AdminQuery(query): AdminQuery<ListAccountGroupsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -255,7 +255,7 @@ where
 async fn create<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<CreateAccountGroupRequest>,
+    AdminJson(request): AdminJson<CreateAccountGroupRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -281,7 +281,7 @@ where
 async fn update<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<UpdateAccountGroupRequest>,
+    AdminJson(request): AdminJson<UpdateAccountGroupRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -308,7 +308,7 @@ where
 async fn enable<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountGroupIdRequest>,
+    AdminJson(request): AdminJson<AccountGroupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -319,7 +319,7 @@ where
 async fn disable<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountGroupIdRequest>,
+    AdminJson(request): AdminJson<AccountGroupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -355,7 +355,7 @@ where
 async fn delete<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountGroupIdRequest>,
+    AdminJson(request): AdminJson<AccountGroupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -387,12 +387,11 @@ fn mutation_response(
 }
 
 fn group_id(value: String) -> Result<AccountGroupId, AdminError> {
-    AccountGroupId::new(value).map_err(|_| AdminError::bad_request("Invalid account group ID"))
+    AccountGroupId::new(value).map_err(|_| AdminError::bad_request("账号组 ID 不合法"))
 }
 
 fn group_color(value: &str) -> Result<AccountGroupColor, AdminError> {
-    AccountGroupColor::parse(value)
-        .ok_or_else(|| AdminError::bad_request("Invalid account group color"))
+    AccountGroupColor::parse(value).ok_or_else(|| AdminError::bad_request("账号组颜色不合法"))
 }
 
 fn validate_group_fields(name: &str, description: Option<&str>) -> Result<(), AdminError> {
@@ -403,15 +402,15 @@ fn validate_group_fields(name: &str, description: Option<&str>) -> Result<(), Ad
         || description
             .is_some_and(|value| value.len() > 4096 || value.chars().any(char::is_control))
     {
-        return Err(AdminError::bad_request("Invalid account group request"));
+        return Err(AdminError::bad_request("账号组请求不合法"));
     }
     Ok(())
 }
 
 fn map_wire_error(_: WireValidationError) -> AdminError {
-    AdminError::bad_request("Invalid account group query")
+    AdminError::bad_request("账号组查询参数不合法")
 }
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
-    map_admin_service_error(error, "Account group repository unavailable")
+    map_admin_service_error(error)
 }

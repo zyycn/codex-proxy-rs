@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use axum::{
-    Json, Router,
+    Router,
     extract::State,
     http::StatusCode,
     response::IntoResponse,
@@ -17,8 +17,8 @@ use gateway_core::routing::{PublicModelId, UpstreamModelId};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, WireValidationError,
-    wire::map_admin_service_error,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminResponse, AdminSessionState,
+    WireValidationError, wire::map_admin_service_error,
 };
 
 /// 客户端模型到上游模型的全局精确映射。
@@ -197,7 +197,7 @@ where
 async fn update_settings<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<UpdateRuntimeSettingsRequest>,
+    AdminJson(request): AdminJson<UpdateRuntimeSettingsRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -324,16 +324,16 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
     let message = match error.field() {
-        "settingsRefreshConcurrencyOverflow" => "Invalid refreshConcurrency".to_owned(),
-        "settingsMaxConcurrencyOverflow" => "Invalid maxConcurrentPerAccount".to_owned(),
-        "settingsUsageRetentionOverflow" => "Invalid usageRetentionDays".to_owned(),
-        "settingsOpsRetentionOverflow" => "Invalid opsEventRetentionDays".to_owned(),
-        "settingsAuditRetentionOverflow" => "Invalid auditRetentionDays".to_owned(),
-        field => format!("Invalid field: {field}"),
+        "settingsRefreshConcurrencyOverflow" => "refreshConcurrency 不合法".to_owned(),
+        "settingsMaxConcurrencyOverflow" => "maxConcurrentPerAccount 不合法".to_owned(),
+        "settingsUsageRetentionOverflow" => "usageRetentionDays 不合法".to_owned(),
+        "settingsOpsRetentionOverflow" => "opsEventRetentionDays 不合法".to_owned(),
+        "settingsAuditRetentionOverflow" => "auditRetentionDays 不合法".to_owned(),
+        field => format!("{field} 字段不合法"),
     };
     AdminError::bad_request(message)
 }
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
-    map_admin_service_error(error, "Settings repository unavailable")
+    map_admin_service_error(error)
 }

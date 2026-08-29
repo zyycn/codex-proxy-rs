@@ -186,7 +186,7 @@ impl ObservabilityService for DefaultObservabilityService {
 
     async fn usage_record_detail(&self, request_id: &str) -> Result<UsageDetail, AdminError> {
         if request_id.trim().is_empty() {
-            return Err(AdminError::invalid("Usage record ID is required"));
+            return Err(AdminError::invalid("用量记录 ID 不能为空"));
         }
         let mut detail = self
             .store
@@ -286,9 +286,7 @@ fn build_usage_insights(
         |point| point.granularity,
     );
     if trend.iter().any(|point| point.granularity != granularity) {
-        return Err(AdminError::internal(
-            "Usage insight trend contains mixed granularities",
-        ));
+        return Err(AdminError::internal("用量洞察趋势包含不一致的时间粒度"));
     }
 
     let requests = &overview.requests;
@@ -405,14 +403,15 @@ impl UsageStandardCosts {
         self.total = Some(match self.total.take() {
             Some(current) => current
                 .checked_add(&amount)
-                .ok_or_else(|| AdminError::internal("Usage standard cost exceeds decimal range"))?,
+                .ok_or_else(|| AdminError::internal("用量标准成本超出数值范围"))?,
             None => amount.clone(),
         });
         match self.by_bucket.entry(bucket_start) {
             Entry::Occupied(mut entry) => {
-                let sum = entry.get().checked_add(&amount).ok_or_else(|| {
-                    AdminError::internal("Usage standard cost exceeds decimal range")
-                })?;
+                let sum = entry
+                    .get()
+                    .checked_add(&amount)
+                    .ok_or_else(|| AdminError::internal("用量标准成本超出数值范围"))?;
                 entry.insert(sum);
             }
             Entry::Vacant(entry) => {
@@ -612,9 +611,9 @@ fn trend(kind: TrendKind, points: Vec<RequestMetricPoint>) -> Result<Trend, Admi
             .saturating_add(point.cost_coverage.not_billable_count);
         for cost in &point.costs {
             if let Some(amount) = costs.get_mut(&cost.currency) {
-                *amount = amount.checked_add(&cost.amount).ok_or_else(|| {
-                    AdminError::internal("Cost aggregation exceeded numeric bounds")
-                })?;
+                *amount = amount
+                    .checked_add(&cost.amount)
+                    .ok_or_else(|| AdminError::internal("成本聚合结果超出数值范围"))?;
             } else {
                 costs.insert(cost.currency.clone(), cost.amount.clone());
             }

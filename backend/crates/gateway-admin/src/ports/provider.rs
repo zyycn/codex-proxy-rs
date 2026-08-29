@@ -28,6 +28,8 @@ pub enum ProviderAdminErrorKind {
     Unsupported,
     NotFound,
     Conflict,
+    /// Provider 已发起不可逆操作，但无法确认最终执行结果。
+    Ambiguous,
     Unavailable,
     CredentialRefreshRequired,
     BadGateway,
@@ -36,8 +38,8 @@ pub enum ProviderAdminErrorKind {
 
 /// 不携带 OAuth 请求材料的管理错误。
 ///
-/// `message` 用于当前认证管理请求展示；上游没有标准 `error.message` 时，
-/// Provider 可以按其官方契约回退为完整的非成功响应正文。
+/// `message` 是 Provider 局部诊断，可能包含原始上游正文；通用管理用例不得自动把它作为公开文案。
+/// 只有明确拥有原始诊断合同的调用方才能读取，`Debug` 始终只记录是否存在。
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 #[error("provider admin operation failed: {kind:?}")]
 pub struct ProviderAdminError {

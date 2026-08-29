@@ -77,6 +77,7 @@ mod account_groups;
 mod accounts;
 mod auth;
 mod client_keys;
+mod errors;
 mod observability;
 mod settings;
 mod system;

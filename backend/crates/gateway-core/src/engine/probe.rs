@@ -7,7 +7,10 @@ use futures::future::BoxFuture;
 
 use crate::error::{ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind};
 use crate::routing::{ProviderKind, UpstreamModelId};
-use crate::{engine::credential::ProviderAccountId, operation::Operation};
+use crate::{
+    engine::{UpstreamSendState, credential::ProviderAccountId},
+    operation::Operation,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountProbeRequest {
@@ -71,12 +74,34 @@ impl fmt::Debug for AccountProbeUpstreamResponse {
     }
 }
 
+/// 连接测试失败发生的稳定责任边界。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountProbeErrorSource {
+    Gateway,
+    Provider,
+    Upstream,
+}
+
+impl AccountProbeErrorSource {
+    /// 返回管理端 wire 使用的稳定值。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gateway => "gateway",
+            Self::Provider => "provider",
+            Self::Upstream => "upstream",
+        }
+    }
+}
+
 /// 管理端连接测试的终态错误。
 ///
 /// `gateway` 保留稳定分类，`upstream_response` 只面向本次认证管理请求展示源响应。
 #[derive(Debug)]
 pub struct AccountProbeError {
     gateway: GatewayError,
+    source: AccountProbeErrorSource,
+    send_state: Option<UpstreamSendState>,
     upstream_response: Option<AccountProbeUpstreamResponse>,
 }
 
@@ -84,10 +109,14 @@ impl AccountProbeError {
     #[must_use]
     pub const fn new(
         gateway: GatewayError,
+        source: AccountProbeErrorSource,
+        send_state: Option<UpstreamSendState>,
         upstream_response: Option<AccountProbeUpstreamResponse>,
     ) -> Self {
         Self {
             gateway,
+            source,
+            send_state,
             upstream_response,
         }
     }
@@ -95,6 +124,16 @@ impl AccountProbeError {
     #[must_use]
     pub const fn kind(&self) -> GatewayErrorKind {
         self.gateway.kind()
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> AccountProbeErrorSource {
+        self.source
+    }
+
+    #[must_use]
+    pub const fn send_state(&self) -> Option<UpstreamSendState> {
+        self.send_state
     }
 
     #[must_use]
@@ -120,7 +159,7 @@ impl AccountProbeError {
 
 impl From<GatewayError> for AccountProbeError {
     fn from(gateway: GatewayError) -> Self {
-        Self::new(gateway, None)
+        Self::new(gateway, AccountProbeErrorSource::Gateway, None, None)
     }
 }
 

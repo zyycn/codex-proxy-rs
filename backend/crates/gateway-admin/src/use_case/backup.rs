@@ -429,9 +429,7 @@ fn map_backup_error(error: BackupError) -> AdminError {
         code::ACTIVE_TASK_CONFLICT | code::STATE_CONFLICT | code::STORAGE_IDENTITY_LOCKED => {
             AdminError::conflict(error.message().to_owned())
         }
-        code::STORE_UNAVAILABLE => {
-            AdminError::new(AdminErrorKind::Unavailable, error.message().to_owned())
-        }
-        _ => AdminError::bad_gateway(error.message().to_owned()),
+        code::STORE_UNAVAILABLE => AdminError::new(AdminErrorKind::Unavailable, "备份服务暂不可用"),
+        _ => AdminError::bad_gateway("备份服务请求失败"),
     }
 }

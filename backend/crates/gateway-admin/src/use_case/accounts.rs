@@ -84,9 +84,7 @@ pub trait AccountsService: Send + Sync {
         &self,
         _account_id: &ProviderAccountId,
     ) -> Result<ProviderProfileStatistics, AdminError> {
-        Err(AdminError::invalid(
-            "Provider profile statistics are not supported",
-        ))
+        Err(AdminError::invalid("当前 Provider 不支持账号统计"))
     }
 
     async fn reset_credits(
@@ -94,9 +92,7 @@ pub trait AccountsService: Send + Sync {
         _context: &MutationContext,
         _account_id: ProviderAccountId,
     ) -> Result<ProviderResetCredits, AdminError> {
-        Err(AdminError::invalid(
-            "Provider reset credits are not supported",
-        ))
+        Err(AdminError::invalid("当前 Provider 不支持重置额度"))
     }
 
     async fn consume_reset_credit(
@@ -104,9 +100,7 @@ pub trait AccountsService: Send + Sync {
         _context: &MutationContext,
         _command: ConsumeProviderResetCredit,
     ) -> Result<ProviderResetCreditResult, AdminError> {
-        Err(AdminError::invalid(
-            "Provider reset credits are not supported",
-        ))
+        Err(AdminError::invalid("当前 Provider 不支持重置额度"))
     }
 
     async fn models(
@@ -168,7 +162,7 @@ impl DefaultAccountsService {
             .load_account(account_id.as_str())
             .await
             .map_err(|error| map_store_error(error, "provider account"))?
-            .ok_or_else(|| AdminError::not_found("Provider account was not found"))
+            .ok_or_else(|| AdminError::not_found("Provider 账号不存在"))
     }
 
     async fn provider_for_account(
@@ -302,7 +296,7 @@ impl AccountsService for DefaultAccountsService {
         let mut quotas = futures::future::join_all(page.items.iter().map(|item| async {
             let account = &item.account;
             let account_id = ProviderAccountId::new(account.id.clone())
-                .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
+                .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
             // 单个账号的 quota 投影失败（Provider 未注册或 quota 读取失败）不拖垮整页：
             // 该账号降级为空额度投影，其余账号与页面状态照常返回。
             let provider = match self.providers.require(&account.provider_kind) {
@@ -368,9 +362,7 @@ impl AccountsService for DefaultAccountsService {
         account_ids: Vec<ProviderAccountId>,
     ) -> Result<AccountExportBundle, AdminError> {
         if account_ids.is_empty() || account_ids.len() > 200 {
-            return Err(AdminError::invalid(
-                "Account export requires between 1 and 200 accounts",
-            ));
+            return Err(AdminError::invalid("账号导出数量必须在 1 到 200 之间"));
         }
         let exported_ids = account_ids.clone();
         let mut grouped = BTreeMap::<ProviderKind, Vec<ProviderAccountId>>::new();
@@ -385,7 +377,7 @@ impl AccountsService for DefaultAccountsService {
             let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
             unique.len() != ids.len()
         }) {
-            return Err(AdminError::invalid("Account export contains duplicate IDs"));
+            return Err(AdminError::invalid("账号导出列表包含重复 ID"));
         }
         let mut documents = Vec::with_capacity(grouped.len());
         for (provider_kind, ids) in grouped {
@@ -475,7 +467,7 @@ impl AccountsService for DefaultAccountsService {
         command: UpdateAccount,
     ) -> Result<AccountUpdateResult, AdminError> {
         let account_id = ProviderAccountId::new(command.account_id.clone())
-            .map_err(|_| AdminError::invalid("Invalid provider account ID"))?;
+            .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
         let (_, provider) = self.provider_for_account(&account_id).await?;
         let enabled = command.enabled;
         let result = self
@@ -503,7 +495,7 @@ impl AccountsService for DefaultAccountsService {
             .iter()
             .map(|id| {
                 ProviderAccountId::new(id.clone())
-                    .map_err(|_| AdminError::invalid("Invalid provider account ID"))
+                    .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut providers = BTreeMap::<
@@ -674,6 +666,9 @@ impl AccountsService for DefaultAccountsService {
                         .map(|response| String::from_utf8_lossy(response.body()).into_owned());
                     let message = error.client_message().to_owned();
                     vec![AccountConnectionTestEvent::Failed {
+                        source: error.source(),
+                        gateway_error_code: error.kind(),
+                        send_state: error.send_state(),
                         message,
                         provider_error_code: error.client_error_code().map(ToOwned::to_owned),
                         provider_error_type: error.client_error_type().map(ToOwned::to_owned),
@@ -693,11 +688,7 @@ fn map_reset_credits_error_after_refresh(
     error: crate::ports::provider::ProviderAdminError,
 ) -> AdminError {
     if error.kind() == crate::ports::provider::ProviderAdminErrorKind::CredentialRefreshRequired {
-        return AdminError::bad_gateway(
-            error
-                .message()
-                .unwrap_or("OpenAI reset-credit upstream rejected the refreshed credential"),
-        );
+        return AdminError::bad_gateway("上游服务拒绝了刷新后的凭据");
     }
     map_provider_error(error, "provider reset credits")
 }

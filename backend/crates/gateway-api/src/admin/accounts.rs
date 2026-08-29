@@ -3,8 +3,8 @@
 use std::{collections::BTreeSet, convert::Infallible, fmt};
 
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    Router,
+    extract::State,
     http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
     response::{
         IntoResponse, Response,
@@ -44,8 +44,8 @@ use uuid::{Uuid, Version};
 
 use super::presenter::{format_compact_number, format_decimal_currency, format_number};
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState, PageMeta,
-    WireValidationError,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
+    PageMeta, WireValidationError,
 };
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
@@ -841,6 +841,9 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 "success": true
             }),
             DomainConnectionTestEvent::Failed {
+                source,
+                gateway_error_code,
+                send_state,
                 message,
                 provider_error_code,
                 provider_error_type,
@@ -849,6 +852,9 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 upstream_body,
             } => serde_json::json!({
                 "type": "error",
+                "source": source.as_str(),
+                "gatewayErrorCode": gateway_error_code.as_str(),
+                "sendState": send_state.map(gateway_core::engine::UpstreamSendState::as_str),
                 "error": message,
                 "providerErrorCode": provider_error_code,
                 "providerErrorType": provider_error_type,
@@ -1315,7 +1321,7 @@ where
 async fn batch_update_accounts<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<BatchUpdateAccountsRequest>,
+    AdminJson(request): AdminJson<BatchUpdateAccountsRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1336,7 +1342,7 @@ where
 async fn list_accounts<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<ListQuery>,
+    AdminQuery(query): AdminQuery<ListQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1357,7 +1363,7 @@ where
 async fn account_detail<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountIdQuery>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1378,7 +1384,7 @@ where
 async fn export_accounts<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountExportQuery>,
+    AdminQuery(query): AdminQuery<AccountExportQuery>,
 ) -> Result<Response, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1401,7 +1407,7 @@ where
 async fn import_accounts<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountImportRequest>,
+    AdminJson(request): AdminJson<AccountImportRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1429,7 +1435,7 @@ where
 async fn start_account_authorization<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<StartAccountAuthorizationRequest>,
+    AdminJson(request): AdminJson<StartAccountAuthorizationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1463,7 +1469,7 @@ where
 async fn complete_account_authorization<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<CompleteAccountAuthorizationRequest>,
+    AdminJson(request): AdminJson<CompleteAccountAuthorizationRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1497,7 +1503,7 @@ where
 async fn rotate_account<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<RotateAccountRequest>,
+    AdminJson(request): AdminJson<RotateAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1520,7 +1526,7 @@ where
 async fn update_account<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<UpdateAccountRequest>,
+    AdminJson(request): AdminJson<UpdateAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1541,7 +1547,7 @@ where
 async fn delete_accounts<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountDeletionRequest>,
+    AdminJson(request): AdminJson<AccountDeletionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1563,7 +1569,7 @@ where
 async fn refresh_account<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountRefreshRequest>,
+    AdminJson(request): AdminJson<AccountRefreshRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1582,7 +1588,7 @@ where
 async fn recover_account<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountActionRequest>,
+    AdminJson(request): AdminJson<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1601,7 +1607,7 @@ where
 async fn account_quota<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountIdQuery>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1622,7 +1628,7 @@ where
 async fn account_profile_statistics<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountIdQuery>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1643,7 +1649,7 @@ where
 async fn refresh_account_quota<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountActionRequest>,
+    AdminJson(request): AdminJson<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1664,7 +1670,7 @@ where
 async fn account_reset_credits<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountIdQuery>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1685,7 +1691,7 @@ where
 async fn consume_account_reset_credit<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountResetCreditConsumeRequest>,
+    AdminJson(request): AdminJson<AccountResetCreditConsumeRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1706,7 +1712,7 @@ where
 async fn account_models<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountIdQuery>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1725,7 +1731,7 @@ where
 async fn refresh_account_models<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Json(request): Json<AccountActionRequest>,
+    AdminJson(request): AdminJson<AccountActionRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -1744,7 +1750,7 @@ where
 async fn test_account_connection<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<AccountTestQuery>,
+    AdminQuery(query): AdminQuery<AccountTestQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -2236,9 +2242,9 @@ fn china_datetime(value: &DateTime<Utc>) -> String {
 }
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
-    AdminError::bad_request(format!("Invalid {}", error.field()))
+    AdminError::bad_request(format!("{} 字段不合法", error.field()))
 }
 
 fn map_service_error(error: AdminServiceError) -> AdminError {
-    super::wire::map_admin_service_error(error, "Account directory unavailable")
+    super::wire::map_admin_service_error(error)
 }

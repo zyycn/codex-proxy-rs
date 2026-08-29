@@ -1404,6 +1404,7 @@ const fn provider_admin_error_code(kind: ProviderAdminErrorKind) -> &'static str
         ProviderAdminErrorKind::Unsupported => "unsupported",
         ProviderAdminErrorKind::NotFound => "not_found",
         ProviderAdminErrorKind::Conflict => "conflict",
+        ProviderAdminErrorKind::Ambiguous => "ambiguous",
         ProviderAdminErrorKind::Unavailable => "unavailable",
         ProviderAdminErrorKind::CredentialRefreshRequired => "credential_refresh_required",
         ProviderAdminErrorKind::BadGateway => "bad_gateway",
@@ -1530,7 +1531,7 @@ fn map_reset_credits_error(error: CodexResetCreditsError) -> ProviderAdminError 
                 bounded_upstream_body(&body)
             ))
         }
-        Error::ConsumeResultUnknown => provider_admin_error(ProviderAdminErrorKind::BadGateway)
+        Error::ConsumeResultUnknown => provider_admin_error(ProviderAdminErrorKind::Ambiguous)
             .with_message(
                 "OpenAI reset-credit consume result is unknown; refresh the credit list before retrying",
             ),

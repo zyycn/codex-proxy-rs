@@ -40,6 +40,7 @@ mod error {
             AdminErrorCode::INTERNAL,
             AdminErrorCode::USAGE_RECORD_ACCOUNTS,
             AdminErrorCode::BAD_GATEWAY,
+            AdminErrorCode::UPSTREAM_RESULT_UNKNOWN,
             AdminErrorCode::SERVICE_UNAVAILABLE,
         ]
         .map(AdminErrorCode::value);
@@ -48,7 +49,7 @@ mod error {
             actual,
             [
                 40000, 40001, 40002, 40003, 40101, 40102, 40103, 40401, 40901, 42901, 50000, 50001,
-                50002, 50201, 50301,
+                50002, 50201, 50202, 50301,
             ]
         );
     }
@@ -57,7 +58,7 @@ mod error {
     fn invalid_admin_api_key_should_keep_code_and_null_data() {
         let value = serde_json::to_value(AdminErrorBody::new(
             AdminErrorCode::INVALID_API_KEY,
-            "Invalid admin API key",
+            "管理 API Key 无效",
         ))
         .expect("admin error body should serialize");
 
@@ -65,7 +66,7 @@ mod error {
             value,
             json!({
                 "code": 40103,
-                "message": "Invalid admin API key",
+                "message": "管理 API Key 无效",
                 "data": null
             })
         );
@@ -158,7 +159,7 @@ mod response {
                 StatusCode::UNAUTHORIZED,
                 json!({
                     "code": 40103,
-                    "message": "Invalid admin API key",
+                    "message": "管理 API Key 无效",
                     "data": null
                 })
             )
@@ -199,17 +200,18 @@ mod response {
                 40401,
             ),
             (
-                AdminError::internal("internal"),
+                AdminError::internal(),
                 StatusCode::INTERNAL_SERVER_ERROR,
                 50001,
             ),
+            (AdminError::bad_gateway(), StatusCode::BAD_GATEWAY, 50201),
             (
-                AdminError::bad_gateway("upstream"),
+                AdminError::upstream_result_unknown(),
                 StatusCode::BAD_GATEWAY,
-                50201,
+                50202,
             ),
             (
-                AdminError::service_unavailable("storage"),
+                AdminError::service_unavailable(),
                 StatusCode::SERVICE_UNAVAILABLE,
                 50301,
             ),

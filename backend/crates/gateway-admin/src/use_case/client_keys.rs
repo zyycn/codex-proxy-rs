@@ -77,7 +77,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .reveal_client_key(id)
             .await
             .map_err(|error| map_store_error(error, "client API key"))?
-            .ok_or_else(|| AdminError::not_found("Client API key was not found"))
+            .ok_or_else(|| AdminError::not_found("Client API Key 不存在"))
     }
 
     async fn create(
@@ -86,7 +86,7 @@ impl ClientKeyService for DefaultClientKeyService {
         command: CreateClientKey,
     ) -> Result<CreatedClientKey, AdminError> {
         let id = ClientApiKeyId::new(format!("key_{}", Uuid::now_v7().simple()))
-            .map_err(|_| AdminError::internal("Failed to create Client API key ID"))?;
+            .map_err(|_| AdminError::internal("创建 Client API Key ID 失败"))?;
         let mut bytes = [0_u8; 32];
         OsRng.fill_bytes(&mut bytes);
         let plaintext = format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes));
@@ -176,7 +176,7 @@ fn validate_cursor(query: &ClientKeyListQuery) -> Result<(), AdminError> {
     };
     if cursor.sort != query.sort {
         return Err(AdminError::invalid(
-            "Client API key cursor sort does not match the query",
+            "Client API Key 游标排序与查询条件不一致",
         ));
     }
     let matches = matches!(
@@ -198,6 +198,6 @@ fn validate_cursor(query: &ClientKeyListQuery) -> Result<(), AdminError> {
     if matches {
         Ok(())
     } else {
-        Err(AdminError::invalid("Invalid Client API key cursor"))
+        Err(AdminError::invalid("Client API Key 游标不合法"))
     }
 }

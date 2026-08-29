@@ -5,8 +5,8 @@
 use std::convert::Infallible;
 
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    Router,
+    extract::State,
     http::StatusCode,
     response::{
         IntoResponse,
@@ -23,7 +23,7 @@ use gateway_admin::model::system::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminResponse, AdminSessionState,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
     wire::map_admin_service_error,
 };
 
@@ -251,7 +251,7 @@ where
 async fn update_detail<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    Query(query): Query<UpdateDetailQuery>,
+    AdminQuery(query): AdminQuery<UpdateDetailQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -290,7 +290,7 @@ where
 async fn perform_update<S>(
     _auth: AdminAuth,
     State(state): State<S>,
-    payload: Option<Json<UpdateRequest>>,
+    payload: Option<AdminJson<UpdateRequest>>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -298,7 +298,7 @@ where
     let result = state
         .admin_services()
         .system()
-        .perform_update(payload.map(|Json(value)| value.into_target_version()))
+        .perform_update(payload.map(|AdminJson(value)| value.into_target_version()))
         .await
         .map_err(map_system_error)?;
     let SystemOperationAccepted::Update {
@@ -309,7 +309,7 @@ where
         target_version,
     } = result
     else {
-        return Err(AdminError::internal("Invalid system update result"));
+        return Err(AdminError::internal());
     };
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -361,7 +361,7 @@ where
         need_restart,
     } = result
     else {
-        return Err(AdminError::internal("Invalid system rollback result"));
+        return Err(AdminError::internal());
     };
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -391,7 +391,7 @@ where
         message,
     } = result
     else {
-        return Err(AdminError::internal("Invalid system restart result"));
+        return Err(AdminError::internal());
     };
     Ok(AdminResponse::new(
         StatusCode::OK,
@@ -477,5 +477,5 @@ const fn update_event_level_name(level: SystemUpdateEventLevel) -> &'static str 
 }
 
 fn map_system_error(error: gateway_admin::model::AdminError) -> AdminError {
-    map_admin_service_error(error, "System operation unavailable")
+    map_admin_service_error(error)
 }

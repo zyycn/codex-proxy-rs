@@ -260,10 +260,11 @@ export function useAccountResetCredits(options: {
 function isAmbiguousConsumeError(error: unknown) {
   if (!(error instanceof ApiError))
     return false
-  if (error.status === 0 || error.status === 408 || error.message.includes('consume result is unknown'))
-    return true
-  return error.status >= 500
-    && !error.message.startsWith('OpenAI reset-credit upstream returned HTTP ')
+  return error.code === 50202
+    || error.status === 0
+    || error.status === 408
+    || error.kind === 'timeout'
+    || error.kind === 'network'
 }
 
 function resetResultMessage(code: string) {

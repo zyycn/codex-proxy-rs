@@ -116,6 +116,8 @@ impl AdminErrorCode {
     pub const USAGE_RECORD_ACCOUNTS: Self = Self(50002);
     /// 上游网关失败。
     pub const BAD_GATEWAY: Self = Self(50201);
+    /// 不可逆上游操作的执行结果未知。
+    pub const UPSTREAM_RESULT_UNKNOWN: Self = Self(50202);
     /// 依赖的服务暂不可用。
     pub const SERVICE_UNAVAILABLE: Self = Self(50301);
 
@@ -165,6 +167,89 @@ pub struct AdminError {
     body: AdminErrorBody,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AdminErrorSpec {
+    status: StatusCode,
+    code: AdminErrorCode,
+    message: &'static str,
+}
+
+impl AdminErrorSpec {
+    const fn new(status: StatusCode, code: AdminErrorCode, message: &'static str) -> Self {
+        Self {
+            status,
+            code,
+            message,
+        }
+    }
+}
+
+const MALFORMED_JSON: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::BAD_REQUEST,
+    AdminErrorCode::MALFORMED_JSON,
+    "请求体不是合法 JSON",
+);
+const BAD_REQUEST: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::BAD_REQUEST,
+    AdminErrorCode::BAD_REQUEST,
+    "请求参数不合法",
+);
+const INVALID_TIME_RANGE: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::BAD_REQUEST,
+    AdminErrorCode::INVALID_TIME_RANGE,
+    "时间范围不合法",
+);
+const SESSION_REQUIRED: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::UNAUTHORIZED,
+    AdminErrorCode::SESSION_REQUIRED,
+    "需要管理员登录",
+);
+const INVALID_CREDENTIALS: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::UNAUTHORIZED,
+    AdminErrorCode::INVALID_CREDENTIALS,
+    "管理员用户名或密码错误",
+);
+const INVALID_API_KEY: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::UNAUTHORIZED,
+    AdminErrorCode::INVALID_API_KEY,
+    "管理 API Key 无效",
+);
+const ADMIN_ROUTE_NOT_FOUND: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::NOT_FOUND,
+    AdminErrorCode::NOT_FOUND,
+    "管理接口不存在",
+);
+const METHOD_NOT_ALLOWED: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::METHOD_NOT_ALLOWED,
+    AdminErrorCode::BAD_REQUEST,
+    "请求方法不受支持",
+);
+const TOO_MANY_LOGIN_ATTEMPTS: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::TOO_MANY_REQUESTS,
+    AdminErrorCode::TOO_MANY_LOGIN_ATTEMPTS,
+    "登录尝试过多，请稍后重试",
+);
+const INTERNAL: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::INTERNAL_SERVER_ERROR,
+    AdminErrorCode::INTERNAL,
+    "服务内部错误",
+);
+const BAD_GATEWAY: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::BAD_GATEWAY,
+    AdminErrorCode::BAD_GATEWAY,
+    "上游服务请求失败",
+);
+const UPSTREAM_RESULT_UNKNOWN: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::BAD_GATEWAY,
+    AdminErrorCode::UPSTREAM_RESULT_UNKNOWN,
+    "上游执行结果未知，请刷新状态后再决定是否重试",
+);
+const SERVICE_UNAVAILABLE: AdminErrorSpec = AdminErrorSpec::new(
+    StatusCode::SERVICE_UNAVAILABLE,
+    AdminErrorCode::SERVICE_UNAVAILABLE,
+    "依赖服务暂不可用",
+);
+
 impl AdminError {
     fn new(status: StatusCode, code: AdminErrorCode, message: impl Into<String>) -> Self {
         Self {
@@ -173,44 +258,48 @@ impl AdminError {
         }
     }
 
+    fn from_spec(spec: AdminErrorSpec) -> Self {
+        Self::new(spec.status, spec.code, spec.message)
+    }
+
+    pub fn malformed_json() -> Self {
+        Self::from_spec(MALFORMED_JSON)
+    }
+
+    pub fn invalid_request(status: StatusCode, message: &'static str) -> Self {
+        Self::new(status, BAD_REQUEST.code, message)
+    }
+
+    pub fn invalid_time_range() -> Self {
+        Self::from_spec(INVALID_TIME_RANGE)
+    }
+
+    pub fn admin_route_not_found() -> Self {
+        Self::from_spec(ADMIN_ROUTE_NOT_FOUND)
+    }
+
+    pub fn method_not_allowed() -> Self {
+        Self::from_spec(METHOD_NOT_ALLOWED)
+    }
+
     pub fn bad_request(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::BAD_REQUEST,
-            AdminErrorCode::BAD_REQUEST,
-            message,
-        )
+        Self::new(BAD_REQUEST.status, BAD_REQUEST.code, message)
     }
 
     pub fn admin_session_required() -> Self {
-        Self::new(
-            StatusCode::UNAUTHORIZED,
-            AdminErrorCode::SESSION_REQUIRED,
-            "Admin session required",
-        )
+        Self::from_spec(SESSION_REQUIRED)
     }
 
     pub fn invalid_admin_credentials() -> Self {
-        Self::new(
-            StatusCode::UNAUTHORIZED,
-            AdminErrorCode::INVALID_CREDENTIALS,
-            "Invalid admin credentials",
-        )
+        Self::from_spec(INVALID_CREDENTIALS)
     }
 
     pub fn invalid_admin_api_key() -> Self {
-        Self::new(
-            StatusCode::UNAUTHORIZED,
-            AdminErrorCode::INVALID_API_KEY,
-            "Invalid admin API key",
-        )
+        Self::from_spec(INVALID_API_KEY)
     }
 
     pub fn too_many_login_attempts() -> Self {
-        Self::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            AdminErrorCode::TOO_MANY_LOGIN_ATTEMPTS,
-            "Too many admin login attempts",
-        )
+        Self::from_spec(TOO_MANY_LOGIN_ATTEMPTS)
     }
 
     pub fn conflict(message: impl Into<String>) -> Self {
@@ -221,47 +310,37 @@ impl AdminError {
         Self::new(StatusCode::NOT_FOUND, AdminErrorCode::NOT_FOUND, message)
     }
 
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            AdminErrorCode::INTERNAL,
-            message,
-        )
+    pub fn internal() -> Self {
+        Self::from_spec(INTERNAL)
     }
 
-    pub fn bad_gateway(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::BAD_GATEWAY,
-            AdminErrorCode::BAD_GATEWAY,
-            message,
-        )
+    pub fn bad_gateway() -> Self {
+        Self::from_spec(BAD_GATEWAY)
     }
 
-    pub fn service_unavailable(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            AdminErrorCode::SERVICE_UNAVAILABLE,
-            message,
-        )
+    pub fn upstream_result_unknown() -> Self {
+        Self::from_spec(UPSTREAM_RESULT_UNKNOWN)
+    }
+
+    pub fn service_unavailable() -> Self {
+        Self::from_spec(SERVICE_UNAVAILABLE)
     }
 }
 
 /// 把管理用例的稳定错误分类映射到既有 HTTP 错误 contract。
-pub(crate) fn map_admin_service_error(
-    error: gateway_admin::model::AdminError,
-    unavailable_message: &'static str,
-) -> AdminError {
+pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     use gateway_admin::model::AdminErrorKind;
 
     match error.kind() {
-        AdminErrorKind::Invalid => AdminError::bad_request(error.to_string()),
+        AdminErrorKind::Invalid => AdminError::bad_request(error.message()),
         AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
-        AdminErrorKind::NotFound => AdminError::not_found(error.to_string()),
-        AdminErrorKind::Conflict => AdminError::conflict(error.to_string()),
+        AdminErrorKind::NotFound => AdminError::not_found(error.message()),
+        AdminErrorKind::Conflict => AdminError::conflict(error.message()),
         AdminErrorKind::RateLimited => AdminError::too_many_login_attempts(),
-        AdminErrorKind::BadGateway => AdminError::bad_gateway(error.to_string()),
-        AdminErrorKind::Unavailable => AdminError::service_unavailable(unavailable_message),
-        AdminErrorKind::Internal => AdminError::internal(error.to_string()),
+        AdminErrorKind::BadGateway => AdminError::bad_gateway(),
+        AdminErrorKind::UpstreamResultUnknown => AdminError::upstream_result_unknown(),
+        AdminErrorKind::Unavailable => AdminError::service_unavailable(),
+        AdminErrorKind::Internal => AdminError::internal(),
     }
 }
 

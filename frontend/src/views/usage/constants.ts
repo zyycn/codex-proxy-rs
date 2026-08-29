@@ -42,7 +42,7 @@ export const opsErrorColumns = defineTableColumns<OpsErrorRow>([
   { key: 'route', label: '端点', kind: 'mono' },
   { key: 'model', label: '模型', kind: 'mono' },
   { key: 'requestId', label: '请求 ID', kind: 'mono', size: '2xl' },
-  { key: 'message', label: '消息', kind: 'text', size: '3xl' },
+  { key: 'message', label: '错误摘要', kind: 'custom', size: '3xl' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'sm' },
 ])
 
