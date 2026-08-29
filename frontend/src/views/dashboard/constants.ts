@@ -80,8 +80,8 @@ export const healthStatusMeta: Record<HealthStatus, HealthStatusMeta> = {
   },
   low_sample: {
     label: '低样本',
-    cellClass: 'bg-cp-info',
-    badgeClass: 'bg-cp-info-bg text-cp-info-text',
+    cellClass: 'bg-cp-cyan-solid',
+    badgeClass: 'bg-cp-cyan-bg text-cp-cyan-text-on-bg',
   },
   stable: {
     label: '稳定',
@@ -99,7 +99,7 @@ export function healthReliabilityValueClass(successRequests: number, failedReque
   if (reliability >= 99.5)
     return 'text-cp-success-text'
   if (reliability >= 98)
-    return 'text-cp-info-text'
+    return 'text-cp-cyan-text'
   if (reliability >= 95)
     return 'text-cp-warning-text'
   return 'text-cp-error-text'

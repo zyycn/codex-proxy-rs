@@ -33,7 +33,7 @@ const authenticationLabel = computed(() => {
 <template>
   <span class="inline-flex items-center whitespace-nowrap" :class="groupGapClass">
     <span
-      class="inline-flex shrink-0 items-center justify-center bg-cp-fill-tertiary text-cp-text"
+      class="inline-flex shrink-0 items-center justify-center bg-cp-fill-secondary/80 text-cp-text"
       :class="iconContainerClass"
       :title="providerLabel"
     >
@@ -44,7 +44,7 @@ const authenticationLabel = computed(() => {
 
     <span
       v-if="showAuthenticationKind"
-      class="inline-flex shrink-0 items-center justify-center bg-cp-fill-tertiary text-cp-text"
+      class="inline-flex shrink-0 items-center justify-center bg-cp-fill-secondary/80 text-cp-text"
       :class="iconContainerClass"
       :title="authenticationLabel"
     >

@@ -433,7 +433,7 @@ function usageTrendSummary(points: ReturnType<typeof aggregateUsageTrend>) {
       label: '缓存',
       value: formatCompactNumber(cachedTokens),
       tone: 'normal',
-      colorVar: '--cp-color-orange-solid',
+      colorVar: '--cp-color-text-tertiary',
     },
   ]
 }
@@ -570,6 +570,6 @@ function trendSummaryColorVar(kind: DashboardTrendKind, label: string) {
   if (label.includes('输出'))
     return '--cp-color-green-solid'
   if (label.includes('缓存'))
-    return '--cp-color-orange-solid'
+    return '--cp-color-text-tertiary'
   return '--cp-color-blue-solid'
 }

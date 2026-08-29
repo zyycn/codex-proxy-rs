@@ -70,7 +70,7 @@ const avatarToneClass = computed(() => {
     </span>
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-cp-lg font-heavy text-cp-text">
+        <span class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>
         <span
@@ -83,7 +83,7 @@ const avatarToneClass = computed(() => {
       </div>
       <div
         v-if="metaPosition === 'secondary' && (showPlan || $slots.meta)"
-        class="mt-1 inline-flex min-w-0 items-center gap-1.5"
+        class="mt-0.5 inline-flex min-w-0 items-center gap-1.5"
       >
         <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />

@@ -123,7 +123,8 @@ async function handleSubmit(): Promise<void> {
   --cp-login-error-text-color: var(--cp-color-error-text);
   --cp-login-button-shadow-color: color-mix(in srgb, var(--cp-color-primary) 30%, transparent);
   --cp-login-footer-color: color-mix(in srgb, var(--cp-color-text-secondary) 82%, var(--cp-color-text-tertiary));
-  --cp-login-toggle-bg: color-mix(in srgb, var(--cp-color-fill-tertiary) 74%, transparent);
+  --cp-login-toggle-bg: color-mix(in srgb, var(--cp-color-fill-tertiary) 90%, var(--cp-color-bg-container));
+  --cp-login-toggle-bg-hover: var(--cp-color-fill-tertiary);
   --cp-login-toggle-sun-color: var(--cp-login-logo-color);
   --cp-login-toggle-moon-color: var(--cp-color-text-secondary);
   --cp-login-toggle-knob: var(--cp-color-bg-container);
@@ -187,10 +188,11 @@ async function handleSubmit(): Promise<void> {
   --cp-login-placeholder-color: var(--cp-color-text-quaternary);
   --cp-login-button-shadow-color: color-mix(in srgb, var(--cp-color-primary) 30%, transparent);
   --cp-login-footer-color: color-mix(in srgb, var(--cp-color-text-secondary) 80%, var(--cp-color-text-quaternary));
-  --cp-login-toggle-bg: color-mix(in srgb, var(--cp-color-bg-container) 72%, transparent);
+  --cp-login-toggle-bg: var(--cp-color-fill-tertiary);
+  --cp-login-toggle-bg-hover: color-mix(in srgb, var(--cp-color-fill-tertiary) 94%, var(--cp-color-white));
   --cp-login-toggle-sun-color: var(--cp-color-text-tertiary);
-  --cp-login-toggle-moon-color: var(--cp-color-text-secondary);
-  --cp-login-toggle-knob: color-mix(in srgb, var(--cp-color-bg-elevated) 82%, var(--cp-color-primary));
-  --cp-login-toggle-shadow-color: color-mix(in srgb, var(--cp-color-primary) 12%, transparent);
+  --cp-login-toggle-moon-color: var(--cp-color-white);
+  --cp-login-toggle-knob: var(--cp-color-primary-hover);
+  --cp-login-toggle-shadow-color: color-mix(in srgb, var(--cp-color-primary-text) 30%, transparent);
 }
 </style>

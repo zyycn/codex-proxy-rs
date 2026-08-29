@@ -26,6 +26,11 @@ const levelClasses: Record<ProfileActivityLevel, string> = {
 }
 const grid = computed(() => buildProfileActivityGrid(props.dailyUsage ?? [], mode.value))
 const rangeLabel = computed(() => `${grid.value.rangeStart} 至 ${grid.value.rangeEnd}`)
+const monthLabels = computed(() =>
+  grid.value.weeks.flatMap((week, weekIndex) =>
+    week.monthLabel ? [{ label: week.monthLabel, weekIndex }] : [],
+  ),
+)
 </script>
 
 <template>
@@ -51,11 +56,15 @@ const rangeLabel = computed(() => `${grid.value.rangeStart} 至 ${grid.value.ran
       <div class="min-w-190">
         <div class="mb-1.5 grid gap-1" style="grid-template-columns: repeat(52, minmax(0, 1fr))">
           <span
-            v-for="week in grid.weeks"
-            :key="week.key"
+            v-for="(month, monthIndex) in monthLabels"
+            :key="`${month.weekIndex}-${month.label}`"
             class="h-4 whitespace-nowrap text-[10px] leading-4 font-semibold text-cp-text-quaternary"
+            :class="monthIndex === monthLabels.length - 1 ? 'text-right' : undefined"
+            :style="{
+              gridColumn: `${month.weekIndex + (monthIndex === monthLabels.length - 1 ? 0 : 1)} / span 2`,
+            }"
           >
-            {{ week.monthLabel }}
+            {{ month.label }}
           </span>
         </div>
         <div class="grid gap-1" style="grid-template-columns: repeat(52, minmax(0, 1fr))">

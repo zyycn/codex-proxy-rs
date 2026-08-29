@@ -251,6 +251,12 @@ function togglePasswordVisible(): void {
     color 0.16s ease;
 }
 
+@media (hover: hover) {
+  .login-theme-toggle:hover {
+    background: var(--cp-login-toggle-bg-hover);
+  }
+}
+
 .login-theme-toggle:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--cp-login-input-icon-color) 46%, transparent);
 }
@@ -271,7 +277,7 @@ function togglePasswordVisible(): void {
 .login-theme-knob {
   position: absolute;
   top: 5px;
-  left: 5px;
+  left: 5.5px;
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -281,7 +287,7 @@ function togglePasswordVisible(): void {
 }
 
 .login-theme-toggle.is-dark .login-theme-knob {
-  transform: translateX(34px);
+  transform: translateX(33px);
 }
 
 .login-error {

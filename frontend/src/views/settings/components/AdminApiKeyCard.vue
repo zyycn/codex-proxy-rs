@@ -57,7 +57,7 @@ const emit = defineEmits<{
       <div class="flex min-h-16 items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3">
         <div class="flex min-w-0 items-center gap-3">
           <BaseMotionIcon
-            class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp bg-cp-bg-container text-cp-primary-text shadow-cp-tertiary"
+            class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp bg-cp-bg-container text-cp-cyan-solid shadow-cp-tertiary"
           >
             <KeyRound class="size-4" />
           </BaseMotionIcon>

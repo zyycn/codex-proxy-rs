@@ -72,7 +72,7 @@ const {
                   'bg-cp-success': item.tone === 'success',
                   'bg-cp-warning': item.tone === 'warning',
                   'bg-cp-error': item.tone === 'danger',
-                  'bg-cp-orange-solid': item.tone === 'normal',
+                  'bg-cp-text-tertiary': item.tone === 'normal',
                 },
               ]"
             />

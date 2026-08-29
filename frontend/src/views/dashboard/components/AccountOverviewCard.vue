@@ -246,6 +246,7 @@ const statusBars = computed(() => {
                   <ProviderIconGroup
                     :provider="account.provider"
                     :authentication-kind="account.authenticationKind"
+                    size="sm"
                   />
                 </template>
               </AccountIdentityCell>

@@ -193,12 +193,12 @@ export function useRequestTrendChart(options: {
         tooltipItem(
           '缓存',
           point?.cachedTokens,
-          trendColor('缓存', '--cp-color-orange-solid', '#F59E0B'),
+          trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem(
           '缓存命中',
           trendPointText(point, 'cacheHitRate'),
-          trendColor('缓存', '--cp-color-orange-solid', '#F59E0B'),
+          trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem('请求', point?.requests, palette.value.textSecondary),
       ]
@@ -243,7 +243,7 @@ export function useRequestTrendChart(options: {
 
   function getSeries() {
     if (activeKind.value === 'usage') {
-      const cacheColor = trendColor('缓存', '--cp-color-orange-solid', '#F59E0B')
+      const cacheColor = trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8')
       const inputColor = trendColor('输入', '--cp-color-blue-solid', '#5983F4')
       const outputColor = trendColor('输出', '--cp-color-green-solid', '#12B981')
       return [
