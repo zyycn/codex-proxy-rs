@@ -1,11 +1,5 @@
 <script setup lang="ts">
-import {
-  Check,
-  RotateCcw,
-  Save,
-  Search,
-  Undo2,
-} from '@lucide/vue'
+import { Check, RotateCcw, Save, Search, Undo2 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -74,7 +68,7 @@ function saveTheme(event: MouseEvent) {
             class="inline-flex items-center gap-1.5 text-cp-sm font-heavy"
             :class="dirty ? 'text-cp-primary-text' : 'text-cp-text-tertiary'"
           >
-            <span class="size-1.5 rounded-full bg-current" aria-hidden="true" />
+            <span class="size-1.5 rounded-full bg-current" />
             {{ dirty ? `${modificationCount} 处修改待应用` : '已同步' }}
           </span>
         </span>
@@ -101,12 +95,7 @@ function saveTheme(event: MouseEvent) {
             </template>
             恢复默认
           </BaseButton>
-          <BaseButton
-            size="sm"
-            variant="primary"
-            :disabled="!dirty"
-            @click="saveTheme"
-          >
+          <BaseButton size="sm" variant="primary" :disabled="!dirty" @click="saveTheme">
             <template #icon>
               <Save v-if="dirty" class="size-3.5" />
               <Check v-else class="size-3.5" />
@@ -117,10 +106,23 @@ function saveTheme(event: MouseEvent) {
       </template>
     </BasePageHeader>
 
-    <section class="theme-workbench isolate mt-5 overflow-hidden rounded-cp-card bg-cp-bg-layout shadow-cp-card xl:flex xl:min-h-0 xl:flex-1 xl:flex-col" aria-label="主题编辑器">
-      <div class="theme-workbench-body grid min-h-180 gap-3 xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:grid-cols-[370px_minmax(0,1fr)]">
-        <aside class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden rounded-cp-lg bg-cp-bg-container pt-3 pr-0 pb-3 pl-3 shadow-cp-secondary" aria-label="主题 Token 编辑面板">
-          <BaseInput v-model="query" class="mr-3" aria-label="搜索 Token" placeholder="搜索 Seed、Alias 或 Component Token">
+    <section
+      class="theme-workbench isolate mt-5 overflow-hidden rounded-cp-card bg-cp-bg-layout shadow-cp-card xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+      aria-label="主题编辑器"
+    >
+      <div
+        class="theme-workbench-body grid min-h-180 gap-3 xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:grid-cols-[370px_minmax(0,1fr)]"
+      >
+        <aside
+          class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden rounded-cp-lg bg-cp-bg-container pt-3 pr-0 pb-3 pl-3 shadow-cp-secondary"
+          aria-label="主题 Token 编辑面板"
+        >
+          <BaseInput
+            v-model="query"
+            class="mr-3"
+            aria-label="搜索 Token"
+            placeholder="搜索 Seed、Alias 或 Component Token"
+          >
             <template #prefix>
               <Search class="size-4" />
             </template>
@@ -157,12 +159,7 @@ function saveTheme(event: MouseEvent) {
         </aside>
 
         <div class="hidden min-h-0 min-[768px]:block">
-          <ThemeEditorPreview
-            v-model="preview"
-            class="h-full"
-            :theme="previewTheme"
-            :style="previewStyle"
-          />
+          <ThemeEditorPreview v-model="preview" class="h-full" :theme="previewTheme" :style="previewStyle" />
         </div>
       </div>
     </section>

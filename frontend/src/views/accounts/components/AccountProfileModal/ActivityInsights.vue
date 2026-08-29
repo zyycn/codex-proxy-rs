@@ -19,9 +19,11 @@ const insightRows = computed(() => [
   { label: '使用的技能总数', value: formatNumber(props.insights.totalSkillsUsed) },
   { label: '聊天总数', value: formatNumber(props.insights.totalThreads) },
 ])
-const invocations = computed(() => (props.insights.invocations ?? [])
-  .map(invocationView)
-  .filter((invocation): invocation is NonNullable<typeof invocation> => invocation !== null))
+const invocations = computed(() =>
+  (props.insights.invocations ?? [])
+    .map(invocationView)
+    .filter((invocation): invocation is NonNullable<typeof invocation> => invocation !== null),
+)
 
 function formatNumber(value: number | null) {
   return value === null ? '—' : formatInteger(value)
@@ -84,10 +86,7 @@ function invocationView(invocation: AccountProfileInvocation) {
           :key="invocation.key"
           class="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2.5 py-1.5"
         >
-          <span
-            class="grid size-6 place-items-center rounded-cp bg-cp-fill-quaternary text-cp-text-secondary"
-            aria-hidden="true"
-          >
+          <span class="grid size-6 place-items-center rounded-cp bg-cp-fill-quaternary text-cp-text-secondary">
             <Package class="size-3.5" :stroke-width="2" />
           </span>
           <span class="truncate text-cp font-bold text-cp-text">{{ invocation.name }}</span>

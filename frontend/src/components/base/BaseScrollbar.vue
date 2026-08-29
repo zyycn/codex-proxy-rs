@@ -40,9 +40,7 @@ const verticalTrackHovering = shallowRef(false)
 const horizontalTrackHovering = shallowRef(false)
 const dragging = shallowRef(false)
 const horizontalDragging = shallowRef(false)
-const dragDocument = computed(() =>
-  dragging.value || horizontalDragging.value ? document : null,
-)
+const dragDocument = computed(() => (dragging.value || horizontalDragging.value ? document : null))
 
 interface AxisMetrics {
   scrollRange: number
@@ -87,12 +85,8 @@ const wrapClasses = computed(() => [
   'min-h-0 max-h-[inherit] overflow-auto outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&::-webkit-scrollbar]:size-0',
   props.maxHeight ? undefined : 'h-full',
 ])
-const verticalTrackClass = computed(() =>
-  props.horizontal && canScrollX.value ? 'bottom-1.5' : 'bottom-0',
-)
-const horizontalTrackClass = computed(() =>
-  props.vertical && canScrollY.value ? 'right-1.5' : 'right-0',
-)
+const verticalTrackClass = computed(() => (props.horizontal && canScrollX.value ? 'bottom-1.5' : 'bottom-0'))
+const horizontalTrackClass = computed(() => (props.vertical && canScrollY.value ? 'right-1.5' : 'right-0'))
 
 function showScrollbar() {
   visible.value = true
@@ -104,10 +98,7 @@ function clearHideTimer() {
 
 function scheduleHideScrollbar() {
   clearHideTimer()
-  if (!dragging.value
-    && !horizontalDragging.value
-    && !verticalTrackHovering.value
-    && !horizontalTrackHovering.value) {
+  if (!dragging.value && !horizontalDragging.value && !verticalTrackHovering.value && !horizontalTrackHovering.value) {
     startHideTimer()
   }
 }
@@ -174,12 +165,7 @@ function measureVerticalScrollbar(wrap: HTMLElement) {
   const clientHeight = wrap.clientHeight
   const scrollHeight = wrap.scrollHeight
   const scrollRange = clamp(scrollHeight - clientHeight, 0, Number.POSITIVE_INFINITY)
-  const availableTrackHeight = trackLength(
-    verticalTrackRef.value,
-    clientHeight,
-    'top',
-    'bottom',
-  )
+  const availableTrackHeight = trackLength(verticalTrackRef.value, clientHeight, 'top', 'bottom')
   if (scrollRange <= overflowTolerance || availableTrackHeight <= 0) {
     wrap.scrollTop = 0
     verticalMetrics.scrollRange = 0
@@ -206,12 +192,7 @@ function measureHorizontalScrollbar(wrap: HTMLElement) {
   const clientWidth = wrap.clientWidth
   const scrollWidth = wrap.scrollWidth
   const scrollRange = clamp(scrollWidth - clientWidth, 0, Number.POSITIVE_INFINITY)
-  const availableTrackWidth = trackLength(
-    horizontalTrackRef.value,
-    clientWidth,
-    'left',
-    'right',
-  )
+  const availableTrackWidth = trackLength(horizontalTrackRef.value, clientWidth, 'left', 'right')
   if (scrollRange <= overflowTolerance || availableTrackWidth <= 0) {
     wrap.scrollLeft = 0
     horizontalMetrics.scrollRange = 0
@@ -241,24 +222,18 @@ function trackLength(
   const end = Number.parseFloat(style[endProperty])
   const inset = (Number.isFinite(start) ? start : 4) + (Number.isFinite(end) ? end : 4)
   const root = rootRef.value
-  const containerLength = root
-    ? startProperty === 'top'
-      ? root.clientHeight
-      : root.clientWidth
-    : viewportLength
+  const containerLength = root ? (startProperty === 'top' ? root.clientHeight : root.clientWidth) : viewportLength
   return clamp(containerLength - inset, 0, Number.POSITIVE_INFINITY)
 }
 
 function updateVerticalThumbPosition(scrollTop: number) {
   const { scrollRange, thumbRange } = verticalMetrics
-  thumbTop.value
-    = scrollRange > 0 ? (clamp(scrollTop, 0, scrollRange) / scrollRange) * thumbRange : 0
+  thumbTop.value = scrollRange > 0 ? (clamp(scrollTop, 0, scrollRange) / scrollRange) * thumbRange : 0
 }
 
 function updateHorizontalThumbPosition(scrollLeft: number) {
   const { scrollRange, thumbRange } = horizontalMetrics
-  horizontalThumbLeft.value
-    = scrollRange > 0 ? (clamp(scrollLeft, 0, scrollRange) / scrollRange) * thumbRange : 0
+  horizontalThumbLeft.value = scrollRange > 0 ? (clamp(scrollLeft, 0, scrollRange) / scrollRange) * thumbRange : 0
 }
 
 function syncScrollbarPosition(wrap: HTMLElement, force = false) {
@@ -337,8 +312,7 @@ function handleTrackPointerDown(event: PointerEvent) {
   activateScrollbar()
   const nextThumbTop = event.clientY - rect.top - thumbHeight.value / 2
   const { scrollRange, thumbRange } = verticalMetrics
-  wrap.scrollTop
-    = thumbRange > 0 ? (clamp(nextThumbTop, 0, thumbRange) / thumbRange) * scrollRange : 0
+  wrap.scrollTop = thumbRange > 0 ? (clamp(nextThumbTop, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
 
 function handleHorizontalTrackPointerDown(event: PointerEvent) {
@@ -356,8 +330,7 @@ function handleHorizontalTrackPointerDown(event: PointerEvent) {
   activateScrollbar()
   const nextThumbLeft = event.clientX - rect.left - horizontalThumbWidth.value / 2
   const { scrollRange, thumbRange } = horizontalMetrics
-  wrap.scrollLeft
-    = thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
+  wrap.scrollLeft = thumbRange > 0 ? (clamp(nextThumbLeft, 0, thumbRange) / thumbRange) * scrollRange : 0
 }
 
 function handleThumbPointerDown(event: PointerEvent) {
@@ -423,9 +396,7 @@ function handleHorizontalThumbPointerMove(event: PointerEvent) {
     return
   }
 
-  wrap.scrollLeft
-    = horizontalDragStartScrollLeft
-      + ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
+  wrap.scrollLeft = horizontalDragStartScrollLeft + ((event.clientX - horizontalDragStartX) / thumbRange) * scrollRange
 }
 
 function handleThumbPointerUp() {
@@ -490,11 +461,7 @@ defineExpose({
 </script>
 
 <template>
-  <div
-    ref="root"
-    :class="rootClasses"
-    :style="{ maxHeight, height }"
-  >
+  <div ref="root" :class="rootClasses" :style="{ maxHeight, height }">
     <div ref="wrap" :class="wrapClasses" tabindex="0">
       <div ref="view">
         <slot />
@@ -504,12 +471,8 @@ defineExpose({
     <div
       v-show="canScrollY"
       ref="verticalTrack"
-      aria-hidden="true"
       class="absolute right-0 bottom-0 top-[var(--cp-scrollbar-track-inset-block-start,0.25rem)] z-40 flex w-3 justify-end transition-opacity duration-200"
-      :class="[
-        verticalTrackClass,
-        verticalScrollbarVisible ? 'opacity-100' : 'opacity-0',
-      ]"
+      :class="[verticalTrackClass, verticalScrollbarVisible ? 'opacity-100' : 'opacity-0']"
     >
       <div
         class="w-1.5 rounded-full bg-(--cp-scrollbar-thumb-bg) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover-bg)"
@@ -522,12 +485,8 @@ defineExpose({
     <div
       v-show="canScrollX"
       ref="horizontalTrack"
-      aria-hidden="true"
       class="base-scrollbar-track-x absolute bottom-0 left-0 z-40 flex h-3 items-end transition-opacity duration-200"
-      :class="[
-        horizontalTrackClass,
-        horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0',
-      ]"
+      :class="[horizontalTrackClass, horizontalScrollbarVisible ? 'opacity-100' : 'opacity-0']"
     >
       <div
         class="h-1.5 rounded-full bg-(--cp-scrollbar-thumb-bg) transition-colors duration-200 hover:bg-(--cp-scrollbar-thumb-hover-bg)"

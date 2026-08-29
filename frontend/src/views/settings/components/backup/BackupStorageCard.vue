@@ -51,9 +51,7 @@ function toggleSecretVisible(): void {
 </script>
 
 <template>
-  <BaseCard
-    title="S3 存储配置"
-  >
+  <BaseCard title="S3 存储配置">
     <template #description>
       <span class="text-cp-text-secondary">
         配置 S3 兼容存储（支持
@@ -78,16 +76,8 @@ function toggleSecretVisible(): void {
           @click="emit('test')"
         >
           <template #icon>
-            <CircleCheck
-              v-if="verified"
-              class="size-4 text-cp-success-text"
-              aria-hidden="true"
-            />
-            <CircleAlert
-              v-else
-              class="size-4 text-cp-warning-text"
-              aria-hidden="true"
-            />
+            <CircleCheck v-if="verified" class="size-4 text-cp-success-text" />
+            <CircleAlert v-else class="size-4 text-cp-warning-text" />
           </template>
           {{ testing ? '测试中...' : '测试连接' }}
         </BaseButton>

@@ -1,15 +1,6 @@
 <script setup lang="ts">
-import type {
-  ThemeEditorDraft,
-  ThemeEditorGlobalCategory,
-} from '../composables/useThemeEditor'
-import type {
-  ResolvedTheme,
-  ThemeColorPreset,
-  ThemeColorPresetId,
-  ThemeMode,
-  ThemeSeedOverrides,
-} from '@/theme'
+import type { ThemeEditorDraft, ThemeEditorGlobalCategory } from '../composables/useThemeEditor'
+import type { ResolvedTheme, ThemeColorPreset, ThemeColorPresetId, ThemeMode, ThemeSeedOverrides } from '@/theme'
 
 import { Check, ChevronDown, Laptop, Moon, Sun } from '@lucide/vue'
 import { computed } from 'vue'
@@ -57,71 +48,75 @@ const modeOptions = [
   { label: '浅色', value: 'light', icon: Sun },
   { label: '深色', value: 'dark', icon: Moon },
 ]
-const presetSwatchesById = new Map(THEME_COLOR_PRESETS.map(preset => [
-  preset.id,
+const presetSwatchesById = new Map(
+  THEME_COLOR_PRESETS.map(preset => [
+    preset.id,
+    [
+      resolveTheme('light', preset.id, preset.seed).seedTokens.colorBgBase,
+      preset.seed,
+      resolveTheme('dark', preset.id, preset.seed).seedTokens.colorBgBase,
+    ],
+  ]),
+)
+
+const semanticColorFields = computed(() =>
   [
-    resolveTheme('light', preset.id, preset.seed).seedTokens.colorBgBase,
-    preset.seed,
-    resolveTheme('dark', preset.id, preset.seed).seedTokens.colorBgBase,
-  ],
-]))
+    {
+      key: 'colorSuccess' as const,
+      label: '成功色',
+      token: 'colorSuccess',
+      value: props.resolved.seedTokens.colorSuccess,
+      description: '成功反馈与状态',
+    },
+    {
+      key: 'colorWarning' as const,
+      label: '警告色',
+      token: 'colorWarning',
+      value: props.resolved.seedTokens.colorWarning,
+      description: '额度与风险提醒',
+    },
+    {
+      key: 'colorError' as const,
+      label: '错误色',
+      token: 'colorError',
+      value: props.resolved.seedTokens.colorError,
+      description: '失败与破坏性操作',
+    },
+    {
+      key: 'colorInfo' as const,
+      label: '信息色',
+      token: 'colorInfo',
+      value: props.resolved.seedTokens.colorInfo,
+      description: '系统与请求信息',
+    },
+    {
+      key: 'colorLink' as const,
+      label: '链接色',
+      token: 'colorLink',
+      value: props.resolved.seedTokens.colorLink,
+      description: '链接与跳转',
+    },
+    {
+      key: 'colorTextBase' as const,
+      label: '基础文本色',
+      token: 'colorTextBase',
+      value: props.resolved.seedTokens.colorTextBase,
+      description: '正文与信息层级',
+    },
+    {
+      key: 'colorBgBase' as const,
+      label: '基础背景色',
+      token: 'colorBgBase',
+      value: props.resolved.seedTokens.colorBgBase,
+      description: '页面与容器基底',
+    },
+  ].filter(field => matches(`${field.label} ${field.token} ${field.description}`)),
+)
 
-const semanticColorFields = computed(() => [
-  {
-    key: 'colorSuccess' as const,
-    label: '成功色',
-    token: 'colorSuccess',
-    value: props.resolved.seedTokens.colorSuccess,
-    description: '成功反馈与状态',
-  },
-  {
-    key: 'colorWarning' as const,
-    label: '警告色',
-    token: 'colorWarning',
-    value: props.resolved.seedTokens.colorWarning,
-    description: '额度与风险提醒',
-  },
-  {
-    key: 'colorError' as const,
-    label: '错误色',
-    token: 'colorError',
-    value: props.resolved.seedTokens.colorError,
-    description: '失败与破坏性操作',
-  },
-  {
-    key: 'colorInfo' as const,
-    label: '信息色',
-    token: 'colorInfo',
-    value: props.resolved.seedTokens.colorInfo,
-    description: '系统与请求信息',
-  },
-  {
-    key: 'colorLink' as const,
-    label: '链接色',
-    token: 'colorLink',
-    value: props.resolved.seedTokens.colorLink,
-    description: '链接与跳转',
-  },
-  {
-    key: 'colorTextBase' as const,
-    label: '基础文本色',
-    token: 'colorTextBase',
-    value: props.resolved.seedTokens.colorTextBase,
-    description: '正文与信息层级',
-  },
-  {
-    key: 'colorBgBase' as const,
-    label: '基础背景色',
-    token: 'colorBgBase',
-    value: props.resolved.seedTokens.colorBgBase,
-    description: '页面与容器基底',
-  },
-].filter(field => matches(`${field.label} ${field.token} ${field.description}`)))
-
-const derivedTokens = computed(() => Object.entries(props.resolved.tokens)
-  .filter(([name]) => name.startsWith('--cp-color-')
-    || name.startsWith('--cp-control-'))
-  .filter(([name]) => matches(name)),
+const derivedTokens = computed(() =>
+  Object.entries(props.resolved.tokens)
+    .filter(([name]) => name.startsWith('--cp-color-') || name.startsWith('--cp-control-'))
+    .filter(([name]) => matches(name)),
 )
 
 function matches(value: string) {
@@ -151,12 +146,7 @@ function presetSwatches(preset: ThemeColorPreset) {
       />
     </div>
 
-    <BaseSegmented
-      v-model="category"
-      label="全局 Token 分类"
-      :options="categoryOptions"
-      class="w-full"
-    />
+    <BaseSegmented v-model="category" label="全局 Token 分类" :options="categoryOptions" class="w-full" />
 
     <template v-if="category === 'color'">
       <section v-if="matches('预置主题 品牌色 colorPrimary')" class="grid gap-2" aria-labelledby="theme-preset-title">
@@ -179,7 +169,7 @@ function presetSwatches(preset: ThemeColorPreset) {
             :title="preset.description"
             @click="emit('preset', preset.id)"
           >
-            <span class="flex h-4 overflow-hidden rounded-full shadow-cp-tertiary" aria-hidden="true">
+            <span class="flex h-4 overflow-hidden rounded-full shadow-cp-tertiary">
               <span
                 v-for="swatch in presetSwatches(preset)"
                 :key="swatch"
@@ -189,9 +179,15 @@ function presetSwatches(preset: ThemeColorPreset) {
             </span>
             <span class="min-w-0 pr-4">
               <strong class="block text-cp-xs font-heavy text-cp-text">{{ preset.label }}</strong>
-              <span class="mt-0.5 block truncate text-[9px] font-emphasis text-cp-text-quaternary">{{ preset.description }}</span>
+              <span class="mt-0.5 block truncate text-[9px] font-emphasis text-cp-text-quaternary">
+                {{ preset.description }}
+              </span>
             </span>
-            <Check v-if="draft.color === preset.id" class="absolute right-2 bottom-2 size-3 text-cp-primary-text" stroke-width="3" />
+            <Check
+              v-if="draft.color === preset.id"
+              class="absolute right-2 bottom-2 size-3 text-cp-primary-text"
+              stroke-width="3"
+            />
           </button>
         </div>
         <ThemeColorTokenField
@@ -225,13 +221,15 @@ function presetSwatches(preset: ThemeColorPreset) {
       </section>
 
       <details v-if="derivedTokens.length > 0" class="group rounded-cp-lg bg-cp-bg-container shadow-cp-tertiary">
-        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-cp-sm font-bold text-cp-text">
+        <summary
+          class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-cp-sm font-bold text-cp-text"
+        >
           派生变量 Map / Alias Token
           <ChevronDown class="size-3.5 transition-transform duration-150 group-open:rotate-180" />
         </summary>
         <div class="grid gap-1 px-2 pb-2">
           <div
-            v-for="([name, value]) in derivedTokens"
+            v-for="[name, value] in derivedTokens"
             :key="name"
             class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-cp bg-cp-fill-quaternary px-2.5 py-2"
           >
@@ -289,7 +287,9 @@ function presetSwatches(preset: ThemeColorPreset) {
     </section>
 
     <section v-else class="grid gap-2" aria-label="风格 Token">
-      <div class="rounded-cp-lg bg-cp-primary-bg px-3 py-3 text-[10px] leading-normal font-emphasis text-cp-primary-text">
+      <div
+        class="rounded-cp-lg bg-cp-primary-bg px-3 py-3 text-[10px] leading-normal font-emphasis text-cp-primary-text"
+      >
         固定无边设计；圆角塑形，阴影分层。
       </div>
       <ThemeNumberTokenField

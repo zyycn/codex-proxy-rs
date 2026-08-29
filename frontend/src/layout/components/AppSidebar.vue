@@ -18,16 +18,7 @@ import {
 import { usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
 import { gsap } from 'gsap'
 import { storeToRefs } from 'pinia'
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  shallowRef,
-  useTemplateRef,
-  watch,
-} from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppBrandMark from '@/components/AppBrandMark.vue'
@@ -124,19 +115,13 @@ const navSignalEl = useTemplateRef<HTMLElement>('navSignal')
 const isCollapsed = computed(() => !props.mobile && Boolean(props.collapsed))
 const collapsedSidebarWidth = 88
 const expandedSidebarWidth = 251
-const sidebarWidth = computed(() =>
-  isCollapsed.value ? collapsedSidebarWidth : expandedSidebarWidth,
-)
+const sidebarWidth = computed(() => (isCollapsed.value ? collapsedSidebarWidth : expandedSidebarWidth))
 const brandLabelVisible = shallowRef(!isCollapsed.value)
-const themeToggleLabel = computed(() =>
-  effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式',
-)
+const themeToggleLabel = computed(() => (effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式'))
 const versionText = computed(() => version.value?.version.trim() ?? '')
 const hasVersionLabel = computed(() => versionText.value.length > 0)
 const versionLabel = computed(() => `v${versionText.value}`)
-const updateButtonLabel = computed(() =>
-  hasUpdate.value ? '发现新版本，打开系统更新' : '打开系统更新',
-)
+const updateButtonLabel = computed(() => (hasUpdate.value ? '发现新版本，打开系统更新' : '打开系统更新'))
 
 function prefersReducedMotion() {
   return preferredMotion.value === 'reduce'
@@ -316,8 +301,8 @@ watch(
 
 onBeforeUnmount(() => {
   stopNavFeedbackRestore()
-  const targets = [sidebarEl.value, brandLabelEl.value, navSignalEl.value].filter(
-    (target): target is HTMLElement => Boolean(target),
+  const targets = [sidebarEl.value, brandLabelEl.value, navSignalEl.value].filter((target): target is HTMLElement =>
+    Boolean(target),
   )
   gsap.killTweensOf(targets)
 
@@ -342,24 +327,15 @@ onBeforeUnmount(() => {
       :class="isCollapsed ? 'w-11 justify-start' : 'w-full gap-3'"
     >
       <BaseMotionIcon
-        aria-hidden="true"
         variant="brand"
         class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-cp"
       >
         <AppBrandMark class="block size-11 select-none" />
       </BaseMotionIcon>
-      <span
-        v-show="brandLabelVisible"
-        ref="brandLabelEl"
-        class="grid min-w-33 content-center overflow-hidden"
-      >
-        <strong class="text-base leading-[1.1] font-heavy text-cp-text">
-          Codex Proxy
-        </strong>
+      <span v-show="brandLabelVisible" ref="brandLabelEl" class="grid min-w-33 content-center overflow-hidden">
+        <strong class="text-base leading-[1.1] font-heavy text-cp-text"> Codex Proxy </strong>
         <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
-          <span class="shrink-0 text-xs leading-none font-emphasis text-cp-text-secondary">
-            Rust build
-          </span>
+          <span class="shrink-0 text-xs leading-none font-emphasis text-cp-text-secondary"> Rust build </span>
           <button
             v-if="hasVersionLabel"
             type="button"
@@ -379,13 +355,8 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <nav
-      class="relative mt-6 grid gap-3"
-      :class="isCollapsed ? 'w-11.5' : 'w-full'"
-      aria-label="主导航"
-    >
+    <nav class="relative mt-6 grid gap-3" :class="isCollapsed ? 'w-11.5' : 'w-full'" aria-label="主导航">
       <span
-        aria-hidden="true"
         class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
         :style="activeNavIndicatorStyle"
       >
@@ -424,11 +395,7 @@ onBeforeUnmount(() => {
     <div class="mt-auto mb-6" :class="isCollapsed ? 'w-11' : 'w-full'">
       <div
         class="bg-cp-fill-quaternary"
-        :class="
-          isCollapsed
-            ? 'grid gap-1 rounded-cp p-1'
-            : 'flex h-11 items-center justify-between rounded-cp-lg px-2'
-        "
+        :class="isCollapsed ? 'grid gap-1 rounded-cp p-1' : 'flex h-11 items-center justify-between rounded-cp-lg px-2'"
       >
         <span
           v-if="!isCollapsed"
@@ -468,22 +435,11 @@ onBeforeUnmount(() => {
             <Moon v-else :size="isCollapsed ? 19 : 18" />
           </BaseIconButton>
 
-          <BaseIconButton
-            variant="ghost"
-            :size="isCollapsed ? 'md' : 'sm'"
-            label="关于"
-            @click="emit('openAbout')"
-          >
+          <BaseIconButton variant="ghost" :size="isCollapsed ? 'md' : 'sm'" label="关于" @click="emit('openAbout')">
             <Info :size="isCollapsed ? 19 : 18" />
           </BaseIconButton>
 
-          <BaseIconButton
-            v-if="mobile"
-            variant="ghost"
-            size="sm"
-            label="关闭侧边栏"
-            @click="emit('close')"
-          >
+          <BaseIconButton v-if="mobile" variant="ghost" size="sm" label="关闭侧边栏" @click="emit('close')">
             <PanelLeftClose :size="18" />
           </BaseIconButton>
 

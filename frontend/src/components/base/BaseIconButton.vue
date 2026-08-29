@@ -39,8 +39,7 @@ const variantClasses: Record<IconButtonVariant, string> = {
     'bg-cp-success-bg text-cp-success-text shadow-none hover:bg-cp-success-bg-hover active:bg-cp-success-bg-active',
   ghost:
     'bg-transparent text-cp-text-secondary shadow-none hover:bg-cp-fill-quaternary hover:text-cp-text active:bg-cp-fill-tertiary',
-  destructive:
-    'bg-transparent text-cp-error-text shadow-none hover:bg-cp-error-bg-hover active:bg-cp-error-bg-active',
+  destructive: 'bg-transparent text-cp-error-text shadow-none hover:bg-cp-error-bg-hover active:bg-cp-error-bg-active',
 }
 
 const sizeClasses: Record<IconButtonSize, string> = {
@@ -78,16 +77,12 @@ const classes = computed(() => [
     <span
       v-if="loading"
       class="inline-grid place-items-center [&>svg]:block [&>svg]:origin-center [&>svg]:transform-view [&>svg]:will-change-transform"
-      aria-hidden="true"
     >
       <slot name="loading">
-        <LoaderCircle
-          class="animate-spin motion-reduce:animate-none"
-          :size="spinnerSizes[size]"
-        />
+        <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="spinnerSizes[size]" />
       </slot>
     </span>
-    <span v-else class="inline-grid place-items-center" aria-hidden="true">
+    <span v-else class="inline-grid place-items-center">
       <slot />
     </span>
   </button>

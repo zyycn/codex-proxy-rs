@@ -13,15 +13,9 @@ const props = defineProps<{
 
 type AccountModelUsage = AccountRow['usage']['models'][number]
 
-const totalBilling = computed(() =>
-  props.account.usage.costs.find(cost => cost.currency.toUpperCase() === 'USD'),
-)
-const totalBillingDisplay = computed(() =>
-  totalBilling.value?.estimatedAmountDisplay ?? '—',
-)
-const hasUsageSummary = computed(() =>
-  (props.account.usage.totalTokens ?? 0) > 0 || totalBilling.value !== undefined,
-)
+const totalBilling = computed(() => props.account.usage.costs.find(cost => cost.currency.toUpperCase() === 'USD'))
+const totalBillingDisplay = computed(() => totalBilling.value?.estimatedAmountDisplay ?? '—')
+const hasUsageSummary = computed(() => (props.account.usage.totalTokens ?? 0) > 0 || totalBilling.value !== undefined)
 
 const modelUsageColumns = defineTableColumns<AccountModelUsage>([
   { key: 'model', label: '模型', kind: 'text', size: 'lg' },
@@ -37,9 +31,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
 </script>
 
 <template>
-  <section
-    class="grid gap-4 rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary xl:grid-cols-[0.52fr_1.48fr]"
-  >
+  <section class="grid gap-4 rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary xl:grid-cols-[0.52fr_1.48fr]">
     <div>
       <div class="mb-3 flex items-baseline justify-between gap-3">
         <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
@@ -81,9 +73,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
       </div>
     </div>
 
-    <div
-      class="min-w-0 pt-4 xl:pt-0 xl:pl-4"
-    >
+    <div class="min-w-0 pt-4 xl:pt-0 xl:pl-4">
       <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <h3 class="m-0 shrink-0 text-cp-lg font-heavy text-cp-text">
           模型使用排行
@@ -91,23 +81,14 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
 
         <div class="ml-auto flex items-center gap-4">
           <div v-if="hasUsageSummary" class="flex items-baseline gap-1.5 whitespace-nowrap">
-            <Sigma
-              class="size-3.5 self-center text-cp-text-tertiary"
-              :stroke-width="1.75"
-              aria-hidden="true"
-            />
+            <Sigma class="size-3.5 self-center text-cp-text-tertiary" :stroke-width="1.75" />
             <span title="总 Token">
               <span class="sr-only">总 Token：</span>
               <span class="font-mono text-cp-sm font-emphasis tabular-nums text-cp-text">
                 {{ account.usage.totalTokensDisplay }}
               </span>
             </span>
-            <span
-              class="mx-0.5 text-[10px] leading-none font-emphasis text-cp-text-quaternary"
-              aria-hidden="true"
-            >
-              /
-            </span>
+            <span class="mx-0.5 text-[10px] leading-none font-emphasis text-cp-text-quaternary"> / </span>
             <span title="总计费">
               <span class="sr-only">总计费：</span>
               <span class="font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text">

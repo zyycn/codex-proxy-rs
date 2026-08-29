@@ -19,17 +19,8 @@ const viewport = useTemplateRef<HTMLElement>('viewport')
 const stage = useTemplateRef<HTMLElement>('stage')
 const boardWidth = 1600
 const boardHeight = 1808
-const {
-  canZoomIn,
-  canZoomOut,
-  dragging,
-  fitToViewport,
-  resetScale,
-  scale,
-  scalePercent,
-  zoomIn,
-  zoomOut,
-} = useThemePreviewCanvas({ viewport, stage, boardWidth, boardHeight })
+const { canZoomIn, canZoomOut, dragging, fitToViewport, resetScale, scale, scalePercent, zoomIn, zoomOut }
+  = useThemePreviewCanvas({ viewport, stage, boardWidth, boardHeight })
 
 const stageStyle = computed<CSSProperties>(() => ({
   width: `${boardWidth * scale.value}px`,
@@ -45,7 +36,7 @@ const boardStyle = computed<CSSProperties>(() => ({
 <template>
   <div
     ref="viewport"
-    class="relative min-h-0 overflow-hidden rounded-cp-lg bg-cp-bg-layout [background-image:radial-gradient(circle,color-mix(in_srgb,var(--cp-color-text-quaternary)_24%,transparent)_1px,transparent_1px)] [background-size:18px_18px] shadow-cp-secondary select-none"
+    class="relative min-h-0 overflow-hidden rounded-cp-lg bg-cp-bg-layout bg-[radial-gradient(circle,color-mix(in_srgb,var(--cp-color-text-quaternary)_24%,transparent)_1px,transparent_1px)] bg-size-[18px_18px] shadow-cp-secondary select-none"
     :class="dragging ? 'cursor-grabbing' : 'cursor-grab'"
     role="application"
     tabindex="0"
@@ -58,15 +49,8 @@ const boardStyle = computed<CSSProperties>(() => ({
       :data-scale="scalePercent"
       :style="stageStyle"
     >
-      <ThemePreviewScope
-        :theme="theme"
-        :style="style"
-      >
-        <div
-          class="overflow-hidden bg-cp-bg-layout p-6"
-          data-theme-preview-board
-          :style="boardStyle"
-        >
+      <ThemePreviewScope :theme="theme" :style="style">
+        <div class="overflow-hidden bg-cp-bg-layout p-6" data-theme-preview-board :style="boardStyle">
           <slot />
         </div>
       </ThemePreviewScope>
@@ -86,13 +70,7 @@ const boardStyle = computed<CSSProperties>(() => ({
       @dblclick.stop
       @wheel.stop
     >
-      <BaseIconButton
-        label="缩小画板"
-        size="sm"
-        variant="ghost"
-        :disabled="!canZoomOut"
-        @click="zoomOut"
-      >
+      <BaseIconButton label="缩小画板" size="sm" variant="ghost" :disabled="!canZoomOut" @click="zoomOut">
         <Minus class="size-3.5" />
       </BaseIconButton>
       <BaseButton
@@ -104,16 +82,10 @@ const boardStyle = computed<CSSProperties>(() => ({
       >
         {{ scalePercent }}%
       </BaseButton>
-      <BaseIconButton
-        label="放大画板"
-        size="sm"
-        variant="ghost"
-        :disabled="!canZoomIn"
-        @click="zoomIn"
-      >
+      <BaseIconButton label="放大画板" size="sm" variant="ghost" :disabled="!canZoomIn" @click="zoomIn">
         <Plus class="size-3.5" />
       </BaseIconButton>
-      <span class="mx-0.5 h-4 w-px bg-cp-fill-secondary" aria-hidden="true" />
+      <span class="mx-0.5 h-4 w-px bg-cp-fill-secondary" />
       <BaseIconButton label="适应画板" size="sm" variant="ghost" @click="fitToViewport()">
         <Maximize2 class="size-3.5" />
       </BaseIconButton>

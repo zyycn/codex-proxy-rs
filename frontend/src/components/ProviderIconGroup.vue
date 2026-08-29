@@ -15,14 +15,10 @@ const props = withDefaults(
 )
 
 const normalizedProvider = computed(() => (props.provider ?? '').trim().toLowerCase())
-const normalizedAuthenticationKind = computed(() =>
-  (props.authenticationKind ?? '').trim().toLowerCase(),
-)
+const normalizedAuthenticationKind = computed(() => (props.authenticationKind ?? '').trim().toLowerCase())
 const showAuthenticationKind = computed(() => props.authenticationKind !== undefined)
 const groupGapClass = computed(() => (props.size === 'sm' ? 'gap-1' : 'gap-2'))
-const iconContainerClass = computed(() =>
-  props.size === 'sm' ? 'size-5 rounded-md' : 'size-7 rounded-lg',
-)
+const iconContainerClass = computed(() => (props.size === 'sm' ? 'size-5 rounded-md' : 'size-7 rounded-lg'))
 const iconClass = computed(() => (props.size === 'sm' ? 'size-3' : 'size-4'))
 
 const providerLabel = computed(() => formatProviderLabel(props.provider, '未知平台'))
@@ -41,8 +37,8 @@ const authenticationLabel = computed(() => {
       :class="iconContainerClass"
       :title="providerLabel"
     >
-      <Openai v-if="normalizedProvider === 'openai'" :class="iconClass" aria-hidden="true" />
-      <Xai v-else-if="normalizedProvider === 'xai'" :class="iconClass" aria-hidden="true" />
+      <Openai v-if="normalizedProvider === 'openai'" :class="iconClass" />
+      <Xai v-else-if="normalizedProvider === 'xai'" :class="iconClass" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 
@@ -52,11 +48,7 @@ const authenticationLabel = computed(() => {
       :class="iconContainerClass"
       :title="authenticationLabel"
     >
-      <Key
-        v-if="normalizedAuthenticationKind === 'oauth'"
-        :class="iconClass"
-        aria-hidden="true"
-      />
+      <Key v-if="normalizedAuthenticationKind === 'oauth'" :class="iconClass" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 

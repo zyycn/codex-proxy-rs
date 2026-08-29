@@ -28,9 +28,9 @@ const model = defineModel<number>({ required: true })
 const attrs = useAttrs()
 
 const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
-const controlAttrs = computed(() => Object.fromEntries(
-  Object.entries(attrs).filter(([key]) => !['class', 'style'].includes(key)),
-))
+const controlAttrs = computed(() =>
+  Object.fromEntries(Object.entries(attrs).filter(([key]) => !['class', 'style'].includes(key))),
+)
 const canDecrease = computed(() => !props.disabled && (props.min === undefined || model.value > props.min))
 const canIncrease = computed(() => !props.disabled && (props.max === undefined || model.value < props.max))
 
@@ -91,11 +91,7 @@ function stepBy(direction: -1 | 1) {
         @input="updateModel"
         @blur="restoreValue"
       >
-      <span
-        v-if="unit"
-        class="shrink-0 text-[9px] font-emphasis text-cp-text-quaternary"
-        aria-hidden="true"
-      >
+      <span v-if="unit" class="shrink-0 text-[9px] font-emphasis text-cp-text-quaternary">
         {{ unit }}
       </span>
     </span>

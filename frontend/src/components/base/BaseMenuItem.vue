@@ -32,18 +32,13 @@ const classes = computed(() => [
 </script>
 
 <template>
-  <button
-    type="button"
-    :class="classes"
-    :disabled="disabled || loading"
-    :aria-busy="loading || undefined"
-  >
-    <span v-if="loading" class="inline-grid size-3.5 shrink-0 place-items-center" aria-hidden="true">
+  <button type="button" :class="classes" :disabled="disabled || loading" :aria-busy="loading || undefined">
+    <span v-if="loading" class="inline-grid size-3.5 shrink-0 place-items-center">
       <slot name="loading">
         <LoaderCircle class="size-3.5 animate-spin motion-reduce:animate-none" />
       </slot>
     </span>
-    <span v-else-if="$slots.icon" class="inline-grid shrink-0 place-items-center" aria-hidden="true">
+    <span v-else-if="$slots.icon" class="inline-grid shrink-0 place-items-center">
       <slot name="icon" />
     </span>
     <span class="min-w-0 flex-1 truncate"><slot /></span>

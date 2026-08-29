@@ -16,7 +16,7 @@ const routeClusters: readonly RouteCluster[] = [
 </script>
 
 <template>
-  <div class="pointer-events-none absolute inset-0 z-[-1] overflow-hidden" aria-hidden="true">
+  <div class="pointer-events-none absolute inset-0 z-[-1] overflow-hidden">
     <div class="login-bg-base" />
     <div class="login-bg-grid" />
     <div class="login-bg-striations" />
@@ -48,13 +48,7 @@ const routeClusters: readonly RouteCluster[] = [
       </span>
     </div>
 
-    <svg
-      class="login-topology"
-      viewBox="0 0 1920 1080"
-      preserveAspectRatio="xMidYMid slice"
-      focusable="false"
-      aria-hidden="true"
-    >
+    <svg class="login-topology" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" focusable="false">
       <g class="login-route-lines">
         <path
           class="login-route-line--bundle"
@@ -90,10 +84,7 @@ const routeClusters: readonly RouteCluster[] = [
           id="login-track-d"
           d="M286 606 C446 606 488 572 602 546 C710 522 806 528 926 528 C1066 528 1188 540 1304 554 C1406 566 1520 576 1665 570"
         />
-        <path
-          id="login-track-return"
-          d="M1540 364 C1370 334 1220 344 1062 394 C902 446 770 442 510 404"
-        />
+        <path id="login-track-return" d="M1540 364 C1370 334 1220 344 1062 394 C902 446 770 442 510 404" />
       </g>
 
       <g class="login-particle">
@@ -190,10 +181,7 @@ const routeClusters: readonly RouteCluster[] = [
         :key="label"
         class="inline-flex w-fit items-center gap-2 rounded-sm bg-(--cp-login-cluster-bg) px-2 py-1"
       >
-        <i
-          class="inline-block h-0.5 w-4.5 rounded-xs bg-(--cp-login-cluster-pulse-color)"
-          aria-hidden="true"
-        />
+        <i class="inline-block h-0.5 w-4.5 rounded-xs bg-(--cp-login-cluster-pulse-color)" />
         {{ label }}
       </span>
     </div>

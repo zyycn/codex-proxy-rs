@@ -14,21 +14,15 @@ const props = defineProps<{
 }>()
 
 const imageFailed = shallowRef(false)
-const displayName = computed(() =>
-  props.profile.displayName
-  || props.profile.username
-  || props.account.email
-  || props.account.name
-  || 'Codex 用户',
+const displayName = computed(
+  () => props.profile.displayName || props.profile.username || props.account.email || props.account.name || 'Codex 用户',
 )
-const username = computed(() => props.profile.username
-  ? `@${props.profile.username.replace(/^@/, '')}`
-  : null)
+const username = computed(() => (props.profile.username ? `@${props.profile.username.replace(/^@/, '')}` : null))
 const accountIdentity = computed(() => props.account.email?.trim() || props.account.accountId?.trim())
 const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || null)
-const avatarToneClass = computed(() => stablePresetVisualToneClass(
-  props.account.id || accountIdentity.value || displayName.value,
-))
+const avatarToneClass = computed(() =>
+  stablePresetVisualToneClass(props.account.id || accountIdentity.value || displayName.value),
+)
 const metrics = computed(() => [
   {
     label: '累计 Token 数',
@@ -54,9 +48,12 @@ const metrics = computed(() => [
   },
 ])
 
-watch(() => props.profile.imageUrl, () => {
-  imageFailed.value = false
-})
+watch(
+  () => props.profile.imageUrl,
+  () => {
+    imageFailed.value = false
+  },
+)
 
 function formatMetric(value: number | null) {
   return value === null ? '—' : formatCompactNumber(value)
@@ -75,7 +72,7 @@ function formatDuration(value: number | null) {
     return '—'
   const totalMinutes = Math.floor(value / 60_000)
   const days = Math.floor(totalMinutes / (24 * 60))
-  const hours = Math.floor(totalMinutes % (24 * 60) / 60)
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
   const minutes = totalMinutes % 60
   if (days > 0)
     return hours > 0 ? `${days} 天 ${hours} 小时` : `${days} 天`
@@ -105,8 +102,8 @@ function formatDuration(value: number | null) {
           referrerpolicy="no-referrer"
           @error="imageFailed = true"
         >
-        <span v-else-if="initial" aria-hidden="true">{{ initial }}</span>
-        <UserRound v-else class="size-6" aria-hidden="true" />
+        <span v-else-if="initial">{{ initial }}</span>
+        <UserRound v-else class="size-6" />
       </span>
 
       <div class="min-w-0 flex-1">
@@ -128,15 +125,8 @@ function formatDuration(value: number | null) {
 
     <div class="min-w-0 overflow-x-auto py-1">
       <dl class="grid min-w-130 grid-cols-5">
-        <div
-          v-for="metric in metrics"
-          :key="metric.label"
-          class="min-w-0 px-2 text-center sm:px-3"
-        >
-          <dd
-            class="m-0 font-mono text-cp-lg leading-tight font-heavy tabular-nums text-cp-text"
-            :title="metric.title"
-          >
+        <div v-for="metric in metrics" :key="metric.label" class="min-w-0 px-2 text-center sm:px-3">
+          <dd class="m-0 font-mono text-cp-lg leading-tight font-heavy tabular-nums text-cp-text" :title="metric.title">
             {{ metric.value }}
           </dd>
           <dt class="mt-1.5 text-cp-xs font-semibold text-cp-text-secondary">

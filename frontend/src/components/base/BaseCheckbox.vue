@@ -42,18 +42,10 @@ const boxClasses = computed(() => [
     class="group relative inline-flex min-h-4 min-w-4 items-center gap-2.5 text-cp leading-none font-emphasis"
     :class="disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'"
   >
-    <input
-      ref="input"
-      v-model="model"
-      type="checkbox"
-      class="peer sr-only"
-      :aria-label="label"
-      :disabled="disabled"
-    >
+    <input ref="input" v-model="model" type="checkbox" class="peer sr-only" :aria-label="label" :disabled="disabled">
     <span
       :class="boxClasses"
       class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-control-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-bg-container"
-      aria-hidden="true"
     >
       <Minus
         class="absolute size-3 transition-opacity duration-150 motion-reduce:transition-none"

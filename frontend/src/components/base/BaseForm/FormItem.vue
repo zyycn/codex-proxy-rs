@@ -21,8 +21,8 @@ const props = withDefaults(
 
 const generatedId = useId()
 const resolvedControlId = computed(() => props.controlId ?? `field-${generatedId}`)
-const descriptionId = computed(() => props.description ? `${resolvedControlId.value}-description` : undefined)
-const errorId = computed(() => props.error ? `${resolvedControlId.value}-error` : undefined)
+const descriptionId = computed(() => (props.description ? `${resolvedControlId.value}-description` : undefined))
+const errorId = computed(() => (props.error ? `${resolvedControlId.value}-error` : undefined))
 const describedBy = computed(() => [descriptionId.value, errorId.value].filter(Boolean).join(' ') || undefined)
 
 provide(formFieldKey, {
@@ -35,10 +35,7 @@ provide(formFieldKey, {
 
 <template>
   <div class="min-w-0">
-    <div
-      v-if="label || $slots.label || $slots.extra"
-      class="mb-2 flex min-w-0 items-center justify-between gap-3"
-    >
+    <div v-if="label || $slots.label || $slots.extra" class="mb-2 flex min-w-0 items-center justify-between gap-3">
       <!-- The runtime id comes from the injected field context. -->
       <!-- eslint-disable-next-line vue-a11y/label-has-for -->
       <label
@@ -46,7 +43,7 @@ provide(formFieldKey, {
         class="flex min-w-0 items-center gap-1.5 text-cp leading-none font-medium text-cp-text-secondary"
       >
         <slot name="label">{{ label }}</slot>
-        <span v-if="required" class="font-bold text-cp-error" aria-hidden="true">*</span>
+        <span v-if="required" class="font-bold text-cp-error">*</span>
         <span v-if="required" class="sr-only">必填</span>
       </label>
       <div v-if="$slots.extra" class="inline-flex shrink-0 items-center">

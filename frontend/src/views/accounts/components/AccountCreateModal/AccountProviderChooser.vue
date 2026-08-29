@@ -36,11 +36,7 @@ const providers = [
 </script>
 
 <template>
-  <div
-    class="flex items-center justify-center gap-4 sm:gap-8"
-    role="group"
-    aria-label="选择账号平台"
-  >
+  <div class="flex items-center justify-center gap-4 sm:gap-8" role="group" aria-label="选择账号平台">
     <button
       v-for="provider in providers"
       :key="provider.value"
@@ -54,7 +50,7 @@ const providers = [
       <span
         class="inline-flex size-16 items-center justify-center rounded-cp-lg bg-cp-fill-quaternary transition-colors duration-150 group-hover:bg-cp-fill-tertiary"
       >
-        <component :is="provider.icon" aria-hidden="true" :width="36" :height="36" />
+        <component :is="provider.icon" :width="36" :height="36" />
       </span>
     </button>
   </div>

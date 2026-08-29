@@ -30,9 +30,5 @@ const classes = computed(() => [
 </script>
 
 <template>
-  <component
-    :is="as"
-    aria-hidden="true"
-    :class="classes"
-  />
+  <component :is="as" :class="classes" />
 </template>

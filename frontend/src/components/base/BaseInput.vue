@@ -25,26 +25,25 @@ const model = defineModel<string>({ default: '' })
 const attrs = useAttrs()
 const field = inject(formFieldKey, null)
 
-const controlId = computed(() => typeof attrs.id === 'string' ? attrs.id : field?.controlId.value)
-const invalid = computed(() => Boolean(
-  field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true',
-))
-const describedBy = computed(() => [
-  typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined,
-  field?.describedBy.value,
-].filter(Boolean).join(' ') || undefined)
+const controlId = computed(() => (typeof attrs.id === 'string' ? attrs.id : field?.controlId.value))
+const invalid = computed(() =>
+  Boolean(field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true'),
+)
+const describedBy = computed(
+  () =>
+    [typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined, field?.describedBy.value]
+      .filter(Boolean)
+      .join(' ') || undefined,
+)
 
 const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
-const controlAttrs = computed(() => Object.fromEntries(
-  Object.entries(attrs).filter(([key]) => ![
-    'class',
-    'style',
-    'id',
-    'aria-describedby',
-    'aria-invalid',
-    'aria-required',
-  ].includes(key)),
-))
+const controlAttrs = computed(() =>
+  Object.fromEntries(
+    Object.entries(attrs).filter(
+      ([key]) => !['class', 'style', 'id', 'aria-describedby', 'aria-invalid', 'aria-required'].includes(key),
+    ),
+  ),
+)
 
 const sizeClasses: Record<InputSize, string> = {
   sm: 'h-cp-control-sm gap-2 px-3 text-xs',
@@ -68,11 +67,7 @@ const containerClasses = computed(() => [
 
 const iconClasses = computed(() => [
   'inline-flex shrink-0',
-  props.disabled
-    ? 'text-cp-text-disabled'
-    : invalid.value
-      ? 'text-cp-error'
-      : 'text-cp-text-quaternary',
+  props.disabled ? 'text-cp-text-disabled' : invalid.value ? 'text-cp-error' : 'text-cp-text-quaternary',
 ])
 
 function updateModel(event: Event) {
@@ -83,7 +78,7 @@ function updateModel(event: Event) {
 <template>
   <div v-bind="rootAttrs" class="min-w-0">
     <span :class="containerClasses">
-      <span v-if="$slots.prefix" :class="iconClasses" aria-hidden="true">
+      <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />
       </span>
       <input

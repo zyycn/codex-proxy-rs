@@ -6,9 +6,9 @@ const props = defineProps<{
   groups: AccountGroupRef[]
 }>()
 
-const fullNames = computed(() => props.groups
-  .map(group => group.enabled ? group.name : `${group.name}（已禁用）`)
-  .join('、'))
+const fullNames = computed(() =>
+  props.groups.map(group => (group.enabled ? group.name : `${group.name}（已禁用）`)).join('、'),
+)
 </script>
 
 <template>
@@ -24,7 +24,6 @@ const fullNames = computed(() => props.groups
       class="size-4 shrink-0 rounded-sm"
       :style="{ backgroundColor: group.color }"
       :title="group.name"
-      aria-hidden="true"
     />
   </div>
   <span v-else class="text-xs text-cp-text-quaternary">—</span>

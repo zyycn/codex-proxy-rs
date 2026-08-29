@@ -46,25 +46,24 @@ const open = ref(false)
 const activeIndex = ref(-1)
 const popoverStyle = ref<CSSProperties>({})
 const selectId = `base-select-${useId()}`
-const controlId = computed(() => typeof attrs.id === 'string' ? attrs.id : (field?.controlId.value ?? selectId))
-const invalid = computed(() => Boolean(
-  field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true',
-))
-const describedBy = computed(() => [
-  typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined,
-  field?.describedBy.value,
-].filter(Boolean).join(' ') || undefined)
+const controlId = computed(() => (typeof attrs.id === 'string' ? attrs.id : (field?.controlId.value ?? selectId)))
+const invalid = computed(() =>
+  Boolean(field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true'),
+)
+const describedBy = computed(
+  () =>
+    [typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined, field?.describedBy.value]
+      .filter(Boolean)
+      .join(' ') || undefined,
+)
 const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
-const triggerAttrs = computed(() => Object.fromEntries(
-  Object.entries(attrs).filter(([key]) => ![
-    'class',
-    'style',
-    'id',
-    'aria-describedby',
-    'aria-invalid',
-    'aria-required',
-  ].includes(key)),
-))
+const triggerAttrs = computed(() =>
+  Object.fromEntries(
+    Object.entries(attrs).filter(
+      ([key]) => !['class', 'style', 'id', 'aria-describedby', 'aria-invalid', 'aria-required'].includes(key),
+    ),
+  ),
+)
 
 const sizeConfig: Record<
   SelectSize,
@@ -75,8 +74,7 @@ const sizeConfig: Record<
   }
 > = {
   md: {
-    trigger:
-      'h-cp-control px-3.5 pr-9 text-cp rounded-cp',
+    trigger: 'h-cp-control px-3.5 pr-9 text-cp rounded-cp',
     option: 'h-8.5 px-3 text-cp',
     icon: 16,
   },
@@ -287,11 +285,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
 </script>
 
 <template>
-  <div
-    ref="rootRef"
-    class="relative inline-block text-left"
-    v-bind="rootAttrs"
-  >
+  <div ref="rootRef" class="relative inline-block text-left" v-bind="rootAttrs">
     <button
       v-bind="triggerAttrs"
       :id="controlId"
@@ -315,14 +309,9 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       <ChevronDown
         class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 transition-transform"
         :class="
-          disabled
-            ? 'text-cp-text-disabled'
-            : open
-              ? 'rotate-180 text-cp-primary-text'
-              : 'text-cp-text-quaternary'
+          disabled ? 'text-cp-text-disabled' : open ? 'rotate-180 text-cp-primary-text' : 'text-cp-text-quaternary'
         "
         :size="sizeConfig[size].icon"
-        aria-hidden="true"
       />
     </button>
 
@@ -371,7 +360,6 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
                 v-if="option.value === model"
                 class="shrink-0 text-cp-primary-text"
                 :size="size === 'sm' ? 13 : size === 'lg' ? 17 : 15"
-                aria-hidden="true"
               />
             </button>
           </template>

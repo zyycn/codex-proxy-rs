@@ -35,8 +35,7 @@ const variantClasses: Record<ButtonVariant, string> = {
     'bg-cp-fill-tertiary text-cp-text shadow-cp-tertiary hover:bg-cp-bg-text-active active:bg-cp-bg-text-active',
   ghost:
     'bg-transparent text-cp-text-secondary shadow-none hover:bg-cp-fill-quaternary hover:text-cp-text active:bg-cp-fill-tertiary',
-  destructive:
-    'bg-cp-error-bg text-cp-error-text shadow-none hover:bg-cp-error-bg-hover active:bg-cp-error-bg-active',
+  destructive: 'bg-cp-error-bg text-cp-error-text shadow-none hover:bg-cp-error-bg-hover active:bg-cp-error-bg-active',
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
@@ -61,25 +60,13 @@ const classes = computed(() => [
 </script>
 
 <template>
-  <button
-    :type="type"
-    :class="classes"
-    :disabled="disabled || loading"
-    :aria-busy="loading || undefined"
-  >
-    <span
-      v-if="loading"
-      class="inline-grid shrink-0 place-items-center leading-none"
-      aria-hidden="true"
-    >
+  <button :type="type" :class="classes" :disabled="disabled || loading" :aria-busy="loading || undefined">
+    <span v-if="loading" class="inline-grid shrink-0 place-items-center leading-none">
       <slot name="loading">
-        <LoaderCircle
-          class="animate-spin motion-reduce:animate-none"
-          :size="spinnerSizes[size]"
-        />
+        <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="spinnerSizes[size]" />
       </slot>
     </span>
-    <span v-else-if="$slots.icon" class="inline-grid shrink-0 place-items-center" aria-hidden="true">
+    <span v-else-if="$slots.icon" class="inline-grid shrink-0 place-items-center">
       <slot name="icon" />
     </span>
     <span class="inline-flex min-w-0 items-center justify-center gap-2">

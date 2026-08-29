@@ -43,7 +43,6 @@ const trackClasses = computed(() => [
     <span
       :class="trackClasses"
       class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-control-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-bg-container"
-      aria-hidden="true"
     >
       <span
         class="size-5 rounded-full bg-cp-bg-container shadow-cp-tertiary transition-transform duration-180 ease-out motion-reduce:transition-none"

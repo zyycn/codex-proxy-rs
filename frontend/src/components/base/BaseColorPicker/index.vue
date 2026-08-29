@@ -7,14 +7,7 @@ import { normalizeHexColor } from '@/utils/color'
 import BaseButton from '../BaseButton.vue'
 import BaseInput from '../BaseInput.vue'
 import BasePopover from '../BasePopover.vue'
-import {
-  formatRgbaColor,
-  hexToHsva,
-  hsvaToHex,
-  normalizePickerHexColor,
-  parseRgbaColor,
-  rgbaToHexColor,
-} from './color'
+import { formatRgbaColor, hexToHsva, hsvaToHex, normalizePickerHexColor, parseRgbaColor, rgbaToHexColor } from './color'
 
 const props = withDefaults(
   defineProps<{
@@ -42,22 +35,28 @@ const svPanel = useTemplateRef<HTMLElement>('svPanel')
 const hueSlider = useTemplateRef<HTMLElement>('hueSlider')
 const alphaSlider = useTemplateRef<HTMLElement>('alphaSlider')
 
-const normalizedModel = computed(() =>
-  normalizePickerHexColor(model.value, props.allowAlpha)
-  ?? (props.allowAlpha ? '#60A5FA80' : '#2563EB'),
+const normalizedModel = computed(
+  () => normalizePickerHexColor(model.value, props.allowAlpha) ?? (props.allowAlpha ? '#60A5FA80' : '#2563EB'),
 )
-const triggerSwatchStyle = computed(() => props.allowAlpha
-  ? {
-      backgroundImage: `linear-gradient(${normalizedModel.value}, ${normalizedModel.value}), conic-gradient(#d8dee8 25%, #fff 0 50%, #d8dee8 0 75%, #fff 0)`,
-      backgroundSize: '100% 100%, 8px 8px',
-    }
-  : { backgroundColor: normalizedModel.value })
-const draftColor = computed(() => hsvaToHex({
-  h: hue.value,
-  s: saturation.value,
-  v: brightness.value,
-  a: alpha.value,
-}, props.allowAlpha))
+const triggerSwatchStyle = computed(() =>
+  props.allowAlpha
+    ? {
+        backgroundImage: `linear-gradient(${normalizedModel.value}, ${normalizedModel.value}), conic-gradient(#d8dee8 25%, #fff 0 50%, #d8dee8 0 75%, #fff 0)`,
+        backgroundSize: '100% 100%, 8px 8px',
+      }
+    : { backgroundColor: normalizedModel.value },
+)
+const draftColor = computed(() =>
+  hsvaToHex(
+    {
+      h: hue.value,
+      s: saturation.value,
+      v: brightness.value,
+      a: alpha.value,
+    },
+    props.allowAlpha,
+  ),
+)
 const hueColor = computed(() => `hsl(${hue.value} 100% 50%)`)
 const svCursorStyle = computed(() => ({
   left: `${saturation.value}%`,
@@ -75,12 +74,16 @@ const alphaTrackStyle = computed(() => {
     backgroundSize: '100% 100%, 8px 8px',
   }
 })
-const inputValid = computed(() => props.allowAlpha
-  ? Boolean(parseRgbaColor(customInput.value))
-  : Boolean(normalizeHexColor(customInput.value)))
-const inputError = computed(() => customInput.value && !inputValid.value
-  ? props.allowAlpha ? '请输入 rgba(r, g, b, a)' : '请输入六位 HEX 颜色，例如 #2563EB'
-  : undefined)
+const inputValid = computed(() =>
+  props.allowAlpha ? Boolean(parseRgbaColor(customInput.value)) : Boolean(normalizeHexColor(customInput.value)),
+)
+const inputError = computed(() =>
+  customInput.value && !inputValid.value
+    ? props.allowAlpha
+      ? '请输入 rgba(r, g, b, a)'
+      : '请输入六位 HEX 颜色，例如 #2563EB'
+    : undefined,
+)
 
 watch(open, (isOpen) => {
   if (isOpen)
@@ -93,8 +96,12 @@ watch(model, (value) => {
 })
 
 function resetDraft(value: string) {
-  const color = hexToHsva(normalizePickerHexColor(value, props.allowAlpha) ?? '')
-    ?? { h: 213, s: 62, v: 98, a: props.allowAlpha ? 0.5 : 1 }
+  const color = hexToHsva(normalizePickerHexColor(value, props.allowAlpha) ?? '') ?? {
+    h: 213,
+    s: 62,
+    v: 98,
+    a: props.allowAlpha ? 0.5 : 1,
+  }
   hue.value = color.h
   saturation.value = color.s
   brightness.value = color.v
@@ -104,8 +111,8 @@ function resetDraft(value: string) {
 
 function syncInput() {
   customInput.value = props.allowAlpha
-    ? formatRgbaColor(draftColor.value) ?? ''
-    : normalizeHexColor(draftColor.value) ?? ''
+    ? (formatRgbaColor(draftColor.value) ?? '')
+    : (normalizeHexColor(draftColor.value) ?? '')
 }
 
 function updateSaturationBrightness(event: PointerEvent) {
@@ -155,8 +162,7 @@ function handleSaturationBrightnessKeydown(event: KeyboardEvent) {
     brightness.value = clamp(brightness.value + step, 0, 100)
   else if (event.key === 'ArrowDown')
     brightness.value = clamp(brightness.value - step, 0, 100)
-  else
-    return
+  else return
 
   event.preventDefault()
   syncInput()
@@ -168,8 +174,7 @@ function handleHueKeydown(event: KeyboardEvent) {
     hue.value = clamp(hue.value - step, 0, 360)
   else if (event.key === 'ArrowDown' || event.key === 'ArrowRight')
     hue.value = clamp(hue.value + step, 0, 360)
-  else
-    return
+  else return
 
   event.preventDefault()
   syncInput()
@@ -199,8 +204,7 @@ function handleAlphaKeydown(event: KeyboardEvent) {
     alpha.value = clamp(alpha.value - step, 0, 1)
   else if (event.key === 'ArrowRight' || event.key === 'ArrowUp')
     alpha.value = clamp(alpha.value + step, 0, 1)
-  else
-    return
+  else return
 
   event.preventDefault()
   syncInput()
@@ -263,12 +267,7 @@ function normalizedInputColor() {
 </script>
 
 <template>
-  <BasePopover
-    v-model="open"
-    class="p-0.75"
-    placement="bottom-start"
-    :disabled="props.disabled"
-  >
+  <BasePopover v-model="open" class="p-0.75" placement="bottom-start" :disabled="props.disabled">
     <template #trigger>
       <button
         type="button"
@@ -281,7 +280,6 @@ function normalizedInputColor() {
         <span
           class="relative flex size-full items-center justify-center overflow-hidden rounded-sm"
           :style="triggerSwatchStyle"
-          aria-hidden="true"
         >
           <ChevronDown class="relative size-3.5 text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.65)]" />
         </span>
@@ -308,7 +306,6 @@ function normalizedInputColor() {
           <span
             class="absolute z-1 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_1px_3px_#00000080]"
             :style="svCursorStyle"
-            aria-hidden="true"
           />
         </div>
 
@@ -329,7 +326,6 @@ function normalizedInputColor() {
           <span
             class="absolute left-1/2 h-1.5 w-4.5 -translate-x-1/2 -translate-y-1/2 rounded-xs bg-white shadow-[0_0_0_1px_#64748b,0_1px_2px_#0000004d]"
             :style="hueThumbStyle"
-            aria-hidden="true"
           />
         </div>
       </div>
@@ -354,7 +350,6 @@ function normalizedInputColor() {
           <span
             class="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_1px_3px_#00000080]"
             :style="alphaThumbStyle"
-            aria-hidden="true"
           />
         </div>
         <span class="text-right font-mono text-cp-xs tabular-nums text-cp-text-secondary">
@@ -362,12 +357,7 @@ function normalizedInputColor() {
         </span>
       </div>
 
-      <div
-        v-if="props.presets.length > 0"
-        class="flex flex-wrap gap-2"
-        role="radiogroup"
-        aria-label="预设颜色"
-      >
+      <div v-if="props.presets.length > 0" class="flex flex-wrap gap-2" role="radiogroup" aria-label="预设颜色">
         <button
           v-for="color in props.presets"
           :key="color"
@@ -384,7 +374,6 @@ function normalizedInputColor() {
             v-if="isPresetSelected(color)"
             class="size-3.5 drop-shadow-[0_1px_2px_rgb(0_0_0/0.2)]"
             :class="presetCheckClass(color)"
-            aria-hidden="true"
           />
         </button>
       </div>

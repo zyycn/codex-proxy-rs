@@ -26,22 +26,20 @@ const props = withDefaults(
 )
 
 const now = useUiClock()
-const presentation = computed(() => resolveAccountStatusPresentation({
-  status: props.status,
-  errorReason: props.errorReason,
-  errorMessage: props.errorMessage,
-  rateLimitedUntil: props.rateLimitedUntil,
-  nextRefreshAt: props.nextRefreshAt,
-  now: now.value.getTime(),
-}))
+const presentation = computed(() =>
+  resolveAccountStatusPresentation({
+    status: props.status,
+    errorReason: props.errorReason,
+    errorMessage: props.errorMessage,
+    rateLimitedUntil: props.rateLimitedUntil,
+    nextRefreshAt: props.nextRefreshAt,
+    now: now.value.getTime(),
+  }),
+)
 </script>
 
 <template>
-  <BasePopover
-    :disabled="!presentation.hasDetail"
-    trigger="hover-click"
-    placement="top-start"
-  >
+  <BasePopover :disabled="!presentation.hasDetail" trigger="hover-click" placement="top-start">
     <template #trigger="{ open }">
       <component
         :is="presentation.hasDetail ? 'button' : 'span'"
@@ -63,7 +61,7 @@ const presentation = computed(() => resolveAccountStatusPresentation({
           class="inline-flex min-w-16 items-center gap-1.5 rounded-md px-1.5 py-1 text-cp-sm leading-none font-emphasis transition-colors duration-150 motion-reduce:transition-none"
           :class="presentation.statusStyle.text"
         >
-          <span aria-hidden="true" class="size-1.5 rounded-full" :class="presentation.statusStyle.dot" />
+          <span class="size-1.5 rounded-full" :class="presentation.statusStyle.dot" />
           <span>{{ presentation.label }}</span>
         </span>
       </component>
@@ -72,7 +70,6 @@ const presentation = computed(() => resolveAccountStatusPresentation({
     <section class="w-88 overflow-hidden rounded-cp-lg">
       <header class="flex items-start gap-3 bg-cp-fill-tertiary px-4 py-3">
         <span
-          aria-hidden="true"
           class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp"
           :class="presentation.statusStyle.icon"
         >
@@ -130,17 +127,16 @@ const presentation = computed(() => resolveAccountStatusPresentation({
           </p>
         </div>
 
-        <div
-          v-if="presentation.errorText"
-          class="overflow-hidden rounded-cp bg-cp-fill-tertiary"
-        >
+        <div v-if="presentation.errorText" class="overflow-hidden rounded-cp bg-cp-fill-tertiary">
           <div class="flex items-center justify-between gap-3 px-3 pt-2.5 pb-1.5">
             <span class="text-cp-xs leading-none font-heavy text-cp-text-tertiary">上游原始反馈</span>
             <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary">仅供排查</span>
           </div>
           <BaseScrollbar class="bg-cp-fill-quaternary" max-height="124px">
             <div class="px-3 py-2">
-              <pre class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-xs leading-[1.55] font-emphasis text-cp-text-secondary">{{ presentation.errorText }}</pre>
+              <pre
+                class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-xs leading-[1.55] font-emphasis text-cp-text-secondary"
+              >{{ presentation.errorText }}</pre>
             </div>
           </BaseScrollbar>
         </div>

@@ -58,20 +58,13 @@ function overviewIconClass(tone: string) {
 
 <template>
   <div class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-    <BaseCard
-      v-for="item in overviewItems"
-      :key="item.label"
-      as="article"
-      padding="compact"
-    >
+    <BaseCard v-for="item in overviewItems" :key="item.label" as="article" padding="compact">
       <div class="flex items-stretch justify-between gap-3">
         <div class="flex min-w-0 flex-col">
           <p class="m-0 text-cp-sm leading-none font-heavy text-cp-text-secondary">
             {{ item.label }}
           </p>
-          <strong
-            class="my-2 block font-mono text-[26px] leading-none font-extrabold text-cp-text"
-          >
+          <strong class="my-2 block font-mono text-[26px] leading-none font-extrabold text-cp-text">
             {{ item.value }}
           </strong>
           <p class="m-0 truncate text-cp-sm leading-none font-emphasis text-cp-text-quaternary">
@@ -79,7 +72,6 @@ function overviewIconClass(tone: string) {
           </p>
         </div>
         <BaseMotionIcon
-          aria-hidden="true"
           class="inline-flex size-9 shrink-0 items-center justify-center self-start rounded-lg"
           :class="overviewIconClass(item.tone)"
         >

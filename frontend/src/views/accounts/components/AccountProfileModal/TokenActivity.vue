@@ -5,10 +5,7 @@ import { computed, shallowRef } from 'vue'
 
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import {
-  buildProfileActivityGrid,
-  profileActivityCellLabel,
-} from '../../utils/accountProfileStatistics'
+import { buildProfileActivityGrid, profileActivityCellLabel } from '../../utils/accountProfileStatistics'
 
 const props = defineProps<{
   dailyUsage: AccountProfileDailyUsage[] | null
@@ -39,12 +36,7 @@ const rangeLabel = computed(() => `${grid.value.rangeStart} 至 ${grid.value.ran
           Token 活动
         </h3>
       </div>
-      <BaseSegmented
-        v-model="mode"
-        label="Token 活动统计方式"
-        size="sm"
-        :options="modeOptions"
-      />
+      <BaseSegmented v-model="mode" label="Token 活动统计方式" size="sm" :options="modeOptions" />
     </div>
 
     <BaseEmpty
@@ -55,18 +47,9 @@ const rangeLabel = computed(() => `${grid.value.rangeStart} 至 ${grid.value.ran
       surface="none"
     />
 
-    <div
-      v-else
-      class="overflow-x-auto pb-1"
-      role="img"
-      :aria-label="`Token 活动热力图，${rangeLabel}`"
-    >
+    <div v-else class="overflow-x-auto pb-1" role="img" :aria-label="`Token 活动热力图，${rangeLabel}`">
       <div class="min-w-190">
-        <div
-          class="mb-1.5 grid gap-1"
-          style="grid-template-columns: repeat(52, minmax(0, 1fr));"
-          aria-hidden="true"
-        >
+        <div class="mb-1.5 grid gap-1" style="grid-template-columns: repeat(52, minmax(0, 1fr))">
           <span
             v-for="week in grid.weeks"
             :key="week.key"
@@ -75,16 +58,8 @@ const rangeLabel = computed(() => `${grid.value.rangeStart} 至 ${grid.value.ran
             {{ week.monthLabel }}
           </span>
         </div>
-        <div
-          class="grid gap-1"
-          style="grid-template-columns: repeat(52, minmax(0, 1fr));"
-          aria-hidden="true"
-        >
-          <div
-            v-for="week in grid.weeks"
-            :key="week.key"
-            class="grid grid-rows-7 gap-1"
-          >
+        <div class="grid gap-1" style="grid-template-columns: repeat(52, minmax(0, 1fr))">
+          <div v-for="week in grid.weeks" :key="week.key" class="grid grid-rows-7 gap-1">
             <span
               v-for="cell in week.cells"
               :key="cell.date"

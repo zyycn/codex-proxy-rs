@@ -48,9 +48,7 @@ const modalTitle = computed(() => {
     return '主动重置额度'
   return ambiguous.value ? '确认上次重置' : '确认重置额度'
 })
-const modalDescription = computed(() =>
-  showConfirm.value ? undefined : '选择一张重置卡后继续',
-)
+const modalDescription = computed(() => (showConfirm.value ? undefined : '选择一张重置卡后继续'))
 const triggerLabel = computed(() => {
   if (ambiguous.value)
     return '查看主动重置卡，有一项操作待确认'
@@ -59,14 +57,10 @@ const triggerLabel = computed(() => {
       ? `查看主动重置卡，查询失败，最近查询 ${availableCount.value} 张可用`
       : '查看主动重置卡，查询失败'
   }
-  return hasSnapshot.value
-    ? `查看主动重置卡，最近查询 ${availableCount.value} 张可用`
-    : '查看主动重置卡'
+  return hasSnapshot.value ? `查看主动重置卡，最近查询 ${availableCount.value} 张可用` : '查看主动重置卡'
 })
 const showTriggerCount = computed(() => hasSnapshot.value && availableCount.value > 0)
-const confirmCreditTitle = computed(() =>
-  consumptionCredit.value?.title || 'Codex 主动重置卡',
-)
+const confirmCreditTitle = computed(() => consumptionCredit.value?.title || 'Codex 主动重置卡')
 
 watch(panelOpen, (isOpen) => {
   if (isOpen) {
@@ -113,12 +107,8 @@ async function handleConfirmConsume() {
     :title="triggerLabel"
     @click="panelOpen = true"
   >
-    <TicketCheck class="size-4 shrink-0" aria-hidden="true" />
-    <span
-      v-if="showTriggerCount"
-      class="translate-y-px font-mono text-[10px] leading-none font-heavy tabular-nums"
-      aria-hidden="true"
-    >
+    <TicketCheck class="size-4 shrink-0" />
+    <span v-if="showTriggerCount" class="translate-y-px font-mono text-[10px] leading-none font-heavy tabular-nums">
       x{{ availableCount }}
     </span>
   </button>
@@ -149,11 +139,7 @@ async function handleConfirmConsume() {
     </div>
 
     <div v-else class="grid gap-4">
-      <section
-        v-if="ambiguous"
-        class="flex items-start gap-3 rounded-cp bg-cp-warning-bg px-4 py-3.5"
-        role="status"
-      >
+      <section v-if="ambiguous" class="flex items-start gap-3 rounded-cp bg-cp-warning-bg px-4 py-3.5" role="status">
         <AlertTriangle class="mt-0.5 size-4 shrink-0 text-cp-warning-text" />
         <div class="min-w-0">
           <p class="m-0 text-cp-sm font-heavy text-cp-warning-text">
@@ -168,7 +154,6 @@ async function handleConfirmConsume() {
       <section class="flex items-center gap-3 rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
         <span
           class="inline-grid size-9 shrink-0 place-items-center rounded-cp bg-cp-fill-tertiary text-cp-primary-text"
-          aria-hidden="true"
         >
           <TicketCheck class="size-4" />
         </span>
@@ -214,12 +199,7 @@ async function handleConfirmConsume() {
           {{ loadError }}，请刷新重试。
         </p>
 
-        <div
-          v-else-if="availableCredits.length"
-          class="grid gap-2"
-          role="radiogroup"
-          aria-label="选择要使用的重置卡"
-        >
+        <div v-else-if="availableCredits.length" class="grid gap-2" role="radiogroup" aria-label="选择要使用的重置卡">
           <BaseRadio
             v-for="credit in availableCredits"
             :key="credit.id"
@@ -267,11 +247,7 @@ async function handleConfirmConsume() {
         <BaseButton variant="ghost" :disabled="consuming" @click="panelOpen = false">
           关闭
         </BaseButton>
-        <BaseButton
-          variant="primary"
-          :disabled="loading || consuming || !canRequestConsume"
-          @click="requestConsume"
-        >
+        <BaseButton variant="primary" :disabled="loading || consuming || !canRequestConsume" @click="requestConsume">
           {{ ambiguous ? '继续确认' : '下一步' }}
         </BaseButton>
       </template>

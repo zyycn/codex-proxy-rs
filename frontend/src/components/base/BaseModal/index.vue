@@ -96,7 +96,7 @@ function closeModal() {
 
 function focusableElements() {
   return Array.from(panel.value?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter(
-    element => !element.hidden && element.getAttribute('aria-hidden') !== 'true',
+    element => !element.hidden,
   )
 }
 

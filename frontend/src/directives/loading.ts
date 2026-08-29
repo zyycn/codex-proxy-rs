@@ -83,7 +83,6 @@ function createOverlay(text: string, preserveContent: boolean) {
 
   const mark = document.createElement('span')
   mark.className = MARK_CLASS
-  mark.setAttribute('aria-hidden', 'true')
 
   const label = document.createElement('span')
   label.className = LABEL_CLASS

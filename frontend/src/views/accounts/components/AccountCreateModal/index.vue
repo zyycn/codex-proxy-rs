@@ -49,13 +49,15 @@ const { open: openImportFile, onChange: onImportFileChange } = useFileDialog({
   reset: true,
 })
 
-const view = computed(() => resolveAccountCreatePresentation({
-  form: form.value,
-  account: props.account,
-  saving: props.saving,
-  oauthLoading: props.oauthLoading,
-  reauthorizing: props.reauthorizing,
-}))
+const view = computed(() =>
+  resolveAccountCreatePresentation({
+    form: form.value,
+    account: props.account,
+    saving: props.saving,
+    oauthLoading: props.oauthLoading,
+    reauthorizing: props.reauthorizing,
+  }),
+)
 
 const provider = computed({
   get: () => form.value.provider,
@@ -129,16 +131,12 @@ async function copyText(value: string, successText: string) {
     :dismissible="!saving"
   >
     <template #icon>
-      <LayoutGrid v-if="view.isBatch" class="text-cp-text" aria-hidden="true" :width="20" :height="20" />
-      <Xai v-else-if="view.isXai" class="text-cp-text" aria-hidden="true" :width="20" :height="20" />
-      <Openai v-else class="text-cp-text" aria-hidden="true" :width="20" :height="20" />
+      <LayoutGrid v-if="view.isBatch" class="text-cp-text" :width="20" :height="20" />
+      <Xai v-else-if="view.isXai" class="text-cp-text" :width="20" :height="20" />
+      <Openai v-else class="text-cp-text" :width="20" :height="20" />
     </template>
 
-    <AccountProviderChooser
-      v-if="view.choosingProvider"
-      :disabled="saving || oauthLoading"
-      @select="selectProvider"
-    />
+    <AccountProviderChooser v-if="view.choosingProvider" :disabled="saving || oauthLoading" @select="selectProvider" />
 
     <div v-else class="flex flex-col gap-4">
       <BaseSegmented
@@ -193,9 +191,7 @@ async function copyText(value: string, successText: string) {
                 <Copy class="size-3.5" />
               </BaseIconButton>
             </template>
-            <BaseScrollbar
-              max-height="92px"
-            >
+            <BaseScrollbar max-height="92px">
               <div class="rounded-cp bg-[var(--cp-input-bg)] px-3.5 py-3 shadow-cp-tertiary">
                 <pre
                   class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-cp-sm leading-[1.6] font-emphasis text-cp-text-secondary"
@@ -220,11 +216,7 @@ async function copyText(value: string, successText: string) {
       </div>
 
       <BaseForm v-else>
-        <BaseFormItem
-          :label="view.importInput.label"
-          required
-          :error="fileError || undefined"
-        >
+        <BaseFormItem :label="view.importInput.label" required :error="fileError || undefined">
           <template v-if="view.importInput.uploadable" #extra>
             <BaseButton variant="secondary" size="sm" :disabled="saving" @click="openImportFile()">
               <template #icon>
@@ -248,12 +240,7 @@ async function copyText(value: string, successText: string) {
       <BaseButton variant="ghost" :disabled="saving" @click="open = false">
         取消
       </BaseButton>
-      <BaseButton
-        variant="primary"
-        :loading="saving"
-        :disabled="!view.canSubmit"
-        @click="emit('create')"
-      >
+      <BaseButton variant="primary" :loading="saving" :disabled="!view.canSubmit" @click="emit('create')">
         {{ view.submitLabel }}
       </BaseButton>
     </template>

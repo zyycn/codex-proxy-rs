@@ -55,7 +55,7 @@ const optionClasses: Record<SegmentedSize, string> = {
 }
 
 function enabledIndexes() {
-  return props.options.flatMap((option, index) => option.disabled ? [] : [index])
+  return props.options.flatMap((option, index) => (option.disabled ? [] : [index]))
 }
 
 function selectOption(index: number) {
@@ -81,8 +81,7 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
     nextIndex = indexes[0]
   else if (event.key === 'End')
     nextIndex = indexes[indexes.length - 1]
-  else
-    return
+  else return
 
   if (nextIndex === undefined)
     return
@@ -108,7 +107,6 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
       v-if="options.length > 0"
       class="pointer-events-none absolute inset-y-0.75 left-0.75 rounded-cp bg-cp-bg-container shadow-cp-tertiary transition-transform duration-200 ease-out motion-reduce:transition-none"
       :style="indicatorStyle"
-      aria-hidden="true"
     />
     <button
       v-for="(option, index) in options"
@@ -116,9 +114,7 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
       class="relative z-10 inline-flex min-w-0 touch-manipulation items-center justify-center gap-1.5 rounded-cp border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
       :class="[
         optionClasses[size],
-        model === option.value
-          ? 'text-cp-text'
-          : 'text-cp-text-secondary hover:text-cp-text',
+        model === option.value ? 'text-cp-text' : 'text-cp-text-secondary hover:text-cp-text',
         disabled || option.disabled ? 'cursor-not-allowed opacity-60 hover:text-cp-text-secondary' : undefined,
         display === 'icon' ? 'px-0' : undefined,
       ]"
@@ -132,7 +128,7 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
       @click="selectOption(index)"
       @keydown="handleKeydown($event, index)"
     >
-      <component :is="option.icon" v-if="option.icon" class="size-3.5 shrink-0" aria-hidden="true" />
+      <component :is="option.icon" v-if="option.icon" class="size-3.5 shrink-0" />
       <span v-if="display === 'label'" class="truncate">{{ option.label }}</span>
     </button>
   </div>

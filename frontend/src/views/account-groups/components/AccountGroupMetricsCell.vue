@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import type { AccountGroup } from '@/api'
-import {
-  AlertTriangle,
-  CircleCheck,
-  Grid2X2,
-  Users,
-} from '@lucide/vue'
+import { AlertTriangle, CircleCheck, Grid2X2, Users } from '@lucide/vue'
 import { computed } from 'vue'
 
 import { formatUsd } from '@/views/usage/utils/format'
@@ -77,10 +72,7 @@ const metrics = computed<MetricItem[]>(() => {
 </script>
 
 <template>
-  <dl
-    v-if="kind === 'usage'"
-    class="m-0 grid grid-cols-[auto_auto] justify-start gap-x-2 gap-y-0.5 text-xs leading-4"
-  >
+  <dl v-if="kind === 'usage'" class="m-0 grid grid-cols-[auto_auto] justify-start gap-x-2 gap-y-0.5 text-xs leading-4">
     <template v-for="metric in metrics" :key="metric.label">
       <dt class="text-cp-text-quaternary">
         {{ metric.label }}
@@ -92,13 +84,9 @@ const metrics = computed<MetricItem[]>(() => {
   </dl>
 
   <dl v-else class="m-0 flex items-center gap-2.5 whitespace-nowrap text-xs leading-none">
-    <div
-      v-for="metric in metrics"
-      :key="metric.label"
-      class="inline-flex min-w-0 items-center gap-1"
-    >
+    <div v-for="metric in metrics" :key="metric.label" class="inline-flex min-w-0 items-center gap-1">
       <dt class="flex items-center" :class="toneClasses[metric.tone]" :title="metric.label">
-        <component :is="metric.icon" v-if="metric.icon" class="size-3 shrink-0" aria-hidden="true" />
+        <component :is="metric.icon" v-if="metric.icon" class="size-3 shrink-0" />
         <span class="sr-only">{{ metric.label }}</span>
       </dt>
       <dd class="m-0 font-mono font-semibold tabular-nums" :class="toneClasses[metric.tone]">

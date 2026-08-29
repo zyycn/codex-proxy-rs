@@ -46,7 +46,7 @@ watch(
   },
   { immediate: true },
 )
-const displayRows = computed(() => props.loading && props.rows.length === 0 ? retainedRows.value : props.rows)
+const displayRows = computed(() => (props.loading && props.rows.length === 0 ? retainedRows.value : props.rows))
 const hasRows = computed(() => displayRows.value.length > 0)
 
 const scrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('scrollbar')
@@ -89,20 +89,20 @@ const headerRowClass = computed(() => [
   props.density === 'compact' ? 'h-8 text-cp-xs' : 'h-10 text-cp-sm',
   'font-bold text-cp-text-secondary',
 ])
-const bodyRowClass = computed(() =>
-  props.density === 'compact' ? 'h-cp-table-row-sm' : 'h-cp-table-row',
+const bodyRowClass = computed(() => (props.density === 'compact' ? 'h-cp-table-row-sm' : 'h-cp-table-row'))
+const cellPaddingClass = computed(() => (props.density === 'compact' ? 'px-3' : 'px-4'))
+const bodyTextClass = computed(() => (props.density === 'compact' ? 'text-cp-sm' : 'text-cp'))
+const bodyCellFrameClass = computed(() =>
+  props.density === 'compact'
+    ? 'border-y-2 border-transparent bg-clip-padding'
+    : 'border-y-[3px] border-transparent bg-clip-padding',
 )
-const cellPaddingClass = computed(() => props.density === 'compact' ? 'px-3' : 'px-4')
-const bodyTextClass = computed(() => props.density === 'compact' ? 'text-cp-sm' : 'text-cp')
-const bodyCellFrameClass = computed(() => props.density === 'compact'
-  ? 'border-y-2 border-transparent bg-clip-padding'
-  : 'border-y-[3px] border-transparent bg-clip-padding')
-const firstRowTopGapClass = computed(() =>
-  props.density === 'compact' ? 'border-t-4' : 'border-t-[6px]',
+const firstRowTopGapClass = computed(() => (props.density === 'compact' ? 'border-t-4' : 'border-t-[6px]'))
+const bodyCellContentClass = computed(() =>
+  props.density === 'compact'
+    ? 'min-h-[calc(var(--cp-table-row-height-sm)-4px)]'
+    : 'min-h-[calc(var(--cp-table-row-height)-6px)]',
 )
-const bodyCellContentClass = computed(() => props.density === 'compact'
-  ? 'min-h-[calc(var(--cp-table-row-height-sm)-4px)]'
-  : 'min-h-[calc(var(--cp-table-row-height)-6px)]')
 
 function getRowKey(row: Row, index: number) {
   if (typeof props.rowKey === 'function')
@@ -128,10 +128,7 @@ function rowBackgroundClass(row: Row, index: number) {
 }
 
 function rowClass() {
-  return [
-    bodyRowClass.value,
-    'hover:[&>td]:bg-(--cp-table-row-hover-bg)',
-  ]
+  return [bodyRowClass.value, 'hover:[&>td]:bg-(--cp-table-row-hover-bg)']
 }
 
 function stickyClass(column: ResolvedTableColumn<Row>, header = false) {
@@ -164,8 +161,7 @@ function toggleColumnSort(column: ResolvedTableColumn<Row>) {
     emit('sortChange', { key, direction: 'asc' })
   else if (direction === 'asc')
     emit('sortChange', { key, direction: 'desc' })
-  else
-    emit('sortChange', undefined)
+  else emit('sortChange', undefined)
 }
 
 function columnAriaSort(column: ResolvedTableColumn<Row>) {
@@ -194,24 +190,18 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
         v-if="hasRows"
         ref="scrollbar"
         class="min-h-0 flex-1"
-        :class="density === 'compact'
-          ? '[--cp-scrollbar-track-inset-block-start:2.25rem]'
-          : '[--cp-scrollbar-track-inset-block-start:2.75rem]'"
+        :class="
+          density === 'compact'
+            ? '[--cp-scrollbar-track-inset-block-start:2.25rem]'
+            : '[--cp-scrollbar-track-inset-block-start:2.75rem]'
+        "
         :always-visible="scrollbarAlwaysVisible"
         horizontal
         @scroll="handleTableScroll"
       >
-        <table
-          ref="table"
-          class="table-fixed border-separate border-spacing-0 text-left"
-          :style="resolvedTableStyle"
-        >
+        <table ref="table" class="table-fixed border-separate border-spacing-0 text-left" :style="resolvedTableStyle">
           <colgroup>
-            <col
-              v-for="column in computedColumns"
-              :key="column.key"
-              :style="columnStyle(column, computedColumns)"
-            >
+            <col v-for="column in computedColumns" :key="column.key" :style="columnStyle(column, computedColumns)">
           </colgroup>
           <thead>
             <tr :class="headerRowClass">
@@ -243,15 +233,19 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
                     <span class="truncate">
                       <slot :name="`header-${column.key}`" :column="column">{{ column.label }}</slot>
                     </span>
-                    <span class="inline-flex shrink-0 -translate-y-px flex-col gap-px" aria-hidden="true">
+                    <span class="inline-flex shrink-0 -translate-y-px flex-col gap-px">
                       <Triangle
                         class="size-1.25 fill-current"
-                        :class="columnSortDirection(column) === 'asc' ? 'text-cp-primary-text' : 'text-cp-text-tertiary'"
+                        :class="
+                          columnSortDirection(column) === 'asc' ? 'text-cp-primary-text' : 'text-cp-text-tertiary'
+                        "
                         :stroke-width="0"
                       />
                       <Triangle
                         class="size-1.25 rotate-180 fill-current"
-                        :class="columnSortDirection(column) === 'desc' ? 'text-cp-primary-text' : 'text-cp-text-tertiary'"
+                        :class="
+                          columnSortDirection(column) === 'desc' ? 'text-cp-primary-text' : 'text-cp-text-tertiary'
+                        "
                         :stroke-width="0"
                       />
                     </span>

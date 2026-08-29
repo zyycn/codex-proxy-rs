@@ -50,7 +50,6 @@ const indicatorClasses = computed(() => [
     <span
       :class="indicatorClasses"
       class="peer-focus-visible:ring-2 peer-focus-visible:ring-cp-control-outline peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-cp-bg-container"
-      aria-hidden="true"
     >
       <span class="size-1.5 rounded-full bg-current" />
     </span>
