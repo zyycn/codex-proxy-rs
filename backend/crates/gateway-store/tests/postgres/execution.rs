@@ -20,6 +20,7 @@ fn postgres_execution_adapter_implements_core_port() {
 fn model_request_rejects_mismatched_client_key_live_id() {
     let started_at = Utc::now();
     let request = NewModelRequest {
+        admission_decision_ms: None,
         id: "request-1".to_owned(),
         client_api_key_id: Some("key-live".to_owned()),
         client_api_key_ref: "key-history".to_owned(),
@@ -70,6 +71,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
     .await
     .expect("seed provider account");
     let request = NewModelRequest {
+        admission_decision_ms: None,
         id: "req_merged".to_owned(),
         client_api_key_id: None,
         client_api_key_ref: "key_merged".to_owned(),
@@ -94,6 +96,9 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         deadline_at: started_at + Duration::seconds(30),
     };
     let attempt = ModelRequestAttemptStart {
+        account_selection_wait_ms: None,
+        capacity_used_slots: None,
+        capacity_total_slots: None,
         model_request_id: "req_merged".to_owned(),
         attempt_count: 1,
         provider_kind: "openai".to_owned(),
@@ -146,6 +151,9 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         .expect("mark sent before retry");
     let second = repository
         .begin_model_request_attempt(ModelRequestAttemptStart {
+            account_selection_wait_ms: None,
+            capacity_used_slots: None,
+            capacity_total_slots: None,
             model_request_id: "req_merged".to_owned(),
             attempt_count: 2,
             provider_kind: "openai".to_owned(),
@@ -177,6 +185,7 @@ async fn model_request_persists_group_routing_snapshot_without_live_group_foreig
     let started_at = Utc::now();
     repository
         .insert_model_request(NewModelRequest {
+            admission_decision_ms: None,
             id: "req_group_history".to_owned(),
             client_api_key_id: None,
             client_api_key_ref: "key_group_history".to_owned(),

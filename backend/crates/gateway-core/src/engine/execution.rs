@@ -5,7 +5,7 @@ use std::fmt;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use futures::{FutureExt, future::BoxFuture, pin_mut, select_biased};
 use futures_timer::Delay;
@@ -473,6 +473,7 @@ impl DefaultExecutionService {
             lease_ttl: MODEL_REQUEST_DEADLINE,
             limits: client.policy.limits(),
         };
+        let admission_started_at = Instant::now();
         match self
             .admissions
             .admit(admission_request)
@@ -494,6 +495,7 @@ impl DefaultExecutionService {
                 ));
             }
         }
+        let admission_decision_ms = duration_ms(admission_started_at.elapsed());
         let admission = AdmissionLease {
             port: Arc::clone(&self.admissions),
             client_api_key_id: client.policy.key_id().clone(),
@@ -525,6 +527,7 @@ impl DefaultExecutionService {
             subagent_kind: observation.subagent_kind,
             compact: observation.compact,
             image_generation_requested: operation.image_generation_requested(),
+            admission_decision_ms: Some(admission_decision_ms),
             started_at,
             deadline_at,
         };
@@ -666,6 +669,7 @@ impl DefaultExecutionService {
             subagent_kind: None,
             compact: false,
             image_generation_requested: false,
+            admission_decision_ms: None,
             started_at,
             deadline_at,
         };
@@ -1182,6 +1186,10 @@ fn constant_time_equal(left: &str, right: &str) -> bool {
             difference | (left ^ right)
         })
         == 0
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn new_request_id() -> Result<ModelRequestId, GatewayError> {

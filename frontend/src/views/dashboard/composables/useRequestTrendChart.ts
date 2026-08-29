@@ -61,6 +61,9 @@ export function useRequestTrendChart(options: {
         point.requestsValue > 0
         || point.errorsValue > 0
         || (point.latencyValue ?? 0) > 0
+        || (point.firstTokenP95Ms ?? 0) > 0
+        || (point.latencyP95Ms ?? 0) > 0
+        || (point.outputThroughputP50 ?? 0) > 0
         || point.tokensValue > 0
         || point.cachedTokensValue > 0,
     ),
@@ -105,7 +108,8 @@ export function useRequestTrendChart(options: {
         right: activeKind.value === 'latency' ? 8 : 10,
         top: 10,
         bottom: 2,
-        containLabel: true,
+        outerBoundsMode: 'same' as const,
+        outerBoundsContain: 'axisLabel' as const,
       },
       xAxis: {
         type: 'category' as const,
@@ -147,7 +151,7 @@ export function useRequestTrendChart(options: {
           axisLine: { show: false },
           axisTick: { show: false },
           axisLabel: {
-            show: activeKind.value !== 'latency',
+            show: true,
             color: activeKind.value === 'usage'
               ? trendColor('输出', '--cp-color-green-solid', '#12B981')
               : trendColor('成功', '--cp-color-green-solid', '#12B981'),
@@ -171,6 +175,8 @@ export function useRequestTrendChart(options: {
   function formatSecondaryAxisValue(value: number) {
     if (activeKind.value === 'errors')
       return `${Math.round(value)}%`
+    if (activeKind.value === 'latency')
+      return `${formatAxisCompact(value)}/s`
     return formatAxisCompact(value)
   }
 
@@ -219,12 +225,12 @@ export function useRequestTrendChart(options: {
         return point?.cachedTokens ?? value
     }
     if (activeKind.value === 'latency') {
-      if (name === '平均')
-        return point?.latency ?? value
-      if (name === '最高')
-        return point?.maxLatency ?? value
-      if (name === '最低')
-        return point?.minLatency ?? value
+      if (name === '首字 P95')
+        return formatLatency(point?.firstTokenP95Ms, value)
+      if (name === '总耗时 P95')
+        return formatLatency(point?.latencyP95Ms, value)
+      if (name === '吞吐 P50')
+        return point?.outputThroughputP50 == null ? value : `${point.outputThroughputP50} tok/s`
     }
     if (name === '错误数')
       return point?.errors ?? value
@@ -272,37 +278,22 @@ export function useRequestTrendChart(options: {
     if (activeKind.value === 'latency') {
       return [
         lineSeries(
-          '最低',
-          activeSeriesValues('minLatencyValue'),
-          trendColor('最低', '--cp-color-green-solid', '#12B981'),
-          {
-            lineType: 'dotted',
-            smooth: 0.2,
-            stack: 'latency-range',
-            width: 1.2,
-            z: 1,
-          },
+          '总耗时 P95',
+          activeSeriesValues('latencyP95Ms'),
+          trendColor('总耗时', '--cp-color-orange-solid', '#F59E0B'),
+          { lineType: 'dashed', smooth: 0.2, width: 1.8, z: 2 },
         ),
         lineSeries(
-          '最高',
-          latencyRangeValues(),
-          trendColor('最高', '--cp-color-orange-solid', '#F59E0B'),
-          {
-            area: true,
-            areaStartAlpha: '26',
-            areaEndAlpha: '10',
-            lineType: 'dashed',
-            smooth: 0.2,
-            stack: 'latency-range',
-            width: 1.2,
-            z: 1,
-          },
+          '首字 P95',
+          activeSeriesValues('firstTokenP95Ms'),
+          trendColor('首字', '--cp-color-blue-solid', '#5983F4'),
+          { area: true, smooth: 0.24, width: 2.5, z: 4 },
         ),
         lineSeries(
-          '平均',
-          activeSeriesValues('latencyValue'),
-          trendColor('平均', '--cp-color-blue-solid', '#5983F4'),
-          { smooth: 0.24, width: 2.5, z: 4 },
+          '吞吐 P50',
+          activeSeriesValues('outputThroughputP50'),
+          trendColor('吞吐', '--cp-color-green-solid', '#12B981'),
+          { smooth: 0.2, width: 2, yAxisIndex: 1, z: 3 },
         ),
       ]
     }
@@ -336,22 +327,6 @@ export function useRequestTrendChart(options: {
     return points.value.map(point =>
       Number(point.requestsValue) > 0 ? trendPointNumber(point, key) : null,
     )
-  }
-
-  function latencyRangeValues() {
-    return points.value.map((point) => {
-      if (Number(point.requestsValue) <= 0)
-        return null
-      if (point.minLatencyValue === null || point.maxLatencyValue === null)
-        return null
-      if (point.minLatencyValue === undefined || point.maxLatencyValue === undefined)
-        return null
-      const minimum = Number(point.minLatencyValue)
-      const maximum = Number(point.maxLatencyValue)
-      return Number.isFinite(minimum) && Number.isFinite(maximum)
-        ? Math.max(0, maximum - minimum)
-        : null
-    })
   }
 
   function lineSeries(
@@ -481,6 +456,16 @@ function formatAxisCompact(value: number) {
 
 function formatAxisNumber(value: number) {
   return value >= 10 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, '')
+}
+
+function formatLatency(value: number | null | undefined, fallback: string) {
+  if (value == null || !Number.isFinite(value))
+    return fallback
+  if (value < 1_000)
+    return `${Math.round(value)} ms`
+  if (value < 60_000)
+    return `${formatAxisNumber(value / 1_000)} s`
+  return `${formatAxisNumber(value / 60_000)} min`
 }
 
 function showTwoHourLabel(_index: number, value: string) {

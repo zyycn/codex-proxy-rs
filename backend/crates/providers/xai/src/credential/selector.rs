@@ -6,9 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::engine::credential::{
-    AccountCandidate, AccountEligibilityPolicy, AccountFeedbackStats, AccountSelectionContext,
-    AccountSelector, CredentialState, ProviderAccount, ProviderAccountId, QuotaAccessState,
-    QuotaEvidence, QuotaState,
+    AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy, AccountFeedbackStats,
+    AccountSelectionContext, AccountSelector, CredentialState, ProviderAccount, ProviderAccountId,
+    QuotaAccessState, QuotaEvidence, QuotaState,
 };
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
@@ -200,7 +200,11 @@ impl GrokAccountSessionSelector {
         };
         let mut capacity_denied = false;
         let mut retry_after = None;
-        while let Some(selection) = AccountSelector.select(&candidates, &context) {
+        loop {
+            let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
+            let Some(selection) = AccountSelector.select(&candidates, &context) else {
+                break;
+            };
             let selected = selection.candidate();
             let selected_id = selected.account.id().clone();
             let selected_revision = selected.account.revision();
@@ -265,7 +269,8 @@ impl GrokAccountSessionSelector {
                 binding,
                 guard,
             )
-            .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
+            .map_err(|_| GrokSessionSelectorError::InvalidSession)?
+            .with_capacity_snapshot(capacity.map(AccountCapacitySnapshot::with_acquired_request));
             return Ok(if allows_account_state_mutation {
                 session
             } else {

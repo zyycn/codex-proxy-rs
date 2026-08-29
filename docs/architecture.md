@@ -195,9 +195,8 @@ PostgreSQL 周期对账才是正确性基础。
 `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`。只有明确上游证据才能恢复或终态化账号，
 本地时钟和不确定响应不能伪造事实。
 
-当前大版本的十二张业务表由 `0001_initial.sql` 建立；`0002_nullable_requested_model.sql` 允许 Images
-等无模型端点把 `requested_model_id` 保存为 `NULL`。已应用迁移按字节冻结，后续 schema 变化只能新增
-编号迁移，详见 [迁移规则](../backend/migrations/README.md)。
+PostgreSQL schema 由迁移目录按编号管理。已应用迁移按字节冻结，后续 schema 变化只能新增编号迁移，
+详见 [迁移规则](../backend/migrations/README.md)。
 
 ## 9. Credential、额度与主动重置
 

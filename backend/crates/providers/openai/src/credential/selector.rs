@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountCandidate, AccountEligibilityPolicy, AccountErrorReason, AccountFeedbackStats,
-    AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext, AccountSelector,
-    AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
-    QuotaEvidence,
+    AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy, AccountErrorReason,
+    AccountFeedbackStats, AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext,
+    AccountSelector, AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount,
+    ProviderAccountId, QuotaEvidence,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -498,6 +498,7 @@ impl CodexCredentialSelector {
                 },
                 account_scope: request.attempt.account_scope().cloned(),
             };
+            let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
             let Some(selection) = AccountSelector.select(&candidates, &context) else {
                 return match shortest_retry {
                     Some(retry_after) => Err(CredentialSelectionError::CapacityUnavailable {
@@ -619,6 +620,7 @@ impl CodexCredentialSelector {
                         allows_account_state_mutation,
                         affinity_telemetry,
                         affinity_expected_account_id,
+                        capacity: capacity.map(AccountCapacitySnapshot::with_acquired_request),
                         _guard: guard,
                     });
                 }
@@ -1224,6 +1226,7 @@ pub struct CodexCredentialLease {
     allows_account_state_mutation: bool,
     affinity_telemetry: AffinityTelemetry,
     affinity_expected_account_id: ProviderAccountId,
+    capacity: Option<AccountCapacitySnapshot>,
     _guard: Box<dyn ProviderLeaseGuard>,
 }
 
@@ -1280,6 +1283,11 @@ impl CodexCredentialLease {
     #[must_use]
     pub const fn account_switch(&self) -> bool {
         self.affinity_telemetry.account_switch
+    }
+
+    #[must_use]
+    pub const fn capacity_snapshot(&self) -> Option<AccountCapacitySnapshot> {
+        self.capacity
     }
 
     /// 成功反馈只能从选择时观察到的绑定迁移，避免迟到请求覆盖较新 winner。

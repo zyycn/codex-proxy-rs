@@ -17,9 +17,10 @@ import {
   usageCategoryAxis,
   usageLegend,
   usageTooltip,
+  usageTooltipContent,
   usageValueAxis,
 } from '../utils/chart'
-import { escapeTooltip, formatPercent } from '../utils/format'
+import { formatPercent } from '../utils/format'
 
 type Health = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']
 type HealthPoint = Health['points'][number]
@@ -62,8 +63,15 @@ const chartOption = computed<EChartsOption>(() => {
 
   return {
     animationDuration: 240,
-    grid: { left: 0, right: 0, top: 40, bottom: 0, containLabel: true },
-    legend: usageLegend(theme, ['请求量', '成功率', '失败']),
+    grid: {
+      left: 0,
+      right: 0,
+      top: 40,
+      bottom: 0,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'axisLabel',
+    },
+    legend: usageLegend(theme, ['成功', '服务失败', '取消', '未完成', '调用方错误', '服务成功率']),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       chartPoints.map(point => point.label),
@@ -78,18 +86,16 @@ const chartOption = computed<EChartsOption>(() => {
       }),
     ],
     series: [
+      outcomeSeries('成功', chartPoints.map(point => point.successRequests), theme.success),
+      outcomeSeries('服务失败', chartPoints.map(point => point.failedRequests), theme.danger),
+      outcomeSeries('取消', chartPoints.map(point => point.cancelledRequests), theme.info),
+      outcomeSeries('未完成', chartPoints.map(point => point.incompleteRequests), theme.warning),
+      outcomeSeries('调用方错误', chartPoints.map(point => point.callerErrorRequests), theme.normal),
       {
-        name: '请求量',
-        type: 'bar',
-        data: chartPoints.map(requestCount),
-        barMaxWidth: 24,
-        itemStyle: { color: theme.info, opacity: 0.32, borderRadius: [3, 3, 0, 0] },
-      },
-      {
-        name: '成功率',
+        name: '服务成功率',
         type: 'line',
         yAxisIndex: 1,
-        data: chartPoints.map(requestSuccessRate),
+        data: chartPoints.map(serviceSuccessRate),
         connectNulls: true,
         smooth: 0.25,
         symbol: activePointCount <= 16 ? 'circle' : 'none',
@@ -97,33 +103,28 @@ const chartOption = computed<EChartsOption>(() => {
         lineStyle: { color: theme.success, width: 2.2 },
         itemStyle: { color: theme.success },
       },
-      {
-        name: '失败',
-        type: 'line',
-        data: chartPoints.map(point => (point.failedRequests > 0 ? requestCount(point) : null)),
-        connectNulls: false,
-        showSymbol: true,
-        symbol: 'circle',
-        symbolSize: 7,
-        lineStyle: { opacity: 0 },
-        itemStyle: {
-          color: theme.danger,
-          borderColor: theme.surface,
-          borderWidth: 2,
-        },
-        z: 4,
-      },
     ],
   }
 })
 
 function requestCount(point: HealthPoint) {
-  return Math.max(0, point.successRequests ?? 0) + Math.max(0, point.failedRequests ?? 0)
+  return Math.max(0, point.totalRequests ?? 0)
 }
 
-function requestSuccessRate(point: HealthPoint) {
-  const total = requestCount(point)
+function serviceSuccessRate(point: HealthPoint) {
+  const total = Math.max(0, point.successRequests) + Math.max(0, point.failedRequests)
   return total > 0 ? Math.max(0, point.successRequests ?? 0) / total : null
+}
+
+function outcomeSeries(name: string, data: number[], color: string) {
+  return {
+    name,
+    type: 'bar' as const,
+    stack: 'outcome',
+    data,
+    barMaxWidth: 24,
+    itemStyle: { color, opacity: 0.72 },
+  }
 }
 
 function formatTooltip(params: unknown) {
@@ -132,15 +133,17 @@ function formatTooltip(params: unknown) {
   if (!point)
     return ''
 
-  const successRate = requestSuccessRate(point)
+  const successRate = serviceSuccessRate(point)
 
-  return [
-    escapeTooltip(point.label),
+  return usageTooltipContent(palette.value, point.label, [
     `请求量: ${formatCompactNumber(requestCount(point))}`,
     `成功: ${formatCompactNumber(point.successRequests)}`,
-    `失败: ${formatCompactNumber(point.failedRequests)}`,
-    `成功率: ${successRate == null ? '无请求' : formatPercent(successRate)}`,
-  ].join('<br/>')
+    `服务失败: ${formatCompactNumber(point.failedRequests)}`,
+    `取消: ${formatCompactNumber(point.cancelledRequests)}`,
+    `未完成: ${formatCompactNumber(point.incompleteRequests)}`,
+    `调用方错误: ${formatCompactNumber(point.callerErrorRequests)}`,
+    `服务成功率: ${successRate == null ? '无服务结果' : formatPercent(successRate)}`,
+  ])
 }
 </script>
 
@@ -148,19 +151,39 @@ function formatTooltip(params: unknown) {
   <BaseCard
     as="article"
     title="请求健康"
-    :description="`按${granularityText}观察请求量、成功率与失败时段`"
+    :description="`按${granularityText}区分服务结果、取消、未完成与调用方错误`"
     class="h-full min-h-90"
   >
     <template #body>
-      <div class="min-h-66">
-        <BaseChart v-if="hasData" :option="chartOption" :height="264" />
+      <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'h-full'">
+        <div v-if="hasData" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
+          <div class="grid gap-1 px-2">
+            <span class="text-[10px] font-bold text-cp-text-quaternary">服务成功率</span>
+            <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-green-text">
+              {{ formatPercent(health.successRate) }}
+            </strong>
+          </div>
+          <div class="grid gap-1 px-2">
+            <span class="text-[10px] font-bold text-cp-text-quaternary">完成率</span>
+            <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-text">
+              {{ formatPercent(health.completionRate) }}
+            </strong>
+          </div>
+          <div class="grid gap-1 px-2">
+            <span class="text-[10px] font-bold text-cp-text-quaternary">非正常结束</span>
+            <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-orange-text">
+              {{ formatCompactNumber(health.cancelledRequests + health.incompleteRequests) }}
+            </strong>
+          </div>
+        </div>
+        <BaseChart v-if="hasData" :option="chartOption" :height="210" />
         <BaseEmpty
           v-else
           size="sm"
           surface="none"
           :title="loading ? '正在加载请求健康数据' : '暂无请求健康数据'"
           description="当前范围没有可绘制的请求记录"
-          class="h-66 place-content-center"
+          class="h-full place-content-center"
         />
       </div>
     </template>

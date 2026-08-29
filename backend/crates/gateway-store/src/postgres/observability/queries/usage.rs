@@ -123,7 +123,9 @@ pub(crate) const USAGE_RECORD_SELECT: &str =
             mr.total_tokens, mr.cost_source, mr.cost_amount::text,
             mr.cost_currency, mr.transport_decision_wait_ms, mr.connect_ms, mr.headers_ms,
             mr.first_event_ms, mr.first_reasoning_ms, mr.first_text_ms, mr.first_token_ms,
-            mr.provider_processing_ms, mr.latency_ms, mr.client_ip::text as client_ip,
+            mr.provider_processing_ms, mr.latency_ms, mr.admission_decision_ms,
+            mr.account_selection_wait_ms, mr.capacity_used_slots, mr.capacity_total_slots,
+            mr.client_ip::text as client_ip,
             mr.user_agent, mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
             mr.subagent_kind, mr.compact, mr.image_generation_requested,
             mr.image_generation_succeeded, mr.started_at, mr.deadline_at, mr.completed_at
@@ -351,6 +353,11 @@ pub(crate) async fn usage_diagnostics(
                 round(avg(mr.latency_ms))::bigint as average_latency_ms,
                 round(percentile_cont(0.95) within group (order by mr.latency_ms))::bigint
                   as latency_p95_ms,
+                round(percentile_cont(0.95) within group (order by mr.first_token_ms))::bigint
+                  as first_token_p95_ms,
+                count(*) filter (where mr.outcome in ('cancelled', 'incomplete'))::bigint
+                  as non_completion_count,
+                coalesce(sum(greatest(mr.attempt_count - 1, 0)), 0)::bigint as retry_count,
                 count(*) filter (where mr.cost_source = 'provider_reported')::bigint
                   as provider_reported_count,
                 count(*) filter (where mr.cost_source = 'calculated')::bigint
@@ -362,7 +369,7 @@ pub(crate) async fn usage_diagnostics(
     statement.push_bind(range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
-    push_diagnostic_fact_filter(&mut statement, dimension);
+    push_diagnostic_dimension_filter(&mut statement, dimension);
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(" group by dimension_name order by request_count desc, dimension_name limit ");
     statement.push_bind(DIAGNOSTIC_LIMIT);
@@ -384,6 +391,9 @@ pub(crate) async fn usage_diagnostics(
                 total_tokens: unsigned(row, "total_tokens")?,
                 average_latency_ms: optional_unsigned(row, "average_latency_ms")?,
                 latency_p95_ms: optional_unsigned(row, "latency_p95_ms")?,
+                first_token_p95_ms: optional_unsigned(row, "first_token_p95_ms")?,
+                non_completion_count: unsigned(row, "non_completion_count")?,
+                retry_count: unsigned(row, "retry_count")?,
                 cost_coverage: coverage_from_row(row)?,
                 costs: Vec::new(),
             })
@@ -501,7 +511,8 @@ pub(crate) async fn diagnostic_costs(
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
     statement.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
-    push_diagnostic_fact_filter(&mut statement, dimension);
+    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_diagnostic_dimension_filter(&mut statement, dimension);
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(
         " group by dimension_name, mr.cost_currency order by dimension_name, mr.cost_currency",
@@ -539,13 +550,22 @@ pub(crate) fn diagnostic_dimension_sql(dimension: DiagnosticDimension) -> &'stat
     }
 }
 
-pub(crate) fn push_diagnostic_fact_filter(
+pub(crate) fn push_diagnostic_dimension_filter(
     statement: &mut QueryBuilder<Postgres>,
     dimension: DiagnosticDimension,
 ) {
-    if dimension == DiagnosticDimension::Failure {
-        statement.push(" and mr.error_kind is not null");
-    } else {
-        push_completed_usage_fact_filter(statement, "mr");
+    match dimension {
+        DiagnosticDimension::Failure => {
+            statement.push(" and mr.error_kind is not null");
+        }
+        DiagnosticDimension::Status => {
+            statement
+                .push(" and coalesce(mr.upstream_status_code, mr.client_status_code) is not null");
+        }
+        DiagnosticDimension::Provider
+        | DiagnosticDimension::Model
+        | DiagnosticDimension::Account
+        | DiagnosticDimension::ApiKey
+        | DiagnosticDimension::Transport => {}
     }
 }

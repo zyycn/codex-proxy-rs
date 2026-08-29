@@ -569,6 +569,8 @@ pub struct NewModelRequest {
     pub subagent_kind: Option<String>,
     pub compact: bool,
     pub image_generation_requested: bool,
+    /// Client Key 准入判定的完整耗时；内部探测不经过该阶段。
+    pub admission_decision_ms: Option<u64>,
     pub started_at: SystemTime,
     pub deadline_at: SystemTime,
 }
@@ -585,6 +587,11 @@ pub struct AttemptRecord {
     pub upstream_model_id: Option<UpstreamModelId>,
     pub upstream_transport: String,
     pub http_version: Option<String>,
+    /// 本 attempt 从进入 Provider 选择器到持有账号 lease 的等待。
+    pub account_selection_wait_ms: Option<u64>,
+    /// 选择成功后（含当前请求）的请求级账号池容量快照。
+    pub capacity_used_slots: Option<u64>,
+    pub capacity_total_slots: Option<u64>,
 }
 
 /// 需要解释换号的中间失败。

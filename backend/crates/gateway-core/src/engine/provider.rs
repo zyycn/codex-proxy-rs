@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use futures::Stream;
 use thiserror::Error;
 
-use crate::engine::credential::{AccountAttemptFeedback, AccountFeedbackStats, ProviderAccountId};
+use crate::engine::credential::{
+    AccountAttemptFeedback, AccountCapacitySnapshot, AccountFeedbackStats, ProviderAccountId,
+};
 use crate::engine::{AttemptContext, UpstreamSendState};
 use crate::error::{
     IdentifierError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind, validate_text,
@@ -57,6 +59,37 @@ pub struct ProviderCallMetadata {
     provider_account_id: ProviderAccountId,
     upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
+    selection_observation: Option<ProviderSelectionObservation>,
+}
+
+/// Provider 账号选择阶段输出的中立运行压力事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderSelectionObservation {
+    account_selection_wait_ms: u64,
+    capacity: Option<AccountCapacitySnapshot>,
+}
+
+impl ProviderSelectionObservation {
+    #[must_use]
+    pub const fn new(
+        account_selection_wait_ms: u64,
+        capacity: Option<AccountCapacitySnapshot>,
+    ) -> Self {
+        Self {
+            account_selection_wait_ms,
+            capacity,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_selection_wait_ms(self) -> u64 {
+        self.account_selection_wait_ms
+    }
+
+    #[must_use]
+    pub const fn capacity(self) -> Option<AccountCapacitySnapshot> {
+        self.capacity
+    }
 }
 
 impl ProviderCallMetadata {
@@ -74,6 +107,7 @@ impl ProviderCallMetadata {
             provider_account_id,
             upstream_request_id: None,
             transport,
+            selection_observation: None,
         }
     }
 
@@ -90,6 +124,7 @@ impl ProviderCallMetadata {
             provider_account_id,
             upstream_request_id: None,
             transport,
+            selection_observation: None,
         }
     }
 
@@ -97,6 +132,16 @@ impl ProviderCallMetadata {
     #[must_use]
     pub fn with_upstream_request_id(mut self, request_id: OpaqueUpstreamValue) -> Self {
         self.upstream_request_id = Some(request_id);
+        self
+    }
+
+    /// 附加 Provider 选择账号时测得的等待与容量快照。
+    #[must_use]
+    pub const fn with_selection_observation(
+        mut self,
+        observation: ProviderSelectionObservation,
+    ) -> Self {
+        self.selection_observation = Some(observation);
         self
     }
 
@@ -128,6 +173,11 @@ impl ProviderCallMetadata {
     #[must_use]
     pub const fn transport(&self) -> &UpstreamTransport {
         &self.transport
+    }
+
+    #[must_use]
+    pub const fn selection_observation(&self) -> Option<ProviderSelectionObservation> {
+        self.selection_observation
     }
 
     /// 确认 metadata 没有替换请求计划中冻结的 Provider 候选。

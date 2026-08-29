@@ -249,6 +249,8 @@ export function usageLatencyDetails(record: UsageDisplayRecord) {
   }
 
   const transportItems = [
+    { label: '准入判定', value: durationValue(latencyDetails?.admissionDecisionMs) },
+    { label: '账号选择等待', value: durationValue(latencyDetails?.accountSelectionWaitMs) },
     {
       label: '传输决策等待',
       value: durationValue(latencyDetails?.transportDecisionWaitMs),
@@ -260,6 +262,16 @@ export function usageLatencyDetails(record: UsageDisplayRecord) {
   ]
     .filter(item => item.value !== null)
     .map(item => ({ ...item, value: formatDuration(item.value) }))
+
+  if (
+    latencyDetails?.capacityUsedSlots != null
+    && latencyDetails.capacityTotalSlots != null
+  ) {
+    transportItems.push({
+      label: '账号槽位快照',
+      value: `${latencyDetails.capacityUsedSlots} / ${latencyDetails.capacityTotalSlots}`,
+    })
+  }
 
   return {
     // SSE 可能先收到生命周期事件而没有文本或推理增量；这不是首字，须保留原始语义。

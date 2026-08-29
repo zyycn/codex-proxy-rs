@@ -17,12 +17,31 @@ pub(crate) fn display_duration(value: Option<u64>) -> String {
     }
 }
 
+fn display_duration_f64(value: Option<f64>) -> String {
+    let Some(value) = value.filter(|value| value.is_finite() && *value >= 0.0) else {
+        return "—".to_owned();
+    };
+    if value < 1_000.0 {
+        format!("{value:.0} ms")
+    } else if value < 60_000.0 {
+        format!("{:.2} s", value / 1_000.0)
+    } else if value < 3_600_000.0 {
+        format!("{:.1} min", value / 60_000.0)
+    } else {
+        format!("{:.1} h", value / 3_600_000.0)
+    }
+}
+
 pub(crate) fn display_rate(value: f64) -> String {
     if value.is_finite() {
         format!("{:.1}%", value * 100.0)
     } else {
         "—".to_owned()
     }
+}
+
+fn basis_points_rate(value: u64) -> f64 {
+    value as f64 / 10_000.0
 }
 
 pub(crate) fn china_datetime(value: &DateTime<Utc>) -> String {
@@ -267,6 +286,10 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         image_generation_requested: record.image_generation_requested,
         image_generation_succeeded: record.image_generation_succeeded,
         latency_details: UsageLatencyDetailsView {
+            admission_decision_ms: record.admission_decision_ms,
+            account_selection_wait_ms: record.account_selection_wait_ms,
+            capacity_used_slots: record.capacity_used_slots,
+            capacity_total_slots: record.capacity_total_slots,
             transport_decision_wait_ms: record.transport_decision_wait_ms,
             ws_connect_ms: record.connect_ms,
             upstream_headers_ms: record.headers_ms,
@@ -514,6 +537,36 @@ pub(crate) fn trend_point_view(point: domain::TrendPoint) -> TrendPointView {
         success_rate: success_rate_value
             .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
         success_rate_value,
+        first_token_p50_ms: point
+            .metrics
+            .first_token_latency_percentiles
+            .p50_ms
+            .map(|value| value.as_f64()),
+        first_token_p95_ms: point
+            .metrics
+            .first_token_latency_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        latency_p95_ms: point
+            .metrics
+            .latency_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        output_throughput_p50: point.metrics.output_throughput_p50,
+        admission_decision_p95_ms: point
+            .metrics
+            .admission_decision_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        account_selection_wait_p95_ms: point
+            .metrics
+            .account_selection_wait_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        capacity_utilization: point
+            .metrics
+            .capacity_utilization_p95_basis_points
+            .map(basis_points_rate),
     }
 }
 
@@ -541,18 +594,20 @@ pub(crate) fn trend_summary_view(
         ],
         TrendKind::Latency => vec![
             TrendSummaryView {
-                label: "平均".to_owned(),
-                value: display_duration(summary.average_latency_ms),
+                label: "首字 P95".to_owned(),
+                value: display_duration_f64(summary.peak_first_token_p95_ms),
                 ratio: None,
             },
             TrendSummaryView {
-                label: "最高".to_owned(),
-                value: display_duration(summary.max_latency_ms),
+                label: "总耗时 P95".to_owned(),
+                value: display_duration_f64(summary.peak_latency_p95_ms),
                 ratio: None,
             },
             TrendSummaryView {
-                label: "最低".to_owned(),
-                value: display_duration(summary.min_latency_ms),
+                label: "吞吐 P50".to_owned(),
+                value: summary
+                    .minimum_output_throughput_p50
+                    .map_or_else(|| "—".to_owned(), |value| format!("{value} tok/s")),
                 ratio: None,
             },
         ],
@@ -821,6 +876,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
         .map(|point| OverviewHealthPointView {
             bucket: point.bucket_start,
             label: china_label(point.bucket_start, "%m-%d %H:%M"),
+            total_requests: point.total_requests,
             success_requests: point.success_requests,
             failed_requests: point.failed_requests,
             cancelled_requests: point.cancelled_requests,
@@ -851,6 +907,31 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
                 .first_token_latency_percentiles
                 .p99_ms
                 .map(|value| value.as_f64()),
+            admission_decision_p50_ms: point
+                .admission_decision_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            admission_decision_p95_ms: point
+                .admission_decision_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            account_selection_wait_p50_ms: point
+                .account_selection_wait_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            account_selection_wait_p95_ms: point
+                .account_selection_wait_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            output_throughput_p10: point.output_throughput_p10,
+            output_throughput_p50: point.output_throughput_p50,
+            output_throughput_p90: point.output_throughput_p90,
+            capacity_utilization: point
+                .capacity_utilization_avg_basis_points
+                .map(basis_points_rate),
+            capacity_utilization_p95: point
+                .capacity_utilization_p95_basis_points
+                .map(basis_points_rate),
         })
         .collect();
     let cost_points = insights
@@ -866,6 +947,8 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
             total_tokens: point.total_tokens,
             estimated_cost: point.estimated_cost.as_ref().map(ToString::to_string),
             standard_cost: point.standard_cost.as_ref().map(ToString::to_string),
+            no_cache_cost: point.no_cache_cost.as_ref().map(ToString::to_string),
+            cache_savings: point.cache_savings.as_ref().map(ToString::to_string),
             cached_token_rate: point.cached_token_rate,
             cache_hit_request_rate: point.cache_hit_request_rate,
         })
@@ -880,6 +963,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
             incomplete_requests: insights.health.incomplete_requests,
             caller_error_requests: insights.health.caller_error_requests,
             success_rate: insights.health.success_rate,
+            completion_rate: insights.health.completion_rate,
             request_change_rate: None,
             success_rate_change: None,
             points: health_points,
@@ -915,8 +999,42 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
                 .first_token_latency_percentiles
                 .p99_ms
                 .map(|value| value.as_f64()),
+            admission_decision_p50_ms: insights
+                .performance
+                .admission_decision_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            admission_decision_p95_ms: insights
+                .performance
+                .admission_decision_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            account_selection_wait_p50_ms: insights
+                .performance
+                .account_selection_wait_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            account_selection_wait_p95_ms: insights
+                .performance
+                .account_selection_wait_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            output_throughput_p10: insights.performance.output_throughput_p10,
+            output_throughput_p50: insights.performance.output_throughput_p50,
+            output_throughput_p90: insights.performance.output_throughput_p90,
+            capacity_utilization: insights
+                .performance
+                .capacity_utilization_avg_basis_points
+                .map(basis_points_rate),
+            capacity_utilization_p95: insights
+                .performance
+                .capacity_utilization_p95_basis_points
+                .map(basis_points_rate),
             latency_coverage: insights.performance.latency_coverage,
             first_token_coverage: insights.performance.first_token_coverage,
+            admission_decision_coverage: insights.performance.admission_decision_coverage,
+            account_selection_wait_coverage: insights.performance.account_selection_wait_coverage,
+            capacity_coverage: insights.performance.capacity_coverage,
             points: performance_points,
         },
         cost: OverviewCostView {
@@ -930,9 +1048,25 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
                 .standard_cost
                 .as_ref()
                 .map(ToString::to_string),
+            no_cache_cost: insights
+                .cost
+                .no_cache_cost
+                .as_ref()
+                .map(ToString::to_string),
+            cache_savings: insights
+                .cost
+                .cache_savings
+                .as_ref()
+                .map(ToString::to_string),
+            tier_premium: insights.cost.tier_premium.as_ref().map(ToString::to_string),
             cost_per_request: insights
                 .cost
                 .cost_per_request
+                .as_ref()
+                .map(ToString::to_string),
+            cost_per_successful_request: insights
+                .cost
+                .cost_per_successful_request
                 .as_ref()
                 .map(ToString::to_string),
             tokens_per_request: insights.cost.tokens_per_request,
@@ -992,6 +1126,12 @@ pub(crate) fn diagnostics_view(
                 request_share: item.request_share,
                 average_latency_ms: item.average_latency_ms,
                 latency_p95_ms: item.latency_p95_ms,
+                first_token_p95_ms: item.first_token_p95_ms,
+                non_completion_count: item.non_completion_count,
+                non_completion_rate: item.non_completion_rate,
+                retry_count: item.retry_count,
+                retry_rate: item.retry_rate,
+                impact_score: item.impact_score,
                 estimated_cost: item.estimated_cost.as_ref().map(ToString::to_string),
                 attempt_count: item.attempt_count,
                 total_tokens: item.total_tokens,

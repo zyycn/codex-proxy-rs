@@ -100,6 +100,7 @@ pub struct NewModelRequest {
     pub subagent_kind: Option<String>,
     pub compact: bool,
     pub image_generation_requested: bool,
+    pub admission_decision_ms: Option<u64>,
     pub started_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
 }
@@ -146,6 +147,9 @@ pub struct ModelRequestAttemptStart {
     pub upstream_model_id: Option<String>,
     pub upstream_transport: String,
     pub http_version: Option<String>,
+    pub account_selection_wait_ms: Option<u64>,
+    pub capacity_used_slots: Option<u64>,
+    pub capacity_total_slots: Option<u64>,
 }
 
 impl ModelRequestAttemptStart {
@@ -162,6 +166,11 @@ impl ModelRequestAttemptStart {
         }
         if self.attempt_count == 0 {
             return Err(invalid("attempt_count must be positive"));
+        }
+        match (self.capacity_used_slots, self.capacity_total_slots) {
+            (None, None) => {}
+            (Some(used), Some(total)) if total > 0 && used <= total => {}
+            _ => return Err(invalid("capacity snapshot is invalid")),
         }
         if self
             .provider_account_id
@@ -379,11 +388,11 @@ impl ModelRequestRepository for PgExecutionStore {
                operation, endpoint, client_transport, requested_model_id,
                client_ip, user_agent, reasoning_effort,
                reasoning_preset, request_kind, subagent_kind, compact,
-               image_generation_requested, started_at, deadline_at
+               image_generation_requested, admission_decision_ms, started_at, deadline_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
-               $16, $17, $18, $19, $20, $21, $22
+               $16, $17, $18, $19, $20, $21, $22, $23
              )",
         )
         .bind(request.id)
@@ -406,6 +415,10 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.subagent_kind)
         .bind(request.compact)
         .bind(request.image_generation_requested)
+        .bind(optional_i64(
+            request.admission_decision_ms,
+            "admission_decision_ms",
+        )?)
         .bind(request.started_at)
         .bind(request.deadline_at)
         .execute(&self.pool)
@@ -431,21 +444,22 @@ impl ModelRequestRepository for PgExecutionStore {
                operation, endpoint, client_transport, requested_model_id,
                client_ip, user_agent, reasoning_effort,
                reasoning_preset, request_kind, subagent_kind, compact,
-               image_generation_requested, started_at, deadline_at,
+               image_generation_requested, admission_decision_ms, started_at, deadline_at,
                provider_kind, provider_account_id, provider_account_ref,
                provider_account_name_snapshot, provider_account_email_snapshot,
                provider_account_authentication_kind_snapshot,
                upstream_model_id, upstream_transport, http_version,
-               attempt_count, upstream_send_state
+               attempt_count, upstream_send_state, account_selection_wait_ms,
+               capacity_used_slots, capacity_total_slots
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
-               $16, $17, $18, $19, $20, $21, $22,
-               $23, $24, $25,
-               (select name from provider_accounts where id = $24),
-               (select email from provider_accounts where id = $24),
-               (select authentication_kind from provider_accounts where id = $24),
-               $26, $27, $28, 1, 'not_sent'
+               $16, $17, $18, $19, $20, $21, $22, $23,
+               $24, $25, $26,
+               (select name from provider_accounts where id = $25),
+               (select email from provider_accounts where id = $25),
+               (select authentication_kind from provider_accounts where id = $25),
+               $27, $28, $29, 1, 'not_sent', $30, $31, $32
              )",
         )
         .bind(request.id)
@@ -468,6 +482,10 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.subagent_kind)
         .bind(request.compact)
         .bind(request.image_generation_requested)
+        .bind(optional_i64(
+            request.admission_decision_ms,
+            "admission_decision_ms",
+        )?)
         .bind(request.started_at)
         .bind(request.deadline_at)
         .bind(attempt.provider_kind)
@@ -476,6 +494,18 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(attempt.upstream_model_id)
         .bind(attempt.upstream_transport)
         .bind(attempt.http_version)
+        .bind(optional_i64(
+            attempt.account_selection_wait_ms,
+            "account_selection_wait_ms",
+        )?)
+        .bind(optional_i64(
+            attempt.capacity_used_slots,
+            "capacity_used_slots",
+        )?)
+        .bind(optional_i64(
+            attempt.capacity_total_slots,
+            "capacity_total_slots",
+        )?)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert model request with first attempt"))?;
@@ -507,7 +537,13 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_model_id = $5,
                  upstream_transport = $6,
                  http_version = $7,
-                 attempt_count = $8
+                 attempt_count = $8,
+                 account_selection_wait_ms = case
+                   when $9::bigint is null then account_selection_wait_ms
+                   else coalesce(account_selection_wait_ms, 0) + $9
+                 end,
+                 capacity_used_slots = coalesce($10, capacity_used_slots),
+                 capacity_total_slots = coalesce($11, capacity_total_slots)
              where id = $1 and outcome = 'running' and downstream_committed_at is null
                and $8 = attempt_count + 1
              returning attempt_count",
@@ -523,6 +559,18 @@ impl ModelRequestRepository for PgExecutionStore {
             i32::try_from(attempt.attempt_count)
                 .map_err(|_| invalid("attempt_count is too large"))?,
         )
+        .bind(optional_i64(
+            attempt.account_selection_wait_ms,
+            "account_selection_wait_ms",
+        )?)
+        .bind(optional_i64(
+            attempt.capacity_used_slots,
+            "capacity_used_slots",
+        )?)
+        .bind(optional_i64(
+            attempt.capacity_total_slots,
+            "capacity_total_slots",
+        )?)
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("begin model request attempt"))?
@@ -1099,6 +1147,7 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         subagent_kind: request.subagent_kind,
         compact: request.compact,
         image_generation_requested: request.image_generation_requested,
+        admission_decision_ms: request.admission_decision_ms,
         started_at: DateTime::<Utc>::from(request.started_at),
         deadline_at: DateTime::<Utc>::from(request.deadline_at),
     }
@@ -1164,6 +1213,9 @@ fn attempt_start_row(attempt: CoreAttemptRecord) -> ModelRequestAttemptStart {
             .map(|model| model.as_str().to_owned()),
         upstream_transport: attempt.upstream_transport,
         http_version: attempt.http_version,
+        account_selection_wait_ms: attempt.account_selection_wait_ms,
+        capacity_used_slots: attempt.capacity_used_slots,
+        capacity_total_slots: attempt.capacity_total_slots,
     }
 }
 

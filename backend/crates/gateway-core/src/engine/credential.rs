@@ -1525,6 +1525,36 @@ pub struct AccountCandidate {
     pub signals: AccountRuntimeSignals,
 }
 
+/// 一次账号选择看到的可调度并发槽快照。
+///
+/// `used_slots` 包含刚刚获取成功的当前请求；快照只覆盖本次请求范围内、
+/// 模型可用且未被显式排除的账号池。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AccountCapacitySnapshot {
+    used_slots: u64,
+    total_slots: u64,
+}
+
+impl AccountCapacitySnapshot {
+    #[must_use]
+    pub const fn used_slots(self) -> u64 {
+        self.used_slots
+    }
+
+    #[must_use]
+    pub const fn total_slots(self) -> u64 {
+        self.total_slots
+    }
+
+    #[must_use]
+    pub fn with_acquired_request(self) -> Self {
+        Self {
+            used_slots: self.used_slots.saturating_add(1).min(self.total_slots),
+            total_slots: self.total_slots,
+        }
+    }
+}
+
 /// 一次账号选择使用的全局策略快照。
 #[derive(Debug, Clone)]
 pub struct AccountSelectionContext {
@@ -1600,6 +1630,43 @@ impl<'a> AccountSelection<'a> {
 pub struct AccountSelector;
 
 impl AccountSelector {
+    /// 汇总与本次调度约束一致的并发容量，供请求级观测使用。
+    #[must_use]
+    pub fn capacity_snapshot(
+        &self,
+        candidates: &[AccountCandidate],
+        context: &AccountSelectionContext,
+    ) -> Option<AccountCapacitySnapshot> {
+        let (used_slots, total_slots) = candidates
+            .iter()
+            .filter(|candidate| {
+                !matches!(
+                    self.scheduling_blocker(candidate, context),
+                    Some(
+                        AccountSchedulingBlocker::OutsideClientScope
+                            | AccountSchedulingBlocker::LocalAvailability
+                            | AccountSchedulingBlocker::Excluded
+                    )
+                )
+            })
+            .fold((0_u64, 0_u64), |(used, total), candidate| {
+                let capacity = u64::from(
+                    candidate
+                        .account
+                        .effective_concurrency(context.policy.max_concurrent_per_account())
+                        .get(),
+                );
+                (
+                    used.saturating_add(u64::from(candidate.signals.in_flight)),
+                    total.saturating_add(capacity),
+                )
+            });
+        (total_slots > 0).then_some(AccountCapacitySnapshot {
+            used_slots: used_slots.min(total_slots),
+            total_slots,
+        })
+    }
+
     /// 从可调度账号中确定一个候选；这里只消费 Provider 已解析的额度投影。
     #[must_use]
     pub fn select<'a>(

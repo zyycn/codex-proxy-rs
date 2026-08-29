@@ -603,6 +603,7 @@ fn plan_with_policy(
 fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest {
     let client_key = ClientApiKeyId::new("key_client_1").expect("client key id");
     NewModelRequest {
+        admission_decision_ms: None,
         id: ModelRequestId::new("req_core_1").expect("request id"),
         client_api_key_id: Some(client_key.clone()),
         client_api_key_ref: client_key,

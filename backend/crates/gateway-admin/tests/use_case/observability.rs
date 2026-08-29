@@ -14,10 +14,10 @@ use gateway_admin::{
         observability::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
             DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
-            HealthStatus, OpsErrorPage, OpsErrorQuery, PageNumber, RequestMetricPoint,
-            RequestMetrics, RequestOutcome, TimeRange, TrendKind, UsageBilling,
-            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageOverview, UsagePage,
-            UsageQuery, UsageRecord, china_day_start,
+            HealthStatus, LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PageNumber,
+            PercentileMilliseconds, RequestMetricPoint, RequestMetrics, RequestOutcome, TimeRange,
+            TrendKind, UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
+            UsageOverview, UsagePage, UsageQuery, UsageRecord, china_day_start,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -234,6 +234,24 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         output_tokens: 200,
         total_tokens: 1_000,
         latency_count: 5,
+        admission_decision_count: 10,
+        admission_decision_percentiles: LatencyPercentiles {
+            p50_ms: Some(PercentileMilliseconds::new(2.0).expect("admission P50")),
+            p95_ms: Some(PercentileMilliseconds::new(5.0).expect("admission P95")),
+            p99_ms: Some(PercentileMilliseconds::new(8.0).expect("admission P99")),
+        },
+        account_selection_wait_count: 8,
+        account_selection_wait_percentiles: LatencyPercentiles {
+            p50_ms: Some(PercentileMilliseconds::new(10.0).expect("selection P50")),
+            p95_ms: Some(PercentileMilliseconds::new(40.0).expect("selection P95")),
+            p99_ms: Some(PercentileMilliseconds::new(70.0).expect("selection P99")),
+        },
+        output_throughput_p10: Some(40),
+        output_throughput_p50: Some(50),
+        output_throughput_p90: Some(60),
+        capacity_sample_count: 8,
+        capacity_utilization_avg_basis_points: Some(6_500),
+        capacity_utilization_p95_basis_points: Some(8_000),
         ..RequestMetrics::default()
     };
     store.replace_overview(UsageOverview {
@@ -294,10 +312,16 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         .await
         .expect("usage diagnostics");
 
-    assert_eq!(insights.health.total_requests, 8);
+    assert_eq!(insights.health.total_requests, 10);
     assert_eq!(insights.health.failed_requests, 2);
+    assert_eq!(insights.health.success_rate, 0.75);
+    assert_eq!(insights.health.completion_rate, 1.0);
     assert_eq!(insights.granularity, Granularity::FifteenMinutes);
     assert_eq!(insights.performance.latency_coverage, 0.5);
+    assert_eq!(insights.performance.admission_decision_coverage, 1.0);
+    assert_eq!(insights.performance.account_selection_wait_coverage, 0.8);
+    assert_eq!(insights.performance.capacity_coverage, 0.8);
+    assert_eq!(insights.performance.output_throughput_p50, Some(50));
     assert_eq!(insights.cost.tokens_per_request, 100.0);
     assert_eq!(
         insights
@@ -337,8 +361,25 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
             .map(gateway_admin::model::observability::DecimalAmount::as_str),
         Some("1")
     );
+    assert_eq!(
+        insights
+            .cost
+            .no_cache_cost
+            .as_ref()
+            .map(gateway_admin::model::observability::DecimalAmount::as_str),
+        Some("1.25")
+    );
+    assert_eq!(
+        insights
+            .cost
+            .tier_premium
+            .as_ref()
+            .map(gateway_admin::model::observability::DecimalAmount::as_str),
+        Some("0.25")
+    );
     assert_eq!(diagnostics.items[0].request_share, 0.75);
     assert_eq!(diagnostics.items[1].request_share, 0.25);
+    assert!((diagnostics.items[0].impact_score - 0.075).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -715,6 +756,10 @@ fn total_record(
         first_token_ms: None,
         provider_processing_ms: None,
         latency_ms: Some(100),
+        admission_decision_ms: None,
+        account_selection_wait_ms: None,
+        capacity_used_slots: None,
+        capacity_total_slots: None,
         client_ip: None,
         user_agent: None,
         reasoning_effort: None,
@@ -742,6 +787,9 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
+        first_token_p95_ms: None,
+        non_completion_count: 0,
+        retry_count: 0,
         key: name.to_owned(),
         name: name.to_owned(),
         request_count,

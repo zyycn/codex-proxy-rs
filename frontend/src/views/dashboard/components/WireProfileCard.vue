@@ -46,8 +46,8 @@ const providerOptions = computed(() =>
   })),
 )
 
-const profile = computed(() =>
-  props.profiles.find(item => item.provider === activeProvider.value) ?? props.profiles[0] ?? null,
+const profile = computed(
+  () => props.profiles.find(item => item.provider === activeProvider.value) ?? props.profiles[0] ?? null,
 )
 
 const versionParts = computed(() => {
@@ -66,9 +66,7 @@ const releaseLabel = computed(() => {
   const release = profile.value?.release
   if (!release?.latestVersion)
     return '尚未检查'
-  return release.latestBuild
-    ? `${release.latestVersion} · Build ${release.latestBuild}`
-    : release.latestVersion
+  return release.latestBuild ? `${release.latestVersion} · Build ${release.latestBuild}` : release.latestVersion
 })
 
 const releaseStatus = computed(() => {
@@ -153,9 +151,7 @@ const runtimeEnvironment = computed(() => {
     return { primary: '—', details: [] as string[], title: '—' }
 
   const present = (value: string) => value !== '—' && value.toLowerCase() !== 'unknown'
-  const primary = [target.osType, target.osVersion]
-    .filter(present)
-    .join(' ')
+  const primary = [target.osType, target.osVersion].filter(present).join(' ')
   const details = [target.arch, target.terminal].filter(present)
   return {
     primary: primary || '—',
@@ -179,11 +175,7 @@ function providerLabel(provider: string) {
 </script>
 
 <template>
-  <BaseCard
-    as="article"
-    title="上游请求身份"
-    class="flex min-h-95 w-full flex-col"
-  >
+  <BaseCard as="article" title="上游请求身份" class="flex min-h-95 w-full flex-col">
     <template #actions>
       <BaseSegmented
         v-if="providerOptions.length > 1"
@@ -196,27 +188,22 @@ function providerLabel(provider: string) {
     </template>
 
     <template #body>
-      <BaseEmpty
-        v-if="!profile"
-        title="暂无请求身份"
-        surface="inset"
-        class="min-h-71.75 flex-1 place-content-center"
-      />
+      <BaseEmpty v-if="!profile" title="暂无请求身份" surface="inset" class="min-h-71.75 flex-1 place-content-center" />
 
       <div v-else class="flex flex-1">
         <section
           aria-label="请求身份组成"
           class="grid min-w-0 flex-1 content-between gap-6 rounded-cp-lg bg-cp-fill-alter/70 px-5 py-5.5 sm:px-6 sm:py-5"
-          :class="verifiedLabel || checkedLabel
-            ? 'sm:grid-rows-[auto_minmax(0,1fr)_auto_auto]'
-            : 'sm:grid-rows-[auto_minmax(0,1fr)_auto]'"
+          :class="
+            verifiedLabel || checkedLabel
+              ? 'sm:grid-rows-[auto_minmax(0,1fr)_auto_auto]'
+              : 'sm:grid-rows-[auto_minmax(0,1fr)_auto]'
+          "
         >
           <div class="flex min-w-0 items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-2 text-cp-text">
-              <span
-                class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-cp-fill-tertiary"
-              >
-                <Box aria-hidden="true" class="size-3.75 text-cp-text-secondary" />
+              <span class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-cp-fill-tertiary">
+                <Box class="size-3.75 text-cp-text-secondary" />
               </span>
               <span class="truncate text-cp-xs leading-none font-heavy">{{ profile.product }}</span>
             </div>
@@ -225,7 +212,7 @@ function providerLabel(provider: string) {
               :class="releaseStatus.tone"
               :title="releaseStatus.title"
             >
-              <component :is="releaseStatus.icon" aria-hidden="true" class="size-3.5" />
+              <component :is="releaseStatus.icon" class="size-3.5" />
               {{ releaseStatus.label }}
             </span>
           </div>
@@ -240,11 +227,7 @@ function providerLabel(provider: string) {
                 <span class="wrap-break-word text-[27px] leading-[1.05] font-heavy text-cp-text">
                   {{ versionParts.release }}
                 </span>
-                <span
-                  v-if="versionParts.prerelease"
-                  aria-hidden="true"
-                  class="truncate text-cp-sm font-bold text-cp-text-secondary"
-                >
+                <span v-if="versionParts.prerelease" class="truncate text-cp-sm font-bold text-cp-text-secondary">
                   {{ versionParts.prerelease }}
                 </span>
               </strong>
@@ -259,15 +242,11 @@ function providerLabel(provider: string) {
 
           <dl
             class="m-0 grid min-w-0 gap-5 sm:gap-7"
-            :class="profile.provider === 'xai'
-              ? 'sm:grid-cols-[0.62fr_1.28fr_0.94fr]'
-              : 'sm:grid-cols-[0.72fr_1.28fr]'"
+            :class="profile.provider === 'xai' ? 'sm:grid-cols-[0.62fr_1.28fr_0.94fr]' : 'sm:grid-cols-[0.72fr_1.28fr]'"
           >
             <div v-if="profile.provider === 'xai'" class="min-w-0">
-              <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
-              >
-                <ShieldCheck aria-hidden="true" class="size-3.25 text-cp-text-tertiary" />
+              <dt class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary">
+                <ShieldCheck class="size-3.25 text-cp-text-tertiary" />
                 认证协议
               </dt>
               <dd
@@ -279,10 +258,8 @@ function providerLabel(provider: string) {
             </div>
 
             <div class="min-w-0">
-              <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
-              >
-                <Monitor aria-hidden="true" class="size-3.25 text-cp-text-tertiary" />
+              <dt class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary">
+                <Monitor class="size-3.25 text-cp-text-tertiary" />
                 {{ profile.provider === 'openai' ? '模拟运行环境' : '运行环境' }}
               </dt>
               <dd
@@ -290,22 +267,15 @@ function providerLabel(provider: string) {
                 :title="runtimeEnvironment.title"
               >
                 {{ runtimeEnvironment.primary }}
-                <span
-                  v-if="runtimeEnvironment.details.length"
-                  class="text-cp-xs font-emphasis text-cp-text-secondary"
-                >
-                  <template v-for="detail in runtimeEnvironment.details" :key="detail">
-                    · {{ detail }}
-                  </template>
+                <span v-if="runtimeEnvironment.details.length" class="text-cp-xs font-emphasis text-cp-text-secondary">
+                  <template v-for="detail in runtimeEnvironment.details" :key="detail"> · {{ detail }} </template>
                 </span>
               </dd>
             </div>
 
             <div class="min-w-0">
-              <dt
-                class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
-              >
-                <Terminal aria-hidden="true" class="size-3.25 text-cp-text-tertiary" />
+              <dt class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary">
+                <Terminal class="size-3.25 text-cp-text-tertiary" />
                 客户端标识
               </dt>
               <dd

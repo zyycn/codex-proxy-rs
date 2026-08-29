@@ -6,13 +6,7 @@ import { gsap } from 'gsap'
 import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
-import {
-  formatHealthCount,
-  healthLegend,
-  healthReliabilityValueClass,
-  healthStatusMeta,
-
-} from '../constants'
+import { formatHealthCount, healthLegend, healthReliabilityValueClass, healthStatusMeta } from '../constants'
 import HealthTimelinePointPopover from './HealthTimelinePointPopover.vue'
 
 const props = defineProps<{
@@ -35,12 +29,7 @@ const highlightedPointTime = shallowRef<string>()
 let wavedCellIndexes = new Set<number>()
 
 function observedRequests(point: HealthTimelinePoint) {
-  return (
-    point.successRequests
-    + point.failedRequests
-    + point.cancelledRequests
-    + point.callerErrorRequests
-  )
+  return point.successRequests + point.failedRequests + point.cancelledRequests + point.callerErrorRequests
 }
 
 function isInteractivePoint(point: HealthTimelinePoint) {
@@ -79,9 +68,7 @@ function resetPointInteraction() {
 }
 
 function timelineButtons() {
-  return Array.from(
-    timelineGrid.value?.querySelectorAll<HTMLButtonElement>('[data-health-timeline-point]') ?? [],
-  )
+  return Array.from(timelineGrid.value?.querySelectorAll<HTMLButtonElement>('[data-health-timeline-point]') ?? [])
 }
 
 function timelineCell(button?: HTMLButtonElement) {
@@ -99,20 +86,13 @@ function animatePointWave(centerIndex: number) {
   const cellsByDistance: HTMLElement[][] = [[], [], []]
 
   for (let distance = 0; distance <= 2; distance += 1) {
-    const candidateIndexes
-      = distance === 0 ? [centerIndex] : [centerIndex - distance, centerIndex + distance]
+    const candidateIndexes = distance === 0 ? [centerIndex] : [centerIndex - distance, centerIndex + distance]
 
     for (const index of candidateIndexes) {
       const button = buttons[index]
       const point = points.value[index]
       const cell = timelineCell(button)
-      if (
-        !button
-        || !point
-        || !cell
-        || button.offsetTop !== centerRow
-        || !isInteractivePoint(point)
-      ) {
+      if (!button || !point || !cell || button.offsetTop !== centerRow || !isInteractivePoint(point)) {
         continue
       }
 
@@ -140,13 +120,7 @@ function animatePointWave(centerIndex: number) {
   wavedCellIndexes = nextCellIndexes
 }
 
-function animateWaveCells(
-  cells: HTMLElement[],
-  y: number,
-  scaleY: number,
-  duration: number,
-  ease: string,
-) {
+function animateWaveCells(cells: HTMLElement[], y: number, scaleY: number, duration: number, ease: string) {
   if (cells.length === 0)
     return
 
@@ -210,12 +184,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <BaseCard
-    as="article"
-    :title="timeline.title"
-    :description="timeline.description"
-    class="w-full"
-  >
+  <BaseCard as="article" :title="timeline.title" :description="timeline.description" class="w-full">
     <template #actions>
       <div class="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div
@@ -226,11 +195,7 @@ onBeforeUnmount(() => {
             :key="item.status"
             class="inline-flex h-3.5 items-center gap-1 align-middle leading-none"
           >
-            <span
-              aria-hidden="true"
-              class="block size-2 shrink-0 rounded-xs"
-              :class="healthStatusMeta[item.status].cellClass"
-            />
+            <span class="block size-2 shrink-0 rounded-xs" :class="healthStatusMeta[item.status].cellClass" />
             <span class="block leading-none">{{ item.label }}</span>
           </span>
         </div>
@@ -259,10 +224,7 @@ onBeforeUnmount(() => {
           class="min-w-0 w-full"
         >
           <template #trigger>
-            <div
-              ref="timelineGrid"
-              class="grid w-full grid-cols-48 items-end gap-x-0.5 gap-y-1 sm:grid-cols-96"
-            >
+            <div ref="timelineGrid" class="grid w-full grid-cols-48 items-end gap-x-0.5 gap-y-1 sm:grid-cols-96">
               <button
                 v-for="(point, pointIndex) in points"
                 :key="point.time"
@@ -281,7 +243,6 @@ onBeforeUnmount(() => {
                 @click="activatePoint(point, pointIndex, $event)"
               >
                 <span
-                  aria-hidden="true"
                   data-health-timeline-cell
                   class="block h-3.5 w-full origin-bottom rounded-xs transition-[filter,box-shadow] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none group-focus-visible:shadow-[0_0_0_2px_var(--cp-color-bg-container),0_0_0_4px_var(--cp-control-outline)]"
                   :class="[

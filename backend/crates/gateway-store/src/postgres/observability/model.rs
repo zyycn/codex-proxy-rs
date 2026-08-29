@@ -255,6 +255,16 @@ pub struct RequestMetrics {
     pub cache_hit_request_count: u64,
     pub latency_percentiles: LatencyPercentiles,
     pub first_token_latency_percentiles: LatencyPercentiles,
+    pub admission_decision_count: u64,
+    pub admission_decision_percentiles: LatencyPercentiles,
+    pub account_selection_wait_count: u64,
+    pub account_selection_wait_percentiles: LatencyPercentiles,
+    pub output_throughput_p10: Option<u64>,
+    pub output_throughput_p50: Option<u64>,
+    pub output_throughput_p90: Option<u64>,
+    pub capacity_sample_count: u64,
+    pub capacity_utilization_avg_basis_points: Option<u64>,
+    pub capacity_utilization_p95_basis_points: Option<u64>,
 }
 
 impl RequestMetrics {
@@ -549,6 +559,10 @@ pub struct UsageRecord {
     pub first_token_ms: Option<u64>,
     pub provider_processing_ms: Option<u64>,
     pub latency_ms: Option<u64>,
+    pub admission_decision_ms: Option<u64>,
+    pub account_selection_wait_ms: Option<u64>,
+    pub capacity_used_slots: Option<u64>,
+    pub capacity_total_slots: Option<u64>,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -640,6 +654,9 @@ pub struct DiagnosticObservation {
     pub total_tokens: u64,
     pub average_latency_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,
+    pub first_token_p95_ms: Option<u64>,
+    pub non_completion_count: u64,
+    pub retry_count: u64,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCostTotal>,
 }

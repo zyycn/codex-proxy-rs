@@ -402,6 +402,16 @@ pub struct RequestMetrics {
     pub max_latency_ms: Option<u64>,
     pub latency_percentiles: LatencyPercentiles,
     pub first_token_latency_percentiles: LatencyPercentiles,
+    pub admission_decision_count: u64,
+    pub admission_decision_percentiles: LatencyPercentiles,
+    pub account_selection_wait_count: u64,
+    pub account_selection_wait_percentiles: LatencyPercentiles,
+    pub output_throughput_p10: Option<u64>,
+    pub output_throughput_p50: Option<u64>,
+    pub output_throughput_p90: Option<u64>,
+    pub capacity_sample_count: u64,
+    pub capacity_utilization_avg_basis_points: Option<u64>,
+    pub capacity_utilization_p95_basis_points: Option<u64>,
     pub cache_eligible_request_count: u64,
     pub cache_hit_request_count: u64,
 }
@@ -604,6 +614,10 @@ pub struct UsageRecord {
     pub first_token_ms: Option<u64>,
     pub provider_processing_ms: Option<u64>,
     pub latency_ms: Option<u64>,
+    pub admission_decision_ms: Option<u64>,
+    pub account_selection_wait_ms: Option<u64>,
+    pub capacity_used_slots: Option<u64>,
+    pub capacity_total_slots: Option<u64>,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -708,6 +722,9 @@ pub struct DiagnosticObservation {
     pub total_tokens: u64,
     pub average_latency_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,
+    pub first_token_p95_ms: Option<u64>,
+    pub non_completion_count: u64,
+    pub retry_count: u64,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
 }
@@ -787,6 +804,9 @@ pub struct TrendSummary {
     pub average_latency_ms: Option<u64>,
     pub max_latency_ms: Option<u64>,
     pub min_latency_ms: Option<u64>,
+    pub peak_first_token_p95_ms: Option<f64>,
+    pub peak_latency_p95_ms: Option<f64>,
+    pub minimum_output_throughput_p50: Option<u64>,
     pub success_rate: Option<f64>,
     pub cache_hit_request_rate: Option<f64>,
     pub costs: Vec<CurrencyCost>,
@@ -935,6 +955,7 @@ pub struct DashboardResult {
 /// 洞察健康时间点的语义结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsightsHealthPoint {
+    pub total_requests: u64,
     pub bucket_start: DateTime<Utc>,
     pub success_requests: u64,
     pub failed_requests: u64,
@@ -954,6 +975,7 @@ pub struct UsageInsightsHealth {
     pub incomplete_requests: u64,
     pub caller_error_requests: u64,
     pub success_rate: f64,
+    pub completion_rate: f64,
     pub points: Vec<UsageInsightsHealthPoint>,
 }
 
@@ -963,6 +985,13 @@ pub struct UsageInsightsPerformancePoint {
     pub bucket_start: DateTime<Utc>,
     pub latency_percentiles: LatencyPercentiles,
     pub first_token_latency_percentiles: LatencyPercentiles,
+    pub admission_decision_percentiles: LatencyPercentiles,
+    pub account_selection_wait_percentiles: LatencyPercentiles,
+    pub output_throughput_p10: Option<u64>,
+    pub output_throughput_p50: Option<u64>,
+    pub output_throughput_p90: Option<u64>,
+    pub capacity_utilization_avg_basis_points: Option<u64>,
+    pub capacity_utilization_p95_basis_points: Option<u64>,
 }
 
 /// 洞察性能汇总与可观测覆盖率。
@@ -972,6 +1001,16 @@ pub struct UsageInsightsPerformance {
     pub first_token_latency_percentiles: LatencyPercentiles,
     pub latency_coverage: f64,
     pub first_token_coverage: f64,
+    pub admission_decision_percentiles: LatencyPercentiles,
+    pub account_selection_wait_percentiles: LatencyPercentiles,
+    pub admission_decision_coverage: f64,
+    pub account_selection_wait_coverage: f64,
+    pub output_throughput_p10: Option<u64>,
+    pub output_throughput_p50: Option<u64>,
+    pub output_throughput_p90: Option<u64>,
+    pub capacity_utilization_avg_basis_points: Option<u64>,
+    pub capacity_utilization_p95_basis_points: Option<u64>,
+    pub capacity_coverage: f64,
     pub points: Vec<UsageInsightsPerformancePoint>,
 }
 
@@ -985,6 +1024,8 @@ pub struct UsageInsightsCostPoint {
     pub total_tokens: u64,
     pub estimated_cost: Option<DecimalAmount>,
     pub standard_cost: Option<DecimalAmount>,
+    pub no_cache_cost: Option<DecimalAmount>,
+    pub cache_savings: Option<DecimalAmount>,
     pub cached_token_rate: f64,
     pub cache_hit_request_rate: Option<f64>,
 }
@@ -994,7 +1035,11 @@ pub struct UsageInsightsCostPoint {
 pub struct UsageInsightsCost {
     pub estimated_cost: Option<DecimalAmount>,
     pub standard_cost: Option<DecimalAmount>,
+    pub no_cache_cost: Option<DecimalAmount>,
+    pub cache_savings: Option<DecimalAmount>,
+    pub tier_premium: Option<DecimalAmount>,
     pub cost_per_request: Option<DecimalAmount>,
+    pub cost_per_successful_request: Option<DecimalAmount>,
     pub tokens_per_request: f64,
     pub cached_token_rate: f64,
     pub cache_hit_request_rate: Option<f64>,
@@ -1030,6 +1075,12 @@ pub struct DiagnosticsItem {
     pub request_share: f64,
     pub average_latency_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,
+    pub first_token_p95_ms: Option<u64>,
+    pub non_completion_count: u64,
+    pub non_completion_rate: f64,
+    pub retry_count: u64,
+    pub retry_rate: f64,
+    pub impact_score: f64,
     pub estimated_cost: Option<DecimalAmount>,
     pub attempt_count: u64,
     pub total_tokens: u64,

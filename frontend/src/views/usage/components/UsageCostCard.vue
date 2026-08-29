@@ -17,11 +17,11 @@ import {
   usageLegend,
   usageLineSeries,
   usageTooltip,
+  usageTooltipContent,
   usageValueAxis,
 } from '../utils/chart'
 import {
   decimalDisplayNumber,
-  escapeTooltip,
   formatPercent,
   formatUsd,
   formatUsdAxis,
@@ -43,13 +43,18 @@ const props = withDefaults(
 const activeView = shallowRef('cost')
 const { palette } = useChartPalette()
 const points = computed(() => props.cost.points)
-const hasStandardCost = computed(() =>
-  points.value.some(point => point.standardCost != null),
+const hasNoCacheCost = computed(() =>
+  points.value.some(point => point.noCacheCost != null),
 )
+const coverageRate = computed(() => {
+  const { known, partial, unknown } = props.cost.coverage
+  const total = known + partial + unknown
+  return total > 0 ? (known + partial) / total : null
+})
 
 const viewOptions = [
   { label: '费用', value: 'cost' },
-  { label: 'Token', value: 'tokens' },
+  { label: '节省', value: 'savings' },
   { label: '缓存', value: 'cache' },
 ]
 
@@ -57,11 +62,10 @@ const hasData = computed(() => {
   if (props.loading || points.value.length === 0)
     return false
   if (activeView.value === 'cost') {
-    return points.value.some(point => point.estimatedCost != null || point.standardCost != null)
+    return points.value.some(point => point.estimatedCost != null || point.noCacheCost != null)
   }
-  if (activeView.value === 'tokens') {
-    return points.value.some(point => point.totalTokens > 0 || point.cachedTokens > 0)
-  }
+  if (activeView.value === 'savings')
+    return points.value.some(point => point.cacheSavings != null)
   return points.value.some(
     point => point.inputTokens > 0 || point.cachedTokenRate > 0 || (point.cacheHitRequestRate ?? 0) > 0,
   )
@@ -73,7 +77,14 @@ const chartOption = computed<EChartsOption>(() => {
 
   return {
     animationDuration: 240,
-    grid: { left: 0, right: 0, top: 40, bottom: 0, containLabel: true },
+    grid: {
+      left: 0,
+      right: 0,
+      top: 40,
+      bottom: 0,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'axisLabel',
+    },
     legend: usageLegend(theme, legend),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
@@ -89,15 +100,15 @@ const chartOption = computed<EChartsOption>(() => {
 })
 
 function legendNames() {
-  if (activeView.value === 'tokens')
-    return ['未缓存输入', '缓存输入', '输出']
+  if (activeView.value === 'savings')
+    return ['缓存节省']
   if (activeView.value === 'cache')
     return ['缓存 Token 占比', '命中请求率']
-  return hasStandardCost.value ? ['预估费用', '标准费用'] : ['预估费用']
+  return hasNoCacheCost.value ? ['实际费用', '无缓存费用'] : ['实际费用']
 }
 
 function axisFormatter() {
-  if (activeView.value === 'cost')
+  if (activeView.value === 'cost' || activeView.value === 'savings')
     return formatUsdAxis
   if (activeView.value === 'cache')
     return (value: number) => formatPercent(value)
@@ -106,25 +117,13 @@ function axisFormatter() {
 
 function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   const chartPoints = points.value
-  if (activeView.value === 'tokens') {
+  if (activeView.value === 'savings') {
     return [
       usageLineSeries(
-        '未缓存输入',
-        chartPoints.map(point => Math.max(0, point.inputTokens - point.cachedTokens)),
-        theme.info,
-        { stack: 'tokens' },
-      ),
-      usageLineSeries(
-        '缓存输入',
-        chartPoints.map(point => point.cachedTokens),
-        theme.normal,
-        { stack: 'tokens' },
-      ),
-      usageLineSeries(
-        '输出',
-        chartPoints.map(point => point.outputTokens),
+        '缓存节省',
+        chartPoints.map(point => decimalDisplayNumber(point.cacheSavings)),
         theme.success,
-        { stack: 'tokens' },
+        { area: 'strong' },
       ),
     ]
   }
@@ -146,17 +145,17 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
 
   const series = [
     usageLineSeries(
-      '预估费用',
+      '实际费用',
       chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
       theme.success,
       { area: 'strong' },
     ),
   ]
-  if (hasStandardCost.value) {
+  if (hasNoCacheCost.value) {
     series.push(
       usageLineSeries(
-        '标准费用',
-        chartPoints.map(point => decimalDisplayNumber(point.standardCost)),
+        '无缓存费用',
+        chartPoints.map(point => decimalDisplayNumber(point.noCacheCost)),
         theme.textMuted,
       ),
     )
@@ -170,32 +169,25 @@ function formatTooltip(params: unknown) {
   if (!point)
     return ''
 
-  const title = escapeTooltip(point.label)
-  if (activeView.value === 'tokens') {
-    return [
-      title,
-      `未缓存输入: ${formatCompactNumber(Math.max(0, point.inputTokens - point.cachedTokens))}`,
-      `缓存输入: ${formatCompactNumber(point.cachedTokens)}`,
-      `输出: ${formatCompactNumber(point.outputTokens)}`,
-      `总 Token: ${formatCompactNumber(point.totalTokens)}`,
-    ].join('<br/>')
+  if (activeView.value === 'savings') {
+    return usageTooltipContent(palette.value, point.label, [
+      `缓存节省: ${formatUsd(point.cacheSavings)}`,
+    ])
   }
 
   if (activeView.value === 'cache') {
-    return [
-      title,
+    return usageTooltipContent(palette.value, point.label, [
       `缓存 Token 占比: ${formatPercent(point.cachedTokenRate)}`,
       `命中请求率: ${formatPercent(point.cacheHitRequestRate)}`,
-    ].join('<br/>')
+    ])
   }
 
   const lines = [
-    title,
-    `预估费用: ${formatUsd(point.estimatedCost)}`,
+    `实际费用: ${formatUsd(point.estimatedCost)}`,
   ]
-  if (point.standardCost != null)
-    lines.push(`标准费用: ${formatUsd(point.standardCost)}`)
-  return lines.join('<br/>')
+  if (point.noCacheCost != null)
+    lines.push(`无缓存费用: ${formatUsd(point.noCacheCost)}`)
+  return usageTooltipContent(palette.value, point.label, lines)
 }
 </script>
 
@@ -203,7 +195,7 @@ function formatTooltip(params: unknown) {
   <BaseCard
     as="article"
     title="成本效率"
-    description="预估费用、Token 与缓存收益"
+    description="实际费用、缓存节省、服务层溢价与单位成本"
     class="h-full min-h-90"
   >
     <template #actions>
@@ -211,15 +203,47 @@ function formatTooltip(params: unknown) {
     </template>
 
     <template #body>
-      <div class="min-h-66">
-        <BaseChart v-if="hasData" :option="chartOption" :height="264" />
+      <div class="grid min-h-66 gap-3">
+        <div v-if="hasData" class="grid grid-cols-5 gap-1 rounded-xl bg-cp-fill-quaternary/45 p-2">
+          <div class="grid min-w-0 gap-1 px-1.5">
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">实际费用</span>
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text" :title="formatUsd(cost.estimatedCost)">
+              {{ formatUsd(cost.estimatedCost) }}
+            </strong>
+          </div>
+          <div class="grid min-w-0 gap-1 px-1.5">
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">缓存节省</span>
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text" :title="formatUsd(cost.cacheSavings)">
+              {{ formatUsd(cost.cacheSavings) }}
+            </strong>
+          </div>
+          <div class="grid min-w-0 gap-1 px-1.5">
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">层级溢价</span>
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-orange-text" :title="formatUsd(cost.tierPremium)">
+              {{ formatUsd(cost.tierPremium) }}
+            </strong>
+          </div>
+          <div class="grid min-w-0 gap-1 px-1.5">
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">每成功请求</span>
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text" :title="formatUsd(cost.costPerSuccessfulRequest, true)">
+              {{ formatUsd(cost.costPerSuccessfulRequest, true) }}
+            </strong>
+          </div>
+          <div class="grid min-w-0 gap-1 px-1.5">
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">费用覆盖</span>
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
+              {{ formatPercent(coverageRate) }}
+            </strong>
+          </div>
+        </div>
+        <BaseChart v-if="hasData" :option="chartOption" :height="210" />
         <BaseEmpty
           v-else
           size="sm"
           surface="none"
           :title="loading ? '正在加载成本数据' : '暂无成本效率数据'"
-          description="当前范围没有可绘制的费用或 Token 数据"
-          class="h-66 place-content-center"
+          description="当前范围没有可绘制的费用或缓存收益数据"
+          class="h-52.5 place-content-center"
         />
       </div>
     </template>

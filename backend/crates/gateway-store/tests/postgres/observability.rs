@@ -983,7 +983,10 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("usage diagnostics");
     assert_eq!(diagnostics[0].key, "acct_observe");
     assert_eq!(diagnostics[0].name, "account@example.invalid");
-    assert_eq!(diagnostics[0].request_count, 1);
+    assert_eq!(diagnostics[0].request_count, 3);
+    assert_eq!(diagnostics[0].success_count, 2);
+    assert_eq!(diagnostics[0].failure_count, 1);
+    assert_eq!(diagnostics[0].retry_count, 1);
     assert_eq!(diagnostics[0].costs[0].amount.as_str(), "1.25");
 
     let errors = repository

@@ -52,9 +52,7 @@ const {
 
     <template #body>
       <div class="grid gap-3.5">
-        <div
-          class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-cp-fill-quaternary/45 p-1.5"
-        >
+        <div class="grid h-14.25 min-w-0 grid-cols-3 gap-1.5 rounded-xl bg-cp-fill-quaternary/45 p-1.5">
           <button
             v-for="item in props.summary"
             :key="item.label"
@@ -65,7 +63,6 @@ const {
             @click="toggleSummarySeries(item.label)"
           >
             <i
-              aria-hidden="true"
               class="size-2 rounded-full transition-transform duration-200 ease-out group-hover:scale-125 motion-reduce:transition-none"
               :style="summaryMarkerStyle(item)"
               :class="[
@@ -79,7 +76,7 @@ const {
                 },
               ]"
             />
-            <span class="grid min-w-0 gap-1">
+            <span class="grid min-w-0 gap-1.5">
               <span class="truncate text-[10px] leading-none font-bold text-cp-text-secondary">
                 {{ item.label }}
               </span>
@@ -95,12 +92,7 @@ const {
 
         <div class="relative h-55 w-full overflow-hidden">
           <BaseChart v-if="hasSamples" :option="chartOption" :height="220" />
-          <BaseEmpty
-            v-if="!hasSamples"
-            surface="none"
-            title="暂无趋势数据"
-            class="h-full place-content-center"
-          />
+          <BaseEmpty v-if="!hasSamples" surface="none" title="暂无趋势数据" class="h-full place-content-center" />
         </div>
       </div>
     </template>

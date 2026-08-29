@@ -44,19 +44,28 @@ const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
   },
   {
     key: 'requestCount',
-    label: '请求 / 占比',
+    label: '请求',
     kind: 'numeric',
+    size: 'sm',
+  },
+  {
+    key: 'impactScore',
+    label: '风险分',
+    kind: 'numeric',
+    size: 'sm',
   },
   {
     key: 'errorCount',
-    label: '错误 / 错误率',
+    label: '错误 / 未完',
     kind: 'numeric',
+    size: 'sm',
   },
-  { key: 'latencyP95Ms', label: 'P95', kind: 'numeric', size: 'sm' },
+  { key: 'firstTokenP95Ms', label: '性能', kind: 'numeric', size: 'lg' },
   {
     key: 'estimatedCost',
-    label: '预估费用',
+    label: '费用',
     kind: 'numeric',
+    size: 'sm',
   },
 ])
 
@@ -71,7 +80,7 @@ const resultDimensionLabel = computed(
 
 const sortedItems = computed(() =>
   [...props.diagnostics.items].sort(
-    (left, right) => right.errorCount - left.errorCount || right.requestCount - left.requestCount,
+    (left, right) => right.impactScore - left.impactScore || right.requestCount - left.requestCount,
   ),
 )
 
@@ -108,7 +117,7 @@ function diagnosticNameDisplay(name: string) {
   <BaseCard
     as="article"
     title="热点诊断"
-    :description="`按${selectedDimensionLabel}定位错误、慢请求与费用热点`"
+    :description="`按${selectedDimensionLabel}定位高影响请求`"
     class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-full lg:min-h-90 lg:max-h-105"
   >
     <template #actions>
@@ -143,7 +152,7 @@ function diagnosticNameDisplay(name: string) {
             >
               {{ row.nameDisplay.primary }}
             </code>
-            <div
+            <span
               v-if="row.nameDisplay.secondary"
               class="flex min-w-0 items-center gap-1.25 text-cp-text-secondary"
             >
@@ -152,10 +161,10 @@ function diagnosticNameDisplay(name: string) {
                 class="size-3.25 shrink-0 text-cp-blue-text"
                 stroke-width="2.4"
               />
-              <code class="block truncate font-mono text-cp-xs leading-none font-bold">
+              <code class="block truncate font-mono text-cp-xs font-bold">
                 {{ row.nameDisplay.secondary }}
               </code>
-            </div>
+            </span>
           </div>
         </template>
 
@@ -173,27 +182,50 @@ function diagnosticNameDisplay(name: string) {
           </span>
         </template>
 
-        <template #errorCount="{ row }">
-          <span class="grid justify-items-end gap-1 font-mono leading-none tabular-nums">
-            <strong
-              class="font-bold"
-              :class="row.errorCount > 0 ? 'text-cp-error-text' : 'text-cp-text'"
-            >
-              {{ formatCompactNumber(row.errorCount) }}
-            </strong>
-            <small
-              class="text-[10px] font-emphasis"
-              :class="row.errorRate > 0 ? 'text-cp-error-text' : 'text-cp-text-quaternary'"
-            >
-              {{ formatPercent(row.errorRate) }}
-            </small>
-          </span>
+        <template #impactScore="{ row }">
+          <strong
+            class="font-mono font-bold tabular-nums"
+            :class="row.impactScore > 0.1 ? 'text-cp-error-text' : 'text-cp-text-secondary'"
+            title="综合错误、未完成、重试、请求占比与 TTFT 的风险分（0–100）"
+          >
+            {{ formatCompactNumber(row.impactScore * 100) }}
+          </strong>
         </template>
 
-        <template #latencyP95Ms="{ row }">
-          <span class="font-mono font-bold tabular-nums text-cp-orange-text">
-            {{ formatDuration(row.latencyP95Ms) }}
-          </span>
+        <template #errorCount="{ row }">
+          <div
+            class="flex items-center justify-end gap-1.5 whitespace-nowrap text-right font-mono leading-none tabular-nums"
+            :aria-label="`错误 ${formatCompactNumber(row.errorCount)}，未完成 ${formatCompactNumber(row.nonCompletionCount)}`"
+            :title="`错误率 ${formatPercent(row.errorRate)}；未完成率 ${formatPercent(row.nonCompletionRate)}`"
+          >
+            <strong :class="row.errorCount > 0 ? 'text-cp-error-text' : 'text-cp-text-quaternary'">
+              {{ formatCompactNumber(row.errorCount) }}
+            </strong>
+            <span class="text-[9px] text-cp-text-quaternary">/</span>
+            <strong :class="row.nonCompletionCount > 0 ? 'text-cp-orange-text' : 'text-cp-text-quaternary'">
+              {{ formatCompactNumber(row.nonCompletionCount) }}
+            </strong>
+          </div>
+        </template>
+
+        <template #firstTokenP95Ms="{ row }">
+          <div
+            class="grid justify-items-end gap-1 font-mono leading-none tabular-nums"
+            :title="`重试率 ${formatPercent(row.retryRate)}`"
+          >
+            <span class="inline-flex items-baseline gap-1.5">
+              <small class="text-[10px] font-emphasis text-cp-text-quaternary">TTFT</small>
+              <strong class="font-bold text-cp-blue-text">
+                {{ formatDuration(row.firstTokenP95Ms) }}
+              </strong>
+            </span>
+            <small class="flex items-center gap-2 text-[10px] font-emphasis text-cp-text-quaternary">
+              <span>P95 {{ formatDuration(row.latencyP95Ms) }}</span>
+              <span :class="row.retryCount > 0 ? 'text-cp-orange-text' : undefined">
+                重试 {{ formatCompactNumber(row.retryCount) }}
+              </span>
+            </small>
+          </div>
         </template>
 
         <template #estimatedCost="{ row }">

@@ -158,6 +158,14 @@ pub struct WebSocketPoolMetadataView {
 #[serde(rename_all = "camelCase")]
 pub struct UsageLatencyDetailsView {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_decision_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_selection_wait_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity_used_slots: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity_total_slots: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transport_decision_wait_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ws_connect_ms: Option<u64>,
@@ -256,6 +264,13 @@ pub struct TrendPointView {
     pub min_latency_value: Option<u64>,
     pub success_rate: String,
     pub success_rate_value: Option<f64>,
+    pub first_token_p50_ms: Option<f64>,
+    pub first_token_p95_ms: Option<f64>,
+    pub latency_p95_ms: Option<f64>,
+    pub output_throughput_p50: Option<u64>,
+    pub admission_decision_p95_ms: Option<f64>,
+    pub account_selection_wait_p95_ms: Option<f64>,
+    pub capacity_utilization: Option<f64>,
 }
 
 /// Dashboard 趋势摘要。
@@ -537,6 +552,7 @@ pub struct UsageSummaryView {
 pub struct OverviewHealthPointView {
     pub bucket: DateTime<Utc>,
     pub label: String,
+    pub total_requests: u64,
     pub success_requests: u64,
     pub failed_requests: u64,
     pub cancelled_requests: u64,
@@ -556,6 +572,7 @@ pub struct OverviewHealthView {
     pub incomplete_requests: u64,
     pub caller_error_requests: u64,
     pub success_rate: f64,
+    pub completion_rate: f64,
     pub request_change_rate: Option<f64>,
     pub success_rate_change: Option<f64>,
     pub points: Vec<OverviewHealthPointView>,
@@ -573,6 +590,15 @@ pub struct OverviewPerformancePointView {
     pub first_token_p50_ms: Option<f64>,
     pub first_token_p95_ms: Option<f64>,
     pub first_token_p99_ms: Option<f64>,
+    pub admission_decision_p50_ms: Option<f64>,
+    pub admission_decision_p95_ms: Option<f64>,
+    pub account_selection_wait_p50_ms: Option<f64>,
+    pub account_selection_wait_p95_ms: Option<f64>,
+    pub output_throughput_p10: Option<u64>,
+    pub output_throughput_p50: Option<u64>,
+    pub output_throughput_p90: Option<u64>,
+    pub capacity_utilization: Option<f64>,
+    pub capacity_utilization_p95: Option<f64>,
 }
 
 /// 洞察性能摘要。
@@ -585,8 +611,20 @@ pub struct OverviewPerformanceView {
     pub first_token_p50_ms: Option<f64>,
     pub first_token_p95_ms: Option<f64>,
     pub first_token_p99_ms: Option<f64>,
+    pub admission_decision_p50_ms: Option<f64>,
+    pub admission_decision_p95_ms: Option<f64>,
+    pub account_selection_wait_p50_ms: Option<f64>,
+    pub account_selection_wait_p95_ms: Option<f64>,
+    pub output_throughput_p10: Option<u64>,
+    pub output_throughput_p50: Option<u64>,
+    pub output_throughput_p90: Option<u64>,
+    pub capacity_utilization: Option<f64>,
+    pub capacity_utilization_p95: Option<f64>,
     pub latency_coverage: f64,
     pub first_token_coverage: f64,
+    pub admission_decision_coverage: f64,
+    pub account_selection_wait_coverage: f64,
+    pub capacity_coverage: f64,
     pub points: Vec<OverviewPerformancePointView>,
 }
 
@@ -602,6 +640,8 @@ pub struct OverviewCostPointView {
     pub total_tokens: u64,
     pub estimated_cost: Option<String>,
     pub standard_cost: Option<String>,
+    pub no_cache_cost: Option<String>,
+    pub cache_savings: Option<String>,
     pub cached_token_rate: f64,
     pub cache_hit_request_rate: Option<f64>,
 }
@@ -612,7 +652,11 @@ pub struct OverviewCostPointView {
 pub struct OverviewCostView {
     pub estimated_cost: Option<String>,
     pub standard_cost: Option<String>,
+    pub no_cache_cost: Option<String>,
+    pub cache_savings: Option<String>,
+    pub tier_premium: Option<String>,
     pub cost_per_request: Option<String>,
+    pub cost_per_successful_request: Option<String>,
     pub tokens_per_request: f64,
     pub cached_token_rate: f64,
     pub cache_hit_request_rate: Option<f64>,
@@ -661,6 +705,12 @@ pub struct DiagnosticItemView {
     pub request_share: f64,
     pub average_latency_ms: Option<u64>,
     pub latency_p95_ms: Option<u64>,
+    pub first_token_p95_ms: Option<u64>,
+    pub non_completion_count: u64,
+    pub non_completion_rate: f64,
+    pub retry_count: u64,
+    pub retry_rate: f64,
+    pub impact_score: f64,
     pub estimated_cost: Option<String>,
     pub attempt_count: u64,
     pub total_tokens: u64,

@@ -8,6 +8,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useChartPalette } from '@/composables/useChartPalette'
+import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
 import {
   tooltipIndex,
@@ -16,9 +17,10 @@ import {
   usageLegend,
   usageLineSeries,
   usageTooltip,
+  usageTooltipContent,
   usageValueAxis,
 } from '../utils/chart'
-import { escapeTooltip, formatDuration, formatDurationAxis } from '../utils/format'
+import { formatDuration, formatDurationAxis, formatPercent } from '../utils/format'
 
 type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
 type PerformancePoint = Performance['points'][number]
@@ -40,28 +42,56 @@ const performancePoints = computed<PerformancePoint[]>(() => props.performance.p
 const viewOptions = [
   { label: '总耗时', value: 'total' },
   { label: '首字', value: 'firstToken' },
+  { label: '吞吐', value: 'throughput' },
+  { label: '调度', value: 'scheduling' },
 ]
 
-const percentileLabels = {
-  p50: '常规响应',
-  p95: '较慢响应',
-  p99: '极慢响应',
-}
+const seriesLabels = computed(() => {
+  if (activeView.value === 'throughput')
+    return ['P10', 'P50', 'P90'] as const
+  if (activeView.value === 'scheduling')
+    return ['准入 P95', '选号 P95', '容量 P95'] as const
+  return ['P50', 'P95', 'P99'] as const
+})
 
 const selectedPoints = computed(() =>
   performancePoints.value.map(point => ({
     point,
-    p50: percentileValue(point, 'p50'),
-    p95: percentileValue(point, 'p95'),
-    p99: percentileValue(point, 'p99'),
+    first: seriesValue(point, 'first'),
+    second: seriesValue(point, 'second'),
+    third: seriesValue(point, 'third'),
   })),
 )
+
+const summaryMetrics = computed(() => {
+  const performance = props.performance
+  if (activeView.value === 'throughput') {
+    return [
+      { label: 'P10', value: formatThroughput(performance.outputThroughputP10) },
+      { label: 'P50', value: formatThroughput(performance.outputThroughputP50) },
+      { label: 'P90', value: formatThroughput(performance.outputThroughputP90) },
+    ]
+  }
+  if (activeView.value === 'scheduling') {
+    return [
+      { label: '判定覆盖', value: formatPercent(performance.admissionDecisionCoverage) },
+      { label: '选号覆盖', value: formatPercent(performance.accountSelectionWaitCoverage) },
+      { label: '容量覆盖', value: formatPercent(performance.capacityCoverage) },
+    ]
+  }
+  const prefix = activeView.value === 'firstToken' ? 'firstToken' : 'latency'
+  return [
+    { label: 'P50', value: formatDuration(performance[`${prefix}P50Ms`]) },
+    { label: 'P95', value: formatDuration(performance[`${prefix}P95Ms`]) },
+    { label: 'P99', value: formatDuration(performance[`${prefix}P99Ms`]) },
+  ]
+})
 
 const hasData = computed(
   () =>
     !props.loading
     && selectedPoints.value.some(
-      point => point.p50 != null || point.p95 != null || point.p99 != null,
+      point => point.first != null || point.second != null || point.third != null,
     ),
 )
 
@@ -71,48 +101,77 @@ const chartOption = computed<EChartsOption>(() => {
 
   return {
     animationDuration: 240,
-    grid: { left: 0, right: 0, top: 40, bottom: 0, containLabel: true },
-    legend: usageLegend(theme, Object.values(percentileLabels)),
+    grid: {
+      left: 0,
+      right: 0,
+      top: 40,
+      bottom: 0,
+      outerBoundsMode: 'same',
+      outerBoundsContain: 'axisLabel',
+    },
+    legend: usageLegend(theme, [...seriesLabels.value]),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       points.map(({ point }) => point.label),
       theme,
     ),
-    yAxis: usageValueAxis(theme, formatDurationAxis),
+    yAxis: activeView.value === 'scheduling'
+      ? [
+          usageValueAxis(theme, formatDurationAxis),
+          usageValueAxis(theme, value => formatPercent(value), {
+            min: 0,
+            max: 1,
+            splitLine: false,
+          }),
+        ]
+      : usageValueAxis(
+          theme,
+          activeView.value === 'throughput'
+            ? value => `${formatCompactNumber(value)}/s`
+            : formatDurationAxis,
+        ),
     series: [
       usageLineSeries(
-        percentileLabels.p50,
-        points.map(point => point.p50),
+        seriesLabels.value[0],
+        points.map(point => point.first),
         theme.info,
         { area: 'subtle' },
       ),
       usageLineSeries(
-        percentileLabels.p95,
-        points.map(point => point.p95),
+        seriesLabels.value[1],
+        points.map(point => point.second),
         theme.warning,
       ),
-      usageLineSeries(
-        percentileLabels.p99,
-        points.map(point => point.p99),
-        theme.danger,
-      ),
+      {
+        ...usageLineSeries(
+          seriesLabels.value[2],
+          points.map(point => point.third),
+          activeView.value === 'scheduling' ? theme.success : theme.danger,
+        ),
+        yAxisIndex: activeView.value === 'scheduling' ? 1 : 0,
+      },
     ],
   }
 })
 
-function percentileValue(point: PerformancePoint, percentile: 'p50' | 'p95' | 'p99') {
-  if (activeView.value === 'firstToken') {
-    if (percentile === 'p50')
-      return point.firstTokenP50Ms
-    if (percentile === 'p95')
-      return point.firstTokenP95Ms
-    return point.firstTokenP99Ms
+function seriesValue(point: PerformancePoint, position: 'first' | 'second' | 'third') {
+  if (activeView.value === 'throughput') {
+    if (position === 'first')
+      return point.outputThroughputP10
+    if (position === 'second')
+      return point.outputThroughputP50
+    return point.outputThroughputP90
   }
-  if (percentile === 'p50')
-    return point.latencyP50Ms
-  if (percentile === 'p95')
-    return point.latencyP95Ms
-  return point.latencyP99Ms
+  if (activeView.value === 'scheduling') {
+    if (position === 'first')
+      return point.admissionDecisionP95Ms
+    if (position === 'second')
+      return point.accountSelectionWaitP95Ms
+    return point.capacityUtilizationP95
+  }
+  const prefix = activeView.value === 'firstToken' ? 'firstToken' : 'latency'
+  const suffix = position === 'first' ? 'P50Ms' : position === 'second' ? 'P95Ms' : 'P99Ms'
+  return point[`${prefix}${suffix}`]
 }
 
 function formatTooltip(params: unknown) {
@@ -121,12 +180,23 @@ function formatTooltip(params: unknown) {
   if (!selected)
     return ''
 
-  return [
-    escapeTooltip(selected.point.label),
-    `${percentileLabels.p50}: ${formatDuration(selected.p50)}`,
-    `${percentileLabels.p95}: ${formatDuration(selected.p95)}`,
-    `${percentileLabels.p99}: ${formatDuration(selected.p99)}`,
-  ].join('<br/>')
+  return usageTooltipContent(palette.value, selected.point.label, [
+    `${seriesLabels.value[0]}: ${formatSeriesValue(selected.first, 'first')}`,
+    `${seriesLabels.value[1]}: ${formatSeriesValue(selected.second, 'second')}`,
+    `${seriesLabels.value[2]}: ${formatSeriesValue(selected.third, 'third')}`,
+  ])
+}
+
+function formatSeriesValue(value: number | null, position: 'first' | 'second' | 'third') {
+  if (activeView.value === 'throughput')
+    return formatThroughput(value)
+  if (activeView.value === 'scheduling' && position === 'third')
+    return formatPercent(value)
+  return formatDuration(value)
+}
+
+function formatThroughput(value: number | null) {
+  return value == null ? '—' : `${formatCompactNumber(value)} tok/s`
 }
 </script>
 
@@ -134,25 +204,39 @@ function formatTooltip(params: unknown) {
   <BaseCard
     as="article"
     title="响应速度"
-    description="总耗时或首字的分位耗时，越低越快"
+    description="延迟、吞吐与调度分位"
     class="h-full min-h-90"
   >
     <template #actions>
-      <BaseSegmented v-model="activeView" label="性能指标" :options="viewOptions" :disabled="loading" class="w-43" />
+      <BaseSegmented v-model="activeView" label="性能指标" :options="viewOptions" :disabled="loading" class="w-68" />
     </template>
 
     <template #body>
-      <div class="min-h-66">
-        <BaseChart v-if="hasData" :option="chartOption" :height="264" />
+      <div class="grid min-h-66 gap-3">
+        <div v-if="hasData" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
+          <div v-for="metric in summaryMetrics" :key="metric.label" class="grid min-w-0 gap-1 px-2">
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ metric.label }}</span>
+            <strong class="truncate font-mono text-cp-base font-heavy tabular-nums text-cp-text" :title="metric.value">
+              {{ metric.value }}
+            </strong>
+          </div>
+        </div>
+        <BaseChart v-if="hasData" :option="chartOption" :height="210" />
         <BaseEmpty
           v-else
           size="sm"
           surface="none"
           :title="loading ? '正在加载性能数据' : '暂无性能数据'"
           :description="
-            activeView === 'firstToken' ? '当前范围没有首字耗时样本' : '当前范围没有总耗时样本'
+            activeView === 'firstToken'
+              ? '当前范围没有首字耗时样本'
+              : activeView === 'throughput'
+                ? '当前范围没有吞吐样本'
+                : activeView === 'scheduling'
+                  ? '部署迁移后才会开始积累调度与容量样本'
+                  : '当前范围没有总耗时样本'
           "
-          class="h-66 place-content-center"
+          class="h-52.5 place-content-center"
         />
       </div>
     </template>

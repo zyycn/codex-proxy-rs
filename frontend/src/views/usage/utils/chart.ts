@@ -1,6 +1,7 @@
 import type { LineSeriesOption } from 'echarts'
 import type { useChartPalette } from '@/composables/useChartPalette'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
+import { escapeTooltip } from './format'
 
 type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
 type UsageAreaStrength = 'strong' | 'subtle'
@@ -63,6 +64,15 @@ export function usageTooltip(
     ...chartTooltipStyle(theme, { axisPointer: true }),
     formatter,
   }
+}
+
+export function usageTooltipContent(
+  theme: UsageChartPalette,
+  label: string,
+  lines: string[],
+) {
+  const title = escapeTooltip(label)
+  return `<div style="margin:0 0 7px;padding:0 0 7px;border-bottom:1px solid ${theme.divider};color:${theme.textPrimary};font-family:'JetBrains Mono Variable','JetBrains Mono',monospace;font-size:11px;font-weight:750;line-height:1.2">${title}</div><div style="line-height:1.55">${lines.join('<br/>')}</div>`
 }
 
 export function usageCategoryAxis(labels: string[], theme: UsageChartPalette) {

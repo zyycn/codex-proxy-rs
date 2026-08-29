@@ -54,6 +54,10 @@ export interface UsageBilling {
 }
 
 export interface UsageLatencyDetails {
+  admissionDecisionMs?: number
+  accountSelectionWaitMs?: number
+  capacityUsedSlots?: number
+  capacityTotalSlots?: number
   transportDecisionWaitMs?: number
   wsConnectMs?: number
   upstreamHeadersMs?: number
@@ -221,6 +225,7 @@ export interface UsageSummaryResponse {
 export interface UsageOverviewHealthPoint {
   bucket: string
   label: string
+  totalRequests: number
   successRequests: number
   failedRequests: number
   cancelledRequests: number
@@ -237,6 +242,7 @@ export interface UsageOverviewHealth {
   incompleteRequests: number
   callerErrorRequests: number
   successRate: number
+  completionRate: number
   requestChangeRate: number | null
   successRateChange: number | null
   points: UsageOverviewHealthPoint[]
@@ -251,6 +257,15 @@ export interface UsageOverviewPerformancePoint {
   firstTokenP50Ms: number | null
   firstTokenP95Ms: number | null
   firstTokenP99Ms: number | null
+  admissionDecisionP50Ms: number | null
+  admissionDecisionP95Ms: number | null
+  accountSelectionWaitP50Ms: number | null
+  accountSelectionWaitP95Ms: number | null
+  outputThroughputP10: number | null
+  outputThroughputP50: number | null
+  outputThroughputP90: number | null
+  capacityUtilization: number | null
+  capacityUtilizationP95: number | null
 }
 
 export interface UsageOverviewPerformance {
@@ -260,8 +275,20 @@ export interface UsageOverviewPerformance {
   firstTokenP50Ms: number | null
   firstTokenP95Ms: number | null
   firstTokenP99Ms: number | null
+  admissionDecisionP50Ms: number | null
+  admissionDecisionP95Ms: number | null
+  accountSelectionWaitP50Ms: number | null
+  accountSelectionWaitP95Ms: number | null
+  outputThroughputP10: number | null
+  outputThroughputP50: number | null
+  outputThroughputP90: number | null
+  capacityUtilization: number | null
+  capacityUtilizationP95: number | null
   latencyCoverage: number
   firstTokenCoverage: number
+  admissionDecisionCoverage: number
+  accountSelectionWaitCoverage: number
+  capacityCoverage: number
   points: UsageOverviewPerformancePoint[]
 }
 
@@ -274,6 +301,8 @@ export interface UsageOverviewCostPoint {
   totalTokens: number
   estimatedCost: string | null
   standardCost: string | null
+  noCacheCost: string | null
+  cacheSavings: string | null
   cachedTokenRate: number
   cacheHitRequestRate: number | null
 }
@@ -281,7 +310,11 @@ export interface UsageOverviewCostPoint {
 export interface UsageOverviewCost {
   estimatedCost: string | null
   standardCost: string | null
+  noCacheCost: string | null
+  cacheSavings: string | null
+  tierPremium: string | null
   costPerRequest: string | null
+  costPerSuccessfulRequest: string | null
   tokensPerRequest: number
   cachedTokenRate: number
   cacheHitRequestRate: number | null
@@ -290,6 +323,7 @@ export interface UsageOverviewCost {
   cachedTokens: number
   totalTokens: number
   points: UsageOverviewCostPoint[]
+  coverage: UsageCostCoverage
 }
 
 export interface UsageInsightsOverviewResponse {
@@ -309,6 +343,12 @@ export interface UsageDiagnosticItem {
   requestShare: number
   averageLatencyMs: number | null
   latencyP95Ms: number | null
+  firstTokenP95Ms: number | null
+  nonCompletionCount: number
+  nonCompletionRate: number
+  retryCount: number
+  retryRate: number
+  impactScore: number
   estimatedCost: string | null
   attemptCount: number
   totalTokens: number

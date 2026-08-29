@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, btree_map::Entry},
+    str::FromStr,
     sync::Arc,
 };
 
@@ -246,26 +247,50 @@ impl ObservabilityService for DefaultObservabilityService {
         let total_requests = items.iter().fold(0_u64, |total, item| {
             total.saturating_add(item.request_count)
         });
-        Ok(DiagnosticsResult {
-            dimension,
-            items: items
-                .into_iter()
-                .map(|item| DiagnosticsItem {
+        let mut items = items
+            .into_iter()
+            .map(|item| {
+                let error_rate = rate_or_zero(item.failure_count, item.request_count);
+                let non_completion_rate =
+                    rate_or_zero(item.non_completion_count, item.request_count);
+                let retry_rate = rate_or_zero(item.retry_count, item.request_count);
+                let impact_score = diagnostic_impact_score(
+                    item.request_count,
+                    total_requests,
+                    error_rate,
+                    non_completion_rate,
+                    retry_rate,
+                    item.first_token_p95_ms,
+                );
+                DiagnosticsItem {
                     key: item.key,
                     name: item.name,
                     request_count: item.request_count,
-                    success_count: item.request_count.saturating_sub(item.failure_count),
+                    success_count: item.success_count,
                     error_count: item.failure_count,
-                    error_rate: rate_or_zero(item.failure_count, item.request_count),
+                    error_rate,
                     request_share: rate_or_zero(item.request_count, total_requests),
                     average_latency_ms: item.average_latency_ms,
                     latency_p95_ms: item.latency_p95_ms,
+                    first_token_p95_ms: item.first_token_p95_ms,
+                    non_completion_count: item.non_completion_count,
+                    non_completion_rate,
+                    retry_count: item.retry_count,
+                    retry_rate,
+                    impact_score,
                     estimated_cost: usd_cost(&item.costs),
                     attempt_count: item.attempt_count,
                     total_tokens: item.total_tokens,
-                })
-                .collect(),
-        })
+                }
+            })
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            right
+                .impact_score
+                .total_cmp(&left.impact_score)
+                .then_with(|| right.request_count.cmp(&left.request_count))
+        });
+        Ok(DiagnosticsResult { dimension, items })
     }
 
     async fn ops_errors(&self, query: OpsErrorQuery) -> Result<OpsErrorPage, AdminError> {
@@ -279,7 +304,7 @@ impl ObservabilityService for DefaultObservabilityService {
 fn build_usage_insights(
     overview: UsageOverview,
     trend: Vec<RequestMetricPoint>,
-    standard_costs: UsageStandardCosts,
+    standard_costs: UsageCostScenarios,
 ) -> Result<UsageInsights, AdminError> {
     let granularity = trend.first().map_or(
         crate::model::observability::Granularity::FifteenMinutes,
@@ -293,19 +318,26 @@ fn build_usage_insights(
     let failed_requests = service_failure_count(requests);
     let health_requests = requests.success_count.saturating_add(failed_requests);
     let health = UsageInsightsHealth {
-        total_requests: health_requests,
+        total_requests: requests.request_count,
         success_requests: requests.success_count,
         failed_requests,
         cancelled_requests: requests.cancelled_count,
         incomplete_requests: requests.incomplete_count,
         caller_error_requests: requests.caller_error_count,
         success_rate: rate_or_zero(requests.success_count, health_requests),
+        completion_rate: rate_or_zero(
+            requests
+                .success_count
+                .saturating_add(requests.failure_count),
+            requests.request_count,
+        ),
         points: trend
             .iter()
             .map(|point| {
                 let failed_requests = service_failure_count(&point.metrics);
                 let health_requests = point.metrics.success_count.saturating_add(failed_requests);
                 UsageInsightsHealthPoint {
+                    total_requests: point.metrics.request_count,
                     bucket_start: point.bucket_start,
                     success_requests: point.metrics.success_count,
                     failed_requests,
@@ -325,27 +357,74 @@ fn build_usage_insights(
             requests.first_token_latency_count,
             requests.request_count,
         ),
+        admission_decision_percentiles: requests.admission_decision_percentiles,
+        account_selection_wait_percentiles: requests.account_selection_wait_percentiles,
+        admission_decision_coverage: rate_or_zero(
+            requests.admission_decision_count,
+            requests.request_count,
+        ),
+        account_selection_wait_coverage: rate_or_zero(
+            requests.account_selection_wait_count,
+            requests.request_count,
+        ),
+        output_throughput_p10: requests.output_throughput_p10,
+        output_throughput_p50: requests.output_throughput_p50,
+        output_throughput_p90: requests.output_throughput_p90,
+        capacity_utilization_avg_basis_points: requests.capacity_utilization_avg_basis_points,
+        capacity_utilization_p95_basis_points: requests.capacity_utilization_p95_basis_points,
+        capacity_coverage: rate_or_zero(requests.capacity_sample_count, requests.request_count),
         points: trend
             .iter()
             .map(|point| UsageInsightsPerformancePoint {
                 bucket_start: point.bucket_start,
                 latency_percentiles: point.metrics.latency_percentiles,
                 first_token_latency_percentiles: point.metrics.first_token_latency_percentiles,
+                admission_decision_percentiles: point.metrics.admission_decision_percentiles,
+                account_selection_wait_percentiles: point
+                    .metrics
+                    .account_selection_wait_percentiles,
+                output_throughput_p10: point.metrics.output_throughput_p10,
+                output_throughput_p50: point.metrics.output_throughput_p50,
+                output_throughput_p90: point.metrics.output_throughput_p90,
+                capacity_utilization_avg_basis_points: point
+                    .metrics
+                    .capacity_utilization_avg_basis_points,
+                capacity_utilization_p95_basis_points: point
+                    .metrics
+                    .capacity_utilization_p95_basis_points,
             })
             .collect(),
     };
     let estimated_cost = usd_cost(&overview.attempts.costs);
-    let UsageStandardCosts {
-        total: standard_cost,
-        by_bucket: standard_costs_by_bucket,
+    let UsageCostScenarios {
+        standard:
+            ScenarioCosts {
+                total: standard_cost,
+                by_bucket: standard_costs_by_bucket,
+            },
+        no_cache:
+            ScenarioCosts {
+                total: no_cache_cost,
+                by_bucket: no_cache_costs_by_bucket,
+            },
     } = standard_costs;
+    let cache_savings = amount_difference(no_cache_cost.as_ref(), estimated_cost.as_ref());
+    let tier_premium = amount_difference(estimated_cost.as_ref(), standard_cost.as_ref());
+    let cost_per_request = estimated_cost
+        .as_ref()
+        .and_then(|cost| cost.checked_div_u64(requests.request_count));
+    let cost_per_successful_request = estimated_cost
+        .as_ref()
+        .and_then(|cost| cost.checked_div_u64(requests.success_count));
     let cost = UsageInsightsCost {
-        cost_per_request: estimated_cost
-            .as_ref()
-            .and_then(|cost| cost.checked_div_u64(requests.request_count)),
+        cost_per_request,
         estimated_cost,
         standard_cost,
+        no_cache_cost,
+        cache_savings,
+        tier_premium,
         tokens_per_request: rate_or_zero(requests.total_tokens, requests.request_count),
+        cost_per_successful_request,
         cached_token_rate: rate_or_zero(requests.cached_tokens, requests.input_tokens),
         cache_hit_request_rate: ratio(
             requests.cache_hit_request_count,
@@ -365,6 +444,11 @@ fn build_usage_insights(
                 total_tokens: point.metrics.total_tokens,
                 estimated_cost: usd_cost(&point.costs),
                 standard_cost: standard_costs_by_bucket.get(&point.bucket_start).cloned(),
+                no_cache_cost: no_cache_costs_by_bucket.get(&point.bucket_start).cloned(),
+                cache_savings: amount_difference(
+                    no_cache_costs_by_bucket.get(&point.bucket_start),
+                    usd_cost(&point.costs).as_ref(),
+                ),
                 cached_token_rate: rate_or_zero(
                     point.metrics.cached_tokens,
                     point.metrics.input_tokens,
@@ -389,12 +473,12 @@ fn build_usage_insights(
 }
 
 #[derive(Debug, Default)]
-struct UsageStandardCosts {
+struct ScenarioCosts {
     total: Option<DecimalAmount>,
     by_bucket: BTreeMap<DateTime<Utc>, DecimalAmount>,
 }
 
-impl UsageStandardCosts {
+impl ScenarioCosts {
     fn add(
         &mut self,
         bucket_start: DateTime<Utc>,
@@ -422,23 +506,29 @@ impl UsageStandardCosts {
     }
 }
 
+#[derive(Debug, Default)]
+struct UsageCostScenarios {
+    standard: ScenarioCosts,
+    no_cache: ScenarioCosts,
+}
+
 fn recover_standard_costs(
     providers: &ProviderAdminRegistry,
     facts: Vec<UsageCalculatedBillingFact>,
-) -> Result<UsageStandardCosts, AdminError> {
-    let mut standard_costs = UsageStandardCosts::default();
+) -> Result<UsageCostScenarios, AdminError> {
+    let mut scenarios = UsageCostScenarios::default();
     for fact in facts {
-        let Ok(provider_kind) = ProviderKind::new(fact.provider_kind) else {
+        let Ok(provider_kind) = ProviderKind::new(fact.provider_kind.clone()) else {
             continue;
         };
         let input = ProviderBillingInput {
-            upstream_model_id: fact.upstream_model_id,
-            service_tier: fact.service_tier,
+            upstream_model_id: fact.upstream_model_id.clone(),
+            service_tier: fact.service_tier.clone(),
             input_tokens: fact.input_tokens,
             output_tokens: fact.output_tokens,
             cached_tokens: fact.cached_tokens,
             cache_write_tokens: fact.cache_write_tokens,
-            total: fact.total,
+            total: fact.total.clone(),
         };
         let breakdown = match providers.calculated_billing(&provider_kind, &input) {
             Ok(breakdown) => breakdown,
@@ -455,9 +545,80 @@ fn recover_standard_costs(
         {
             continue;
         }
-        standard_costs.add(fact.bucket_start, breakdown.standard_amount.amount)?;
+        scenarios
+            .standard
+            .add(fact.bucket_start, breakdown.standard_amount.amount.clone())?;
+        if let Some(no_cache_cost) = no_cache_cost(&fact, &breakdown) {
+            scenarios.no_cache.add(fact.bucket_start, no_cache_cost)?;
+        }
     }
-    Ok(standard_costs)
+    Ok(scenarios)
+}
+
+fn no_cache_cost(
+    fact: &UsageCalculatedBillingFact,
+    breakdown: &crate::model::observability::CalculatedBillingBreakdown,
+) -> Option<DecimalAmount> {
+    let input_tokens = fact.input_tokens?;
+    let cached_tokens = fact.cached_tokens.unwrap_or_default().min(input_tokens);
+    let cache_write_tokens = fact
+        .cache_write_tokens
+        .unwrap_or_default()
+        .min(input_tokens.saturating_sub(cached_tokens));
+    let input_rate = decimal(&breakdown.input_price_per_million.amount)?;
+    let replaced_input_amount = input_rate
+        .scaled()
+        .checked_mul(u128::from(cached_tokens.saturating_add(cache_write_tokens)))?
+        .checked_div(1_000_000)?;
+    let total = decimal(&breakdown.total_amount.amount)?
+        .scaled()
+        .checked_sub(decimal(&breakdown.cache_read_amount.amount)?.scaled())?
+        .checked_sub(decimal(&breakdown.cache_write_amount.amount)?.scaled())?
+        .checked_add(replaced_input_amount)?;
+    DecimalAmount::from_str(
+        &gateway_core::accounting::Decimal::from_scaled(total)
+            .ok()?
+            .canonical(),
+    )
+    .ok()
+}
+
+fn amount_difference(
+    larger: Option<&DecimalAmount>,
+    smaller: Option<&DecimalAmount>,
+) -> Option<DecimalAmount> {
+    let difference = decimal(larger?)?
+        .scaled()
+        .checked_sub(decimal(smaller?)?.scaled())?;
+    DecimalAmount::from_str(
+        &gateway_core::accounting::Decimal::from_scaled(difference)
+            .ok()?
+            .canonical(),
+    )
+    .ok()
+}
+
+fn decimal(value: &DecimalAmount) -> Option<gateway_core::accounting::Decimal> {
+    value.as_str().parse().ok()
+}
+
+fn diagnostic_impact_score(
+    request_count: u64,
+    total_requests: u64,
+    error_rate: f64,
+    non_completion_rate: f64,
+    retry_rate: f64,
+    first_token_p95_ms: Option<u64>,
+) -> f64 {
+    let request_share = rate_or_zero(request_count, total_requests);
+    let slow_score = first_token_p95_ms
+        .map_or(0.0, |value| value as f64 / 30_000.0)
+        .min(1.0);
+    error_rate * 0.35
+        + non_completion_rate * 0.25
+        + retry_rate.min(1.0) * 0.20
+        + request_share * 0.10
+        + slow_score * 0.10
 }
 
 fn usd_cost(costs: &[CurrencyCost]) -> Option<DecimalAmount> {
@@ -629,6 +790,20 @@ fn trend(kind: TrendKind, points: Vec<RequestMetricPoint>) -> Result<Trend, Admi
         metrics.cache_hit_request_count,
         metrics.cache_eligible_request_count,
     );
+    let peak_first_token_p95_ms = points
+        .iter()
+        .filter_map(|point| point.metrics.first_token_latency_percentiles.p95_ms)
+        .map(|value| value.as_f64())
+        .reduce(f64::max);
+    let peak_latency_p95_ms = points
+        .iter()
+        .filter_map(|point| point.metrics.latency_percentiles.p95_ms)
+        .map(|value| value.as_f64())
+        .reduce(f64::max);
+    let minimum_output_throughput_p50 = points
+        .iter()
+        .filter_map(|point| point.metrics.output_throughput_p50)
+        .min();
     Ok(Trend {
         kind,
         points: points.into_iter().map(trend_point).collect(),
@@ -642,6 +817,9 @@ fn trend(kind: TrendKind, points: Vec<RequestMetricPoint>) -> Result<Trend, Admi
             average_latency_ms,
             max_latency_ms: metrics.max_latency_ms,
             min_latency_ms: metrics.min_latency_ms,
+            peak_first_token_p95_ms,
+            peak_latency_p95_ms,
+            minimum_output_throughput_p50,
             success_rate,
             cache_hit_request_rate,
             costs: costs

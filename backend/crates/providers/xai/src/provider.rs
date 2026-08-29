@@ -13,8 +13,8 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation, ProviderStream,
-    UpstreamTransport,
+    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation,
+    ProviderSelectionObservation, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
 use gateway_core::error::{
@@ -215,6 +215,7 @@ impl GrokBuildProvider {
         if let Some(previous) = previous_session.as_ref() {
             upstream_request.inherit_session(previous.session_id.as_deref());
         }
+        let selection_started_at = Instant::now();
         let selected = select_grok_session(
             self.selector.as_ref(),
             candidate,
@@ -224,6 +225,8 @@ impl GrokBuildProvider {
             upstream_request.affinity().cloned(),
         )
         .await?;
+        let account_selection_wait_ms =
+            u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         // 首字计时的起点：账号选择完成之后、上游建立之前。
         let output_started_at = Instant::now();
         apply_continuation(
@@ -278,7 +281,7 @@ impl GrokBuildProvider {
         });
         let selected = Arc::new(selected);
         let allows_account_state_mutation = selected.allows_account_state_mutation();
-        let metadata = provider_call_metadata(candidate, &selected)?;
+        let metadata = provider_call_metadata(candidate, &selected, account_selection_wait_ms)?;
         let events = cold_http_sse_stream(
             Arc::clone(&self.selector),
             Arc::clone(&self.transport),
@@ -347,6 +350,7 @@ impl GrokBuildProvider {
         let upstream_session_id = inherited_session_id
             .clone()
             .or_else(|| explicit_replay_session_id.clone());
+        let selection_started_at = Instant::now();
         let selected = Arc::new(
             select_grok_session(
                 self.selector.as_ref(),
@@ -358,6 +362,8 @@ impl GrokBuildProvider {
             )
             .await?,
         );
+        let account_selection_wait_ms =
+            u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let reasoning_replay_key = explicit_replay_session_id
             .as_deref()
             .or(inherited_session_id.as_deref())
@@ -369,7 +375,7 @@ impl GrokBuildProvider {
                 )
             });
         let allows_account_state_mutation = selected.allows_account_state_mutation();
-        let metadata = provider_call_metadata(candidate, &selected)?;
+        let metadata = provider_call_metadata(candidate, &selected, account_selection_wait_ms)?;
         let events = cold_compaction_http_sse_stream(
             Arc::clone(&self.selector),
             Arc::clone(&self.transport),
@@ -451,13 +457,18 @@ async fn select_grok_session(
 fn provider_call_metadata(
     candidate: &ProviderCandidate,
     selected: &SelectedGrokSession,
+    account_selection_wait_ms: u64,
 ) -> Result<ProviderCallMetadata, ProviderError> {
     Ok(ProviderCallMetadata::new(
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?,
         candidate_upstream_model(candidate)?.clone(),
         selected.account_id().clone(),
         UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| protocol_not_sent())?,
-    ))
+    )
+    .with_selection_observation(ProviderSelectionObservation::new(
+        account_selection_wait_ms,
+        selected.capacity_snapshot(),
+    )))
 }
 
 fn candidate_upstream_model(

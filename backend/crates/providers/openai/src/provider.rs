@@ -12,8 +12,8 @@ use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuation
 use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation, ProviderStream,
-    UpstreamTransport,
+    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation,
+    ProviderSelectionObservation, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
     AttemptContext, CancellationToken, ContinuationAttempt, UpstreamSendState,
@@ -292,6 +292,7 @@ impl Provider for CodexProvider {
         let transport = selected_transport(&upstream_request);
         apply_transport(&mut upstream_request, transport);
 
+        let selection_started_at = Instant::now();
         let lease = self
             .selector
             .select_with_cyber_policy(
@@ -306,6 +307,8 @@ impl Provider for CodexProvider {
             )
             .await
             .map_err(map_selection_error)?;
+        let account_selection_wait_ms =
+            u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
         // 首字计时的起点：账号选择完成之后、上游建立之前。
         let output_started_at = Instant::now();
@@ -390,7 +393,11 @@ impl Provider for CodexProvider {
             UpstreamTransport::new(transport_name(transport)).map_err(|_| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
-        );
+        )
+        .with_selection_observation(ProviderSelectionObservation::new(
+            account_selection_wait_ms,
+            lease.capacity_snapshot(),
+        ));
         let response_store = upstream_request.store();
         let session_capture =
             (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
@@ -447,6 +454,7 @@ impl CodexProvider {
             ),
             ImageRequestKind::Edit => (CODEX_IMAGE_EDITS_PATH, self.image_edits_url.clone()),
         };
+        let selection_started_at = Instant::now();
         let lease = self
             .selector
             .select_for_provider_endpoint(&SelectCodexProviderEndpointCredential {
@@ -455,6 +463,8 @@ impl CodexProvider {
             })
             .await
             .map_err(map_selection_error)?;
+        let account_selection_wait_ms =
+            u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
@@ -465,7 +475,11 @@ impl CodexProvider {
             UpstreamTransport::new(HTTP_JSON_TRANSPORT).map_err(|_| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
-        );
+        )
+        .with_selection_observation(ProviderSelectionObservation::new(
+            account_selection_wait_ms,
+            lease.capacity_snapshot(),
+        ));
         let image_turn_id = image
             .payload()
             .context()

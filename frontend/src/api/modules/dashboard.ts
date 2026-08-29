@@ -30,6 +30,13 @@ export interface DashboardTrendPoint {
   minLatencyValue: number | null
   successRate: string
   successRateValue: number | null
+  firstTokenP50Ms: number | null
+  firstTokenP95Ms: number | null
+  latencyP95Ms: number | null
+  outputThroughputP50: number | null
+  admissionDecisionP95Ms: number | null
+  accountSelectionWaitP95Ms: number | null
+  capacityUtilization: number | null
 }
 
 export interface DashboardTrendSummaryItem {

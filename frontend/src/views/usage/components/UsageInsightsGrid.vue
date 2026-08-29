@@ -27,7 +27,10 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
 </script>
 
 <template>
-  <section class="mt-5 grid grid-cols-1 gap-3 xl:grid-cols-2" aria-label="使用统计观测">
+  <section
+    class="mt-5 grid grid-cols-1 gap-3 xl:auto-rows-[24.25rem] xl:grid-cols-2"
+    aria-label="使用统计观测"
+  >
     <UsageHealthCard
       :health="overview.health"
       :granularity="overview.granularity"

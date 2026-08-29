@@ -431,6 +431,9 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
         .insert_model_request_with_first_attempt(
             new_request("req_snap_legacy", started_at + chrono::Duration::seconds(1)),
             ModelRequestAttemptStart {
+                account_selection_wait_ms: None,
+                capacity_used_slots: None,
+                capacity_total_slots: None,
                 model_request_id: "req_snap_legacy".to_owned(),
                 attempt_count: 1,
                 provider_kind: "openai".to_owned(),
@@ -542,6 +545,9 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         request.client_api_key_id = Some("key_diag".to_owned());
         request.client_api_key_ref = "key_diag".to_owned();
         let attempt = ModelRequestAttemptStart {
+            account_selection_wait_ms: None,
+            capacity_used_slots: None,
+            capacity_total_slots: None,
             model_request_id: id.to_owned(),
             attempt_count: 1,
             provider_kind: "openai".to_owned(),
@@ -656,6 +662,7 @@ async fn renaming_account_should_not_rewrite_historical_snapshots() {
 
 fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
     NewModelRequest {
+        admission_decision_ms: None,
         id: id.to_owned(),
         client_api_key_id: None,
         client_api_key_ref: "key_snapshot".to_owned(),
@@ -683,6 +690,9 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
 
 fn attempt(id: &str, count: u32, account_id: &str) -> ModelRequestAttemptStart {
     ModelRequestAttemptStart {
+        account_selection_wait_ms: None,
+        capacity_used_slots: None,
+        capacity_total_slots: None,
         model_request_id: id.to_owned(),
         attempt_count: count,
         provider_kind: "openai".to_owned(),

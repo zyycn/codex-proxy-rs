@@ -2,12 +2,7 @@
 import type { HealthTimelinePoint } from '../constants'
 
 import { computed } from 'vue'
-import {
-  formatHealthCount,
-  healthReliabilityValueClass,
-  healthStatusMeta,
-
-} from '../constants'
+import { formatHealthCount, healthReliabilityValueClass, healthStatusMeta } from '../constants'
 
 const props = defineProps<{
   point: HealthTimelinePoint
@@ -80,9 +75,7 @@ const metricItems = outcomeMeta
           {{ status.label }}
         </span>
       </div>
-      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary">
-        15 分钟
-      </span>
+      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary"> 15 分钟 </span>
     </header>
 
     <div class="grid gap-3.5 px-3.5 py-3.5">
@@ -99,21 +92,14 @@ const metricItems = outcomeMeta
           </strong>
         </div>
         <div class="text-right">
-          <span class="block text-[10px] leading-none font-emphasis text-cp-text-quaternary">
-            有效请求
-          </span>
-          <strong
-            class="mt-2 block font-mono text-cp-xl leading-none font-heavy tabular-nums text-cp-text"
-          >
+          <span class="block text-[10px] leading-none font-emphasis text-cp-text-quaternary"> 有效请求 </span>
+          <strong class="mt-2 block font-mono text-cp-xl leading-none font-heavy tabular-nums text-cp-text">
             {{ formatHealthCount(eligibleRequests) }}
           </strong>
         </div>
       </div>
 
-      <div
-        class="flex h-1.5 w-full overflow-hidden rounded-full bg-cp-fill-tertiary"
-        aria-hidden="true"
-      >
+      <div class="flex h-1.5 w-full overflow-hidden rounded-full bg-cp-fill-tertiary">
         <span
           v-for="segment in outcomeSegments"
           :key="segment.label"
@@ -133,18 +119,13 @@ const metricItems = outcomeMeta
           <span class="truncate text-[10px] leading-none font-emphasis text-cp-text-secondary">
             {{ item.label }}
           </span>
-          <strong
-            class="font-mono text-cp-sm leading-none font-heavy tabular-nums"
-            :class="item.valueClass"
-          >
+          <strong class="font-mono text-cp-sm leading-none font-heavy tabular-nums" :class="item.valueClass">
             {{ formatHealthCount(item.value) }}
           </strong>
         </div>
       </div>
 
-      <p
-        class="m-0 border-t border-cp-split pt-3 text-[10px] leading-[1.45] font-emphasis text-cp-text-quaternary"
-      >
+      <p class="m-0 border-t border-cp-split pt-3 text-[10px] leading-[1.45] font-emphasis text-cp-text-quaternary">
         客户端取消与调用方错误单独记录，不计入可用性。
       </p>
     </div>

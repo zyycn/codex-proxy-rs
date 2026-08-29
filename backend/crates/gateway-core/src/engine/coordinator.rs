@@ -753,6 +753,8 @@ where
         }
 
         let metadata = stream.metadata().clone();
+        let selection_observation = metadata.selection_observation();
+        let capacity = selection_observation.and_then(|observation| observation.capacity());
         if !self.account_selection.is_diagnostic()
             && !candidate
                 .account_scope()
@@ -830,6 +832,10 @@ where
             upstream_model_id: metadata.upstream_model().cloned(),
             upstream_transport: metadata.transport().as_str().to_owned(),
             http_version: None,
+            account_selection_wait_ms: selection_observation
+                .map(|observation| observation.account_selection_wait_ms()),
+            capacity_used_slots: capacity.map(|snapshot| snapshot.used_slots()),
+            capacity_total_slots: capacity.map(|snapshot| snapshot.total_slots()),
         };
         if self.request_persisted {
             best_effort_store_write(

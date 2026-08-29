@@ -50,7 +50,44 @@ pub(crate) async fn request_metrics(
                 percentile_cont(0.95) within group (order by first_token_ms)
                   filter (where {fact}) as first_token_p95_ms,
                 percentile_cont(0.99) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p99_ms
+                  filter (where {fact}) as first_token_p99_ms,
+                count(admission_decision_ms)::bigint as admission_decision_count,
+                percentile_cont(0.50) within group (order by admission_decision_ms)
+                  as admission_decision_p50_ms,
+                percentile_cont(0.95) within group (order by admission_decision_ms)
+                  as admission_decision_p95_ms,
+                percentile_cont(0.99) within group (order by admission_decision_ms)
+                  as admission_decision_p99_ms,
+                count(account_selection_wait_ms)::bigint as account_selection_wait_count,
+                percentile_cont(0.50) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p50_ms,
+                percentile_cont(0.95) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p95_ms,
+                percentile_cont(0.99) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p99_ms,
+                round((percentile_cont(0.10) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / greatest(latency_ms - first_token_ms, 1)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > first_token_ms)))::bigint as output_throughput_p10,
+                round((percentile_cont(0.50) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / greatest(latency_ms - first_token_ms, 1)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > first_token_ms)))::bigint as output_throughput_p50,
+                round((percentile_cont(0.90) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / greatest(latency_ms - first_token_ms, 1)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > first_token_ms)))::bigint as output_throughput_p90,
+                count(capacity_total_slots)::bigint as capacity_sample_count,
+                round(avg(capacity_used_slots::double precision
+                          / nullif(capacity_total_slots, 0)) * 10000)::bigint
+                  as capacity_utilization_avg_basis_points,
+                round(percentile_cont(0.95) within group (
+                  order by capacity_used_slots::double precision
+                    / nullif(capacity_total_slots, 0)
+                ) * 10000)::bigint as capacity_utilization_p95_basis_points
          from model_requests mr where mr.started_at >= "
     ));
     query.push_bind(range.start);
@@ -145,6 +182,43 @@ pub(crate) async fn request_metric_series(
                   filter (where {fact}) as first_token_p95_ms,
                 percentile_cont(0.99) within group (order by first_token_ms)
                   filter (where {fact}) as first_token_p99_ms,
+                count(admission_decision_ms)::bigint as admission_decision_count,
+                percentile_cont(0.50) within group (order by admission_decision_ms)
+                  as admission_decision_p50_ms,
+                percentile_cont(0.95) within group (order by admission_decision_ms)
+                  as admission_decision_p95_ms,
+                percentile_cont(0.99) within group (order by admission_decision_ms)
+                  as admission_decision_p99_ms,
+                count(account_selection_wait_ms)::bigint as account_selection_wait_count,
+                percentile_cont(0.50) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p50_ms,
+                percentile_cont(0.95) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p95_ms,
+                percentile_cont(0.99) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p99_ms,
+                round((percentile_cont(0.10) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / greatest(latency_ms - first_token_ms, 1)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > first_token_ms)))::bigint as output_throughput_p10,
+                round((percentile_cont(0.50) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / greatest(latency_ms - first_token_ms, 1)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > first_token_ms)))::bigint as output_throughput_p50,
+                round((percentile_cont(0.90) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / greatest(latency_ms - first_token_ms, 1)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > first_token_ms)))::bigint as output_throughput_p90,
+                count(capacity_total_slots)::bigint as capacity_sample_count,
+                round(avg(capacity_used_slots::double precision
+                          / nullif(capacity_total_slots, 0)) * 10000)::bigint
+                  as capacity_utilization_avg_basis_points,
+                round(percentile_cont(0.95) within group (
+                  order by capacity_used_slots::double precision
+                    / nullif(capacity_total_slots, 0)
+                ) * 10000)::bigint as capacity_utilization_p95_basis_points,
                 count(*) filter (where {fact} and cost_source = 'provider_reported')::bigint
                   as provider_reported_count,
                 count(*) filter (where {fact} and cost_source = 'calculated')::bigint
@@ -438,6 +512,30 @@ pub(crate) fn request_metrics_from_row(row: &sqlx::postgres::PgRow) -> StoreResu
             p95_ms: optional_percentile(row, "first_token_p95_ms")?,
             p99_ms: optional_percentile(row, "first_token_p99_ms")?,
         },
+        admission_decision_count: unsigned(row, "admission_decision_count")?,
+        admission_decision_percentiles: LatencyPercentiles {
+            p50_ms: optional_percentile(row, "admission_decision_p50_ms")?,
+            p95_ms: optional_percentile(row, "admission_decision_p95_ms")?,
+            p99_ms: optional_percentile(row, "admission_decision_p99_ms")?,
+        },
+        account_selection_wait_count: unsigned(row, "account_selection_wait_count")?,
+        account_selection_wait_percentiles: LatencyPercentiles {
+            p50_ms: optional_percentile(row, "account_selection_wait_p50_ms")?,
+            p95_ms: optional_percentile(row, "account_selection_wait_p95_ms")?,
+            p99_ms: optional_percentile(row, "account_selection_wait_p99_ms")?,
+        },
+        output_throughput_p10: optional_unsigned(row, "output_throughput_p10")?,
+        output_throughput_p50: optional_unsigned(row, "output_throughput_p50")?,
+        output_throughput_p90: optional_unsigned(row, "output_throughput_p90")?,
+        capacity_sample_count: unsigned(row, "capacity_sample_count")?,
+        capacity_utilization_avg_basis_points: optional_unsigned(
+            row,
+            "capacity_utilization_avg_basis_points",
+        )?,
+        capacity_utilization_p95_basis_points: optional_unsigned(
+            row,
+            "capacity_utilization_p95_basis_points",
+        )?,
     })
 }
 

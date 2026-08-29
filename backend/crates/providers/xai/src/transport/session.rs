@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gateway_core::engine::credential::{
-    AccountEligibilityPolicy, AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
+    AccountCapacitySnapshot, AccountEligibilityPolicy, AccountSelectionPolicy, CredentialRevision,
+    ProviderAccountId,
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{FrozenAccountScope, UpstreamModelId};
@@ -89,6 +90,7 @@ pub struct SelectedGrokSession {
     email: Option<SecretValue>,
     binding: GrokSessionBinding,
     allows_account_state_mutation: bool,
+    capacity: Option<AccountCapacitySnapshot>,
     _guard: Box<dyn GrokSessionLeaseGuard>,
 }
 
@@ -123,6 +125,7 @@ impl SelectedGrokSession {
             email,
             binding,
             allows_account_state_mutation: true,
+            capacity: None,
             _guard: Box::new(guard),
         })
     }
@@ -131,6 +134,15 @@ impl SelectedGrokSession {
     #[must_use]
     pub(crate) const fn without_account_state_mutation(mut self) -> Self {
         self.allows_account_state_mutation = false;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn with_capacity_snapshot(
+        mut self,
+        capacity: Option<AccountCapacitySnapshot>,
+    ) -> Self {
+        self.capacity = capacity;
         self
     }
 
@@ -173,6 +185,11 @@ impl SelectedGrokSession {
     #[must_use]
     pub(crate) const fn allows_account_state_mutation(&self) -> bool {
         self.allows_account_state_mutation
+    }
+
+    #[must_use]
+    pub(crate) const fn capacity_snapshot(&self) -> Option<AccountCapacitySnapshot> {
+        self.capacity
     }
 }
 
