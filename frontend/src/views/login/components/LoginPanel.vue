@@ -28,16 +28,10 @@ const username = defineModel<string>('username', { required: true })
 const password = defineModel<string>('password', { required: true })
 const isPasswordVisible = shallowRef(false)
 
-const passwordType = computed<PasswordInputType>(() =>
-  isPasswordVisible.value ? 'text' : 'password',
-)
-const passwordToggleLabel = computed<string>(() =>
-  isPasswordVisible.value ? '隐藏密码' : '显示密码',
-)
+const passwordType = computed<PasswordInputType>(() => (isPasswordVisible.value ? 'text' : 'password'))
+const passwordToggleLabel = computed<string>(() => (isPasswordVisible.value ? '隐藏密码' : '显示密码'))
 const submitLabel = computed<string>(() => (props.loading ? '正在进入...' : '进入控制台'))
-const themeToggleLabel = computed<string>(() =>
-  props.effectiveTheme === 'dark' ? '切换浅色模式' : '切换暗黑模式',
-)
+const themeToggleLabel = computed<string>(() => (props.effectiveTheme === 'dark' ? '切换浅色模式' : '切换暗黑模式'))
 const themeToggleClasses = computed<Record<string, boolean>>(() => ({
   'is-dark': props.effectiveTheme === 'dark',
 }))
@@ -51,14 +45,14 @@ function togglePasswordVisible(): void {
   <BaseCard
     as="form"
     padding="none"
-    class="login-form relative grid min-h-129.25 w-[min(440px,100%)] gap-3 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-3 max-[560px]:p-5.5"
+    class="login-form relative grid min-h-129.25 w-[min(440px,100%)] gap-2.5 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-2.5 max-[560px]:p-5.5"
     @submit.prevent="emit('submit')"
   >
-    <div class="login-form-line" aria-hidden="true" />
+    <div class="login-form-line" />
 
     <header class="flex min-w-0 items-center justify-between gap-4.5 max-[560px]:gap-3.5">
       <div class="flex min-w-0 items-center gap-3">
-        <BaseMotionIcon aria-hidden="true" variant="brand" class="login-logo">
+        <BaseMotionIcon variant="brand" class="login-logo">
           <AppBrandMark class="block size-9.5 select-none" />
         </BaseMotionIcon>
         <span class="grid min-w-0 gap-1">
@@ -67,9 +61,7 @@ function togglePasswordVisible(): void {
           >
             Codex Proxy RS
           </strong>
-          <span
-            class="font-mono text-[10px] leading-[1.2] font-normal text-(--cp-login-brand-caption-color)"
-          >
+          <span class="font-mono text-[10px] leading-[1.2] font-normal text-(--cp-login-brand-caption-color)">
             ADMIN REALM
           </span>
         </span>
@@ -84,12 +76,12 @@ function togglePasswordVisible(): void {
         @click="emit('toggleTheme', $event)"
       >
         <Sun :size="16" />
-        <span class="login-theme-knob" aria-hidden="true" />
+        <span class="login-theme-knob" />
         <Moon :size="16" />
       </button>
     </header>
 
-    <section class="grid min-w-0 gap-1.5" aria-labelledby="login-title">
+    <section class="grid min-w-0 gap-1" aria-labelledby="login-title">
       <h1
         id="login-title"
         class="m-0 text-[34px] leading-[1.02] font-semibold text-(--cp-login-title-color) max-[560px]:text-[30px]"
@@ -278,10 +270,10 @@ function togglePasswordVisible(): void {
 
 .login-theme-knob {
   position: absolute;
-  top: 4px;
-  left: 4px;
-  width: 24px;
-  height: 24px;
+  top: 5px;
+  left: 5px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--cp-login-toggle-knob);
   box-shadow: 0 0 10px var(--cp-login-toggle-shadow-color);
