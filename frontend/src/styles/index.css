@@ -3,22 +3,26 @@
 @import './base.css';
 
 @theme inline {
+  /* 基础 */
   --font-sans:
     'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  /* 界面字重刻度：正文强调 650 / 加粗 700(font-bold) / 重标题 760 / 极重 800(font-extrabold)。 */
   --font-weight-emphasis: 650;
   --font-weight-heavy: 760;
   --animate-cp-skeleton: cp-skeleton-breathe 2.8s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 
+  /* 排版 */
   --text-cp-xs: var(--cp-font-size-xs);
   --text-cp-sm: var(--cp-font-size-sm);
   --text-cp: var(--cp-font-size);
   --text-cp-lg: var(--cp-font-size-lg);
   --text-cp-xl: var(--cp-font-size-xl);
 
+  /* 颜色 · 基元 */
   --color-cp-white: var(--cp-color-white);
   --color-cp-transparent: var(--cp-color-transparent);
+
+  /* 颜色 · 表面 */
   --color-cp-bg-layout: var(--cp-color-bg-layout);
   --color-cp-bg-container: var(--cp-color-bg-container);
   --color-cp-bg-elevated: var(--cp-color-bg-elevated);
@@ -42,6 +46,7 @@
   --color-cp-text-disabled: var(--cp-color-text-disabled);
   --color-cp-text-light-solid: var(--cp-color-text-light-solid);
 
+  /* 颜色 · 主色与链接 */
   --color-cp-primary-bg: var(--cp-color-primary-bg);
   --color-cp-primary-bg-hover: var(--cp-color-primary-bg-hover);
   --color-cp-primary-border: var(--cp-color-primary-border);
@@ -55,60 +60,113 @@
   --color-cp-link: var(--cp-color-link);
   --color-cp-link-hover: var(--cp-color-link-hover);
   --color-cp-link-active: var(--cp-color-link-active);
-  --color-cp-control-item-bg-active: var(--cp-control-item-bg-active);
-  --color-cp-control-item-bg-active-hover: var(--cp-control-item-bg-active-hover);
-  --color-cp-control-outline: var(--cp-control-outline);
-  --color-cp-menu-item-selected-bg: var(--cp-menu-item-selected-bg);
-  --color-cp-progress-remaining: var(--cp-progress-remaining-color);
-  --color-cp-modal-bg: var(--cp-modal-bg);
 
-  --color-cp-info: var(--cp-color-info);
-  --color-cp-info-hover: var(--cp-color-info-hover);
-  --color-cp-info-active: var(--cp-color-info-active);
+  /* 颜色 · 语义 */
   --color-cp-info-bg: var(--cp-color-info-bg);
+  --color-cp-info-bg-hover: var(--cp-color-info-bg-hover);
+  --color-cp-info-bg-active: var(--cp-color-info-bg-active);
   --color-cp-info-border: var(--cp-color-info-border);
+  --color-cp-info-border-hover: var(--cp-color-info-border-hover);
+  --color-cp-info-hover: var(--cp-color-info-hover);
+  --color-cp-info: var(--cp-color-info);
+  --color-cp-info-active: var(--cp-color-info-active);
+  --color-cp-info-text-hover: var(--cp-color-info-text-hover);
   --color-cp-info-text: var(--cp-color-info-text);
+  --color-cp-info-text-active: var(--cp-color-info-text-active);
+  --color-cp-success-bg: var(--cp-color-success-bg);
+  --color-cp-success-bg-hover: var(--cp-color-success-bg-hover);
+  --color-cp-success-bg-active: var(--cp-color-success-bg-active);
+  --color-cp-success-border: var(--cp-color-success-border);
+  --color-cp-success-border-hover: var(--cp-color-success-border-hover);
+  --color-cp-success-hover: var(--cp-color-success-hover);
+  --color-cp-success: var(--cp-color-success);
+  --color-cp-success-active: var(--cp-color-success-active);
+  --color-cp-success-text-hover: var(--cp-color-success-text-hover);
+  --color-cp-success-text: var(--cp-color-success-text);
+  --color-cp-success-text-active: var(--cp-color-success-text-active);
+  --color-cp-warning-bg: var(--cp-color-warning-bg);
+  --color-cp-warning-bg-hover: var(--cp-color-warning-bg-hover);
+  --color-cp-warning-bg-active: var(--cp-color-warning-bg-active);
+  --color-cp-warning-border: var(--cp-color-warning-border);
+  --color-cp-warning-border-hover: var(--cp-color-warning-border-hover);
+  --color-cp-warning-hover: var(--cp-color-warning-hover);
+  --color-cp-warning: var(--cp-color-warning);
+  --color-cp-warning-active: var(--cp-color-warning-active);
+  --color-cp-warning-text-hover: var(--cp-color-warning-text-hover);
+  --color-cp-warning-text: var(--cp-color-warning-text);
+  --color-cp-warning-text-active: var(--cp-color-warning-text-active);
+  --color-cp-error-bg: var(--cp-color-error-bg);
+  --color-cp-error-bg-hover: var(--cp-color-error-bg-hover);
+  --color-cp-error-bg-active: var(--cp-color-error-bg-active);
+  --color-cp-error-border: var(--cp-color-error-border);
+  --color-cp-error-border-hover: var(--cp-color-error-border-hover);
+  --color-cp-error-hover: var(--cp-color-error-hover);
+  --color-cp-error: var(--cp-color-error);
+  --color-cp-error-active: var(--cp-color-error-active);
+  --color-cp-error-text-hover: var(--cp-color-error-text-hover);
+  --color-cp-error-text: var(--cp-color-error-text);
+  --color-cp-error-text-active: var(--cp-color-error-text-active);
+
+  /* 颜色 · 预设（色系按字母排序，角色顺序固定） */
+  --color-cp-blue-bg: var(--cp-color-blue-bg);
+  --color-cp-blue-bg-strong: var(--cp-color-blue-bg-strong);
+  --color-cp-blue-border: var(--cp-color-blue-border);
+  --color-cp-blue-solid: var(--cp-color-blue-solid);
+  --color-cp-blue-text: var(--cp-color-blue-text);
+  --color-cp-blue-text-on-bg: var(--cp-color-blue-text-on-bg);
+  --color-cp-cyan-bg: var(--cp-color-cyan-bg);
+  --color-cp-cyan-bg-strong: var(--cp-color-cyan-bg-strong);
+  --color-cp-cyan-border: var(--cp-color-cyan-border);
+  --color-cp-cyan-solid: var(--cp-color-cyan-solid);
+  --color-cp-cyan-text: var(--cp-color-cyan-text);
+  --color-cp-cyan-text-on-bg: var(--cp-color-cyan-text-on-bg);
+  --color-cp-green-bg: var(--cp-color-green-bg);
+  --color-cp-green-bg-strong: var(--cp-color-green-bg-strong);
+  --color-cp-green-border: var(--cp-color-green-border);
+  --color-cp-green-solid: var(--cp-color-green-solid);
+  --color-cp-green-text: var(--cp-color-green-text);
+  --color-cp-green-text-on-bg: var(--cp-color-green-text-on-bg);
+  --color-cp-orange-bg: var(--cp-color-orange-bg);
+  --color-cp-orange-bg-strong: var(--cp-color-orange-bg-strong);
+  --color-cp-orange-border: var(--cp-color-orange-border);
+  --color-cp-orange-solid: var(--cp-color-orange-solid);
+  --color-cp-orange-text: var(--cp-color-orange-text);
+  --color-cp-orange-text-on-bg: var(--cp-color-orange-text-on-bg);
+  --color-cp-purple-bg: var(--cp-color-purple-bg);
+  --color-cp-purple-bg-strong: var(--cp-color-purple-bg-strong);
+  --color-cp-purple-border: var(--cp-color-purple-border);
+  --color-cp-purple-solid: var(--cp-color-purple-solid);
+  --color-cp-purple-text: var(--cp-color-purple-text);
+  --color-cp-purple-text-on-bg: var(--cp-color-purple-text-on-bg);
+  --color-cp-red-bg: var(--cp-color-red-bg);
+  --color-cp-red-bg-strong: var(--cp-color-red-bg-strong);
+  --color-cp-red-border: var(--cp-color-red-border);
+  --color-cp-red-solid: var(--cp-color-red-solid);
+  --color-cp-red-text: var(--cp-color-red-text);
+  --color-cp-red-text-on-bg: var(--cp-color-red-text-on-bg);
+
+  /* 颜色 · 数据 */
   --color-cp-activity-level-0: var(--cp-activity-level-0);
   --color-cp-activity-level-1: var(--cp-activity-level-1);
   --color-cp-activity-level-2: var(--cp-activity-level-2);
   --color-cp-activity-level-3: var(--cp-activity-level-3);
   --color-cp-activity-level-4: var(--cp-activity-level-4);
-  --color-cp-status-normal: var(--cp-color-status-normal);
-  --color-cp-status-normal-hover: var(--cp-color-status-normal-hover);
-  --color-cp-status-normal-active: var(--cp-color-status-normal-active);
-  --color-cp-status-normal-bg: var(--cp-color-status-normal-bg);
-  --color-cp-status-normal-border: var(--cp-color-status-normal-border);
-  --color-cp-status-normal-text: var(--cp-color-status-normal-text);
-  --color-cp-success: var(--cp-color-success);
-  --color-cp-success-bg: var(--cp-color-success-bg);
-  --color-cp-success-bg-hover: var(--cp-color-success-bg-hover);
-  --color-cp-success-bg-active: var(--cp-color-success-bg-active);
-  --color-cp-success-border: var(--cp-color-success-border);
-  --color-cp-success-text: var(--cp-color-success-text);
-  --color-cp-warning: var(--cp-color-warning);
-  --color-cp-warning-bg: var(--cp-color-warning-bg);
-  --color-cp-warning-bg-hover: var(--cp-color-warning-bg-hover);
-  --color-cp-warning-bg-active: var(--cp-color-warning-bg-active);
-  --color-cp-warning-border: var(--cp-color-warning-border);
-  --color-cp-warning-text: var(--cp-color-warning-text);
-  --color-cp-error: var(--cp-color-error);
-  --color-cp-error-bg: var(--cp-color-error-bg);
-  --color-cp-error-bg-hover: var(--cp-color-error-bg-hover);
-  --color-cp-error-bg-active: var(--cp-color-error-bg-active);
-  --color-cp-error-border: var(--cp-color-error-border);
-  --color-cp-error-text: var(--cp-color-error-text);
-  --color-cp-reasoning: var(--cp-color-reasoning);
 
-  --color-cp-account-plan-pro-bg: var(--cp-account-plan-pro-bg);
-  --color-cp-account-plan-pro: var(--cp-account-plan-pro-color);
-  --color-cp-account-plan-pro-lite-bg: var(--cp-account-plan-pro-lite-bg);
-  --color-cp-account-plan-pro-lite: var(--cp-account-plan-pro-lite-color);
+  /* 颜色 · 组件 */
+  --color-cp-control-item-bg-active: var(--cp-control-item-bg-active);
+  --color-cp-control-item-bg-active-hover: var(--cp-control-item-bg-active-hover);
+  --color-cp-control-outline: var(--cp-control-outline);
+  --color-cp-menu-item-selected-bg: var(--cp-menu-item-selected-bg);
+  --color-cp-modal-bg: var(--cp-modal-bg);
+  --color-cp-progress-remaining: var(--cp-progress-remaining-color);
 
+  /* 圆角 */
   --radius-cp-sm: var(--cp-border-radius-sm);
   --radius-cp: var(--cp-border-radius);
   --radius-cp-lg: var(--cp-border-radius-lg);
   --radius-cp-card: var(--cp-card-border-radius);
 
+  /* 阴影 */
   --shadow-cp: var(--cp-box-shadow);
   --shadow-cp-secondary: var(--cp-box-shadow-secondary);
   --shadow-cp-tertiary: var(--cp-box-shadow-tertiary);
@@ -119,6 +177,7 @@
   --shadow-cp-input-error-active: var(--cp-input-error-active-shadow);
   --shadow-cp-layout-sider: var(--cp-layout-sider-shadow);
 
+  /* 间距与尺寸 */
   --spacing-cp-control-sm: var(--cp-control-height-sm);
   --spacing-cp-control: var(--cp-control-height);
   --spacing-cp-control-lg: var(--cp-control-height-lg);

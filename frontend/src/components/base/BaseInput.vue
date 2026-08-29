@@ -53,7 +53,7 @@ const sizeClasses: Record<InputSize, string> = {
 }
 
 const containerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp border-0 text-cp-text shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] motion-reduce:transition-none',
+  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp border-0 text-cp-text shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] [--base-input-autofill-bg:var(--cp-input-bg)] hover:[--base-input-autofill-bg:var(--cp-input-hover-bg)] focus-within:[--base-input-autofill-bg:var(--cp-input-active-bg)] motion-reduce:transition-none',
   sizeClasses[props.size],
   props.disabled
     ? 'cursor-not-allowed bg-cp-bg-container-disabled text-cp-text-disabled shadow-none'
@@ -82,7 +82,7 @@ function updateModel(event: Event) {
 
 <template>
   <div v-bind="rootAttrs" class="min-w-0">
-    <span class="base-input__control" :class="containerClasses">
+    <span :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses" aria-hidden="true">
         <slot name="prefix" />
       </span>
@@ -90,7 +90,7 @@ function updateModel(event: Event) {
         v-bind="controlAttrs"
         :id="controlId"
         :value="model"
-        class="base-input__field h-full min-w-0 flex-1 border-0 bg-transparent font-emphasis leading-[1.15] text-cp-text outline-0 placeholder:text-cp-text-quaternary disabled:cursor-not-allowed disabled:text-cp-text-disabled"
+        class="base-input__field h-full min-w-0 flex-1 border-0 bg-transparent font-emphasis leading-[1.15] text-cp-text outline-0 placeholder:text-cp-text-quaternary disabled:cursor-not-allowed disabled:text-cp-text-disabled [&[type=number]]:appearance-[textfield] [&[type=number]::-webkit-inner-spin-button]:m-0 [&[type=number]::-webkit-inner-spin-button]:appearance-none [&[type=number]::-webkit-outer-spin-button]:m-0 [&[type=number]::-webkit-outer-spin-button]:appearance-none"
         :placeholder="placeholder"
         :type="type"
         :disabled="disabled"
@@ -108,18 +108,6 @@ function updateModel(event: Event) {
 </template>
 
 <style scoped>
-.base-input__control {
-  --base-input-autofill-bg: var(--cp-input-bg);
-}
-
-.base-input__control:hover {
-  --base-input-autofill-bg: var(--cp-input-hover-bg);
-}
-
-.base-input__control:focus-within {
-  --base-input-autofill-bg: var(--cp-input-active-bg);
-}
-
 .base-input__field:-webkit-autofill,
 .base-input__field:-webkit-autofill:hover,
 .base-input__field:-webkit-autofill:focus,
@@ -128,16 +116,5 @@ function updateModel(event: Event) {
   -webkit-text-fill-color: var(--cp-color-text) !important;
   -webkit-box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
   box-shadow: 0 0 0 1000px var(--base-input-autofill-bg) inset !important;
-}
-
-/* 普通数字表单保留键盘步进，但不混入浏览器原生微调器外观。 */
-.base-input__field[type='number'] {
-  appearance: textfield;
-}
-
-.base-input__field[type='number']::-webkit-inner-spin-button,
-.base-input__field[type='number']::-webkit-outer-spin-button {
-  margin: 0;
-  appearance: none;
 }
 </style>

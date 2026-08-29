@@ -5,6 +5,7 @@ import { UserRound } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 
 import { formatCompactNumber, formatInteger } from '@/utils/number'
+import { stablePresetVisualToneClass } from '../../utils/visualTone'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 
 const props = defineProps<{
@@ -25,6 +26,9 @@ const username = computed(() => props.profile.username
   : null)
 const accountIdentity = computed(() => props.account.email?.trim() || props.account.accountId?.trim())
 const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperCase() || null)
+const avatarToneClass = computed(() => stablePresetVisualToneClass(
+  props.account.id || accountIdentity.value || displayName.value,
+))
 const metrics = computed(() => [
   {
     label: '累计 Token 数',
@@ -90,7 +94,8 @@ function formatDuration(value: number | null) {
   >
     <div class="flex min-w-0 items-center gap-3.5">
       <span
-        class="grid size-14 shrink-0 place-items-center overflow-hidden rounded-full bg-cp-error-bg text-xl font-heavy text-cp-error-text"
+        class="grid size-14 shrink-0 place-items-center overflow-hidden rounded-full text-xl font-heavy"
+        :class="avatarToneClass"
       >
         <img
           v-if="profile.imageUrl && !imageFailed"

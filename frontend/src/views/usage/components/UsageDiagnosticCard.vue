@@ -149,7 +149,7 @@ function diagnosticNameDisplay(name: string) {
             >
               <CornerDownRight
                 v-if="resultDimension !== 'account'"
-                class="size-3.25 shrink-0 text-cp-info"
+                class="size-3.25 shrink-0 text-cp-blue-text"
                 stroke-width="2.4"
               />
               <code class="block truncate font-mono text-cp-xs leading-none font-bold">
@@ -191,13 +191,13 @@ function diagnosticNameDisplay(name: string) {
         </template>
 
         <template #latencyP95Ms="{ row }">
-          <span class="font-mono font-bold tabular-nums text-cp-warning-text">
+          <span class="font-mono font-bold tabular-nums text-cp-orange-text">
             {{ formatDuration(row.latencyP95Ms) }}
           </span>
         </template>
 
         <template #estimatedCost="{ row }">
-          <span class="font-mono font-bold tabular-nums text-cp-success-text">
+          <span class="font-mono font-bold tabular-nums text-cp-green-text">
             {{ formatUsd(row.estimatedCost) }}
           </span>
         </template>

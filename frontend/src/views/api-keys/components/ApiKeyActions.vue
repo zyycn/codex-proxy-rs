@@ -40,7 +40,7 @@ const emit = defineEmits<{
       :disabled="revealing"
       @click.stop="emit('use', apiKey)"
     >
-      <Terminal class="size-3.5 text-cp-status-normal" />
+      <Terminal class="size-3.5 text-cp-primary-text" />
     </BaseIconButton>
 
     <BaseIconButton

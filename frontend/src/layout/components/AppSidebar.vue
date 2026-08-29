@@ -366,14 +366,14 @@ onBeforeUnmount(() => {
             class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-cp-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
             :class="[
               hasUpdate
-                ? 'bg-cp-success-bg text-cp-success-text hover:bg-cp-success-bg-hover'
+                ? 'bg-cp-info-bg text-cp-info-text hover:bg-cp-info-bg-hover'
                 : 'bg-cp-fill-quaternary text-cp-text-quaternary hover:bg-cp-fill-tertiary hover:text-cp-text-secondary',
             ]"
             :title="updateButtonLabel"
             @click="openSystemUpdate"
           >
             <span>{{ versionLabel }}</span>
-            <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-cp-success" />
+            <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-cp-info" />
           </button>
         </span>
       </span>
@@ -389,7 +389,10 @@ onBeforeUnmount(() => {
         class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
         :style="activeNavIndicatorStyle"
       >
-        <span ref="navSignal" class="sidebar-active-signal absolute inset-y-0 left-0 w-2/3" />
+        <span
+          ref="navSignal"
+          class="absolute inset-y-0 left-0 w-2/3 [background:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--cp-color-info)_9%,transparent),transparent)]"
+        />
       </span>
       <button
         v-for="item in navItems"
@@ -438,7 +441,7 @@ onBeforeUnmount(() => {
         <div class="flex items-center" :class="isCollapsed ? 'grid gap-1' : 'gap-1'">
           <BaseIconButton
             v-if="isCollapsed && hasUpdate"
-            variant="success"
+            variant="primary"
             size="md"
             :label="updateButtonLabel"
             @click="openSystemUpdate"
@@ -500,14 +503,3 @@ onBeforeUnmount(() => {
     </div>
   </aside>
 </template>
-
-<style scoped>
-.sidebar-active-signal {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--cp-color-info) 9%, transparent),
-    transparent
-  );
-}
-</style>

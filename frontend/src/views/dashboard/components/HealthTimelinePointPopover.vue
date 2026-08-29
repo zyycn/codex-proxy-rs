@@ -35,8 +35,8 @@ const outcomeMeta = computed(() => [
   {
     label: '客户端取消',
     value: props.point.cancelledRequests,
-    dotClass: 'bg-cp-status-normal',
-    valueClass: 'text-cp-status-normal-text',
+    dotClass: 'bg-cp-orange-solid',
+    valueClass: 'text-cp-orange-text',
   },
   {
     label: '调用方错误',
@@ -65,9 +65,9 @@ const metricItems = outcomeMeta
   <section
     role="dialog"
     :aria-label="`${point.time} 请求健康详情`"
-    class="overflow-hidden rounded-cp-lg"
+    class="overflow-hidden rounded-cp-lg bg-cp-bg-elevated"
   >
-    <header class="flex items-center justify-between gap-3 bg-cp-fill-quaternary px-3.5 py-3">
+    <header class="flex items-center justify-between gap-3 bg-cp-fill-tertiary px-3.5 py-3">
       <div class="flex min-w-0 items-center gap-2">
         <span class="size-2 shrink-0 rounded-full" :class="status.cellClass" />
         <strong class="font-mono text-cp leading-none font-heavy text-cp-text">

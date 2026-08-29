@@ -45,7 +45,7 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
 
       <div class="flex justify-between border-t border-cp-split pt-2">
         <span class="whitespace-nowrap text-cp-text-secondary">总耗时</span>
-        <span class="whitespace-nowrap font-mono font-heavy text-cp-info-text">
+        <span class="whitespace-nowrap font-mono font-heavy text-cp-blue-text">
           {{ latencyDetails.totalDisplay }}
         </span>
       </div>

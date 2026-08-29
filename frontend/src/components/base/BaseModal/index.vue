@@ -67,8 +67,8 @@ const iconMap = {
 
 const toneClasses: Record<ModalTone, { iconBg: string, icon: string }> = {
   neutral: {
-    iconBg: 'bg-cp-info-bg',
-    icon: 'text-cp-info',
+    iconBg: 'bg-cp-fill-quaternary',
+    icon: 'text-cp-text-secondary',
   },
   info: {
     iconBg: 'bg-cp-info-bg',

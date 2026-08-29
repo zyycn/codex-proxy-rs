@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { getAccounts } from '@/api'
-import { sumBy } from 'es-toolkit'
 import { computed } from 'vue'
 
+import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -54,16 +54,9 @@ const secondaryClass = computed(() =>
     : 'mt-0.5 font-mono text-cp-xs text-cp-text-quaternary',
 )
 
-const avatarClass = computed(() => {
-  const palettes = [
-    'bg-cp-info-bg text-cp-info-text shadow-[inset_0_0_0_1px_var(--cp-color-info-border)]',
-    'bg-cp-success-bg text-cp-success-text shadow-[inset_0_0_0_1px_var(--cp-color-success-border)]',
-    'bg-cp-status-normal-bg text-cp-status-normal-text shadow-[inset_0_0_0_1px_var(--cp-color-status-normal-border)]',
-    'bg-cp-warning-bg text-cp-warning-text shadow-[inset_0_0_0_1px_var(--cp-color-warning-border)]',
-  ]
-  const key = String(props.account.id || props.account.email || displayTitle.value)
-  const hash = sumBy([...key], char => char.charCodeAt(0))
-  return palettes[hash % palettes.length]
+const avatarToneClass = computed(() => {
+  const identity = props.account.id || props.account.email || displayTitle.value
+  return stablePresetVisualToneClass(identity)
 })
 </script>
 
@@ -71,7 +64,7 @@ const avatarClass = computed(() => {
   <div class="flex min-w-0 items-center gap-3">
     <span
       class="inline-flex shrink-0 items-center justify-center rounded-lg font-extrabold"
-      :class="[avatarSizeClass, avatarClass]"
+      :class="[avatarSizeClass, avatarToneClass]"
     >
       {{ initial }}
     </span>

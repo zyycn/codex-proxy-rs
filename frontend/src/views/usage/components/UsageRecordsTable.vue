@@ -80,7 +80,7 @@ withDefaults(
         <code class="font-mono text-cp-sm font-emphasis">{{ row.route || '—' }}</code>
         <span
           v-if="usageIsCompact(row)"
-          class="inline-flex shrink-0 text-cp-warning-text"
+          class="inline-flex shrink-0 text-cp-orange-text"
           title="压缩请求"
           aria-label="压缩请求"
         >
@@ -91,7 +91,7 @@ withDefaults(
 
     <template #recordType="{ row }">
       <span
-        class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-cp-sm leading-none font-bold"
+        class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-cp leading-none font-bold"
         :class="usageRecordTypeClass(row)"
       >
         {{ usageRecordType(row) }}

@@ -31,7 +31,7 @@ const toneClasses: Record<MetricTone, string> = {
   secondary: 'text-cp-text-secondary',
   success: 'text-cp-success-text',
   warning: 'text-cp-warning',
-  active: 'text-cp-success',
+  active: 'text-cp-primary-text',
 }
 
 const metrics = computed<MetricItem[]>(() => {

@@ -13,7 +13,7 @@ const open = defineModel<boolean>({ default: false })
   >
     <div class="flex flex-col gap-4 text-cp leading-relaxed text-cp-text-secondary">
       <section class="flex flex-col gap-1.5">
-        <h3 class="text-cp-lg font-heavy text-cp-status-normal">
+        <h3 class="text-cp-lg font-heavy text-cp-primary-text">
           1. 创建存储桶
         </h3>
         <p class="m-0">
@@ -24,7 +24,7 @@ const open = defineModel<boolean>({ default: false })
       </section>
 
       <section class="flex flex-col gap-1.5">
-        <h3 class="text-cp-lg font-heavy text-cp-status-normal">
+        <h3 class="text-cp-lg font-heavy text-cp-primary-text">
           2. 创建 API Token
         </h3>
         <p class="m-0">
@@ -38,7 +38,7 @@ const open = defineModel<boolean>({ default: false })
       </section>
 
       <section class="flex flex-col gap-1.5">
-        <h3 class="text-cp-lg font-heavy text-cp-status-normal">
+        <h3 class="text-cp-lg font-heavy text-cp-primary-text">
           3. 填写连接参数
         </h3>
         <ul class="m-0 list-disc space-y-1 pl-5">
@@ -52,7 +52,7 @@ const open = defineModel<boolean>({ default: false })
       </section>
 
       <section class="flex flex-col gap-1.5">
-        <h3 class="text-cp-lg font-heavy text-cp-status-normal">
+        <h3 class="text-cp-lg font-heavy text-cp-primary-text">
           4. 完成连接测试
         </h3>
         <p class="m-0">

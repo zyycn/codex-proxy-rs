@@ -16,7 +16,7 @@ const overviewItems = computed(() => [
     label: '总账号',
     value: formatInteger(props.summary.total),
     caption: '账号池规模',
-    tone: 'info',
+    tone: 'neutral',
     icon: Users,
   },
   {
@@ -44,15 +44,15 @@ const overviewItems = computed(() => [
 
 function overviewIconClass(tone: string) {
   if (tone === 'success') {
-    return 'bg-cp-success-bg text-cp-success-text'
+    return 'bg-cp-green-bg text-cp-green-text-on-bg'
   }
   if (tone === 'warning') {
-    return 'bg-cp-warning-bg text-cp-warning-text'
+    return 'bg-cp-orange-bg text-cp-orange-text-on-bg'
   }
   if (tone === 'danger') {
     return 'bg-cp-error-bg text-cp-error-text'
   }
-  return 'bg-cp-info-bg text-cp-info-text'
+  return 'bg-cp-blue-bg text-cp-blue-text-on-bg'
 }
 </script>
 

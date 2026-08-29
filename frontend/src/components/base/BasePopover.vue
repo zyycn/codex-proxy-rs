@@ -7,6 +7,8 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs, watch }
 type PopoverPlacement
   = 'top' | 'top-start' | 'top-end' | 'right' | 'bottom' | 'bottom-start' | 'bottom-end' | 'left'
 type PopoverTrigger = 'click' | 'hover' | 'hover-click'
+type PopoverSide = 'top' | 'right' | 'bottom' | 'left'
+type PopoverArrowSurfaceClass = string | Partial<Record<PopoverSide, string>>
 
 interface PopoverPoint {
   left: number
@@ -32,6 +34,8 @@ const props = withDefaults(
     hoverDelay?: number
     anchorElement?: HTMLElement | null
     animatePosition?: boolean
+    /** 箭头贴合不同内容边缘时使用的表面类；字符串表示所有边缘共用。 */
+    arrowSurfaceClass?: PopoverArrowSurfaceClass
   }>(),
   {
     placement: 'bottom-end',
@@ -51,6 +55,7 @@ const rootRef = ref<HTMLElement | null>(null)
 const popoverRef = ref<HTMLElement | null>(null)
 const popoverStyle = ref<CSSProperties>({})
 const popoverArrowStyle = ref<CSSProperties>({})
+const popoverPlacement = shallowRef<PopoverPlacement>(props.placement)
 const hoverCloseTimer = shallowRef<number>()
 const hoverOpenTimer = shallowRef<number>()
 const viewportTarget = computed(() => (open.value && typeof window !== 'undefined' ? window : null))
@@ -61,6 +66,12 @@ const popoverClasses = computed(() => [
     ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
     : undefined,
 ])
+const popoverArrowSurfaceClass = computed(() => {
+  if (typeof props.arrowSurfaceClass === 'string')
+    return props.arrowSurfaceClass
+
+  return props.arrowSurfaceClass?.[popoverArrowEdge(popoverPlacement.value)] ?? 'bg-inherit'
+})
 
 function updatePopoverPosition() {
   const anchorElement = props.anchorElement ?? rootRef.value
@@ -82,6 +93,7 @@ function updatePopoverPosition() {
     offset: props.offset,
     viewportPadding,
   })
+  popoverPlacement.value = position.placement
   const left = clamp(position.point.left, viewportPadding, maxLeft)
   const top = clamp(position.point.top, viewportPadding, maxTop)
 
@@ -98,6 +110,18 @@ function updatePopoverPosition() {
     left,
     top,
   })
+}
+
+function popoverArrowEdge(placement: PopoverPlacement): PopoverSide {
+  const placementSide = placement.split('-')[0] as PopoverSide
+  const oppositeSide: Record<PopoverSide, PopoverSide> = {
+    top: 'bottom',
+    right: 'left',
+    bottom: 'top',
+    left: 'right',
+  }
+
+  return oppositeSide[placementSide]
 }
 
 function choosePopoverPosition(options: {
@@ -371,12 +395,13 @@ onBeforeUnmount(() => {
           :style="popoverStyle"
         >
           <span
-            class="pointer-events-none absolute size-2 rotate-45 bg-inherit"
-            :class="
+            class="pointer-events-none absolute size-2 rotate-45"
+            :class="[
+              popoverArrowSurfaceClass,
               props.animatePosition
                 ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
-                : undefined
-            "
+                : undefined,
+            ]"
             :style="popoverArrowStyle"
           />
           <slot :open="open" :close="closePopover" :toggle="togglePopover" />

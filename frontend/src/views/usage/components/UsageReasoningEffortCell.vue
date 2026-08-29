@@ -16,7 +16,7 @@ defineProps<{
     <span>{{ usageReasoningEffort(record) }}</span>
     <span
       v-if="usageIsSubagent(record)"
-      class="inline-flex shrink-0 text-cp-info-text"
+      class="inline-flex shrink-0 text-cp-purple-text"
       title="子代理请求"
       aria-label="子代理请求"
     >

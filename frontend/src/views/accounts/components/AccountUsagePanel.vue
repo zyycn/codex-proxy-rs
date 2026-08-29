@@ -48,32 +48,32 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
         <span class="text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
       </div>
       <div class="grid gap-2">
-        <div class="flex items-center justify-between rounded-lg bg-cp-success-bg px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-success-text">输入 Tokens</span>
+        <div class="flex items-center justify-between rounded-lg bg-cp-green-bg px-3 py-2">
+          <span class="text-cp-sm font-bold text-cp-green-text-on-bg">输入 Tokens</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.inputTokensDisplay }}
           </strong>
         </div>
-        <div class="flex items-center justify-between rounded-lg bg-cp-warning-bg px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-warning-text">输出 Tokens</span>
+        <div class="flex items-center justify-between rounded-lg bg-cp-orange-bg px-3 py-2">
+          <span class="text-cp-sm font-bold text-cp-orange-text-on-bg">输出 Tokens</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.outputTokensDisplay }}
           </strong>
         </div>
-        <div class="flex items-center justify-between rounded-lg bg-cp-status-normal-bg px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-status-normal-text">缓存 Tokens</span>
+        <div class="flex items-center justify-between rounded-lg bg-cp-cyan-bg px-3 py-2">
+          <span class="text-cp-sm font-bold text-cp-cyan-text-on-bg">缓存 Tokens</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.cachedTokensDisplay }}
           </strong>
         </div>
-        <div class="flex items-center justify-between rounded-lg bg-cp-info-bg px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-info-text">创建</span>
+        <div class="flex items-center justify-between rounded-lg bg-cp-blue-bg px-3 py-2">
+          <span class="text-cp-sm font-bold text-cp-blue-text-on-bg">创建</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.createdTokensDisplay }}
           </strong>
         </div>
-        <div class="flex items-center justify-between rounded-lg bg-cp-info-bg px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-info-text">读取</span>
+        <div class="flex items-center justify-between rounded-lg bg-cp-blue-bg px-3 py-2">
+          <span class="text-cp-sm font-bold text-cp-blue-text-on-bg">读取</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.readTokensDisplay }}
           </strong>
@@ -110,7 +110,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
             </span>
             <span title="总计费">
               <span class="sr-only">总计费：</span>
-              <span class="font-mono text-cp-sm font-heavy tabular-nums text-cp-success-text">
+              <span class="font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text">
                 {{ totalBillingDisplay }}
               </span>
             </span>

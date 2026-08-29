@@ -84,7 +84,7 @@ const rootClasses = computed(() => [
   props.maxHeight || props.height ? undefined : 'h-full',
 ])
 const wrapClasses = computed(() => [
-  'base-scrollbar-wrap min-h-0 max-h-[inherit] overflow-auto outline-none',
+  'min-h-0 max-h-[inherit] overflow-auto outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&::-webkit-scrollbar]:size-0',
   props.maxHeight ? undefined : 'h-full',
 ])
 const verticalTrackClass = computed(() =>
@@ -505,7 +505,7 @@ defineExpose({
       v-show="canScrollY"
       ref="verticalTrack"
       aria-hidden="true"
-      class="base-scrollbar-track-y absolute right-0 bottom-0 z-40 flex w-3 justify-end transition-opacity duration-200"
+      class="absolute right-0 bottom-0 top-[var(--cp-scrollbar-track-inset-block-start,0.25rem)] z-40 flex w-3 justify-end transition-opacity duration-200"
       :class="[
         verticalTrackClass,
         verticalScrollbarVisible ? 'opacity-100' : 'opacity-0',
@@ -538,19 +538,3 @@ defineExpose({
     </div>
   </div>
 </template>
-
-<style scoped>
-.base-scrollbar-wrap {
-  scrollbar-width: none;
-}
-
-.base-scrollbar-wrap::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
-}
-
-.base-scrollbar-track-y {
-  top: var(--cp-scrollbar-track-inset-block-start, 0.25rem);
-}
-</style>

@@ -27,7 +27,7 @@ withDefaults(
       :title="showNativeTooltip ? bar.title : undefined"
     >
       <span
-        class="absolute inset-x-0 bottom-0 bg-cp-success"
+        class="absolute inset-x-0 bottom-0 bg-cp-green-solid"
         :style="{ height: bar.height }"
       />
     </span>

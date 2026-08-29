@@ -94,7 +94,7 @@ function quotaWindowCode(
     <template #trigger="{ open }">
       <button
         type="button"
-        class="block w-full cursor-help rounded-sm border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
+        class="block w-full cursor-pointer rounded-sm border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
         :aria-label="`查看${detailTitle}详情`"
         :aria-expanded="open"
         aria-haspopup="dialog"
@@ -122,7 +122,7 @@ function quotaWindowCode(
     >
       <header
         v-if="detailHeading"
-        class="bg-cp-fill-quaternary px-3 py-2.5"
+        class="bg-cp-fill-tertiary px-3 py-2.5"
       >
         <h3
           class="m-0 truncate text-cp leading-5 font-heavy text-cp-text"
@@ -142,7 +142,7 @@ function quotaWindowCode(
         >
           <div class="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2.5">
             <span
-              class="grid h-5 w-8 place-items-center rounded-sm bg-cp-fill-tertiary font-mono text-[9px] leading-none font-heavy tracking-[0.04em] text-cp-info-text"
+              class="grid h-5 w-8 place-items-center rounded-sm bg-cp-blue-bg-strong font-mono text-[9px] leading-none font-heavy tracking-[0.04em] text-cp-blue-text-on-bg"
               aria-hidden="true"
             >
               {{ item.code }}

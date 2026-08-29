@@ -86,7 +86,7 @@ async function handleSubmit(): Promise<void> {
   --cp-login-striation-color: color-mix(in srgb, var(--cp-color-text-secondary) 18%, transparent);
   --cp-login-grain-color: color-mix(in srgb, var(--cp-color-text-secondary) 13%, transparent);
   --cp-login-grain-primary-color: color-mix(in srgb, var(--cp-color-primary-text) 11%, transparent);
-  --cp-login-grain-secondary-color: color-mix(in srgb, var(--cp-color-status-normal) 9%, transparent);
+  --cp-login-grain-secondary-color: color-mix(in srgb, var(--cp-color-text-tertiary) 9%, transparent);
   --cp-login-route-bundle-color: color-mix(in srgb, var(--cp-color-text-secondary) 20%, transparent);
   --cp-login-route-stream-color: color-mix(in srgb, var(--cp-color-primary-text) 17%, transparent);
   --cp-login-route-audit-color: color-mix(in srgb, var(--cp-color-text-tertiary) 18%, transparent);
@@ -143,7 +143,7 @@ async function handleSubmit(): Promise<void> {
 :global(html[data-theme='dark'] .login-page) {
   --cp-login-page-bg-start: color-mix(in srgb, var(--cp-color-bg-layout) 86%, var(--cp-color-bg-spotlight));
   --cp-login-page-bg-middle: color-mix(in srgb, var(--cp-color-bg-container) 68%, var(--cp-color-bg-layout));
-  --cp-login-page-bg-end: color-mix(in srgb, var(--cp-color-bg-spotlight) 76%, var(--cp-color-status-normal-bg));
+  --cp-login-page-bg-end: color-mix(in srgb, var(--cp-color-bg-spotlight) 76%, var(--cp-color-primary-bg));
   --cp-login-canvas-bg-start: color-mix(in srgb, var(--cp-color-bg-container) 82%, var(--cp-color-fill-tertiary));
   --cp-login-canvas-bg-middle: color-mix(in srgb, var(--cp-color-bg-layout) 88%, var(--cp-color-bg-container));
   --cp-login-canvas-bg-end: color-mix(in srgb, var(--cp-color-bg-spotlight) 88%, var(--cp-color-bg-layout));
@@ -153,12 +153,12 @@ async function handleSubmit(): Promise<void> {
   --cp-login-striation-color: color-mix(in srgb, var(--cp-color-primary-text) 5%, transparent);
   --cp-login-grain-color: color-mix(in srgb, var(--cp-color-text-secondary) 9%, transparent);
   --cp-login-grain-primary-color: color-mix(in srgb, var(--cp-color-primary-text) 7%, transparent);
-  --cp-login-grain-secondary-color: color-mix(in srgb, var(--cp-color-status-normal-text) 5%, transparent);
+  --cp-login-grain-secondary-color: color-mix(in srgb, var(--cp-color-text-tertiary) 5%, transparent);
   --cp-login-route-bundle-color: color-mix(in srgb, var(--cp-color-primary-text) 17%, transparent);
   --cp-login-route-stream-color: color-mix(in srgb, var(--cp-color-primary-text) 14%, transparent);
   --cp-login-route-audit-color: color-mix(in srgb, var(--cp-color-text-secondary) 12%, transparent);
   --cp-login-semantic-color: color-mix(in srgb, var(--cp-color-primary-text) 27%, transparent);
-  --cp-login-particle-color: color-mix(in srgb, var(--cp-color-primary-text) 72%, var(--cp-color-status-normal));
+  --cp-login-particle-color: color-mix(in srgb, var(--cp-color-primary-text) 72%, var(--cp-color-primary));
   --cp-login-particle-glow-color: color-mix(in srgb, var(--cp-color-primary-text) 80%, transparent);
   --cp-login-watermark-color: color-mix(in srgb, var(--cp-color-primary-text) 40%, transparent);
   --cp-login-stack-text-color: color-mix(in srgb, var(--cp-color-text) 80%, transparent);

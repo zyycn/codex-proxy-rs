@@ -45,7 +45,7 @@ const boardStyle = computed<CSSProperties>(() => ({
 <template>
   <div
     ref="viewport"
-    class="theme-preview-canvas relative min-h-0 overflow-hidden rounded-cp-lg bg-cp-bg-layout shadow-cp-secondary select-none"
+    class="relative min-h-0 overflow-hidden rounded-cp-lg bg-cp-bg-layout [background-image:radial-gradient(circle,color-mix(in_srgb,var(--cp-color-text-quaternary)_24%,transparent)_1px,transparent_1px)] [background-size:18px_18px] shadow-cp-secondary select-none"
     :class="dragging ? 'cursor-grabbing' : 'cursor-grab'"
     role="application"
     tabindex="0"
@@ -120,14 +120,3 @@ const boardStyle = computed<CSSProperties>(() => ({
     </div>
   </div>
 </template>
-
-<style scoped>
-.theme-preview-canvas {
-  background-image: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--cp-color-text-quaternary) 24%, transparent) 1px,
-    transparent 1px
-  );
-  background-size: 18px 18px;
-}
-</style>

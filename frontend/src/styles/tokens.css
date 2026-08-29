@@ -1,42 +1,13 @@
-/* :root 提供首屏浅色兜底；data-theme 允许预览区域独立于宿主切换明暗。 */
-:root,
-[data-theme='light'] {
-  color-scheme: light;
-
-  /* 静态常量。皮肤 Token 由主题 Store 在 Vue 挂载前生成。 */
+/* 主题无关的颜色基元；皮肤 Token 由主题 Store 在 Vue 挂载前生成。 */
+:root {
   --cp-color-white: #ffffff;
   --cp-color-transparent: #ffffff00;
+}
 
-  /* 稳定的业务语义色，不参与主题编辑器派生。 */
-  --cp-color-status-normal: #0f9f9a;
-  --cp-color-status-normal-hover: #0d8d88;
-  --cp-color-status-normal-active: #0b7370;
-  --cp-color-status-normal-bg: #ecfdfd;
-  --cp-color-status-normal-border: #a7dfdd;
-  --cp-color-status-normal-text: #0b7370;
-
-  --cp-color-reasoning: #8b5cf6;
-
-  --cp-account-plan-pro-bg: #ede9fe;
-  --cp-account-plan-pro-color: #5b21b6;
-  --cp-account-plan-pro-lite-bg: #f5f3ff;
-  --cp-account-plan-pro-lite-color: #7c3aed;
+[data-theme='light'] {
+  color-scheme: light;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
-
-  --cp-color-status-normal: #2dd4bf;
-  --cp-color-status-normal-hover: #5eead4;
-  --cp-color-status-normal-active: #14b8a6;
-  --cp-color-status-normal-bg: #0c332f;
-  --cp-color-status-normal-border: #1f6f67;
-  --cp-color-status-normal-text: #5eead4;
-
-  --cp-color-reasoning: #a78bfa;
-
-  --cp-account-plan-pro-bg: #35136f;
-  --cp-account-plan-pro-color: #ddd6fe;
-  --cp-account-plan-pro-lite-bg: #24143e;
-  --cp-account-plan-pro-lite-color: #c4b5fd;
 }

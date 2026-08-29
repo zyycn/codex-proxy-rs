@@ -30,10 +30,8 @@ export type ThemeEditorPreview = 'page' | 'components'
 export type ThemeEditorComponent
   = 'action'
     | 'form'
-    | 'selection'
     | 'surface'
     | 'data'
-    | 'feedback'
     | 'navigation'
     | 'layout'
 

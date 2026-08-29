@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 
 import BaseChart from '@/components/charts/BaseChart.vue'
+import { useThemeColor } from '@/composables/useThemeColor'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 import AnimatedMetricValue from './AnimatedMetricValue.vue'
 
@@ -15,19 +16,20 @@ const props = defineProps<{
 }>()
 
 const trendToneClasses: Record<MetricTone, string> = {
-  normal: 'bg-cp-status-normal-text',
+  normal: 'bg-cp-text-tertiary',
   info: 'bg-cp-info-text',
   success: 'bg-cp-success-text',
   warning: 'bg-cp-warning-text',
   danger: 'bg-cp-error-text',
 }
 
-const sparklineColors: Record<MetricTone, string> = {
-  normal: '#94A3B8',
-  info: '#60A5FA',
-  success: '#5CCB8A',
-  warning: '#E3B658',
-  danger: '#E87972',
+const themeColor = useThemeColor()
+const sparklineColorTokens: Record<MetricTone, { token: string, fallback: string }> = {
+  normal: { token: '--cp-color-blue-solid', fallback: '#5983F4' },
+  info: { token: '--cp-color-blue-solid', fallback: '#5983F4' },
+  success: { token: '--cp-color-green-solid', fallback: '#12B981' },
+  warning: { token: '--cp-color-orange-solid', fallback: '#F59E0B' },
+  danger: { token: '--cp-color-error', fallback: '#EF4444' },
 }
 
 const sparklineOption = computed<EChartsOption | null>(() => {
@@ -35,7 +37,8 @@ const sparklineOption = computed<EChartsOption | null>(() => {
   if (values.length < 2)
     return null
 
-  const color = sparklineColors[props.metric.sparkline?.tone ?? 'normal']
+  const colorToken = sparklineColorTokens[props.metric.sparkline?.tone ?? 'normal']
+  const color = themeColor(colorToken.token, colorToken.fallback)
   return {
     animation: false,
     grid: { left: 0, right: 0, top: 4, bottom: 4 },
@@ -73,7 +76,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
     <div class="flex items-start gap-3">
       <BaseMotionIcon
         aria-hidden="true"
-        class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-cp-lg bg-cp-fill-alter/70!"
+        class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-cp-lg"
         :class="metricToneIconClasses[metric.tone]"
       >
         <component :is="metric.icon" :size="18" />

@@ -87,7 +87,7 @@ function stepBy(direction: -1 | 1) {
         :max="max"
         :step="step"
         :disabled="disabled"
-        class="base-number-input__field w-9 min-w-0 border-0 bg-transparent p-0 text-right font-mono text-cp-xs font-bold tabular-nums text-cp-text outline-none disabled:text-cp-text-disabled"
+        class="w-9 min-w-0 appearance-[textfield] border-0 bg-transparent p-0 text-right font-mono text-cp-xs font-bold tabular-nums text-cp-text outline-none disabled:text-cp-text-disabled [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none"
         @input="updateModel"
         @blur="restoreValue"
       >
@@ -112,16 +112,3 @@ function stepBy(direction: -1 | 1) {
     </BaseIconButton>
   </div>
 </template>
-
-<style scoped>
-/* 隐藏浏览器原生微调器，统一使用两侧的减号和加号。 */
-.base-number-input__field {
-  appearance: textfield;
-}
-
-.base-number-input__field::-webkit-inner-spin-button,
-.base-number-input__field::-webkit-outer-spin-button {
-  margin: 0;
-  appearance: none;
-}
-</style>

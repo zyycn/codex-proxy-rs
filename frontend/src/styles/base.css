@@ -1,104 +1,105 @@
-html {
-  background: var(--cp-color-bg-layout, #f6f8fb);
-  color: var(--cp-color-text, #0e1726);
-  font-family: var(--font-sans);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+@layer base {
+  html {
+    background: var(--cp-color-bg-layout, #f6f8fb);
+    color: var(--cp-color-text, #0e1726);
+    font-family: var(--font-sans);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-body {
-  background: var(--cp-color-bg-layout, #f6f8fb);
-  font-size: var(--cp-font-size, 13px);
-}
+  body {
+    background: var(--cp-color-bg-layout, #f6f8fb);
+    font-size: var(--cp-font-size, 13px);
+  }
 
-/* 主题作用域同时驱动 Tailwind 数值间距，保证预览草稿与已保存主题使用同一密度算法。 */
-[data-theme] {
-  --spacing: var(--cp-size-unit, 4px);
-}
+  /* 主题作用域同时驱动 Tailwind 数值间距，保证预览草稿与已保存主题使用同一密度算法。 */
+  [data-theme] {
+    --spacing: var(--cp-size-unit, 4px);
+  }
 
-[data-theme]:not(html) {
-  font-size: var(--cp-font-size, 13px);
-}
+  [data-theme]:not(html) {
+    font-size: var(--cp-font-size, 13px);
+  }
 
-html.theme-fallback-transition,
-html.theme-fallback-transition body {
-  transition:
-    background-color 180ms cubic-bezier(0.2, 0, 0, 1),
-    color 180ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
-}
-
-::view-transition-old(root) {
-  z-index: 1;
-}
-
-::view-transition-new(root) {
-  z-index: 2;
-}
-
-html.theme-view-transition-shrink::view-transition-old(root) {
-  z-index: 2;
-}
-
-html.theme-view-transition-shrink::view-transition-new(root) {
-  z-index: 1;
-}
-
-button {
-  font-family: inherit;
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: not-allowed;
-}
-
-.cp-scrollbar {
-  scrollbar-color: var(--cp-scrollbar-thumb-bg) transparent;
-  scrollbar-width: thin;
-}
-
-.cp-scrollbar::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.cp-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.cp-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--cp-scrollbar-thumb-bg);
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background-clip: content-box;
-}
-
-.cp-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--cp-scrollbar-thumb-hover-bg);
-  border: 3px solid transparent;
-  background-clip: content-box;
-}
-
-.cp-scrollbar::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-@media (prefers-reduced-motion: reduce) {
   html.theme-fallback-transition,
   html.theme-fallback-transition body {
-    transition-duration: 0ms;
+    transition:
+      background-color 180ms cubic-bezier(0.2, 0, 0, 1),
+      color 180ms cubic-bezier(0.2, 0, 0, 1);
   }
 
   ::view-transition-old(root),
   ::view-transition-new(root) {
-    animation-duration: 0ms;
+    animation: none;
+    mix-blend-mode: normal;
+  }
+
+  ::view-transition-old(root) {
+    z-index: 1;
+  }
+
+  ::view-transition-new(root) {
+    z-index: 2;
+  }
+
+  html.theme-view-transition-shrink::view-transition-old(root) {
+    z-index: 2;
+  }
+
+  html.theme-view-transition-shrink::view-transition-new(root) {
+    z-index: 1;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html.theme-fallback-transition,
+    html.theme-fallback-transition body {
+      transition-duration: 0ms;
+    }
+
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+      animation-duration: 0ms;
+    }
+  }
+}
+
+@utility cp-scrollbar {
+  scrollbar-color: var(--cp-scrollbar-thumb-bg) transparent;
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--cp-scrollbar-thumb-bg);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--cp-scrollbar-thumb-hover-bg);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  &::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }

@@ -63,7 +63,7 @@ const emit = defineEmits<{
         <div class="flex min-w-0 items-center gap-3">
           <BaseMotionIcon
             aria-hidden="true"
-            class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp bg-cp-bg-container text-cp-status-normal shadow-cp-tertiary"
+            class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp bg-cp-bg-container text-cp-primary-text shadow-cp-tertiary"
           >
             <KeyRound class="size-4" />
           </BaseMotionIcon>

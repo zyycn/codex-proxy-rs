@@ -57,7 +57,7 @@ const trendKind = defineModel<DashboardTrendKind>('trendKind', { required: true 
       </template>
       <template #actions>
         <BaseIconButton
-          class="text-cp-status-normal"
+          class="text-cp-primary-text"
           size="md"
           label="刷新概览"
           :loading="loading || refreshing"

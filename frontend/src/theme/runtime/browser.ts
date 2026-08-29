@@ -1,6 +1,6 @@
 // @env browser
 
-import type { ResolvedTheme } from './index'
+import type { ResolvedTheme } from '../types'
 
 const RUNTIME_THEME_STYLE_ID = 'cp-runtime-theme'
 

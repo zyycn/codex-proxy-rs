@@ -3,13 +3,15 @@ import type { Component } from 'vue'
 import { Inbox } from '@lucide/vue'
 import { computed } from 'vue'
 
+type EmptySurface = 'subtle' | 'inset' | 'none'
+
 const props = withDefaults(
   defineProps<{
     title?: string
     description?: string
     icon?: Component
     size?: 'sm' | 'md'
-    surface?: 'subtle' | 'none'
+    surface?: EmptySurface
   }>(),
   {
     title: undefined,
@@ -22,13 +24,19 @@ const props = withDefaults(
 
 const resolvedTitle = computed(() => props.title ?? '暂无数据')
 const resolvedIcon = computed(() => props.icon ?? Inbox)
+
+const surfaceClasses: Record<EmptySurface, string> = {
+  subtle: 'rounded-cp-lg bg-cp-fill-alter',
+  inset: 'rounded-cp-lg bg-cp-fill-alter/70',
+  none: 'bg-transparent',
+}
 </script>
 
 <template>
   <div
     class="grid justify-items-center text-center"
     :class="[
-      surface === 'none' ? 'bg-transparent' : 'rounded-cp-lg bg-cp-fill-alter',
+      surfaceClasses[surface],
       size === 'sm' ? 'gap-2 px-4 py-5' : 'gap-3 px-6 py-8',
     ]"
   >

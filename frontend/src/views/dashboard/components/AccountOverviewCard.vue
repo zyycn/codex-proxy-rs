@@ -151,7 +151,7 @@ const statusBars = computed(() => {
   return [
     { pct: (counts.normal / counts.total) * 100, cls: 'bg-cp-success' },
     { pct: (counts.quotaExhausted / counts.total) * 100, cls: 'bg-cp-warning' },
-    { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-cp-status-normal' },
+    { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-cp-warning' },
     { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-cp-error' },
   ].filter(b => b.pct > 0)
 })
@@ -226,6 +226,7 @@ const statusBars = computed(() => {
           <BaseEmpty
             v-if="accounts.length === 0"
             title="暂无账号请求记录"
+            surface="inset"
             class="min-h-40 place-content-center xl:h-full"
           />
           <template v-else>

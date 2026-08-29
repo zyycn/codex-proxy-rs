@@ -11,9 +11,9 @@
 
 </div>
 
-主题系统为 Codex Proxy RS 管理端提供浅色、深色、预置配色与自定义配色能力。实现借鉴 Ant Design 的
-Token 分层与十阶色板算法，但不引入 `antd`、React、`ConfigProvider` 或 CSS-in-JS；Vue 组件继续通过
-CSS Variables 与 Tailwind CSS 4 utilities 消费主题。
+主题系统为 Codex Proxy RS 管理端提供浅色、深色、预置配色与自定义配色能力。颜色 Map 复用 Ant Design 的
+Token 分层、十阶色板与明暗角色映射，中性 Surface 由背景和文字 Seed 统一派生；不引入 `antd`、React、`ConfigProvider`
+或 CSS-in-JS，Vue 组件继续通过 CSS Variables 与 Tailwind CSS 4 utilities 消费主题。
 
 > [!IMPORTANT]
 > 主题的目标是调整颜色、密度、圆角与层级，不改变现有页面结构和产品语义。默认主题必须保持既有视觉基线，
@@ -21,14 +21,16 @@ CSS Variables 与 Tailwind CSS 4 utilities 消费主题。
 
 ## 设计原则
 
-- **所选即所得**：`colorPrimary` 始终保留用户选择的 Seed 原色；浅色功能基础色沿用 Ant Design P6，
-  同样等于 Seed。只有深色适配、Hover、Active、弱背景和文字色使用派生值。
+- **Seed 与 Map 可追踪**：主色和功能色均按 Ant Design 从 Seed 派生 P1-P10；浅色 P6 等于 Seed，深色 P6
+  经过暗色色板适配。编辑器同时展示 Seed 与最终 Map，不在中途隐式改色。
 - **主色与表面分离**：品牌色负责交互和强调，页面、容器、浮层与文字由独立的背景和文本 Seed 派生。
-- **语义独立**：`success`、`warning`、`error`、`info` 与 `link` 拥有各自 Seed，不随品牌色隐式改变。
+- **语义独立**：`success`、`warning`、`error`、`info` 与 `link` 不随品牌色隐式改变；未显式配置 `link`
+  时按 Ant Design 回退到 `info`。
 - **无边设计**：默认依靠表面色差、间距和轻阴影表达层级；边框只用于焦点、错误和必要分隔。
 - **运行时可定制**：用户输入在浏览器中实时派生，因此使用 CSS Variables，不使用构建时 SCSS 变量。
 - **单一事实源**：Store 只保存最小配置，所有 Map、Alias 与未覆盖的 Component Token 均由纯函数生成。
-- **可访问性优先**：文字、焦点和实心控件在 Alias 层执行对比度保护，并尊重 `prefers-reduced-motion`。
+- **行为透明**：任意自定义 Seed 都直接进入公开算法，不追加页面或组件级修色；彩色文字 Alias 统一依据当前
+  Container Surface 做对比度保护，交互仍尊重 `prefers-reduced-motion`。
 
 ## 架构概览
 
@@ -51,16 +53,26 @@ flowchart LR
 
 | 层 | 文件 | 职责 |
 | --- | --- | --- |
-| 领域模型 | [`theme/index.ts`](../frontend/src/theme/index.ts) | 类型、规范化、纯派生算法与最终 Token 输出 |
-| 设计基线 | [`theme/constants.ts`](../frontend/src/theme/constants.ts) | 默认值、预置主题、中性色面、阴影与可编辑白名单 |
-| 浏览器适配 | [`theme/browser.ts`](../frontend/src/theme/browser.ts) | 将解析结果提交为根作用域运行时样式表 |
+| 公开入口 | [`theme/index.ts`](../frontend/src/theme/index.ts) | 只汇总稳定的外部 API，不承载实现 |
+| 领域类型 | [`theme/types.ts`](../frontend/src/theme/types.ts) | 唯一类型文件，包含持久化模型、解析结果与内部 Map 契约 |
+| 设计输入 | [`theme/core/constants.ts`](../frontend/src/theme/core/constants.ts) | 默认 Seed、预置主题元数据、尺寸与可编辑白名单 |
+| 颜色算法 | [`theme/core/color.ts`](../frontend/src/theme/core/color.ts) | Ant Design 色板角色、色调混合、透明度与对比度 |
+| Map 派生 | [`theme/derive/colors.ts`](../frontend/src/theme/derive/colors.ts) | Surface、Primary、Semantic、Preset 与数据色 Map |
+| Component 派生 | [`theme/derive/components.ts`](../frontend/src/theme/derive/components.ts) | 尺寸、阴影和 Component Token Map |
+| 输入边界 | [`theme/core/normalize.ts`](../frontend/src/theme/core/normalize.ts) | 持久化配置与直接覆盖值的规范化 |
+| 解析编排 | [`theme/core/resolve.ts`](../frontend/src/theme/core/resolve.ts) | 串联 Seed → Map → Alias → Component |
+| Token 编译 | [`theme/core/tokens.ts`](../frontend/src/theme/core/tokens.ts) | 从类型化 Map 和短角色表生成 CSS Variables |
+| 浏览器适配 | [`theme/runtime/browser.ts`](../frontend/src/theme/runtime/browser.ts) | 将解析结果提交为根作用域运行时样式表 |
 | 状态 | [`stores/modules/theme.ts`](../frontend/src/stores/modules/theme.ts) | 持久化配置、系统明暗偏好、切换动作与动画 |
 | 编辑器状态 | [`useThemeEditor.ts`](../frontend/src/views/theme/composables/useThemeEditor.ts) | 草稿、修改计数、恢复与保存 |
 | 样式桥接 | [`styles/index.css`](../frontend/src/styles/index.css) | 将 CSS Token 暴露为 Tailwind CSS 4 utilities |
-| 稳定语义 | [`styles/tokens.css`](../frontend/src/styles/tokens.css) | 不参与主题派生的业务常量 |
+| 样式基线 | [`styles/base.css`](../frontend/src/styles/base.css) | 通过 `@layer base` 提供浏览器基线，通过 `@utility` 提供通用原生滚动条 |
+| 静态基元 | [`styles/tokens.css`](../frontend/src/styles/tokens.css) | 只保留白色、透明色和作用域 `color-scheme` |
 
-`theme/index.ts` 不访问 DOM，`theme/browser.ts` 不包含派生规则，Theme Store 不复制算法。类型与算法集中在
-`theme/index.ts`，不额外拆分 `types.ts`。
+`theme/` 根目录只保留公开入口 `index.ts` 和唯一类型文件 `types.ts`；内部实现按 `core/`、`derive/`、`runtime/` 分层，不增加嵌套 barrel。
+纯派生模块不访问 DOM，`theme/runtime/browser.ts` 不包含派生规则，Theme Store 不复制算法。
+普通 Map 字段按 camelCase → kebab-case 统一生成 `--cp-*`；Semantic 与 Preset Color 仅维护各自的短角色表。
+`ThemeTokenName` 在 `types.ts` 中由 Map 契约推导，新增字段不再要求同步手写大段联合类型和对象映射。
 
 ## Token 模型
 
@@ -99,21 +111,24 @@ interface ThemeCustomization {
 
 ### Map Token
 
-品牌色和功能色使用 `@ant-design/colors` 从一个 Seed 生成十阶色板。主色派生规则为：
+品牌色和功能色使用 `@ant-design/colors` 从一个 Seed 生成十阶色板，再复刻 Ant Design 的 Map 角色映射：
 
 | 角色 | 规则 |
 | --- | --- |
-| `colorPrimary` | 始终使用 Seed 原色 |
-| Hover | 浅色取 P5，深色取暗色算法 P8 |
-| Active | 浅色取 P7，深色取暗色算法 P6 |
-| 实心 Hover | Seed 向白混合 6% |
-| 实心 Active | Seed 向黑混合 8% |
-| 弱背景 | 从当前容器表面与主色混合，避免低亮度 Seed 产生脏灰色块 |
-| 文字与描边 | 从色板取值后，对相邻 Surface 执行对比度校正 |
+| 弱背景 | P1 / P2 |
+| 描边 | P3 / P4 |
+| Hover / Base / Active | P5 / P6 / P7 |
+| Text Hover / Text / Text Active | P8 / P9 / P10 |
 
-功能色的基础 Map 对齐 Ant Design：`info`、`success`、`warning`、`error` 均固定取十阶色板 P6。浅色 P6
-就是用户选择的 Seed，因此 `--cp-color-info / success / warning / error` 不再经过额外对比度改写；深色 P6
-继续使用暗色色板对当前 Surface 做主题适配。功能色的 Hover、Active、弱背景、文字和描边仍按各自角色派生。
+功能色的 Background、Border、Hover、Base、Active 与 Text 统一消费 Ant Design 明暗算法已经映射好的
+P1-P10 角色：Base 固定 P6，Active 使用 P7，Success、Warning、Info 的 Hover 使用 P4，Error Hover 使用 P5，
+Text 使用 P8 / P9 / P10。彩色文字只额外保证相对 Container Surface 至少 4.5:1 的对比度，不再二次改写暗色色阶。
+
+分类、图表与数据强调继续使用 Ant Design Preset Color 的角色结构。Blue、Green、Orange、Red 分别复用
+`colorInfo`、`colorSuccess`、`colorWarning`、`colorError`，保证通用彩色与可编辑语义 Seed 同源；没有语义对应的
+Cyan、Purple 从 `@ant-design/colors` 的 `presetPrimaryColors` 取得 Seed。
+P1 / P2 / P3 / P6 / P7 分别映射弱背景、较强背景、边界、实心色和文字；文字只按实际 Surface 做统一的
+4.5:1 对比度校正，不再针对暗色模式升阶或插值。
 
 背景与文本 Seed 进入独立的 Surface Map，生成：
 
@@ -122,9 +137,12 @@ interface ThemeCustomization {
 - `colorText / Heading / Secondary / Tertiary / Quaternary / Disabled`
 - `colorBorder / BorderSecondary / Split / Shadow`
 
-默认中继蓝使用固定的石墨中性色基线。其他预置通过各自的浅色、深色 `colorBgBase` 与 `colorTextBase`
-建立完整气质。自定义主色只向中性表面注入少量色温：浅色混入 2.8%，深色从默认暗面与暗色色板背景混合；
-用户显式设置背景或文字 Seed 后，自动配套值立即让位。
+中继蓝使用稳定的浅色 / 深色中性基线；深海青、古风色与石墨预置额外提供各自的 `colorBgBase`、`colorTextBase`
+画像，自定义主色则只向通用中性基线注入少量色温。Surface 使用 `@ant-design/fast-color` 从背景明度向文字 Seed
+插值，并保留受限的文本色相：浅色层级随深度降低色度，避免白色背景经 RGB 混合退化为无色灰；深色层级按 Fill、
+Border、Muted Text 的职责收敛色度。稳定锚点位于 Map、Component 与 Shadow 派生层，并按外观距离连续过渡；
+所有预置、自定义 Seed 和用户覆盖仍进入同一条算法，不在页面或组件中追加 HEX 特判。
+Input、阴影与其他 Component Token 继续从 Surface、Primary 和 Semantic Map 派生，不在常量文件维护整套颜色表。
 
 ### Alias Token
 
@@ -140,13 +158,10 @@ Alias 按视觉角色命名，使用 `--cp-` 命名空间，并优先对齐 Ant 
 | 选择 | `--cp-control-item-bg-active*` | Segmented、Select 和选择控件 |
 | 焦点 | `--cp-control-outline` | 键盘焦点和输入反馈 |
 | 功能色 | `--cp-color-info / success / warning / error-*` | 系统反馈与状态 |
+| 预设彩色 | `--cp-color-{blue,cyan,green,orange,purple,red}-{bg,bg-strong,border,solid,text,text-on-bg}` | 分类标签与数据强调 |
 
-Alias 层执行以下保护：
-
-- 普通文字与背景的目标对比度为 4.5:1。
-- 控件边界与相邻 Surface 的目标对比度为 3:1。
-- 极亮的实心按钮背景自动切换为深色文字，避免白底白字。
-- 校正只修改文字、描边和状态等具体角色 Alias，不反写用户保存的 Seed，也不改写基础功能色 Alias。
+Alias 不对单个页面或组件追加修色；只有彩色文字统一执行 4.5:1 对比度保护。和 Ant Design 一样，Component
+Token 直接覆盖时不会自动重算同组件的其他状态；需要保持梯度关系时应修改 Seed，而不是逐个覆盖 Map Token。
 
 ### Component Token
 
@@ -163,32 +178,32 @@ Alias 层执行以下保护：
 | Scrollbar | `--cp-scrollbar-thumb-bg / hover-bg` |
 | BrandMark | `--cp-brand-mark-bg` |
 
+Theme Editor 只开放真正由对应组件消费的 Component Token。全局 Alias 不放进组件目录，避免一次覆盖同时改变
+多个无关组件。
+
 应用内品牌图标使用 [`AppBrandMark.vue`](../frontend/src/components/AppBrandMark.vue)：浅色模式取
 `colorBgSpotlight`，深色模式取 `colorBgElevated`，保持中性暗面与白色图形；浏览器 favicon 继续使用固定黑白
 图标，不随主题改变。
 
-### 稳定业务语义
+### 通用颜色消费
 
-下列颜色不属于通用主题皮肤，保留在 `styles/tokens.css`：
-
-- 账号“正常”状态 `colorStatusNormal*`
-- 推理标识色 `colorReasoning`
-- 账号套餐标识色 `accountPlan*`
-
-它们可以分别拥有浅色和深色值，但不会被品牌 Seed 重写。图表数据系列同样按数据语义管理，不把所有曲线染成
-主色。
+主题层禁止声明账号套餐、推理类型或具体页面名称。业务组件只能选择通用 Preset Color 角色，例如 Cyan 弱背景、
+Purple 强背景或 Purple 实心色；同一组颜色仍由运行时色板统一派生。`styles/tokens.css` 只保留白色、透明色与
+作用域 `color-scheme`，不保存可换肤值或业务标识色。账户活动热力图以 Success Background 为起点、Success Solid
+为终点，按 22% / 46% / 70% 生成中间密度；浅色与暗色使用同一规则，因此不会在浅色背景退化成近白方块。
+图表数据系列也只引用通用 Preset Color Token。
 
 ## 预置主题
 
-| ID | 名称 | 主色 | 表面方向 |
+| ID | 名称 | 主色 | 交互方向 |
 | --- | --- | --- | --- |
-| `relay-blue` | 中继蓝 | `#5983F4` | 默认石墨控制面，清晰可信 |
-| `deep-teal` | 深海青 | `#0E7C72` | 氧化铜与深水玻璃，冷静低饱和 |
-| `signal-violet` | 古风色 | `#A0583D` | 赭石、宣纸与松烟墨，温厚克制 |
-| `graphite` | 石墨 | `#525B66` | 工作室灰纸与铅笔粉末，近单色层级 |
+| `relay-blue` | 中继蓝 | `#5983F4` | 清晰可信的冷蓝强调 |
+| `deep-teal` | 深海青 | `#0E7C72` | 冷静低饱和的青色强调 |
+| `signal-violet` | 古风色 | `#A0583D` | 温厚克制的赭色强调 |
+| `graphite` | 石墨 | `#525B66` | 近单色的灰色强调 |
 
-预置主题只改变颜色画像，不改变字号、密度、圆角或布局。所有预置与自定义主题走同一条派生链路，不存在页面级
-特判。
+预置主题改变品牌主色，并可提供与该品牌匹配的浅色 / 深色背景和文字 Seed；不改变字号、密度、圆角或布局。
+所有预置与自定义主题走同一条 Surface、Map、Alias 与 Component 派生链路，不存在页面级特判。
 
 ## 运行时架构
 
@@ -250,11 +265,11 @@ createApp
 | 全局 / 颜色 | 模式、预置、自定义主色、功能色、链接、基础文本与背景、派生变量查看 |
 | 全局 / 尺寸 | 字号、基础间距、尺寸步长、控件高度 |
 | 全局 / 风格 | 通用圆角、阴影强度 |
-| 组件 | Action、Form、Selection、Surface、Data Display、Feedback、Navigation、Layout |
+| 组件 | Action、Form、Surface、Data Display、Navigation、Layout |
 | 工作流 | 搜索、单项恢复、撤销草稿、恢复默认、保存并应用 |
 
-Component Token 只开放白名单字段。未覆盖项始终继续使用全局 Seed 与 Alias 算法，避免主题配置逐渐退化成一份
-无法维护的完整 CSS 快照。
+Component Token 只开放白名单字段，且不允许在组件目录覆盖全局 Alias。未覆盖项始终继续使用全局 Seed 与
+Alias 算法，避免主题配置逐渐退化成一份无法维护的完整 CSS 快照。
 
 ### 草稿与保存
 
@@ -282,7 +297,9 @@ Component Token 只开放白名单字段。未覆盖项始终继续使用全局 
 
 - 全局 Token：`--cp-color-bg-container`、`--cp-font-size`。
 - Component Token：`--cp-table-row-hover-bg`、`--cp-input-active-shadow`。
-- 业务 Token：命名中明确业务域，例如 `--cp-account-plan-pro-bg`。
+- Preset Color Token：`--cp-color-purple-bg-strong`、`--cp-color-cyan-text-on-bg`。
+- 主题层禁止业务域命名；套餐、模型或页面只能消费通用 Alias、Preset 或 Component Token。
+- Map 与 Component 字段由 `theme/core/tokens.ts` 统一生成 CSS Token；禁止在解析器中再写平行的逐项映射表。
 - 禁止继续引入 `accent`、`soft`、`current`、`subtle` 等与现有角色重叠的平行词汇。
 
 ### Vue 与 Tailwind CSS 4
@@ -298,6 +315,16 @@ Component Token 只开放白名单字段。未覆盖项始终继续使用全局 
 仅当值需要在 CSS 函数、SVG 或局部派生中参与计算时，直接读取 `var(--cp-*)`。不在页面组件中重新实现色阶、
 对比度或明暗算法。
 
+`@theme inline` 只注册 Tailwind 名称，不保存主题值。注册表按基础、排版、颜色、圆角、阴影、间距与尺寸排序；
+颜色再按基元、表面、主色与链接、语义、预设、数据、组件分组。
+Preset 家族按字母排序，每个家族固定使用 `bg → bg-strong → border → solid → text → text-on-bg`。主题值由
+`initializeTheme()` 在 Vue 挂载前动态生成并提交，不增加 `theme:generate`、`theme:check` 或构建期快照。
+
+全局元素基线统一放进 `styles/base.css` 的 `@layer base`，确保组件 utility 可以按 Tailwind 层级正常覆盖；可复用的
+原生滚动条声明使用 Tailwind CSS 4 `@utility`。组件内能等价表达的简单 SVG、渐变、原生外观与伪元素优先使用
+utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文本 `:deep()`、复杂纹理与关键帧继续保留局部
+`<style scoped>`，不为追求原子化牺牲可读性。
+
 ### 视觉状态
 
 - 静态填充、Hover、Active 与 Selected 必须使用不同角色，不能复用一个变量制造所有层级。
@@ -311,15 +338,15 @@ Component Token 只开放白名单字段。未覆盖项始终继续使用全局 
 ### 增加预置主题
 
 1. 在 `ThemeColorPresetId` 增加稳定 ID。
-2. 在 `THEME_COLOR_PRESETS` 声明名称、描述、主色 Seed 与可选浅暗表面画像。
+2. 在 `THEME_COLOR_PRESETS` 声明名称、描述与主色 Seed。
 3. 不新增页面特判，确认预置可通过同一 `resolveTheme()` 派生。
 4. 在浅色、深色和系统模式下检查文本、浮层、Input、表格与图表。
 
 ### 增加全局 Seed 或 Alias
 
-1. 在 `theme/index.ts` 的领域类型中声明字段。
-2. 在规范化函数中定义合法输入边界。
-3. 在 Map 或 Alias 层集中派生，并加入 `ThemeTokens` 完整输出。
+1. 在唯一的 `theme/types.ts` 中声明 Seed、Map 或 Alias 字段。
+2. 在 `theme/core/normalize.ts` 定义合法输入边界。
+3. 在对应派生模块集中生成字段；普通 Map 字段会自动进入 `ThemeTokens` 完整输出。
 4. 如需 Tailwind utility，在 `styles/index.css` 的 `@theme inline` 中映射。
 5. 只在确实需要用户控制时加入 Theme Editor；派生细节默认只读。
 
@@ -327,13 +354,13 @@ Component Token 只开放白名单字段。未覆盖项始终继续使用全局 
 
 1. 先确认全局 Alias 无法准确表达组件职责。
 2. 使用 `component[-part][-variant][-state]-property` 命名。
-3. 在 `ThemeComponentMap` 和 `toThemeTokens()` 中提供默认派生值。
+3. 在 `ThemeComponentMap` 和 `deriveThemeComponentMap()` 中提供默认值；Token 编译器自动生成 CSS 变量。
 4. 需要开放编辑时，加入对应组件目录和可编辑白名单。
 5. 基础组件消费 Token，页面不得再写第二套局部常量。
 
 > [!WARNING]
-> 不要把任意 HEX、阴影或尺寸加入 `styles/tokens.css` 作为“临时修复”。可换肤值必须进入派生链；只有稳定的
-> 业务语义与首帧安全 fallback 可以留在静态样式中。
+> 不要把任意 HEX、阴影、尺寸或业务标识色加入 `styles/tokens.css` 作为“临时修复”。可换肤值必须进入派生链；
+> 静态样式只保留主题无关的颜色基元和首帧安全 fallback。
 
 ## 验证
 
@@ -357,9 +384,12 @@ git diff --check
 
 ## 上游参考
 
-- [Ant Design 色彩规范](https://github.com/ant-design/ant-design/blob/977d8e037a4841bb847b8a40ffd1f79b23264826/docs/spec/colors.zh-CN.md)
-- [Ant Design 暗黑模式](https://github.com/ant-design/ant-design/blob/977d8e037a4841bb847b8a40ffd1f79b23264826/docs/spec/dark.zh-CN.md)
-- [Ant Design 主题定制](https://github.com/ant-design/ant-design/blob/977d8e037a4841bb847b8a40ffd1f79b23264826/docs/react/customize-theme.zh-CN.md)
-- [Seed 到 Map](https://github.com/ant-design/ant-design/blob/977d8e037a4841bb847b8a40ffd1f79b23264826/components/theme/themes/shared/genColorMapToken.ts)
-- [Map 到 Alias](https://github.com/ant-design/ant-design/blob/977d8e037a4841bb847b8a40ffd1f79b23264826/components/theme/util/alias.ts)
+- [Ant Design 色彩规范](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/docs/spec/colors.zh-CN.md)
+- [Ant Design 暗黑模式](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/docs/spec/dark.zh-CN.md)
+- [Ant Design 主题定制](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/docs/react/customize-theme.zh-CN.md)
+- [Seed 到 Map](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/theme/themes/shared/genColorMapToken.ts)
+- [暗色色板角色](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/theme/themes/dark/colors.ts)
+- [预设彩色角色](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/theme/util/genPresetColor.ts)
+- [Colorful Tag 样式](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/tag/style/presetCmp.ts)
+- [Map 到 Alias](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/theme/util/alias.ts)
 - [`@ant-design/colors` 生成器](https://github.com/ant-design/ant-design-colors/blob/89b4a5b7e989b792610087abe855bf4a2fb1d322/src/generate.ts)

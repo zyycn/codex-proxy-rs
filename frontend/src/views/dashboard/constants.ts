@@ -3,15 +3,15 @@ import { formatInteger } from '@/utils/number'
 
 // tone 到 Tailwind 类的唯一映射；仪表盘各卡片共用。
 export const metricToneIconClasses: Record<MetricTone, string> = {
-  normal: 'bg-cp-status-normal-bg text-cp-status-normal',
-  info: 'bg-cp-info-bg text-cp-info',
-  success: 'bg-cp-success-bg text-cp-success',
-  warning: 'bg-cp-warning-bg text-cp-warning',
-  danger: 'bg-cp-error-bg text-cp-error',
+  normal: 'bg-cp-cyan-bg text-cp-cyan-text-on-bg',
+  info: 'bg-cp-blue-bg text-cp-blue-text-on-bg',
+  success: 'bg-cp-green-bg text-cp-green-text-on-bg',
+  warning: 'bg-cp-orange-bg text-cp-orange-text-on-bg',
+  danger: 'bg-cp-error-bg text-cp-error-text',
 }
 
 export const metricToneValueClasses: Record<MetricTone, string> = {
-  normal: 'text-cp-status-normal-text',
+  normal: 'text-cp-text',
   info: 'text-cp-info-text',
   success: 'text-cp-success-text',
   warning: 'text-cp-warning-text',
@@ -80,8 +80,8 @@ export const healthStatusMeta: Record<HealthStatus, HealthStatusMeta> = {
   },
   low_sample: {
     label: '低样本',
-    cellClass: 'bg-cp-status-normal',
-    badgeClass: 'bg-cp-status-normal-bg text-cp-status-normal-text',
+    cellClass: 'bg-cp-info',
+    badgeClass: 'bg-cp-info-bg text-cp-info-text',
   },
   stable: {
     label: '稳定',
@@ -99,7 +99,7 @@ export function healthReliabilityValueClass(successRequests: number, failedReque
   if (reliability >= 99.5)
     return 'text-cp-success-text'
   if (reliability >= 98)
-    return 'text-cp-status-normal-text'
+    return 'text-cp-info-text'
   if (reliability >= 95)
     return 'text-cp-warning-text'
   return 'text-cp-error-text'

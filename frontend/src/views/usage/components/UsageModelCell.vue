@@ -23,7 +23,7 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
       v-if="modelDisplay.secondary"
       class="flex min-w-0 items-center gap-1.25 text-cp-text-secondary"
     >
-      <CornerDownRight class="size-3.25 shrink-0 text-cp-info" stroke-width="2.4" />
+      <CornerDownRight class="size-3.25 shrink-0 text-cp-blue-text" stroke-width="2.4" />
       <code class="block truncate font-mono text-cp-xs leading-none font-bold">
         {{ modelDisplay.secondary }}
       </code>

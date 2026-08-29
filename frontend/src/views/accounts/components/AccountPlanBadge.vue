@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { stableVisualIndex } from '../utils/visualTone'
+
 const props = withDefaults(
   defineProps<{
     planType?: string | null
@@ -12,17 +14,18 @@ const props = withDefaults(
   },
 )
 
-const fallbackPalettes = [
-  'bg-cp-info-bg text-cp-info-text shadow-cp-tertiary',
-  'bg-cp-success-bg text-cp-success-text shadow-cp-tertiary',
-  'bg-cp-status-normal-bg text-cp-status-normal-text shadow-cp-tertiary',
-  'bg-cp-warning-bg text-cp-warning-text shadow-cp-tertiary',
-]
-
-const usageTierPalettes: Record<string, string> = {
-  pro: 'bg-cp-account-plan-pro-bg text-cp-account-plan-pro shadow-cp-tertiary',
-  prolite: 'bg-cp-account-plan-pro-lite-bg text-cp-account-plan-pro-lite shadow-cp-tertiary',
+const planPalettes: Record<string, string> = {
+  free: 'bg-cp-cyan-bg text-cp-cyan-text-on-bg',
+  pro: 'bg-cp-purple-bg-strong text-cp-purple-text-on-bg',
+  prolite: 'bg-cp-purple-bg text-cp-purple-text-on-bg',
 }
+
+const fallbackPalettes = [
+  'bg-cp-blue-bg text-cp-blue-text-on-bg',
+  'bg-cp-green-bg text-cp-green-text-on-bg',
+  'bg-cp-cyan-bg text-cp-cyan-text-on-bg',
+  'bg-cp-orange-bg text-cp-orange-text-on-bg',
+] as const
 
 const label = computed(() => props.planType?.trim() || 'Free')
 
@@ -34,21 +37,17 @@ const sizeClass = computed(() =>
 
 const paletteClass = computed(() => {
   const key = label.value.toLowerCase()
-  const usageTierPalette = usageTierPalettes[key]
-  if (usageTierPalette)
-    return usageTierPalette
+  const planPalette = planPalettes[key]
+  if (planPalette)
+    return planPalette
 
-  let hash = 0
-  for (const char of key) {
-    hash += char.charCodeAt(0)
-  }
-  return fallbackPalettes[hash % fallbackPalettes.length]
+  return fallbackPalettes[stableVisualIndex(key, fallbackPalettes.length)]
 })
 </script>
 
 <template>
   <span
-    class="inline-flex shrink-0 items-center justify-center whitespace-nowrap leading-none capitalize"
+    class="inline-flex shrink-0 items-center justify-center whitespace-nowrap leading-none capitalize shadow-cp-tertiary"
     :class="[sizeClass, paletteClass]"
   >
     <span>{{ label }}</span>

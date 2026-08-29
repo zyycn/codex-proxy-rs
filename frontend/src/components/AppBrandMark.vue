@@ -9,7 +9,7 @@ const mistGradientId = `${id}-brand-mist`
 
 <template>
   <svg
-    class="app-brand-mark"
+    class="text-cp-text-light-solid"
     xmlns="http://www.w3.org/2000/svg"
     viewBox="48 48 416 416"
     aria-hidden="true"
@@ -49,7 +49,7 @@ const mistGradientId = `${id}-brand-mist`
       </radialGradient>
     </defs>
 
-    <rect class="app-brand-mark__surface" x="48" y="48" width="416" height="416" rx="88" />
+    <rect class="fill-[var(--cp-brand-mark-bg)]" x="48" y="48" width="416" height="416" rx="88" />
     <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="36">
       <path d="M156 307A112 112 0 0 1 307 156" />
       <path d="M356 205A112 112 0 0 1 205 356" />
@@ -105,13 +105,3 @@ const mistGradientId = `${id}-brand-mist`
     />
   </svg>
 </template>
-
-<style scoped>
-.app-brand-mark {
-  color: var(--cp-color-text-light-solid);
-}
-
-.app-brand-mark__surface {
-  fill: var(--cp-brand-mark-bg);
-}
-</style>

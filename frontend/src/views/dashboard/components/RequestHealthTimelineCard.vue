@@ -19,6 +19,11 @@ const props = defineProps<{
   timeline: HealthTimeline
 }>()
 
+const healthPopoverArrowSurfaceClasses = {
+  top: 'bg-cp-fill-tertiary',
+  bottom: 'bg-cp-bg-elevated',
+}
+
 const timelineGrid = useTemplateRef<HTMLElement>('timelineGrid')
 const preferredMotion = usePreferredReducedMotion()
 const points = computed(() => props.timeline.points)
@@ -250,6 +255,7 @@ onBeforeUnmount(() => {
           :anchor-element="activeAnchor"
           :disabled="!activePoint"
           animate-position
+          :arrow-surface-class="healthPopoverArrowSurfaceClasses"
           class="min-w-0 w-full"
         >
           <template #trigger>

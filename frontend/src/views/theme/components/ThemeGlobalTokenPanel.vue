@@ -15,7 +15,7 @@ import { Check, ChevronDown, Laptop, Moon, Sun } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import { THEME_COLOR_PRESETS } from '@/theme'
+import { resolveTheme, THEME_COLOR_PRESETS } from '@/theme'
 
 import ThemeColorTokenField from './ThemeColorTokenField.vue'
 import ThemeNumberTokenField from './ThemeNumberTokenField.vue'
@@ -57,8 +57,16 @@ const modeOptions = [
   { label: '浅色', value: 'light', icon: Sun },
   { label: '深色', value: 'dark', icon: Moon },
 ]
+const presetSwatchesById = new Map(THEME_COLOR_PRESETS.map(preset => [
+  preset.id,
+  [
+    resolveTheme('light', preset.id, preset.seed).seedTokens.colorBgBase,
+    preset.seed,
+    resolveTheme('dark', preset.id, preset.seed).seedTokens.colorBgBase,
+  ],
+]))
 
-const colorFields = computed(() => [
+const semanticColorFields = computed(() => [
   {
     key: 'colorSuccess' as const,
     label: '成功色',
@@ -111,12 +119,10 @@ const colorFields = computed(() => [
 ].filter(field => matches(`${field.label} ${field.token} ${field.description}`)))
 
 const derivedTokens = computed(() => Object.entries(props.resolved.tokens)
-  .filter(([name]) => name.startsWith('--cp-color-primary')
-    || name.startsWith('--cp-color-bg-')
-    || name.startsWith('--cp-color-fill-')
-    || name.startsWith('--cp-color-text-'))
-  .filter(([name]) => matches(name))
-  .slice(0, 28))
+  .filter(([name]) => name.startsWith('--cp-color-')
+    || name.startsWith('--cp-control-'))
+  .filter(([name]) => matches(name)),
+)
 
 function matches(value: string) {
   const query = props.query.trim().toLocaleLowerCase()
@@ -128,11 +134,7 @@ function seedOverridden(key: keyof ThemeSeedOverrides) {
 }
 
 function presetSwatches(preset: ThemeColorPreset) {
-  return [
-    preset.appearance?.light?.colorBgBase ?? '#FFFFFF',
-    preset.seed,
-    preset.appearance?.dark?.colorBgBase ?? '#111A29',
-  ]
+  return presetSwatchesById.get(preset.id) ?? [preset.seed]
 }
 </script>
 
@@ -204,12 +206,12 @@ function presetSwatches(preset: ThemeColorPreset) {
         />
       </section>
 
-      <section v-if="colorFields.length > 0" class="grid gap-2" aria-labelledby="theme-semantic-title">
+      <section v-if="semanticColorFields.length > 0" class="grid gap-2" aria-labelledby="theme-semantic-title">
         <h3 id="theme-semantic-title" class="m-0 px-1 text-cp font-heavy text-cp-text">
           功能色与中性色
         </h3>
         <ThemeColorTokenField
-          v-for="field in colorFields"
+          v-for="field in semanticColorFields"
           :key="field.key"
           :label="field.label"
           :token="field.token"
@@ -287,7 +289,7 @@ function presetSwatches(preset: ThemeColorPreset) {
     </section>
 
     <section v-else class="grid gap-2" aria-label="风格 Token">
-      <div class="rounded-cp-lg bg-cp-primary-bg px-3 py-3 text-[10px] leading-[1.5] font-emphasis text-cp-primary-text">
+      <div class="rounded-cp-lg bg-cp-primary-bg px-3 py-3 text-[10px] leading-normal font-emphasis text-cp-primary-text">
         固定无边设计；圆角塑形，阴影分层。
       </div>
       <ThemeNumberTokenField

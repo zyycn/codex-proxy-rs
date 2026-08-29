@@ -8,8 +8,6 @@ import type { ResolvedTheme, ThemeComponentOverrides, ThemeTokenName } from '@/t
 
 import {
   AppWindow,
-  Bell,
-  CheckSquare,
   Compass,
   CreditCard,
   FormInput,
@@ -58,10 +56,8 @@ const component = defineModel<ThemeEditorComponent>({ required: true })
 const components: readonly ComponentOption[] = [
   { id: 'action', label: 'Action', description: '按钮与动作', icon: MousePointerClick },
   { id: 'form', label: 'Form', description: '表单与输入', icon: FormInput },
-  { id: 'selection', label: 'Selection', description: '选择控件', icon: CheckSquare },
   { id: 'surface', label: 'Surface', description: '卡片与容器', icon: CreditCard },
   { id: 'data', label: 'Data Display', description: '数据展示', icon: TableProperties },
-  { id: 'feedback', label: 'Feedback', description: '反馈与浮层', icon: Bell },
   { id: 'navigation', label: 'Navigation', description: '导航', icon: Compass },
   { id: 'layout', label: 'Layout', description: '布局与滚动', icon: LayoutPanelLeft },
 ]
@@ -74,16 +70,12 @@ const tokenCatalog: Record<ThemeEditorComponent, readonly EditableToken[]> = {
     { name: '--cp-button-primary-active-bg', label: '主按钮 Active', kind: 'color', description: 'primaryActiveBg' },
   ],
   form: [
-    { name: '--cp-input-bg', label: '输入框背景', kind: 'color', description: 'activeBg' },
+    { name: '--cp-input-bg', label: '输入框背景', kind: 'color', description: 'colorBgContainer' },
     { name: '--cp-input-hover-bg', label: '输入框 Hover', kind: 'color', description: 'hoverBg' },
     { name: '--cp-input-active-bg', label: '输入框 Active', kind: 'color', description: 'activeBg' },
     { name: '--cp-input-shadow', label: '输入框阴影', kind: 'shadow', description: 'shadow' },
     { name: '--cp-input-hover-shadow', label: '输入框 Hover 阴影', kind: 'shadow', description: 'hoverShadow' },
     { name: '--cp-input-active-shadow', label: '输入框焦点阴影', kind: 'shadow', description: 'activeShadow' },
-  ],
-  selection: [
-    { name: '--cp-control-item-bg-active', label: '选择背景', kind: 'color', description: 'optionSelectedBg' },
-    { name: '--cp-control-item-bg-active-hover', label: '选择 Hover', kind: 'color', description: 'optionSelectedHoverBg' },
   ],
   surface: [
     { name: '--cp-card-bg', label: '卡片背景', kind: 'color', description: 'colorBgContainer' },
@@ -116,14 +108,8 @@ const tokenCatalog: Record<ThemeEditorComponent, readonly EditableToken[]> = {
     { name: '--cp-table-row-selected-bg', label: '选中行背景', kind: 'color', description: 'rowSelectedBg' },
     { name: '--cp-progress-remaining-color', label: '进度轨道', kind: 'color', description: 'progressRemainingColor' },
   ],
-  feedback: [
-    { name: '--cp-color-bg-elevated', label: '浮层背景', kind: 'color', description: 'colorBgElevated' },
-    { name: '--cp-box-shadow', label: '浮层阴影', kind: 'shadow', description: 'boxShadow' },
-  ],
   navigation: [
     { name: '--cp-menu-item-selected-bg', label: '菜单选中背景', kind: 'color', description: 'itemSelectedBg' },
-    { name: '--cp-color-bg-text-hover', label: '导航 Hover', kind: 'color', description: 'itemHoverBg' },
-    { name: '--cp-color-bg-text-active', label: '导航 Active', kind: 'color', description: 'itemActiveBg' },
   ],
   layout: [
     { name: '--cp-layout-sider-bg', label: '侧栏背景', kind: 'color', description: 'siderBg' },
@@ -186,7 +172,7 @@ function numericTokenValue(name: ThemeTokenName) {
     <section class="grid gap-2" :aria-label="`${activeComponent.label} Component Token`">
       <div class="rounded-cp-lg bg-cp-bg-container px-3 py-3 shadow-cp-tertiary">
         <p class="m-0 text-[10px] leading-normal font-emphasis text-cp-text-secondary">
-          调整 {{ activeComponent.label }} 的 Component / Alias Token；未修改的值继续由全局 Seed / Alias 算法生成。
+          调整 {{ activeComponent.label }} 的 Component Token；未修改的值继续由全局 Seed / Alias 算法生成。
         </p>
       </div>
 

@@ -110,7 +110,7 @@ const releaseStatus = computed(() => {
   return {
     label: '待检查',
     title: '尚未检查官方发布渠道',
-    tone: 'bg-cp-status-normal-bg text-cp-status-normal-text',
+    tone: 'bg-cp-info-bg text-cp-info-text',
     icon: RefreshCw,
   }
 })
@@ -199,6 +199,7 @@ function providerLabel(provider: string) {
       <BaseEmpty
         v-if="!profile"
         title="暂无请求身份"
+        surface="inset"
         class="min-h-71.75 flex-1 place-content-center"
       />
 
@@ -266,7 +267,7 @@ function providerLabel(provider: string) {
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
               >
-                <ShieldCheck aria-hidden="true" class="size-3.25 text-cp-info" />
+                <ShieldCheck aria-hidden="true" class="size-3.25 text-cp-text-tertiary" />
                 认证协议
               </dt>
               <dd
@@ -281,7 +282,7 @@ function providerLabel(provider: string) {
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
               >
-                <Monitor aria-hidden="true" class="size-3.25 text-cp-status-normal" />
+                <Monitor aria-hidden="true" class="size-3.25 text-cp-text-tertiary" />
                 {{ profile.provider === 'openai' ? '模拟运行环境' : '运行环境' }}
               </dt>
               <dd
@@ -304,7 +305,7 @@ function providerLabel(provider: string) {
               <dt
                 class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary"
               >
-                <Terminal aria-hidden="true" class="size-3.25 text-cp-info" />
+                <Terminal aria-hidden="true" class="size-3.25 text-cp-text-tertiary" />
                 客户端标识
               </dt>
               <dd

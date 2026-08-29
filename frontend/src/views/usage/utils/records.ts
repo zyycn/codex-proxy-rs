@@ -160,10 +160,10 @@ export function usageRecordType(record: UsageDisplayRecord) {
 export function usageRecordTypeClass(record: UsageDisplayRecord) {
   const type = usageRecordType(record)
   if (type === 'WS')
-    return 'bg-cp-info-bg text-cp-info-text'
+    return 'bg-cp-blue-bg text-cp-blue-text-on-bg'
   if (type === 'SSE')
-    return 'bg-cp-success-bg text-cp-success-text'
-  return 'bg-cp-fill-tertiary text-cp-info-text'
+    return 'bg-cp-green-bg text-cp-green-text-on-bg'
+  return 'bg-cp-fill-tertiary text-cp-text-secondary'
 }
 
 export function usageAccountText(record: UsageDisplayRecord) {

@@ -70,7 +70,7 @@ const presentation = computed(() => resolveAccountStatusPresentation({
     </template>
 
     <section class="w-88 overflow-hidden rounded-cp-lg">
-      <header class="flex items-start gap-3 bg-cp-fill-quaternary px-4 py-3">
+      <header class="flex items-start gap-3 bg-cp-fill-tertiary px-4 py-3">
         <span
           aria-hidden="true"
           class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp"

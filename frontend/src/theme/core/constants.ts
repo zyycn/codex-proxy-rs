@@ -3,8 +3,10 @@ import type {
   ThemeColorPresetId,
   ThemeCustomization,
   ThemeMode,
+  ThemePresetColorName,
   ThemeTokenName,
-} from './index'
+} from '../types'
+import { presetPrimaryColors } from '@ant-design/colors'
 
 export const DEFAULT_THEME_MODE: ThemeMode = 'system'
 export const DEFAULT_THEME_COLOR: ThemeColorPresetId = 'relay-blue'
@@ -15,8 +17,17 @@ export const DEFAULT_SEED_COLORS = {
   colorSuccess: '#12B981',
   colorWarning: '#F59E0B',
   colorError: '#EF4444',
-  colorInfo: '#5983F4',
+  colorInfo: DEFAULT_CUSTOM_THEME_COLOR,
 } as const
+
+export const PRESET_COLOR_SEEDS = {
+  blue: presetPrimaryColors.blue,
+  cyan: presetPrimaryColors.cyan,
+  green: presetPrimaryColors.green,
+  orange: presetPrimaryColors.orange,
+  purple: presetPrimaryColors.purple,
+  red: presetPrimaryColors.red,
+} as const satisfies Record<ThemePresetColorName, string>
 
 export const DEFAULT_DIMENSIONS = {
   fontSize: 13,
@@ -34,7 +45,7 @@ export const THEME_COLOR_PRESETS: readonly ThemeColorPreset[] = [
     id: 'relay-blue',
     label: '中继蓝',
     description: '石墨表面上的清晰交互信号',
-    seed: '#5983F4',
+    seed: DEFAULT_CUSTOM_THEME_COLOR,
   },
   {
     id: 'deep-teal',
@@ -86,105 +97,56 @@ export const THEME_COLOR_PRESETS: readonly ThemeColorPreset[] = [
   },
 ] as const
 
-export const LIGHT_FOREGROUND = '#FFFFFF'
-export const LIGHT_CONTAINER_BASE = '#FFFFFF'
-export const LIGHT_TEXT_BASE = '#0E1726'
-export const DARK_CONTAINER_BASE = '#111A29'
-export const DARK_SPOTLIGHT_BASE = '#030710'
-export const DARK_TEXT_BASE = '#D8E2EE'
 export const BLACK = '#000000'
 export const WHITE = '#FFFFFF'
+export const LIGHT_FOREGROUND = WHITE
+export const LIGHT_CONTAINER_BASE = WHITE
+export const LIGHT_TEXT_BASE = '#0E1726'
+export const DARK_CONTAINER_BASE = '#111A29'
+export const DARK_TEXT_BASE = '#D8E2EE'
 
-export const NEUTRAL_LIGHT_SURFACES = {
-  colorBgLayout: '#F6F8FB',
-  colorBgContainer: LIGHT_CONTAINER_BASE,
-  colorBgElevated: LIGHT_CONTAINER_BASE,
+/** 中继蓝浅色主题的稳定中性色阶；带色温主题会连续过渡到通用派生结果。 */
+export const LIGHT_SURFACE_ANCHORS = {
   colorBgSpotlight: '#111827',
-  colorBgMask: '#0E17264D',
-  colorBgTextHover: '#F1F5F9',
-  colorBgTextActive: '#E9EEF5',
-  colorBgContainerDisabled: '#F1F5F9',
   colorFillSecondary: '#E9EEF5',
   colorFillTertiary: '#F1F5F9',
   colorFillQuaternary: '#F6F8FB',
   colorBorder: '#D8E0EA',
   colorBorderSecondary: '#E2E8F0',
-  colorSplit: '#D8E0EA6B',
   colorTextHeading: '#111827',
   colorTextSecondary: '#64748B',
-  colorTextTertiary: '#94A3B8',
-  colorTextQuaternary: '#94A3B8',
-  colorTextDisabled: '#94A3B8',
+  colorTextMuted: '#94A3B8',
 } as const
 
-export const NEUTRAL_DARK_SURFACES = {
+/** 中继蓝暗色主题的视觉锚点；带色温主题会连续过渡到通用派生结果。 */
+export const DARK_SURFACE_ANCHORS = {
   colorBgLayout: '#0B111C',
-  colorBgContainer: DARK_CONTAINER_BASE,
-  colorBgElevated: '#162133',
+  colorBgMask: '#030712',
   colorBgSpotlight: '#050913',
-  colorBgMask: '#030712A6',
-  colorBgTextHover: '#1B2A40',
-  colorBgTextActive: '#23354F',
-  colorBgContainerDisabled: '#182231',
-  colorFillSecondary: '#23354F',
-  colorFillTertiary: '#1C2A3D',
-  colorFillQuaternary: '#162133',
-  colorBorder: '#29384D',
-  colorBorderSecondary: '#26364C',
-  colorSplit: '#26364C80',
-  colorTextHeading: '#F5F8FC',
-  colorTextSecondary: '#8FA0B7',
-  colorTextTertiary: '#71839C',
-  colorTextQuaternary: '#64748B',
-  colorTextDisabled: '#53647A',
 } as const
 
-export const NEUTRAL_LIGHT_INPUT = {
-  bg: '#EEF2F7',
-  hoverBg: '#F2F6FA',
-  activeBg: '#F8FAFC',
+/** 默认主题组件基准；带色温主题会连续过渡到 Surface 派生结果。 */
+export const LIGHT_COMPONENT_ANCHORS = {
+  inputHoverBg: '#F2F6FA',
+  inputActiveBg: '#F8FAFC',
 } as const
 
-export const NEUTRAL_DARK_INPUT = {
-  bg: '#182437',
-  hoverBg: '#1D2D43',
-  activeBg: '#111D2D',
+export const DARK_COMPONENT_ANCHORS = {
+  inputActiveBg: '#111D2D',
 } as const
 
-export const NEUTRAL_DARK_SEMANTIC_TEXT = {
+/** 浅色阴影保持中性，不随主题文字色染色。 */
+export const LIGHT_SHADOW_BASE = LIGHT_TEXT_BASE
+
+/** 小字号语义文字的暗色可读性锚点。 */
+export const DARK_SEMANTIC_TEXT_ANCHORS = {
   info: '#93C5FD',
   success: '#86EFAC',
   warning: '#FCD34D',
   error: '#FDA4AF',
 } as const
 
-/** 阴影保持中性，不跟随主题主色染色。 */
-export const NEUTRAL_LIGHT_SHADOWS = {
-  boxShadow: '0 18px 38px -18px #0E17262B',
-  boxShadowSecondary: '0 10px 22px -18px #0E172614',
-  boxShadowTertiary: '0 9px 18px -14px #0E172616',
-  cardShadow: '0 10px 22px -18px #0E172614',
-  inputShadow: '0 9px 18px -14px #0E172616',
-  inputHoverDropShadow: '0 12px 24px -16px #0E17261F',
-  layoutSiderShadow: '2px 0 12px -12px #0E172607',
-} as const
-
-export const NEUTRAL_DARK_SHADOWS = {
-  boxShadow: '0 24px 52px -26px #000000D1',
-  boxShadowSecondary: '0 18px 34px -26px #000000A3',
-  boxShadowTertiary: '0 12px 24px -20px #000000A8',
-  cardShadow: '0 18px 34px -26px #000000A3',
-  inputShadow: '0 12px 24px -20px #000000A8',
-  inputHoverDropShadow: '0 14px 28px -22px #000000B8',
-  layoutSiderShadow: '2px 0 18px -14px #000000B8',
-} as const
-
 export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
-  '--cp-color-bg-elevated',
-  '--cp-color-bg-text-hover',
-  '--cp-color-bg-text-active',
-  '--cp-control-item-bg-active',
-  '--cp-control-item-bg-active-hover',
   '--cp-menu-item-selected-bg',
   '--cp-input-bg',
   '--cp-input-hover-bg',
@@ -207,7 +169,6 @@ export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
 ])
 
 export const EDITABLE_SHADOW_TOKEN_NAMES = new Set<ThemeTokenName>([
-  '--cp-box-shadow',
   '--cp-input-shadow',
   '--cp-input-hover-shadow',
   '--cp-input-active-shadow',

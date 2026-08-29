@@ -11,6 +11,9 @@ importers:
       '@ant-design/colors':
         specifier: ^8.0.1
         version: 8.0.1
+      '@ant-design/fast-color':
+        specifier: ^3.0.1
+        version: 3.0.1
       '@boxicons/vue':
         specifier: 1.0.1
         version: 1.0.1(vue@3.5.41(typescript@6.0.3))

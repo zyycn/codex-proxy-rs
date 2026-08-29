@@ -14,12 +14,12 @@ export function useChartPalette() {
     divider: color('--cp-color-split', '#E2E8F0'),
     border: color('--cp-color-border-secondary', '#E2E8F0'),
     pointer: color('--cp-color-border', '#CBD5E1'),
-    info: color('--cp-color-info', '#2563EB'),
-    success: color('--cp-color-success', '#10B981'),
-    warning: color('--cp-color-warning', '#F59E0B'),
-    danger: color('--cp-color-error', '#EF4444'),
-    normal: color('--cp-color-status-normal', '#0F9F9A'),
-    reasoning: color('--cp-color-reasoning', '#8B5CF6'),
+    info: color('--cp-color-blue-solid', '#5983F4'),
+    success: color('--cp-color-green-solid', '#12B981'),
+    warning: color('--cp-color-orange-solid', '#F59E0B'),
+    danger: color('--cp-color-red-solid', '#EF4444'),
+    normal: color('--cp-color-text-tertiary', '#94A3B8'),
+    reasoning: color('--cp-color-purple-solid', '#722ED1'),
   }))
 
   return { color, palette }

@@ -48,7 +48,7 @@ const MARK_CLASS = [
   'size-4',
   'rounded-full',
   'animate-spin',
-  'bg-[radial-gradient(circle_at_center,var(--cp-color-bg-container)_0_44%,transparent_46%),conic-gradient(from_0deg,var(--cp-color-status-normal)_0deg_105deg,var(--cp-color-info)_105deg_200deg,var(--cp-color-fill-tertiary)_200deg_360deg)]',
+  'bg-[radial-gradient(circle_at_center,var(--cp-color-bg-container)_0_44%,transparent_46%),conic-gradient(from_0deg,var(--cp-color-primary)_0deg_105deg,var(--cp-color-primary-hover)_105deg_200deg,var(--cp-color-fill-tertiary)_200deg_360deg)]',
 ].join(' ')
 const LABEL_CLASS = 'whitespace-nowrap'
 
