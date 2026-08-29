@@ -184,7 +184,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden">
+  <div class="isolate flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden">
     <div v-loading="loading" class="relative flex min-h-0 max-w-full flex-1 overflow-hidden">
       <BaseScrollbar
         v-if="hasRows"

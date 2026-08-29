@@ -221,7 +221,7 @@ const statusBars = computed(() => {
         </p>
 
         <div
-          class="mt-5 flex w-full flex-col gap-2 overflow-hidden xl:mt-6.75 xl:h-82.5 xl:gap-1.5"
+          class="mt-5 flex w-full flex-col gap-2 overflow-hidden xl:mt-6.75 xl:h-82.5 xl:gap-2.5"
         >
           <BaseEmpty
             v-if="accounts.length === 0"
@@ -233,7 +233,7 @@ const statusBars = computed(() => {
             <article
               v-for="account in accounts"
               :key="account.id"
-              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-fill-alter/70 px-3.5 py-3.5 transition-colors xl:h-19.5 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
+              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-fill-alter/70 px-3.5 py-3.5 transition-colors xl:h-18.75 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
             >
               <AccountIdentityCell
                 :account="account"

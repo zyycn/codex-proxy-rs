@@ -270,12 +270,12 @@ function metricCards(
         {
           label: '可用',
           value: credentials.available,
-          tone: credentials.availableValue > 0 ? 'success' : 'normal',
+          tone: 'success',
         },
         {
           label: '不可用',
           value: credentials.unavailable,
-          tone: credentials.unavailableValue > 0 ? 'danger' : 'normal',
+          tone: 'danger',
         },
       ],
     },

@@ -56,12 +56,6 @@ const emit = defineEmits<{
         暂无模型映射
       </div>
       <div v-else class="grid gap-3">
-        <div class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 px-1 text-cp-sm font-bold text-cp-text-quaternary">
-          <span>请求模型</span>
-          <span />
-          <span>上游模型</span>
-          <span />
-        </div>
         <div
           v-for="(row, index) in mappings"
           :key="index"
@@ -69,14 +63,14 @@ const emit = defineEmits<{
         >
           <BaseInput
             :model-value="row.requestedModel"
-            placeholder="gpt-5.4"
+            placeholder="请求模型"
             aria-label="请求模型"
             @update:model-value="emit('updateMapping', index, 'requestedModel', $event)"
           />
           <span class="text-cp-text-quaternary">→</span>
           <BaseInput
             :model-value="row.upstreamModel"
-            placeholder="gpt-5.5"
+            placeholder="上游模型"
             aria-label="上游模型名称"
             @update:model-value="emit('updateMapping', index, 'upstreamModel', $event)"
           />
