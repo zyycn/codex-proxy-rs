@@ -1,9 +1,7 @@
 use bytes::Bytes;
-use gateway_core::error::OperationError;
 use gateway_core::operation::{
-    EmbedRequest, Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
-    OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload, RerankRequest,
-    RetrySafety, SpeechRequest,
+    Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind,
+    ProtocolPayload, ProviderSessionState, RawJsonPayload,
 };
 use serde_json::{Map, Value, json};
 
@@ -117,43 +115,16 @@ fn provider_session_state_should_only_be_visible_to_its_provider() {
 }
 
 #[test]
-fn non_generate_requests_should_reject_missing_required_fields() {
-    assert_eq!(
-        EmbedRequest::new(Vec::new()).expect_err("input is required"),
-        OperationError::EmptyField { field: "input" }
-    );
-    assert_eq!(
-        RerankRequest::new("", vec!["document".to_owned()]).expect_err("query is required"),
-        OperationError::EmptyField { field: "query" }
-    );
-    assert_eq!(
-        SpeechRequest::new("hello", "").expect_err("voice is required"),
-        OperationError::EmptyField { field: "voice" }
-    );
-}
-
-#[test]
-fn operation_kind_and_retry_safety_should_remain_stable() {
+fn operation_kind_should_remain_stable() {
     let generate = Operation::Generate(generate(json!({"model": "gpt-test"})));
-    let embed = Operation::Embed(
-        EmbedRequest::new(vec!["input".to_owned()]).expect("embedding request is valid"),
-    );
-    let rerank = Operation::Rerank(
-        RerankRequest::new("query", vec!["document".to_owned()]).expect("rerank request is valid"),
-    );
     let image = Operation::GenerateImage(image(
         ImageRequestKind::Generation,
         json!({"model": "gpt-image-2", "prompt": "draw"}),
     ));
-    let speech = Operation::Speech(SpeechRequest::new("hello", "alloy").expect("speech request"));
 
     assert_eq!(generate.kind(), OperationKind::Generate);
-    assert_eq!(generate.retry_safety(), RetrySafety::NonIdempotent);
-    assert_eq!(embed.retry_safety(), RetrySafety::Idempotent);
-    assert_eq!(rerank.retry_safety(), RetrySafety::Idempotent);
     assert_eq!(image.kind(), OperationKind::GenerateImage);
     assert!(image.image_generation_requested());
-    assert_eq!(speech.kind(), OperationKind::Speech);
 }
 
 #[test]

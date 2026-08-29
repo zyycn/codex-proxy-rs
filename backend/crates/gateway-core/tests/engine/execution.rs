@@ -18,7 +18,7 @@ use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
 };
 use gateway_core::engine::credential::{
-    AccountSelectionPolicy, CredentialRevision, ProviderAccountId, RotationStrategy,
+    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::{
     ClientApiKeyUsageSink, ClientTransport, DefaultExecutionService, ExecutionRequestMetadata,
@@ -28,7 +28,7 @@ use gateway_core::engine::execution::{
 use gateway_core::engine::probe::{AccountProbe, AccountProbeErrorSource, AccountProbeRequest};
 use gateway_core::engine::provider::{
     Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
-    ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream, UpstreamTransport,
+    ProviderRegistry, ProviderRequest, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
     AttemptContext, AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization,
@@ -283,10 +283,7 @@ impl Provider for ColdFailingProvider {
     ) -> Result<ProviderStream, ProviderError> {
         let metadata = ProviderCallMetadata::for_provider_endpoint(
             request.candidate().provider().clone(),
-            ProviderResource::Account {
-                id: ProviderAccountId::new("acct_usage").expect("account"),
-                revision: CredentialRevision::new(1).expect("revision"),
-            },
+            ProviderAccountId::new("acct_usage").expect("account"),
             UpstreamTransport::new("http_json").expect("transport"),
         );
         Ok(ProviderStream::new(

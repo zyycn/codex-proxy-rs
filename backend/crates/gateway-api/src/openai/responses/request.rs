@@ -136,12 +136,6 @@ pub enum ContinuationIntent {
 }
 
 impl ContinuationIntent {
-    /// 返回是否请求了对话延续。
-    #[must_use]
-    pub const fn is_continuation(&self) -> bool {
-        matches!(self, Self::PreviousResponseId(_))
-    }
-
     /// 返回待 history owner 解析的 response ID。
     #[must_use]
     pub fn previous_response_id(&self) -> Option<&str> {

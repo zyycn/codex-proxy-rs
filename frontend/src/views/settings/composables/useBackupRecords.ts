@@ -203,5 +203,3 @@ export function useBackupRecords() {
     stopPolling,
   }
 }
-
-export type BackupRecordsStore = ReturnType<typeof useBackupRecords>

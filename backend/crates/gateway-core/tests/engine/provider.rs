@@ -6,16 +6,14 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use futures_timer::Delay;
 
-use gateway_core::engine::credential::{
-    AccountFeedbackStats, CredentialRevision, ProviderAccountId,
-};
+use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccountId};
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRegistry, ProviderRequest, ProviderResource, ProviderStream,
-    RegistryError, ResourceId, UpstreamTransport,
+    ProviderModelCapabilities, ProviderRegistry, ProviderRequest, ProviderStream, RegistryError,
+    UpstreamTransport,
 };
 use gateway_core::engine::{AttemptContext, UpstreamSendState};
-use gateway_core::error::{IdentifierError, ProviderError, ProviderErrorKind};
+use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta,
     TextDelta,
@@ -112,7 +110,7 @@ fn provider_stream_should_release_owned_lease_on_drop() {
     let metadata = ProviderCallMetadata::new(
         ProviderKind::new("openai").expect("valid provider"),
         UpstreamModelId::new("gpt-5").expect("valid model"),
-        ProviderResource::Anonymous(ResourceId::none()),
+        ProviderAccountId::new("acct_drop").expect("account"),
         UpstreamTransport::new("http_sse").expect("valid transport"),
     );
     let events: EventStream = Box::pin(stream::empty());
@@ -131,10 +129,7 @@ fn provider_stream_should_report_common_account_success_and_first_output() {
     let metadata = ProviderCallMetadata::new(
         provider.clone(),
         UpstreamModelId::new("gpt-5").expect("valid model"),
-        ProviderResource::Account {
-            id: account.clone(),
-            revision: CredentialRevision::new(1).expect("revision"),
-        },
+        account.clone(),
         UpstreamTransport::new("http_sse").expect("valid transport"),
     );
     let response = ResponseMeta::new("resp_upstream", "gpt-5");
@@ -173,7 +168,7 @@ fn provider_stream_should_not_sequence_gate_canonical_observation_attached_to_wi
     let metadata = ProviderCallMetadata::new(
         ProviderKind::new("openai").expect("valid provider"),
         UpstreamModelId::new("gpt-5").expect("valid model"),
-        ProviderResource::Anonymous(ResourceId::none()),
+        ProviderAccountId::new("acct_wire").expect("account"),
         UpstreamTransport::new("http_sse").expect("valid transport"),
     );
     let wire = ProtocolWireEvent::json(
@@ -217,10 +212,7 @@ fn provider_stream_should_report_confirmed_sent_failure_but_ignore_unconfirmed_f
         let metadata = ProviderCallMetadata::new(
             provider.clone(),
             UpstreamModelId::new("grok-4.5").expect("valid model"),
-            ProviderResource::Account {
-                id: account,
-                revision: CredentialRevision::new(1).expect("revision"),
-            },
+            account,
             UpstreamTransport::new("http_sse").expect("valid transport"),
         );
         let events: EventStream = Box::pin(stream::iter([Err(ProviderError::new(
@@ -251,20 +243,4 @@ fn provider_stream_should_report_confirmed_sent_failure_but_ignore_unconfirmed_f
         feedback.scheduling_signals(&provider, &not_sent_account),
         (None, None)
     );
-}
-
-#[test]
-fn resource_id_should_accept_versioned_hmac_pseudonym() {
-    let resource = ResourceId::anonymous("rr_hmac_sha256_v1:opaque-digest")
-        .expect("versioned pseudonym is valid");
-
-    assert_eq!(resource.as_str(), "rr_hmac_sha256_v1:opaque-digest");
-}
-
-#[test]
-fn resource_id_should_reserve_none_sentinel_for_constructor() {
-    let error = ResourceId::anonymous("__none__")
-        .expect_err("sentinel must only be created by ResourceId::none");
-
-    assert_eq!(error, IdentifierError::ReservedPrefix);
 }

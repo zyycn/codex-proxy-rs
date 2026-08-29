@@ -344,12 +344,6 @@ impl CodexCredentialData {
         }
     }
 
-    pub fn set_installation_id(&mut self, installation_id: String) {
-        match self {
-            Self::OAuth(data) => data.installation_id = installation_id,
-        }
-    }
-
     #[must_use]
     pub fn cookies(&self) -> &[CodexCookie] {
         match self {
@@ -388,31 +382,6 @@ impl fmt::Debug for CodexCredentialData {
         match self {
             Self::OAuth(data) => data.fmt(formatter),
         }
-    }
-}
-
-/// 刷新成功后的 CAS 输入。
-pub struct RotateCodexCredential {
-    pub account_id: String,
-    pub expected_credential_revision: u64,
-    pub secret: CodexOAuthSecret,
-    pub verified_account: CodexAccountProfile,
-    pub next_refresh_at: Option<DateTime<Utc>>,
-}
-
-impl fmt::Debug for RotateCodexCredential {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RotateCodexCredential")
-            .field("account_id", &self.account_id)
-            .field(
-                "expected_credential_revision",
-                &self.expected_credential_revision,
-            )
-            .field("secret", &self.secret)
-            .field("verified_account", &self.verified_account)
-            .field("next_refresh_at", &self.next_refresh_at)
-            .finish()
     }
 }
 

@@ -20,14 +20,8 @@ use crate::error::{OperationError, validate_text};
 pub enum OperationKind {
     /// 文本、多模态和工具生成。
     Generate,
-    /// 向量嵌入。
-    Embed,
-    /// 文档重排。
-    Rerank,
     /// 图像生成。
     GenerateImage,
-    /// 语音生成。
-    Speech,
 }
 
 impl OperationKind {
@@ -36,21 +30,9 @@ impl OperationKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Generate => "generate",
-            Self::Embed => "embed",
-            Self::Rerank => "rerank",
             Self::GenerateImage => "generate_image",
-            Self::Speech => "speech",
         }
     }
-}
-
-/// 请求在 commit 前是否允许跨目标重放。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RetrySafety {
-    /// 相同业务 payload 可以安全重放。
-    Idempotent,
-    /// 默认禁止跨 Provider fallback。
-    NonIdempotent,
 }
 
 /// Router 理解的稳定能力。
@@ -473,101 +455,6 @@ fn contains_type(value: Option<&Value>, expected: &str) -> bool {
     }
 }
 
-/// Embedding 请求。
-#[derive(Clone, PartialEq, Eq)]
-pub struct EmbedRequest {
-    input: Vec<String>,
-    dimensions: Option<u32>,
-}
-
-impl EmbedRequest {
-    /// 创建 embedding 请求。
-    ///
-    /// # Errors
-    ///
-    /// 输入为空时返回错误。
-    pub fn new(input: Vec<String>) -> Result<Self, OperationError> {
-        if input.is_empty() || input.iter().any(String::is_empty) {
-            return Err(OperationError::EmptyField { field: "input" });
-        }
-        Ok(Self {
-            input,
-            dimensions: None,
-        })
-    }
-
-    /// 设置输出维度。
-    #[must_use]
-    pub const fn with_dimensions(mut self, dimensions: u32) -> Self {
-        self.dimensions = Some(dimensions);
-        self
-    }
-
-    /// 返回输入文本。
-    #[must_use]
-    pub fn input(&self) -> &[String] {
-        &self.input
-    }
-}
-
-impl fmt::Debug for EmbedRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("EmbedRequest")
-            .field("input_items", &self.input.len())
-            .field("dimensions", &self.dimensions)
-            .finish()
-    }
-}
-
-/// Rerank 请求。
-#[derive(Clone, PartialEq, Eq)]
-pub struct RerankRequest {
-    query: String,
-    documents: Vec<String>,
-    top_n: Option<u32>,
-}
-
-impl RerankRequest {
-    /// 创建 rerank 请求。
-    ///
-    /// # Errors
-    ///
-    /// Query 或文档为空时返回错误。
-    pub fn new(query: impl Into<String>, documents: Vec<String>) -> Result<Self, OperationError> {
-        let query = query.into();
-        if query.is_empty() {
-            return Err(OperationError::EmptyField { field: "query" });
-        }
-        if documents.is_empty() || documents.iter().any(String::is_empty) {
-            return Err(OperationError::EmptyField { field: "documents" });
-        }
-        Ok(Self {
-            query,
-            documents,
-            top_n: None,
-        })
-    }
-
-    /// 设置返回条数。
-    #[must_use]
-    pub const fn with_top_n(mut self, top_n: u32) -> Self {
-        self.top_n = Some(top_n);
-        self
-    }
-}
-
-impl fmt::Debug for RerankRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RerankRequest")
-            .field("query", &"<not included in Debug>")
-            .field("documents", &self.documents.len())
-            .field("top_n", &self.top_n)
-            .finish()
-    }
-}
-
 /// 图像 API 的稳定端点语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageRequestKind {
@@ -614,56 +501,14 @@ impl fmt::Debug for ImageRequest {
     }
 }
 
-/// 语音生成请求。
-#[derive(Clone, PartialEq, Eq)]
-pub struct SpeechRequest {
-    input: String,
-    voice: String,
-}
-
-impl SpeechRequest {
-    /// 创建语音生成请求。
-    ///
-    /// # Errors
-    ///
-    /// 输入或 voice 为空时返回错误。
-    pub fn new(input: impl Into<String>, voice: impl Into<String>) -> Result<Self, OperationError> {
-        let input = input.into();
-        let voice = voice.into();
-        if input.is_empty() {
-            return Err(OperationError::EmptyField { field: "input" });
-        }
-        if voice.is_empty() {
-            return Err(OperationError::EmptyField { field: "voice" });
-        }
-        Ok(Self { input, voice })
-    }
-}
-
-impl fmt::Debug for SpeechRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SpeechRequest")
-            .field("input", &"<not included in Debug>")
-            .field("voice", &self.voice)
-            .finish()
-    }
-}
-
 /// 网关内部业务请求；不包含任何客户端 wire 或 Provider SDK 类型。
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Operation {
     /// 生成。
     Generate(GenerateRequest),
-    /// Embedding。
-    Embed(EmbedRequest),
-    /// Rerank。
-    Rerank(RerankRequest),
     /// 图像生成。
     GenerateImage(ImageRequest),
-    /// 语音生成。
-    Speech(SpeechRequest),
 }
 
 impl Operation {
@@ -688,10 +533,7 @@ impl Operation {
     pub const fn kind(&self) -> OperationKind {
         match self {
             Self::Generate(_) => OperationKind::Generate,
-            Self::Embed(_) => OperationKind::Embed,
-            Self::Rerank(_) => OperationKind::Rerank,
             Self::GenerateImage(_) => OperationKind::GenerateImage,
-            Self::Speech(_) => OperationKind::Speech,
         }
     }
 
@@ -700,21 +542,7 @@ impl Operation {
     pub fn capability_requirements(&self) -> CapabilityRequirements {
         match self {
             Self::Generate(request) => request.requirements(),
-            Self::Embed(_) => CapabilityRequirements::new(OperationKind::Embed),
-            Self::Rerank(_) => CapabilityRequirements::new(OperationKind::Rerank),
             Self::GenerateImage(_) => CapabilityRequirements::new(OperationKind::GenerateImage),
-            Self::Speech(_) => CapabilityRequirements::new(OperationKind::Speech),
-        }
-    }
-
-    /// 返回跨目标重放安全性。
-    #[must_use]
-    pub const fn retry_safety(&self) -> RetrySafety {
-        match self {
-            Self::Embed(_) | Self::Rerank(_) => RetrySafety::Idempotent,
-            Self::Generate(_) | Self::GenerateImage(_) | Self::Speech(_) => {
-                RetrySafety::NonIdempotent
-            }
         }
     }
 
@@ -724,7 +552,6 @@ impl Operation {
         match self {
             Self::Generate(request) => request.image_generation_requested(),
             Self::GenerateImage(_) => true,
-            Self::Embed(_) | Self::Rerank(_) | Self::Speech(_) => false,
         }
     }
 
@@ -733,7 +560,7 @@ impl Operation {
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {
             Self::Generate(request) => request.provider_session_state(provider),
-            Self::Embed(_) | Self::Rerank(_) | Self::GenerateImage(_) | Self::Speech(_) => None,
+            Self::GenerateImage(_) => None,
         }
     }
 }

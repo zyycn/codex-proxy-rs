@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime};
 use gateway_core::engine::credential::{
     AccountEligibilityPolicy, AccountSelectionPolicy, CredentialRevision, ProviderAccountId,
 };
-use gateway_core::engine::provider::ProviderResource;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{FrozenAccountScope, UpstreamModelId};
 use sha2::{Digest as _, Sha256};
@@ -145,15 +144,6 @@ impl SelectedGrokSession {
     #[must_use]
     pub const fn credential_revision(&self) -> CredentialRevision {
         self.credential_revision
-    }
-
-    /// 返回 Core 为本次上游调用记录的元数据。
-    #[must_use]
-    pub fn resource(&self) -> ProviderResource {
-        ProviderResource::Account {
-            id: self.account_id.clone(),
-            revision: self.credential_revision,
-        }
     }
 
     /// 返回用于显式构造 header 的 OAuth access token。

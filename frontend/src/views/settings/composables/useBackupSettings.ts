@@ -168,5 +168,3 @@ export function useBackupSettings() {
     saveSchedule,
   }
 }
-
-export type BackupSettingsStore = ReturnType<typeof useBackupSettings>

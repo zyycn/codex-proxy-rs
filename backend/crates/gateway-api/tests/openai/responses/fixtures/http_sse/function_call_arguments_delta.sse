@@ -1,3 +1,0 @@
-event: response.function_call_arguments.delta
-data: {"delta":"{\"path\""}
-

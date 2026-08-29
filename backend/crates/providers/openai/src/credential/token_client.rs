@@ -274,14 +274,6 @@ pub fn openai_token_client(
     Ok(OpenAiTokenClient::new(client, config))
 }
 
-/// 构建固定官方 endpoint 的 Codex token client。
-pub fn official_openai_token_client() -> Result<OpenAiTokenClient, TokenClientBuildError> {
-    openai_token_client(TokenClientConfig {
-        client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
-        token_endpoint: OFFICIAL_CODEX_TOKEN_ENDPOINT.to_owned(),
-    })
-}
-
 #[derive(Deserialize)]
 struct RefreshTokenResponse {
     access_token: Option<String>,

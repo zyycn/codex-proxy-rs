@@ -12,8 +12,8 @@ use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuation
 use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation, ProviderResource,
-    ProviderStream, UpstreamTransport,
+    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation, ProviderStream,
+    UpstreamTransport,
 };
 use gateway_core::engine::{
     AttemptContext, CancellationToken, ContinuationAttempt, UpstreamSendState,
@@ -386,10 +386,7 @@ impl Provider for CodexProvider {
         let metadata = ProviderCallMetadata::new(
             provider_kind,
             upstream_model.clone(),
-            ProviderResource::Account {
-                id: lease.account_id().clone(),
-                revision: lease.account().revision(),
-            },
+            lease.account_id().clone(),
             UpstreamTransport::new(transport_name(transport)).map_err(|_| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,
@@ -464,10 +461,7 @@ impl CodexProvider {
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
         let metadata = ProviderCallMetadata::for_provider_endpoint(
             provider_kind,
-            ProviderResource::Account {
-                id: lease.account_id().clone(),
-                revision: lease.account().revision(),
-            },
+            lease.account_id().clone(),
             UpstreamTransport::new(HTTP_JSON_TRANSPORT).map_err(|_| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
             })?,

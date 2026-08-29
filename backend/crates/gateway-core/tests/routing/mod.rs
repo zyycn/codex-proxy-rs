@@ -494,7 +494,7 @@ fn upstream_feature_validation_should_preserve_operation_and_limit_gates() {
         .require(Feature::JsonSchema);
     let oversized_output = CapabilityRequirements::new(OperationKind::Generate)
         .with_requested_output_tokens(Some(16_001));
-    let unsupported_operation = CapabilityRequirements::new(OperationKind::Speech);
+    let unsupported_operation = CapabilityRequirements::new(OperationKind::GenerateImage);
 
     assert_eq!(
         (

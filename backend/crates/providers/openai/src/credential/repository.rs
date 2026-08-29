@@ -3,10 +3,9 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, CredentialState, ProviderAccount, ProviderAccountId, ProviderAccountStore,
+    CredentialRevision, CredentialState, ProviderAccount, ProviderAccountStore,
     ProviderAccountUpdate,
 };
 use gateway_core::routing::ProviderKind;
@@ -14,7 +13,7 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
-use super::types::{CodexCredentialData, CodexOAuthSecret, RotateCodexCredential};
+use super::types::{CodexCredentialData, CodexOAuthSecret};
 
 const PROVIDER_NAME: &str = "openai";
 
@@ -32,51 +31,6 @@ impl CodexCredentialRepository {
     #[must_use]
     pub fn store(&self) -> &Arc<dyn ProviderAccountStore> {
         &self.store
-    }
-
-    pub async fn rotate_oauth_secret(
-        &self,
-        input: RotateCodexCredential,
-    ) -> Result<CredentialRevision, CredentialRepositoryError> {
-        let account_id = ProviderAccountId::new(input.account_id)
-            .map_err(|_| CredentialRepositoryError::InvalidInput("account_id"))?;
-        let expected = CredentialRevision::new(input.expected_credential_revision)
-            .map_err(|_| CredentialRepositoryError::InvalidInput("credential_revision"))?;
-        let current = self.store.load_credential(&account_id, expected).await?;
-        let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
-        let oauth = data
-            .oauth_mut()
-            .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
-        oauth.access_token = input.secret.access_token.expose_secret().to_owned();
-        oauth.refresh_token = input
-            .secret
-            .refresh_token
-            .as_ref()
-            .map(|value| value.expose_secret().to_owned());
-        oauth.id_token = input
-            .secret
-            .id_token
-            .as_ref()
-            .map(|value| value.expose_secret().to_owned());
-        let credential = CodexCredentialCodec::encode_complete(data)?;
-        let update = CredentialCasUpdate::new(
-            account_id.clone(),
-            expected,
-            ProviderAccountUpdate {
-                account_id,
-                name: current.account.name().to_owned(),
-                email: input.verified_account.email.clone(),
-                plan_type: input.verified_account.plan_type.clone(),
-            },
-            credential,
-            input.secret.refresh_token.is_some(),
-            Some(required_time(
-                input.verified_account.access_token_expires_at,
-            )?),
-            optional_time(input.next_refresh_at),
-        )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
-        cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
     /// 持久化成功 RT exchange 的 token，同时保留既有账号身份投影。
@@ -294,20 +248,8 @@ fn cas_revision(
     }
 }
 
-fn required_time(value: Option<DateTime<Utc>>) -> Result<SystemTime, CredentialRepositoryError> {
-    value
-        .map(SystemTime::from)
-        .ok_or(CredentialRepositoryError::InvalidCredentialData)
-}
-
-fn optional_time(value: Option<DateTime<Utc>>) -> Option<SystemTime> {
-    value.map(SystemTime::from)
-}
-
 #[derive(Debug, Error)]
 pub enum CredentialRepositoryError {
-    #[error("invalid Codex credential input: {0}")]
-    InvalidInput(&'static str),
     #[error("Codex credential data is invalid")]
     InvalidCredentialData,
     #[error("Codex credential revision conflict")]

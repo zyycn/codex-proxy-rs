@@ -373,7 +373,6 @@ pub struct ProviderError {
 struct ProviderErrorUpstreamValues {
     code: Option<OpaqueUpstreamValue>,
     request_id: Option<OpaqueUpstreamValue>,
-    response_id: Option<OpaqueUpstreamValue>,
 }
 
 #[derive(Clone)]
@@ -421,13 +420,6 @@ impl ProviderError {
     #[must_use]
     pub fn with_upstream_request_id(mut self, request_id: OpaqueUpstreamValue) -> Self {
         self.upstream_values_mut().request_id = Some(request_id);
-        self
-    }
-
-    /// 附加 adapter 已分类为非 bearer 的上游 response ID。
-    #[must_use]
-    pub fn with_upstream_response_id(mut self, response_id: OpaqueUpstreamValue) -> Self {
-        self.upstream_values_mut().response_id = Some(response_id);
         self
     }
 
@@ -551,14 +543,6 @@ impl ProviderError {
             .and_then(|values| values.request_id.as_ref())
     }
 
-    /// 返回安全分类的上游 response ID。
-    #[must_use]
-    pub fn upstream_response_id(&self) -> Option<&OpaqueUpstreamValue> {
-        self.upstream_values
-            .as_deref()
-            .and_then(|values| values.response_id.as_ref())
-    }
-
     /// 返回 Provider 建议的冷却时间。
     #[must_use]
     pub const fn retry_after(&self) -> Option<Duration> {
@@ -665,10 +649,6 @@ impl fmt::Debug for ProviderError {
             .field(
                 "upstream_request_id",
                 &self.upstream_request_id().map(|_| "<classified-safe>"),
-            )
-            .field(
-                "upstream_response_id",
-                &self.upstream_response_id().map(|_| "<classified-safe>"),
             )
             .field("retry_after", &self.retry_after)
             .field("continuation_failure", &self.continuation_failure)

@@ -1,2 +1,0 @@
-event: response.failed
-data: {"response":{"id":"resp_server_overloaded","object":"response","status":"failed","error":{"code":"server_is_overloaded","message":"upstream is temporarily overloaded"}}}

@@ -22,7 +22,7 @@ use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorK
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
-use crate::operation::{Operation, ProviderSessionState, RetrySafety};
+use crate::operation::{Operation, ProviderSessionState};
 use crate::routing::RoutingPlan;
 use futures::future::Fuse;
 use futures::{FutureExt, StreamExt, pin_mut, select_biased};
@@ -214,7 +214,6 @@ struct FailureFinalization {
     upstream_status_code: Option<u16>,
     provider_error_code: Option<String>,
     retry_after_ms: Option<u64>,
-    provider_response_id: Option<String>,
 }
 
 /// API 可逐事件消费的 Core 执行会话。
@@ -477,7 +476,7 @@ where
         if state.provider() != provider.as_str() {
             return None;
         }
-        let account = current.metadata.provider_account_id()?.clone();
+        let account = current.metadata.provider_account_id().clone();
         let response_id = self.upstream_response_id.as_deref()?;
         let previous_response_id = PreviousResponseId::new(response_id.to_owned());
         let upstream_response_id = PreviousResponseId::new(response_id.to_owned());
@@ -602,7 +601,6 @@ where
                 upstream_status_code: None,
                 provider_error_code: None,
                 retry_after_ms: None,
-                provider_response_id: None,
             })
             .await?;
             return Err(EngineError::EmptyRoutingPlan);
@@ -749,7 +747,6 @@ where
                 upstream_status_code: None,
                 provider_error_code: None,
                 retry_after_ms: None,
-                provider_response_id: None,
             })
             .await?;
             return Err(EngineError::ProviderMetadataMismatch);
@@ -757,9 +754,9 @@ where
 
         let metadata = stream.metadata().clone();
         if !self.account_selection.is_diagnostic()
-            && metadata
-                .provider_account_id()
-                .is_none_or(|account| !candidate.account_scope().allows(account))
+            && !candidate
+                .account_scope()
+                .allows(metadata.provider_account_id())
         {
             let error = GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -772,14 +769,13 @@ where
                 upstream_status_code: None,
                 provider_error_code: None,
                 retry_after_ms: None,
-                provider_response_id: None,
             })
             .await?;
             return Err(EngineError::AccountOutsideClientScope);
         }
         if pinned_account
             .as_ref()
-            .is_some_and(|required| metadata.provider_account_id() != Some(required))
+            .is_some_and(|required| metadata.provider_account_id() != required)
         {
             let error = GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -792,7 +788,6 @@ where
                 upstream_status_code: None,
                 provider_error_code: None,
                 retry_after_ms: None,
-                provider_response_id: None,
             })
             .await?;
             return Err(EngineError::RequiredAccountMismatch);
@@ -802,9 +797,7 @@ where
             .as_ref()
             .and_then(ContinuationBinding::pinned)
             && self.continuation_attempt == ContinuationAttempt::Native
-            && !metadata
-                .provider_account_id()
-                .is_some_and(|account| pin.matches(metadata.provider(), account))
+            && !pin.matches(metadata.provider(), metadata.provider_account_id())
         {
             let error = GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -817,17 +810,14 @@ where
                 upstream_status_code: None,
                 provider_error_code: None,
                 retry_after_ms: None,
-                provider_response_id: None,
             })
             .await?;
             return Err(EngineError::ContinuationPinMismatch);
         }
-        if self.account_state_owner.is_none()
-            && let Some(account) = metadata.provider_account_id()
-        {
+        if self.account_state_owner.is_none() {
             self.account_state_owner = Some(ProviderAccountStateOwner::new(
                 metadata.provider().clone(),
-                account.clone(),
+                metadata.provider_account_id().clone(),
             ));
         }
         let attempt_record = AttemptRecord {
@@ -835,8 +825,8 @@ where
             attempt_count: next_attempt,
             trigger,
             provider_kind: metadata.provider().clone(),
-            provider_account_id: metadata.provider_account_id().cloned(),
-            provider_account_ref: metadata.provider_account_id().cloned(),
+            provider_account_id: Some(metadata.provider_account_id().clone()),
+            provider_account_ref: Some(metadata.provider_account_id().clone()),
             upstream_model_id: metadata.upstream_model().cloned(),
             upstream_transport: metadata.transport().as_str().to_owned(),
             http_version: None,
@@ -1032,8 +1022,7 @@ where
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
             && attempt_send_state != UpstreamSendState::Ambiguous
-            && (self.operation.retry_safety() == RetrySafety::Idempotent
-                || provider_proved_replay_safe)
+            && provider_proved_replay_safe
             && self.attempts < self.plan.max_attempts().get();
         let same_account_retry = error.retries_same_account()
             && provider_proved_replay_safe
@@ -1041,14 +1030,9 @@ where
             && !self.delivery_pending
             && attempt_send_state != UpstreamSendState::Ambiguous
             && self.attempts < self.plan.max_attempts().get()
-            && current
-                .metadata
-                .provider_account_id()
-                .is_some_and(|account| {
-                    !self
-                        .credential_recovery_attempted_accounts
-                        .contains(account)
-                });
+            && !self
+                .credential_recovery_attempted_accounts
+                .contains(current.metadata.provider_account_id());
         let retryable =
             continuation_retry || same_account_retry || ordinary_retry || pre_delivery_retry;
 
@@ -1057,17 +1041,15 @@ where
             // 所有权保留到下一次 attempt 成功，或最终空选路时返回客户端。
             let persistence_error = self.request_persisted.then(|| error.clone());
             if same_account_retry {
-                if let Some(account) = current.metadata.provider_account_id() {
-                    self.credential_recovery_attempted_accounts
-                        .insert(account.clone());
-                    // 只钉住紧随其后的 replay attempt；replay 再遇可重试错误时，
-                    // ordinary/continuation 重试门不受影响，仍可换号。
-                    self.recovery_account = Some(account.clone());
-                }
-            } else if !continuation_retry
-                && let Some(account) = current.metadata.provider_account_id()
-            {
-                self.excluded_accounts.insert(account.clone());
+                let account = current.metadata.provider_account_id().clone();
+                self.credential_recovery_attempted_accounts
+                    .insert(account.clone());
+                // 只钉住紧随其后的 replay attempt；replay 再遇可重试错误时，
+                // ordinary/continuation 重试门不受影响，仍可换号。
+                self.recovery_account = Some(account);
+            } else if !continuation_retry {
+                self.excluded_accounts
+                    .insert(current.metadata.provider_account_id().clone());
             }
             self.last_retryable_failure_events = atomic_client_events;
             self.last_retryable_failure = Some(error);
@@ -1082,7 +1064,7 @@ where
                             attempt_index: current.index,
                             trigger: current.trigger,
                             provider_kind: current.metadata.provider().clone(),
-                            account_id: current.metadata.provider_account_id().cloned(),
+                            account_id: Some(current.metadata.provider_account_id().clone()),
                             upstream_model_id: current.metadata.upstream_model().cloned(),
                             upstream_status_code: current
                                 .response_observation
@@ -1157,14 +1139,12 @@ where
             }
             ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner => {
                 self.continuation_attempt = ContinuationAttempt::ReplayAny;
-                if let Some(account) = current.metadata.provider_account_id() {
-                    self.excluded_accounts.insert(account.clone());
-                }
+                self.excluded_accounts
+                    .insert(current.metadata.provider_account_id().clone());
             }
             ContinuationAttempt::ReplayAny => {
-                if let Some(account) = current.metadata.provider_account_id() {
-                    self.excluded_accounts.insert(account.clone());
-                }
+                self.excluded_accounts
+                    .insert(current.metadata.provider_account_id().clone());
             }
             ContinuationAttempt::None => return false,
         }
@@ -1317,9 +1297,6 @@ where
             upstream_status_code: error.upstream_status(),
             provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
             retry_after_ms: error.retry_after().map(duration_ms),
-            provider_response_id: error
-                .upstream_response_id()
-                .map(|value| value.as_str().to_owned()),
         })
         .await
     }
@@ -1373,7 +1350,6 @@ where
             upstream_status_code: None,
             provider_error_code: None,
             retry_after_ms: None,
-            provider_response_id: None,
         })
         .await
     }
@@ -1433,9 +1409,7 @@ where
                         .or(observed_status_code),
                     client_response_id: self.client_response_id.clone(),
                     upstream_request_id,
-                    upstream_response_id: finalization
-                        .provider_response_id
-                        .or_else(|| self.upstream_response_id.clone()),
+                    upstream_response_id: self.upstream_response_id.clone(),
                     upstream_transport,
                     http_version,
                     websocket_pool,

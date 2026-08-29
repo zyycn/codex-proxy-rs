@@ -6,9 +6,7 @@ use provider_openai::transport::canonical::{
 use provider_openai::transport::protocol::websocket::websocket_event_to_sse_frame;
 use serde_json::json;
 
-const METADATA_PREFIX_FIXTURE: &str = include_str!(
-    "../../../../gateway-api/tests/openai/responses/fixtures/http_sse/metadata_only_prefix.sse"
-);
+const METADATA_PREFIX_FIXTURE: &str = include_str!("fixtures/metadata_only_prefix.sse");
 
 #[test]
 fn decoder_should_not_forward_codex_rate_limit_metadata_fixture_as_openai_wire() {

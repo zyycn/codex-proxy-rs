@@ -675,7 +675,6 @@ fn provider_error_bytes(error: &ProviderError) -> usize {
     let mut bytes = text_bytes([
         error.upstream_code().map(|value| value.as_str()),
         error.upstream_request_id().map(|value| value.as_str()),
-        error.upstream_response_id().map(|value| value.as_str()),
     ]);
     if let Some(client_error) = error.client_visible_upstream_error() {
         bytes = bytes.saturating_add(text_bytes([

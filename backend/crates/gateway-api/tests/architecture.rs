@@ -108,14 +108,6 @@ fn test_tree_should_match_frozen_rust_mirror() {
 }
 
 #[test]
-fn frozen_openai_fixture_set_should_be_complete() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/openai/responses/fixtures");
-    let files = all_files(&root);
-
-    assert_eq!(files.len(), 69);
-}
-
-#[test]
 fn admin_routes_should_use_only_get_post_and_static_paths() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/admin");
     let mut combined = String::new();

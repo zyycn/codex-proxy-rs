@@ -455,7 +455,7 @@ fn provider_call_metadata(
     Ok(ProviderCallMetadata::new(
         ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?,
         candidate_upstream_model(candidate)?.clone(),
-        selected.resource(),
+        selected.account_id().clone(),
         UpstreamTransport::new(HTTP_SSE_TRANSPORT).map_err(|_| protocol_not_sent())?,
     ))
 }

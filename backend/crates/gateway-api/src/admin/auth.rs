@@ -37,11 +37,6 @@ impl AdminAuth {
     pub const fn context(&self) -> &AdminRequestContext {
         &self.context
     }
-
-    #[must_use]
-    pub fn into_context(self) -> AdminRequestContext {
-        self.context
-    }
 }
 
 impl<S> FromRequestParts<S> for AdminAuth

@@ -1,6 +1,6 @@
 // Usage 记录的单一规范化 view model 消费层。
 //
-// 组件只消费 `UsageDisplayRecord`（即 `UsageViewModel`）；兼容性回退只在本文件发生。
+// 组件只消费 `UsageDisplayRecord`（即 `UsageViewModel`）。
 
 import type {
   UsageAttempt,
@@ -16,7 +16,7 @@ import type {
 import { isRecord } from '@/utils/object'
 import { formatDuration } from './format'
 
-// Usage 记录的规范化 view model：组件只消费这个形状，兼容性回退只发生在本文件。
+// Usage 记录的规范化 view model：组件只消费这个形状。
 export interface UsageViewModel {
   id: string
   requestId: string
@@ -34,8 +34,6 @@ export interface UsageViewModel {
   serviceTier: string | null
   statusCode: number | null
   transport: string | null
-  stream: boolean | null
-  apiKind: string | null
   attemptIndex: number | null
   attemptCount: number
   responseId: string | null
@@ -81,47 +79,9 @@ export interface UsageViewModel {
   attemptsComplete?: boolean
 }
 
-const CORE_METADATA_KEYS = new Set([
-  'protocol',
-  'logicalOutcome',
-  'attemptCount',
-  'requestedModel',
-  'upstreamModel',
-  'clientIp',
-  'userAgent',
-  'reasoningEffort',
-  'reasoningPreset',
-  'compact',
-  'requestKind',
-  'subagentKind',
-  'transport',
-  'httpVersion',
-  'clientStatusCode',
-  'upstreamStatusCode',
-  'responseId',
-  'upstreamRequestId',
-  'websocketPool',
-  'imageGenerationRequested',
-  'imageGenerationSucceeded',
-  'latencyDetails',
-])
-
-function metadataRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {}
-}
-
-/** 一次性兼容 normalize：顶层 Core 字段优先，旧响应中的 metadata 回退只发生在这里。 */
+/** 将现行 Usage API 记录收口为组件消费的单一形状。 */
 export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): UsageViewModel {
-  const metadata = metadataRecord(record.metadata)
-  const legacy = <T>(top: T | null | undefined, key: string): T | null | undefined =>
-    top ?? (metadata[key] as T | undefined)
-
-  const latencyDetails = legacy(record.latencyDetails, 'latencyDetails') ?? null
-  const providerMetadata: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(metadata)) {
-    if (!CORE_METADATA_KEYS.has(key))
-      providerMetadata[key] = value
-  }
+  const metadata = record.metadata
 
   return {
     id: record.id,
@@ -135,29 +95,25 @@ export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): U
     accountName: record.accountName,
     route: record.route,
     model: record.model,
-    requestedModel: legacy(record.requestedModel, 'requestedModel') ?? null,
-    upstreamModel: legacy(record.upstreamModel, 'upstreamModel') ?? null,
+    requestedModel: record.requestedModel,
+    upstreamModel: record.upstreamModel,
     serviceTier: record.serviceTier,
     statusCode: record.statusCode,
-    transport: legacy(record.transport, 'transport') ?? null,
-    stream: typeof metadata.stream === 'boolean' ? metadata.stream : null,
-    apiKind: typeof metadata.apiKind === 'string' ? metadata.apiKind : null,
+    transport: record.transport,
     attemptIndex: record.attemptIndex,
-    attemptCount: legacy(record.attemptCount, 'attemptCount') ?? 0,
-    responseId: legacy(record.responseId, 'responseId') ?? null,
-    upstreamRequestId: legacy(record.upstreamRequestId, 'upstreamRequestId') ?? null,
-    protocol: legacy(record.protocol, 'protocol') ?? '',
-    httpVersion: legacy(record.httpVersion, 'httpVersion') ?? null,
-    clientStatusCode: legacy(record.clientStatusCode, 'clientStatusCode') ?? null,
-    upstreamStatusCode: legacy(record.upstreamStatusCode, 'upstreamStatusCode') ?? null,
-    websocketPool: legacy(record.websocketPool, 'websocketPool') ?? null,
-    imageGenerationRequested:
-      legacy(record.imageGenerationRequested, 'imageGenerationRequested') ?? false,
-    imageGenerationSucceeded:
-      legacy(record.imageGenerationSucceeded, 'imageGenerationSucceeded') ?? null,
+    attemptCount: record.attemptCount,
+    responseId: record.responseId,
+    upstreamRequestId: record.upstreamRequestId,
+    protocol: record.protocol,
+    httpVersion: record.httpVersion,
+    clientStatusCode: record.clientStatusCode,
+    upstreamStatusCode: record.upstreamStatusCode,
+    websocketPool: record.websocketPool,
+    imageGenerationRequested: record.imageGenerationRequested,
+    imageGenerationSucceeded: record.imageGenerationSucceeded,
     latencyMs: record.latencyMs,
     firstTokenLatencyMs: record.firstTokenLatencyMs,
-    latencyDetails,
+    latencyDetails: record.latencyDetails,
     inputTokens: record.inputTokens,
     outputTokens: record.outputTokens,
     cachedTokens: record.cachedTokens,
@@ -168,21 +124,21 @@ export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): U
     message: record.message,
     createdAt: record.createdAt,
     createdAtDisplay: record.createdAtDisplay,
-    clientIp: legacy(record.clientIp, 'clientIp') ?? null,
-    userAgent: legacy(record.userAgent, 'userAgent') ?? null,
-    reasoningEffort: legacy(record.reasoningEffort, 'reasoningEffort') ?? null,
-    reasoningPreset: legacy(record.reasoningPreset, 'reasoningPreset') ?? null,
-    compact: legacy(record.compact, 'compact') ?? false,
-    requestKind: legacy(record.requestKind, 'requestKind') ?? null,
-    subagentKind: legacy(record.subagentKind, 'subagentKind') ?? null,
+    clientIp: record.clientIp,
+    userAgent: record.userAgent,
+    reasoningEffort: record.reasoningEffort,
+    reasoningPreset: record.reasoningPreset,
+    compact: record.compact ?? false,
+    requestKind: record.requestKind,
+    subagentKind: record.subagentKind,
     tokenDetails: record.tokenDetails,
     billing: record.billing,
     costs: record.costs,
     costCoverage: record.costCoverage,
     firstTokenLatencyMsDisplay: record.firstTokenLatencyMsDisplay,
     latencyMsDisplay: record.latencyMsDisplay,
-    logicalOutcome: legacy(record.logicalOutcome, 'logicalOutcome') ?? '',
-    providerMetadata,
+    logicalOutcome: record.logicalOutcome,
+    providerMetadata: metadata,
     requestBody: metadata.requestBody,
     responseBody: metadata.responseBody,
     attempts: 'attempts' in record ? record.attempts : undefined,
@@ -196,13 +152,9 @@ export function usageRecordType(record: UsageDisplayRecord) {
   if (record.transport === 'websocket')
     return 'WS'
 
-  if (record.stream === true || record.transport === 'http_sse')
+  if (record.transport === 'http_sse')
     return 'SSE'
-
-  if (record.stream === false)
-    return 'HTTP'
-
-  return record.apiKind === 'chat' ? 'Chat' : 'HTTP'
+  return 'HTTP'
 }
 
 export function usageRecordTypeClass(record: UsageDisplayRecord) {
@@ -211,8 +163,6 @@ export function usageRecordTypeClass(record: UsageDisplayRecord) {
     return 'bg-cp-info-bg text-cp-info-text'
   if (type === 'SSE')
     return 'bg-cp-success-bg text-cp-success-text'
-  if (type === 'Chat')
-    return 'bg-cp-warning-bg text-cp-warning-text'
   return 'bg-cp-fill-tertiary text-cp-info-text'
 }
 

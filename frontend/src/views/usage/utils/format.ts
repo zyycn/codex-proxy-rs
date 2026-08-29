@@ -55,12 +55,6 @@ export function formatUsd(value?: string | number | null, precise = false) {
   }).format(safeValue)
 }
 
-export function formatEstimatedAmount(currency: string, value?: string | null) {
-  if (value == null)
-    return '—'
-  return currency.toUpperCase() === 'USD' ? formatUsd(value, true) : `${currency} ${value}`
-}
-
 export function formatUsdAxis(value: number) {
   const safeValue = finiteOrZero(value)
   if (Math.abs(safeValue) >= 1_000)

@@ -11,9 +11,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use thiserror::Error;
 
-use crate::engine::credential::{
-    AccountAttemptFeedback, AccountFeedbackStats, CredentialRevision, ProviderAccountId,
-};
+use crate::engine::credential::{AccountAttemptFeedback, AccountFeedbackStats, ProviderAccountId};
 use crate::engine::{AttemptContext, UpstreamSendState};
 use crate::error::{
     IdentifierError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind, validate_text,
@@ -27,74 +25,6 @@ use crate::routing::{
 /// Box 只出现在 Provider Registry 的统一 event envelope 边界。
 pub type EventStream =
     Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static>>;
-
-/// 匿名 credential/resource 引用。
-///
-/// 有 credential 的值必须是带算法/版本标识的不可逆伪名；无 credential 的
-/// Provider 使用 `__none__`。邮箱、API Key prefix 等身份信息不能进入该类型。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ResourceId(String);
-
-impl ResourceId {
-    /// 无 credential 的稳定 sentinel。
-    #[must_use]
-    pub fn none() -> Self {
-        Self("__none__".to_owned())
-    }
-
-    /// 创建匿名资源 ID。
-    ///
-    /// # Errors
-    ///
-    /// ID 为空、过长、含控制字符或使用 `__` 保留前缀时返回错误。
-    pub fn anonymous(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        let value = value.into();
-        validate_text(&value, 128, true, None)?;
-        Ok(Self(value))
-    }
-
-    /// 返回匿名引用。
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Provider 本次调用实际使用的账号或匿名资源。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderResource {
-    Account {
-        id: ProviderAccountId,
-        revision: CredentialRevision,
-    },
-    Anonymous(ResourceId),
-}
-
-impl ProviderResource {
-    #[must_use]
-    pub const fn account_id(&self) -> Option<&ProviderAccountId> {
-        match self {
-            Self::Account { id, .. } => Some(id),
-            Self::Anonymous(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn credential_revision(&self) -> Option<CredentialRevision> {
-        match self {
-            Self::Account { revision, .. } => Some(*revision),
-            Self::Anonymous(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn anonymous_id(&self) -> Option<&ResourceId> {
-        match self {
-            Self::Account { .. } => None,
-            Self::Anonymous(resource) => Some(resource),
-        }
-    }
-}
 
 /// 上游 transport 注册名称。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -124,7 +54,7 @@ impl UpstreamTransport {
 pub struct ProviderCallMetadata {
     provider: ProviderKind,
     upstream_model: Option<UpstreamModelId>,
-    resource: ProviderResource,
+    provider_account_id: ProviderAccountId,
     upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
 }
@@ -135,13 +65,13 @@ impl ProviderCallMetadata {
     pub const fn new(
         provider: ProviderKind,
         upstream_model: UpstreamModelId,
-        resource: ProviderResource,
+        provider_account_id: ProviderAccountId,
         transport: UpstreamTransport,
     ) -> Self {
         Self {
             provider,
             upstream_model: Some(upstream_model),
-            resource,
+            provider_account_id,
             upstream_request_id: None,
             transport,
         }
@@ -151,13 +81,13 @@ impl ProviderCallMetadata {
     #[must_use]
     pub const fn for_provider_endpoint(
         provider: ProviderKind,
-        resource: ProviderResource,
+        provider_account_id: ProviderAccountId,
         transport: UpstreamTransport,
     ) -> Self {
         Self {
             provider,
             upstream_model: None,
-            resource,
+            provider_account_id,
             upstream_request_id: None,
             transport,
         }
@@ -182,22 +112,10 @@ impl ProviderCallMetadata {
         self.upstream_model.as_ref()
     }
 
-    /// 返回匿名资源；账号调用返回 `None`。
-    #[must_use]
-    pub const fn anonymous_resource(&self) -> Option<&ResourceId> {
-        self.resource.anonymous_id()
-    }
-
     /// 返回 live Provider account ID。
     #[must_use]
-    pub const fn provider_account_id(&self) -> Option<&ProviderAccountId> {
-        self.resource.account_id()
-    }
-
-    /// 返回本次冻结的 credential revision。
-    #[must_use]
-    pub const fn upstream_credential_revision(&self) -> Option<CredentialRevision> {
-        self.resource.credential_revision()
+    pub const fn provider_account_id(&self) -> &ProviderAccountId {
+        &self.provider_account_id
     }
 
     /// 返回安全上游 request ID。
@@ -334,16 +252,14 @@ impl ProviderStream {
     /// 让公共 stream 边界统一回灌账号成功率与首个有效输出延迟。
     #[must_use]
     pub fn with_account_feedback(mut self, stats: Arc<AccountFeedbackStats>) -> Self {
-        if let Some(account_id) = self.metadata.provider_account_id().cloned() {
-            self.account_feedback = Some(ProviderStreamAccountFeedback {
-                stats,
-                provider_kind: self.metadata.provider().clone(),
-                account_id,
-                started_at: None,
-                first_output_ms: None,
-                reported: false,
-            });
-        }
+        self.account_feedback = Some(ProviderStreamAccountFeedback {
+            stats,
+            provider_kind: self.metadata.provider().clone(),
+            account_id: self.metadata.provider_account_id().clone(),
+            started_at: None,
+            first_output_ms: None,
+            reported: false,
+        });
         self
     }
 

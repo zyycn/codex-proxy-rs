@@ -360,14 +360,6 @@ export function recoverAccount(data: AccountIdParam) {
   })
 }
 
-export function getAccountQuota(data: AccountIdParam) {
-  return request<AccountQuotaResponse>({
-    url: '/api/admin/accounts/quota',
-    method: 'GET',
-    params: data,
-  })
-}
-
 export function getAccountProfileStatistics(data: AccountIdParam) {
   return request<AccountProfileStatisticsResponse>({
     url: '/api/admin/accounts/profile-statistics',
