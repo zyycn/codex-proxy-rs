@@ -341,63 +341,99 @@ pub(crate) async fn attempt_metrics(
     filter: &UsageRecordFilter,
 ) -> StoreResult<AttemptMetrics> {
     filter.validate()?;
+    let fact = completed_usage_fact_predicate("sr");
+    // PERF: `model_requests` 包含宽请求元数据。这里只物化两个聚合族会复用的列，
+    // 避免生产基数下 `mr.*` 与多次标量子查询把 CTE 反复写入临时文件。
     let mut query = QueryBuilder::<Postgres>::new(
-        "with selected_requests as (
-           select mr.* from model_requests mr where mr.started_at >= ",
+        "with selected_requests as materialized (
+           select mr.id, mr.attempt_count, mr.outcome, mr.error_kind,
+                  mr.upstream_status_code, mr.client_status_code,
+                  mr.downstream_committed_at, mr.client_transport, mr.cost_source
+           from model_requests mr where mr.started_at >= ",
     );
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
     push_usage_filter(&mut query, filter, "mr");
-    query.push(
-        "), usage_facts as (
-           select * from selected_requests
-           where outcome = 'succeeded'
-             and downstream_committed_at is not null
-             and client_status_code between 200 and 399
-         ), failures as (
-           select coalesce(oe.occurrence_count, 1)::bigint as occurrences,
-                  oe.failure_kind, oe.status_code
+    query.push(format!(
+        "), request_aggregate as (
+           select coalesce(sum(sr.attempt_count), 0)::bigint as attempt_count,
+                  count(*) filter (
+                    where sr.outcome = 'succeeded' and sr.attempt_count > 0
+                  )::bigint as success_count,
+                  count(*) filter (
+                    where sr.outcome = 'cancelled' and sr.attempt_count > 0
+                  )::bigint as cancelled_count,
+                  count(*) filter (
+                    where sr.outcome = 'incomplete' and sr.attempt_count > 0
+                  )::bigint as incomplete_count,
+                  count(*) filter (
+                    where sr.outcome = 'failed' and sr.attempt_count > 0
+                  )::bigint as request_failure_count,
+                  count(*) filter (
+                    where sr.outcome = 'failed' and sr.attempt_count > 0
+                      and (coalesce(sr.error_kind, 'failed') in
+                             ('rate_limited', 'quota_exhausted')
+                           or coalesce(sr.upstream_status_code,
+                                       sr.client_status_code) = 429)
+                  )::bigint as request_rate_limited_count,
+                  count(*) filter (
+                    where sr.outcome = 'failed' and sr.attempt_count > 0
+                      and (coalesce(sr.error_kind, 'failed') in
+                             ('authentication', 'authorization', 'invalid_credential')
+                           or coalesce(sr.upstream_status_code,
+                                       sr.client_status_code) in (401, 403))
+                  )::bigint as request_auth_failure_count,
+                  count(*) filter (
+                    where sr.outcome = 'failed' and sr.attempt_count > 0
+                      and coalesce(sr.upstream_status_code,
+                                   sr.client_status_code) between 500 and 599
+                  )::bigint as request_provider_5xx_count,
+                  count(*) filter (
+                    where {fact} and sr.cost_source = 'provider_reported'
+                  )::bigint as provider_reported_count,
+                  count(*) filter (
+                    where {fact} and sr.cost_source = 'calculated'
+                  )::bigint as calculated_count,
+                  count(*) filter (
+                    where {fact} and sr.cost_source = 'unavailable'
+                  )::bigint as unavailable_count
+           from selected_requests sr
+         ), ops_aggregate as (
+           select coalesce(sum(coalesce(oe.occurrence_count, 1)), 0)::bigint
+                    as ops_failure_count,
+                  coalesce(sum(coalesce(oe.occurrence_count, 1)) filter (
+                    where oe.failure_kind in ('rate_limited', 'quota_exhausted')
+                       or oe.status_code = 429
+                  ), 0)::bigint as ops_rate_limited_count,
+                  coalesce(sum(coalesce(oe.occurrence_count, 1)) filter (
+                    where oe.failure_kind in
+                            ('authentication', 'authorization', 'invalid_credential')
+                       or oe.status_code in (401, 403)
+                  ), 0)::bigint as ops_auth_failure_count,
+                  coalesce(sum(coalesce(oe.occurrence_count, 1)) filter (
+                    where oe.status_code between 500 and 599
+                  ), 0)::bigint as ops_provider_5xx_count
            from ops_events oe
            join selected_requests sr on sr.id = oe.model_request_id
-           union all
-           select 1::bigint, coalesce(sr.error_kind, 'failed'),
-                  coalesce(sr.upstream_status_code, sr.client_status_code)
-           from selected_requests sr
-           where sr.outcome = 'failed' and sr.attempt_count > 0
          )
-         select coalesce((select sum(attempt_count) from selected_requests), 0)::bigint
-                  as attempt_count,
-                coalesce((select count(*) from selected_requests
-                          where outcome = 'succeeded' and attempt_count > 0), 0)::bigint
-                  as success_count,
-                coalesce((select sum(occurrences) from failures), 0)::bigint as failure_count,
-                coalesce((select count(*) from selected_requests
-                          where outcome = 'cancelled' and attempt_count > 0), 0)::bigint
-                  as cancelled_count,
-                coalesce((select count(*) from selected_requests
-                          where outcome = 'incomplete' and attempt_count > 0), 0)::bigint
-                  as incomplete_count,
-                coalesce((select sum(occurrences) from failures
-                          where failure_kind in ('rate_limited', 'quota_exhausted')
-                             or status_code = 429), 0)::bigint as rate_limited_count,
-                coalesce((select sum(occurrences) from failures
-                          where failure_kind in ('authentication', 'authorization',
-                                                 'invalid_credential')
-                             or status_code in (401, 403)), 0)::bigint as auth_failure_count,
-                coalesce((select sum(occurrences) from failures
-                          where status_code between 500 and 599), 0)::bigint
+         select requests.attempt_count,
+                requests.success_count,
+                requests.request_failure_count + ops.ops_failure_count as failure_count,
+                requests.cancelled_count,
+                requests.incomplete_count,
+                requests.request_rate_limited_count + ops.ops_rate_limited_count
+                  as rate_limited_count,
+                requests.request_auth_failure_count + ops.ops_auth_failure_count
+                  as auth_failure_count,
+                requests.request_provider_5xx_count + ops.ops_provider_5xx_count
                   as provider_5xx_count,
-                coalesce((select count(*) from usage_facts
-                          where cost_source = 'provider_reported'), 0)::bigint
-                  as provider_reported_count,
-                coalesce((select count(*) from usage_facts
-                          where cost_source = 'calculated'), 0)::bigint
-                  as calculated_count,
-                coalesce((select count(*) from usage_facts
-                          where cost_source = 'unavailable'), 0)::bigint
-                  as unavailable_count",
-    );
+                requests.provider_reported_count,
+                requests.calculated_count,
+                requests.unavailable_count
+         from request_aggregate requests
+         cross join ops_aggregate ops"
+    ));
     let row = query
         .build()
         .fetch_one(pool)
