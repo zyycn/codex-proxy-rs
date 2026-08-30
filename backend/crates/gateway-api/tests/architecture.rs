@@ -62,7 +62,10 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/responses/mod.rs",
         "src/openai/responses/request.rs",
         "src/openai/responses/response.rs",
-        "src/openai/responses/websocket.rs",
+        "src/openai/responses/websocket/connection.rs",
+        "src/openai/responses/websocket/forward.rs",
+        "src/openai/responses/websocket/mod.rs",
+        "src/openai/responses/websocket/protocol.rs",
         "src/openai/router.rs",
         "src/openai/service.rs",
     ];
@@ -99,7 +102,9 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/models.rs",
         "tests/openai/responses/http.rs",
         "tests/openai/responses/mod.rs",
-        "tests/openai/responses/websocket.rs",
+        "tests/openai/responses/websocket/connection.rs",
+        "tests/openai/responses/websocket/mod.rs",
+        "tests/openai/responses/websocket/protocol.rs",
         "tests/openai/router.rs",
     ];
     expected.sort_unstable();

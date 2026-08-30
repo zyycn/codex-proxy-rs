@@ -1,3 +1,6 @@
+mod connection;
+mod protocol;
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -171,6 +174,7 @@ fn response_create_should_reject_non_boolean_stream_without_disclosing_body_valu
 
 #[derive(Default)]
 struct AtomicFailureTrace {
+    starts: AtomicUsize,
     next_calls: AtomicUsize,
     committed: AtomicBool,
     finalized: AtomicBool,
@@ -258,6 +262,7 @@ impl ExecutionService for AtomicFailureExecution {
         &self,
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        self.trace.starts.fetch_add(1, Ordering::AcqRel);
         Box::pin(async move {
             Ok(StartedExecution {
                 request_id: gateway_core::engine::ModelRequestId::new("req_ws_atomic")
