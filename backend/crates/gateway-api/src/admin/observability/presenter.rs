@@ -250,10 +250,6 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         .upstream_model_id
         .clone()
         .or_else(|| record.requested_model_id.clone());
-    let transport = record
-        .upstream_transport
-        .clone()
-        .or_else(|| Some(record.client_transport.clone()));
     let metadata = provider_metadata_fields(record.provider_metadata_json.as_deref());
     UsageRecordView {
         id: record.id.clone(),
@@ -274,7 +270,8 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         upstream_model: record.upstream_model_id,
         service_tier: record.service_tier,
         status_code,
-        transport,
+        client_transport: record.client_transport,
+        upstream_transport: record.upstream_transport,
         protocol: record.protocol.clone(),
         http_version: record.http_version.clone(),
         client_status_code: record.client_status_code.map(i64::from),
@@ -349,6 +346,8 @@ pub(crate) fn provider_metadata_fields(value: Option<&str>) -> BTreeMap<String, 
         "requestKind",
         "subagentKind",
         "transport",
+        "clientTransport",
+        "upstreamTransport",
         "httpVersion",
         "clientStatusCode",
         "upstreamStatusCode",

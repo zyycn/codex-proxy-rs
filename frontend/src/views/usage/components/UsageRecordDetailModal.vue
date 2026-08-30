@@ -20,8 +20,8 @@ import {
   usageLatencyDetails,
   usageModelDisplay,
   usageReasoningEffort,
-  usageRecordType,
   usageTokenDetails,
+  usageTransportType,
   usageUserAgent,
   visibleRequestText,
   visibleResponseText,
@@ -58,7 +58,8 @@ const finalAttemptIndex = computed(() => {
 })
 const overviewItems = computed(() => [
   { label: '时间', value: props.record?.createdAtDisplay, mono: true },
-  { label: '类型', value: props.record ? usageRecordType(props.record) : '—' },
+  { label: '客户端传输', value: usageTransportType(props.record?.clientTransport) },
+  { label: '上游传输', value: usageTransportType(props.record?.upstreamTransport) },
   { label: '耗时', value: props.record?.latencyMsDisplay, mono: true },
   {
     label: latencyDetails.value?.firstOutputLabel ?? '首字',
@@ -99,7 +100,6 @@ const detailGroups = computed(() => [
         mono: true,
         wrap: true,
       },
-      { label: '传输方式', value: props.record?.transport, mono: true },
       { label: '事件类型', value: props.record?.kind, mono: true },
       { label: '尝试序号', value: finalAttemptIndex.value },
       { label: '服务档位', value: props.record?.serviceTier, mono: true },
@@ -128,7 +128,7 @@ const attemptColumns = defineTableColumns<AttemptRow>([
   { key: 'outcome', label: '结果', kind: 'status', size: 'sm' },
   { key: 'provider', label: '平台', kind: 'meta', size: 'sm' },
   { key: 'model', label: '模型', kind: 'mono', size: 'lg' },
-  { key: 'transport', label: '传输', kind: 'status', size: 'sm' },
+  { key: 'transport', label: '上游传输', kind: 'status', size: 'md' },
   { key: 'statusCode', label: '状态', kind: 'status', size: 'sm' },
   { key: 'accountLabel', label: '账号', kind: 'mono', size: '3xl' },
   { key: 'latencyMs', label: '耗时', kind: 'numeric', size: 'sm' },

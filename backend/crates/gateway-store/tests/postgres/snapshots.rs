@@ -10,6 +10,62 @@ use sqlx::PgPool;
 use super::TestDatabase;
 
 #[tokio::test]
+async fn usage_facts_should_accept_statusless_websocket_but_reject_statusless_http() {
+    let Some(database) = TestDatabase::create("snapshot_statusless_websocket_usage").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_statusless_transport",
+        "Statusless transport",
+        None,
+        "oauth",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+
+    let mut websocket_request = new_request("req_statusless_websocket", started_at);
+    websocket_request.client_transport = "websocket".to_owned();
+    store
+        .insert_model_request_with_first_attempt(
+            websocket_request,
+            attempt("req_statusless_websocket", 1, "acct_statusless_transport"),
+        )
+        .await
+        .expect("insert statusless WebSocket request");
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_statusless_http", started_at),
+            attempt("req_statusless_http", 1, "acct_statusless_transport"),
+        )
+        .await
+        .expect("insert statusless HTTP request");
+    finalize_request_without_client_status(&database.pool, "req_statusless_websocket", started_at)
+        .await;
+    finalize_request_without_client_status(&database.pool, "req_statusless_http", started_at).await;
+
+    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let page = repository
+        .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
+        .await
+        .expect("list statusless transport usage records");
+    let request_ids = page
+        .items
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (page.total, request_ids),
+        (1, vec!["req_statusless_websocket"])
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn request_snapshots_should_survive_account_deletion() {
     let Some(database) = TestDatabase::create("snapshot_request_delete").await else {
         return;
@@ -765,6 +821,25 @@ async fn finalize_request(pool: &PgPool, id: &str, started_at: DateTime<Utc>) {
     .execute(pool)
     .await
     .expect("finalize request");
+}
+
+async fn finalize_request_without_client_status(
+    pool: &PgPool,
+    id: &str,
+    started_at: DateTime<Utc>,
+) {
+    sqlx::query(
+        "update model_requests
+         set outcome = 'succeeded', upstream_send_state = 'sent',
+             client_status_code = null, upstream_status_code = 200,
+             downstream_committed_at = $2, completed_at = $2
+         where id = $1",
+    )
+    .bind(id)
+    .bind(started_at + chrono::Duration::seconds(5))
+    .execute(pool)
+    .await
+    .expect("finalize request without client status");
 }
 
 async fn seed_api_key(pool: &PgPool, id: &str, name: &str, now: DateTime<Utc>) {

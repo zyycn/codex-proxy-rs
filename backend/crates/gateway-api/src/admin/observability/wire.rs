@@ -99,7 +99,8 @@ pub struct UsageRecordView {
     pub upstream_model: Option<String>,
     pub service_tier: Option<String>,
     pub status_code: Option<i64>,
-    pub transport: Option<String>,
+    pub client_transport: String,
+    pub upstream_transport: Option<String>,
     pub protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_version: Option<String>,

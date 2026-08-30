@@ -33,7 +33,8 @@ export interface UsageViewModel {
   upstreamModel: string | null
   serviceTier: string | null
   statusCode: number | null
-  transport: string | null
+  clientTransport: string
+  upstreamTransport: string | null
   attemptIndex: number | null
   attemptCount: number
   responseId: string | null
@@ -99,7 +100,8 @@ export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): U
     upstreamModel: record.upstreamModel,
     serviceTier: record.serviceTier,
     statusCode: record.statusCode,
-    transport: record.transport,
+    clientTransport: record.clientTransport,
+    upstreamTransport: record.upstreamTransport,
     attemptIndex: record.attemptIndex,
     attemptCount: record.attemptCount,
     responseId: record.responseId,
@@ -148,17 +150,19 @@ export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): U
 
 export type UsageDisplayRecord = UsageViewModel
 
-export function usageRecordType(record: UsageDisplayRecord) {
-  if (record.transport === 'websocket')
+export function usageTransportType(transport?: string | null) {
+  if (transport === 'websocket')
     return 'WS'
 
-  if (record.transport === 'http_sse')
+  if (transport === 'http_sse')
     return 'SSE'
-  return 'HTTP'
+  if (transport === 'http' || transport === 'http_json')
+    return 'HTTP'
+  return transport || '—'
 }
 
-export function usageRecordTypeClass(record: UsageDisplayRecord) {
-  const type = usageRecordType(record)
+export function usageTransportTypeClass(transport?: string | null) {
+  const type = usageTransportType(transport)
   if (type === 'WS')
     return 'bg-cp-blue-bg text-cp-blue-text-on-bg'
   if (type === 'SSE')

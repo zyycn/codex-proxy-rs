@@ -89,7 +89,8 @@ export interface UsageRecord {
   upstreamModel: string | null
   serviceTier: string | null
   statusCode: number | null
-  transport: string | null
+  clientTransport: string
+  upstreamTransport: string | null
   protocol: string
   httpVersion: string | null
   clientStatusCode: number | null

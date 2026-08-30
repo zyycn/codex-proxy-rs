@@ -8,8 +8,6 @@ import {
   usageAccountText,
   usageAuthenticationKind,
   usageIsCompact,
-  usageRecordType,
-  usageRecordTypeClass,
   usageUserAgent,
 } from '../utils/records'
 import UsageBillingCell from './UsageBillingCell.vue'
@@ -18,6 +16,7 @@ import UsageLatencyCell from './UsageLatencyCell.vue'
 import UsageModelCell from './UsageModelCell.vue'
 import UsageReasoningEffortCell from './UsageReasoningEffortCell.vue'
 import UsageTokenCell from './UsageTokenCell.vue'
+import UsageTransportBadge from './UsageTransportBadge.vue'
 
 // 使用记录表只负责该领域的单元格呈现；筛选与分页由页面组合。
 withDefaults(
@@ -89,13 +88,12 @@ withDefaults(
       </div>
     </template>
 
-    <template #recordType="{ row }">
-      <span
-        class="inline-flex h-6 min-w-12 items-center justify-center rounded-full px-2 text-cp leading-none font-bold"
-        :class="usageRecordTypeClass(row)"
-      >
-        {{ usageRecordType(row) }}
-      </span>
+    <template #clientTransport="{ row }">
+      <UsageTransportBadge :transport="row.clientTransport" />
+    </template>
+
+    <template #upstreamTransport="{ row }">
+      <UsageTransportBadge :transport="row.upstreamTransport" />
     </template>
 
     <template #tokenDetails="{ row }">

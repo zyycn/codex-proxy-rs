@@ -7,6 +7,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 
 const props = defineProps<{
   apiKey: {
@@ -23,6 +24,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ default: false })
 
 const activePlatform = shallowRef('unix')
+const websocketEnabled = shallowRef(true)
 
 const platformOptions = [
   { label: 'macOS / Linux', value: 'unix', icon: Apple },
@@ -49,21 +51,20 @@ model_reasoning_effort = "max"
 service_tier = "default"
 disable_response_storage = true
 network_access = "enabled"
-windows_wsl_setup_acknowledged = true
 
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${props.apiBaseUrl}"
-wire_api = "responses"
+wire_api = "responses"${websocketEnabled.value ? '\nsupports_websockets = true' : ''}
 requires_openai_auth = true
 
-[features]
+[features]${websocketEnabled.value ? '\nresponses_websockets_v2 = true' : ''}
 goals = true`,
 )
 
 const visibleFiles = computed(() => [
-  { path: configPath.value, content: codexConfigToml.value },
-  { path: authPath.value, content: codexAuthJson.value },
+  { path: configPath.value, content: codexConfigToml.value, scrollbarHeight: '360px' },
+  { path: authPath.value, content: codexAuthJson.value, scrollbarHeight: undefined },
 ])
 </script>
 
@@ -75,8 +76,16 @@ const visibleFiles = computed(() => [
     size="lg"
   >
     <div class="flex flex-col gap-5">
-      <div class="flex flex-wrap items-center gap-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
         <BaseSegmented v-model="activePlatform" label="配置平台" :options="platformOptions" />
+        <BaseSwitch
+          v-model="websocketEnabled"
+          label="切换 WebSocket 配置"
+          active-text="WS"
+          inactive-text="WS"
+          inline-prompt
+          :width="56"
+        />
       </div>
 
       <div class="flex flex-col gap-3">
@@ -101,6 +110,7 @@ const visibleFiles = computed(() => [
             </BaseIconButton>
           </div>
           <BaseScrollbar
+            :height="file.scrollbarHeight"
             max-height="360px"
           >
             <div class="mx-3 mb-3 rounded-cp bg-cp-bg-container px-3.5 py-3 shadow-cp-tertiary">
