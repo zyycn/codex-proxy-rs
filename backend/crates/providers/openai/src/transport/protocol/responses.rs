@@ -8,6 +8,24 @@ use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+/// 官方 Codex 客户端据此触发完整历史重放的稳定错误码。
+pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
+/// 本地生成 history unavailable 错误时使用的官方提示文本。
+pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
+    "Previous response was not found. Retrying the full request.";
+const INVALID_PREVIOUS_RESPONSE_ID_MESSAGE: &str = "Invalid `previous_response_id`.";
+
+/// 精确匹配上游省略错误码的旧版 previous response 拒绝形状。
+pub(crate) fn is_bare_invalid_previous_response_id_error(
+    code: Option<&Value>,
+    error_type: Option<&str>,
+    message: Option<&str>,
+) -> bool {
+    code.is_none_or(Value::is_null)
+        && error_type == Some("invalid_request_error")
+        && message == Some(INVALID_PREVIOUS_RESPONSE_ID_MESSAGE)
+}
+
 /// Codex Responses 上游请求体。
 ///
 /// 发往上游的 Responses 请求。`body` 持有客户端原始 JSON object，逐字段（含顺序、

@@ -2,13 +2,12 @@ use gateway_protocol::openai::sse::encode_sse_event;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::transport::protocol::responses::{CodexResponsesRequest, transport_requirement};
+use crate::transport::protocol::responses::{
+    CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE,
+    is_bare_invalid_previous_response_id_error, transport_requirement,
+};
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
-pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
-pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
-    "Previous response was not found. Retrying the full request.";
-const INVALID_PREVIOUS_RESPONSE_ID_MESSAGE: &str = "Invalid `previous_response_id`.";
 
 /// WebSocket 握手审计快照。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,11 +86,11 @@ fn previous_response_not_found_event(value: &Value) -> Option<String> {
         return None;
     }
     let error = value.get("error")?.as_object()?;
-    if error.get("code").is_some_and(|code| !code.is_null())
-        || error.get("type").and_then(Value::as_str) != Some("invalid_request_error")
-        || error.get("message").and_then(Value::as_str)
-            != Some(INVALID_PREVIOUS_RESPONSE_ID_MESSAGE)
-    {
+    if !is_bare_invalid_previous_response_id_error(
+        error.get("code"),
+        error.get("type").and_then(Value::as_str),
+        error.get("message").and_then(Value::as_str),
+    ) {
         return None;
     }
 

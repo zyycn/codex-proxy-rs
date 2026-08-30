@@ -412,6 +412,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_truncated_stream",
         "acct_usage_limit_request_path",
         "acct_websocket_close",
+        "acct_websocket_busy_replay",
         "acct_websocket_turn_state",
     ]
     .into_iter()
@@ -508,6 +509,40 @@ fn replay_any_context(request_id: &str, owner_account_id: &str) -> AttemptContex
         CancellationToken::new(),
     )
     .with_continuation_attempt(ContinuationAttempt::ReplayAny)
+}
+
+fn pinned_continuation_context(
+    request_id: &str,
+    account_id: &str,
+    client_previous_response_id: &str,
+    upstream_previous_response_id: &str,
+    attempt_index: u32,
+    continuation_attempt: ContinuationAttempt,
+) -> AttemptContext {
+    let account = ProviderAccountId::new(account_id).expect("account id");
+    let provider = ProviderKind::new("openai").expect("provider");
+    let owner = ProviderAccountStateOwner::new(provider.clone(), account.clone());
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new(client_previous_response_id),
+        PreviousResponseId::new(upstream_previous_response_id),
+        ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        provider,
+        account,
+    );
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(attempt_index).expect("attempt index"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner))
+            .with_account_scope(contract_account_scope()),
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    )
+    .with_continuation_attempt(continuation_attempt)
 }
 
 fn external_continuation_context(request_id: &str) -> AttemptContext {
@@ -2917,6 +2952,288 @@ async fn same_account_previous_response_not_found_should_remain_client_visible()
         events[0].wire_event().and_then(|wire| wire.event_type()),
         Some("response.failed")
     );
+}
+
+#[tokio::test]
+async fn exact_websocket_busy_then_http_invalid_previous_response_should_request_official_replay() {
+    const ACCOUNT_ID: &str = "acct_websocket_busy_replay";
+    const CONVERSATION_ID: &str = "conversation-websocket-busy-replay";
+    const CLIENT_PREVIOUS_RESPONSE_ID: &str = "client-resp-busy-seed";
+    const UPSTREAM_PREVIOUS_RESPONSE_ID: &str = "resp_busy_seed";
+
+    fn operation(
+        previous_response_id: Option<&str>,
+        session_state: ProviderSessionState,
+    ) -> Operation {
+        let mut body = Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            ("input".to_owned(), json!("hello")),
+        ]);
+        if let Some(previous_response_id) = previous_response_id {
+            body.insert(
+                "previous_response_id".to_owned(),
+                json!(previous_response_id),
+            );
+        }
+        Operation::Generate(
+            GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+            )
+            .with_provider_session_state(session_state),
+        )
+    }
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT_ID).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let (release_busy_sender, release_busy_receiver) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept WebSocket");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+
+        let seed = websocket
+            .next()
+            .await
+            .expect("seed request")
+            .expect("valid seed request");
+        let Message::Text(seed) = seed else {
+            panic!("seed request must be text");
+        };
+        let seed: Value = serde_json::from_str(&seed).expect("seed request JSON");
+        assert_eq!(seed.get("previous_response_id"), None);
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": UPSTREAM_PREVIOUS_RESPONSE_ID,
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("complete seed request");
+
+        let busy = websocket
+            .next()
+            .await
+            .expect("busy continuation request")
+            .expect("valid busy continuation request");
+        let Message::Text(busy) = busy else {
+            panic!("busy continuation request must be text");
+        };
+        let busy: Value = serde_json::from_str(&busy).expect("busy continuation JSON");
+        assert_eq!(
+            busy.get("previous_response_id").and_then(Value::as_str),
+            Some(UPSTREAM_PREVIOUS_RESPONSE_ID)
+        );
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_text.delta",
+                    "delta": "the exact WebSocket is busy"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send busy stream output");
+
+        let (mut http, _) = listener.accept().await.expect("accept HTTP fallback");
+        read_http_request(&mut http).await;
+        let body = json!({
+            "error": {
+                "code": null,
+                "type": "invalid_request_error",
+                "message": "Invalid `previous_response_id`."
+            }
+        })
+        .to_string();
+        http.write_all(
+            format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write HTTP 400");
+
+        release_busy_receiver.await.expect("release busy stream");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_busy_finished",
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("complete busy stream");
+    });
+    let provider = provider_with_base_url(&store, base_url);
+    let initial_session_state = ProviderSessionState::new(
+        "openai",
+        Map::from_iter([
+            ("account_id".to_owned(), json!(ACCOUNT_ID)),
+            ("conversation_id".to_owned(), json!(CONVERSATION_ID)),
+            ("continuation_scope".to_owned(), json!("connection_local")),
+        ]),
+    )
+    .expect("initial provider session state");
+
+    let mut seed = provider
+        .execute(
+            planned_request("openai", operation(None, initial_session_state)),
+            context("req_ws_busy_seed", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare seed stream");
+    let mut session_state = None;
+    while let Some(event) = seed.next().await {
+        let event = event.expect("seed event");
+        if let Some(update) = event.session_update() {
+            session_state = Some(update.clone());
+        }
+    }
+    let session_state = session_state.expect("seed session update");
+    assert_eq!(
+        session_state
+            .payload()
+            .get("continuation_scope")
+            .and_then(Value::as_str),
+        Some("connection_local")
+    );
+
+    let continuation = operation(Some(CLIENT_PREVIOUS_RESPONSE_ID), session_state);
+    let mut busy = provider
+        .execute(
+            planned_request("openai", continuation.clone()),
+            pinned_continuation_context(
+                "req_ws_busy_owner",
+                ACCOUNT_ID,
+                CLIENT_PREVIOUS_RESPONSE_ID,
+                UPSTREAM_PREVIOUS_RESPONSE_ID,
+                1,
+                ContinuationAttempt::Native,
+            ),
+        )
+        .await
+        .expect("prepare busy continuation stream");
+    loop {
+        let event = busy
+            .next()
+            .await
+            .expect("busy stream event")
+            .expect("valid busy stream event");
+        if event.has_client_event() {
+            break;
+        }
+    }
+
+    let mut exact = provider
+        .execute(
+            planned_request("openai", continuation.clone()),
+            pinned_continuation_context(
+                "req_ws_busy_exact",
+                ACCOUNT_ID,
+                CLIENT_PREVIOUS_RESPONSE_ID,
+                UPSTREAM_PREVIOUS_RESPONSE_ID,
+                1,
+                ContinuationAttempt::Native,
+            ),
+        )
+        .await
+        .expect("prepare competing exact continuation");
+    let exact_error = loop {
+        match exact.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("competing exact continuation must fail while its socket is busy"),
+        }
+    };
+    assert_eq!(
+        exact_error.continuation_failure(),
+        Some(ContinuationFailure::Busy)
+    );
+
+    let mut replay = provider
+        .execute(
+            planned_request("openai", continuation),
+            pinned_continuation_context(
+                "req_ws_busy_replay",
+                ACCOUNT_ID,
+                CLIENT_PREVIOUS_RESPONSE_ID,
+                UPSTREAM_PREVIOUS_RESPONSE_ID,
+                2,
+                ContinuationAttempt::ReplayAny,
+            ),
+        )
+        .await
+        .expect("prepare replay-any continuation");
+    let replay_error = loop {
+        match replay.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("HTTP fallback 400 must produce a provider error"),
+        }
+    };
+    let detail = replay_error
+        .client_visible_upstream_error()
+        .expect("client-visible replay error");
+
+    assert_eq!(
+        (
+            replay_error.kind(),
+            replay_error.continuation_failure(),
+            detail.code(),
+            detail.error_type(),
+            detail.message(),
+        ),
+        (
+            ProviderErrorKind::InvalidRequest,
+            Some(ContinuationFailure::HistoryUnavailable),
+            Some("previous_response_not_found"),
+            Some("invalid_request_error"),
+            "Invalid `previous_response_id`.",
+        )
+    );
+
+    release_busy_sender.send(()).expect("release busy stream");
+    while busy
+        .next()
+        .await
+        .transpose()
+        .expect("busy stream event")
+        .is_some()
+    {}
+    server.await.expect("upstream server");
 }
 
 #[tokio::test]

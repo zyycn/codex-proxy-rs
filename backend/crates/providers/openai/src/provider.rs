@@ -69,10 +69,8 @@ use crate::transport::profile::{
     APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState,
 };
 use crate::transport::protocol::responses::{
-    CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals,
-};
-use crate::transport::protocol::websocket::{
-    PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
+    CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
+    PreviousResponseScope, ResponseEventSignals,
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
