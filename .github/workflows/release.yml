@@ -163,6 +163,15 @@ jobs:
       ref: ${{ needs.release-info.outputs.git_sha }}
       upload_frontend: true
 
+  container:
+    needs: [release-info]
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/_container.yml
+    with:
+      ref: ${{ needs.release-info.outputs.git_sha }}
+
   build-docker-binary:
     name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
     needs: release-info
@@ -497,7 +506,7 @@ jobs:
           exit-code: '1'
 
   publish:
-    needs: [release-info, package-assets, build-docker-image]
+    needs: [release-info, package-assets, build-docker-image, container]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

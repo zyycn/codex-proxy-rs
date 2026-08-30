@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'release/version.yaml'
   pull_request:
     branches:
       - main
