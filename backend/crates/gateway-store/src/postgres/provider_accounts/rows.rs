@@ -455,6 +455,29 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, 
      where id = any($1::text[]) and provider_kind = $2
      order by id";
 
+pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
+            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            last_error_reason, last_error_message,
+            credential_observed_at, quota_observed_at, created_at, updated_at
+     from provider_accounts
+     where provider_kind = $1
+       and enabled
+       and has_refresh_token
+       and credential_state in ('unknown', 'ready')
+       and access_token_expires_at is not null
+       and (
+         access_token_expires_at <= $3
+         or (
+           access_token_expires_at <= $2
+           and (next_refresh_at is null or next_refresh_at <= $4)
+         )
+       )
+       and not (id = any($5::text[]))
+     order by access_token_expires_at, id
+     limit $6";
+
 pub(crate) fn account_record_from_row(
     row: sqlx::postgres::PgRow,
 ) -> StoreResult<ProviderAccountRecord> {

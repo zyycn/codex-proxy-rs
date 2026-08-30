@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use gateway_core::engine::credential::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
-    CredentialRevision, CredentialState, ProviderAccount, ProviderAccountStore,
-    ProviderAccountUpdate,
+    CredentialRevision, CredentialState, LoadedCredential, ProviderAccount, ProviderAccountStore,
+    ProviderAccountUpdate, ProviderRefreshQuery,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
@@ -129,6 +129,26 @@ impl CodexCredentialRepository {
             .map_err(Into::into)
     }
 
+    pub async fn list_refresh_candidates(
+        &self,
+        query: ProviderRefreshQuery,
+    ) -> Result<Vec<LoadedCredential>, CredentialRepositoryError> {
+        self.store
+            .list_refresh_candidates(query)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub fn decode_runtime_credential(
+        &self,
+        loaded: &LoadedCredential,
+    ) -> Result<CodexRuntimeCredential, CredentialRepositoryError> {
+        if loaded.account.provider().as_str() != PROVIDER_NAME {
+            return Err(CredentialRepositoryError::InvalidCredentialData);
+        }
+        CodexCredentialCodec::decode(&loaded.credential).map_err(Into::into)
+    }
+
     pub async fn load_runtime_credential(
         &self,
         account: &ProviderAccount,
@@ -143,7 +163,7 @@ impl CodexCredentialRepository {
         if loaded.account != *account {
             return Err(CredentialRepositoryError::RevisionConflict);
         }
-        CodexCredentialCodec::decode(&loaded.credential).map_err(Into::into)
+        self.decode_runtime_credential(&loaded)
     }
 
     pub async fn load_complete_data(

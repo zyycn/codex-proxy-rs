@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -10,6 +11,7 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
 use gateway_core::engine::credential::{
     AccountErrorReason, CredentialRevision, CredentialState, LoadedCredential, ProviderAccountId,
+    ProviderRefreshQuery,
 };
 use gateway_core::provider_ports::{
     ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -17,10 +19,11 @@ use gateway_core::provider_ports::{
     ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_backoff_at,
     provider_refresh_retry_at,
 };
+use gateway_core::routing::ProviderKind;
 
 use super::catalog::GrokCredentialCatalogService;
 use super::repository::{
-    GrokCredentialAdmin, GrokCredentialRepository, GrokCredentialRepositoryError,
+    GrokCredentialAdmin, GrokCredentialRepository, GrokCredentialRepositoryError, loaded_from_core,
 };
 use super::types::{
     GrokAccountProfile, GrokOAuthSecret, PreparedGrokCredentialRotation, RotateGrokCredential,
@@ -33,6 +36,7 @@ use crate::{
 
 const MAX_REFRESH_BATCH: u32 = 100;
 const MAX_REFRESH_EXCLUSIONS: usize = 400;
+const PROVIDER_NAME: &str = "xai";
 const MAX_SECRET_BYTES: usize = 64 * 1_024;
 const DISCOVERY_NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(5);
 /// 连续失败计数窗口；静默满窗后计数过期归零。
@@ -865,31 +869,33 @@ impl GrokCredentialRepository {
             .cloned()
             .collect::<BTreeSet<_>>();
         let now = SystemTime::now();
-        let mut accounts = self
-            .list_all_accounts()
-            .await?
-            .into_iter()
-            .filter(|account| !excluded.contains(account.id()) && account_due(account, policy, now))
-            .collect::<Vec<_>>();
-        accounts.sort_by_key(|account| {
-            (
-                account.access_token_expires_at(),
-                account.next_refresh_at(),
-                account.id().clone(),
-            )
-        });
-        accounts.truncate(MAX_REFRESH_BATCH as usize);
+        let provider = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
+        let limit = NonZeroU32::new(MAX_REFRESH_BATCH)
+            .ok_or(GrokCredentialRepositoryError::InvalidCredentialData)?;
+        let query = ProviderRefreshQuery::new(
+            provider,
+            now.checked_add(policy.margin()).unwrap_or(now),
+            now.checked_sub(REFRESH_RECOVERY_WINDOW)
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            now,
+            excluded.into_iter().collect(),
+            limit,
+        );
+        let candidates = self.list_refresh_candidates(query).await?;
 
-        let mut due = Vec::with_capacity(accounts.len());
+        let mut due = Vec::with_capacity(candidates.len());
         let mut failed_account_ids = Vec::new();
-        for account in accounts {
-            let loaded = match self.load(account.id(), account.revision()).await {
+        for candidate in candidates {
+            let account_id = candidate.account.id().clone();
+            let loaded = match loaded_from_core(candidate) {
                 Ok(loaded) => loaded,
                 Err(_) => {
-                    failed_account_ids.push(account.id().clone());
+                    failed_account_ids.push(account_id);
                     continue;
                 }
             };
+            let account = loaded.account;
             let Some(subject) = account.upstream_user_id() else {
                 failed_account_ids.push(account.id().clone());
                 continue;
@@ -913,32 +919,6 @@ impl GrokCredentialRepository {
             failed_account_ids,
         })
     }
-}
-
-fn account_due(
-    account: &gateway_core::engine::credential::ProviderAccount,
-    policy: ProviderRefreshPolicy,
-    now: SystemTime,
-) -> bool {
-    account.enabled()
-        && account.has_refresh_token()
-        && !matches!(
-            account.credential_state(),
-            CredentialState::Expired | CredentialState::Banned | CredentialState::Invalid
-        )
-        && (refresh_recovery_window_exhausted(account.access_token_expires_at(), now)
-            || (access_token_refresh_due(account.access_token_expires_at(), policy, now)
-                && account
-                    .next_refresh_at()
-                    .is_none_or(|retry_at| retry_at <= now)))
-}
-
-fn access_token_refresh_due(
-    access_token_expires_at: Option<SystemTime>,
-    policy: ProviderRefreshPolicy,
-    now: SystemTime,
-) -> bool {
-    access_token_expires_at.is_some_and(|expires_at| policy.is_refresh_due(expires_at, now))
 }
 
 fn refreshed_tokens(tokens: RefreshedTokenSet) -> Result<GrokRefreshTokens, GrokRefreshFailure> {

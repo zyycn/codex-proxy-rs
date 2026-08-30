@@ -1,13 +1,14 @@
 //! Codex AT/RT 刷新状态机；Redis lease + ProviderAccountStore CAS，无 SQL。
 
 use std::collections::BTreeSet;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
 use gateway_core::engine::credential::{
-    AccountErrorReason, CredentialState, ProviderAccount, ProviderAccountId,
+    AccountErrorReason, CredentialState, ProviderAccount, ProviderAccountId, ProviderRefreshQuery,
 };
 use gateway_core::provider_ports::{
     ProviderCredentialStatePort, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -15,6 +16,7 @@ use gateway_core::provider_ports::{
     ProviderRuntimePolicyPort, ProviderStoreError, provider_refresh_backoff_at,
     provider_refresh_retry_at,
 };
+use gateway_core::routing::ProviderKind;
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 
@@ -130,28 +132,6 @@ impl<'a> RefreshFailureContext<'a> {
             upstream,
         }
     }
-}
-
-fn refresh_due_at(
-    account: &ProviderAccount,
-    policy: ProviderRefreshPolicy,
-    now: SystemTime,
-) -> Option<SystemTime> {
-    if refresh_recovery_window_exhausted(account.access_token_expires_at(), now) {
-        // 即使 retry-not-before 异常地落在 deadline 之后，也必须进入终态化路径。
-        return refresh_recovery_deadline(account.access_token_expires_at());
-    }
-    let access_token_expires_at = account.access_token_expires_at()?;
-    if !policy.is_refresh_due(access_token_expires_at, now) {
-        return None;
-    }
-    if account
-        .next_refresh_at()
-        .is_some_and(|retry_at| retry_at > now)
-    {
-        return None;
-    }
-    Some(access_token_expires_at)
 }
 
 pub struct DueCodexCredential {
@@ -410,31 +390,25 @@ impl CodexCredentialRefreshService {
         CodexCredentialRefreshError,
     > {
         let now = SystemTime::now();
-        let mut accounts = self
-            .repository
-            .store()
-            .list_accounts()
-            .await
-            .map_err(CredentialRepositoryError::from)?;
-        accounts.retain(|account| {
-            account.provider().as_str() == PROVIDER_NAME
-                && account.enabled()
-                && account.has_refresh_token()
-                && !excluded.contains(account.id())
-                && matches!(
-                    account.credential_state(),
-                    CredentialState::Unknown | CredentialState::Ready
-                )
-                && refresh_due_at(account, policy, now).is_some()
-        });
-        accounts
-            .sort_by_key(|account| (refresh_due_at(account, policy, now), account.id().clone()));
-        accounts.truncate(MAX_REFRESH_BATCH as usize);
-        let mut due = Vec::with_capacity(accounts.len());
+        let provider = ProviderKind::new(PROVIDER_NAME)
+            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let limit = NonZeroU32::new(MAX_REFRESH_BATCH)
+            .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+        let query = ProviderRefreshQuery::new(
+            provider,
+            now.checked_add(policy.margin()).unwrap_or(now),
+            now.checked_sub(REFRESH_RECOVERY_WINDOW)
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            now,
+            excluded.iter().cloned().collect(),
+            limit,
+        );
+        let candidates = self.repository.list_refresh_candidates(query).await?;
+        let mut due = Vec::with_capacity(candidates.len());
         let mut failures = Vec::new();
-        for account in accounts {
-            let account_id = account.id().to_string();
-            match self.repository.load_runtime_credential(&account).await {
+        for loaded in candidates {
+            let account_id = loaded.account.id().to_string();
+            match self.repository.decode_runtime_credential(&loaded) {
                 Ok(runtime)
                     if runtime
                         .authentication
@@ -445,7 +419,7 @@ impl CodexCredentialRefreshService {
                         unreachable!("OAuth runtime authentication was checked above")
                     };
                     due.push(DueCodexCredential {
-                        account,
+                        account: loaded.account,
                         secret: secret.clone(),
                     });
                 }

@@ -43,7 +43,8 @@ use gateway_core::engine::credential::{
     NewProviderAccount as CoreNewProviderAccount, OpaqueProviderData, PlaintextCredential,
     ProviderAccount as CoreProviderAccount, ProviderAccountId as CoreProviderAccountId,
     ProviderAccountIdentity, ProviderAccountStore,
-    ProviderAccountUpdate as CoreProviderAccountUpdate, QuotaAccessChange, QuotaAccessState,
+    ProviderAccountUpdate as CoreProviderAccountUpdate,
+    ProviderRefreshQuery as CoreProviderRefreshQuery, QuotaAccessChange, QuotaAccessState,
     QuotaEvidence, QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};

@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    num::NonZeroU32,
+    time::{Duration, SystemTime},
+};
 
 use chrono::{TimeDelta, Utc};
 use gateway_admin::{
@@ -23,8 +26,8 @@ use gateway_core::engine::credential::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
     CredentialRevision, CredentialState, OpaqueProviderData, PlaintextCredential,
     ProviderAccountId, ProviderAccountIdentity, ProviderAccountStore, ProviderAccountUpdate,
-    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
-    QuotaState, QuotaWriteOutcome,
+    ProviderRefreshQuery, QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation,
+    QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::routing::{AccountGroupId, ProviderKind};
 use gateway_store::{
@@ -82,6 +85,71 @@ fn postgres_provider_account_adapter_implements_core_port() {
 
     fn assert_terminal_admin_port<T: AccountStore>() {}
     assert_terminal_admin_port::<PgAdminAccountStore>();
+}
+
+#[tokio::test]
+async fn refresh_candidates_should_filter_order_and_bound_in_one_query() {
+    let Some(database) = TestDatabase::create("provider_refresh_candidates").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let now = Utc::now();
+    let mut forced = account("acct_refresh_forced", "user-forced");
+    forced.has_refresh_token = true;
+    forced.access_token_expires_at = Some(now - TimeDelta::hours(3));
+    forced.next_refresh_at = Some(now + TimeDelta::hours(1));
+    let mut due = account("acct_refresh_due", "user-due");
+    due.has_refresh_token = true;
+    due.access_token_expires_at = Some(now);
+    let mut retry_later = account("acct_refresh_retry_later", "user-retry-later");
+    retry_later.has_refresh_token = true;
+    retry_later.access_token_expires_at = Some(now);
+    retry_later.next_refresh_at = Some(now + TimeDelta::hours(1));
+    let mut disabled = account("acct_refresh_disabled", "user-disabled");
+    disabled.has_refresh_token = true;
+    disabled.access_token_expires_at = Some(now);
+    disabled.enabled = false;
+    let mut other_provider = account("acct_refresh_other", "user-other");
+    other_provider.provider_kind = "xai".to_owned();
+    other_provider.has_refresh_token = true;
+    other_provider.access_token_expires_at = Some(now);
+    for candidate in [forced, due, retry_later, disabled, other_provider] {
+        repository
+            .insert_provider_account(candidate)
+            .await
+            .expect("insert refresh candidate fixture");
+    }
+
+    let observed_at = SystemTime::from(now);
+    let query = ProviderRefreshQuery::new(
+        ProviderKind::new("openai").expect("Provider kind"),
+        observed_at
+            .checked_add(Duration::from_secs(5 * 60))
+            .expect("refresh boundary"),
+        observed_at
+            .checked_sub(Duration::from_secs(2 * 60 * 60))
+            .expect("force boundary"),
+        observed_at,
+        Vec::new(),
+        NonZeroU32::new(2).expect("positive limit"),
+    );
+    let candidates = repository
+        .list_refresh_candidates(query)
+        .await
+        .expect("load bounded refresh candidates");
+
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.account.id().as_str())
+            .collect::<Vec<_>>(),
+        vec!["acct_refresh_forced", "acct_refresh_due"]
+    );
+    assert!(candidates.iter().all(|candidate| {
+        candidate.credential.expose_to_provider()["access_token"] == "initial-secret"
+    }));
+
+    database.close().await;
 }
 
 #[tokio::test]

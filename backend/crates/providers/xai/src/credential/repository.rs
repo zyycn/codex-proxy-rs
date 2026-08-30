@@ -334,6 +334,16 @@ impl GrokCredentialRepository {
         Self { store }
     }
 
+    pub(crate) async fn list_refresh_candidates(
+        &self,
+        query: gateway_core::engine::credential::ProviderRefreshQuery,
+    ) -> Result<Vec<LoadedCredential>, GrokCredentialRepositoryError> {
+        self.store
+            .list_refresh_candidates(query)
+            .await
+            .map_err(map_store_error)
+    }
+
     /// 读取不含 secret 的生命周期投影；Provider 仍是明文 credential JSON 的唯一解析者。
     pub async fn read_lifecycle(
         &self,
@@ -504,16 +514,6 @@ impl GrokCredentialRepository {
             ensure_xai(account)?;
         }
         Ok(accounts)
-    }
-
-    pub(crate) async fn list_all_accounts(
-        &self,
-    ) -> Result<Vec<ProviderAccount>, GrokCredentialRepositoryError> {
-        let accounts = self.store.list_accounts().await.map_err(map_store_error)?;
-        Ok(accounts
-            .into_iter()
-            .filter(|account| account.provider().as_str() == XAI_PROVIDER_KIND)
-            .collect())
     }
 
     pub(crate) async fn load_current(

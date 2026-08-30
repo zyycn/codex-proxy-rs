@@ -2,6 +2,15 @@
 
 use super::*;
 
+fn loaded_credential_from_record(
+    record: ProviderAccountRecord,
+) -> Result<LoadedCredential, CoreStoreError> {
+    Ok(LoadedCredential {
+        account: core_account_from_summary(record.summary)?,
+        credential: PlaintextCredential::new(record.provider_credentials_json.fields().clone()),
+    })
+}
+
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
     async fn create_account(&self, account: CoreNewProviderAccount) -> Result<(), CoreStoreError> {
@@ -72,6 +81,35 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .collect()
     }
 
+    async fn list_refresh_candidates(
+        &self,
+        query: CoreProviderRefreshQuery,
+    ) -> Result<Vec<LoadedCredential>, CoreStoreError> {
+        let excluded_account_ids = query
+            .excluded_account_ids()
+            .iter()
+            .map(|account_id| account_id.as_str())
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(REFRESH_CANDIDATES_SELECT)
+            .bind(query.provider().as_str())
+            .bind(DateTime::<Utc>::from(query.refresh_due_before()))
+            .bind(DateTime::<Utc>::from(query.force_due_before()))
+            .bind(DateTime::<Utc>::from(query.observed_at()))
+            .bind(excluded_account_ids)
+            .bind(i64::from(query.limit().get()))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        rows.into_iter()
+            .map(account_record_from_row)
+            .map(|record| {
+                record
+                    .map_err(core_store_error)
+                    .and_then(loaded_credential_from_record)
+            })
+            .collect()
+    }
+
     async fn load_credential(
         &self,
         account: &CoreProviderAccountId,
@@ -93,10 +131,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .await
             .map_err(core_store_error)?
             .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
-        Ok(LoadedCredential {
-            account: core_account_from_summary(record.summary)?,
-            credential: PlaintextCredential::new(record.provider_credentials_json.fields().clone()),
-        })
+        loaded_credential_from_record(record)
     }
 
     async fn compare_and_swap_credential(

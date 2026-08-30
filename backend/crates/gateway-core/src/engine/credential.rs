@@ -910,6 +910,90 @@ pub struct LoadedCredential {
     pub credential: PlaintextCredential,
 }
 
+/// Provider 已计算好时间边界的有界 OAuth refresh 候选查询。
+///
+/// Store 只负责按持久事实筛选和稳定排序，不拥有提前量或恢复窗口语义。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRefreshQuery {
+    provider: ProviderKind,
+    refresh_due_before: SystemTime,
+    force_due_before: SystemTime,
+    observed_at: SystemTime,
+    excluded_account_ids: Vec<ProviderAccountId>,
+    limit: NonZeroU32,
+}
+
+impl ProviderRefreshQuery {
+    #[must_use]
+    pub fn new(
+        provider: ProviderKind,
+        refresh_due_before: SystemTime,
+        force_due_before: SystemTime,
+        observed_at: SystemTime,
+        excluded_account_ids: Vec<ProviderAccountId>,
+        limit: NonZeroU32,
+    ) -> Self {
+        Self {
+            provider,
+            refresh_due_before,
+            force_due_before,
+            observed_at,
+            excluded_account_ids,
+            limit,
+        }
+    }
+
+    #[must_use]
+    pub const fn provider(&self) -> &ProviderKind {
+        &self.provider
+    }
+
+    #[must_use]
+    pub const fn refresh_due_before(&self) -> SystemTime {
+        self.refresh_due_before
+    }
+
+    #[must_use]
+    pub const fn force_due_before(&self) -> SystemTime {
+        self.force_due_before
+    }
+
+    #[must_use]
+    pub const fn observed_at(&self) -> SystemTime {
+        self.observed_at
+    }
+
+    #[must_use]
+    pub fn excluded_account_ids(&self) -> &[ProviderAccountId] {
+        &self.excluded_account_ids
+    }
+
+    #[must_use]
+    pub const fn limit(&self) -> NonZeroU32 {
+        self.limit
+    }
+
+    /// 判断内存 Store 中的账号是否满足与 PostgreSQL 相同的候选谓词。
+    #[must_use]
+    pub fn contains(&self, account: &ProviderAccount) -> bool {
+        account.provider() == &self.provider
+            && account.enabled()
+            && account.has_refresh_token()
+            && matches!(
+                account.credential_state(),
+                CredentialState::Unknown | CredentialState::Ready
+            )
+            && !self.excluded_account_ids.contains(account.id())
+            && account.access_token_expires_at().is_some_and(|expires_at| {
+                expires_at <= self.force_due_before
+                    || (expires_at <= self.refresh_due_before
+                        && account
+                            .next_refresh_at()
+                            .is_none_or(|retry_at| retry_at <= self.observed_at))
+            })
+    }
+}
+
 /// Admin/Provider import 创建账号时的一次性明文输入。
 #[derive(Clone, PartialEq)]
 pub struct NewProviderAccount {
@@ -1190,6 +1274,12 @@ pub trait ProviderAccountStore: Send + Sync {
         &self,
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError>;
+
+    /// 一次有界查询返回账号事实和 revision-fenced 明文 credential。
+    async fn list_refresh_candidates(
+        &self,
+        query: ProviderRefreshQuery,
+    ) -> Result<Vec<LoadedCredential>, StoreError>;
 
     async fn load_credential(
         &self,

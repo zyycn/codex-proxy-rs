@@ -11,8 +11,8 @@ use gateway_core::engine::credential::{
     AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
     CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts, CredentialRevision,
     CredentialState, LoadedCredential, NewProviderAccount, PlaintextCredential, ProviderAccount,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaAccessChange,
-    QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, ProviderRefreshQuery,
+    QuotaAccessChange, QuotaObservation, QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::provider_ports::{
@@ -297,6 +297,28 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             .filter(|stored| stored.account.provider() == provider)
             .map(|stored| stored.account.clone())
             .collect())
+    }
+
+    async fn list_refresh_candidates(
+        &self,
+        query: ProviderRefreshQuery,
+    ) -> Result<Vec<LoadedCredential>, StoreError> {
+        let mut candidates = lock(&self.accounts)
+            .values()
+            .filter(|stored| query.contains(&stored.account))
+            .map(|stored| LoadedCredential {
+                account: stored.account.clone(),
+                credential: stored.credential.clone(),
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|loaded| {
+            (
+                loaded.account.access_token_expires_at(),
+                loaded.account.id().clone(),
+            )
+        });
+        candidates.truncate(query.limit().get() as usize);
+        Ok(candidates)
     }
 
     async fn load_credential(
