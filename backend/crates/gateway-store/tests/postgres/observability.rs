@@ -949,6 +949,15 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     assert_eq!(overview.attempts.failure_count, 2);
     assert_eq!(overview.requests.request_count, 3);
     assert_eq!(overview.requests.failure_count, 1);
+    assert_eq!(
+        (
+            overview.providers[0].request_count,
+            overview.providers[0].attempt_count,
+            overview.providers[0].failure_count,
+            overview.providers[0].total_tokens,
+        ),
+        (3, 4, 1, 120),
+    );
 
     let succeeded = repository
         .usage_summary(

@@ -448,18 +448,20 @@ pub(crate) async fn provider_observations(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<ProviderObservation>> {
-    let mut query = QueryBuilder::<Postgres>::new(
+    let fact = completed_usage_fact_predicate("mr");
+    // 请求、attempt 与失败覆盖执行审计；token 只累计完整交付的用量事实。
+    let mut query = QueryBuilder::<Postgres>::new(format!(
         "select coalesce(mr.provider_kind, 'unrouted') as provider_kind,
                 count(*)::bigint as request_count,
                 coalesce(sum(mr.attempt_count), 0)::bigint as attempt_count,
                 count(*) filter (where mr.outcome = 'failed')::bigint as failure_count,
-                coalesce(sum(mr.total_tokens), 0)::bigint as total_tokens
-         from model_requests mr where mr.started_at >= ",
-    );
+                coalesce(sum(mr.total_tokens) filter (where {fact}), 0)::bigint
+                  as total_tokens
+         from model_requests mr where mr.started_at >= "
+    ));
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
-    push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by coalesce(mr.provider_kind, 'unrouted') order by request_count desc");
     let rows = query
