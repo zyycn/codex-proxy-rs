@@ -24,6 +24,11 @@ export function usageLineSeries(
 ): LineSeriesOption {
   const area = options.area ?? (options.stack ? 'strong' : false)
   const alpha = area ? areaAlpha[area] : null
+  const sampleCount = data.reduce<number>(
+    (count, value) => count + (value == null ? 0 : 1),
+    0,
+  )
+  const showSymbols = sampleCount > 0 && sampleCount <= 12
 
   return {
     name,
@@ -32,9 +37,10 @@ export function usageLineSeries(
     connectNulls: false,
     stack: options.stack,
     smooth: true,
-    showSymbol: data.length <= 12,
+    showSymbol: showSymbols,
+    showAllSymbol: showSymbols,
     symbol: 'circle',
-    symbolSize: 5,
+    symbolSize: sampleCount === 1 ? 7 : 5,
     lineStyle: { color, width: 2.2 },
     itemStyle: { color },
     areaStyle: alpha

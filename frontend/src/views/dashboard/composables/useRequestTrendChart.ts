@@ -286,7 +286,7 @@ export function useRequestTrendChart(options: {
         lineSeries(
           '首字 P95',
           activeSeriesValues('firstTokenP95Ms'),
-          trendColor('首字', '--cp-color-blue-solid', '#5983F4'),
+          trendColor('首字', '--cp-color-cyan-solid', '#13C2C2'),
           { area: true, smooth: 0.24, width: 2.5, z: 4 },
         ),
         lineSeries(

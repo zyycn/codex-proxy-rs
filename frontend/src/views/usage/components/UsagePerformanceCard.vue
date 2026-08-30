@@ -221,7 +221,7 @@ function formatThroughput(value: number | null) {
             </strong>
           </div>
         </div>
-        <BaseChart v-if="hasData" :option="chartOption" :height="210" class="-mb-2" />
+        <BaseChart v-if="hasData" :option="chartOption" :height="210" />
         <BaseEmpty
           v-else
           size="sm"

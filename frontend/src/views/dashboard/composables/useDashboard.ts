@@ -545,9 +545,9 @@ function trendSummaryTone(label: string) {
     return 'danger'
   if (label.includes('总耗时'))
     return 'warning'
-  if (label.includes('输出') || label.includes('成功'))
+  if (label.includes('吞吐') || label.includes('输出') || label.includes('成功'))
     return 'success'
-  if (label.includes('缓存'))
+  if (label.includes('首字') || label.includes('缓存'))
     return 'normal'
   return 'info'
 }
@@ -556,9 +556,9 @@ function trendSummaryColorVar(kind: DashboardTrendKind, label: string) {
   if (kind === 'latency') {
     if (label.includes('总耗时'))
       return '--cp-color-orange-solid'
-    if (label.includes('输出'))
+    if (label.includes('吞吐'))
       return '--cp-color-green-solid'
-    return '--cp-color-blue-solid'
+    return '--cp-color-cyan-solid'
   }
   if (kind === 'errors') {
     if (label.includes('错误'))

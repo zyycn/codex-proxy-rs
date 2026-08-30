@@ -220,7 +220,7 @@ onScopeDispose(() => {
   >
     <button
       type="button"
-      class="inline-flex size-12 touch-none select-none items-center justify-center rounded-cp border-0 bg-cp-bg-elevated text-cp-primary-text shadow-cp outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 [-webkit-tap-highlight-color:transparent] hover:bg-cp-fill-tertiary hover:text-cp-text active:scale-95 active:bg-cp-control-item-bg-active focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-layout"
+      class="inline-flex size-12 touch-none select-none items-center justify-center rounded-cp border-0 bg-cp-fill-secondary text-cp-text shadow-cp-tertiary outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 [-webkit-tap-highlight-color:transparent] hover:bg-cp-bg-text-active active:scale-95 active:bg-cp-control-item-bg-active focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-layout"
       :class="
         isDragging
           ? 'scale-95 cursor-grabbing shadow-[0_14px_28px_-20px_var(--cp-color-shadow)]'
