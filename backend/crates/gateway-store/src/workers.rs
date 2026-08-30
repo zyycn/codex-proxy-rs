@@ -5,6 +5,7 @@ use super::*;
 pub(crate) fn store_worker_contributions(
     execution: Arc<postgres::PgExecutionStore>,
     execution_writer: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
+    client_key_usage_writer: postgres::PgClientApiKeyUsageWriter,
     admission_release_writer: redis::ClientAdmissionReleaseWriter,
     circuit_feedback_writer: redis::ProviderCircuitFeedbackWriter,
     retention: Arc<postgres::PgRetentionRepository>,
@@ -15,6 +16,9 @@ pub(crate) fn store_worker_contributions(
         WorkerId::try_new(WorkerKind::Retention, "postgres").map_err(worker_definition_error)?;
     let ops_flush_id =
         WorkerId::try_new(WorkerKind::OpsFlush, "postgres").map_err(worker_definition_error)?;
+    let client_key_usage_flush_id =
+        WorkerId::try_new(WorkerKind::OpsFlush, "postgres_client_key_usage")
+            .map_err(worker_definition_error)?;
     let admission_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_admission")
         .map_err(worker_definition_error)?;
     let circuit_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_circuit")
@@ -39,6 +43,16 @@ pub(crate) fn store_worker_contributions(
                 WorkerRunnable::Daemon {
                     restart: ops_flush_restart,
                     task: Box::new(execution_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                client_key_usage_flush_id,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
+                    task: Box::new(client_key_usage_writer),
                 },
             )
             .map_err(worker_definition_error)?,
@@ -148,8 +162,47 @@ impl ScheduledTask for RetentionTask {
     }
 }
 
-pub(crate) struct PostgresHealthProbe {
-    pub(crate) pool: sqlx::PgPool,
+pub struct PostgresHealthProbe {
+    pool: sqlx::PgPool,
+    max_connections: u32,
+}
+
+impl PostgresHealthProbe {
+    #[must_use]
+    pub const fn new(pool: sqlx::PgPool, max_connections: u32) -> Self {
+        Self {
+            pool,
+            max_connections,
+        }
+    }
+
+    async fn check_once(&self) -> HealthState {
+        let deadline = tokio::time::Instant::now() + POSTGRES_HEALTH_ATTEMPT_TIMEOUT;
+        let mut connection = match tokio::time::timeout_at(deadline, self.pool.acquire()).await {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(_)) => {
+                return HealthState::Unhealthy("PostgreSQL is unavailable".to_owned());
+            }
+            Err(_) => {
+                return postgres_acquire_timeout_state(
+                    self.pool.size(),
+                    self.pool.num_idle(),
+                    self.max_connections,
+                );
+            }
+        };
+        match tokio::time::timeout_at(
+            deadline,
+            sqlx::query_scalar::<_, i32>("select 1").fetch_one(&mut *connection),
+        )
+        .await
+        {
+            Ok(Ok(1)) => HealthState::Healthy,
+            Ok(Ok(_)) => HealthState::Unhealthy("PostgreSQL health result is invalid".to_owned()),
+            Ok(Err(_)) => HealthState::Unhealthy("PostgreSQL is unavailable".to_owned()),
+            Err(_) => HealthState::Unhealthy("PostgreSQL health query timed out".to_owned()),
+        }
+    }
 }
 
 impl HealthProbe for PostgresHealthProbe {
@@ -158,16 +211,37 @@ impl HealthProbe for PostgresHealthProbe {
     }
 
     fn check(&self) -> futures::future::BoxFuture<'_, HealthState> {
-        Box::pin(async move {
-            match sqlx::query_scalar::<_, i32>("select 1")
-                .fetch_one(&self.pool)
-                .await
-            {
-                Ok(1) => HealthState::Healthy,
-                Ok(_) => HealthState::Unhealthy("PostgreSQL health result is invalid".to_owned()),
-                Err(_) => HealthState::Unhealthy("PostgreSQL is unavailable".to_owned()),
-            }
-        })
+        Box::pin(health_state_with_one_retry(
+            || self.check_once(),
+            POSTGRES_HEALTH_RETRY_DELAY,
+        ))
+    }
+}
+
+async fn health_state_with_one_retry<F, Fut>(mut check: F, retry_delay: Duration) -> HealthState
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = HealthState>,
+{
+    let first = check().await;
+    if first == HealthState::Healthy {
+        return first;
+    }
+    tokio::time::sleep(retry_delay).await;
+    check().await
+}
+
+fn postgres_acquire_timeout_state(
+    pool_size: u32,
+    idle_connections: usize,
+    max_connections: u32,
+) -> HealthState {
+    if pool_size >= max_connections && idle_connections == 0 {
+        HealthState::Degraded(format!(
+            "PostgreSQL pool is saturated ({pool_size}/{max_connections} connections in use)"
+        ))
+    } else {
+        HealthState::Unhealthy("PostgreSQL connection acquisition timed out".to_owned())
     }
 }
 

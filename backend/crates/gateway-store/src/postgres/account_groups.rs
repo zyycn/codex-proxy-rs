@@ -1,10 +1,6 @@
 //! PostgreSQL owner for provider-neutral account groups and memberships.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr as _,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, str::FromStr as _};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -13,30 +9,26 @@ use gateway_admin::{
         MutationContext,
         account_groups::{
             AccountGroupAccountSummary, AccountGroupCapacity, AccountGroupColor,
-            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, AccountGroupRecord,
-            AccountGroupUsage, DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled,
-            UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMemberFact, AccountGroupMutation, AccountGroupPage,
+            AccountGroupRecord, AccountGroupUsage, DeleteAccountGroup, NewAccountGroup,
+            SetAccountGroupEnabled, UpdateAccountGroup,
         },
         observability::DecimalAmount,
     },
     ports::store::{AccountGroupStore, AdminStoreError, AdminStoreResult},
 };
-use gateway_core::{
-    engine::credential::AccountStatus, provider_ports::ProviderCooldownPort,
-    routing::AccountGroupId,
-};
+use gateway_core::{engine::credential::AccountStatusFacts, routing::AccountGroupId};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
 
-use crate::redis::CredentialLeaseRepository as _;
 use crate::{
     ConflictKind, StoreError, StoreResult, admin_revision, admin_store_error, mutation_audit,
     postgres_unavailable,
 };
 
 use super::{
-    PgProviderAccountRepository, PgRuntimeSettingsRepository, ProviderAccountRepository,
-    RuntimeSettingsRepository, account_status_projection, append_admin_audit_event_in_transaction,
-    bump_config_revision_in_transaction, load_rate_limited_until,
+    PgRuntimeSettingsRepository, RuntimeSettingsRepository, account_summary_from_row,
+    append_admin_audit_event_in_transaction, bump_config_revision_in_transaction,
+    completed_usage_fact_predicate,
 };
 
 const ENTITY: &str = "account group";
@@ -45,31 +37,12 @@ const ENTITY: &str = "account group";
 #[derive(Clone)]
 pub struct PgAccountGroupRepository {
     pool: PgPool,
-    runtime_signals: Option<crate::redis::RedisCredentialLeaseRepository>,
-    cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
 }
 
 impl PgAccountGroupRepository {
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self {
-            pool,
-            runtime_signals: None,
-            cooldowns: None,
-        }
-    }
-
-    #[must_use]
-    pub fn with_runtime_state(
-        pool: PgPool,
-        runtime_signals: crate::redis::RedisCredentialLeaseRepository,
-        cooldowns: Arc<dyn ProviderCooldownPort>,
-    ) -> Self {
-        Self {
-            pool,
-            runtime_signals: Some(runtime_signals),
-            cooldowns: Some(cooldowns),
-        }
+        Self { pool }
     }
 
     async fn current_revision(&self) -> AdminStoreResult<gateway_admin::model::Revision> {
@@ -82,26 +55,17 @@ impl PgAccountGroupRepository {
     }
 
     async fn required_record(&self, id: &AccountGroupId) -> AdminStoreResult<AccountGroupRecord> {
-        let record = load_record(&self.pool, id.as_str())
+        let mut record = load_record(&self.pool, id.as_str())
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?
             .ok_or_else(|| not_found(id.as_str()))?;
-        let mut records = vec![record];
-        self.enrich_records(&mut records).await?;
-        records
-            .pop()
-            .ok_or_else(|| invalid_admin("account group record disappeared"))
-    }
-
-    async fn enrich_records(&self, records: &mut [AccountGroupRecord]) -> AdminStoreResult<()> {
-        enrich_group_records(
-            &self.pool,
-            self.runtime_signals.as_ref(),
-            self.cooldowns.as_deref(),
-            records,
-        )
-        .await
-        .map_err(|error| admin_store_error(ENTITY, error))
+        let costs = group_costs(&self.pool, &[id.as_str().to_owned()])
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        if let Some(usage) = costs.get(id.as_str()) {
+            record.usage = usage.clone();
+        }
+        Ok(record)
     }
 
     async fn mutate<F>(
@@ -167,7 +131,18 @@ impl AccountGroupStore for PgAccountGroupRepository {
             .map(group_record)
             .collect::<StoreResult<Vec<_>>>()
             .map_err(|error| admin_store_error(ENTITY, error))?;
-        self.enrich_records(&mut items).await?;
+        let group_ids = items
+            .iter()
+            .map(|record| record.id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let costs = group_costs(&self.pool, &group_ids)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        for record in &mut items {
+            if let Some(usage) = costs.get(record.id.as_str()) {
+                record.usage = usage.clone();
+            }
+        }
         Ok(AccountGroupPage {
             config_revision: self.current_revision().await?,
             items,
@@ -175,6 +150,75 @@ impl AccountGroupStore for PgAccountGroupRepository {
             page: query.page,
             page_size: query.page_size.get(),
         })
+    }
+
+    async fn load_account_group_members(
+        &self,
+        group_ids: &[AccountGroupId],
+    ) -> AdminStoreResult<Vec<AccountGroupMemberFact>> {
+        if group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let group_ids = group_ids
+            .iter()
+            .map(|group_id| group_id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(
+            "select membership.account_group_id,
+                    account.id, account.provider_kind, account.name, account.email,
+                    account.upstream_user_id, account.upstream_account_id, account.plan_type,
+                    account.authentication_kind, account.credential_revision,
+                    account.has_refresh_token, account.access_token_expires_at,
+                    account.next_refresh_at, account.enabled, account.concurrency_limit,
+                    account.weight, account.credential_state, account.quota_access_state,
+                    account.quota_evidence, account.quota_access_observed_at,
+                    account.quota_reset_at, account.last_error_reason,
+                    account.last_error_message, account.credential_observed_at,
+                    account.created_at, account.updated_at,
+                    settings.max_concurrent_per_account
+               from account_group_accounts membership
+               join provider_accounts account on account.id = membership.provider_account_id
+               cross join runtime_settings settings
+              where settings.id = 1
+                and membership.account_group_id = any($1::text[])
+              order by membership.account_group_id, membership.provider_account_id",
+        )
+        .bind(group_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| admin_store_error(ENTITY, unavailable("load account group members")))?;
+        rows.into_iter()
+            .map(|row| {
+                let group_id = AccountGroupId::new(
+                    row.try_get::<String, _>("account_group_id")
+                        .map_err(|_| invalid("invalid group ID"))?,
+                )
+                .map_err(|_| invalid("invalid group ID"))?;
+                let default_slots = u64::try_from(
+                    row.try_get::<i64, _>("max_concurrent_per_account")
+                        .map_err(|_| invalid("invalid default account concurrency"))?,
+                )
+                .map_err(|_| invalid("invalid default account concurrency"))?;
+                let account = account_summary_from_row(row)?;
+                Ok(AccountGroupMemberFact {
+                    group_id,
+                    account_id: account.id,
+                    status: AccountStatusFacts {
+                        enabled: account.enabled,
+                        credential_state: account.credential_state,
+                        access_token_expires_at: account.access_token_expires_at.map(Into::into),
+                        quota: account.quota,
+                        rate_limited_until: None,
+                        last_error_reason: account.last_error_reason,
+                        last_error_message: account.last_error_message,
+                    },
+                    total_slots: account
+                        .concurrency_limit
+                        .map_or(default_slots, |limit| u64::from(limit.get())),
+                })
+            })
+            .collect::<StoreResult<Vec<_>>>()
+            .map_err(|error| admin_store_error(ENTITY, error))
     }
 
     async fn create_account_group(
@@ -450,7 +494,8 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
         },
         usage: AccountGroupUsage {
             today_usd: DecimalAmount::from_str("0").map_err(|_| invalid("invalid zero cost"))?,
-            total_usd: DecimalAmount::from_str("0").map_err(|_| invalid("invalid zero cost"))?,
+            retained_total_usd: DecimalAmount::from_str("0")
+                .map_err(|_| invalid("invalid zero cost"))?,
         },
         created_at: row
             .try_get("created_at")
@@ -461,182 +506,59 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
     })
 }
 
-async fn enrich_group_records(
-    pool: &PgPool,
-    runtime_signals: Option<&crate::redis::RedisCredentialLeaseRepository>,
-    cooldowns: Option<&dyn ProviderCooldownPort>,
-    records: &mut [AccountGroupRecord],
-) -> StoreResult<()> {
-    if records.is_empty() {
-        return Ok(());
-    }
-    let settings = RuntimeSettingsRepository::load_runtime_settings(
-        &PgRuntimeSettingsRepository::new(pool.clone()),
-    )
-    .await?;
-    let accounts = PgProviderAccountRepository::new(pool.clone())
-        .list_provider_accounts(None, true)
-        .await?;
-    let now = chrono::Utc::now();
-    let cooldowns = load_rate_limited_until(cooldowns, &accounts, now.into()).await;
-    let mut status_by_account = BTreeMap::new();
-    let mut capacity_by_account = BTreeMap::new();
-    for account in &accounts {
-        let status =
-            account_status_projection(account, now.into(), cooldowns.get(&account.id).copied())
-                .status;
-        status_by_account.insert(account.id.as_str(), status);
-        capacity_by_account.insert(
-            account.id.as_str(),
-            u64::from(
-                account
-                    .concurrency_limit
-                    .map_or(settings.max_concurrent_per_account, |limit| limit.get()),
-            ),
-        );
-    }
-    let group_ids = records
-        .iter()
-        .map(|record| record.id.as_str().to_owned())
-        .collect::<Vec<_>>();
-    let memberships = sqlx::query(
-        "select account_group_id, provider_account_id
-         from account_group_accounts
-         where account_group_id = any($1::text[])",
-    )
-    .bind(&group_ids)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| unavailable("load account group availability"))?;
-    let mut accounts_by_group = BTreeMap::<String, Vec<String>>::new();
-    for row in memberships {
-        accounts_by_group
-            .entry(
-                row.try_get("account_group_id")
-                    .map_err(|_| invalid("invalid group ID"))?,
-            )
-            .or_default()
-            .push(
-                row.try_get("provider_account_id")
-                    .map_err(|_| invalid("invalid account ID"))?,
-            );
-    }
-    let normal_ids = accounts_by_group
-        .values()
-        .flatten()
-        .filter(|account_id| {
-            status_by_account.get(account_id.as_str()) == Some(&AccountStatus::Normal)
-        })
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let used_by_account = if normal_ids.is_empty() {
-        Some(BTreeMap::new())
-    } else if let Some(runtime_signals) = runtime_signals {
-        runtime_signals
-            .credential_runtime_signals(&normal_ids)
-            .await
-            .ok()
-            .map(|signals| {
-                signals
-                    .into_iter()
-                    .map(|signal| (signal.resource_id, u64::from(signal.in_flight)))
-                    .collect::<BTreeMap<_, _>>()
-            })
-    } else {
-        None
-    };
-    let costs = group_costs(pool, &group_ids).await?;
-    for record in records {
-        let account_ids = accounts_by_group
-            .get(record.id.as_str())
-            .map_or(&[][..], Vec::as_slice);
-        let available = account_ids
-            .iter()
-            .filter(|id| status_by_account.get(id.as_str()) == Some(&AccountStatus::Normal))
-            .count() as u64;
-        let total = u64::try_from(account_ids.len())
-            .map_err(|_| invalid("group account count overflow"))?;
-        record.account_summary = AccountGroupAccountSummary {
-            available,
-            limited: total.saturating_sub(available),
-            total,
-        };
-        record.capacity = AccountGroupCapacity {
-            used_slots: if available == 0 {
-                Some(0)
-            } else {
-                used_by_account.as_ref().map(|used| {
-                    account_ids.iter().fold(0_u64, |sum, id| {
-                        sum.saturating_add(used.get(id).copied().unwrap_or(0))
-                    })
-                })
-            },
-            total_slots: account_ids.iter().fold(0_u64, |total, account_id| {
-                if status_by_account.get(account_id.as_str()) == Some(&AccountStatus::Normal) {
-                    total.saturating_add(
-                        capacity_by_account
-                            .get(account_id.as_str())
-                            .copied()
-                            .unwrap_or(0),
-                    )
-                } else {
-                    total
-                }
-            }),
-        };
-        if let Some(usage) = costs.get(record.id.as_str()) {
-            record.usage = usage.clone();
-        }
-    }
-    Ok(())
-}
-
 async fn group_costs(
     pool: &PgPool,
     group_ids: &[String],
 ) -> StoreResult<BTreeMap<String, AccountGroupUsage>> {
-    let rows = sqlx::query(
-        "select gm.account_group_id,
+    if group_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let completed_usage = completed_usage_fact_predicate("mr");
+    let statement = format!(
+        "with requested_groups(group_id) as (
+           select unnest($1::text[])
+         )
+         select requested_groups.group_id,
                 coalesce(sum(mr.cost_amount) filter (
                   where mr.started_at >= date_trunc('day', now() at time zone 'Asia/Shanghai')
                     at time zone 'Asia/Shanghai'
                 ), 0)::text as today_usd,
-                coalesce(sum(mr.cost_amount), 0)::text as total_usd
-         from account_group_accounts gm
+                coalesce(sum(mr.cost_amount), 0)::text as retained_total_usd
+         from requested_groups
+         cross join runtime_settings settings
          left join model_requests mr
-           on mr.provider_account_ref = gm.provider_account_id
-          and mr.outcome = 'succeeded'
-          and mr.downstream_committed_at is not null
-          and mr.client_status_code between 200 and 399
+           on mr.routing_group_refs @> array[requested_groups.group_id]::text[]
+          and mr.started_at >= now() - make_interval(days => settings.usage_retention_days::int)
+          and {completed_usage}
           and mr.cost_currency = 'USD'
           and mr.cost_amount is not null
-         where gm.account_group_id = any($1::text[])
-         group by gm.account_group_id",
-    )
-    .bind(group_ids)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| unavailable("load account group costs"))?;
+         where settings.id = 1
+         group by requested_groups.group_id"
+    );
+    // 动态片段仅为共享的固定 usage-fact predicate；group IDs 仍使用 bind。
+    let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
+        .bind(group_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| unavailable("load account group costs"))?;
     rows.into_iter()
         .map(|row| {
-            let group_id = row
-                .try_get("account_group_id")
+            let group_id: String = row
+                .try_get("group_id")
                 .map_err(|_| invalid("invalid group ID"))?;
             let today = row
                 .try_get::<String, _>("today_usd")
                 .map_err(|_| invalid("invalid today cost"))?;
-            let total = row
-                .try_get::<String, _>("total_usd")
-                .map_err(|_| invalid("invalid total cost"))?;
+            let retained_total = row
+                .try_get::<String, _>("retained_total_usd")
+                .map_err(|_| invalid("invalid retained total cost"))?;
             Ok((
                 group_id,
                 AccountGroupUsage {
                     today_usd: DecimalAmount::from_str(&today)
                         .map_err(|_| invalid("invalid today cost"))?,
-                    total_usd: DecimalAmount::from_str(&total)
-                        .map_err(|_| invalid("invalid total cost"))?,
+                    retained_total_usd: DecimalAmount::from_str(&retained_total)
+                        .map_err(|_| invalid("invalid retained total cost"))?,
                 },
             ))
         })

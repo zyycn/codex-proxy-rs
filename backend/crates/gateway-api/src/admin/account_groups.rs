@@ -127,7 +127,7 @@ struct AccountGroupCapacityView {
 #[serde(rename_all = "camelCase")]
 struct AccountGroupUsageView {
     today_usd: String,
-    total_usd: String,
+    retained_total_usd: String,
 }
 
 impl From<AccountGroupRecord> for AccountGroupView {
@@ -168,7 +168,7 @@ fn capacity_view(capacity: AccountGroupCapacity) -> AccountGroupCapacityView {
 fn usage_view(usage: AccountGroupUsage) -> AccountGroupUsageView {
     AccountGroupUsageView {
         today_usd: usage.today_usd.to_string(),
-        total_usd: usage.total_usd.to_string(),
+        retained_total_usd: usage.retained_total_usd.to_string(),
     }
 }
 

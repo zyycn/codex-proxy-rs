@@ -1,3 +1,4 @@
+mod account_groups;
 mod accounts;
 mod auth;
 mod backup;
@@ -21,12 +22,12 @@ use gateway_admin::{
     model::{
         MutationContext, Revision,
         account_groups::{
-            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, DeleteAccountGroup,
-            NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMemberFact, AccountGroupMutation, AccountGroupPage,
+            DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
         },
         accounts::{
-            AccountListQuery, AccountPage, AccountUpdateResult, AccountUsage,
-            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+            AccountListQuery, AccountPage, AccountRuntimeSnapshot, AccountUpdateResult,
+            AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
             BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         auth::{AdminAuditEvent, AdminSession},
@@ -56,8 +57,9 @@ use gateway_admin::{
         backup::BackupStorePorts,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
-            AccountGroupStore, AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
-            AdminStoreResult, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
+            AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
+            AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
+            ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -79,6 +81,8 @@ pub(super) struct AdminHarness {
     default_password: String,
     session_ttl_minutes: u64,
     accounts: Arc<dyn AccountStore>,
+    account_runtime: Arc<dyn AccountRuntimeStore>,
+    account_groups: Arc<dyn AccountGroupStore>,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
@@ -96,6 +100,8 @@ impl AdminHarness {
             default_password: "strong-test-password".to_owned(),
             session_ttl_minutes: 60,
             accounts: unavailable.clone(),
+            account_runtime: unavailable.clone(),
+            account_groups: Arc::new(UnavailableAccountGroupStore),
             auth: Arc::new(BootstrapAuthStore::default()),
             client_keys: unavailable.clone(),
             observability: unavailable.clone(),
@@ -122,6 +128,16 @@ impl AdminHarness {
 
     pub(super) fn accounts(mut self, store: Arc<dyn AccountStore>) -> Self {
         self.accounts = store;
+        self
+    }
+
+    pub(super) fn account_runtime(mut self, store: Arc<dyn AccountRuntimeStore>) -> Self {
+        self.account_runtime = store;
+        self
+    }
+
+    pub(super) fn account_groups(mut self, store: Arc<dyn AccountGroupStore>) -> Self {
+        self.account_groups = store;
         self
     }
 
@@ -175,8 +191,11 @@ impl AdminHarness {
                 default_password: InitialAdminPassword::new(self.default_password),
             },
             AdminStorePorts::new(
-                self.accounts,
-                Arc::new(UnavailableAccountGroupStore),
+                AdminAccountStorePorts::new(
+                    self.accounts,
+                    self.account_runtime,
+                    self.account_groups,
+                ),
                 self.auth,
                 self.client_keys,
                 self.observability,
@@ -252,6 +271,13 @@ impl AccountGroupStore for UnavailableAccountGroupStore {
         Err(unavailable("account groups"))
     }
 
+    async fn load_account_group_members(
+        &self,
+        _: &[gateway_core::routing::AccountGroupId],
+    ) -> AdminStoreResult<Vec<AccountGroupMemberFact>> {
+        Err(unavailable("account group members"))
+    }
+
     async fn create_account_group(
         &self,
         _: NewAccountGroup,
@@ -287,13 +313,18 @@ impl AccountGroupStore for UnavailableAccountGroupStore {
 
 #[async_trait]
 impl AccountStore for UnavailableStore {
-    async fn list_accounts(&self, _: AccountListQuery) -> AdminStoreResult<AccountPage> {
+    async fn list_accounts(
+        &self,
+        _: AccountListQuery,
+        _: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<AccountPage> {
         Err(unavailable("accounts"))
     }
 
     async fn load_account(
         &self,
         _: &str,
+        _: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<Option<gateway_admin::model::accounts::AccountPageItem>> {
         Err(unavailable("account"))
     }
@@ -407,6 +438,17 @@ impl AccountStore for UnavailableStore {
         _: &MutationContext,
     ) -> AdminStoreResult<()> {
         Err(unavailable("credential export audit"))
+    }
+}
+
+#[async_trait]
+impl AccountRuntimeStore for UnavailableStore {
+    async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        Ok(AccountRuntimeSnapshot::default())
+    }
+
+    async fn account_runtime(&self, _: &[String]) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        Ok(AccountRuntimeSnapshot::default())
     }
 }
 

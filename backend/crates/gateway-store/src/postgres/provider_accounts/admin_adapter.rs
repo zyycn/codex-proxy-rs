@@ -6,6 +6,7 @@ use std::sync::Arc;
 use gateway_core::provider_ports::ProviderCooldownPort;
 
 use super::*;
+use crate::postgres::ObservabilityQueryBudget;
 
 /// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力。
 ///
@@ -17,17 +18,23 @@ pub struct PgAdminAccountStore {
     observability: PgObservabilityRepository,
     control_plane: PgControlPlaneRepository,
     cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
+    query_budget: ObservabilityQueryBudget,
 }
 
 impl PgAdminAccountStore {
     #[must_use]
-    pub fn new(pool: PgPool, cooldowns: Option<Arc<dyn ProviderCooldownPort>>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
+        query_budget: ObservabilityQueryBudget,
+    ) -> Self {
         Self {
             pool: pool.clone(),
             accounts: PgProviderAccountRepository::new(pool.clone()),
-            observability: PgObservabilityRepository::new(pool.clone(), cooldowns.clone()),
+            observability: PgObservabilityRepository::new(pool.clone(), None),
             control_plane: PgControlPlaneRepository::new(pool),
             cooldowns,
+            query_budget,
         }
     }
 
@@ -97,62 +104,61 @@ impl PgAdminAccountStore {
             .iter()
             .map(|window| window.account_id.clone())
             .collect::<Vec<_>>();
-        let (usage_rows, cost_rows, model_rows, model_cost_rows) = futures::try_join!(
-            sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
-                .bind(account_ids.clone())
-                .bind(keys.clone())
-                .bind(starts.clone())
-                .bind(ends.clone())
-                .fetch_all(&self.pool),
-            sqlx::query(ACCOUNT_USAGE_COSTS_BY_WINDOWS_SQL)
-                .bind(account_ids.clone())
-                .bind(keys.clone())
-                .bind(starts.clone())
-                .bind(ends.clone())
-                .fetch_all(&self.pool),
-            sqlx::query(ACCOUNT_USAGE_MODELS_BY_WINDOWS_SQL)
-                .bind(account_ids.clone())
-                .bind(keys.clone())
-                .bind(starts.clone())
-                .bind(ends.clone())
-                .fetch_all(&self.pool),
-            sqlx::query(ACCOUNT_USAGE_MODEL_COSTS_BY_WINDOWS_SQL)
-                .bind(account_ids)
-                .bind(keys)
-                .bind(starts)
-                .bind(ends)
-                .fetch_all(&self.pool),
-        )
-        .map_err(|_| {
-            admin_store_error(
-                ENTITY,
-                postgres_unavailable("load provider account quota window usage"),
-            )
-        })?;
+        let rows = self
+            .query_budget
+            .run("load account usage windows", async {
+                sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
+                    .bind(account_ids)
+                    .bind(keys)
+                    .bind(starts)
+                    .bind(ends)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|_| postgres_unavailable("load provider account quota window usage"))
+            })
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?;
+        let mut usage_rows = Vec::with_capacity(windows.len());
         let mut costs_by_window = BTreeMap::<(String, String), Vec<AccountCost>>::new();
-        for row in &cost_rows {
-            let (key, cost) = admin_account_usage_window_cost(row)?;
-            costs_by_window.entry(key).or_default().push(cost);
-        }
         let mut model_costs = BTreeMap::<(String, String, String), Vec<AccountCost>>::new();
-        for row in &model_cost_rows {
-            let (key, cost) = admin_account_usage_window_model_cost(row)?;
-            model_costs.entry(key).or_default().push(cost);
-        }
         let mut models_by_window = BTreeMap::<(String, String), Vec<AccountModelUsage>>::new();
-        for row in &model_rows {
-            let ((account_id, window_key, model), mut usage) =
-                admin_account_usage_window_model(row)?;
-            usage.costs = model_costs
-                .remove(&(account_id.clone(), window_key.clone(), model))
-                .unwrap_or_default();
-            models_by_window
-                .entry((account_id, window_key))
-                .or_default()
-                .push(usage);
+        for row in &rows {
+            let model_grouping = window_usage_value::<i32>(row, "model_grouping")?;
+            let currency_grouping = window_usage_value::<i32>(row, "currency_grouping")?;
+            match (model_grouping, currency_grouping) {
+                (1, 1) => usage_rows.push(row),
+                (1, 0) if window_usage_value::<Option<String>>(row, "cost_currency")?.is_some() => {
+                    let (key, cost) = admin_account_usage_window_cost(row)?;
+                    costs_by_window.entry(key).or_default().push(cost);
+                }
+                (0, 1) if window_usage_value::<Option<String>>(row, "model")?.is_some() => {
+                    let ((account_id, window_key, _), usage) =
+                        admin_account_usage_window_model(row)?;
+                    models_by_window
+                        .entry((account_id, window_key))
+                        .or_default()
+                        .push(usage);
+                }
+                (0, 0)
+                    if window_usage_value::<Option<String>>(row, "model")?.is_some()
+                        && window_usage_value::<Option<String>>(row, "cost_currency")?
+                            .is_some() =>
+                {
+                    let (key, cost) = admin_account_usage_window_model_cost(row)?;
+                    model_costs.entry(key).or_default().push(cost);
+                }
+                (0 | 1, 0 | 1) => {}
+                _ => {
+                    return Err(AdminStoreError::new(
+                        AdminStoreErrorKind::Unavailable,
+                        ENTITY,
+                        "account usage window query returned an invalid grouping marker",
+                    ));
+                }
+            }
         }
         let mut results = usage_rows
-            .iter()
+            .into_iter()
             .map(admin_account_usage_window)
             .collect::<AdminStoreResult<Vec<_>>>()?;
         for result in &mut results {
@@ -162,6 +168,21 @@ impl PgAdminAccountStore {
             result.usage.models = models_by_window
                 .remove(&(result.account_id.clone(), result.key.clone()))
                 .unwrap_or_default();
+            for model in &mut result.usage.models {
+                model.costs = model_costs
+                    .remove(&(
+                        result.account_id.clone(),
+                        result.key.clone(),
+                        model.model.clone(),
+                    ))
+                    .unwrap_or_default();
+            }
+            result.usage.models.sort_by(|left, right| {
+                right
+                    .request_count
+                    .cmp(&left.request_count)
+                    .then_with(|| left.model.cmp(&right.model))
+            });
         }
         Ok(results)
     }
@@ -331,67 +352,15 @@ impl PgAdminAccountStore {
         }
         Ok(groups)
     }
-
-    async fn account_ids_matching_group(
-        &self,
-        filter: Option<&AccountGroupFilter>,
-    ) -> AdminStoreResult<Option<BTreeSet<String>>> {
-        let Some(filter) = filter else {
-            return Ok(None);
-        };
-        let rows = match filter {
-            AccountGroupFilter::Group(group_id) => {
-                let exists = sqlx::query_scalar::<_, bool>(
-                    "select exists(select 1 from account_groups where id = $1)",
-                )
-                .bind(group_id.as_str())
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|_| {
-                    admin_store_error(
-                        ENTITY,
-                        postgres_unavailable("validate account group filter"),
-                    )
-                })?;
-                if !exists {
-                    return Err(admin_store_error(
-                        ENTITY,
-                        StoreError::NotFound {
-                            entity: "account group",
-                            id: group_id.as_str().to_owned(),
-                        },
-                    ));
-                }
-                sqlx::query_scalar::<_, String>(
-                    "select provider_account_id from account_group_accounts
-                     where account_group_id = $1",
-                )
-                .bind(group_id.as_str())
-                .fetch_all(&self.pool)
-                .await
-            }
-            AccountGroupFilter::Ungrouped => {
-                sqlx::query_scalar::<_, String>(
-                    "select a.id from provider_accounts a
-                     where not exists (
-                       select 1 from account_group_accounts m
-                       where m.provider_account_id = a.id
-                     )",
-                )
-                .fetch_all(&self.pool)
-                .await
-            }
-        }
-        .map_err(|_| {
-            admin_store_error(ENTITY, postgres_unavailable("load account group filter"))
-        })?;
-        Ok(Some(rows.into_iter().collect()))
-    }
 }
 
 #[async_trait]
 impl AccountStore for PgAdminAccountStore {
-    async fn list_accounts(&self, query: AdminAccountListQuery) -> AdminStoreResult<AccountPage> {
+    async fn list_accounts(
+        &self,
+        query: AdminAccountListQuery,
+        runtime: gateway_admin::model::accounts::AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<AccountPage> {
         if query.page == 0 {
             return Err(AdminStoreError::new(
                 AdminStoreErrorKind::Invalid,
@@ -399,93 +368,57 @@ impl AccountStore for PgAdminAccountStore {
                 "page number must be positive",
             ));
         }
-        let (control_plane, accounts) = futures::try_join!(
-            self.control_plane.load_control_plane(),
-            self.accounts.list_provider_accounts(None, true),
-        )
-        .map_err(|error| admin_store_error(ENTITY, error))?;
         let now = Utc::now();
-        let rate_limited_until =
-            load_rate_limited_until(self.cooldowns.as_deref(), &accounts, now.into()).await;
-        let summary = admin_account_summary(&accounts, now, &rate_limited_until);
-        let group_matches = self
-            .account_ids_matching_group(query.group_filter.as_ref())
-            .await?;
-        let mut items = accounts
+        let rate_limited_until = runtime
+            .rate_limited_until
             .into_iter()
-            .filter_map(|account| {
-                let until = rate_limited_until.get(&account.id).copied();
-                let projection = account_status_projection(&account, now.into(), until);
-                (account_matches_admin_query(&account, projection.status, &query)
-                    && group_matches
-                        .as_ref()
-                        .is_none_or(|matches| matches.contains(&account.id)))
-                .then_some(AdminAccountListItem {
-                    account,
-                    projection,
-                    usage: None,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        if query.sort.is_some_and(|sort| {
-            matches!(
-                sort.field,
-                AdminAccountSortField::Usage | AdminAccountSortField::LastUsedAt
-            )
-        }) {
-            let range = retained_usage_range(control_plane.settings.usage_retention_days, now)?;
-            let account_ids = items
-                .iter()
-                .map(|item| item.account.id.clone())
-                .collect::<Vec<_>>();
-            let mut usage_by_account = self
-                .usage_observations(range, &account_ids)
-                .await?
-                .into_iter()
-                .map(|usage| (usage.account_id.clone(), usage))
-                .collect::<BTreeMap<_, _>>();
-            for item in &mut items {
-                item.usage = usage_by_account.remove(&item.account.id);
-            }
-        }
-        sort_admin_account_items(&mut items, query.sort);
-
-        let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
-        let page_size = usize::from(query.page_size.get());
-        let offset = u64::from(query.page - 1).saturating_mul(u64::from(query.page_size.get()));
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        let items = items
-            .into_iter()
-            .skip(offset)
-            .take(page_size)
-            .collect::<Vec<_>>();
-        let item_ids = items
+            .map(|(account_id, until)| (account_id, until.into()))
+            .collect::<BTreeMap<_, _>>();
+        let now_system_time = std::time::SystemTime::from(now);
+        let active_rate_limited_ids = rate_limited_until
             .iter()
-            .map(|item| item.account.id.clone())
+            .filter(|(_, until)| **until > now_system_time)
+            .map(|(account_id, _)| account_id.clone())
+            .collect::<Vec<_>>();
+        let page =
+            load_admin_account_page(&self.pool, &query, now, active_rate_limited_ids).await?;
+        let item_ids = page
+            .accounts
+            .iter()
+            .map(|account| account.id.clone())
             .collect::<Vec<_>>();
         let mut groups_by_account = self.account_groups_by_account(&item_ids).await?;
-        let items = items
+        let items = page
+            .accounts
             .into_iter()
-            .map(|item| {
-                let account_id = item.account.id.clone();
-                let mut account = admin_account_record(item.account)?;
+            .map(|summary| {
+                let account_id = summary.id.clone();
+                let projection = account_status_projection(
+                    &summary,
+                    now.into(),
+                    rate_limited_until.get(&account_id).copied(),
+                );
+                let mut account = admin_account_record(summary)?;
                 account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
                 Ok(AccountPageItem {
                     account,
-                    projection: item.projection,
+                    projection,
                 })
             })
             .collect::<AdminStoreResult<Vec<_>>>()?;
         Ok(AccountPage {
-            config_revision: admin_revision(control_plane.settings.config_revision)?,
+            config_revision: page.config_revision,
             items,
-            total,
-            summary,
+            total: page.total,
+            summary: page.summary,
         })
     }
 
-    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountPageItem>> {
+    async fn load_account(
+        &self,
+        account_id: &str,
+        runtime: gateway_admin::model::accounts::AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<Option<AccountPageItem>> {
         let record = self
             .accounts
             .load_provider_account(account_id)
@@ -495,14 +428,11 @@ impl AccountStore for PgAdminAccountStore {
             return Ok(None);
         };
         let now = Utc::now();
-        let rate_limited_until = load_rate_limited_until(
-            self.cooldowns.as_deref(),
-            std::slice::from_ref(&record.summary),
-            now.into(),
-        )
-        .await
-        .get(account_id)
-        .copied();
+        let rate_limited_until = runtime
+            .rate_limited_until
+            .get(account_id)
+            .copied()
+            .map(Into::into);
         let projection = account_status_projection(&record.summary, now.into(), rate_limited_until);
         let account_id = record.summary.id.clone();
         let mut groups = self

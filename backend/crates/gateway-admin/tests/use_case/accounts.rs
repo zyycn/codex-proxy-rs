@@ -26,8 +26,8 @@ use gateway_admin::{
         AdminError, MutationContext, Revision,
         accounts::{
             AccountConnectionTestEvent, AccountListQuery, AccountPage, AccountPageItem,
-            AccountRecord, AccountSummary, AccountUpdateResult, AccountUsage,
-            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
+            AccountRecord, AccountRuntimeSnapshot, AccountSummary, AccountUpdateResult,
+            AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
             BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         observability::TimeRange,
@@ -507,7 +507,11 @@ impl FakeAccountStore {
 
 #[async_trait]
 impl AccountStore for FakeAccountStore {
-    async fn list_accounts(&self, _: AccountListQuery) -> AdminStoreResult<AccountPage> {
+    async fn list_accounts(
+        &self,
+        _: AccountListQuery,
+        _: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<AccountPage> {
         self.record("store.list_accounts");
         let accounts = self.accounts.lock().expect("accounts").clone();
         let total = accounts.len() as u64;
@@ -526,7 +530,11 @@ impl AccountStore for FakeAccountStore {
         })
     }
 
-    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountPageItem>> {
+    async fn load_account(
+        &self,
+        account_id: &str,
+        _: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<Option<AccountPageItem>> {
         self.record("store.load_account");
         // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询。
         let account = self

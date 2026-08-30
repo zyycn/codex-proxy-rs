@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use chrono::{TimeZone as _, Utc};
 use gateway_admin::{
@@ -9,10 +9,15 @@ use gateway_admin::{
     },
     ports::store::ClientKeyStore as _,
 };
+use gateway_core::{
+    engine::{CancellationToken, execution::ClientApiKeyUsageSink as _},
+    policy::ClientApiKeyId,
+    task::DaemonTask as _,
+};
 use gateway_store::postgres::{
     ClientApiKeyCursor, ClientApiKeyCursorValue, ClientApiKeyListQuery, ClientApiKeyRepository,
     ClientApiKeySort, ClientApiKeySortDirection, ClientApiKeySortField, NewClientApiKey,
-    PgAdminClientKeyStore, PgClientApiKeyRepository,
+    PgAdminClientKeyStore, PgClientApiKeyRepository, PgClientApiKeyUsageSink,
 };
 
 use super::TestDatabase;
@@ -304,6 +309,47 @@ async fn client_key_usage_touch_should_preserve_the_latest_observed_timestamp() 
         .expect("load API Key")
         .expect("client key exists");
     assert_eq!(record.last_used_at, Some(latest));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn client_key_usage_daemon_should_flush_pending_touch_on_shutdown() {
+    let Some(database) = TestDatabase::create("client_key_usage_daemon").await else {
+        return;
+    };
+    sqlx::query(
+        "insert into client_api_keys (
+           id, name, key, enabled, max_concurrency, requests_per_minute,
+           created_at, updated_at
+         ) values ('key_usage_daemon', 'usage', $1, true, 0, 0, now(), now())",
+    )
+    .bind(format!("sk_{}", "u".repeat(43)))
+    .execute(&database.pool)
+    .await
+    .expect("seed client key");
+
+    let (sink, writer) =
+        PgClientApiKeyUsageSink::with_flush_delay(database.pool.clone(), Duration::from_secs(60));
+    let writer = Arc::new(writer);
+    let cancellation = CancellationToken::new();
+    let task = {
+        let writer = Arc::clone(&writer);
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move { writer.run(cancellation).await })
+    };
+    sink.record_used(&ClientApiKeyId::new("key_usage_daemon").expect("valid client API Key ID"));
+    cancellation.cancel();
+    task.await
+        .expect("join client key usage daemon")
+        .expect("stop client key usage daemon");
+
+    let last_used_at: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "select last_used_at from client_api_keys where id = 'key_usage_daemon'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load client key last-used timestamp");
+    assert!(last_used_at.is_some());
     database.close().await;
 }
 

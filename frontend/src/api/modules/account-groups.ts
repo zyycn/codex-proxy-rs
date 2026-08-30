@@ -20,7 +20,7 @@ export interface AccountGroupCapacity {
 
 export interface AccountGroupUsage {
   todayUsd: string
-  totalUsd: string
+  retainedTotalUsd: string
 }
 
 export interface AccountGroup extends AccountGroupRef {

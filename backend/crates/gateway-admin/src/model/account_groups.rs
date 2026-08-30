@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gateway_core::routing::AccountGroupId;
+use gateway_core::{engine::credential::AccountStatusFacts, routing::AccountGroupId};
 
 use super::{PageSize, Revision, observability::DecimalAmount};
 
@@ -45,7 +45,17 @@ pub struct AccountGroupCapacity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupUsage {
     pub today_usd: DecimalAmount,
-    pub total_usd: DecimalAmount,
+    /// 当前 usage retention 窗口内、按请求发生时 routing group 快照归属的累计成本。
+    pub retained_total_usd: DecimalAmount,
+}
+
+/// 当前页账号组 membership 对应的持久账号事实；运行态在 Admin query service 合并。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountGroupMemberFact {
+    pub group_id: AccountGroupId,
+    pub account_id: String,
+    pub status: AccountStatusFacts,
+    pub total_slots: u64,
 }
 
 /// Lightweight group reference embedded in account and client-key views.

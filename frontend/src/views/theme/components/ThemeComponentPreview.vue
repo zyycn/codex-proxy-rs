@@ -105,7 +105,7 @@ const tableRows: PreviewTableRow[] = [
   { id: 'disabled', account: 'disabled@example.com', provider: 'OpenAI', status: '停用', requests: '0', latency: '—', updatedAt: '2 小时前' },
 ]
 const pagination: BaseTablePaginationState = {
-  page: 2,
+  currentPage: 2,
   pageSize: 20,
   total: 1_182,
 }

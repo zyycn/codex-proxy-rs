@@ -14,6 +14,8 @@ pub(crate) const REDIS_PASSWORD_ENV: &str = "CPR_REDIS_PASSWORD";
 pub(crate) const POSTGRES_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const POSTGRES_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const POSTGRES_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const POSTGRES_HEALTH_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(450);
+pub(crate) const POSTGRES_HEALTH_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Store 自己拥有并校验的启动配置。
 #[derive(Clone, Deserialize)]
@@ -61,6 +63,10 @@ impl StorePoolConfig {
     #[must_use]
     pub const fn observability_max_connections(self) -> u32 {
         self.max_connections - self.max_connections.div_ceil(5)
+    }
+
+    pub(crate) const fn acquire_timeout(self) -> Duration {
+        Duration::from_secs(self.acquire_timeout_seconds)
     }
 }
 

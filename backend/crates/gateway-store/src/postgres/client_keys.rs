@@ -3,15 +3,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use gateway_admin::{
     model::{
         MutationContext,
@@ -29,12 +27,14 @@ use gateway_admin::{
     ports::store::{AdminStoreResult, ClientKeyStore},
 };
 use gateway_core::{
-    engine::execution::ClientApiKeyUsageSink,
+    engine::{CancellationToken, execution::ClientApiKeyUsageSink},
     policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
     routing::{AccountGroupId, ProviderKind},
+    task::{DaemonTask, WorkerTaskError},
 };
 use serde::Deserialize;
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use tokio::sync::Notify;
 
 use crate::{
     StoreError, StoreResult, admin_revision, admin_store_error, mutation_audit,
@@ -46,6 +46,7 @@ use super::{ControlPlaneRepository, PgControlPlaneRepository};
 const ENTITY: &str = "client API key";
 const KEY_LENGTH: usize = 46;
 const CLIENT_API_KEY_LAST_USED_FLUSH_DELAY: Duration = Duration::from_secs(1);
+const CLIENT_API_KEY_LAST_USED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeySnapshot {
@@ -349,35 +350,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         let mut statement = QueryBuilder::<Postgres>::new(
             "select k.id, k.name, k.label, left(k.key, 10) as prefix, k.enabled,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
-                    k.updated_at,
-                    coalesce(groups.groups, '[]'::jsonb) as groups,
-                    case
-                      when groups.binding_count = 0 then coalesce(
-                        (select array_agg(distinct a.provider_kind order by a.provider_kind)
-                         from provider_accounts a),
-                        '{}'
-                      )
-                      else coalesce(groups.provider_kinds, '{}')
-                    end as provider_kinds
+                    k.updated_at, '[]'::jsonb as groups, '{}'::text[] as provider_kinds
              from client_api_keys k
-             left join lateral (
-               select
-                 (select count(*)::bigint
-                  from client_api_key_groups kg
-                  where kg.client_api_key_id = k.id) as binding_count,
-                 (select jsonb_agg(jsonb_build_object(
-                           'id', g.id, 'name', g.name, 'color', g.color, 'enabled', g.enabled
-                         ) order by g.id)
-                  from client_api_key_groups kg
-                  join account_groups g on g.id = kg.account_group_id
-                  where kg.client_api_key_id = k.id) as groups,
-                 (select array_agg(distinct a.provider_kind order by a.provider_kind)
-                  from client_api_key_groups kg
-                  join account_groups g on g.id = kg.account_group_id and g.enabled
-                  join account_group_accounts gm on gm.account_group_id = g.id
-                  join provider_accounts a on a.id = gm.provider_account_id
-                  where kg.client_api_key_id = k.id) as provider_kinds
-             ) groups on true
              where true",
         );
         push_client_key_search(&mut statement, query.search.as_deref());
@@ -407,6 +381,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         } else {
             None
         };
+        load_client_key_memberships(&self.pool, &mut items).await?;
         Ok(ClientApiKeyPage {
             items,
             total,
@@ -501,76 +476,102 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
 /// 该 adapter 仅记录稳定 Key ID；认证材料从不进入异步队列或日志。
 #[derive(Clone)]
 pub struct PgClientApiKeyUsageSink {
+    state: Arc<ClientApiKeyUsageBuffer>,
+}
+
+struct ClientApiKeyUsageBuffer {
+    pending: Mutex<BTreeMap<String, DateTime<Utc>>>,
+    flush_requested: Notify,
+}
+
+pub struct PgClientApiKeyUsageWriter {
     repository: PgClientApiKeyRepository,
-    pending: Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>,
-    flush_scheduled: Arc<AtomicBool>,
+    state: Arc<ClientApiKeyUsageBuffer>,
+    flush_delay: Duration,
 }
 
 impl PgClientApiKeyUsageSink {
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self {
-            repository: PgClientApiKeyRepository::new(pool),
-            pending: Arc::new(Mutex::new(BTreeMap::new())),
-            flush_scheduled: Arc::new(AtomicBool::new(false)),
-        }
+    pub fn new(pool: PgPool) -> (Self, PgClientApiKeyUsageWriter) {
+        Self::with_flush_delay(pool, CLIENT_API_KEY_LAST_USED_FLUSH_DELAY)
+    }
+
+    #[must_use]
+    pub fn with_flush_delay(
+        pool: PgPool,
+        flush_delay: Duration,
+    ) -> (Self, PgClientApiKeyUsageWriter) {
+        let state = Arc::new(ClientApiKeyUsageBuffer {
+            pending: Mutex::new(BTreeMap::new()),
+            flush_requested: Notify::new(),
+        });
+        (
+            Self {
+                state: Arc::clone(&state),
+            },
+            PgClientApiKeyUsageWriter {
+                repository: PgClientApiKeyRepository::new(pool),
+                state,
+                flush_delay: flush_delay.max(Duration::from_millis(1)),
+            },
+        )
     }
 
     fn queue(&self, key_id: &ClientApiKeyId) {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(key_id.as_str().to_owned(), Utc::now());
-        self.schedule_flush();
+        let used_at = Utc::now();
+        let mut pending = lock_unpoisoned(&self.state.pending);
+        pending
+            .entry(key_id.as_str().to_owned())
+            .and_modify(|pending_at| *pending_at = (*pending_at).max(used_at))
+            .or_insert(used_at);
+        drop(pending);
+        self.state.flush_requested.notify_one();
     }
+}
 
-    fn schedule_flush(&self) {
-        if self
-            .flush_scheduled
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
+impl PgClientApiKeyUsageWriter {
+    async fn flush_pending(&self) -> StoreResult<u64> {
+        let updates = std::mem::take(&mut *lock_unpoisoned(&self.state.pending));
+        if updates.is_empty() {
+            return Ok(0);
         }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            self.flush_scheduled.store(false, Ordering::Release);
-            return;
-        };
-        let sink = self.clone();
-        drop(runtime.spawn(async move {
-            tokio::time::sleep(CLIENT_API_KEY_LAST_USED_FLUSH_DELAY).await;
-            sink.flush_pending().await;
-        }));
-    }
-
-    async fn flush_pending(&self) {
-        let updates = std::mem::take(
-            &mut *self
-                .pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        if let Err(error) = self.repository.touch_client_api_keys(&updates).await {
-            tracing::error!(error = %error, "Failed to flush client API key last-used batch");
-            let mut pending = self
-                .pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for (key_id, used_at) in updates {
-                pending
-                    .entry(key_id)
-                    .and_modify(|pending_at| *pending_at = (*pending_at).max(used_at))
-                    .or_insert(used_at);
+        match self.repository.touch_client_api_keys(&updates).await {
+            Ok(updated) => Ok(updated),
+            Err(error) => {
+                let mut pending = lock_unpoisoned(&self.state.pending);
+                for (key_id, used_at) in updates {
+                    pending
+                        .entry(key_id)
+                        .and_modify(|pending_at| *pending_at = (*pending_at).max(used_at))
+                        .or_insert(used_at);
+                }
+                drop(pending);
+                self.state.flush_requested.notify_one();
+                Err(error)
             }
         }
-        self.flush_scheduled.store(false, Ordering::Release);
-        if !self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
+    }
+
+    async fn flush_on_shutdown(&self) {
+        match tokio::time::timeout(
+            CLIENT_API_KEY_LAST_USED_SHUTDOWN_TIMEOUT,
+            self.flush_pending(),
+        )
+        .await
         {
-            self.schedule_flush();
+            Ok(Ok(updated)) if updated > 0 => {
+                tracing::info!(updated, "Client API Key last-used 已在关闭前写回");
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => {
+                tracing::warn!("Client API Key last-used 关闭写回失败");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    pending = lock_unpoisoned(&self.state.pending).len(),
+                    "Client API Key last-used 关闭写回超时"
+                );
+            }
         }
     }
 }
@@ -579,6 +580,41 @@ impl ClientApiKeyUsageSink for PgClientApiKeyUsageSink {
     fn record_used(&self, key_id: &ClientApiKeyId) {
         self.queue(key_id);
     }
+}
+
+impl DaemonTask for PgClientApiKeyUsageWriter {
+    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            loop {
+                tokio::select! {
+                    () = cancellation.cancelled() => {
+                        self.flush_on_shutdown().await;
+                        return Ok(());
+                    }
+                    () = self.state.flush_requested.notified() => {}
+                }
+                tokio::select! {
+                    () = cancellation.cancelled() => {
+                        self.flush_on_shutdown().await;
+                        return Ok(());
+                    }
+                    () = tokio::time::sleep(self.flush_delay) => {}
+                }
+                if self.flush_pending().await.is_err() {
+                    tracing::warn!("Client API Key last-used 批量写回失败");
+                    return Err(WorkerTaskError::safe(
+                        "client API key last-used flush failed",
+                    ));
+                }
+            }
+        })
+    }
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Admin 用例所需的 Client Key 事务能力。
@@ -1131,14 +1167,122 @@ async fn count_client_api_keys(pool: &PgPool, search: Option<&str>) -> StoreResu
 
 fn push_client_key_search(statement: &mut QueryBuilder<Postgres>, search: Option<&str>) {
     if let Some(search) = search {
+        let prefix = literal_prefix_pattern(search);
         statement.push(" and (lower(name) like ");
-        statement.push_bind(format!("%{}%", search.to_lowercase()));
+        statement.push_bind(prefix.clone());
+        statement.push(" escape '\\'");
         statement.push(" or lower(coalesce(label, '')) like ");
-        statement.push_bind(format!("%{}%", search.to_lowercase()));
+        statement.push_bind(prefix.clone());
+        statement.push(" escape '\\'");
         statement.push(" or lower(left(key, 10)) like ");
-        statement.push_bind(format!("%{}%", search.to_lowercase()));
+        statement.push_bind(prefix);
+        statement.push(" escape '\\'");
         statement.push(")");
     }
+}
+
+async fn load_client_key_memberships(
+    pool: &PgPool,
+    records: &mut [ClientApiKeyRecord],
+) -> StoreResult<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let ids = records
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    let rows = sqlx::query(
+        "with requested_keys(key_id) as (
+           select unnest($1::text[])
+         ),
+         global_providers as (
+           select coalesce(array_agg(distinct provider_kind order by provider_kind), '{}')
+                    as provider_kinds
+             from provider_accounts
+         )
+         select requested_keys.key_id,
+                groups.id as group_id, groups.name as group_name, groups.color as group_color,
+                groups.enabled as group_enabled,
+                global_providers.provider_kinds as global_provider_kinds,
+                coalesce(array_agg(distinct accounts.provider_kind order by accounts.provider_kind)
+                  filter (where accounts.provider_kind is not null), '{}')
+                  as group_provider_kinds
+           from requested_keys
+           cross join global_providers
+           left join client_api_key_groups bindings
+             on bindings.client_api_key_id = requested_keys.key_id
+           left join account_groups groups on groups.id = bindings.account_group_id
+           left join account_group_accounts memberships
+             on memberships.account_group_id = groups.id and groups.enabled
+           left join provider_accounts accounts
+             on accounts.id = memberships.provider_account_id
+          group by requested_keys.key_id, global_providers.provider_kinds,
+                   groups.id, groups.name, groups.color, groups.enabled
+          order by requested_keys.key_id, groups.id",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| postgres_unavailable("load client API key memberships"))?;
+    let mut groups = BTreeMap::<String, Vec<ClientApiKeyGroupRecord>>::new();
+    let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
+    for row in rows {
+        use sqlx::Row as _;
+        let key_id: String = row
+            .try_get("key_id")
+            .map_err(|_| invalid("invalid client API key membership"))?;
+        let group_id: Option<String> = row
+            .try_get("group_id")
+            .map_err(|_| invalid("invalid client API key group"))?;
+        if let Some(group_id) = group_id {
+            groups
+                .entry(key_id.clone())
+                .or_default()
+                .push(ClientApiKeyGroupRecord {
+                    id: group_id,
+                    name: row
+                        .try_get("group_name")
+                        .map_err(|_| invalid("invalid client API key group name"))?,
+                    color: row
+                        .try_get("group_color")
+                        .map_err(|_| invalid("invalid client API key group color"))?,
+                    enabled: row
+                        .try_get("group_enabled")
+                        .map_err(|_| invalid("invalid client API key group state"))?,
+                });
+            providers.entry(key_id).or_default().extend(
+                row.try_get::<Vec<String>, _>("group_provider_kinds")
+                    .map_err(|_| invalid("invalid client API key provider kinds"))?,
+            );
+        } else {
+            providers.entry(key_id).or_default().extend(
+                row.try_get::<Vec<String>, _>("global_provider_kinds")
+                    .map_err(|_| invalid("invalid global provider kinds"))?,
+            );
+        }
+    }
+    for record in records {
+        record.groups = groups.remove(&record.id).unwrap_or_default();
+        record.provider_kinds = providers
+            .remove(&record.id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    }
+    Ok(())
+}
+
+fn literal_prefix_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len().saturating_add(1));
+    for character in value.to_lowercase().chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped.push('%');
+    escaped
 }
 
 fn push_client_key_cursor(statement: &mut QueryBuilder<Postgres>, cursor: &ClientApiKeyCursor) {

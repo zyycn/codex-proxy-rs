@@ -87,6 +87,14 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
             .await
             .expect("create scoped client key");
     }
+    seed_group_cost_snapshot(
+        &database.pool,
+        "req_historical_empty_group",
+        "acct_group_openai",
+        EMPTY_GROUP,
+        "1.5",
+    )
+    .await;
 
     let page = groups
         .list_account_groups(AccountGroupListQuery {
@@ -97,6 +105,15 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         })
         .await
         .expect("list account groups");
+    let members = groups
+        .load_account_group_members(std::slice::from_ref(&mixed_group))
+        .await
+        .expect("load current-page group members");
+    assert_eq!(members.len(), 2);
+    assert_eq!(
+        members.iter().map(|member| member.total_slots).sum::<u64>(),
+        7
+    );
     assert_eq!(page.total, 2);
     let by_id = page
         .items
@@ -110,17 +127,20 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         BTreeMap::from([("openai".to_owned(), 1), ("xai".to_owned(), 1)])
     );
     assert_eq!(mixed.client_key_count, 2);
-    assert_eq!(mixed.account_summary.available, 2);
+    // PostgreSQL 返回持久页与 member facts；实时状态/容量由 Admin query service 投影。
+    assert_eq!(mixed.account_summary.available, 0);
     assert_eq!(mixed.account_summary.limited, 0);
-    assert_eq!(mixed.account_summary.total, 2);
+    assert_eq!(mixed.account_summary.total, 0);
     assert_eq!(mixed.capacity.used_slots, None);
-    assert_eq!(mixed.capacity.total_slots, 7);
+    assert_eq!(mixed.capacity.total_slots, 0);
     assert_eq!(mixed.usage.today_usd.as_str(), "0");
-    assert_eq!(mixed.usage.total_usd.as_str(), "0");
+    assert_eq!(mixed.usage.retained_total_usd.as_str(), "0");
     let empty = by_id.get(EMPTY_GROUP).expect("empty group");
     assert_eq!(empty.member_count, 0);
     assert!(empty.provider_counts.is_empty());
     assert_eq!(empty.client_key_count, 1);
+    assert_eq!(empty.usage.today_usd.as_str(), "1.5");
+    assert_eq!(empty.usage.retained_total_usd.as_str(), "1.5");
 
     let all_key = keys
         .reveal_client_key(&client_key_id("key_all_accounts"))
@@ -279,6 +299,40 @@ async fn assign_accounts(pool: &sqlx::PgPool, group_id: &str, account_ids: &[&st
         .await
         .expect("seed account group membership");
     }
+}
+
+async fn seed_group_cost_snapshot(
+    pool: &sqlx::PgPool,
+    request_id: &str,
+    account_id: &str,
+    historical_group_id: &str,
+    cost_amount: &str,
+) {
+    sqlx::query(
+        "insert into model_requests (
+           id, client_api_key_ref, config_revision, protocol, operation, endpoint,
+           client_transport, requested_model_id, provider_kind, provider_account_id,
+           provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
+           upstream_send_state, downstream_committed_at, outcome, client_status_code,
+           upstream_status_code, total_tokens, cost_source, cost_amount, cost_currency,
+           started_at, deadline_at, completed_at,
+           routing_scope, routing_group_refs, routing_group_names_snapshot
+         ) values (
+           $1, 'key-group-history', 1, 'openai', 'responses', '/v1/responses',
+           'http_sse', 'gpt-group', 'openai', $2, $2, 'gpt-group', 'http_sse', 1,
+           'sent', now(), 'succeeded', 200, 200, 10,
+           'provider_reported', $4::numeric, 'USD', now() - interval '1 minute',
+           now() + interval '5 minutes', now(),
+           'groups', array[$3]::text[], jsonb_build_array($3::text)
+         )",
+    )
+    .bind(request_id)
+    .bind(account_id)
+    .bind(historical_group_id)
+    .bind(cost_amount)
+    .execute(pool)
+    .await
+    .expect("seed historical group cost snapshot");
 }
 
 async fn current_revision(pool: &sqlx::PgPool) -> u64 {

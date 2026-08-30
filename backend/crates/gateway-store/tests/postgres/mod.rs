@@ -1,6 +1,8 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
-use gateway_store::postgres::connect_and_migrate;
+use gateway_store::postgres::{
+    ObservabilityQueryBudget, PgAdminAccountStore, connect_and_migrate,
+};
 use sqlx::{
     ConnectOptions as _, PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -14,6 +16,7 @@ mod backup;
 mod client_keys;
 mod execution;
 mod execution_buffer;
+mod health;
 mod observability;
 mod ops_events;
 mod provider_accounts;
@@ -29,6 +32,15 @@ pub(super) struct TestDatabase {
     admin: PgPool,
     pub(super) pool: PgPool,
     schema: String,
+}
+
+pub(super) fn observability_query_budget() -> ObservabilityQueryBudget {
+    ObservabilityQueryBudget::try_new(4, Duration::from_secs(1))
+        .expect("valid test observability query budget")
+}
+
+pub(super) fn admin_account_store(pool: &PgPool) -> PgAdminAccountStore {
+    PgAdminAccountStore::new(pool.clone(), None, observability_query_budget())
 }
 
 impl TestDatabase {

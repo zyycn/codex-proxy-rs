@@ -40,7 +40,10 @@ async fn list_route_should_keep_camel_case_group_and_page_wire() {
     assert_eq!(value["data"]["items"][0]["capacity"]["usedSlots"], 0);
     assert_eq!(value["data"]["items"][0]["capacity"]["totalSlots"], 1);
     assert_eq!(value["data"]["items"][0]["usage"]["todayUsd"], "1.25");
-    assert_eq!(value["data"]["items"][0]["usage"]["totalUsd"], "5.5");
+    assert_eq!(
+        value["data"]["items"][0]["usage"]["retainedTotalUsd"],
+        "5.5"
+    );
     assert!(value["data"]["items"][0].get("member_count").is_none());
 }
 

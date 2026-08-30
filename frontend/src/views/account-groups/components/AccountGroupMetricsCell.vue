@@ -66,7 +66,11 @@ const metrics = computed<MetricItem[]>(() => {
 
   return [
     { label: '今日', value: formatUsd(props.group.usage.todayUsd), tone: 'primary' },
-    { label: '累计', value: formatUsd(props.group.usage.totalUsd), tone: 'secondary' },
+    {
+      label: '累计',
+      value: formatUsd(props.group.usage.retainedTotalUsd),
+      tone: 'secondary',
+    },
   ]
 })
 </script>

@@ -1,10 +1,6 @@
 //! 明文 `provider_accounts` 与凭证 revision CAS 的唯一 PostgreSQL owner。
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    str::FromStr,
-};
+use std::{collections::BTreeSet, fmt, str::FromStr};
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -16,10 +12,9 @@ use gateway_admin::{
             AccountCost, AccountGroupFilter, AccountListQuery as AdminAccountListQuery,
             AccountModelUsage, AccountPage, AccountPageItem, AccountRecord, AccountRequestBucket,
             AccountSort as AdminAccountSort, AccountSortField as AdminAccountSortField,
-            AccountStatus as AdminAccountStatus, AccountSummary, AccountUpdateResult, AccountUsage,
-            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
-            BatchUpdateAccounts, DeleteAccounts, SortDirection as AdminSortDirection,
-            UpdateAccount,
+            AccountSummary, AccountUpdateResult, AccountUsage, AccountUsageWindowQuery,
+            AccountUsageWindowResult, AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts,
+            SortDirection as AdminSortDirection, UpdateAccount,
         },
         observability::{
             CostCoverage as AdminCostCoverage, DecimalAmount as AdminDecimalAmount, TimeRange,
@@ -34,8 +29,6 @@ use gateway_admin::{
     },
     ports::store::{AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
-
 use gateway_core::engine::credential::{
     AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
     CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts,
@@ -49,6 +42,7 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
 use gateway_core::routing::{AccountGroupId, ProviderKind};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::{
     ConflictKind, JsonObject, Revision, StoreError, StoreResult, admin_revision, admin_store_error,
@@ -60,10 +54,11 @@ use super::{
     ObservabilityRepository, PgControlPlaneRepository, PgObservabilityRepository,
     ProviderAccountModelUsageObservation, ProviderAccountUsageObservation,
     ProviderAccountUsageQuery, append_admin_audit_event_in_transaction,
-    bump_config_revision_in_transaction,
+    bump_config_revision_in_transaction, completed_usage_fact_predicate,
 };
 
 mod admin_adapter;
+mod admin_queries;
 mod core_adapter;
 mod mapping;
 mod repository;
@@ -71,6 +66,7 @@ mod rows;
 mod runtime;
 
 pub use admin_adapter::*;
+pub(crate) use admin_queries::*;
 pub(crate) use mapping::*;
 pub use repository::*;
 pub use rows::*;

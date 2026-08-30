@@ -191,7 +191,7 @@ function canDelete(record: BackupRecord): boolean {
         </template>
       </BaseTable>
       <BaseTablePagination
-        :pagination="{ page, pageSize, total }"
+        :pagination="{ currentPage: page, pageSize, total }"
         :loading="loading"
         @page-change="emit('pageChange', $event)"
         @page-size-change="emit('pageSizeChange', $event)"

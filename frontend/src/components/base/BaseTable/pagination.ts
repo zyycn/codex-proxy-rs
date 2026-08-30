@@ -1,7 +1,7 @@
 import { clamp, range } from 'es-toolkit'
 
 export interface BaseTablePagination {
-  page: number
+  currentPage: number
   pageSize: number
   total: number
   pageSizes?: number[]
@@ -28,7 +28,7 @@ export function getCurrentPage(pagination: BaseTablePagination | undefined, tota
     return 0
   }
 
-  return clamp(pagination.page, 1, totalPages)
+  return clamp(pagination.currentPage, 1, totalPages)
 }
 
 export function getPageSizeOptions(pagination?: BaseTablePagination) {

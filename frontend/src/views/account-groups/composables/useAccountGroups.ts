@@ -62,7 +62,7 @@ export function useAccountGroups() {
     updatedAtDisplay: formatDateTime(group.updatedAt),
   })))
   const pagination = computed(() => ({
-    page: query.page.value,
+    currentPage: query.page.value,
     pageSize: query.pageSize.value,
     total: query.total.value,
   }))

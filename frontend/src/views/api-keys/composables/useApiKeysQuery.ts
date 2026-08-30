@@ -23,7 +23,7 @@ export function useApiKeysQuery() {
   let requestSequence = 0
 
   const apiKeyPagination = computed(() => ({
-    page: page.value,
+    currentPage: page.value,
     pageSize: pageSize.value,
     total: total.value,
   }))

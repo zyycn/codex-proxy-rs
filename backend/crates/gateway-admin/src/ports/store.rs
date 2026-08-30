@@ -11,13 +11,13 @@ use super::backup::BackupStorePorts;
 use crate::model::{
     MutationContext, Revision,
     account_groups::{
-        AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, DeleteAccountGroup,
-        NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
+        AccountGroupListQuery, AccountGroupMemberFact, AccountGroupMutation, AccountGroupPage,
+        DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
     },
     accounts::{
-        AccountListQuery, AccountPage, AccountPageItem, AccountUpdateResult, AccountUsage,
-        AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
-        BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
+        AccountListQuery, AccountPage, AccountPageItem, AccountRuntimeSnapshot,
+        AccountUpdateResult, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
+        AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
     },
     auth::{AdminAuditEvent, AdminSession},
     client_keys::{
@@ -86,9 +86,17 @@ pub type AdminStoreResult<T> = Result<T, AdminStoreError>;
 /// 账号目录与公共账号写操作。
 #[async_trait]
 pub trait AccountStore: Send + Sync {
-    async fn list_accounts(&self, query: AccountListQuery) -> AdminStoreResult<AccountPage>;
+    async fn list_accounts(
+        &self,
+        query: AccountListQuery,
+        runtime: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<AccountPage>;
 
-    async fn load_account(&self, account_id: &str) -> AdminStoreResult<Option<AccountPageItem>>;
+    async fn load_account(
+        &self,
+        account_id: &str,
+        runtime: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<Option<AccountPageItem>>;
 
     async fn load_account_usage(
         &self,
@@ -174,6 +182,17 @@ pub trait AccountStore: Send + Sync {
     ) -> AdminStoreResult<()>;
 }
 
+/// 可丢失账号运行态的管理读端口；跨存储编排由 Admin application service 拥有。
+#[async_trait]
+pub trait AccountRuntimeStore: Send + Sync {
+    async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot>;
+
+    async fn account_runtime(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<AccountRuntimeSnapshot>;
+}
+
 /// 管理员密码、会话和安全审计。
 #[async_trait]
 pub trait AuthStore: Send + Sync {
@@ -239,6 +258,11 @@ pub trait AccountGroupStore: Send + Sync {
         &self,
         query: AccountGroupListQuery,
     ) -> AdminStoreResult<AccountGroupPage>;
+
+    async fn load_account_group_members(
+        &self,
+        group_ids: &[gateway_core::routing::AccountGroupId],
+    ) -> AdminStoreResult<Vec<AccountGroupMemberFact>>;
 
     async fn create_account_group(
         &self,
@@ -346,13 +370,35 @@ pub trait SettingsStore: Send + Sync {
     ) -> AdminStoreResult<AdminApiKeyMutation>;
 }
 
+/// 账号目录、运行态与分组所需的 Store 能力集合。
+#[derive(Clone)]
+pub struct AdminAccountStorePorts {
+    accounts: Arc<dyn AccountStore>,
+    runtime: Arc<dyn AccountRuntimeStore>,
+    groups: Arc<dyn AccountGroupStore>,
+}
+
+impl AdminAccountStorePorts {
+    #[must_use]
+    pub fn new(
+        accounts: Arc<dyn AccountStore>,
+        runtime: Arc<dyn AccountRuntimeStore>,
+        groups: Arc<dyn AccountGroupStore>,
+    ) -> Self {
+        Self {
+            accounts,
+            runtime,
+            groups,
+        }
+    }
+}
+
 /// 管理用例所需能力的封闭集合。
 ///
 /// 字段保持私有，每个 getter 只交出一种明确能力。该类型不提供通用拆包入口。
 #[derive(Clone)]
 pub struct AdminStorePorts {
-    accounts: Arc<dyn AccountStore>,
-    account_groups: Arc<dyn AccountGroupStore>,
+    accounts: AdminAccountStorePorts,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
@@ -363,8 +409,7 @@ pub struct AdminStorePorts {
 impl AdminStorePorts {
     #[must_use]
     pub fn new(
-        accounts: Arc<dyn AccountStore>,
-        account_groups: Arc<dyn AccountGroupStore>,
+        accounts: AdminAccountStorePorts,
         auth: Arc<dyn AuthStore>,
         client_keys: Arc<dyn ClientKeyStore>,
         observability: Arc<dyn ObservabilityStore>,
@@ -373,7 +418,6 @@ impl AdminStorePorts {
     ) -> Self {
         Self {
             accounts,
-            account_groups,
             auth,
             client_keys,
             observability,
@@ -384,12 +428,17 @@ impl AdminStorePorts {
 
     #[must_use]
     pub fn accounts(&self) -> Arc<dyn AccountStore> {
-        self.accounts.clone()
+        self.accounts.accounts.clone()
+    }
+
+    #[must_use]
+    pub fn account_runtime(&self) -> Arc<dyn AccountRuntimeStore> {
+        self.accounts.runtime.clone()
     }
 
     #[must_use]
     pub fn account_groups(&self) -> Arc<dyn AccountGroupStore> {
-        self.account_groups.clone()
+        self.accounts.groups.clone()
     }
 
     #[must_use]

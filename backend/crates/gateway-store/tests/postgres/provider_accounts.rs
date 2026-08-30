@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     num::NonZeroU32,
     time::{Duration, SystemTime},
 };
@@ -8,7 +9,7 @@ use gateway_admin::{
     model::{
         MutationActor, MutationContext, PageSize,
         accounts::{
-            AccountListQuery, AccountSort, AccountSortField, AccountStatus,
+            AccountListQuery, AccountRuntimeSnapshot, AccountSort, AccountSortField, AccountStatus,
             AccountUsageWindowQuery, BatchUpdateAccounts, DeleteAccounts, SortDirection,
             UpdateAccount,
         },
@@ -42,7 +43,7 @@ use gateway_store::{
 };
 use serde_json::json;
 
-use super::TestDatabase;
+use super::{TestDatabase, admin_account_store};
 
 #[derive(sqlx::FromRow)]
 struct RecoveredAccountRow {
@@ -620,20 +621,23 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     .await
     .expect("seed charlie usage");
 
-    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+    let store = admin_account_store(&database.pool);
     let usage_page = store
-        .list_accounts(AccountListQuery {
-            page: 1,
-            page_size: PageSize::new(2).expect("page size"),
-            provider_kind: None,
-            group_filter: None,
-            search: None,
-            status: None,
-            sort: Some(AccountSort {
-                field: AccountSortField::Usage,
-                direction: SortDirection::Desc,
-            }),
-        })
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(2).expect("page size"),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: None,
+                sort: Some(AccountSort {
+                    field: AccountSortField::Usage,
+                    direction: SortDirection::Desc,
+                }),
+            },
+            Default::default(),
+        )
         .await
         .expect("sort accounts by retained usage");
     assert_eq!(usage_page.config_revision.get(), 1);
@@ -662,18 +666,21 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     );
 
     let last_used_page = store
-        .list_accounts(AccountListQuery {
-            page: 1,
-            page_size: PageSize::new(2).expect("page size"),
-            provider_kind: None,
-            group_filter: None,
-            search: None,
-            status: None,
-            sort: Some(AccountSort {
-                field: AccountSortField::LastUsedAt,
-                direction: SortDirection::Desc,
-            }),
-        })
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(2).expect("page size"),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: None,
+                sort: Some(AccountSort {
+                    field: AccountSortField::LastUsedAt,
+                    direction: SortDirection::Desc,
+                }),
+            },
+            Default::default(),
+        )
         .await
         .expect("sort accounts by retained last use");
     assert_eq!(
@@ -686,15 +693,18 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     );
 
     let filtered = store
-        .list_accounts(AccountListQuery {
-            page: 1,
-            page_size: PageSize::new(10).expect("page size"),
-            provider_kind: Some(ProviderKind::new("openai").expect("Provider kind")),
-            group_filter: None,
-            search: Some("ALPHA@EXAMPLE".to_owned()),
-            status: Some(AccountStatus::Normal),
-            sort: None,
-        })
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(10).expect("page size"),
+                provider_kind: Some(ProviderKind::new("openai").expect("Provider kind")),
+                group_filter: None,
+                search: Some("ALPHA@EXAMPLE".to_owned()),
+                status: Some(AccountStatus::Normal),
+                sort: None,
+            },
+            Default::default(),
+        )
         .await
         .expect("filter account directory");
     assert_eq!(filtered.total, 1);
@@ -702,16 +712,62 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(filtered.items[0].account.id, "acct_alpha");
     assert_eq!(filtered.items[0].account.provider_kind.as_str(), "openai");
 
+    let rate_limited = store
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(10).expect("page size"),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: Some(AccountStatus::RateLimited),
+                sort: None,
+            },
+            AccountRuntimeSnapshot {
+                rate_limited_until: BTreeMap::from([(
+                    "acct_alpha".to_owned(),
+                    now + TimeDelta::minutes(5),
+                )]),
+                in_flight: None,
+            },
+        )
+        .await
+        .expect("filter active runtime status in PostgreSQL page query");
+    assert_eq!(rate_limited.total, 1);
+    assert_eq!(rate_limited.items[0].account.id, "acct_alpha");
+    assert_eq!(rate_limited.summary.rate_limited, 1);
+    assert_eq!(rate_limited.summary.normal, 0);
+
+    let no_contains_compatibility = store
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(10).expect("page size"),
+                provider_kind: None,
+                group_filter: None,
+                search: Some("example.invalid".to_owned()),
+                status: None,
+                sort: None,
+            },
+            Default::default(),
+        )
+        .await
+        .expect("use structured account prefix search");
+    assert_eq!(no_contains_compatibility.total, 0);
+
     let error_accounts = store
-        .list_accounts(AccountListQuery {
-            page: 1,
-            page_size: PageSize::new(10).expect("page size"),
-            provider_kind: None,
-            group_filter: None,
-            search: None,
-            status: Some(AccountStatus::Error),
-            sort: None,
-        })
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(10).expect("page size"),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: Some(AccountStatus::Error),
+                sort: None,
+            },
+            Default::default(),
+        )
         .await
         .expect("filter error accounts");
     assert_eq!(error_accounts.items.len(), 2);
@@ -744,7 +800,7 @@ async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collecti
             .expect("insert xAI credential fixture");
     }
 
-    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+    let store = admin_account_store(&database.pool);
     let provider = ProviderKind::new("xai").expect("xAI Provider kind");
     let complete = store
         .list_credentials(
@@ -825,7 +881,7 @@ async fn terminal_admin_usage_chunks_large_selections_and_preserves_exact_costs(
     let mut account_ids = vec!["acct_usage_exact".to_owned()];
     account_ids.extend((0..200).map(|index| format!("missing_account_{index}")));
 
-    let usage = PgAdminAccountStore::new(database.pool.clone(), None)
+    let usage = admin_account_store(&database.pool)
         .load_account_usage(
             TimeRange {
                 start: now - TimeDelta::hours(1),
@@ -917,7 +973,7 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
     .await
     .expect("separate provider total from fallback components");
 
-    let mut usage = PgAdminAccountStore::new(database.pool.clone(), None)
+    let mut usage = admin_account_store(&database.pool)
         .load_account_usage_by_windows(&[
             AccountUsageWindowQuery {
                 account_id: "acct_quota_window".to_owned(),
@@ -981,7 +1037,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         .insert_provider_account(account("acct_terminal_mutation", "user-terminal-mutation"))
         .await
         .expect("insert mutation account");
-    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+    let store = admin_account_store(&database.pool);
     let context = MutationContext {
         actor: MutationActor::System,
         request_id: "request_terminal_mutation".to_owned(),
@@ -1124,7 +1180,7 @@ async fn account_recovery_resets_status_facts_without_changing_credentials_or_sc
     .fetch_one(&database.pool)
     .await
     .expect("load account before recovery");
-    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+    let store = admin_account_store(&database.pool);
 
     let result = store
         .recover_account(
@@ -1198,7 +1254,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     .execute(&database.pool)
     .await
     .expect("insert batch account group");
-    let store = PgAdminAccountStore::new(database.pool.clone(), None);
+    let store = admin_account_store(&database.pool);
     let account_ids = vec!["acct_batch_a".to_owned(), "acct_batch_b".to_owned()];
     let context = MutationContext {
         actor: MutationActor::System,
@@ -1302,7 +1358,7 @@ async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
             .expect("insert enabled account");
     }
 
-    let revision = PgAdminAccountStore::new(database.pool.clone(), None)
+    let revision = admin_account_store(&database.pool)
         .delete_accounts(
             DeleteAccounts {
                 account_ids: vec![
@@ -1428,7 +1484,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         unreachable!("credential fixture must be an object");
     };
 
-    let result = PgAdminAccountStore::new(database.pool.clone(), None)
+    let result = admin_account_store(&database.pool)
         .commit_authorization(
             AuthorizationCommit {
                 pending: PendingAuthorizationMutation::new(

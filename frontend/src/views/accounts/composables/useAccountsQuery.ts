@@ -56,7 +56,7 @@ export function useAccountsQuery() {
   })
 
   const accountPagination = computed(() => ({
-    page: query.page.value,
+    currentPage: query.page.value,
     pageSize: query.pageSize.value,
     total: query.total.value,
   }))

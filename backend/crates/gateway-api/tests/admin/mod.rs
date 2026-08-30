@@ -15,14 +15,14 @@ use gateway_admin::{
         MutationContext, Revision,
         account_groups::{
             AccountGroupAccountSummary, AccountGroupCapacity, AccountGroupColor,
-            AccountGroupListQuery, AccountGroupMutation, AccountGroupPage, AccountGroupRecord,
-            AccountGroupUsage, DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled,
-            UpdateAccountGroup,
+            AccountGroupListQuery, AccountGroupMemberFact, AccountGroupMutation, AccountGroupPage,
+            AccountGroupRecord, AccountGroupUsage, DeleteAccountGroup, NewAccountGroup,
+            SetAccountGroupEnabled, UpdateAccountGroup,
         },
         accounts::{
-            AccountListQuery, AccountPage, AccountPageItem, AccountUpdateResult, AccountUsage,
-            AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
-            BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
+            AccountListQuery, AccountPage, AccountPageItem, AccountRuntimeSnapshot,
+            AccountUpdateResult, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
+            AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         auth::{AdminAuditEvent, AdminSession},
         client_keys::{
@@ -52,8 +52,9 @@ use gateway_admin::{
     ports::{
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
-            AccountGroupStore, AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
-            AdminStoreResult, AuthStore, ClientKeyStore, ObservabilityStore, SettingsStore,
+            AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
+            AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
+            ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -64,7 +65,7 @@ use gateway_admin::{
 use gateway_api::admin::AdminSessionState;
 use gateway_core::{
     engine::{
-        credential::ProviderAccountId,
+        credential::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
         probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     },
     policy::{ClientApiKeyId, RateLimits},
@@ -121,8 +122,7 @@ impl AdminTestFixture {
             dashboard_summary_range: Arc::clone(&dashboard_summary_range),
         });
         let stores = AdminStorePorts::new(
-            unused.clone(),
-            account_groups.clone(),
+            AdminAccountStorePorts::new(unused.clone(), unused.clone(), account_groups.clone()),
             auth.clone(),
             client_keys.clone(),
             unused,
@@ -466,6 +466,45 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         })
     }
 
+    async fn load_account_group_members(
+        &self,
+        group_ids: &[gateway_core::routing::AccountGroupId],
+    ) -> AdminStoreResult<Vec<AccountGroupMemberFact>> {
+        if !group_ids.iter().any(|id| id.as_str() == PRIMARY_GROUP_ID) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![
+            AccountGroupMemberFact {
+                group_id: group_id(PRIMARY_GROUP_ID),
+                account_id: "acct_group_ready".to_owned(),
+                status: AccountStatusFacts {
+                    enabled: true,
+                    credential_state: CredentialState::Ready,
+                    access_token_expires_at: None,
+                    quota: QuotaState::default(),
+                    rate_limited_until: None,
+                    last_error_reason: None,
+                    last_error_message: None,
+                },
+                total_slots: 1,
+            },
+            AccountGroupMemberFact {
+                group_id: group_id(PRIMARY_GROUP_ID),
+                account_id: "acct_group_disabled".to_owned(),
+                status: AccountStatusFacts {
+                    enabled: false,
+                    credential_state: CredentialState::Ready,
+                    access_token_expires_at: None,
+                    quota: QuotaState::default(),
+                    rate_limited_until: None,
+                    last_error_reason: None,
+                    last_error_message: None,
+                },
+                total_slots: 1,
+            },
+        ])
+    }
+
     async fn create_account_group(
         &self,
         command: NewAccountGroup,
@@ -632,11 +671,19 @@ struct UnusedStore {
 
 #[async_trait]
 impl AccountStore for UnusedStore {
-    async fn list_accounts(&self, _: AccountListQuery) -> AdminStoreResult<AccountPage> {
+    async fn list_accounts(
+        &self,
+        _: AccountListQuery,
+        _: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<AccountPage> {
         Err(unavailable("account list"))
     }
 
-    async fn load_account(&self, _: &str) -> AdminStoreResult<Option<AccountPageItem>> {
+    async fn load_account(
+        &self,
+        _: &str,
+        _: AccountRuntimeSnapshot,
+    ) -> AdminStoreResult<Option<AccountPageItem>> {
         Err(unavailable("account"))
     }
 
@@ -749,6 +796,23 @@ impl AccountStore for UnusedStore {
         _: &MutationContext,
     ) -> AdminStoreResult<()> {
         Err(unavailable("credential export audit"))
+    }
+}
+
+#[async_trait]
+impl AccountRuntimeStore for UnusedStore {
+    async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        Ok(AccountRuntimeSnapshot {
+            rate_limited_until: BTreeMap::new(),
+            in_flight: Some(BTreeMap::new()),
+        })
+    }
+
+    async fn account_runtime(&self, _: &[String]) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        Ok(AccountRuntimeSnapshot {
+            rate_limited_until: BTreeMap::new(),
+            in_flight: Some(BTreeMap::new()),
+        })
     }
 }
 
@@ -1037,10 +1101,12 @@ fn capacity(used_slots: Option<u64>, total_slots: u64) -> AccountGroupCapacity {
     }
 }
 
-fn usage(today_usd: &str, total_usd: &str) -> AccountGroupUsage {
+fn usage(today_usd: &str, retained_total_usd: &str) -> AccountGroupUsage {
     AccountGroupUsage {
         today_usd: today_usd.parse::<DecimalAmount>().expect("today cost"),
-        total_usd: total_usd.parse::<DecimalAmount>().expect("total cost"),
+        retained_total_usd: retained_total_usd
+            .parse::<DecimalAmount>()
+            .expect("retained total cost"),
     }
 }
 

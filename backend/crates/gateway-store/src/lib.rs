@@ -15,8 +15,8 @@ use gateway_admin::model::settings::{
 use gateway_admin::model::{MutationActor, MutationContext, Revision as AdminRevision};
 use gateway_admin::ports::backup::BackupStorePorts;
 use gateway_admin::ports::store::{
-    AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-    SettingsStore,
+    AdminAccountStorePorts, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
+    AdminStoreResult, AuthStore, SettingsStore,
 };
 use gateway_core::CoreStorePorts;
 use gateway_core::health::{HealthProbe, HealthState};
@@ -43,4 +43,5 @@ pub(crate) use admin_adapter::*;
 pub use bundle::*;
 pub use config::*;
 pub use value::*;
+pub use workers::PostgresHealthProbe;
 pub(crate) use workers::*;

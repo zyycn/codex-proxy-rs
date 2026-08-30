@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use async_trait::async_trait;
 
+mod admin_account_runtime;
 mod artifact_profile;
 mod client_admission;
 mod coordination_buffer;
@@ -21,6 +22,7 @@ mod provider_session_exclusion;
 mod runtime_change;
 pub(crate) mod worker_lease;
 
+pub use admin_account_runtime::*;
 pub use artifact_profile::*;
 pub use client_admission::*;
 pub use coordination_buffer::*;

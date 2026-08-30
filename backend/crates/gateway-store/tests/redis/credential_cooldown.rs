@@ -23,7 +23,7 @@ fn credential_cooldown_is_revision_fenced() {
 }
 
 #[tokio::test]
-async fn credential_cooldown_round_trips_without_raw_account_id_in_key() {
+async fn credential_cooldown_round_trips_and_indexes_active_account_without_raw_id_in_keys() {
     let Some((repository, mut connection, namespace)) = repository().await else {
         return;
     };
@@ -42,9 +42,26 @@ async fn credential_cooldown_round_trips_without_raw_account_id_in_key() {
             .expect("read cooldown"),
         Some(cooldown.clone())
     );
-    let keys = namespace_keys(&mut connection, &namespace).await;
-    assert_eq!(keys.len(), 1);
-    assert!(!keys[0].contains(&cooldown.provider_account_id));
+    let mut keys = namespace_keys(&mut connection, &namespace).await;
+    keys.sort();
+    assert_eq!(keys.len(), 2);
+    assert!(
+        keys.iter()
+            .all(|key| !key.contains(&cooldown.provider_account_id))
+    );
+
+    let index_key = keys
+        .iter()
+        .find(|key| key.ends_with(":account:active-cooldowns"))
+        .expect("active cooldown index key");
+    let indexed_accounts: Vec<String> = redis::cmd("ZRANGE")
+        .arg(index_key)
+        .arg(0)
+        .arg(-1)
+        .query_async(&mut connection)
+        .await
+        .expect("read active cooldown index");
+    assert_eq!(indexed_accounts, [cooldown.provider_account_id]);
 }
 
 #[tokio::test]

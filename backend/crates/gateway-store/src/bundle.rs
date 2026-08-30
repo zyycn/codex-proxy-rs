@@ -52,6 +52,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
 
     config.validate_resolved()?;
     let pool = postgres::connect_and_migrate(&config.database_url()?, config.pool).await?;
+    let observability_query_budget = postgres::ObservabilityQueryBudget::try_new(
+        config.pool.observability_max_connections(),
+        config.pool.acquire_timeout(),
+    )?;
     let redis_client = ::redis::Client::open(config.redis_url()?)
         .map_err(|_| redis_unavailable("create Redis client"))?;
     let redis_connection = redis_client
@@ -68,6 +72,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
 
     let credential_leases =
         redis::RedisCredentialLeaseRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?;
+    let admin_account_runtime = Arc::new(redis::RedisAdminAccountRuntimeStore::new(
+        cooldowns.as_ref().clone(),
+        credential_leases.clone(),
+    ));
     let provider_leases = Arc::new(redis::RedisProviderLeaseCoordinator::new(
         credential_leases.clone(),
     ));
@@ -90,15 +98,15 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     )?);
 
     let admin_ports = AdminStorePorts::new(
-        Arc::new(postgres::PgAdminAccountStore::new(
-            pool.clone(),
-            Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
-        )),
-        Arc::new(postgres::PgAccountGroupRepository::with_runtime_state(
-            pool.clone(),
-            credential_leases.clone(),
-            Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
-        )),
+        AdminAccountStorePorts::new(
+            Arc::new(postgres::PgAdminAccountStore::new(
+                pool.clone(),
+                Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
+                observability_query_budget.clone(),
+            )),
+            admin_account_runtime,
+            Arc::new(postgres::PgAccountGroupRepository::new(pool.clone())),
+        ),
         Arc::new(AdminAuthStoreAdapter {
             security: postgres::PgAdminSecurityAuditRepository::new(pool.clone()),
             settings: postgres::PgRuntimeSettingsRepository::new(pool.clone()),
@@ -123,6 +131,8 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let (execution, execution_writer) =
         postgres::BufferedExecutionStore::new(Arc::clone(&execution_repository));
     let execution = Arc::new(execution);
+    let (client_key_usage, client_key_usage_writer) =
+        postgres::PgClientApiKeyUsageSink::new(pool.clone());
     let retention = Arc::new(postgres::PgRetentionRepository::new(pool.clone()));
     let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> = Arc::new(
         redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
@@ -159,7 +169,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
                 REDIS_NAMESPACE,
             )?),
         ),
-        Arc::new(postgres::PgClientApiKeyUsageSink::new(pool.clone())),
+        Arc::new(client_key_usage),
     );
 
     let provider_ports = ProviderStorePorts::new(
@@ -181,7 +191,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         credential_leases,
     ));
     let health_probes: Vec<Arc<dyn HealthProbe>> = vec![
-        Arc::new(PostgresHealthProbe { pool: pool.clone() }),
+        Arc::new(PostgresHealthProbe::new(
+            pool.clone(),
+            config.pool.max_connections,
+        )),
         Arc::new(RedisHealthProbe {
             connection: redis_connection,
         }),
@@ -189,6 +202,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let worker_contributions = store_worker_contributions(
         execution_repository,
         execution_writer,
+        client_key_usage_writer,
         admission_release_writer,
         circuit_feedback_writer,
         retention,

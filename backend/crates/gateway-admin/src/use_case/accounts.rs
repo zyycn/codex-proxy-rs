@@ -29,7 +29,10 @@ use crate::{
             ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
         },
     },
-    ports::{provider::ProviderAdminRegistry, store::AccountStore},
+    ports::{
+        provider::ProviderAdminRegistry,
+        store::{AccountRuntimeStore, AccountStore},
+    },
 };
 
 use super::{
@@ -118,6 +121,7 @@ pub trait AccountsService: Send + Sync {
 
 pub(crate) struct DefaultAccountsService {
     accounts: Arc<dyn AccountStore>,
+    account_runtime: Arc<dyn AccountRuntimeStore>,
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
@@ -129,12 +133,14 @@ impl DefaultAccountsService {
     #[must_use]
     pub(crate) fn new(
         accounts: Arc<dyn AccountStore>,
+        account_runtime: Arc<dyn AccountRuntimeStore>,
         providers: ProviderAdminRegistry,
         snapshot: Arc<dyn SnapshotControl>,
         probe: Arc<dyn AccountProbe>,
     ) -> Self {
         Self {
             accounts,
+            account_runtime,
             providers,
             snapshot,
             probe,
@@ -158,8 +164,13 @@ impl DefaultAccountsService {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<AccountPageItem, AdminError> {
+        let runtime = self
+            .account_runtime
+            .account_runtime(&[account_id.as_str().to_owned()])
+            .await
+            .map_err(|error| map_store_error(error, "account runtime"))?;
         self.accounts
-            .load_account(account_id.as_str())
+            .load_account(account_id.as_str(), runtime)
             .await
             .map_err(|error| map_store_error(error, "provider account"))?
             .ok_or_else(|| AdminError::not_found("Provider 账号不存在"))
@@ -269,9 +280,14 @@ impl DefaultAccountsService {
 #[async_trait]
 impl AccountsService for DefaultAccountsService {
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
+        let runtime = self
+            .account_runtime
+            .active_rate_limits()
+            .await
+            .map_err(|error| map_store_error(error, "account runtime"))?;
         let page = self
             .accounts
-            .list_accounts(query)
+            .list_accounts(query, runtime)
             .await
             .map_err(|error| map_store_error(error, "account directory"))?;
         let now = Utc::now();
