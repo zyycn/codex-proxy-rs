@@ -143,21 +143,35 @@ pub(crate) struct RetentionTask {
 impl ScheduledTask for RetentionTask {
     fn run_cycle(
         &self,
-        _context: WorkerCycleContext,
+        context: WorkerCycleContext,
     ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
             let settings =
                 postgres::RetentionRepository::load_retention_settings(self.retention.as_ref())
                     .await
                     .map_err(|_| WorkerTaskError::safe("retention settings read failed"))?;
-            postgres::RetentionRepository::apply_retention(
+            let started_at = std::time::Instant::now();
+            let cleanup = postgres::RetentionRepository::apply_retention(
                 self.retention.as_ref(),
                 chrono::Utc::now(),
                 settings,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))
+            );
+            let report = tokio::select! {
+                () = context.cancellation().cancelled() => return Ok(()),
+                result = cleanup => result
+                    .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))?,
+            };
+            tracing::info!(
+                model_requests = report.model_requests,
+                ops_events = report.ops_events,
+                admin_audit_events = report.admin_audit_events,
+                batches = report.batches,
+                budget_exhausted = report.budget_exhausted,
+                elapsed_milliseconds =
+                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "PostgreSQL retention cycle completed"
+            );
+            Ok(())
         })
     }
 }

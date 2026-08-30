@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use std::time::{Duration, Instant};
 
 use crate::{StoreError, StoreResult, postgres_unavailable};
 
@@ -18,6 +19,48 @@ pub struct RetentionReport {
     pub model_requests: u64,
     pub ops_events: u64,
     pub admin_audit_events: u64,
+    pub batches: u32,
+    pub budget_exhausted: bool,
+}
+
+/// 一次 retention cycle 可占用的删除预算；不从部署配置暴露低价值开关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionCycleBudget {
+    batch_rows: u32,
+    max_batches: u32,
+    max_duration: Duration,
+    batch_pause: Duration,
+}
+
+impl RetentionCycleBudget {
+    pub fn try_new(
+        batch_rows: u32,
+        max_batches: u32,
+        max_duration: Duration,
+        batch_pause: Duration,
+    ) -> StoreResult<Self> {
+        if batch_rows == 0 || max_batches == 0 || max_duration.is_zero() {
+            return Err(StoreError::InvalidData {
+                entity: "retention cycle budget",
+                message: "row, batch, and duration budgets must be positive".to_owned(),
+            });
+        }
+        Ok(Self {
+            batch_rows,
+            max_batches,
+            max_duration,
+            batch_pause,
+        })
+    }
+
+    const fn production() -> Self {
+        Self {
+            batch_rows: 5_000,
+            max_batches: 12,
+            max_duration: Duration::from_secs(30),
+            batch_pause: Duration::from_millis(50),
+        }
+    }
 }
 
 #[async_trait]
@@ -33,12 +76,21 @@ pub trait RetentionRepository: Send + Sync {
 #[derive(Clone)]
 pub struct PgRetentionRepository {
     pool: PgPool,
+    cycle_budget: RetentionCycleBudget,
 }
 
 impl PgRetentionRepository {
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            cycle_budget: RetentionCycleBudget::production(),
+        }
+    }
+
+    #[must_use]
+    pub const fn with_cycle_budget(pool: PgPool, cycle_budget: RetentionCycleBudget) -> Self {
+        Self { pool, cycle_budget }
     }
 }
 
@@ -78,81 +130,116 @@ impl RetentionRepository for PgRetentionRepository {
             });
         }
 
-        // 分批删除，每批独立提交：清理是幂等的，无需跨表原子性；
-        // 有界批量避免百万行单事务的长锁与 WAL 峰值。
-        let model_requests = purge_in_batches(
-            &self.pool,
-            "delete from model_requests
-             where ctid in (
-               select ctid from model_requests
-                where outcome <> 'running'
-                  and completed_at < $1 - ($2 * interval '1 day')
-                limit $3
-             )",
-            now,
-            settings.usage_retention_days,
-            "delete expired model requests",
-        )
-        .await?;
-        let ops_events = purge_in_batches(
-            &self.pool,
-            "delete from ops_events
-             where ctid in (
-               select ctid from ops_events
-                where model_request_id is null
-                  and created_at < $1 - ($2 * interval '1 day')
-                limit $3
-             )",
-            now,
-            settings.ops_event_retention_days,
-            "delete expired ops events",
-        )
-        .await?;
-        let admin_audit_events = purge_in_batches(
-            &self.pool,
-            "delete from admin_audit_events
-             where ctid in (
-               select ctid from admin_audit_events
-                where created_at < $1 - ($2 * interval '1 day')
-                limit $3
-             )",
-            now,
-            settings.audit_retention_days,
-            "delete expired admin audit events",
-        )
-        .await?;
+        // 各表轮转执行单批独立事务；行数、批数和 wall-clock 同时有界。
+        let mut targets = [
+            RetentionTarget::new(
+                "delete from model_requests
+                 where ctid in (
+                   select ctid from model_requests
+                    where outcome <> 'running'
+                      and completed_at < $1 - ($2 * interval '1 day')
+                    limit $3
+                 )",
+                settings.usage_retention_days,
+                "delete expired model requests",
+            ),
+            RetentionTarget::new(
+                "delete from ops_events
+                 where ctid in (
+                   select ctid from ops_events
+                    where model_request_id is null
+                      and created_at < $1 - ($2 * interval '1 day')
+                    limit $3
+                 )",
+                settings.ops_event_retention_days,
+                "delete expired ops events",
+            ),
+            RetentionTarget::new(
+                "delete from admin_audit_events
+                 where ctid in (
+                   select ctid from admin_audit_events
+                    where created_at < $1 - ($2 * interval '1 day')
+                    limit $3
+                 )",
+                settings.audit_retention_days,
+                "delete expired admin audit events",
+            ),
+        ];
+        let started_at = Instant::now();
+        let mut batches = 0_u32;
+        'cycles: loop {
+            let mut attempted = false;
+            for target in &mut targets {
+                if target.complete {
+                    continue;
+                }
+                if batches >= self.cycle_budget.max_batches
+                    || started_at.elapsed() >= self.cycle_budget.max_duration
+                {
+                    break 'cycles;
+                }
+                attempted = true;
+                let deleted =
+                    purge_batch(&self.pool, target, now, self.cycle_budget.batch_rows).await?;
+                batches = batches.saturating_add(1);
+                target.deleted = target.deleted.saturating_add(deleted);
+                target.complete = deleted < u64::from(self.cycle_budget.batch_rows);
+                if !target.complete
+                    && batches < self.cycle_budget.max_batches
+                    && started_at.elapsed() < self.cycle_budget.max_duration
+                    && !self.cycle_budget.batch_pause.is_zero()
+                {
+                    tokio::time::sleep(self.cycle_budget.batch_pause).await;
+                }
+            }
+            if !attempted || targets.iter().all(|target| target.complete) {
+                break;
+            }
+        }
         Ok(RetentionReport {
-            model_requests,
-            ops_events,
-            admin_audit_events,
+            model_requests: targets[0].deleted,
+            ops_events: targets[1].deleted,
+            admin_audit_events: targets[2].deleted,
+            batches,
+            budget_exhausted: targets.iter().any(|target| !target.complete),
         })
     }
 }
 
-const RETENTION_DELETE_BATCH_ROWS: i64 = 10_000;
-
-async fn purge_in_batches(
-    pool: &PgPool,
+struct RetentionTarget {
     delete_sql: &'static str,
-    now: DateTime<Utc>,
     retention_days: u32,
     label: &'static str,
-) -> StoreResult<u64> {
-    let mut total = 0u64;
-    loop {
-        let deleted = sqlx::query(delete_sql)
-            .bind(now)
-            .bind(i64::from(retention_days))
-            .bind(RETENTION_DELETE_BATCH_ROWS)
-            .execute(pool)
-            .await
-            .map_err(|_| postgres_unavailable(label))?
-            .rows_affected();
-        total += deleted;
-        if deleted < RETENTION_DELETE_BATCH_ROWS.unsigned_abs() {
-            return Ok(total);
+    deleted: u64,
+    complete: bool,
+}
+
+impl RetentionTarget {
+    const fn new(delete_sql: &'static str, retention_days: u32, label: &'static str) -> Self {
+        Self {
+            delete_sql,
+            retention_days,
+            label,
+            deleted: 0,
+            complete: false,
         }
     }
+}
+
+async fn purge_batch(
+    pool: &PgPool,
+    target: &RetentionTarget,
+    now: DateTime<Utc>,
+    batch_rows: u32,
+) -> StoreResult<u64> {
+    sqlx::query(target.delete_sql)
+        .bind(now)
+        .bind(i64::from(target.retention_days))
+        .bind(i64::from(batch_rows))
+        .execute(pool)
+        .await
+        .map_err(|_| postgres_unavailable(target.label))
+        .map(|result| result.rows_affected())
 }
 
 fn to_u32(value: i64) -> StoreResult<u32> {
