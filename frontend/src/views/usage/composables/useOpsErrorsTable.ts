@@ -3,9 +3,9 @@ import type { UsageTimeRangeParams } from './useUsageTimeRange'
 import { watchDebounced } from '@vueuse/core'
 
 import { computed, onMounted, shallowRef, watch } from 'vue'
-import { getOpsErrors } from '@/api'
+import { createOpsErrorsPager } from '@/api'
 import { toast } from '@/components/base/BaseToast'
-import { usePagedQuery } from '@/composables/usePagedQuery'
+import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 
 export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>) {
@@ -13,11 +13,12 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
   const searchQuery = shallowRef('')
   const failureClass = shallowRef('')
   const route = shallowRef('')
+  const pager = createOpsErrorsPager()
 
-  const query = usePagedQuery({
+  const query = useStablePagedQuery({
     initialPageSize: 10,
-    load: ({ page, pageSize }) => getOpsErrors({
-      page,
+    load: ({ currentPage, pageSize }) => pager.load({
+      currentPage,
       pageSize,
       search: searchQuery.value.trim() || undefined,
       failureClass: failureClass.value.trim() || undefined,
@@ -30,20 +31,18 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
   query.loading.value = true
 
   const pagination = computed(() => ({
-    page: query.page.value,
+    currentPage: query.currentPage.value,
     pageSize: query.pageSize.value,
     total: query.total.value,
   }))
 
   function handlePageChange(nextPage: number) {
-    query.page.value = nextPage
-    void query.execute()
+    void query.execute(nextPage)
   }
 
   function handlePageSizeChange(nextPageSize: number) {
     query.pageSize.value = nextPageSize
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   }
 
   async function refresh() {
@@ -51,7 +50,7 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
       return
     refreshing.value = true
     try {
-      await withMinimumDuration(() => query.execute())
+      await withMinimumDuration(() => query.execute(query.currentPage.value))
     }
     finally {
       refreshing.value = false
@@ -61,18 +60,16 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
   watchDebounced(
     [searchQuery, failureClass, route],
     () => {
-      query.page.value = 1
-      void query.execute()
+      void query.reloadFromStart()
     },
     { debounce: 250 },
   )
 
   watch(timeRangeParams, () => {
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   })
 
-  onMounted(() => void query.execute())
+  onMounted(() => void query.execute(1))
 
   return {
     loading: query.loading,

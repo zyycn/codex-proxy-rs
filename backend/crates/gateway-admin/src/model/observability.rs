@@ -1,6 +1,6 @@
 //! 用量、成本、健康与错误诊断的 UTC 语义事实。
 
-use std::{num::NonZeroU32, str::FromStr};
+use std::str::FromStr;
 
 use chrono::{DateTime, TimeDelta, Timelike as _, Utc};
 
@@ -35,22 +35,6 @@ impl TimeRange {
             return Err(AdminModelError::InvalidTimeRange);
         }
         Ok(Self { start, end })
-    }
-}
-
-/// 从一开始的观测页码。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PageNumber(NonZeroU32);
-
-impl PageNumber {
-    #[must_use]
-    pub const fn new(value: NonZeroU32) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0.get()
     }
 }
 
@@ -147,8 +131,8 @@ pub struct UsageQuery {
     pub range: TimeRange,
     pub filter: UsageFilter,
     pub cursor: Option<ObservabilityCursor>,
-    pub page: PageNumber,
     pub page_size: PageSize,
+    pub include_total: bool,
 }
 
 /// 运维错误过滤条件。
@@ -175,8 +159,8 @@ pub struct OpsErrorQuery {
     pub range: TimeRange,
     pub filter: OpsErrorFilter,
     pub cursor: Option<ObservabilityCursor>,
-    pub page: PageNumber,
     pub page_size: PageSize,
+    pub include_total: bool,
 }
 
 /// 用量诊断维度。
@@ -545,13 +529,60 @@ pub struct DashboardTotals {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardObservation {
     pub range: TimeRange,
-    pub requests: RequestMetrics,
-    pub attempts: AttemptMetrics,
     pub totals: DashboardTotals,
     pub provider_accounts: AccountPoolMetrics,
     pub trend: Vec<RequestMetricPoint>,
     pub account_usage: Vec<DashboardAccountUsage>,
-    pub recent_requests: Vec<UsageRecord>,
+    pub recent_requests: Vec<UsageListRecord>,
+}
+
+/// 使用记录表格的窄读模型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageListRecord {
+    pub id: String,
+    pub endpoint: String,
+    pub client_transport: String,
+    pub requested_model_id: Option<String>,
+    pub provider_kind: Option<String>,
+    pub provider_account_ref: Option<String>,
+    pub provider_account_name: Option<String>,
+    pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
+    pub upstream_model_id: Option<String>,
+    pub upstream_transport: Option<String>,
+    pub service_tier: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub image_input_tokens: Option<u64>,
+    pub image_output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_source: String,
+    pub cost_amount: Option<DecimalAmount>,
+    pub cost_currency: Option<String>,
+    pub billing: Option<UsageBilling>,
+    pub transport_decision_wait_ms: Option<u64>,
+    pub connect_ms: Option<u64>,
+    pub headers_ms: Option<u64>,
+    pub first_event_ms: Option<u64>,
+    pub first_reasoning_ms: Option<u64>,
+    pub first_text_ms: Option<u64>,
+    pub first_token_ms: Option<u64>,
+    pub provider_processing_ms: Option<u64>,
+    pub latency_ms: Option<u64>,
+    pub admission_decision_ms: Option<u64>,
+    pub account_selection_wait_ms: Option<u64>,
+    pub capacity_used_slots: Option<u64>,
+    pub capacity_total_slots: Option<u64>,
+    pub client_ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_preset: Option<String>,
+    pub subagent_kind: Option<String>,
+    pub compact: bool,
+    pub started_at: DateTime<Utc>,
 }
 
 /// 一次完整模型请求的公共观测记录。
@@ -635,8 +666,8 @@ pub struct UsageRecord {
 /// 用量分页结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsagePage {
-    pub items: Vec<UsageRecord>,
-    pub total: u64,
+    pub items: Vec<UsageListRecord>,
+    pub total: Option<u64>,
     pub next_cursor: Option<ObservabilityCursor>,
 }
 
@@ -764,7 +795,7 @@ pub struct OpsError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsErrorPage {
     pub items: Vec<OpsError>,
-    pub total: u64,
+    pub total: Option<u64>,
     pub next_cursor: Option<ObservabilityCursor>,
 }
 

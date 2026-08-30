@@ -1,7 +1,10 @@
 use std::{
-    num::NonZeroU32,
     str::FromStr as _,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration as StdDuration,
 };
 
 use async_trait::async_trait;
@@ -14,10 +17,10 @@ use gateway_admin::{
         observability::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
             DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
-            HealthStatus, LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PageNumber,
-            PercentileMilliseconds, RequestMetricPoint, RequestMetrics, RequestOutcome, TimeRange,
-            TrendKind, UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
-            UsageOverview, UsagePage, UsageQuery, UsageRecord, china_day_start,
+            HealthStatus, LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
+            RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageBilling,
+            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageListRecord, UsageOverview,
+            UsagePage, UsageQuery, china_day_start,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -106,6 +109,40 @@ async fn health_timeline_should_keep_exactly_china_day_quarter_hour_slots() {
 }
 
 #[tokio::test]
+async fn dashboard_summary_should_derive_first_token_average_from_trend() {
+    let now = Utc::now();
+    let current_slot = quarter_hour_start(now);
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    store.replace_trend(vec![
+        health_metric_point(
+            current_slot - Duration::minutes(15),
+            RequestMetrics {
+                first_token_latency_sum_ms: 120,
+                first_token_latency_count: 2,
+                ..RequestMetrics::default()
+            },
+        ),
+        health_metric_point(
+            current_slot,
+            RequestMetrics {
+                first_token_latency_sum_ms: 180,
+                first_token_latency_count: 1,
+                ..RequestMetrics::default()
+            },
+        ),
+    ]);
+    let services = observability_services(store).await;
+
+    let summary = services
+        .observability()
+        .dashboard_summary(observation_range(now), TrendKind::Usage)
+        .await
+        .expect("dashboard summary");
+
+    assert_eq!(summary.average_first_token_latency_ms, Some(100));
+}
+
+#[tokio::test]
 async fn health_timeline_should_match_legacy_status_precedence_and_thresholds() {
     let now = Utc::now();
     let current_slot = quarter_hour_start(now);
@@ -160,11 +197,15 @@ async fn health_timeline_should_match_legacy_status_precedence_and_thresholds() 
         ),
     ];
 
-    for (metrics, expected_status, expected_reliability) in fixtures {
+    for (index, (metrics, expected_status, expected_reliability)) in
+        fixtures.into_iter().enumerate()
+    {
         store.replace_trend(vec![health_metric_point(current_slot, metrics)]);
+        let range_end =
+            now + Duration::seconds(i64::try_from(index).expect("fixture index fits i64") * 2);
         let timeline = services
             .observability()
-            .dashboard_summary(observation_range(now), TrendKind::Usage)
+            .dashboard_summary(observation_range(range_end), TrendKind::Usage)
             .await
             .expect("dashboard summary")
             .health_timeline;
@@ -218,6 +259,53 @@ async fn dashboard_summary_should_share_one_current_observation_time_across_runt
     let (summary_observed_at, slots_observed_at) = store.observed_times();
     assert_eq!(summary_observed_at, slots_observed_at);
     assert!(summary_observed_at.is_some_and(|value| value > historical_end));
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_coalesce_concurrent_requests_in_one_short_window() {
+    let end_bucket = Utc::now().timestamp().div_euclid(2) * 2;
+    let first_end = DateTime::from_timestamp(end_bucket, 100_000_000).expect("first end");
+    let second_end = DateTime::from_timestamp(end_bucket, 900_000_000).expect("second end");
+    let first_range = TimeRange::new(china_day_start(first_end), first_end).expect("first range");
+    let second_range =
+        TimeRange::new(china_day_start(second_end), second_end).expect("second range");
+    let store = Arc::new(FixtureObservabilityStore::new(first_range));
+    store.set_dashboard_delay(StdDuration::from_millis(20));
+    let services = observability_services(store.clone()).await;
+    let observability = services.observability();
+
+    let (first, second) = tokio::join!(
+        observability.dashboard_summary(first_range, TrendKind::Usage),
+        observability.dashboard_summary(second_range, TrendKind::Errors),
+    );
+
+    first.expect("first dashboard summary");
+    second.expect("second dashboard summary");
+    assert_eq!(store.dashboard_summary_calls(), 1);
+}
+
+#[tokio::test]
+async fn dashboard_summary_should_reload_after_the_short_window_changes() {
+    let end_bucket = Utc::now().timestamp().div_euclid(2) * 2;
+    let first_end = DateTime::from_timestamp(end_bucket, 100_000_000).expect("first end");
+    let second_end = first_end + Duration::seconds(2);
+    let first_range = TimeRange::new(china_day_start(first_end), first_end).expect("first range");
+    let second_range =
+        TimeRange::new(china_day_start(second_end), second_end).expect("second range");
+    let store = Arc::new(FixtureObservabilityStore::new(first_range));
+    let services = observability_services(store.clone()).await;
+    let observability = services.observability();
+
+    observability
+        .dashboard_summary(first_range, TrendKind::Usage)
+        .await
+        .expect("first dashboard summary");
+    observability
+        .dashboard_summary(second_range, TrendKind::Usage)
+        .await
+        .expect("second dashboard summary");
+
+    assert_eq!(store.dashboard_summary_calls(), 2);
 }
 
 #[tokio::test]
@@ -457,7 +545,9 @@ struct FixtureObservabilityStore {
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
     summary_observed_at: Mutex<Option<DateTime<Utc>>>,
     slots_observed_at: Mutex<Option<DateTime<Utc>>>,
-    usage_records: Mutex<Vec<UsageRecord>>,
+    usage_records: Mutex<Vec<UsageListRecord>>,
+    dashboard_delay: Mutex<StdDuration>,
+    dashboard_summary_calls: AtomicUsize,
 }
 
 impl FixtureObservabilityStore {
@@ -476,7 +566,17 @@ impl FixtureObservabilityStore {
             summary_observed_at: Mutex::new(None),
             slots_observed_at: Mutex::new(None),
             usage_records: Mutex::new(Vec::new()),
+            dashboard_delay: Mutex::new(StdDuration::ZERO),
+            dashboard_summary_calls: AtomicUsize::new(0),
         }
+    }
+
+    fn set_dashboard_delay(&self, delay: StdDuration) {
+        *self.dashboard_delay.lock().expect("dashboard delay") = delay;
+    }
+
+    fn dashboard_summary_calls(&self) -> usize {
+        self.dashboard_summary_calls.load(Ordering::Relaxed)
     }
 
     fn replace_trend(&self, trend: Vec<RequestMetricPoint>) {
@@ -512,7 +612,7 @@ impl FixtureObservabilityStore {
         )
     }
 
-    fn replace_usage_records(&self, records: Vec<UsageRecord>) {
+    fn replace_usage_records(&self, records: Vec<UsageListRecord>) {
         *self.usage_records.lock().expect("usage records") = records;
     }
 }
@@ -524,14 +624,17 @@ impl ObservabilityStore for FixtureObservabilityStore {
         range: TimeRange,
         observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<DashboardObservation> {
+        self.dashboard_summary_calls.fetch_add(1, Ordering::Relaxed);
         *self
             .summary_observed_at
             .lock()
             .expect("summary observed at") = Some(observed_at);
+        let dashboard_delay = *self.dashboard_delay.lock().expect("dashboard delay");
+        if !dashboard_delay.is_zero() {
+            tokio::time::sleep(dashboard_delay).await;
+        }
         Ok(DashboardObservation {
             range,
-            requests: RequestMetrics::default(),
-            attempts: AttemptMetrics::default(),
             totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
             trend: self.trend.lock().expect("trend").clone(),
@@ -577,7 +680,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
         let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
         Ok(UsagePage {
             items,
-            total,
+            total: Some(total),
             next_cursor: None,
         })
     }
@@ -681,8 +784,8 @@ fn usage_query(now: DateTime<Utc>) -> UsageQuery {
         range: observation_range(now),
         filter: UsageFilter::default(),
         cursor: None,
-        page: PageNumber::new(NonZeroU32::new(1).expect("page number")),
         page_size: PageSize::new(50).expect("page size"),
+        include_total: true,
     }
 }
 
@@ -691,16 +794,9 @@ fn total_record(
     provider_kind: Option<&str>,
     source: &str,
     now: DateTime<Utc>,
-) -> UsageRecord {
-    UsageRecord {
+) -> UsageListRecord {
+    UsageListRecord {
         id: id.to_owned(),
-        client_api_key_ref: "key_billing".to_owned(),
-        config_revision: 1,
-        routing_scope: "all".to_owned(),
-        routing_group_refs: Vec::new(),
-        routing_group_names_snapshot: Vec::new(),
-        protocol: "openai".to_owned(),
-        operation: "generate".to_owned(),
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
         requested_model_id: Some("gpt-5.5".to_owned()),
@@ -711,23 +807,7 @@ fn total_record(
         provider_account_authentication_kind: None,
         upstream_model_id: Some("gpt-5.5".to_owned()),
         upstream_transport: None,
-        http_version: None,
-        websocket_pool: None,
         service_tier: None,
-        provider_metadata_json: None,
-        attempt_count: 1,
-        upstream_send_state: "sent".to_owned(),
-        downstream_committed_at: None,
-        outcome: RequestOutcome::Succeeded,
-        client_status_code: Some(200),
-        upstream_status_code: Some(200),
-        client_response_id: None,
-        upstream_request_id: None,
-        upstream_response_id: None,
-        error_kind: None,
-        provider_error_code: None,
-        error_message: None,
-        retry_after_ms: None,
         input_tokens: Some(800),
         output_tokens: Some(200),
         cached_tokens: Some(0),
@@ -764,14 +844,9 @@ fn total_record(
         user_agent: None,
         reasoning_effort: None,
         reasoning_preset: None,
-        request_kind: None,
         subagent_kind: None,
         compact: false,
-        image_generation_requested: false,
-        image_generation_succeeded: None,
         started_at: now,
-        deadline_at: now,
-        completed_at: Some(now),
     }
 }
 

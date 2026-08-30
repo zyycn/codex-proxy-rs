@@ -43,9 +43,9 @@ pub(crate) fn store_usage_query(
         range: store_range(query.range)?,
         filter: store_usage_filter(query.filter),
         cursor: query.cursor.map(store_cursor).transpose()?,
-        page: ObservabilityPageNumber::new(query.page.get()).map_err(observability_error)?,
         page_size: ObservabilityPageSize::new(query.page_size.get())
             .map_err(observability_error)?,
+        include_total: query.include_total,
     })
 }
 
@@ -76,9 +76,9 @@ pub(crate) fn store_ops_error_query(
         range: store_range(query.range)?,
         filter: store_ops_error_filter(query.filter),
         cursor: query.cursor.map(store_cursor).transpose()?,
-        page: ObservabilityPageNumber::new(query.page.get()).map_err(observability_error)?,
         page_size: ObservabilityPageSize::new(query.page_size.get())
             .map_err(observability_error)?,
+        include_total: query.include_total,
     })
 }
 
@@ -101,8 +101,6 @@ pub(crate) fn admin_dashboard_observation(
 ) -> AdminStoreResult<admin_observability::DashboardObservation> {
     let DashboardObservation {
         range,
-        requests,
-        attempts,
         totals,
         provider_accounts,
         trend,
@@ -111,8 +109,6 @@ pub(crate) fn admin_dashboard_observation(
     } = observation;
     Ok(admin_observability::DashboardObservation {
         range: admin_range(range),
-        requests: admin_request_metrics(requests)?,
-        attempts: admin_attempt_metrics(attempts)?,
         totals: admin_dashboard_totals(totals)?,
         provider_accounts: admin_account_pool_metrics(provider_accounts),
         trend: trend
@@ -125,7 +121,7 @@ pub(crate) fn admin_dashboard_observation(
             .collect::<AdminStoreResult<_>>()?,
         recent_requests: recent_requests
             .into_iter()
-            .map(admin_usage_record)
+            .map(admin_usage_list_record)
             .collect::<AdminStoreResult<_>>()?,
     })
 }
@@ -411,7 +407,7 @@ pub(crate) fn admin_usage_page(
         items: page
             .items
             .into_iter()
-            .map(admin_usage_record)
+            .map(admin_usage_list_record)
             .collect::<AdminStoreResult<_>>()?,
         total: page.total,
         next_cursor: page.next_cursor.map(admin_cursor),
@@ -425,6 +421,73 @@ pub(crate) fn admin_cursor(
         observed_at: cursor.observed_at,
         stable_id: cursor.stable_id,
     }
+}
+
+pub(crate) fn admin_usage_list_record(
+    record: UsageListRecord,
+) -> AdminStoreResult<admin_observability::UsageListRecord> {
+    let billing = match (&record.cost_amount, &record.cost_currency) {
+        (Some(amount), Some(currency)) => Some(admin_observability::UsageBilling::Total {
+            source: record.cost_source.clone(),
+            total: admin_observability::CurrencyCost {
+                currency: currency.clone(),
+                amount: admin_decimal_amount(amount.clone())?,
+            },
+        }),
+        (None, None) => None,
+        _ => {
+            return Err(observability_error(StoreError::InvalidData {
+                entity: "observability request billing",
+                message: "cost amount and currency must be present together".to_owned(),
+            }));
+        }
+    };
+    Ok(admin_observability::UsageListRecord {
+        id: record.id,
+        endpoint: record.endpoint,
+        client_transport: record.client_transport,
+        requested_model_id: record.requested_model_id,
+        provider_kind: record.provider_kind,
+        provider_account_ref: record.provider_account_ref,
+        provider_account_name: record.provider_account_name,
+        provider_account_email: record.provider_account_email,
+        provider_account_authentication_kind: record.provider_account_authentication_kind,
+        upstream_model_id: record.upstream_model_id,
+        upstream_transport: record.upstream_transport,
+        service_tier: record.service_tier,
+        input_tokens: record.input_tokens,
+        output_tokens: record.output_tokens,
+        cached_tokens: record.cached_tokens,
+        cache_write_tokens: record.cache_write_tokens,
+        reasoning_tokens: record.reasoning_tokens,
+        image_input_tokens: record.image_input_tokens,
+        image_output_tokens: record.image_output_tokens,
+        total_tokens: record.total_tokens,
+        cost_source: record.cost_source,
+        cost_amount: admin_optional_decimal_amount(record.cost_amount)?,
+        cost_currency: record.cost_currency,
+        billing,
+        transport_decision_wait_ms: record.transport_decision_wait_ms,
+        connect_ms: record.connect_ms,
+        headers_ms: record.headers_ms,
+        first_event_ms: record.first_event_ms,
+        first_reasoning_ms: record.first_reasoning_ms,
+        first_text_ms: record.first_text_ms,
+        first_token_ms: record.first_token_ms,
+        provider_processing_ms: record.provider_processing_ms,
+        latency_ms: record.latency_ms,
+        admission_decision_ms: record.admission_decision_ms,
+        account_selection_wait_ms: record.account_selection_wait_ms,
+        capacity_used_slots: record.capacity_used_slots,
+        capacity_total_slots: record.capacity_total_slots,
+        client_ip: record.client_ip,
+        user_agent: record.user_agent,
+        reasoning_effort: record.reasoning_effort,
+        reasoning_preset: record.reasoning_preset,
+        subagent_kind: record.subagent_kind,
+        compact: record.compact,
+        started_at: record.started_at,
+    })
 }
 
 pub(crate) fn admin_usage_record(
@@ -672,6 +735,56 @@ pub(crate) fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::Ops
         occurred_at: error.occurred_at,
         stable_sort_id: error.stable_sort_id,
     }
+}
+
+pub(crate) fn usage_list_record_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> StoreResult<UsageListRecord> {
+    Ok(UsageListRecord {
+        id: get(row, "id")?,
+        endpoint: get(row, "endpoint")?,
+        client_transport: get(row, "client_transport")?,
+        requested_model_id: get(row, "requested_model_id")?,
+        provider_kind: get(row, "provider_kind")?,
+        provider_account_ref: get(row, "provider_account_ref")?,
+        provider_account_name: get(row, "provider_account_name")?,
+        provider_account_email: get(row, "provider_account_email")?,
+        provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
+        upstream_model_id: get(row, "upstream_model_id")?,
+        upstream_transport: get(row, "upstream_transport")?,
+        service_tier: get(row, "service_tier")?,
+        input_tokens: optional_unsigned(row, "input_tokens")?,
+        output_tokens: optional_unsigned(row, "output_tokens")?,
+        cached_tokens: optional_unsigned(row, "cached_tokens")?,
+        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
+        reasoning_tokens: optional_unsigned(row, "reasoning_tokens")?,
+        image_input_tokens: optional_unsigned(row, "image_input_tokens")?,
+        image_output_tokens: optional_unsigned(row, "image_output_tokens")?,
+        total_tokens: optional_unsigned(row, "total_tokens")?,
+        cost_source: get(row, "cost_source")?,
+        cost_amount: optional_decimal(row, "cost_amount")?,
+        cost_currency: get(row, "cost_currency")?,
+        transport_decision_wait_ms: optional_unsigned(row, "transport_decision_wait_ms")?,
+        connect_ms: optional_unsigned(row, "connect_ms")?,
+        headers_ms: optional_unsigned(row, "headers_ms")?,
+        first_event_ms: optional_unsigned(row, "first_event_ms")?,
+        first_reasoning_ms: optional_unsigned(row, "first_reasoning_ms")?,
+        first_text_ms: optional_unsigned(row, "first_text_ms")?,
+        first_token_ms: optional_unsigned(row, "first_token_ms")?,
+        provider_processing_ms: optional_unsigned(row, "provider_processing_ms")?,
+        latency_ms: optional_unsigned(row, "latency_ms")?,
+        admission_decision_ms: optional_unsigned(row, "admission_decision_ms")?,
+        account_selection_wait_ms: optional_unsigned(row, "account_selection_wait_ms")?,
+        capacity_used_slots: optional_unsigned(row, "capacity_used_slots")?,
+        capacity_total_slots: optional_unsigned(row, "capacity_total_slots")?,
+        client_ip: get(row, "client_ip")?,
+        user_agent: get(row, "user_agent")?,
+        reasoning_effort: get(row, "reasoning_effort")?,
+        reasoning_preset: get(row, "reasoning_preset")?,
+        subagent_kind: get(row, "subagent_kind")?,
+        compact: get(row, "compact")?,
+        started_at: get(row, "started_at")?,
+    })
 }
 
 pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord> {

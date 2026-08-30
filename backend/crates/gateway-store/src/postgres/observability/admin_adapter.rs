@@ -16,12 +16,21 @@ use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepositor
 pub struct PgObservabilityRepository {
     pool: PgPool,
     cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
+    query_budget: ObservabilityQueryBudget,
 }
 
 impl PgObservabilityRepository {
     #[must_use]
-    pub const fn new(pool: PgPool, cooldowns: Option<Arc<dyn ProviderCooldownPort>>) -> Self {
-        Self { pool, cooldowns }
+    pub fn new(
+        pool: PgPool,
+        cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
+        query_budget: ObservabilityQueryBudget,
+    ) -> Self {
+        Self {
+            pool,
+            cooldowns,
+            query_budget,
+        }
     }
 
     /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机。
@@ -29,8 +38,13 @@ impl PgObservabilityRepository {
         &self,
         observed_at: DateTime<Utc>,
     ) -> StoreResult<(ProviderAccountMetrics, Vec<ProviderAccountSummary>)> {
-        let accounts = PgProviderAccountRepository::new(self.pool.clone())
-            .list_provider_accounts(None, true)
+        let repository = PgProviderAccountRepository::new(self.pool.clone());
+        let accounts = self
+            .query_budget
+            .run(
+                "load dashboard provider accounts",
+                repository.list_provider_accounts(None, true),
+            )
             .await?;
         let now = observed_at.into();
         let rate_limited_until =
@@ -85,9 +99,10 @@ impl PgAdminObservabilityStore {
         pool: PgPool,
         runtime_signals: Option<RedisCredentialLeaseRepository>,
         cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
+        query_budget: ObservabilityQueryBudget,
     ) -> Self {
         Self {
-            repository: PgObservabilityRepository::new(pool, cooldowns),
+            repository: PgObservabilityRepository::new(pool, cooldowns, query_budget),
             runtime_signals,
         }
     }
@@ -111,25 +126,33 @@ impl ObservabilityRepository for PgObservabilityRepository {
                 ..UsageRecordFilter::default()
             },
             cursor: None,
-            page: ObservabilityPageNumber::new(1)?,
             page_size: ObservabilityPageSize::new(10)?,
+            include_total: false,
         };
-        // 每批最多三路并发，既缩短概览渲染路径，也不与数据面写路径争抢整个连接池。
-        let (requests, attempts, totals) = futures::try_join!(
-            request_metrics(&self.pool, range, &filter),
-            attempt_metrics(&self.pool, range, &filter),
-            dashboard_totals(&self.pool),
+        // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞。
+        let (totals, (provider_accounts, _)) = futures::try_join!(
+            self.query_budget.run(
+                "load dashboard lifetime totals",
+                dashboard_totals(&self.pool)
+            ),
+            self.account_status_snapshot(observed_at),
         )?;
-        let (provider_accounts, _) = self.account_status_snapshot(observed_at).await?;
         let (trend, account_usage, recent_requests) = futures::try_join!(
-            request_metric_series(&self.pool, range, &filter),
-            provider_account_usage(&self.pool, account_usage_query),
-            async { Ok(list_usage_records(&self.pool, recent_query).await?.items) },
+            self.query_budget.run(
+                "load dashboard request trend",
+                dashboard_request_metric_series(&self.pool, range, &filter),
+            ),
+            self.query_budget.run(
+                "load dashboard account usage",
+                provider_account_usage(&self.pool, account_usage_query),
+            ),
+            self.query_budget
+                .run("load dashboard recent requests", async {
+                    Ok(list_usage_records(&self.pool, recent_query).await?.items)
+                }),
         )?;
         Ok(DashboardObservation {
             range,
-            requests,
-            attempts,
             totals,
             provider_accounts,
             trend,
@@ -142,7 +165,12 @@ impl ObservabilityRepository for PgObservabilityRepository {
         &self,
         range: ObservabilityRange,
     ) -> StoreResult<Vec<RequestMetricPoint>> {
-        request_metric_series(&self.pool, range, &UsageRecordFilter::default()).await
+        self.query_budget
+            .run(
+                "load dashboard request trend",
+                dashboard_request_metric_series(&self.pool, range, &UsageRecordFilter::default()),
+            )
+            .await
     }
 
     async fn usage_trend(
@@ -150,7 +178,12 @@ impl ObservabilityRepository for PgObservabilityRepository {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
     ) -> StoreResult<Vec<RequestMetricPoint>> {
-        request_metric_series(&self.pool, range, &filter).await
+        self.query_budget
+            .run(
+                "load usage request trend",
+                request_metric_series(&self.pool, range, &filter),
+            )
+            .await
     }
 
     async fn usage_calculated_billing_facts(
@@ -158,22 +191,39 @@ impl ObservabilityRepository for PgObservabilityRepository {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
     ) -> StoreResult<Vec<CalculatedUsageBillingFact>> {
-        calculated_usage_billing_facts(&self.pool, range, &filter).await
+        self.query_budget
+            .run(
+                "load calculated usage billing facts",
+                calculated_usage_billing_facts(&self.pool, range, &filter),
+            )
+            .await
     }
 
     async fn provider_account_usage(
         &self,
         query: ProviderAccountUsageQuery,
     ) -> StoreResult<Vec<ProviderAccountUsageObservation>> {
-        provider_account_usage(&self.pool, query).await
+        self.query_budget
+            .run(
+                "load provider account usage",
+                provider_account_usage(&self.pool, query),
+            )
+            .await
     }
 
     async fn list_usage_records(&self, query: UsageRecordQuery) -> StoreResult<UsageRecordPage> {
-        list_usage_records(&self.pool, query).await
+        self.query_budget
+            .run("list usage records", list_usage_records(&self.pool, query))
+            .await
     }
 
     async fn usage_record_detail(&self, request_id: &str) -> StoreResult<UsageRecordDetail> {
-        usage_record_detail(&self.pool, request_id).await
+        self.query_budget
+            .run(
+                "load usage record detail",
+                usage_record_detail(&self.pool, request_id),
+            )
+            .await
     }
 
     async fn usage_summary(
@@ -182,9 +232,27 @@ impl ObservabilityRepository for PgObservabilityRepository {
         filter: UsageRecordFilter,
     ) -> StoreResult<UsageOverview> {
         filter.validate()?;
-        let requests = request_metrics(&self.pool, range, &filter).await?;
-        let attempts = attempt_metrics(&self.pool, range, &filter).await?;
-        let providers = provider_observations(&self.pool, range, &filter).await?;
+        let requests = self
+            .query_budget
+            .run(
+                "load usage request metrics",
+                request_metrics(&self.pool, range, &filter),
+            )
+            .await?;
+        let attempts = self
+            .query_budget
+            .run(
+                "load usage attempt metrics",
+                attempt_metrics(&self.pool, range, &filter),
+            )
+            .await?;
+        let providers = self
+            .query_budget
+            .run(
+                "load usage provider observations",
+                provider_observations(&self.pool, range, &filter),
+            )
+            .await?;
         Ok(UsageOverview {
             range,
             requests,
@@ -199,11 +267,18 @@ impl ObservabilityRepository for PgObservabilityRepository {
         filter: UsageRecordFilter,
         dimension: DiagnosticDimension,
     ) -> StoreResult<Vec<DiagnosticObservation>> {
-        usage_diagnostics(&self.pool, range, &filter, dimension).await
+        self.query_budget
+            .run(
+                "load usage diagnostics",
+                usage_diagnostics(&self.pool, range, &filter, dimension),
+            )
+            .await
     }
 
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> StoreResult<OpsErrorPage> {
-        list_ops_errors(&self.pool, query).await
+        self.query_budget
+            .run("list ops errors", list_ops_errors(&self.pool, query))
+            .await
     }
 }
 

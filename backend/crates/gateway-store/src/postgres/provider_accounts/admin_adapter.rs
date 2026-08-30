@@ -31,7 +31,7 @@ impl PgAdminAccountStore {
         Self {
             pool: pool.clone(),
             accounts: PgProviderAccountRepository::new(pool.clone()),
-            observability: PgObservabilityRepository::new(pool.clone(), None),
+            observability: PgObservabilityRepository::new(pool.clone(), None, query_budget.clone()),
             control_plane: PgControlPlaneRepository::new(pool),
             cooldowns,
             query_budget,

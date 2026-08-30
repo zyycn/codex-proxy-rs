@@ -1,4 +1,4 @@
-//! 账号用量查询族。
+//! Provider 账号用量查询族。
 
 use super::super::*;
 
@@ -14,32 +14,18 @@ pub(crate) async fn provider_account_usage(
     }
 
     let mut statement = QueryBuilder::<Postgres>::new(
-        "select pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
-                pa.plan_type,
-                count(mr.id)::bigint as request_count,
-                count(mr.id) filter (where mr.outcome = 'succeeded')::bigint as success_count,
-                sum(mr.input_tokens)::bigint as input_tokens,
-                sum(mr.output_tokens)::bigint as output_tokens,
-                sum(mr.cached_tokens)::bigint as cached_tokens,
-                sum(mr.cache_write_tokens)::bigint as cache_write_tokens,
-                sum(mr.reasoning_tokens)::bigint as reasoning_tokens,
-                sum(mr.image_input_tokens)::bigint as image_input_tokens,
-                sum(mr.image_output_tokens)::bigint as image_output_tokens,
-                count(mr.id) filter (where mr.image_generation_succeeded is true)::bigint
-                  as image_request_count,
-                count(mr.id) filter (where mr.image_generation_succeeded is false)::bigint
-                  as image_request_failed_count,
-                sum(mr.total_tokens)::bigint as total_tokens,
-                count(mr.id) filter (where mr.cost_source = 'provider_reported')::bigint
-                  as provider_reported_count,
-                count(mr.id) filter (where mr.cost_source = 'calculated')::bigint
-                  as calculated_count,
-                count(mr.id) filter (where mr.cost_source = 'unavailable')::bigint
-                  as unavailable_count,
-                max(mr.started_at) as last_used_at
-         from provider_accounts pa
-         left join model_requests mr
-           on mr.provider_account_ref = pa.id and mr.started_at >= ",
+        "with matched as (
+           select pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
+                  pa.plan_type, mr.id as request_id,
+                  coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
+                  mr.cost_currency, mr.outcome, mr.input_tokens, mr.output_tokens,
+                  mr.cached_tokens, mr.cache_write_tokens, mr.reasoning_tokens,
+                  mr.image_input_tokens, mr.image_output_tokens,
+                  mr.image_generation_succeeded, mr.total_tokens, mr.cost_source,
+                  mr.cost_amount, mr.started_at
+             from provider_accounts pa
+             left join model_requests mr
+               on mr.provider_account_ref = pa.id and mr.started_at >= ",
     );
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
@@ -51,24 +37,101 @@ pub(crate) async fn provider_account_usage(
         statement.push("::text[])");
     }
     statement.push(
-        " group by pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
-                   pa.plan_type",
+        "), aggregated as (
+           select id, provider_kind, authentication_kind, name, email, plan_type,
+                  model, cost_currency,
+                  grouping(model)::integer as model_grouping,
+                  grouping(cost_currency)::integer as currency_grouping,
+                  count(request_id)::bigint as request_count,
+                  count(request_id) filter (where outcome = 'succeeded')::bigint
+                    as success_count,
+                  sum(input_tokens)::bigint as input_tokens,
+                  sum(output_tokens)::bigint as output_tokens,
+                  sum(cached_tokens)::bigint as cached_tokens,
+                  sum(cache_write_tokens)::bigint as cache_write_tokens,
+                  sum(reasoning_tokens)::bigint as reasoning_tokens,
+                  sum(image_input_tokens)::bigint as image_input_tokens,
+                  sum(image_output_tokens)::bigint as image_output_tokens,
+                  count(request_id) filter (where image_generation_succeeded is true)::bigint
+                    as image_request_count,
+                  count(request_id) filter (where image_generation_succeeded is false)::bigint
+                    as image_request_failed_count,
+                  sum(total_tokens)::bigint as total_tokens,
+                  count(request_id) filter (where cost_source = 'provider_reported')::bigint
+                    as provider_reported_count,
+                  count(request_id) filter (where cost_source = 'calculated')::bigint
+                    as calculated_count,
+                  count(request_id) filter (where cost_source = 'unavailable')::bigint
+                    as unavailable_count,
+                  max(started_at) as last_used_at,
+                  sum(cost_amount)::text as amount
+             from matched
+            group by id, provider_kind, authentication_kind, name, email, plan_type,
+                     grouping sets ((), (cost_currency), (model), (model, cost_currency))
+         ), selected_accounts as (
+           select id,
+                  row_number() over (order by last_used_at desc nulls last, name, id)
+                    as sort_position
+             from aggregated
+            where model_grouping = 1 and currency_grouping = 1",
     );
     if query.account_ids.is_none() {
-        statement.push(" having count(mr.id) > 0");
+        statement.push(" and request_count > 0");
     }
-    statement.push(" order by max(mr.started_at) desc nulls last, pa.name, pa.id limit ");
+    statement.push(" order by last_used_at desc nulls last, name, id limit ");
     statement.push_bind(i64::from(query.limit));
+    statement.push(
+        ")
+         select aggregated.*
+           from aggregated
+           join selected_accounts selected using (id)
+          order by selected.sort_position, model_grouping desc, currency_grouping desc,
+                   model nulls last, cost_currency nulls last",
+    );
     let rows = statement
         .build()
         .fetch_all(pool)
         .await
         .map_err(|_| postgres_unavailable("load provider account usage"))?;
 
-    let mut observations = rows
-        .iter()
-        .map(provider_account_from_row)
-        .collect::<StoreResult<Vec<_>>>()?;
+    let mut observations = Vec::with_capacity(usize::from(query.limit));
+    let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
+    let mut models = HashMap::<String, Vec<ProviderAccountModelUsageObservation>>::new();
+    let mut model_costs = HashMap::<(String, String), Vec<CurrencyCostTotal>>::new();
+    for row in &rows {
+        let model_grouping: i32 = get(row, "model_grouping")?;
+        let currency_grouping: i32 = get(row, "currency_grouping")?;
+        match (model_grouping, currency_grouping) {
+            (1, 1) => observations.push(provider_account_from_row(row)?),
+            (1, 0) if get::<Option<String>>(row, "cost_currency")?.is_some() => {
+                costs
+                    .entry(get(row, "id")?)
+                    .or_default()
+                    .push(cost_from_row(row)?);
+            }
+            (0, 1) if get::<Option<String>>(row, "model")?.is_some() => {
+                models
+                    .entry(get(row, "id")?)
+                    .or_default()
+                    .push(provider_account_model_from_row(row)?);
+            }
+            (0, 0)
+                if get::<Option<String>>(row, "model")?.is_some()
+                    && get::<Option<String>>(row, "cost_currency")?.is_some() =>
+            {
+                model_costs
+                    .entry((get(row, "id")?, get(row, "model")?))
+                    .or_default()
+                    .push(cost_from_row(row)?);
+            }
+            (0 | 1, 0 | 1) => {}
+            _ => {
+                return Err(postgres_unavailable(
+                    "decode provider account usage grouping",
+                ));
+            }
+        }
+    }
     if observations.is_empty() {
         return Ok(observations);
     }
@@ -81,52 +144,23 @@ pub(crate) async fn provider_account_usage(
     } else {
         HashMap::new()
     };
-    let account_costs = account_costs(pool, query.range, &account_ids).await?;
-    let model_rows = account_model_rows(pool, query.range, &account_ids).await?;
-    let model_costs = account_model_costs(pool, query.range, &account_ids).await?;
-    let account_positions = observations
-        .iter()
-        .enumerate()
-        .map(|(index, item)| (item.account_id.clone(), index))
-        .collect::<HashMap<_, _>>();
     for observation in &mut observations {
-        observation.costs = account_costs
-            .get(&observation.account_id)
-            .cloned()
-            .unwrap_or_default();
+        observation.costs = costs.remove(&observation.account_id).unwrap_or_default();
         observation.request_buckets = request_buckets
             .remove(&observation.account_id)
             .unwrap_or_default();
-    }
-    for row in model_rows {
-        let account_id: String = get(&row, "provider_account_ref")?;
-        let Some(position) = account_positions.get(&account_id).copied() else {
-            continue;
-        };
-        let model: String = get(&row, "model")?;
-        observations[position]
-            .models
-            .push(ProviderAccountModelUsageObservation {
-                costs: model_costs
-                    .get(&(account_id, model.clone()))
-                    .cloned()
-                    .unwrap_or_default(),
-                model,
-                request_count: unsigned(&row, "request_count")?,
-                success_count: unsigned(&row, "success_count")?,
-                input_tokens: optional_unsigned(&row, "input_tokens")?,
-                output_tokens: optional_unsigned(&row, "output_tokens")?,
-                cached_tokens: optional_unsigned(&row, "cached_tokens")?,
-                cache_write_tokens: optional_unsigned(&row, "cache_write_tokens")?,
-                reasoning_tokens: optional_unsigned(&row, "reasoning_tokens")?,
-                image_input_tokens: optional_unsigned(&row, "image_input_tokens")?,
-                image_output_tokens: optional_unsigned(&row, "image_output_tokens")?,
-                image_request_count: unsigned(&row, "image_request_count")?,
-                image_request_failed_count: unsigned(&row, "image_request_failed_count")?,
-                total_tokens: optional_unsigned(&row, "total_tokens")?,
-                cost_coverage: coverage_from_row(&row)?,
-                last_used_at: get(&row, "last_used_at")?,
-            });
+        observation.models = models.remove(&observation.account_id).unwrap_or_default();
+        for model in &mut observation.models {
+            model.costs = model_costs
+                .remove(&(observation.account_id.clone(), model.model.clone()))
+                .unwrap_or_default();
+        }
+        observation.models.sort_by(|left, right| {
+            right
+                .request_count
+                .cmp(&left.request_count)
+                .then_with(|| left.model.cmp(&right.model))
+        });
     }
     Ok(observations)
 }
@@ -145,7 +179,8 @@ pub(crate) async fn provider_account_request_buckets(
            and mr.started_at >= $1 and mr.started_at < $3
            and mr.outcome = 'succeeded'
            and mr.downstream_committed_at is not null
-           and mr.client_status_code between 200 and 399
+           and ((mr.client_transport = 'websocket' and mr.client_status_code is null)
+                or mr.client_status_code between 200 and 399)
          group by mr.provider_account_ref, bucket_index
          order by mr.provider_account_ref, bucket_index",
     )
@@ -191,121 +226,27 @@ pub(crate) async fn provider_account_request_buckets(
     Ok(timelines)
 }
 
-pub(crate) async fn account_costs(
-    pool: &PgPool,
-    range: ObservabilityRange,
-    account_ids: &[String],
-) -> StoreResult<HashMap<String, Vec<CurrencyCostTotal>>> {
-    let rows = sqlx::query(
-        "select mr.provider_account_ref, mr.cost_currency, sum(mr.cost_amount)::text as amount
-         from model_requests mr
-         where mr.provider_account_ref = any($1::text[])
-           and mr.started_at >= $2 and mr.started_at < $3
-           and mr.outcome = 'succeeded'
-           and mr.downstream_committed_at is not null
-           and mr.client_status_code between 200 and 399
-           and mr.cost_amount is not null and mr.cost_currency is not null
-         group by mr.provider_account_ref, mr.cost_currency
-         order by mr.provider_account_ref, mr.cost_currency",
-    )
-    .bind(account_ids)
-    .bind(range.start)
-    .bind(range.end)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| postgres_unavailable("load provider account costs"))?;
-    let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
-    for row in rows {
-        costs
-            .entry(get(&row, "provider_account_ref")?)
-            .or_default()
-            .push(cost_from_row(&row)?);
-    }
-    Ok(costs)
-}
-
-pub(crate) async fn account_model_rows(
-    pool: &PgPool,
-    range: ObservabilityRange,
-    account_ids: &[String],
-) -> StoreResult<Vec<sqlx::postgres::PgRow>> {
-    sqlx::query(
-        "select mr.provider_account_ref,
-                coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
-                count(*)::bigint as request_count,
-                count(*) filter (where mr.outcome = 'succeeded')::bigint as success_count,
-                sum(mr.input_tokens)::bigint as input_tokens,
-                sum(mr.output_tokens)::bigint as output_tokens,
-                sum(mr.cached_tokens)::bigint as cached_tokens,
-                sum(mr.cache_write_tokens)::bigint as cache_write_tokens,
-                sum(mr.reasoning_tokens)::bigint as reasoning_tokens,
-                sum(mr.image_input_tokens)::bigint as image_input_tokens,
-                sum(mr.image_output_tokens)::bigint as image_output_tokens,
-                count(*) filter (where mr.image_generation_succeeded is true)::bigint
-                  as image_request_count,
-                count(*) filter (where mr.image_generation_succeeded is false)::bigint
-                  as image_request_failed_count,
-                sum(mr.total_tokens)::bigint as total_tokens,
-                count(*) filter (where mr.cost_source = 'provider_reported')::bigint
-                  as provider_reported_count,
-                count(*) filter (where mr.cost_source = 'calculated')::bigint
-                  as calculated_count,
-                count(*) filter (where mr.cost_source = 'unavailable')::bigint
-                  as unavailable_count,
-                max(mr.started_at) as last_used_at
-         from model_requests mr
-         where mr.provider_account_ref = any($1::text[])
-           and mr.started_at >= $2 and mr.started_at < $3
-           and mr.outcome = 'succeeded'
-           and mr.downstream_committed_at is not null
-           and mr.client_status_code between 200 and 399
-           and coalesce(mr.upstream_model_id, mr.requested_model_id) is not null
-         group by mr.provider_account_ref, coalesce(mr.upstream_model_id, mr.requested_model_id)
-         order by mr.provider_account_ref, request_count desc, model",
-    )
-    .bind(account_ids)
-    .bind(range.start)
-    .bind(range.end)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| postgres_unavailable("load provider account model usage"))
-}
-
-pub(crate) async fn account_model_costs(
-    pool: &PgPool,
-    range: ObservabilityRange,
-    account_ids: &[String],
-) -> StoreResult<HashMap<(String, String), Vec<CurrencyCostTotal>>> {
-    let rows = sqlx::query(
-        "select mr.provider_account_ref,
-                coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
-                mr.cost_currency, sum(mr.cost_amount)::text as amount
-         from model_requests mr
-         where mr.provider_account_ref = any($1::text[])
-           and mr.started_at >= $2 and mr.started_at < $3
-           and mr.outcome = 'succeeded'
-           and mr.downstream_committed_at is not null
-           and mr.client_status_code between 200 and 399
-           and mr.cost_amount is not null and mr.cost_currency is not null
-           and coalesce(mr.upstream_model_id, mr.requested_model_id) is not null
-         group by mr.provider_account_ref, coalesce(mr.upstream_model_id, mr.requested_model_id),
-                  mr.cost_currency
-         order by mr.provider_account_ref, model, mr.cost_currency",
-    )
-    .bind(account_ids)
-    .bind(range.start)
-    .bind(range.end)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| postgres_unavailable("load provider account model costs"))?;
-    let mut costs = HashMap::<(String, String), Vec<CurrencyCostTotal>>::new();
-    for row in rows {
-        costs
-            .entry((get(&row, "provider_account_ref")?, get(&row, "model")?))
-            .or_default()
-            .push(cost_from_row(&row)?);
-    }
-    Ok(costs)
+fn provider_account_model_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> StoreResult<ProviderAccountModelUsageObservation> {
+    Ok(ProviderAccountModelUsageObservation {
+        model: get(row, "model")?,
+        request_count: unsigned(row, "request_count")?,
+        success_count: unsigned(row, "success_count")?,
+        input_tokens: optional_unsigned(row, "input_tokens")?,
+        output_tokens: optional_unsigned(row, "output_tokens")?,
+        cached_tokens: optional_unsigned(row, "cached_tokens")?,
+        cache_write_tokens: optional_unsigned(row, "cache_write_tokens")?,
+        reasoning_tokens: optional_unsigned(row, "reasoning_tokens")?,
+        image_input_tokens: optional_unsigned(row, "image_input_tokens")?,
+        image_output_tokens: optional_unsigned(row, "image_output_tokens")?,
+        image_request_count: unsigned(row, "image_request_count")?,
+        image_request_failed_count: unsigned(row, "image_request_failed_count")?,
+        total_tokens: optional_unsigned(row, "total_tokens")?,
+        cost_coverage: coverage_from_row(row)?,
+        costs: Vec::new(),
+        last_used_at: get(row, "last_used_at")?,
+    })
 }
 
 pub(crate) fn provider_account_from_row(

@@ -120,6 +120,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             pool.clone(),
             Some(credential_leases.clone()),
             Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
+            observability_query_budget,
         )),
         Arc::new(AdminSettingsStoreAdapter {
             control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),

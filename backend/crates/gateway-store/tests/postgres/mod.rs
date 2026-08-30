@@ -1,7 +1,8 @@
 use std::{str::FromStr, time::Duration};
 
 use gateway_store::postgres::{
-    ObservabilityQueryBudget, PgAdminAccountStore, connect_and_migrate,
+    ObservabilityQueryBudget, PgAdminAccountStore, PgAdminObservabilityStore,
+    PgObservabilityRepository, connect_and_migrate,
 };
 use sqlx::{
     ConnectOptions as _, PgPool,
@@ -37,6 +38,14 @@ pub(super) struct TestDatabase {
 pub(super) fn observability_query_budget() -> ObservabilityQueryBudget {
     ObservabilityQueryBudget::try_new(4, Duration::from_secs(1))
         .expect("valid test observability query budget")
+}
+
+pub(super) fn observability_repository(pool: &PgPool) -> PgObservabilityRepository {
+    PgObservabilityRepository::new(pool.clone(), None, observability_query_budget())
+}
+
+pub(super) fn admin_observability_store(pool: &PgPool) -> PgAdminObservabilityStore {
+    PgAdminObservabilityStore::new(pool.clone(), None, None, observability_query_budget())
 }
 
 pub(super) fn admin_account_store(pool: &PgPool) -> PgAdminAccountStore {

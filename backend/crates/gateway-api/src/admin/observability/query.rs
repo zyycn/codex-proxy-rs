@@ -31,7 +31,6 @@ impl DashboardQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
-    pub page: Option<u32>,
     pub page_size: Option<u16>,
     pub cursor: Option<String>,
     pub kind: Option<String>,
@@ -54,16 +53,12 @@ pub struct UsageQuery {
 
 impl UsageQuery {
     /// 校验分页字段，不改变仓储层的分页 owner。
-    pub fn validate_page(&self) -> Result<(u32, u16), WireValidationError> {
-        let page = self.page.unwrap_or(1);
-        if page == 0 {
-            return Err(WireValidationError::new("page"));
-        }
+    pub fn validate_page_size(&self) -> Result<u16, WireValidationError> {
         let page_size = self.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
         if page_size == 0 || page_size > MAX_PAGE_SIZE {
             return Err(WireValidationError::new("pageSize"));
         }
-        Ok((page, page_size))
+        Ok(page_size)
     }
 
     /// 校验游标的 wire 边界；编码和排序语义由应用层负责。
@@ -110,7 +105,6 @@ impl DiagnosticsQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpsQuery {
-    pub page: Option<u32>,
     pub page_size: Option<u16>,
     pub cursor: Option<String>,
     pub kind: Option<String>,
@@ -135,16 +129,12 @@ pub struct OpsQuery {
 
 impl OpsQuery {
     /// 校验分页字段。
-    pub fn validate_page(&self) -> Result<(u32, u16), WireValidationError> {
-        let page = self.page.unwrap_or(1);
-        if page == 0 {
-            return Err(WireValidationError::new("page"));
-        }
+    pub fn validate_page_size(&self) -> Result<u16, WireValidationError> {
         let page_size = self.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
         if page_size == 0 || page_size > MAX_PAGE_SIZE {
             return Err(WireValidationError::new("pageSize"));
         }
-        Ok((page, page_size))
+        Ok(page_size)
     }
 
     /// 校验游标的 wire 边界。
@@ -345,37 +335,23 @@ pub(crate) fn usage_filter(query: &UsageQuery) -> Result<domain::UsageFilter, Wi
     })
 }
 
-pub(crate) fn usage_command(
-    query: &UsageQuery,
-) -> Result<(domain::UsageQuery, u32, u16), WireValidationError> {
-    let (page, page_size) = query.validate_page()?;
+pub(crate) fn usage_command(query: &UsageQuery) -> Result<domain::UsageQuery, WireValidationError> {
+    let page_size = query.validate_page_size()?;
     query.validate_cursor()?;
-    let page_number = NonZeroU32::new(page)
-        .map(domain::PageNumber::new)
-        .ok_or_else(|| WireValidationError::new("page"))?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
-    Ok((
-        domain::UsageQuery {
-            range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
-            filter: usage_filter(query)?,
-            cursor: decode_observability_cursor(query.cursor.as_deref())?,
-            page: page_number,
-            page_size: page_size_value,
-        },
-        page,
-        page_size,
-    ))
+    Ok(domain::UsageQuery {
+        range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
+        filter: usage_filter(query)?,
+        cursor: decode_observability_cursor(query.cursor.as_deref())?,
+        page_size: page_size_value,
+        include_total: query.cursor.is_none(),
+    })
 }
 
-pub(crate) fn ops_command(
-    query: &OpsQuery,
-) -> Result<(domain::OpsErrorQuery, u32, u16), WireValidationError> {
-    let (page, page_size) = query.validate_page()?;
+pub(crate) fn ops_command(query: &OpsQuery) -> Result<domain::OpsErrorQuery, WireValidationError> {
+    let page_size = query.validate_page_size()?;
     query.validate_cursor()?;
-    let page_number = NonZeroU32::new(page)
-        .map(domain::PageNumber::new)
-        .ok_or_else(|| WireValidationError::new("page"))?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     let status_code = parse_status(
@@ -384,31 +360,27 @@ pub(crate) fn ops_command(
             .or(query.client_status_code)
             .or(query.status_code),
     )?;
-    Ok((
-        domain::OpsErrorQuery {
-            range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
-            filter: domain::OpsErrorFilter {
-                client_api_key_ref: non_empty(query.client_api_key_id.clone()),
-                request_id: non_empty(query.request_id.clone()),
-                provider_kind: non_empty(query.provider.clone()),
-                provider_account_ref: non_empty(query.account_id.clone()),
-                operation: non_empty(query.route.clone()).or_else(|| non_empty(query.kind.clone())),
-                model: non_empty(query.model.clone()),
-                transport: non_empty(query.transport.clone()),
-                attempt_index: parse_attempt_index(query.attempt_index)?,
-                response_id: non_empty(query.response_id.clone()),
-                upstream_request_id: non_empty(query.upstream_request_id.clone()),
-                failure_kind: non_empty(query.failure_class.clone()),
-                status_code,
-                search: non_empty(query.search.clone()),
-            },
-            cursor: decode_observability_cursor(query.cursor.as_deref())?,
-            page: page_number,
-            page_size: page_size_value,
+    Ok(domain::OpsErrorQuery {
+        range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
+        filter: domain::OpsErrorFilter {
+            client_api_key_ref: non_empty(query.client_api_key_id.clone()),
+            request_id: non_empty(query.request_id.clone()),
+            provider_kind: non_empty(query.provider.clone()),
+            provider_account_ref: non_empty(query.account_id.clone()),
+            operation: non_empty(query.route.clone()).or_else(|| non_empty(query.kind.clone())),
+            model: non_empty(query.model.clone()),
+            transport: non_empty(query.transport.clone()),
+            attempt_index: parse_attempt_index(query.attempt_index)?,
+            response_id: non_empty(query.response_id.clone()),
+            upstream_request_id: non_empty(query.upstream_request_id.clone()),
+            failure_kind: non_empty(query.failure_class.clone()),
+            status_code,
+            search: non_empty(query.search.clone()),
         },
-        page,
-        page_size,
-    ))
+        cursor: decode_observability_cursor(query.cursor.as_deref())?,
+        page_size: page_size_value,
+        include_total: query.cursor.is_none(),
+    })
 }
 
 pub(crate) fn decode_observability_cursor(

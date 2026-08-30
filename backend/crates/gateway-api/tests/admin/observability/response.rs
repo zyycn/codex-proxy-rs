@@ -2,7 +2,6 @@
 
 use chrono::{TimeZone, Utc};
 use gateway_admin::model::observability::DesktopReleaseStatus;
-use gateway_api::admin::PageMeta;
 use gateway_api::admin::observability::{
     BillingView, CostCoverageView, CursorWire, DashboardAccountRequestBucketView,
     DashboardAccountUsageView, DashboardDesktopReleaseStatusView, DashboardWireAttributeView,
@@ -15,11 +14,11 @@ use serde_json::json;
 fn usage_page_should_keep_terminal_camel_case_shape() {
     let data = PageData {
         items: vec![json!({"id": "request_1"})],
-        page: PageMeta::new(1, 50, 1, 1),
+        total: Some(1),
         next_cursor: Some("cursor".to_owned()),
     };
     let value = serde_json::to_value(data).unwrap();
-    assert_eq!(value["page"]["pageSize"], 50);
+    assert_eq!(value["total"], 1);
     assert_eq!(value["nextCursor"], "cursor");
 }
 
@@ -209,7 +208,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
     };
     use chrono::{Duration, Utc};
     use gateway_admin::model::observability::{
-        AccountPoolMetrics, AttemptMetrics, DashboardObservation, RequestMetrics, TimeRange,
+        AccountPoolMetrics, DashboardObservation, TimeRange,
     };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
@@ -224,8 +223,6 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
-        requests: RequestMetrics::default(),
-        attempts: AttemptMetrics::default(),
         totals: Default::default(),
         provider_accounts: AccountPoolMetrics {
             total: 1002,
@@ -293,8 +290,7 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
     };
     use chrono::{Duration, Utc};
     use gateway_admin::model::observability::{
-        AccountPoolMetrics, AttemptMetrics, DashboardObservation, DashboardTotals, RequestMetrics,
-        TimeRange,
+        AccountPoolMetrics, DashboardObservation, DashboardTotals, TimeRange,
     };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
@@ -304,20 +300,11 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let now = Utc::now();
-    let range_requests = RequestMetrics {
-        request_count: 2,
-        input_tokens: 8,
-        cached_tokens: 2,
-        total_tokens: 12,
-        ..RequestMetrics::default()
-    };
     *fixture
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
-        requests: range_requests,
-        attempts: AttemptMetrics::default(),
         totals: DashboardTotals {
             request_count: 42,
             input_tokens: 800,
@@ -374,8 +361,7 @@ async fn dashboard_summary_should_default_to_current_china_day() {
     };
     use chrono::{Duration, Utc};
     use gateway_admin::model::observability::{
-        AccountPoolMetrics, AttemptMetrics, DashboardObservation, RequestMetrics, TimeRange,
-        china_day_start,
+        AccountPoolMetrics, DashboardObservation, TimeRange, china_day_start,
     };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
@@ -390,8 +376,6 @@ async fn dashboard_summary_should_default_to_current_china_day() {
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
-        requests: RequestMetrics::default(),
-        attempts: AttemptMetrics::default(),
         totals: Default::default(),
         provider_accounts: AccountPoolMetrics::default(),
         trend: Vec::new(),
@@ -798,7 +782,7 @@ async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
 }
 
 #[tokio::test]
-async fn usage_route_should_expose_image_and_websocket_facts() {
+async fn usage_route_should_expose_table_facts_without_detail_payload() {
     use std::str::FromStr as _;
 
     use axum::{
@@ -807,8 +791,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
     };
     use chrono::Utc;
     use gateway_admin::model::observability::{
-        CalculatedBillingBreakdown, CurrencyCost, DecimalAmount, RequestOutcome, UsageBilling,
-        UsageRecord,
+        CalculatedBillingBreakdown, CurrencyCost, DecimalAmount, UsageBilling, UsageListRecord,
     };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
@@ -825,15 +808,8 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
         .usage_records
         .lock()
         .expect("usage records")
-        .push(UsageRecord {
+        .push(UsageListRecord {
             id: "request_endpoint".to_owned(),
-            client_api_key_ref: "key_endpoint".to_owned(),
-            config_revision: 1,
-            routing_scope: "groups".to_owned(),
-            routing_group_refs: vec!["grp_usage".to_owned()],
-            routing_group_names_snapshot: vec!["Usage group".to_owned()],
-            protocol: "openai".to_owned(),
-            operation: "generate".to_owned(),
             endpoint: "/v1/responses".to_owned(),
             client_transport: "websocket".to_owned(),
             requested_model_id: Some("grok-4.5".to_owned()),
@@ -844,30 +820,7 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             provider_account_authentication_kind: Some("oauth".to_owned()),
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
-            http_version: Some("h2".to_owned()),
-            websocket_pool: Some("reuse".to_owned()),
             service_tier: Some("default".to_owned()),
-            provider_metadata_json: Some(
-                serde_json::json!({
-                    "effectiveModel": "grok-4.5",
-                    "requestSummary": {"inputItemsCount": 2},
-                    "transport": "must-not-overwrite-core",
-                })
-                .to_string(),
-            ),
-            attempt_count: 1,
-            upstream_send_state: "sent".to_owned(),
-            downstream_committed_at: None,
-            outcome: RequestOutcome::Succeeded,
-            client_status_code: Some(200),
-            upstream_status_code: Some(200),
-            client_response_id: Some("resp_usage_metadata".to_owned()),
-            upstream_request_id: Some("upstream_usage_metadata".to_owned()),
-            upstream_response_id: None,
-            error_kind: None,
-            provider_error_code: None,
-            error_message: None,
-            retry_after_ms: None,
             input_tokens: Some(1),
             output_tokens: Some(1),
             cached_tokens: Some(0),
@@ -895,31 +848,26 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
                     multiplier_percent: 100,
                 },
             ))),
-            transport_decision_wait_ms: Some(7),
-            connect_ms: Some(11),
-            headers_ms: Some(13),
+            transport_decision_wait_ms: Some(4),
+            connect_ms: Some(5),
+            headers_ms: Some(7),
             first_event_ms: Some(17),
-            first_reasoning_ms: Some(19),
-            first_text_ms: Some(23),
-            first_token_ms: Some(19),
-            provider_processing_ms: Some(29),
+            first_reasoning_ms: Some(18),
+            first_text_ms: Some(19),
+            first_token_ms: Some(20),
+            provider_processing_ms: Some(21),
             latency_ms: Some(31),
-            admission_decision_ms: Some(3),
-            account_selection_wait_ms: Some(5),
-            capacity_used_slots: Some(7),
-            capacity_total_slots: Some(10),
-            client_ip: Some("127.0.0.1".to_owned()),
-            user_agent: Some("usage-metadata-test".to_owned()),
+            admission_decision_ms: Some(1),
+            account_selection_wait_ms: Some(2),
+            capacity_used_slots: Some(3),
+            capacity_total_slots: Some(8),
+            client_ip: Some("192.0.2.10".to_owned()),
+            user_agent: Some("codex-cli/1.0".to_owned()),
             reasoning_effort: Some("max".to_owned()),
             reasoning_preset: Some("ultra".to_owned()),
-            request_kind: Some("review".to_owned()),
             subagent_kind: Some("worker".to_owned()),
             compact: true,
-            image_generation_requested: true,
-            image_generation_succeeded: Some(true),
             started_at: Utc::now(),
-            deadline_at: Utc::now(),
-            completed_at: Some(Utc::now()),
         });
     let response = observability::router::<AdminTestState>()
         .with_state(fixture.state())
@@ -959,9 +907,6 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
     assert_eq!(
         serde_json::json!({
             "route": value["data"]["items"][0]["route"],
-            "routingScope": value["data"]["items"][0]["routingScope"],
-            "routingGroupRefs": value["data"]["items"][0]["routingGroupRefs"],
-            "routingGroupNamesSnapshot": value["data"]["items"][0]["routingGroupNamesSnapshot"],
             "serviceTier": value["data"]["items"][0]["serviceTier"],
             "accountId": value["data"]["items"][0]["accountId"],
             "accountName": value["data"]["items"][0]["accountName"],
@@ -969,33 +914,22 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             "authenticationKind": value["data"]["items"][0]["authenticationKind"],
             "imageInputTokens": value["data"]["items"][0]["tokenDetails"]["imageInputTokens"],
             "imageOutputTokens": value["data"]["items"][0]["tokenDetails"]["imageOutputTokens"],
-            "websocketPool": value["data"]["items"][0]["websocketPool"],
-            "imageGenerationRequested": value["data"]["items"][0]["imageGenerationRequested"],
-            "imageGenerationSucceeded": value["data"]["items"][0]["imageGenerationSucceeded"],
             "requestedModel": value["data"]["items"][0]["requestedModel"],
             "upstreamModel": value["data"]["items"][0]["upstreamModel"],
-            "clientIp": value["data"]["items"][0]["clientIp"],
-            "userAgent": value["data"]["items"][0]["userAgent"],
             "reasoningEffort": value["data"]["items"][0]["reasoningEffort"],
             "reasoningPreset": value["data"]["items"][0]["reasoningPreset"],
-            "requestKind": value["data"]["items"][0]["requestKind"],
             "subagentKind": value["data"]["items"][0]["subagentKind"],
             "compact": value["data"]["items"][0]["compact"],
             "clientTransport": value["data"]["items"][0]["clientTransport"],
             "upstreamTransport": value["data"]["items"][0]["upstreamTransport"],
-            "transportDecisionWaitMs": value["data"]["items"][0]["latencyDetails"]["transportDecisionWaitMs"],
-            "wsConnectMs": value["data"]["items"][0]["latencyDetails"]["wsConnectMs"],
-            "firstReasoningMs": value["data"]["items"][0]["latencyDetails"]["firstReasoningMs"],
-            "firstTextMs": value["data"]["items"][0]["latencyDetails"]["firstTextMs"],
-            "firstTokenMs": value["data"]["items"][0]["latencyDetails"]["firstTokenMs"],
-            "effectiveModel": value["data"]["items"][0]["metadata"]["effectiveModel"],
-            "requestSummary": value["data"]["items"][0]["metadata"]["requestSummary"],
+            "latencyDetails": value["data"]["items"][0]["latencyDetails"],
+            "firstTokenLatencyMs": value["data"]["items"][0]["firstTokenLatencyMs"],
+            "latencyMs": value["data"]["items"][0]["latencyMs"],
+            "clientIp": value["data"]["items"][0]["clientIp"],
+            "userAgent": value["data"]["items"][0]["userAgent"],
         }),
         serde_json::json!({
             "route": "/v1/responses",
-            "routingScope": "groups",
-            "routingGroupRefs": ["grp_usage"],
-            "routingGroupNamesSnapshot": ["Usage group"],
             "serviceTier": "default",
             "accountId": "acct_snapshot",
             "accountName": "Snapshot Alpha",
@@ -1003,27 +937,33 @@ async fn usage_route_should_expose_image_and_websocket_facts() {
             "authenticationKind": "oauth",
             "imageInputTokens": 31,
             "imageOutputTokens": 9,
-            "websocketPool": {"kind": "reuse"},
-            "imageGenerationRequested": true,
-            "imageGenerationSucceeded": true,
             "requestedModel": "grok-4.5",
             "upstreamModel": "grok-4.5",
-            "clientIp": "127.0.0.1",
-            "userAgent": "usage-metadata-test",
             "reasoningEffort": "max",
             "reasoningPreset": "ultra",
-            "requestKind": "review",
             "subagentKind": "worker",
             "compact": true,
             "clientTransport": "websocket",
             "upstreamTransport": "http_sse",
-            "transportDecisionWaitMs": 7,
-            "wsConnectMs": 11,
-            "firstReasoningMs": 19,
-            "firstTextMs": 23,
-            "firstTokenMs": 19,
-            "effectiveModel": "grok-4.5",
-            "requestSummary": {"inputItemsCount": 2},
+            "latencyDetails": {
+                "admissionDecisionMs": 1,
+                "accountSelectionWaitMs": 2,
+                "capacityUsedSlots": 3,
+                "capacityTotalSlots": 8,
+                "transportDecisionWaitMs": 4,
+                "wsConnectMs": 5,
+                "upstreamHeadersMs": 7,
+                "firstEventMs": 17,
+                "firstReasoningMs": 18,
+                "firstTextMs": 19,
+                "firstTokenMs": 20,
+                "openaiProcessingMs": 21,
+            },
+            "firstTokenLatencyMs": 20,
+            "latencyMs": 31,
+            "clientIp": "192.0.2.10",
+            "userAgent": "codex-cli/1.0",
         })
     );
+    assert!(value["data"]["items"][0].get("metadata").is_none());
 }

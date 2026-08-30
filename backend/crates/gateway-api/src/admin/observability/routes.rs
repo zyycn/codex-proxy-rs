@@ -84,14 +84,14 @@ pub(crate) async fn usage_records<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (command, page, page_size) = usage_command(&query).map_err(map_wire_error)?;
+    let command = usage_command(&query).map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
         .usage_records(command)
         .await
         .map_err(map_service_error)?;
-    let data = usage_page_view(result, page, page_size).map_err(|_| AdminError::internal())?;
+    let data = usage_page_view(result).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -200,13 +200,13 @@ pub(crate) async fn ops_errors<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (command, page, page_size) = ops_command(&query).map_err(map_wire_error)?;
+    let command = ops_command(&query).map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
         .ops_errors(command)
         .await
         .map_err(map_service_error)?;
-    let data = ops_page_view(result, page, page_size).map_err(|_| AdminError::internal())?;
+    let data = ops_page_view(result).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

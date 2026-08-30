@@ -2,84 +2,71 @@
 
 use super::super::*;
 
-pub(crate) const OPS_ERRORS_CTE: &str = "with errors as (
-       select 'model_request'::text as source,
-              mr.id as event_id, mr.id as request_id,
-              nullif(mr.attempt_count, 0) as attempt_index,
-              mr.client_api_key_ref, 'model_request'::text as component, mr.operation,
-              mr.endpoint,
-              mr.provider_kind,
-              mr.provider_account_ref,
-              mr.provider_account_name_snapshot as provider_account_name,
-              mr.provider_account_email_snapshot as provider_account_email,
-              mr.provider_account_authentication_kind_snapshot
-                as provider_account_authentication_kind,
-              mr.upstream_model_id, mr.upstream_transport,
-              coalesce(mr.error_kind, 'failed') as failure_kind,
-              mr.client_status_code, mr.upstream_status_code,
-              mr.provider_error_code, mr.client_response_id, mr.upstream_request_id,
-              mr.latency_ms, coalesce(mr.error_message, mr.error_kind, 'request failed') as message,
-              1::integer as occurrence_count,
-              coalesce(mr.completed_at, mr.started_at) as occurred_at,
-              'model_request:' || mr.id as stable_sort_id
-       from model_requests mr where mr.outcome = 'failed'
-       union all
-       select 'ops_event'::text, oe.id, oe.model_request_id, oe.attempt_index,
-              mr.client_api_key_ref, oe.component, oe.operation,
-              null::text as endpoint,
-              oe.provider_kind, oe.provider_account_ref,
-              oe.provider_account_name_snapshot as provider_account_name,
-              oe.provider_account_email_snapshot as provider_account_email,
-              oe.provider_account_authentication_kind_snapshot
-                as provider_account_authentication_kind,
-              oe.upstream_model_id, null::text, oe.failure_kind,
-              null::integer as client_status_code, oe.status_code as upstream_status_code,
-              oe.provider_error_code, mr.client_response_id, oe.upstream_request_id,
-              oe.latency_ms, oe.message, oe.occurrence_count, oe.created_at,
-              'ops_event:' || oe.id
-       from ops_events oe left join model_requests mr on mr.id = oe.model_request_id
-     )";
+const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
+       mr.id as event_id, mr.id as request_id,
+       nullif(mr.attempt_count, 0) as attempt_index,
+       mr.client_api_key_ref, 'model_request'::text as component, mr.operation,
+       mr.endpoint, mr.provider_kind, mr.provider_account_ref,
+       mr.provider_account_name_snapshot as provider_account_name,
+       mr.provider_account_email_snapshot as provider_account_email,
+       mr.provider_account_authentication_kind_snapshot
+         as provider_account_authentication_kind,
+       mr.upstream_model_id, mr.upstream_transport,
+       coalesce(mr.error_kind, 'failed') as failure_kind,
+       mr.client_status_code, mr.upstream_status_code,
+       mr.provider_error_code, mr.client_response_id, mr.upstream_request_id,
+       mr.latency_ms,
+       coalesce(mr.error_message, mr.error_kind, 'request failed') as message,
+       1::integer as occurrence_count, mr.completed_at as occurred_at,
+       'model_request:' || mr.id as stable_sort_id
+from model_requests mr
+where mr.outcome = 'failed'";
+
+const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
+       oe.id as event_id, oe.model_request_id as request_id, oe.attempt_index,
+       mr.client_api_key_ref, oe.component, oe.operation,
+       null::text as endpoint, oe.provider_kind, oe.provider_account_ref,
+       oe.provider_account_name_snapshot as provider_account_name,
+       oe.provider_account_email_snapshot as provider_account_email,
+       oe.provider_account_authentication_kind_snapshot
+         as provider_account_authentication_kind,
+       oe.upstream_model_id, null::text as upstream_transport, oe.failure_kind,
+       null::integer as client_status_code, oe.status_code as upstream_status_code,
+       oe.provider_error_code, mr.client_response_id, oe.upstream_request_id,
+       oe.latency_ms, oe.message, oe.occurrence_count, oe.created_at as occurred_at,
+       'ops_event:' || oe.id as stable_sort_id
+from ops_events oe
+left join model_requests mr on mr.id = oe.model_request_id
+where true";
 
 pub(crate) async fn list_ops_errors(
     pool: &PgPool,
     query: OpsErrorQuery,
 ) -> StoreResult<OpsErrorPage> {
     query.filter.validate()?;
-    let total = count_ops_errors(pool, query.range, &query.filter).await?;
-    let mut statement = QueryBuilder::<Postgres>::new(OPS_ERRORS_CTE);
-    statement.push(
-        " select source, event_id, request_id, attempt_index, client_api_key_ref,
-                 component, operation, endpoint, provider_kind, provider_account_ref,
-                 provider_account_name, provider_account_email,
-                 provider_account_authentication_kind,
-                 upstream_model_id, upstream_transport,
-                 failure_kind, client_status_code, upstream_status_code,
-                 provider_error_code, client_response_id,
-                 upstream_request_id, latency_ms, message, occurrence_count, occurred_at,
-                 stable_sort_id
-          from errors e where e.occurred_at >= ",
+    let total = if query.include_total {
+        Some(count_ops_errors(pool, query.range, &query.filter).await?)
+    } else {
+        None
+    };
+    let mut statement = QueryBuilder::<Postgres>::new("select * from (");
+    statement.push(REQUEST_ERROR_SELECT);
+    push_request_error_predicates(
+        &mut statement,
+        query.range,
+        &query.filter,
+        query.cursor.as_ref(),
     );
-    statement.push_bind(query.range.start);
-    statement.push(" and e.occurred_at < ");
-    statement.push_bind(query.range.end);
-    push_ops_filter(&mut statement, &query.filter);
-    if let Some(cursor) = &query.cursor {
-        statement.push(" and (e.occurred_at, e.stable_sort_id) < (");
-        statement.push_bind(cursor.observed_at);
-        statement.push(", ");
-        statement.push_bind(cursor.stable_id.clone());
-        statement.push(")");
-    }
-    statement.push(" order by e.occurred_at desc, e.stable_sort_id desc limit ");
+    statement.push(" union all ");
+    statement.push(OPS_EVENT_SELECT);
+    push_ops_event_predicates(
+        &mut statement,
+        query.range,
+        &query.filter,
+        query.cursor.as_ref(),
+    );
+    statement.push(") e order by occurred_at desc, stable_sort_id desc limit ");
     statement.push_bind(i64::from(query.page_size.get()) + 1);
-    if query.cursor.is_none() {
-        let offset = u64::from(query.page.get() - 1)
-            .checked_mul(u64::from(query.page_size.get()))
-            .and_then(|value| i64::try_from(value).ok())
-            .ok_or_else(|| invalid("ops error page offset is too large"))?;
-        statement.push(" offset ");
-        statement.push_bind(offset);
-    }
     let rows = statement
         .build()
         .fetch_all(pool)
@@ -113,12 +100,15 @@ pub(crate) async fn count_ops_errors(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) -> StoreResult<u64> {
-    let mut statement = QueryBuilder::<Postgres>::new(OPS_ERRORS_CTE);
-    statement.push(" select count(*)::bigint from errors e where e.occurred_at >= ");
-    statement.push_bind(range.start);
-    statement.push(" and e.occurred_at < ");
-    statement.push_bind(range.end);
-    push_ops_filter(&mut statement, filter);
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "select coalesce(sum(source_count), 0)::bigint from (select count(*)::bigint as source_count from model_requests mr where mr.outcome = 'failed'",
+    );
+    push_request_error_predicates(&mut statement, range, filter, None);
+    statement.push(
+        " union all select count(*)::bigint as source_count from ops_events oe left join model_requests mr on mr.id = oe.model_request_id where true",
+    );
+    push_ops_event_predicates(&mut statement, range, filter, None);
+    statement.push(") counts");
     let total = statement
         .build_query_scalar::<i64>()
         .fetch_one(pool)
@@ -127,45 +117,163 @@ pub(crate) async fn count_ops_errors(
     to_u64(total)
 }
 
-pub(crate) fn push_ops_filter(statement: &mut QueryBuilder<Postgres>, filter: &OpsErrorFilter) {
+fn push_request_error_predicates(
+    statement: &mut QueryBuilder<Postgres>,
+    range: ObservabilityRange,
+    filter: &OpsErrorFilter,
+    cursor: Option<&ObservabilityCursor>,
+) {
+    push_range(statement, "mr.completed_at", range);
     for (column, value) in [
-        ("client_api_key_ref", &filter.client_api_key_ref),
-        ("request_id", &filter.request_id),
-        ("provider_account_ref", &filter.provider_account_ref),
-        ("provider_kind", &filter.provider_kind),
-        ("operation", &filter.operation),
-        ("upstream_transport", &filter.transport),
-        ("upstream_request_id", &filter.upstream_request_id),
-        ("failure_kind", &filter.failure_kind),
+        ("mr.client_api_key_ref", &filter.client_api_key_ref),
+        ("mr.id", &filter.request_id),
+        ("mr.provider_account_ref", &filter.provider_account_ref),
+        ("mr.provider_kind", &filter.provider_kind),
+        ("mr.operation", &filter.operation),
+        ("mr.upstream_transport", &filter.transport),
+        ("mr.upstream_request_id", &filter.upstream_request_id),
     ] {
-        if let Some(value) = value {
-            statement.push(format!(" and e.{column} = "));
-            statement.push_bind(value.clone());
-        }
+        push_text_equality(statement, column, value);
     }
-    if let Some(value) = &filter.response_id {
-        statement.push(" and e.client_response_id = ");
-        statement.push_bind(value.as_bytes().to_vec());
+    if let Some(value) = &filter.failure_kind {
+        statement.push(" and coalesce(mr.error_kind, 'failed') = ");
+        statement.push_bind(value.clone());
     }
-    if let Some(model) = &filter.model {
-        statement.push(" and e.upstream_model_id = ");
-        statement.push_bind(model.clone());
-    }
+    push_response_id_filter(statement, "mr.client_response_id", filter);
+    push_text_equality(statement, "mr.upstream_model_id", &filter.model);
     if let Some(index) = filter.attempt_index {
-        statement.push(" and e.attempt_index = ");
+        statement.push(" and nullif(mr.attempt_count, 0) = ");
         statement.push_bind(i32::try_from(index).unwrap_or(i32::MAX));
     }
     if let Some(status) = filter.status_code {
-        statement.push(" and e.upstream_status_code = ");
+        statement.push(" and mr.upstream_status_code = ");
         statement.push_bind(i32::from(status));
     }
     if let Some(search) = &filter.search {
-        statement.push(
-            " and lower(concat_ws(' ', e.event_id, e.request_id, e.client_api_key_ref,
-                    e.component, e.operation, e.provider_kind, e.provider_account_ref,
-                    e.upstream_model_id, e.failure_kind, e.provider_error_code,
-                    e.upstream_request_id, e.message)) like ",
+        push_prefix_search(
+            statement,
+            &[
+                "mr.id",
+                "mr.client_api_key_ref",
+                "mr.provider_account_ref",
+                "mr.upstream_request_id",
+                "mr.provider_error_code",
+            ],
+            search,
         );
-        statement.push_bind(format!("%{}%", search.to_lowercase()));
+    }
+    push_cursor(
+        statement,
+        "mr.completed_at",
+        "'model_request:' || mr.id",
+        cursor,
+    );
+}
+
+fn push_ops_event_predicates(
+    statement: &mut QueryBuilder<Postgres>,
+    range: ObservabilityRange,
+    filter: &OpsErrorFilter,
+    cursor: Option<&ObservabilityCursor>,
+) {
+    push_range(statement, "oe.created_at", range);
+    for (column, value) in [
+        ("mr.client_api_key_ref", &filter.client_api_key_ref),
+        ("oe.model_request_id", &filter.request_id),
+        ("oe.provider_account_ref", &filter.provider_account_ref),
+        ("oe.provider_kind", &filter.provider_kind),
+        ("oe.operation", &filter.operation),
+        ("oe.upstream_request_id", &filter.upstream_request_id),
+        ("oe.failure_kind", &filter.failure_kind),
+    ] {
+        push_text_equality(statement, column, value);
+    }
+    // Ops events do not persist upstream transport. A transport filter therefore
+    // intentionally excludes this source instead of matching an unrelated request fact.
+    if filter.transport.is_some() {
+        statement.push(" and false");
+    }
+    push_response_id_filter(statement, "mr.client_response_id", filter);
+    push_text_equality(statement, "oe.upstream_model_id", &filter.model);
+    if let Some(index) = filter.attempt_index {
+        statement.push(" and oe.attempt_index = ");
+        statement.push_bind(i32::try_from(index).unwrap_or(i32::MAX));
+    }
+    if let Some(status) = filter.status_code {
+        statement.push(" and oe.status_code = ");
+        statement.push_bind(i32::from(status));
+    }
+    if let Some(search) = &filter.search {
+        push_prefix_search(
+            statement,
+            &[
+                "oe.id",
+                "oe.model_request_id",
+                "mr.client_api_key_ref",
+                "oe.provider_account_ref",
+                "oe.upstream_request_id",
+                "oe.provider_error_code",
+            ],
+            search,
+        );
+    }
+    push_cursor(statement, "oe.created_at", "'ops_event:' || oe.id", cursor);
+}
+
+fn push_range(statement: &mut QueryBuilder<Postgres>, column: &str, range: ObservabilityRange) {
+    statement.push(format!(" and {column} >= "));
+    statement.push_bind(range.start);
+    statement.push(format!(" and {column} < "));
+    statement.push_bind(range.end);
+}
+
+fn push_text_equality(
+    statement: &mut QueryBuilder<Postgres>,
+    column: &str,
+    value: &Option<String>,
+) {
+    if let Some(value) = value {
+        statement.push(format!(" and {column} = "));
+        statement.push_bind(value.clone());
+    }
+}
+
+fn push_response_id_filter(
+    statement: &mut QueryBuilder<Postgres>,
+    column: &str,
+    filter: &OpsErrorFilter,
+) {
+    if let Some(value) = &filter.response_id {
+        statement.push(format!(" and {column} = "));
+        statement.push_bind(value.as_bytes().to_vec());
+    }
+}
+
+fn push_prefix_search(statement: &mut QueryBuilder<Postgres>, columns: &[&str], value: &str) {
+    let pattern = literal_prefix_pattern(value);
+    statement.push(" and (");
+    for (index, column) in columns.iter().enumerate() {
+        if index > 0 {
+            statement.push(" or ");
+        }
+        statement.push(format!("{column} like "));
+        statement.push_bind(pattern.clone());
+        statement.push(" escape '\\'");
+    }
+    statement.push(")");
+}
+
+fn push_cursor(
+    statement: &mut QueryBuilder<Postgres>,
+    occurred_at: &str,
+    stable_sort_id: &str,
+    cursor: Option<&ObservabilityCursor>,
+) {
+    if let Some(cursor) = cursor {
+        statement.push(format!(" and ({occurred_at}, {stable_sort_id}) < ("));
+        statement.push_bind(cursor.observed_at);
+        statement.push(", ");
+        statement.push_bind(cursor.stable_id.clone());
+        statement.push(")");
     }
 }

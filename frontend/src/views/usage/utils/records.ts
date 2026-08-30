@@ -1,6 +1,4 @@
-// Usage 记录的单一规范化 view model 消费层。
-//
-// 组件只消费 `UsageDisplayRecord`（即 `UsageViewModel`）。
+// Usage 列表与详情使用独立读模型；共享展示函数只依赖两者的公共字段。
 
 import type {
   UsageAttempt,
@@ -8,7 +6,7 @@ import type {
   UsageCost,
   UsageCostCoverage,
   UsageLatencyDetails,
-  UsageRecord,
+  UsageListRecord,
   UsageRecordDetail,
   UsageTokenDetails,
 } from '@/api'
@@ -80,8 +78,8 @@ export interface UsageViewModel {
   attemptsComplete?: boolean
 }
 
-/** 将现行 Usage API 记录收口为组件消费的单一形状。 */
-export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): UsageViewModel {
+/** 将 Usage 详情 API 记录收口为详情组件消费的形状。 */
+export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel {
   const metadata = record.metadata
 
   return {
@@ -130,7 +128,7 @@ export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): U
     userAgent: record.userAgent,
     reasoningEffort: record.reasoningEffort,
     reasoningPreset: record.reasoningPreset,
-    compact: record.compact ?? false,
+    compact: record.compact === true,
     requestKind: record.requestKind,
     subagentKind: record.subagentKind,
     tokenDetails: record.tokenDetails,
@@ -143,12 +141,14 @@ export function normalizeUsageRecord(record: UsageRecord | UsageRecordDetail): U
     providerMetadata: metadata,
     requestBody: metadata.requestBody,
     responseBody: metadata.responseBody,
-    attempts: 'attempts' in record ? record.attempts : undefined,
-    attemptsComplete: 'attemptsComplete' in record ? record.attemptsComplete : undefined,
+    attempts: record.attempts,
+    attemptsComplete: record.attemptsComplete,
   }
 }
 
-export type UsageDisplayRecord = UsageViewModel
+export type UsageDisplayRecord = UsageListRecord
+
+type UsageCommonRecord = UsageDisplayRecord | UsageViewModel
 
 export function usageTransportType(transport?: string | null) {
   if (transport === 'websocket')
@@ -170,38 +170,38 @@ export function usageTransportTypeClass(transport?: string | null) {
   return 'bg-cp-fill-tertiary text-cp-text-secondary'
 }
 
-export function usageAccountText(record: UsageDisplayRecord) {
+export function usageAccountText(record: UsageCommonRecord) {
   return record.accountEmail || record.accountName || record.accountId || '—'
 }
 
-export function usageAuthenticationKind(record: UsageDisplayRecord) {
+export function usageAuthenticationKind(record: UsageCommonRecord) {
   return typeof record.authenticationKind === 'string' ? record.authenticationKind : null
 }
 
-export function usageClientIp(record: UsageDisplayRecord) {
+export function usageClientIp(record: UsageCommonRecord) {
   return record.clientIp || '—'
 }
 
-export function usageUserAgent(record: UsageDisplayRecord) {
+export function usageUserAgent(record: UsageCommonRecord) {
   return record.userAgent || '—'
 }
 
-export function usageReasoningEffort(record: UsageDisplayRecord) {
+export function usageReasoningEffort(record: UsageCommonRecord) {
   const reasoningEffort = record.reasoningEffort || '—'
   if (usageIsSubagent(record))
     return reasoningEffort
   return record.reasoningPreset || reasoningEffort
 }
 
-export function usageIsSubagent(record: UsageDisplayRecord) {
+export function usageIsSubagent(record: UsageCommonRecord) {
   return Boolean(record.subagentKind)
 }
 
-export function usageIsCompact(record: UsageDisplayRecord) {
+export function usageIsCompact(record: UsageCommonRecord) {
   return record.compact === true
 }
 
-export function usageModelDisplay(record: UsageDisplayRecord) {
+export function usageModelDisplay(record: UsageCommonRecord) {
   const requestedModel = record.requestedModel || ''
   const upstreamModel = record.upstreamModel || ''
   const storedModel = record.model || ''
@@ -216,11 +216,11 @@ export function usageModelDisplay(record: UsageDisplayRecord) {
   return { primary, secondary }
 }
 
-export function usageTokenDetails(record: UsageDisplayRecord) {
+export function usageTokenDetails(record: UsageCommonRecord) {
   return record.tokenDetails
 }
 
-export function usageLatencyDetails(record: UsageDisplayRecord) {
+export function usageLatencyDetails(record: UsageCommonRecord) {
   const latencyDetails = record.latencyDetails
   const firstTokenMs = durationValue(
     record.firstTokenLatencyMs ?? latencyDetails?.firstTokenMs,
@@ -287,15 +287,15 @@ export function usageLatencyDetails(record: UsageDisplayRecord) {
   }
 }
 
-export function usageBilling(record: UsageDisplayRecord) {
+export function usageBilling(record: UsageCommonRecord) {
   return record.billing
 }
 
-export function usageBillingText(record: UsageDisplayRecord) {
+export function usageBillingText(record: UsageCommonRecord) {
   return usageBilling(record)?.totalAmountDisplay || '—'
 }
 
-export function visibleRequestText(record: UsageDisplayRecord) {
+export function visibleRequestText(record: UsageViewModel) {
   const body = record.requestBody
   if (!body)
     return ''
@@ -303,7 +303,7 @@ export function visibleRequestText(record: UsageDisplayRecord) {
   return extractInputText(body) || JSON.stringify(body, null, 2)
 }
 
-export function visibleResponseText(record: UsageDisplayRecord) {
+export function visibleResponseText(record: UsageViewModel) {
   const body = record.responseBody
   if (!body)
     return ''

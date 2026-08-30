@@ -134,6 +134,23 @@ pub(crate) async fn request_metric_series(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<RequestMetricPoint>> {
+    request_metric_series_inner(pool, range, filter, true).await
+}
+
+pub(crate) async fn dashboard_request_metric_series(
+    pool: &PgPool,
+    range: ObservabilityRange,
+    filter: &UsageRecordFilter,
+) -> StoreResult<Vec<RequestMetricPoint>> {
+    request_metric_series_inner(pool, range, filter, false).await
+}
+
+async fn request_metric_series_inner(
+    pool: &PgPool,
+    range: ObservabilityRange,
+    filter: &UsageRecordFilter,
+    load_costs: bool,
+) -> StoreResult<Vec<RequestMetricPoint>> {
     filter.validate()?;
     let granularity = granularity_for(range);
     // 与 request_metrics 同一契约：结果计数覆盖全部请求，用量/延迟/成本
@@ -252,10 +269,12 @@ pub(crate) async fn request_metric_series(
             },
         );
     }
-    let bucket_costs = request_costs_by_bucket(pool, range, filter, granularity).await?;
-    for (bucket, costs) in bucket_costs {
-        if let Some(point) = points.get_mut(&bucket) {
-            point.costs = costs;
+    if load_costs {
+        let bucket_costs = request_costs_by_bucket(pool, range, filter, granularity).await?;
+        for (bucket, costs) in bucket_costs {
+            if let Some(point) = points.get_mut(&bucket) {
+                point.costs = costs;
+            }
         }
     }
     fill_metric_gaps(range, granularity, points)

@@ -1,13 +1,13 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_store::postgres::{
     DiagnosticDimension, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
-    ObservabilityPageNumber, ObservabilityPageSize, ObservabilityRange, ObservabilityRepository,
-    OpsErrorFilter, OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
-    PgObservabilityRepository, PgOpsEventRepository, UsageRecordFilter, UsageRecordQuery,
+    ObservabilityPageSize, ObservabilityRange, ObservabilityRepository, OpsErrorFilter,
+    OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
+    PgOpsEventRepository, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
 
-use super::TestDatabase;
+use super::{TestDatabase, observability_repository};
 
 #[tokio::test]
 async fn usage_facts_should_accept_statusless_websocket_but_reject_statusless_http() {
@@ -46,7 +46,7 @@ async fn usage_facts_should_accept_statusless_websocket_but_reject_statusless_ht
         .await;
     finalize_request_without_client_status(&database.pool, "req_statusless_http", started_at).await;
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
         .await
@@ -59,8 +59,14 @@ async fn usage_facts_should_accept_statusless_websocket_but_reject_statusless_ht
 
     assert_eq!(
         (page.total, request_ids),
-        (1, vec!["req_statusless_websocket"])
+        (Some(1), vec!["req_statusless_websocket"])
     );
+
+    let overview = repository
+        .usage_summary(range_around(started_at), UsageRecordFilter::default())
+        .await
+        .expect("summarize statusless transport usage");
+    assert_eq!(overview.attempts.cost_coverage.unavailable_count, 1);
 
     database.close().await;
 }
@@ -95,7 +101,7 @@ async fn request_snapshots_should_survive_account_deletion() {
         .await
         .expect("delete provider account");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
         .await
@@ -210,7 +216,7 @@ async fn attempts_should_keep_their_own_account_snapshots() {
         .await
         .expect("delete provider accounts");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let detail = repository
         .usage_record_detail("req_snap_ab")
         .await
@@ -332,14 +338,14 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
         .await
         .expect("delete provider accounts");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let errors = repository
         .list_ops_errors(OpsErrorQuery {
             range: range_around(started_at),
             filter: OpsErrorFilter::default(),
             cursor: None,
-            page: ObservabilityPageNumber::new(1).expect("page"),
             page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("list ops errors after deletion");
@@ -432,7 +438,7 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
         .await
         .expect("delete provider accounts");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -504,7 +510,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
         .expect("insert legacy request without live account");
     finalize_request(&database.pool, "req_snap_legacy", started_at).await;
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -523,6 +529,66 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
         Some(&"acct_legacy_deleted")
     );
 
+    database.close().await;
+}
+
+#[tokio::test]
+async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
+    let Some(database) = TestDatabase::create("snapshot_diagnostics_latest_email").await else {
+        return;
+    };
+    let started_at = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_snapshot_history",
+        "Older Name",
+        Some("history@example.invalid"),
+        "oauth",
+        started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    store
+        .insert_model_request_with_first_attempt(
+            new_request("req_snapshot_history_old", started_at),
+            attempt("req_snapshot_history_old", 1, "acct_snapshot_history"),
+        )
+        .await
+        .expect("insert older account snapshot");
+    finalize_request(&database.pool, "req_snapshot_history_old", started_at).await;
+    sqlx::query(
+        "update provider_accounts
+         set name = 'Newer Name', email = null, updated_at = now()
+         where id = 'acct_snapshot_history'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("update account snapshot source");
+    store
+        .insert_model_request_with_first_attempt(
+            new_request(
+                "req_snapshot_history_new",
+                started_at + chrono::Duration::seconds(1),
+            ),
+            attempt("req_snapshot_history_new", 1, "acct_snapshot_history"),
+        )
+        .await
+        .expect("insert newer account snapshot");
+    finalize_request(&database.pool, "req_snapshot_history_new", started_at).await;
+
+    let diagnostics = observability_repository(&database.pool)
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+        )
+        .await
+        .expect("account diagnostics");
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].key, "acct_snapshot_history");
+    assert_eq!(diagnostics[0].name, "history@example.invalid");
+    assert_eq!(diagnostics[0].request_count, 2);
     database.close().await;
 }
 
@@ -570,7 +636,7 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
     .await
     .expect("mark request failed");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -628,7 +694,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         .await
         .expect("set request b latency");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -695,7 +761,7 @@ async fn renaming_account_should_not_rewrite_historical_snapshots() {
     .await
     .expect("rename provider account");
 
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
         .await
@@ -765,8 +831,8 @@ fn usage_query(started_at: DateTime<Utc>, filter: UsageRecordFilter) -> UsageRec
         range: range_around(started_at),
         filter,
         cursor: None,
-        page: ObservabilityPageNumber::new(1).expect("page"),
         page_size: ObservabilityPageSize::new(10).expect("page size"),
+        include_total: true,
     }
 }
 

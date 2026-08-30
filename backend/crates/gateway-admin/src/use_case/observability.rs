@@ -1,9 +1,10 @@
 //! 观测查询、趋势、费用覆盖与健康阈值规则。
 
 use std::{
-    collections::{BTreeMap, btree_map::Entry},
+    collections::{BTreeMap, HashMap, btree_map::Entry},
     str::FromStr,
     sync::Arc,
+    time::{Duration as StdDuration, Instant},
 };
 
 use async_trait::async_trait;
@@ -39,6 +40,58 @@ const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
 const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
 const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
 const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 99.0;
+const DASHBOARD_QUERY_BUCKET_SECONDS: i64 = 2;
+const DASHBOARD_QUERY_CACHE_RETENTION: StdDuration = StdDuration::from_secs(2);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DashboardQueryKey {
+    start: DateTime<Utc>,
+    end_bucket: i64,
+}
+
+impl DashboardQueryKey {
+    fn new(range: TimeRange) -> Self {
+        Self {
+            start: range.start,
+            end_bucket: range
+                .end
+                .timestamp()
+                .div_euclid(DASHBOARD_QUERY_BUCKET_SECONDS),
+        }
+    }
+}
+
+struct DashboardQueryEntry {
+    created_at: Instant,
+    result: Arc<tokio::sync::OnceCell<Result<DashboardResult, AdminError>>>,
+}
+
+#[derive(Default)]
+struct DashboardQueryCache {
+    entries: tokio::sync::Mutex<HashMap<DashboardQueryKey, DashboardQueryEntry>>,
+}
+
+impl DashboardQueryCache {
+    async fn result_cell(
+        &self,
+        key: DashboardQueryKey,
+    ) -> Arc<tokio::sync::OnceCell<Result<DashboardResult, AdminError>>> {
+        let now = Instant::now();
+        let mut entries = self.entries.lock().await;
+        entries.retain(|_, entry| {
+            now.duration_since(entry.created_at) < DASHBOARD_QUERY_CACHE_RETENTION
+        });
+        Arc::clone(
+            &entries
+                .entry(key)
+                .or_insert_with(|| DashboardQueryEntry {
+                    created_at: now,
+                    result: Arc::new(tokio::sync::OnceCell::new()),
+                })
+                .result,
+        )
+    }
+}
 
 /// API 消费的观测控制面服务。
 #[async_trait]
@@ -75,6 +128,7 @@ pub(crate) struct DefaultObservabilityService {
     store: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
+    dashboard_queries: DashboardQueryCache,
 }
 
 impl DefaultObservabilityService {
@@ -88,16 +142,13 @@ impl DefaultObservabilityService {
             store,
             settings,
             providers,
+            dashboard_queries: DashboardQueryCache::default(),
         }
     }
-}
 
-#[async_trait]
-impl ObservabilityService for DefaultObservabilityService {
-    async fn dashboard_summary(
+    async fn load_dashboard_summary(
         &self,
         range: TimeRange,
-        kind: TrendKind,
     ) -> Result<DashboardResult, AdminError> {
         let observed_at = Utc::now();
         let (mut observation, settings, runtime_slots) = futures::try_join!(
@@ -106,7 +157,7 @@ impl ObservabilityService for DefaultObservabilityService {
             self.store.dashboard_runtime_slots(observed_at),
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
-        self.enrich_billing(&mut observation.recent_requests);
+        self.enrich_list_billing(&mut observation.recent_requests);
         self.enrich_dashboard_quotas(&mut observation.account_usage)
             .await;
         let today_start = china_day_start(observation.range.end);
@@ -119,11 +170,18 @@ impl ObservabilityService for DefaultObservabilityService {
             observation.totals.cached_tokens,
             observation.totals.input_tokens,
         );
-        let average_first_token_latency_ms = average(
-            observation.requests.first_token_latency_sum_ms,
-            observation.requests.first_token_latency_count,
-        );
-        let trend = trend(kind, observation.trend.clone())?;
+        let (first_token_latency_sum_ms, first_token_latency_count) = observation
+            .trend
+            .iter()
+            .fold((0_u64, 0_u64), |(sum, count), point| {
+                (
+                    sum.saturating_add(point.metrics.first_token_latency_sum_ms),
+                    count.saturating_add(point.metrics.first_token_latency_count),
+                )
+            });
+        let average_first_token_latency_ms =
+            average(first_token_latency_sum_ms, first_token_latency_count);
+        let trend = trend(TrendKind::Usage, observation.trend.clone())?;
         let health_timeline = health_timeline_at(&observation.trend, Utc::now());
         let wire_profiles = self.providers.dashboard_wire_profiles();
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
@@ -161,6 +219,26 @@ impl ObservabilityService for DefaultObservabilityService {
             wire_profiles,
         })
     }
+}
+
+#[async_trait]
+impl ObservabilityService for DefaultObservabilityService {
+    async fn dashboard_summary(
+        &self,
+        range: TimeRange,
+        kind: TrendKind,
+    ) -> Result<DashboardResult, AdminError> {
+        let cell = self
+            .dashboard_queries
+            .result_cell(DashboardQueryKey::new(range))
+            .await;
+        let mut result = cell
+            .get_or_init(|| self.load_dashboard_summary(range))
+            .await
+            .clone()?;
+        result.trend = trend(kind, result.observation.trend.clone())?;
+        Ok(result)
+    }
 
     async fn dashboard_trend(
         &self,
@@ -181,7 +259,7 @@ impl ObservabilityService for DefaultObservabilityService {
             .list_usage_records(query)
             .await
             .map_err(|error| map_store_error(error, "usage records"))?;
-        self.enrich_billing(&mut page.items);
+        self.enrich_list_billing(&mut page.items);
         Ok(page)
     }
 
@@ -194,7 +272,7 @@ impl ObservabilityService for DefaultObservabilityService {
             .usage_record_detail(request_id)
             .await
             .map_err(|error| map_store_error(error, "usage record"))?;
-        self.enrich_billing(std::slice::from_mut(&mut detail.request));
+        self.enrich_detail_billing(std::slice::from_mut(&mut detail.request));
         Ok(detail)
     }
 
@@ -659,7 +737,39 @@ impl DefaultObservabilityService {
 
     /// 逐条尽力把可校验的总额升级为完整分解；单条脏数据（非法 Provider kind、
     /// 不支持的来源或费用规则失败）只保留该条已存的总额，不影响整页返回。
-    fn enrich_billing(&self, records: &mut [crate::model::observability::UsageRecord]) {
+    fn enrich_list_billing(&self, records: &mut [crate::model::observability::UsageListRecord]) {
+        for record in records {
+            let Some(UsageBilling::Total { source, total }) = record.billing.as_ref() else {
+                continue;
+            };
+            if !matches!(source.as_str(), "calculated" | "provider_reported") {
+                continue;
+            }
+            let (Some(provider), Some(upstream_model_id)) = (
+                record.provider_kind.as_deref(),
+                record.upstream_model_id.as_ref(),
+            ) else {
+                continue;
+            };
+            let Ok(provider_kind) = ProviderKind::new(provider.to_owned()) else {
+                continue;
+            };
+            let input = ProviderBillingInput {
+                upstream_model_id: upstream_model_id.clone(),
+                service_tier: record.service_tier.clone(),
+                input_tokens: record.input_tokens,
+                output_tokens: record.output_tokens,
+                cached_tokens: record.cached_tokens,
+                cache_write_tokens: record.cache_write_tokens,
+                total: total.clone(),
+            };
+            if let Ok(Some(breakdown)) = self.providers.calculated_billing(&provider_kind, &input) {
+                record.billing = Some(UsageBilling::Calculated(Box::new(breakdown)));
+            }
+        }
+    }
+
+    fn enrich_detail_billing(&self, records: &mut [crate::model::observability::UsageRecord]) {
         for record in records {
             let Some(UsageBilling::Total { source, total }) = record.billing.as_ref() else {
                 continue;

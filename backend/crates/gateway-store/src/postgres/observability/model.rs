@@ -43,23 +43,6 @@ impl ObservabilityPageSize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ObservabilityPageNumber(u32);
-
-impl ObservabilityPageNumber {
-    pub fn new(value: u32) -> StoreResult<Self> {
-        if value == 0 {
-            return Err(invalid("page number must be positive"));
-        }
-        Ok(Self(value))
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservabilityCursor {
     pub observed_at: DateTime<Utc>,
@@ -137,8 +120,8 @@ pub struct UsageRecordQuery {
     pub range: ObservabilityRange,
     pub filter: UsageRecordFilter,
     pub cursor: Option<ObservabilityCursor>,
-    pub page: ObservabilityPageNumber,
     pub page_size: ObservabilityPageSize,
+    pub include_total: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -201,8 +184,8 @@ pub struct OpsErrorQuery {
     pub range: ObservabilityRange,
     pub filter: OpsErrorFilter,
     pub cursor: Option<ObservabilityCursor>,
-    pub page: ObservabilityPageNumber,
     pub page_size: ObservabilityPageSize,
+    pub include_total: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -493,13 +476,59 @@ pub struct DashboardTotals {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardObservation {
     pub range: ObservabilityRange,
-    pub requests: RequestMetrics,
-    pub attempts: AttemptMetrics,
     pub totals: DashboardTotals,
     pub provider_accounts: ProviderAccountMetrics,
     pub trend: Vec<RequestMetricPoint>,
     pub account_usage: Vec<ProviderAccountUsageObservation>,
-    pub recent_requests: Vec<UsageRecord>,
+    pub recent_requests: Vec<UsageListRecord>,
+}
+
+/// 使用记录列表所需的窄投影；完整执行、路由和客户端详情按 ID 单独读取。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageListRecord {
+    pub id: String,
+    pub endpoint: String,
+    pub client_transport: String,
+    pub requested_model_id: Option<String>,
+    pub provider_kind: Option<String>,
+    pub provider_account_ref: Option<String>,
+    pub provider_account_name: Option<String>,
+    pub provider_account_email: Option<String>,
+    pub provider_account_authentication_kind: Option<String>,
+    pub upstream_model_id: Option<String>,
+    pub upstream_transport: Option<String>,
+    pub service_tier: Option<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub image_input_tokens: Option<u64>,
+    pub image_output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_source: String,
+    pub cost_amount: Option<DecimalAmount>,
+    pub cost_currency: Option<String>,
+    pub transport_decision_wait_ms: Option<u64>,
+    pub connect_ms: Option<u64>,
+    pub headers_ms: Option<u64>,
+    pub first_event_ms: Option<u64>,
+    pub first_reasoning_ms: Option<u64>,
+    pub first_text_ms: Option<u64>,
+    pub first_token_ms: Option<u64>,
+    pub provider_processing_ms: Option<u64>,
+    pub latency_ms: Option<u64>,
+    pub admission_decision_ms: Option<u64>,
+    pub account_selection_wait_ms: Option<u64>,
+    pub capacity_used_slots: Option<u64>,
+    pub capacity_total_slots: Option<u64>,
+    pub client_ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_preset: Option<String>,
+    pub subagent_kind: Option<String>,
+    pub compact: bool,
+    pub started_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -579,8 +608,8 @@ pub struct UsageRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRecordPage {
-    pub items: Vec<UsageRecord>,
-    pub total: u64,
+    pub items: Vec<UsageListRecord>,
+    pub total: Option<u64>,
     pub next_cursor: Option<ObservabilityCursor>,
 }
 
@@ -694,7 +723,7 @@ pub struct OpsErrorRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsErrorPage {
     pub items: Vec<OpsErrorRecord>,
-    pub total: u64,
+    pub total: Option<u64>,
     pub next_cursor: Option<ObservabilityCursor>,
 }
 

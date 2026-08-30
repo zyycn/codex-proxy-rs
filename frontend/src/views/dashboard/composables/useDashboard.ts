@@ -8,7 +8,6 @@ import { getDashboardSummary, getDashboardTrend } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { formatCompactNumber, formatInteger } from '@/utils/number'
-import { normalizeUsageRecord } from '@/views/usage/utils/records'
 
 export function useDashboard() {
   const activeTrendKind = shallowRef(normalizeDashboardTrendKind('usage'))
@@ -215,7 +214,7 @@ export function dashboardSnapshotView(summary: DashboardSummary | null) {
     healthTimeline: summary?.healthTimeline ?? emptyHealthTimeline,
     accountUsage: (summary?.accountUsage ?? []).map(accountUsageItem),
     wireProfiles: summary?.wireProfiles ?? [],
-    usageRecords: (summary?.usageRecords ?? []).map(normalizeUsageRecord),
+    usageRecords: summary?.usageRecords ?? [],
     poolSummary: summary?.poolSummary ?? null,
     capacityInfo: summary?.capacityInfo ?? emptyCapacityInfo,
     rotationStrategy: summary?.rotationStrategy ?? null,

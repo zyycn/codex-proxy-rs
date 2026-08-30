@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    num::NonZeroU32,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -19,13 +18,15 @@ use gateway_core::{
     },
 };
 use gateway_store::postgres::{
-    DiagnosticDimension, ObservabilityPageNumber, ObservabilityPageSize, ObservabilityRange,
-    ObservabilityRepository, OpsErrorFilter, OpsErrorQuery, PgAdminObservabilityStore,
-    PgObservabilityRepository, ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
+    DiagnosticDimension, ObservabilityPageSize, ObservabilityRange, ObservabilityRepository,
+    OpsErrorFilter, OpsErrorQuery, PgAdminObservabilityStore, PgObservabilityRepository,
+    ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
 
-use super::TestDatabase;
+use super::{
+    TestDatabase, admin_observability_store, observability_query_budget, observability_repository,
+};
 
 #[test]
 fn observability_range_rejects_empty_window() {
@@ -96,7 +97,7 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
     .expect("persist opaque response IDs");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
 
     let records = repository
         .list_usage_records(UsageRecordQuery {
@@ -106,21 +107,113 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
                 ..UsageRecordFilter::default()
             },
             cursor: None,
-            page: ObservabilityPageNumber::new(1).expect("page"),
             page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("filter opaque response ID");
-    assert_eq!(records.total, 1);
+    assert_eq!(records.total, Some(1));
+    assert_eq!(records.items[0].id, "req_observe_success");
+    let detail = repository
+        .usage_record_detail("req_observe_success")
+        .await
+        .expect("usage detail with opaque response IDs");
     assert_eq!(
-        records.items[0].client_response_id.as_deref(),
+        detail.request.client_response_id.as_deref(),
         Some(response_id.as_str())
     );
     assert_eq!(
-        records.items[0].upstream_response_id.as_deref(),
+        detail.request.upstream_response_id.as_deref(),
         Some(response_id.as_str())
     );
 
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_page_should_skip_exact_count_when_total_is_not_requested() {
+    let Some(database) = TestDatabase::create("usage_page_without_total").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    let page = observability_repository(&database.pool)
+        .list_usage_records(UsageRecordQuery {
+            range,
+            filter: UsageRecordFilter::default(),
+            cursor: None,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: false,
+        })
+        .await
+        .expect("usage page without total");
+
+    assert_eq!(page.total, None);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_search_should_match_literal_prefix_instead_of_substring() {
+    let Some(database) = TestDatabase::create("usage_literal_prefix_search").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    let page = observability_repository(&database.pool)
+        .list_usage_records(UsageRecordQuery {
+            range,
+            filter: UsageRecordFilter {
+                search: Some("observe_success".to_owned()),
+                ..UsageRecordFilter::default()
+            },
+            cursor: None,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: true,
+        })
+        .await
+        .expect("usage substring search");
+
+    assert_eq!(page.total, Some(0));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn ops_search_should_treat_sql_wildcards_as_literals() {
+    let Some(database) = TestDatabase::create("ops_literal_wildcard_search").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    let page = observability_repository(&database.pool)
+        .list_ops_errors(OpsErrorQuery {
+            range,
+            filter: OpsErrorFilter {
+                search: Some("req%".to_owned()),
+                ..OpsErrorFilter::default()
+            },
+            cursor: None,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: true,
+        })
+        .await
+        .expect("ops literal wildcard search");
+
+    assert_eq!(page.total, Some(0));
     database.close().await;
 }
 
@@ -161,7 +254,7 @@ async fn dashboard_account_metrics_should_partition_account_statuses() {
     .execute(&database.pool)
     .await
     .expect("seed account metric states");
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("dashboard range");
 
@@ -246,8 +339,11 @@ async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligibl
         test_cooldown("acct_metrics_unknown", 6),
         test_cooldown("acct_metrics_stale_cooldown", 3),
     ]);
-    let repository =
-        PgObservabilityRepository::new(database.pool.clone(), Some(Arc::new(cooldowns)));
+    let repository = PgObservabilityRepository::new(
+        database.pool.clone(),
+        Some(Arc::new(cooldowns)),
+        observability_query_budget(),
+    );
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("dashboard range");
 
@@ -371,7 +467,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
         .expect("seed calculated billing facts");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
 
     let facts = repository
         .usage_calculated_billing_facts(range, UsageRecordFilter::default())
@@ -385,7 +481,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
     assert_eq!(facts[0].service_tier.as_deref(), Some("priority"));
     assert_eq!(facts[0].total.amount.as_str(), "1.25");
 
-    let store = PgAdminObservabilityStore::new(database.pool.clone(), None, None);
+    let store = admin_observability_store(&database.pool);
     let facts = store
         .usage_calculated_billing_facts(
             admin_observability::TimeRange::new(range.start, range.end)
@@ -413,24 +509,37 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     let range =
         admin_observability::TimeRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
             .expect("admin observability range");
-    let store = PgAdminObservabilityStore::new(database.pool.clone(), None, None);
+    let store = admin_observability_store(&database.pool);
 
     let dashboard = store
         .dashboard_summary(range, now)
         .await
         .expect("admin dashboard summary");
     assert_eq!(dashboard.range, range);
-    assert_eq!(dashboard.requests.request_count, 3);
-    assert_eq!(dashboard.requests.success_count, 2);
-    assert_eq!(dashboard.requests.failure_count, 1);
-    assert_eq!(dashboard.requests.first_token_latency_sum_ms, 120);
-    assert_eq!(dashboard.requests.latency_sum_ms, 900);
-    assert_eq!(dashboard.requests.min_latency_ms, Some(900));
-    assert_eq!(dashboard.requests.max_latency_ms, Some(900));
-    assert_eq!(dashboard.attempts.attempt_count, 4);
-    assert_eq!(dashboard.attempts.cost_coverage.provider_reported_count, 1);
-    assert_eq!(dashboard.attempts.cost_coverage.unavailable_count, 0);
-    assert_eq!(dashboard.attempts.costs[0].amount.as_str(), "1.25");
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.request_count)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.first_token_latency_sum_ms)
+            .sum::<u64>(),
+        120
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.latency_sum_ms)
+            .sum::<u64>(),
+        900
+    );
     assert_eq!(dashboard.provider_accounts.total, 1);
     assert_eq!(dashboard.account_usage[0].request_count, 1);
     assert_eq!(dashboard.account_usage[0].request_buckets.len(), 2);
@@ -447,10 +556,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         dashboard.recent_requests[0].service_tier.as_deref(),
         Some("priority")
     );
-    assert_eq!(
-        dashboard.recent_requests[0].outcome,
-        admin_observability::RequestOutcome::Succeeded,
-    );
+    assert_eq!(dashboard.recent_requests[0].id, "req_observe_success");
     assert_eq!(
         dashboard.recent_requests[0]
             .cost_amount
@@ -477,6 +583,14 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             .map(|point| point.metrics.failure_count)
             .sum::<u64>(),
         1,
+    );
+    assert!(
+        dashboard
+            .trend
+            .iter()
+            .chain(&dashboard_trend)
+            .all(|point| point.costs.is_empty()),
+        "Dashboard 趋势不应触发未展示的成本聚合",
     );
 
     let trend = store
@@ -512,12 +626,12 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             range,
             filter: admin_observability::UsageFilter::default(),
             cursor: None,
-            page: admin_page(1),
             page_size: PageSize::new(1).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("first usage page");
-    assert_eq!(first_page.total, 1);
+    assert_eq!(first_page.total, Some(1));
     assert_eq!(first_page.items.len(), 1);
     assert!(first_page.next_cursor.is_none());
     assert_eq!(
@@ -544,23 +658,14 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 search: Some("req_observe_success".to_owned()),
             },
             cursor: None,
-            page: admin_page(1),
             page_size: PageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("fully filtered usage page");
-    assert_eq!(filtered.total, 1);
-    assert_eq!(filtered.items[0].routing_scope, "groups");
-    assert_eq!(filtered.items[0].routing_group_refs, ["grp_history"]);
-    assert_eq!(
-        filtered.items[0].routing_group_names_snapshot,
-        ["Historical group"]
-    );
+    assert_eq!(filtered.total, Some(1));
+    assert_eq!(filtered.items[0].id, "req_observe_success");
     assert_eq!(filtered.items[0].service_tier.as_deref(), Some("priority"));
-    assert_eq!(
-        filtered.items[0].upstream_request_id.as_deref(),
-        Some("upstream_req_success")
-    );
 
     let other_outcome = store
         .list_usage_records(admin_observability::UsageQuery {
@@ -573,12 +678,12 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 ..admin_observability::UsageFilter::default()
             },
             cursor: None,
-            page: admin_page(1),
             page_size: PageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("other outcome filter should reach PostgreSQL");
-    assert_eq!(other_outcome.total, 0);
+    assert_eq!(other_outcome.total, Some(0));
     assert!(other_outcome.items.is_empty());
 
     let detail = store
@@ -595,6 +700,10 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
     assert_eq!(
         detail.request.routing_group_names_snapshot,
         ["Historical group"]
+    );
+    assert_eq!(
+        detail.request.upstream_request_id.as_deref(),
+        Some("upstream_req_success")
     );
     assert_eq!(detail.attempts.len(), 1);
     assert_eq!(
@@ -645,16 +754,16 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 model: Some("upstream-model".to_owned()),
                 failure_kind: Some("rate_limited".to_owned()),
                 status_code: Some(429),
-                search: Some("limited".to_owned()),
+                search: Some("req_observe_failed".to_owned()),
                 ..admin_observability::OpsErrorFilter::default()
             },
             cursor: None,
-            page: admin_page(1),
             page_size: PageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("admin ops errors");
-    assert_eq!(errors.total, 2);
+    assert_eq!(errors.total, Some(2));
     assert!(errors.items.iter().all(|item| item.occurred_at <= now));
 
     for filter in [
@@ -688,19 +797,15 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 range,
                 filter,
                 cursor: None,
-                page: admin_page(1),
                 page_size: PageSize::new(10).expect("page size"),
+                include_total: true,
             })
             .await
             .expect("fully forwarded ops filter");
-        assert_eq!(page.total, 0);
+        assert_eq!(page.total, Some(0));
     }
 
     database.close().await;
-}
-
-fn admin_page(value: u32) -> admin_observability::PageNumber {
-    admin_observability::PageNumber::new(NonZeroU32::new(value).expect("positive page"))
 }
 
 #[tokio::test]
@@ -723,13 +828,20 @@ async fn dashboard_summary_totals_include_history_outside_selected_range() {
     .expect("move historical request outside selected range");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
 
     let dashboard = repository
         .dashboard_summary(range, now)
         .await
         .expect("dashboard summary");
-    assert_eq!(dashboard.requests.request_count, 2);
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.request_count)
+            .sum::<u64>(),
+        2
+    );
     assert!(dashboard.account_usage.is_empty());
 
     let explicit_account_usage = repository
@@ -774,51 +886,92 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("seed observability facts");
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
-    let repository = PgObservabilityRepository::new(database.pool.clone(), None);
+    let repository = observability_repository(&database.pool);
 
     let dashboard = repository
         .dashboard_summary(range, now)
         .await
         .expect("dashboard summary");
-    assert_eq!(dashboard.requests.request_count, 3);
-    assert_eq!(dashboard.requests.success_count, 2);
-    assert_eq!(dashboard.requests.failure_count, 1);
-    assert_eq!(dashboard.requests.caller_error_count, 0);
-    assert_eq!(dashboard.requests.cache_eligible_request_count, 1);
-    assert_eq!(dashboard.requests.cache_hit_request_count, 1);
-    assert_eq!(dashboard.requests.cache_hit_request_rate(), Some(1.0));
     assert_eq!(
         dashboard
-            .requests
-            .latency_percentiles
-            .p50_ms
+            .trend
+            .iter()
+            .map(|point| point.metrics.request_count)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.success_count)
+            .sum::<u64>(),
+        2
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.failure_count)
+            .sum::<u64>(),
+        1
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.caller_error_count)
+            .sum::<u64>(),
+        0
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.cache_eligible_request_count)
+            .sum::<u64>(),
+        1
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .map(|point| point.metrics.cache_hit_request_count)
+            .sum::<u64>(),
+        1
+    );
+    assert_eq!(
+        dashboard
+            .trend
+            .iter()
+            .find_map(|point| point.metrics.latency_percentiles.p50_ms)
             .expect("latency p50")
             .as_f64(),
         900.0
     );
     assert_eq!(
         dashboard
-            .requests
-            .latency_percentiles
-            .p95_ms
+            .trend
+            .iter()
+            .find_map(|point| point.metrics.latency_percentiles.p95_ms)
             .expect("latency p95")
             .as_f64(),
         900.0
     );
     assert_eq!(
         dashboard
-            .requests
-            .latency_percentiles
-            .p99_ms
+            .trend
+            .iter()
+            .find_map(|point| point.metrics.latency_percentiles.p99_ms)
             .expect("latency p99")
             .as_f64(),
         900.0
     );
     assert_eq!(
         dashboard
-            .requests
-            .first_token_latency_percentiles
-            .p50_ms
+            .trend
+            .iter()
+            .find_map(|point| point.metrics.first_token_latency_percentiles.p50_ms)
             .expect("first token p50")
             .as_f64(),
         120.0
@@ -900,12 +1053,12 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
                 ..UsageRecordFilter::default()
             },
             cursor: None,
-            page: ObservabilityPageNumber::new(1).expect("page"),
             page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("usage records");
-    assert_eq!(usage_page.total, 1);
+    assert_eq!(usage_page.total, Some(1));
     let successful_image = usage_page
         .items
         .iter()
@@ -913,25 +1066,27 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("successful image usage record");
     assert_eq!(
         (
-            successful_image.websocket_pool.as_deref(),
             successful_image.service_tier.as_deref(),
             successful_image
                 .provider_account_authentication_kind
                 .as_deref(),
             successful_image.image_input_tokens,
             successful_image.image_output_tokens,
-            successful_image.image_generation_requested,
-            successful_image.image_generation_succeeded,
         ),
+        (Some("priority"), Some("oauth"), Some(31), Some(9))
+    );
+
+    let successful_detail = repository
+        .usage_record_detail("req_observe_success")
+        .await
+        .expect("successful usage detail");
+    assert_eq!(
         (
-            Some("reuse"),
-            Some("priority"),
-            Some("oauth"),
-            Some(31),
-            Some(9),
-            true,
-            Some(true)
-        )
+            successful_detail.request.websocket_pool.as_deref(),
+            successful_detail.request.image_generation_requested,
+            successful_detail.request.image_generation_succeeded,
+        ),
+        (Some("reuse"), true, Some(true))
     );
 
     assert!(
@@ -1003,12 +1158,12 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
             range,
             filter: OpsErrorFilter::default(),
             cursor: None,
-            page: ObservabilityPageNumber::new(1).expect("page"),
             page_size: ObservabilityPageSize::new(10).expect("page size"),
+            include_total: true,
         })
         .await
         .expect("ops errors");
-    assert_eq!(errors.total, 2);
+    assert_eq!(errors.total, Some(2));
     let request_error = errors
         .items
         .iter()

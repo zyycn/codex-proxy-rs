@@ -1,20 +1,18 @@
 import type { Ref } from 'vue'
-import type { UsageViewModel } from '../utils/records'
+import type { UsageDisplayRecord } from '../utils/records'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
 import { watchDebounced } from '@vueuse/core'
-import { clamp } from 'es-toolkit'
 
-import { computed, onMounted, shallowRef, watch } from 'vue'
+import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import {
+  createUsageRecordsPager,
   getUsageRecordInsightsDiagnostics,
   getUsageRecordInsightsOverview,
-  getUsageRecords,
   getUsageRecordSummary,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 
 import { errorMessage, withMinimumDuration } from '@/utils/async'
-import { normalizeUsageRecord } from '../utils/records'
 
 interface UseUsageRecordsTableOptions {
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
@@ -28,13 +26,20 @@ interface UsageLoadOptions {
   background?: boolean
 }
 
+interface UsageTableParams {
+  startTime: string
+  endTime: string
+  provider?: string
+  search?: string
+}
+
 export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
-  const records = shallowRef<UsageViewModel[]>([])
+  const records = shallowRef<UsageDisplayRecord[]>([])
   const summary = shallowRef(emptySummary())
   const insights = shallowRef(emptyInsights())
-  const page = shallowRef(1)
+  const currentPage = shallowRef(1)
   const pageSize = shallowRef(10)
   const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
@@ -44,6 +49,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
+  const pager = createUsageRecordsPager()
   let loadRequestId = 0
   let diagnosticRequestId = 0
   const scopedParams = () => ({
@@ -54,10 +60,30 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     search: searchQuery.value || undefined,
   })
   const usagePagination = computed(() => ({
-    page: page.value,
+    currentPage: currentPage.value,
     pageSize: pageSize.value,
     total: totalRecords.value,
   }))
+
+  function resetPagination() {
+    currentPage.value = 1
+    totalRecords.value = 0
+  }
+
+  async function loadTablePage(
+    params: UsageTableParams,
+    targetPage: number,
+    requestId: number,
+  ) {
+    const result = await pager.load({
+      currentPage: targetPage,
+      pageSize: pageSize.value,
+      ...params,
+    })
+    if (requestId !== loadRequestId)
+      return null
+    return { result, page: result.currentPage }
+  }
 
   async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {
     const { scope = 'all', background = false } = loadOptions
@@ -81,17 +107,15 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
       const globalParams = scopedParams()
       if (scope === 'all') {
+        resetPagination()
         tableTimeRangeParams.value = { ...globalParams }
       }
       const tableParams = {
         ...tableTimeRangeParams.value,
         ...filterParams(),
       }
-      const resultPromise = getUsageRecords({
-        page: page.value,
-        pageSize: pageSize.value,
-        ...tableParams,
-      })
+      const requestedPage = currentPage.value
+      const resultPromise = loadTablePage(tableParams, requestedPage, requestId)
       const analyticsPromise
         = scope === 'all'
           ? loadUsageAnalytics(globalParams)
@@ -99,11 +123,12 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
               summary: summary.value,
               insights: insights.value,
             })
-      const [result, nextAnalytics] = await Promise.all([resultPromise, analyticsPromise])
-      if (requestId !== loadRequestId)
+      const [tableResult, nextAnalytics] = await Promise.all([resultPromise, analyticsPromise])
+      if (requestId !== loadRequestId || tableResult == null)
         return
+      const { result, page: resultPage } = tableResult
 
-      records.value = result.items.map(normalizeUsageRecord)
+      records.value = result.items
       summary.value = nextAnalytics.summary
       insights.value = {
         ...nextAnalytics.insights,
@@ -112,14 +137,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
             ? nextAnalytics.insights.diagnostics
             : insights.value.diagnostics,
       }
-      pageSize.value = result.page.pageSize
-      totalRecords.value = result.page.total
-      page.value = result.page.page
-
-      if (records.value.length === 0 && totalRecords.value > 0 && page.value > 1) {
-        page.value = clamp(result.page.totalPages, 1, Number.POSITIVE_INFINITY)
-        await loadUsageRecords({ scope, background })
-      }
+      totalRecords.value = result.total
+      currentPage.value = resultPage
     }
     catch (error: unknown) {
       if (requestId !== loadRequestId)
@@ -180,6 +199,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     refreshingList.value = true
     try {
       tableTimeRangeParams.value = options.latestTimeRangeParams()
+      resetPagination()
       await withMinimumDuration(() => loadUsageRecords({ scope: 'table' }))
     }
     finally {
@@ -188,13 +208,13 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   }
 
   function handlePageChange(nextPage: number) {
-    page.value = nextPage
+    currentPage.value = nextPage
     void loadUsageRecords({ scope: 'table' })
   }
 
   function handlePageSizeChange(nextPageSize: number) {
     pageSize.value = nextPageSize
-    page.value = 1
+    resetPagination()
     void loadUsageRecords({ scope: 'table' })
   }
 
@@ -207,21 +227,25 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
 
   watch(providerQuery, () => {
-    page.value = 1
     void loadUsageRecords({ background: true })
   })
 
   watchDebounced(
     searchQuery,
     () => {
-      page.value = 1
+      resetPagination()
       void loadUsageRecords({ scope: 'table' })
     },
     { debounce: 250 },
   )
 
+  onScopeDispose(() => {
+    loadRequestId += 1
+    diagnosticRequestId += 1
+  })
+
   return {
-    page,
+    currentPage,
     pageSize,
     searchQuery,
     providerQuery,

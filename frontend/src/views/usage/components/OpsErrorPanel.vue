@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { UsageTimeRangeParams } from '../composables/useUsageTimeRange'
-import type { getOpsErrors } from '@/api'
+import type { OpsError } from '@/api'
 
 import { Eye, RefreshCw, Search } from '@lucide/vue'
 import { shallowRef, toRef } from 'vue'
@@ -31,21 +31,19 @@ const {
   refresh,
 } = useOpsErrorsTable(toRef(props, 'timeRangeParams'))
 
-const selectedRecord = shallowRef<Awaited<ReturnType<typeof getOpsErrors>>['items'][number] | null>(
-  null,
-)
+const selectedRecord = shallowRef<OpsError | null>(null)
 const detailOpen = shallowRef(false)
 
-function showDetail(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
+function showDetail(record: OpsError) {
   selectedRecord.value = record
   detailOpen.value = true
 }
 
-function failureClassText(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
+function failureClassText(record: OpsError) {
   return presentOpsError(record).failureClassLabel
 }
 
-function errorSummary(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number]) {
+function errorSummary(record: OpsError) {
   return presentOpsError(record).summary
 }
 </script>
@@ -61,7 +59,7 @@ function errorSummary(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][
         <div class="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:items-center lg:gap-3">
           <BaseInput
             v-model="searchQuery"
-            placeholder="搜索消息或精确请求 ID"
+            placeholder="事件、请求、Key 或账号 ID 前缀"
             class="min-w-0 sm:col-span-2 lg:min-w-64 lg:flex-1 lg:max-w-96"
           >
             <template #prefix>

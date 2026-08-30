@@ -15,7 +15,7 @@ pub struct CursorWire {
 #[serde(rename_all = "camelCase")]
 pub struct PageData<T> {
     pub items: Vec<T>,
-    pub page: PageMeta,
+    pub total: Option<u64>,
     pub next_cursor: Option<String>,
 }
 
@@ -77,7 +77,39 @@ pub struct BillingView {
     pub multiplier_display: String,
 }
 
-/// 单条逻辑请求展示。
+/// 使用记录表格的窄展示。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageListRecordView {
+    pub id: String,
+    pub provider: Option<String>,
+    pub authentication_kind: Option<String>,
+    pub account_id: Option<String>,
+    pub account_email: Option<String>,
+    pub account_name: Option<String>,
+    pub route: String,
+    pub model: Option<String>,
+    pub requested_model: Option<String>,
+    pub upstream_model: Option<String>,
+    pub service_tier: Option<String>,
+    pub client_transport: String,
+    pub upstream_transport: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_preset: Option<String>,
+    pub subagent_kind: Option<String>,
+    pub compact: bool,
+    pub token_details: TokenDetailsView,
+    pub billing: Option<BillingView>,
+    pub latency_details: UsageLatencyDetailsView,
+    pub first_token_latency_ms: Option<u64>,
+    pub latency_ms: Option<u64>,
+    pub created_at: DateTime<Utc>,
+    pub created_at_display: String,
+    pub client_ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+/// 单条逻辑请求详情展示。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordView {
@@ -526,7 +558,7 @@ pub struct DashboardDataView {
     pub health_timeline: HealthTimelineView,
     pub wire_profiles: Vec<DashboardWireProfileView>,
     pub account_usage: Vec<DashboardAccountUsageView>,
-    pub usage_records: Vec<UsageRecordView>,
+    pub usage_records: Vec<UsageListRecordView>,
     pub pool_summary: DashboardPoolSummaryView,
     pub capacity_info: DashboardCapacityInfoView,
     pub rotation_strategy: String,

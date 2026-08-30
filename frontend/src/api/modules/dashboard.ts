@@ -1,4 +1,4 @@
-import type { UsageRecord } from './usage'
+import type { UsageListRecord } from './usage'
 import request from '../request'
 
 export type DashboardTrendKind = 'usage' | 'latency' | 'errors'
@@ -170,7 +170,7 @@ export interface DashboardSummaryResponse {
   healthTimeline: DashboardHealthTimeline
   wireProfiles: DashboardWireProfile[]
   accountUsage: DashboardAccountUsage[]
-  usageRecords: UsageRecord[]
+  usageRecords: UsageListRecord[]
   poolSummary: DashboardPoolSummary
   capacityInfo: DashboardCapacityInfo
   rotationStrategy: string

@@ -1,9 +1,9 @@
 import type { UsageDisplayRecord } from './utils/records'
-import type { getOpsErrors } from '@/api'
+import type { OpsError } from '@/api'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import { formatProvider } from './utils/format'
 
-type OpsErrorRow = Awaited<ReturnType<typeof getOpsErrors>>['items'][number]
+type OpsErrorRow = OpsError
 
 export const usageRecordColumns = defineTableColumns<UsageDisplayRecord>([
   {

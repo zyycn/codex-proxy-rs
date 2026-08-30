@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { getOpsErrors } from '@/api'
+import type { OpsError } from '@/api'
 
 import { computed } from 'vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
@@ -9,7 +9,7 @@ import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
-  record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number] | null
+  record: OpsError | null
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -46,7 +46,7 @@ function latencyDisplay(value: unknown) {
   return typeof value === 'number' ? `${value} ms` : '—'
 }
 
-function providerKindLabel(record: Awaited<ReturnType<typeof getOpsErrors>>['items'][number] | null) {
+function providerKindLabel(record: OpsError | null) {
   if (!record?.provider)
     return '—'
   return record.authenticationKind

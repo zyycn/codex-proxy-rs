@@ -32,7 +32,7 @@ use gateway_admin::{
         observability::{
             DashboardObservation, DecimalAmount, DiagnosticDimension, DiagnosticObservation,
             OpsError, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail,
-            UsageFilter, UsageOverview, UsagePage, UsageQuery, UsageRecord,
+            UsageFilter, UsageListRecord, UsageOverview, UsagePage, UsageQuery,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -88,7 +88,7 @@ pub(super) struct AdminTestFixture {
     pub services: AdminServices,
     pub auth: Arc<MemoryAuthStore>,
     pub settings: Arc<MemorySettingsStore>,
-    pub usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+    pub usage_records: Arc<Mutex<Vec<UsageListRecord>>>,
     pub usage_detail: Arc<Mutex<Option<UsageDetail>>>,
     pub diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     pub ops_errors: Arc<Mutex<Vec<OpsError>>>,
@@ -661,7 +661,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
 }
 
 struct UnusedStore {
-    usage_records: Arc<Mutex<Vec<UsageRecord>>>,
+    usage_records: Arc<Mutex<Vec<UsageListRecord>>>,
     usage_detail: Arc<Mutex<Option<UsageDetail>>>,
     diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     ops_errors: Arc<Mutex<Vec<OpsError>>>,
@@ -855,10 +855,10 @@ impl ObservabilityStore for UnusedStore {
         Err(unavailable("usage billing facts"))
     }
 
-    async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {
+    async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
         let items = self.usage_records.lock().expect("usage records").clone();
         Ok(UsagePage {
-            total: items.len() as u64,
+            total: query.include_total.then_some(items.len() as u64),
             items,
             next_cursor: None,
         })
@@ -885,10 +885,10 @@ impl ObservabilityStore for UnusedStore {
         Ok(self.diagnostics.lock().expect("diagnostics").clone())
     }
 
-    async fn list_ops_errors(&self, _: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {
+    async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {
         let items = self.ops_errors.lock().expect("ops errors").clone();
         Ok(OpsErrorPage {
-            total: items.len() as u64,
+            total: query.include_total.then_some(items.len() as u64),
             items,
             next_cursor: None,
         })

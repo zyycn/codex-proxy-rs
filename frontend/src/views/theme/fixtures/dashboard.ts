@@ -3,7 +3,7 @@ import type {
   DashboardSummaryResponse,
   DashboardTrendPoint,
 } from '@/api/modules/dashboard'
-import type { UsageRecord } from '@/api/modules/usage'
+import type { UsageListRecord } from '@/api/modules/usage'
 
 interface PreviewUsageRecordOptions {
   id: string
@@ -104,16 +104,13 @@ function previewHealthStatus(index: number): DashboardHealthStatus {
   return 'stable'
 }
 
-function previewUsageRecord(options: PreviewUsageRecordOptions): UsageRecord {
+function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord {
   const totalTokens = options.inputTokens + options.outputTokens
   const reasoningTokens = Math.round(options.outputTokens * 0.32)
   const stream = options.clientTransport !== 'http_json'
 
   return {
     id: options.id,
-    requestId: `req_${options.id}`,
-    clientApiKeyId: 'preview-client-key',
-    kind: 'request.completed',
     provider: options.provider,
     authenticationKind: options.authenticationKind,
     accountId: `account_${options.id}`,
@@ -124,51 +121,11 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageRecord {
     requestedModel: options.model,
     upstreamModel: options.model,
     serviceTier: options.provider === 'openai' ? 'priority' : 'standard',
-    statusCode: 200,
     clientTransport: options.clientTransport,
     upstreamTransport: options.upstreamTransport,
-    protocol: stream ? 'responses' : 'chat_completions',
-    httpVersion: options.upstreamTransport === 'websocket' ? null : 'HTTP/2',
-    clientStatusCode: options.clientTransport === 'websocket' ? null : 200,
-    upstreamStatusCode: options.upstreamTransport === 'websocket' ? null : 200,
-    websocketPool: options.upstreamTransport === 'websocket' ? { kind: 'warm' } : null,
-    imageGenerationRequested: false,
-    imageGenerationSucceeded: null,
-    latencyDetails: {
-      transportDecisionWaitMs: 4,
-      upstreamHeadersMs: Math.max(24, options.firstTokenMs - 36),
-      firstEventMs: options.firstTokenMs,
-      firstReasoningMs: options.firstTokenMs + 18,
-      firstTextMs: options.firstTokenMs + 64,
-      firstTokenMs: options.firstTokenMs,
-      openaiProcessingMs: options.provider === 'openai' ? options.latencyMs - 72 : undefined,
-    },
-    attemptIndex: 0,
-    attemptCount: 1,
-    responseId: `resp_${options.id}`,
-    upstreamRequestId: `up_${options.id}`,
-    latencyMs: options.latencyMs,
-    firstTokenMs: options.firstTokenMs,
-    inputTokens: options.inputTokens,
-    outputTokens: options.outputTokens,
-    cachedTokens: options.cachedTokens,
-    cacheWriteTokens: 0,
-    reasoningTokens,
-    imageInputTokens: 0,
-    imageOutputTokens: 0,
-    message: '请求成功',
-    metadata: {
-      stream,
-      apiKind: stream ? 'responses' : 'chat',
-    },
-    createdAt: options.createdAt,
-    createdAtDisplay: options.createdAtDisplay,
-    clientIp: options.clientIp,
-    userAgent: options.userAgent,
     reasoningEffort: options.reasoningEffort,
     reasoningPreset: options.reasoningEffort,
     compact: options.compact ?? false,
-    requestKind: stream ? 'responses' : 'chat',
     subagentKind: null,
     tokenDetails: {
       inputTokens: options.inputTokens,
@@ -202,12 +159,21 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageRecord {
       serviceTierDisplay: options.provider === 'openai' ? 'Fast' : 'Standard',
       multiplierDisplay: '1.0x',
     },
-    costs: [{ currency: 'USD', estimatedAmount: options.estimatedCost }],
-    costCoverage: { known: 1, partial: 0, unknown: 0, notBillable: 0 },
+    latencyDetails: {
+      transportDecisionWaitMs: 4,
+      upstreamHeadersMs: Math.max(24, options.firstTokenMs - 36),
+      firstEventMs: options.firstTokenMs,
+      firstReasoningMs: options.firstTokenMs + 18,
+      firstTextMs: options.firstTokenMs + 64,
+      firstTokenMs: options.firstTokenMs,
+      openaiProcessingMs: options.provider === 'openai' ? options.latencyMs - 72 : undefined,
+    },
     firstTokenLatencyMs: options.firstTokenMs,
-    firstTokenLatencyMsDisplay: `${options.firstTokenMs} ms`,
-    latencyMsDisplay: `${options.latencyMs} ms`,
-    logicalOutcome: 'success',
+    latencyMs: options.latencyMs,
+    createdAt: options.createdAt,
+    createdAtDisplay: options.createdAtDisplay,
+    clientIp: options.clientIp,
+    userAgent: options.userAgent,
   }
 }
 

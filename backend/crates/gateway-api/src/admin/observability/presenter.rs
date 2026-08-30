@@ -146,6 +146,43 @@ pub(crate) fn token_details(record: &domain::UsageRecord) -> TokenDetailsView {
     }
 }
 
+pub(crate) fn usage_list_token_details(record: &domain::UsageListRecord) -> TokenDetailsView {
+    TokenDetailsView {
+        input_tokens: record.input_tokens,
+        output_tokens: record.output_tokens,
+        cached_tokens: record.cached_tokens,
+        cache_write_tokens: record.cache_write_tokens,
+        reasoning_tokens: record.reasoning_tokens,
+        image_input_tokens: record.image_input_tokens,
+        image_output_tokens: record.image_output_tokens,
+        total_tokens: record.total_tokens,
+        input_tokens_display: record
+            .input_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        output_tokens_display: record
+            .output_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        cached_tokens_display: record
+            .cached_tokens
+            .map_or_else(|| "-".to_owned(), format_compact_number),
+        cache_write_tokens_display: record
+            .cache_write_tokens
+            .map_or_else(|| "-".to_owned(), format_compact_number),
+        reasoning_tokens_display: record
+            .reasoning_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        image_input_tokens_display: record
+            .image_input_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        image_output_tokens_display: record
+            .image_output_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+        total_tokens_display: record
+            .total_tokens
+            .map_or_else(|| "-".to_owned(), format_number),
+    }
+}
+
 pub(crate) fn format_money(cost: &domain::CurrencyCost) -> String {
     format_decimal_currency(cost.amount.as_str(), &cost.currency)
 }
@@ -204,6 +241,57 @@ pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<Bil
             service_tier_display: format_service_tier(value.service_tier.as_deref()),
             multiplier_display: format!("{:.2}x", f64::from(value.multiplier_percent) / 100.0),
         }),
+    }
+}
+
+pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageListRecordView {
+    let token_details = usage_list_token_details(&record);
+    let billing = billing_view(record.billing.as_ref());
+    let created_at_display = china_datetime(&record.started_at);
+    let model = record
+        .upstream_model_id
+        .clone()
+        .or_else(|| record.requested_model_id.clone());
+    UsageListRecordView {
+        id: record.id,
+        provider: record.provider_kind,
+        authentication_kind: record.provider_account_authentication_kind,
+        account_id: record.provider_account_ref,
+        account_email: record.provider_account_email,
+        account_name: record.provider_account_name,
+        route: record.endpoint,
+        model,
+        requested_model: record.requested_model_id,
+        upstream_model: record.upstream_model_id,
+        service_tier: record.service_tier,
+        client_transport: record.client_transport,
+        upstream_transport: record.upstream_transport,
+        reasoning_effort: record.reasoning_effort,
+        reasoning_preset: record.reasoning_preset,
+        subagent_kind: record.subagent_kind,
+        compact: record.compact,
+        token_details,
+        billing,
+        latency_details: UsageLatencyDetailsView {
+            admission_decision_ms: record.admission_decision_ms,
+            account_selection_wait_ms: record.account_selection_wait_ms,
+            capacity_used_slots: record.capacity_used_slots,
+            capacity_total_slots: record.capacity_total_slots,
+            transport_decision_wait_ms: record.transport_decision_wait_ms,
+            ws_connect_ms: record.connect_ms,
+            upstream_headers_ms: record.headers_ms,
+            first_event_ms: record.first_event_ms,
+            first_reasoning_ms: record.first_reasoning_ms,
+            first_text_ms: record.first_text_ms,
+            first_token_ms: record.first_token_ms,
+            openai_processing_ms: record.provider_processing_ms,
+        },
+        first_token_latency_ms: record.first_token_ms,
+        latency_ms: record.latency_ms,
+        created_at: record.started_at,
+        created_at_display,
+        client_ip: record.client_ip,
+        user_agent: record.user_agent,
     }
 }
 
@@ -427,25 +515,12 @@ pub(crate) fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetai
     }
 }
 
-pub(crate) fn page_meta(page: u32, page_size: u16, total: u64) -> PageMeta {
-    let page_size_u64 = u64::from(page_size);
-    let total_pages = total.saturating_add(page_size_u64 - 1) / page_size_u64;
-    PageMeta::new(
-        page,
-        u32::from(page_size),
-        total,
-        u32::try_from(total_pages).unwrap_or(u32::MAX),
-    )
-}
-
 pub(crate) fn usage_page_view(
     page: domain::UsagePage,
-    page_number: u32,
-    page_size: u16,
-) -> Result<PageData<UsageRecordView>, WireValidationError> {
+) -> Result<PageData<UsageListRecordView>, WireValidationError> {
     Ok(PageData {
-        items: page.items.into_iter().map(usage_record_view).collect(),
-        page: page_meta(page_number, page_size, page.total),
+        items: page.items.into_iter().map(usage_list_record_view).collect(),
+        total: page.total,
         next_cursor: page
             .next_cursor
             .as_ref()
@@ -493,12 +568,10 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
 
 pub(crate) fn ops_page_view(
     page: domain::OpsErrorPage,
-    page_number: u32,
-    page_size: u16,
 ) -> Result<PageData<OpsErrorView>, WireValidationError> {
     Ok(PageData {
         items: page.items.into_iter().map(ops_error_view).collect(),
-        page: page_meta(page_number, page_size, page.total),
+        total: page.total,
         next_cursor: page
             .next_cursor
             .as_ref()
@@ -833,7 +906,10 @@ pub(crate) fn dashboard_view(
         health_timeline: health_timeline_view(health_timeline),
         wire_profiles: wire_profiles.into_iter().map(wire_profile_view).collect(),
         account_usage: account_usage_views,
-        usage_records: recent_requests.into_iter().map(usage_record_view).collect(),
+        usage_records: recent_requests
+            .into_iter()
+            .map(usage_list_record_view)
+            .collect(),
         pool_summary: DashboardPoolSummaryView {
             total: provider_accounts.total,
             normal: provider_accounts.normal,

@@ -29,7 +29,7 @@ const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
   = useUsageTimeRange()
 
 const {
-  page,
+  currentPage,
   searchQuery,
   providerQuery,
   usagePagination,
@@ -53,7 +53,7 @@ const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecor
 
 watch(timeRange, () => {
   refreshTimeRangeEnd()
-  page.value = 1
+  currentPage.value = 1
   void loadUsageRecords()
 })
 </script>

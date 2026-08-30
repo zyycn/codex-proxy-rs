@@ -1,12 +1,5 @@
 import request from '../request'
 
-export interface UsagePageMeta {
-  page: number
-  pageSize: number
-  total: number
-  totalPages: number
-}
-
 export interface UsageTokenDetails {
   inputTokens: number | null
   outputTokens: number | null
@@ -71,6 +64,35 @@ export interface UsageLatencyDetails {
 // Provider 私有观测字段；Core 字段由顶层 UsageRecord 提供，不再复制进 metadata。
 export interface UsageRecordMetadata {
   [key: string]: unknown
+}
+
+export interface UsageListRecord {
+  id: string
+  provider: string | null
+  authenticationKind: string | null
+  accountId: string | null
+  accountEmail: string | null
+  accountName: string | null
+  route: string
+  model: string | null
+  requestedModel: string | null
+  upstreamModel: string | null
+  serviceTier: string | null
+  clientTransport: string
+  upstreamTransport: string | null
+  reasoningEffort: string | null
+  reasoningPreset: string | null
+  subagentKind: string | null
+  compact: boolean
+  tokenDetails: UsageTokenDetails
+  billing: UsageBilling | null
+  latencyDetails: UsageLatencyDetails
+  firstTokenLatencyMs: number | null
+  latencyMs: number | null
+  createdAt: string
+  createdAtDisplay: string
+  clientIp: string | null
+  userAgent: string | null
 }
 
 export interface UsageRecord {
@@ -171,9 +193,10 @@ export type UsageRecordDetail = UsageRecord & {
 }
 
 export interface UsageRecordsResponse {
-  items: UsageRecord[]
-  page: UsagePageMeta
-  nextCursor: string | null
+  items: UsageListRecord[]
+  currentPage: number
+  pageSize: number
+  total: number
 }
 
 export interface OpsErrorMetadata {
@@ -209,8 +232,9 @@ export interface OpsError {
 
 export interface OpsErrorsResponse {
   items: OpsError[]
-  page: UsagePageMeta
-  nextCursor: string | null
+  currentPage: number
+  pageSize: number
+  total: number
 }
 
 export interface UsageSummaryResponse {
@@ -370,14 +394,27 @@ interface UsageRangeQuery {
   search?: string
 }
 
-type UsagePagedQuery = UsageRangeQuery & {
-  page: number
+interface PageQuery {
+  currentPage: number
   pageSize: number
 }
 
-type OpsErrorPagedQuery = UsagePagedQuery & {
+type UsagePageQuery = UsageRangeQuery & PageQuery
+
+type OpsErrorPageQuery = UsagePageQuery & {
   failureClass?: string
   route?: string
+}
+
+interface CursorPageResponse<Item> {
+  items: Item[]
+  total: number | null
+  nextCursor: string | null
+}
+
+type CursorPageQuery<Query> = Query & {
+  pageSize: number
+  cursor?: string
 }
 
 interface UsageDetailQuery {
@@ -386,20 +423,81 @@ interface UsageDetailQuery {
 
 type UsageDiagnosticsQuery = UsageRangeQuery & { dimension: string }
 
-export function getUsageRecords(data: UsagePagedQuery) {
-  return request<UsageRecordsResponse>({
-    url: '/api/admin/usage/records',
-    method: 'GET',
-    params: data,
-  })
+export function createUsageRecordsPager() {
+  return createPageLoader<UsageListRecord, UsageRangeQuery>(data =>
+    request<CursorPageResponse<UsageListRecord>>({
+      url: '/api/admin/usage/records',
+      method: 'GET',
+      params: data,
+    }))
 }
 
-export function getOpsErrors(data: OpsErrorPagedQuery) {
-  return request<OpsErrorsResponse>({
-    url: '/api/admin/operations/errors',
-    method: 'GET',
-    params: data,
-  })
+export function createOpsErrorsPager() {
+  return createPageLoader<OpsError, Omit<OpsErrorPageQuery, keyof PageQuery>>(data =>
+    request<CursorPageResponse<OpsError>>({
+      url: '/api/admin/operations/errors',
+      method: 'GET',
+      params: data,
+    }))
+}
+
+function createPageLoader<Item, Query extends object>(
+  fetchPage: (query: CursorPageQuery<Query>) => Promise<CursorPageResponse<Item>>,
+) {
+  const cursors = new Map<number, string | undefined>([[1, undefined]])
+  let queryKey = ''
+  let total = 0
+
+  function reset(nextQueryKey: string) {
+    cursors.clear()
+    cursors.set(1, undefined)
+    queryKey = nextQueryKey
+    total = 0
+  }
+
+  async function load(data: Query & PageQuery) {
+    const { currentPage, pageSize, ...query } = data
+    const nextQueryKey = JSON.stringify([pageSize, query])
+    if (queryKey !== nextQueryKey)
+      reset(nextQueryKey)
+
+    const requestedPage = Math.max(1, Math.trunc(currentPage))
+    let page = [...cursors.keys()].reduce(
+      (known, candidate) => candidate <= requestedPage && candidate > known ? candidate : known,
+      1,
+    )
+    let result: CursorPageResponse<Item>
+
+    while (page < requestedPage) {
+      result = await fetchPage({
+        ...(query as Query),
+        pageSize,
+        cursor: cursors.get(page),
+      })
+      if (result.total != null)
+        total = result.total
+      if (!result.nextCursor)
+        return { items: result.items, currentPage: page, pageSize, total }
+      cursors.set(page + 1, result.nextCursor)
+      page += 1
+    }
+
+    result = await fetchPage({
+      ...(query as Query),
+      pageSize,
+      cursor: cursors.get(page),
+    })
+    if (result.total != null)
+      total = result.total
+    if (result.nextCursor)
+      cursors.set(page + 1, result.nextCursor)
+    else
+      cursors.delete(page + 1)
+
+    return { items: result.items, currentPage: page, pageSize, total }
+  }
+
+  return { load }
 }
 
 export function getUsageRecordDetail(data: UsageDetailQuery) {

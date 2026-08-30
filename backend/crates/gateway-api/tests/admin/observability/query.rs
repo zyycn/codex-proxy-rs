@@ -21,25 +21,28 @@ fn dashboard_query_should_reject_unknown_trend_kind() {
 #[test]
 fn usage_query_should_bound_page_size_and_cursor() {
     let query: UsageQuery = serde_json::from_value(json!({
-        "page": 2,
         "pageSize": 100,
         "cursor": "opaque"
     }))
     .unwrap();
-    assert_eq!(query.validate_page().unwrap(), (2, 100));
+    assert_eq!(query.validate_page_size().unwrap(), 100);
     assert!(query.validate_cursor().is_ok());
 }
 
 #[test]
-fn usage_query_should_reject_zero_page() {
-    let query: UsageQuery = serde_json::from_value(json!({"page": 0})).unwrap();
-    assert_eq!(query.validate_page().unwrap_err().field(), "page");
+fn usage_query_should_reject_removed_total_toggle() {
+    assert!(serde_json::from_value::<UsageQuery>(json!({"includeTotal": true})).is_err());
+}
+
+#[test]
+fn usage_query_should_reject_removed_offset_page_contract() {
+    assert!(serde_json::from_value::<UsageQuery>(json!({"page": 1})).is_err());
 }
 
 #[test]
 fn ops_query_should_reject_page_size_above_terminal_limit() {
     let query: OpsQuery = serde_json::from_value(json!({"pageSize": 101})).unwrap();
-    assert_eq!(query.validate_page().unwrap_err().field(), "pageSize");
+    assert_eq!(query.validate_page_size().unwrap_err().field(), "pageSize");
 }
 
 #[test]
