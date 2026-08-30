@@ -11,7 +11,10 @@ pub(crate) const ADMIN_USAGE_CHUNK_SIZE: usize = 200;
 
 /// 四种窗口投影通过一组 `GROUPING SETS` 从同一批匹配请求派生。`grouping_* = 1`
 /// 表示对应维度未参与该行聚合，调用方据此区分窗口、模型与成本行。
-pub(crate) const ACCOUNT_USAGE_BY_WINDOWS_SQL: &str = "with requested_windows as (
+pub(crate) fn account_usage_by_windows_sql() -> String {
+    let completed_usage = completed_usage_fact_predicate("mr");
+    format!(
+        "with requested_windows as (
          select *
          from unnest($1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[])
            as requested(account_id, window_key, window_start, window_end)
@@ -30,10 +33,7 @@ pub(crate) const ACCOUNT_USAGE_BY_WINDOWS_SQL: &str = "with requested_windows as
              on mr.provider_account_ref = requested.account_id
             and mr.started_at >= requested.window_start
             and mr.started_at < requested.window_end
-            and mr.outcome = 'succeeded'
-            and mr.downstream_committed_at is not null
-            and ((mr.client_transport = 'websocket' and mr.client_status_code is null)
-                 or mr.client_status_code between 200 and 399)
+            and {completed_usage}
      )
      select account_id,
             window_key,
@@ -74,7 +74,9 @@ pub(crate) const ACCOUNT_USAGE_BY_WINDOWS_SQL: &str = "with requested_windows as
         (account_id, window_key, model, cost_currency)
       )
       order by account_id, window_key, model_grouping desc, currency_grouping desc,
-               model nulls last, cost_currency nulls last";
+               model nulls last, cost_currency nulls last"
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountAdminScope {

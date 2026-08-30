@@ -107,7 +107,7 @@ impl PgAdminAccountStore {
         let rows = self
             .query_budget
             .run("load account usage windows", async {
-                sqlx::query(ACCOUNT_USAGE_BY_WINDOWS_SQL)
+                sqlx::query(sqlx::AssertSqlSafe(account_usage_by_windows_sql()))
                     .bind(account_ids)
                     .bind(keys)
                     .bind(starts)

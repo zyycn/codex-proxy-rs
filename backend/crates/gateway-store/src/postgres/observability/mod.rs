@@ -18,6 +18,8 @@ use crate::{
     require_nonempty,
 };
 
+use super::{completed_usage_fact_predicate, push_completed_usage_fact_filter};
+
 mod admin_adapter;
 mod mapping;
 mod model;

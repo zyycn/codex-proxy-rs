@@ -24,6 +24,7 @@ mod provider_accounts;
 mod retention;
 mod runtime_settings;
 mod snapshot;
+mod usage_facts;
 
 pub use account_groups::*;
 pub use admin_security_audit::*;
@@ -38,6 +39,7 @@ pub use provider_accounts::*;
 pub use retention::*;
 pub use runtime_settings::*;
 pub use snapshot::*;
+pub(crate) use usage_facts::{completed_usage_fact_predicate, push_completed_usage_fact_filter};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 

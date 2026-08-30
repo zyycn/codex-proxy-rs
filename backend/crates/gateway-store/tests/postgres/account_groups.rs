@@ -234,6 +234,80 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     database.close().await;
 }
 
+#[tokio::test]
+async fn group_costs_should_include_statusless_websocket_but_reject_statusless_http() {
+    let Some(database) = TestDatabase::create("account_group_statusless_websocket_cost").await
+    else {
+        return;
+    };
+    seed_account(
+        &database.pool,
+        "acct_group_statusless",
+        "openai",
+        "Statusless Account",
+    )
+    .await;
+    let groups = PgAccountGroupRepository::new(database.pool.clone());
+    groups
+        .create_account_group(
+            NewAccountGroup {
+                id: group_id(EMPTY_GROUP),
+                name: "Statusless Costs".to_owned(),
+                description: None,
+                color: group_color("#06B6D4CC"),
+            },
+            &context("create-statusless-cost-group"),
+        )
+        .await
+        .expect("create statusless cost group");
+    for (request_id, cost_amount) in [
+        ("req_group_http_success", "1.5"),
+        ("req_group_statusless_websocket", "2"),
+        ("req_group_statusless_http", "4"),
+    ] {
+        seed_group_cost_snapshot(
+            &database.pool,
+            request_id,
+            "acct_group_statusless",
+            EMPTY_GROUP,
+            cost_amount,
+        )
+        .await;
+    }
+    sqlx::query(
+        "update model_requests
+         set client_transport = case id
+               when 'req_group_statusless_websocket' then 'websocket'
+               else 'http_sse'
+             end,
+             client_status_code = null
+         where id in ('req_group_statusless_websocket', 'req_group_statusless_http')",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("make account group requests statusless");
+
+    let page = groups
+        .list_account_groups(AccountGroupListQuery {
+            page: 1,
+            page_size: PageSize::new(20).expect("page size"),
+            search: None,
+            enabled: None,
+        })
+        .await
+        .expect("list statusless cost group");
+
+    assert_eq!(
+        (
+            page.items[0].usage.today_usd.as_str(),
+            page.items[0].usage.retained_total_usd.as_str(),
+        ),
+        ("3.5", "3.5"),
+    );
+
+    database.close().await;
+}
+
 fn new_key(id: &str, group_ids: Vec<AccountGroupId>) -> NewClientKey {
     let marker = char::from(id.as_bytes().last().copied().unwrap_or(b'k'));
     NewClientKey {

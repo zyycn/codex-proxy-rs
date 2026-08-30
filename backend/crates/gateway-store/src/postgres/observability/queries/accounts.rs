@@ -170,26 +170,25 @@ pub(crate) async fn provider_account_request_buckets(
     range: ObservabilityRange,
     account_ids: &[String],
 ) -> StoreResult<HashMap<String, Vec<ProviderAccountRequestBucket>>> {
-    let rows = sqlx::query(
+    let completed_usage = completed_usage_fact_predicate("mr");
+    let statement = format!(
         "select provider_account_ref,
                 floor(extract(epoch from (started_at - $1)) / 3600)::bigint as bucket_index,
                 count(*)::bigint as request_count
          from model_requests mr
          where mr.provider_account_ref = any($2::text[])
            and mr.started_at >= $1 and mr.started_at < $3
-           and mr.outcome = 'succeeded'
-           and mr.downstream_committed_at is not null
-           and ((mr.client_transport = 'websocket' and mr.client_status_code is null)
-                or mr.client_status_code between 200 and 399)
+           and {completed_usage}
          group by mr.provider_account_ref, bucket_index
-         order by mr.provider_account_ref, bucket_index",
-    )
-    .bind(range.start)
-    .bind(account_ids)
-    .bind(range.end)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| postgres_unavailable("load provider account request timeline"))?;
+         order by mr.provider_account_ref, bucket_index"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
+        .bind(range.start)
+        .bind(account_ids)
+        .bind(range.end)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| postgres_unavailable("load provider account request timeline"))?;
 
     let mut observed = HashMap::<String, BTreeMap<u64, u64>>::new();
     for row in rows {

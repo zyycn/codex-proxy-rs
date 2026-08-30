@@ -1029,6 +1029,84 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
 }
 
 #[tokio::test]
+async fn terminal_admin_quota_window_usage_should_include_only_statusless_websocket() {
+    let Some(database) = TestDatabase::create("provider_account_quota_window_websocket").await
+    else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account(
+            "acct_quota_window_websocket",
+            "user-quota-window-websocket",
+        ))
+        .await
+        .expect("insert WebSocket quota window account");
+    let now = Utc::now();
+    for seed in [
+        ModelRequestSeed {
+            request_id: "req_quota_window_websocket",
+            account_id: "acct_quota_window_websocket",
+            provider_kind: "openai",
+            model: "gpt-window-websocket",
+            total_tokens: 13,
+            cost_amount: "1.50",
+            started_at: now - TimeDelta::minutes(2),
+        },
+        ModelRequestSeed {
+            request_id: "req_quota_window_statusless_http",
+            account_id: "acct_quota_window_websocket",
+            provider_kind: "openai",
+            model: "gpt-window-statusless-http",
+            total_tokens: 29,
+            cost_amount: "2.50",
+            started_at: now - TimeDelta::minutes(1),
+        },
+    ] {
+        seed_model_request(&database.pool, seed)
+            .await
+            .expect("seed statusless quota window request");
+    }
+    sqlx::query(
+        "update model_requests
+         set client_transport = case id
+               when 'req_quota_window_websocket' then 'websocket'
+               else 'http_sse'
+             end,
+             client_status_code = null
+         where id in ('req_quota_window_websocket', 'req_quota_window_statusless_http')",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("make quota window requests statusless");
+
+    let usage = admin_account_store(&database.pool)
+        .load_account_usage_by_windows(&[AccountUsageWindowQuery {
+            account_id: "acct_quota_window_websocket".to_owned(),
+            key: "statusless".to_owned(),
+            range: TimeRange {
+                start: now - TimeDelta::hours(1),
+                end: now + TimeDelta::minutes(1),
+            },
+        }])
+        .await
+        .expect("load statusless quota window usage");
+
+    assert_eq!(
+        (
+            usage[0].usage.request_count,
+            usage[0].usage.success_count,
+            usage[0].usage.total_tokens,
+            usage[0].usage.costs[0].amount.as_str(),
+            usage[0].usage.models[0].model.as_str(),
+        ),
+        (1, 1, Some(13), "1.5", "gpt-window-websocket"),
+    );
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let Some(database) = TestDatabase::create("provider_account_terminal_mutation").await else {
         return;

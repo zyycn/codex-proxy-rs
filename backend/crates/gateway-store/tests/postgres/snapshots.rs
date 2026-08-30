@@ -3,14 +3,15 @@ use gateway_store::postgres::{
     DiagnosticDimension, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
     ObservabilityPageSize, ObservabilityRange, ObservabilityRepository, OpsErrorFilter,
     OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
-    PgOpsEventRepository, UsageRecordFilter, UsageRecordQuery,
+    PgOpsEventRepository, ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
 
 use super::{TestDatabase, observability_repository};
 
 #[tokio::test]
-async fn usage_facts_should_accept_statusless_websocket_but_reject_statusless_http() {
+async fn completed_usage_projections_should_accept_statusless_websocket_but_reject_statusless_http()
+{
     let Some(database) = TestDatabase::create("snapshot_statusless_websocket_usage").await else {
         return;
     };
@@ -66,7 +67,62 @@ async fn usage_facts_should_accept_statusless_websocket_but_reject_statusless_ht
         .usage_summary(range_around(started_at), UsageRecordFilter::default())
         .await
         .expect("summarize statusless transport usage");
-    assert_eq!(overview.attempts.cost_coverage.unavailable_count, 1);
+    assert_eq!(
+        (
+            overview.requests.request_count,
+            overview.requests.success_count,
+            overview.requests.total_tokens,
+            overview.attempts.cost_coverage.provider_reported_count,
+        ),
+        (2, 2, 10, 1),
+    );
+
+    let account_usage = repository
+        .provider_account_usage(
+            ProviderAccountUsageQuery::for_accounts(
+                range_around(started_at),
+                vec!["acct_statusless_transport".to_owned()],
+            )
+            .expect("statusless account usage query")
+            .with_hourly_request_buckets()
+            .expect("statusless account request timeline"),
+        )
+        .await
+        .expect("load statusless account usage");
+    assert_eq!(
+        (
+            account_usage[0].request_count,
+            account_usage[0].total_tokens,
+            account_usage[0].models[0].request_count,
+            account_usage[0]
+                .request_buckets
+                .iter()
+                .map(|bucket| bucket.request_count)
+                .sum::<u64>(),
+            account_usage[0].costs[0].amount.as_str(),
+        ),
+        (1, Some(10), 1, 1, "1.25"),
+    );
+
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+        )
+        .await
+        .expect("load statusless usage diagnostics");
+    assert_eq!(
+        (
+            diagnostics[0].request_count,
+            diagnostics[0].success_count,
+            diagnostics[0].total_tokens,
+            diagnostics[0].average_latency_ms,
+            diagnostics[0].cost_coverage.provider_reported_count,
+            diagnostics[0].costs[0].amount.as_str(),
+        ),
+        (2, 2, 10, Some(500), 1, "1.25"),
+    );
 
     database.close().await;
 }
@@ -898,6 +954,10 @@ async fn finalize_request_without_client_status(
         "update model_requests
          set outcome = 'succeeded', upstream_send_state = 'sent',
              client_status_code = null, upstream_status_code = 200,
+             input_tokens = 7, output_tokens = 3, total_tokens = 10,
+             first_token_ms = 100, latency_ms = 500,
+             cost_source = 'provider_reported', cost_amount = 1.25,
+             cost_currency = 'USD',
              downstream_committed_at = $2, completed_at = $2
          where id = $1",
     )

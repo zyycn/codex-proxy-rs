@@ -102,23 +102,6 @@ pub(crate) fn literal_prefix_pattern(value: &str) -> String {
     )
 }
 
-/// 只把已完整交付给客户端的成功响应投影为使用事实。
-///
-/// `model_requests` 同时承担执行审计：包括上游已发送、但尚未收到首个事件就断开的
-/// WebSocket 请求。这些失败仍必须留给 Ops Errors 和调度健康度分析，不能混入用量、
-/// 成本、账号使用次数或请求明细。
-/// 客户端 WebSocket 的每个 `response.create` 没有独立 HTTP 状态码；成功终态与下游
-/// 提交边界已足以证明交付，连接握手的 101 不能冒充单次请求状态。
-pub(crate) fn completed_usage_fact_predicate(alias: &str) -> String {
-    format!(
-        "{alias}.outcome = 'succeeded' and {alias}.downstream_committed_at is not null and (({alias}.client_transport = 'websocket' and {alias}.client_status_code is null) or {alias}.client_status_code between 200 and 399)"
-    )
-}
-
-pub(crate) fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
-    query.push(format!(" and {}", completed_usage_fact_predicate(alias)));
-}
-
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
     "select mr.id, mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
@@ -374,15 +357,16 @@ pub(crate) async fn usage_diagnostics(
 ) -> StoreResult<Vec<DiagnosticObservation>> {
     filter.validate()?;
     let dimension_sql = diagnostic_dimension_sql(dimension);
+    let completed_usage = completed_usage_fact_predicate("mr");
     let mut statement = QueryBuilder::<Postgres>::new("with matched as (select ");
     statement.push(dimension_sql);
-    statement.push(
+    statement.push(format!(
         " as dimension_name, mr.outcome, mr.attempt_count, mr.total_tokens,
                 mr.latency_ms, mr.first_token_ms, mr.cost_source, mr.cost_amount,
                 mr.cost_currency, mr.downstream_committed_at, mr.client_transport,
-                mr.client_status_code
+                mr.client_status_code, ({completed_usage}) as is_completed_usage
          from model_requests mr where mr.started_at >= ",
-    );
+    ));
     statement.push_bind(range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
@@ -396,26 +380,33 @@ pub(crate) async fn usage_diagnostics(
                   count(*) filter (where outcome = 'succeeded')::bigint as success_count,
                   count(*) filter (where outcome = 'failed')::bigint as failure_count,
                   coalesce(sum(attempt_count), 0)::bigint as attempt_count,
-                  coalesce(sum(total_tokens), 0)::bigint as total_tokens,
-                  round(avg(latency_ms))::bigint as average_latency_ms,
-                  round(percentile_cont(0.95) within group (order by latency_ms))::bigint
+                  coalesce(sum(total_tokens) filter (where is_completed_usage), 0)::bigint
+                    as total_tokens,
+                  round(avg(latency_ms) filter (where is_completed_usage))::bigint
+                    as average_latency_ms,
+                  round(percentile_cont(0.95) within group (order by latency_ms)
+                    filter (where is_completed_usage))::bigint
                     as latency_p95_ms,
-                  round(percentile_cont(0.95) within group (order by first_token_ms))::bigint
+                  round(percentile_cont(0.95) within group (order by first_token_ms)
+                    filter (where is_completed_usage))::bigint
                     as first_token_p95_ms,
                   count(*) filter (where outcome in ('cancelled', 'incomplete'))::bigint
                     as non_completion_count,
                   coalesce(sum(greatest(attempt_count - 1, 0)), 0)::bigint as retry_count,
-                  count(*) filter (where cost_source = 'provider_reported')::bigint
+                  count(*) filter (
+                    where is_completed_usage and cost_source = 'provider_reported'
+                  )::bigint
                     as provider_reported_count,
-                  count(*) filter (where cost_source = 'calculated')::bigint
+                  count(*) filter (
+                    where is_completed_usage and cost_source = 'calculated'
+                  )::bigint
                     as calculated_count,
-                  count(*) filter (where cost_source = 'unavailable')::bigint
+                  count(*) filter (
+                    where is_completed_usage and cost_source = 'unavailable'
+                  )::bigint
                     as unavailable_count,
                   sum(cost_amount) filter (
-                    where outcome = 'succeeded'
-                      and downstream_committed_at is not null
-                      and ((client_transport = 'websocket' and client_status_code is null)
-                           or client_status_code between 200 and 399)
+                    where is_completed_usage
                   )::text as amount
              from matched
             group by dimension_name, grouping sets ((), (cost_currency))
