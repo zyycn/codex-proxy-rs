@@ -30,22 +30,15 @@ pub(crate) fn store_request_outcome(outcome: admin_observability::RequestOutcome
     outcome.as_str().to_owned()
 }
 
-pub(crate) fn store_cursor(
-    cursor: admin_observability::ObservabilityCursor,
-) -> AdminStoreResult<ObservabilityCursor> {
-    ObservabilityCursor::new(cursor.observed_at, cursor.stable_id).map_err(observability_error)
-}
-
 pub(crate) fn store_usage_query(
     query: admin_observability::UsageQuery,
 ) -> AdminStoreResult<UsageRecordQuery> {
     Ok(UsageRecordQuery {
         range: store_range(query.range)?,
         filter: store_usage_filter(query.filter),
-        cursor: query.cursor.map(store_cursor).transpose()?,
+        current_page: query.current_page,
         page_size: ObservabilityPageSize::new(query.page_size.get())
             .map_err(observability_error)?,
-        include_total: query.include_total,
     })
 }
 
@@ -75,10 +68,9 @@ pub(crate) fn store_ops_error_query(
     Ok(OpsErrorQuery {
         range: store_range(query.range)?,
         filter: store_ops_error_filter(query.filter),
-        cursor: query.cursor.map(store_cursor).transpose()?,
+        current_page: query.current_page,
         page_size: ObservabilityPageSize::new(query.page_size.get())
             .map_err(observability_error)?,
-        include_total: query.include_total,
     })
 }
 
@@ -409,18 +401,10 @@ pub(crate) fn admin_usage_page(
             .into_iter()
             .map(admin_usage_list_record)
             .collect::<AdminStoreResult<_>>()?,
+        current_page: page.current_page,
+        page_size: page.page_size,
         total: page.total,
-        next_cursor: page.next_cursor.map(admin_cursor),
     })
-}
-
-pub(crate) fn admin_cursor(
-    cursor: ObservabilityCursor,
-) -> admin_observability::ObservabilityCursor {
-    admin_observability::ObservabilityCursor {
-        observed_at: cursor.observed_at,
-        stable_id: cursor.stable_id,
-    }
 }
 
 pub(crate) fn admin_usage_list_record(
@@ -701,8 +685,9 @@ pub(crate) fn admin_ops_error_page(
 ) -> AdminStoreResult<admin_observability::OpsErrorPage> {
     Ok(admin_observability::OpsErrorPage {
         items: page.items.into_iter().map(admin_ops_error).collect(),
+        current_page: page.current_page,
+        page_size: page.page_size,
         total: page.total,
-        next_cursor: page.next_cursor.map(admin_cursor),
     })
 }
 

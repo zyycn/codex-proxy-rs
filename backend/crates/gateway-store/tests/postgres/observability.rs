@@ -106,13 +106,12 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
                 response_id: Some(response_id.clone()),
                 ..UsageRecordFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("filter opaque response ID");
-    assert_eq!(records.total, Some(1));
+    assert_eq!(records.total, 1);
     assert_eq!(records.items[0].id, "req_observe_success");
     let detail = repository
         .usage_record_detail("req_observe_success")
@@ -131,8 +130,8 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
 }
 
 #[tokio::test]
-async fn usage_page_should_skip_exact_count_when_total_is_not_requested() {
-    let Some(database) = TestDatabase::create("usage_page_without_total").await else {
+async fn usage_page_should_always_return_total() {
+    let Some(database) = TestDatabase::create("usage_page_with_total").await else {
         return;
     };
     let now = Utc::now();
@@ -146,14 +145,15 @@ async fn usage_page_should_skip_exact_count_when_total_is_not_requested() {
         .list_usage_records(UsageRecordQuery {
             range,
             filter: UsageRecordFilter::default(),
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: false,
         })
         .await
-        .expect("usage page without total");
+        .expect("usage page with total");
 
-    assert_eq!(page.total, None);
+    assert_eq!(page.total, 1);
+    assert_eq!(page.current_page, 1);
+    assert_eq!(page.page_size, 10);
     database.close().await;
 }
 
@@ -176,14 +176,13 @@ async fn usage_search_should_match_literal_prefix_instead_of_substring() {
                 search: Some("observe_success".to_owned()),
                 ..UsageRecordFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("usage substring search");
 
-    assert_eq!(page.total, Some(0));
+    assert_eq!(page.total, 0);
     database.close().await;
 }
 
@@ -206,14 +205,13 @@ async fn ops_search_should_treat_sql_wildcards_as_literals() {
                 search: Some("req%".to_owned()),
                 ..OpsErrorFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("ops literal wildcard search");
 
-    assert_eq!(page.total, Some(0));
+    assert_eq!(page.total, 0);
     database.close().await;
 }
 
@@ -625,19 +623,33 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
         .list_usage_records(admin_observability::UsageQuery {
             range,
             filter: admin_observability::UsageFilter::default(),
-            cursor: None,
+            current_page: 1,
             page_size: PageSize::new(1).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("first usage page");
-    assert_eq!(first_page.total, Some(1));
+    assert_eq!(first_page.total, 1);
     assert_eq!(first_page.items.len(), 1);
-    assert!(first_page.next_cursor.is_none());
+    assert_eq!(first_page.current_page, 1);
+    assert_eq!(first_page.page_size, 1);
     assert_eq!(
         first_page.items[0].service_tier.as_deref(),
         Some("priority")
     );
+
+    let deep_page = store
+        .list_usage_records(admin_observability::UsageQuery {
+            range,
+            filter: admin_observability::UsageFilter::default(),
+            current_page: 129,
+            page_size: PageSize::new(1).expect("page size"),
+        })
+        .await
+        .expect("direct deep usage page");
+    assert_eq!(deep_page.current_page, 129);
+    assert_eq!(deep_page.page_size, 1);
+    assert_eq!(deep_page.total, 1);
+    assert!(deep_page.items.is_empty());
 
     let filtered = store
         .list_usage_records(admin_observability::UsageQuery {
@@ -657,13 +669,12 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 upstream_request_id: Some("upstream_req_success".to_owned()),
                 search: Some("req_observe_success".to_owned()),
             },
-            cursor: None,
+            current_page: 1,
             page_size: PageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("fully filtered usage page");
-    assert_eq!(filtered.total, Some(1));
+    assert_eq!(filtered.total, 1);
     assert_eq!(filtered.items[0].id, "req_observe_success");
     assert_eq!(filtered.items[0].service_tier.as_deref(), Some("priority"));
 
@@ -677,13 +688,12 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 ),
                 ..admin_observability::UsageFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: PageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("other outcome filter should reach PostgreSQL");
-    assert_eq!(other_outcome.total, Some(0));
+    assert_eq!(other_outcome.total, 0);
     assert!(other_outcome.items.is_empty());
 
     let detail = store
@@ -757,14 +767,27 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 search: Some("req_observe_failed".to_owned()),
                 ..admin_observability::OpsErrorFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: PageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("admin ops errors");
-    assert_eq!(errors.total, Some(2));
+    assert_eq!(errors.total, 2);
     assert!(errors.items.iter().all(|item| item.occurred_at <= now));
+
+    let deep_errors = store
+        .list_ops_errors(admin_observability::OpsErrorQuery {
+            range,
+            filter: admin_observability::OpsErrorFilter::default(),
+            current_page: 129,
+            page_size: PageSize::new(1).expect("page size"),
+        })
+        .await
+        .expect("direct deep ops page");
+    assert_eq!(deep_errors.current_page, 129);
+    assert_eq!(deep_errors.page_size, 1);
+    assert_eq!(deep_errors.total, 2);
+    assert!(deep_errors.items.is_empty());
 
     for filter in [
         admin_observability::OpsErrorFilter {
@@ -796,13 +819,12 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             .list_ops_errors(admin_observability::OpsErrorQuery {
                 range,
                 filter,
-                cursor: None,
+                current_page: 1,
                 page_size: PageSize::new(10).expect("page size"),
-                include_total: true,
             })
             .await
             .expect("fully forwarded ops filter");
-        assert_eq!(page.total, Some(0));
+        assert_eq!(page.total, 0);
     }
 
     database.close().await;
@@ -1052,13 +1074,12 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
                 provider_account_ref: Some("acct_observe".to_owned()),
                 ..UsageRecordFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("usage records");
-    assert_eq!(usage_page.total, Some(1));
+    assert_eq!(usage_page.total, 1);
     let successful_image = usage_page
         .items
         .iter()
@@ -1157,13 +1178,12 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .list_ops_errors(OpsErrorQuery {
             range,
             filter: OpsErrorFilter::default(),
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("ops errors");
-    assert_eq!(errors.total, Some(2));
+    assert_eq!(errors.total, 2);
     let request_error = errors
         .items
         .iter()

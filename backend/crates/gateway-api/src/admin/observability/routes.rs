@@ -91,7 +91,7 @@ where
         .usage_records(command)
         .await
         .map_err(map_service_error)?;
-    let data = usage_page_view(result).map_err(|_| AdminError::internal())?;
+    let data = usage_page_view(result);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -207,6 +207,6 @@ where
         .ops_errors(command)
         .await
         .map_err(map_service_error)?;
-    let data = ops_page_view(result).map_err(|_| AdminError::internal())?;
+    let data = ops_page_view(result);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

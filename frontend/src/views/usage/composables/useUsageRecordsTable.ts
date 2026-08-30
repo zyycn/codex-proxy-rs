@@ -5,9 +5,9 @@ import { watchDebounced } from '@vueuse/core'
 
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import {
-  createUsageRecordsPager,
   getUsageRecordInsightsDiagnostics,
   getUsageRecordInsightsOverview,
+  getUsageRecords,
   getUsageRecordSummary,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
@@ -26,13 +26,6 @@ interface UsageLoadOptions {
   background?: boolean
 }
 
-interface UsageTableParams {
-  startTime: string
-  endTime: string
-  provider?: string
-  search?: string
-}
-
 export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
@@ -49,7 +42,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
-  const pager = createUsageRecordsPager()
   let loadRequestId = 0
   let diagnosticRequestId = 0
   const scopedParams = () => ({
@@ -68,21 +60,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   function resetPagination() {
     currentPage.value = 1
     totalRecords.value = 0
-  }
-
-  async function loadTablePage(
-    params: UsageTableParams,
-    targetPage: number,
-    requestId: number,
-  ) {
-    const result = await pager.load({
-      currentPage: targetPage,
-      pageSize: pageSize.value,
-      ...params,
-    })
-    if (requestId !== loadRequestId)
-      return null
-    return { result, page: result.currentPage }
   }
 
   async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {
@@ -114,8 +91,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
         ...tableTimeRangeParams.value,
         ...filterParams(),
       }
-      const requestedPage = currentPage.value
-      const resultPromise = loadTablePage(tableParams, requestedPage, requestId)
+      const resultPromise = getUsageRecords({
+        currentPage: currentPage.value,
+        pageSize: pageSize.value,
+        ...tableParams,
+      })
       const analyticsPromise
         = scope === 'all'
           ? loadUsageAnalytics(globalParams)
@@ -123,10 +103,9 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
               summary: summary.value,
               insights: insights.value,
             })
-      const [tableResult, nextAnalytics] = await Promise.all([resultPromise, analyticsPromise])
-      if (requestId !== loadRequestId || tableResult == null)
+      const [result, nextAnalytics] = await Promise.all([resultPromise, analyticsPromise])
+      if (requestId !== loadRequestId)
         return
-      const { result, page: resultPage } = tableResult
 
       records.value = result.items
       summary.value = nextAnalytics.summary
@@ -137,8 +116,9 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
             ? nextAnalytics.insights.diagnostics
             : insights.value.diagnostics,
       }
+      pageSize.value = result.pageSize
       totalRecords.value = result.total
-      currentPage.value = resultPage
+      currentPage.value = result.currentPage
     }
     catch (error: unknown) {
       if (requestId !== loadRequestId)

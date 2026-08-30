@@ -60,7 +60,7 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
 
     assert_eq!(
         (page.total, request_ids),
-        (Some(1), vec!["req_statusless_websocket"])
+        (1, vec!["req_statusless_websocket"])
     );
 
     let overview = repository
@@ -399,9 +399,8 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
         .list_ops_errors(OpsErrorQuery {
             range: range_around(started_at),
             filter: OpsErrorFilter::default(),
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10).expect("page size"),
-            include_total: true,
         })
         .await
         .expect("list ops errors after deletion");
@@ -886,9 +885,8 @@ fn usage_query(started_at: DateTime<Utc>, filter: UsageRecordFilter) -> UsageRec
     UsageRecordQuery {
         range: range_around(started_at),
         filter,
-        cursor: None,
+        current_page: 1,
         page_size: ObservabilityPageSize::new(10).expect("page size"),
-        include_total: true,
     }
 }
 

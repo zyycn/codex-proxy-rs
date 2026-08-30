@@ -2,21 +2,14 @@
 
 use super::*;
 
-/// 观测列表游标的稳定 wire 形状。
-#[derive(Clone, Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CursorWire {
-    pub observed_at: DateTime<Utc>,
-    pub stable_id: String,
-}
-
 /// 观测列表响应数据。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageData<T> {
     pub items: Vec<T>,
-    pub total: Option<u64>,
-    pub next_cursor: Option<String>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub total: u64,
 }
 
 /// Token 详情展示。

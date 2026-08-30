@@ -125,9 +125,8 @@ impl ObservabilityRepository for PgObservabilityRepository {
                 outcome: Some("succeeded".to_owned()),
                 ..UsageRecordFilter::default()
             },
-            cursor: None,
+            current_page: 1,
             page_size: ObservabilityPageSize::new(10)?,
-            include_total: false,
         };
         // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞。
         let (totals, (provider_accounts, _)) = futures::try_join!(
@@ -148,7 +147,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             ),
             self.query_budget
                 .run("load dashboard recent requests", async {
-                    Ok(list_usage_records(&self.pool, recent_query).await?.items)
+                    list_usage_record_items(&self.pool, &recent_query).await
                 }),
         )?;
         Ok(DashboardObservation {

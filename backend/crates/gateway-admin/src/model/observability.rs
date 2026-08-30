@@ -38,13 +38,6 @@ impl TimeRange {
     }
 }
 
-/// 观测记录的稳定键集游标。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObservabilityCursor {
-    pub observed_at: DateTime<Utc>,
-    pub stable_id: String,
-}
-
 /// 请求结果状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestOutcome {
@@ -130,9 +123,8 @@ pub struct UsageFilter {
 pub struct UsageQuery {
     pub range: TimeRange,
     pub filter: UsageFilter,
-    pub cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
     pub page_size: PageSize,
-    pub include_total: bool,
 }
 
 /// 运维错误过滤条件。
@@ -158,9 +150,8 @@ pub struct OpsErrorFilter {
 pub struct OpsErrorQuery {
     pub range: TimeRange,
     pub filter: OpsErrorFilter,
-    pub cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
     pub page_size: PageSize,
-    pub include_total: bool,
 }
 
 /// 用量诊断维度。
@@ -667,8 +658,9 @@ pub struct UsageRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsagePage {
     pub items: Vec<UsageListRecord>,
-    pub total: Option<u64>,
-    pub next_cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub total: u64,
 }
 
 /// 请求中的一次上游尝试或运维事件。
@@ -795,8 +787,9 @@ pub struct OpsError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsErrorPage {
     pub items: Vec<OpsError>,
-    pub total: Option<u64>,
-    pub next_cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub total: u64,
 }
 
 /// 仪表盘趋势指标。

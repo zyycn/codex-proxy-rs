@@ -44,54 +44,32 @@ pub(crate) async fn list_ops_errors(
     query: OpsErrorQuery,
 ) -> StoreResult<OpsErrorPage> {
     query.filter.validate()?;
-    let total = if query.include_total {
-        Some(count_ops_errors(pool, query.range, &query.filter).await?)
-    } else {
-        None
-    };
+    let total = count_ops_errors(pool, query.range, &query.filter).await?;
+    let offset = observability_page_offset(query.current_page, query.page_size)?;
     let mut statement = QueryBuilder::<Postgres>::new("select * from (");
     statement.push(REQUEST_ERROR_SELECT);
-    push_request_error_predicates(
-        &mut statement,
-        query.range,
-        &query.filter,
-        query.cursor.as_ref(),
-    );
+    push_request_error_predicates(&mut statement, query.range, &query.filter);
     statement.push(" union all ");
     statement.push(OPS_EVENT_SELECT);
-    push_ops_event_predicates(
-        &mut statement,
-        query.range,
-        &query.filter,
-        query.cursor.as_ref(),
-    );
+    push_ops_event_predicates(&mut statement, query.range, &query.filter);
     statement.push(") e order by occurred_at desc, stable_sort_id desc limit ");
-    statement.push_bind(i64::from(query.page_size.get()) + 1);
+    statement.push_bind(i64::from(query.page_size.get()));
+    statement.push(" offset ");
+    statement.push_bind(offset);
     let rows = statement
         .build()
         .fetch_all(pool)
         .await
         .map_err(|_| postgres_unavailable("list ops errors"))?;
-    let mut items = rows
+    let items = rows
         .iter()
         .map(ops_error_from_row)
         .collect::<StoreResult<Vec<_>>>()?;
-    let has_more = items.len() > usize::from(query.page_size.get());
-    if has_more {
-        items.pop();
-    }
-    let next_cursor = if has_more {
-        items
-            .last()
-            .map(|item| ObservabilityCursor::new(item.occurred_at, item.stable_sort_id.clone()))
-            .transpose()?
-    } else {
-        None
-    };
     Ok(OpsErrorPage {
         items,
+        current_page: query.current_page,
+        page_size: query.page_size.get(),
         total,
-        next_cursor,
     })
 }
 
@@ -103,11 +81,11 @@ pub(crate) async fn count_ops_errors(
     let mut statement = QueryBuilder::<Postgres>::new(
         "select coalesce(sum(source_count), 0)::bigint from (select count(*)::bigint as source_count from model_requests mr where mr.outcome = 'failed'",
     );
-    push_request_error_predicates(&mut statement, range, filter, None);
+    push_request_error_predicates(&mut statement, range, filter);
     statement.push(
         " union all select count(*)::bigint as source_count from ops_events oe left join model_requests mr on mr.id = oe.model_request_id where true",
     );
-    push_ops_event_predicates(&mut statement, range, filter, None);
+    push_ops_event_predicates(&mut statement, range, filter);
     statement.push(") counts");
     let total = statement
         .build_query_scalar::<i64>()
@@ -121,7 +99,6 @@ fn push_request_error_predicates(
     statement: &mut QueryBuilder<Postgres>,
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
-    cursor: Option<&ObservabilityCursor>,
 ) {
     push_range(statement, "mr.completed_at", range);
     for (column, value) in [
@@ -162,19 +139,12 @@ fn push_request_error_predicates(
             search,
         );
     }
-    push_cursor(
-        statement,
-        "mr.completed_at",
-        "'model_request:' || mr.id",
-        cursor,
-    );
 }
 
 fn push_ops_event_predicates(
     statement: &mut QueryBuilder<Postgres>,
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
-    cursor: Option<&ObservabilityCursor>,
 ) {
     push_range(statement, "oe.created_at", range);
     for (column, value) in [
@@ -217,7 +187,6 @@ fn push_ops_event_predicates(
             search,
         );
     }
-    push_cursor(statement, "oe.created_at", "'ops_event:' || oe.id", cursor);
 }
 
 fn push_range(statement: &mut QueryBuilder<Postgres>, column: &str, range: ObservabilityRange) {
@@ -261,19 +230,4 @@ fn push_prefix_search(statement: &mut QueryBuilder<Postgres>, columns: &[&str], 
         statement.push(" escape '\\'");
     }
     statement.push(")");
-}
-
-fn push_cursor(
-    statement: &mut QueryBuilder<Postgres>,
-    occurred_at: &str,
-    stable_sort_id: &str,
-    cursor: Option<&ObservabilityCursor>,
-) {
-    if let Some(cursor) = cursor {
-        statement.push(format!(" and ({occurred_at}, {stable_sort_id}) < ("));
-        statement.push_bind(cursor.observed_at);
-        statement.push(", ");
-        statement.push_bind(cursor.stable_id.clone());
-        statement.push(")");
-    }
 }

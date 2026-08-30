@@ -19,14 +19,13 @@ fn dashboard_query_should_reject_unknown_trend_kind() {
 }
 
 #[test]
-fn usage_query_should_bound_page_size_and_cursor() {
+fn usage_query_should_accept_element_plus_pagination() {
     let query: UsageQuery = serde_json::from_value(json!({
-        "pageSize": 100,
-        "cursor": "opaque"
+        "currentPage": 129,
+        "pageSize": 10
     }))
     .unwrap();
-    assert_eq!(query.validate_page_size().unwrap(), 100);
-    assert!(query.validate_cursor().is_ok());
+    assert_eq!(query.validate_pagination().unwrap(), (129, 10));
 }
 
 #[test]
@@ -35,14 +34,19 @@ fn usage_query_should_reject_removed_total_toggle() {
 }
 
 #[test]
-fn usage_query_should_reject_removed_offset_page_contract() {
+fn usage_query_should_reject_removed_cursor_contract() {
+    assert!(serde_json::from_value::<UsageQuery>(json!({"cursor": "opaque"})).is_err());
+}
+
+#[test]
+fn usage_query_should_reject_nonstandard_page_name() {
     assert!(serde_json::from_value::<UsageQuery>(json!({"page": 1})).is_err());
 }
 
 #[test]
 fn ops_query_should_reject_page_size_above_terminal_limit() {
     let query: OpsQuery = serde_json::from_value(json!({"pageSize": 101})).unwrap();
-    assert_eq!(query.validate_page_size().unwrap_err().field(), "pageSize");
+    assert_eq!(query.validate_pagination().unwrap_err().field(), "pageSize");
 }
 
 #[test]

@@ -675,13 +675,14 @@ impl ObservabilityStore for FixtureObservabilityStore {
             .clone())
     }
 
-    async fn list_usage_records(&self, _: UsageQuery) -> AdminStoreResult<UsagePage> {
+    async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
         let items = self.usage_records.lock().expect("usage records").clone();
         let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
         Ok(UsagePage {
             items,
-            total: Some(total),
-            next_cursor: None,
+            current_page: query.current_page,
+            page_size: query.page_size.get(),
+            total,
         })
     }
 
@@ -783,9 +784,8 @@ fn usage_query(now: DateTime<Utc>) -> UsageQuery {
     UsageQuery {
         range: observation_range(now),
         filter: UsageFilter::default(),
-        cursor: None,
+        current_page: 1,
         page_size: PageSize::new(50).expect("page size"),
-        include_total: true,
     }
 }
 

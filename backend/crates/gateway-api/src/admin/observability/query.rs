@@ -2,14 +2,10 @@
 
 use super::*;
 
-use base64::Engine as _;
-
 /// 观测列表默认页大小。
 pub const DEFAULT_PAGE_SIZE: u16 = 50;
 /// 观测列表允许的最大页大小。
 pub const MAX_PAGE_SIZE: u16 = 100;
-/// 游标编码在 HTTP 层解码前允许的最大长度。
-pub const MAX_CURSOR_BYTES: usize = 1024;
 
 /// Dashboard 查询参数。
 #[derive(Clone, Default, Deserialize)]
@@ -31,8 +27,8 @@ impl DashboardQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
+    pub current_page: Option<u32>,
     pub page_size: Option<u16>,
-    pub cursor: Option<String>,
     pub kind: Option<String>,
     pub outcome: Option<String>,
     pub client_api_key_id: Option<String>,
@@ -52,18 +48,17 @@ pub struct UsageQuery {
 }
 
 impl UsageQuery {
-    /// 校验分页字段，不改变仓储层的分页 owner。
-    pub fn validate_page_size(&self) -> Result<u16, WireValidationError> {
+    /// 校验 Element Plus 风格的页码分页字段。
+    pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
+        let current_page = self.current_page.unwrap_or(1);
+        if current_page == 0 {
+            return Err(WireValidationError::new("currentPage"));
+        }
         let page_size = self.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
         if page_size == 0 || page_size > MAX_PAGE_SIZE {
             return Err(WireValidationError::new("pageSize"));
         }
-        Ok(page_size)
-    }
-
-    /// 校验游标的 wire 边界；编码和排序语义由应用层负责。
-    pub fn validate_cursor(&self) -> Result<(), WireValidationError> {
-        validate_cursor(self.cursor.as_deref())
+        Ok((current_page, page_size))
     }
 }
 
@@ -105,8 +100,8 @@ impl DiagnosticsQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpsQuery {
+    pub current_page: Option<u32>,
     pub page_size: Option<u16>,
-    pub cursor: Option<String>,
     pub kind: Option<String>,
     pub client_api_key_id: Option<String>,
     pub provider: Option<String>,
@@ -128,18 +123,17 @@ pub struct OpsQuery {
 }
 
 impl OpsQuery {
-    /// 校验分页字段。
-    pub fn validate_page_size(&self) -> Result<u16, WireValidationError> {
+    /// 校验 Element Plus 风格的页码分页字段。
+    pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
+        let current_page = self.current_page.unwrap_or(1);
+        if current_page == 0 {
+            return Err(WireValidationError::new("currentPage"));
+        }
         let page_size = self.page_size.unwrap_or(DEFAULT_PAGE_SIZE);
         if page_size == 0 || page_size > MAX_PAGE_SIZE {
             return Err(WireValidationError::new("pageSize"));
         }
-        Ok(page_size)
-    }
-
-    /// 校验游标的 wire 边界。
-    pub fn validate_cursor(&self) -> Result<(), WireValidationError> {
-        validate_cursor(self.cursor.as_deref())
+        Ok((current_page, page_size))
     }
 }
 
@@ -248,13 +242,6 @@ pub(crate) fn require_text(value: &str, field: &'static str) -> Result<(), WireV
     }
 }
 
-pub(crate) fn validate_cursor(value: Option<&str>) -> Result<(), WireValidationError> {
-    if value.is_some_and(|value| value.is_empty() || value.len() > MAX_CURSOR_BYTES) {
-        return Err(WireValidationError::new("cursor"));
-    }
-    Ok(())
-}
-
 pub(crate) fn trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -336,22 +323,19 @@ pub(crate) fn usage_filter(query: &UsageQuery) -> Result<domain::UsageFilter, Wi
 }
 
 pub(crate) fn usage_command(query: &UsageQuery) -> Result<domain::UsageQuery, WireValidationError> {
-    let page_size = query.validate_page_size()?;
-    query.validate_cursor()?;
+    let (current_page, page_size) = query.validate_pagination()?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     Ok(domain::UsageQuery {
         range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
         filter: usage_filter(query)?,
-        cursor: decode_observability_cursor(query.cursor.as_deref())?,
+        current_page,
         page_size: page_size_value,
-        include_total: query.cursor.is_none(),
     })
 }
 
 pub(crate) fn ops_command(query: &OpsQuery) -> Result<domain::OpsErrorQuery, WireValidationError> {
-    let page_size = query.validate_page_size()?;
-    query.validate_cursor()?;
+    let (current_page, page_size) = query.validate_pagination()?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     let status_code = parse_status(
@@ -377,45 +361,9 @@ pub(crate) fn ops_command(query: &OpsQuery) -> Result<domain::OpsErrorQuery, Wir
             status_code,
             search: non_empty(query.search.clone()),
         },
-        cursor: decode_observability_cursor(query.cursor.as_deref())?,
+        current_page,
         page_size: page_size_value,
-        include_total: query.cursor.is_none(),
     })
-}
-
-pub(crate) fn decode_observability_cursor(
-    value: Option<&str>,
-) -> Result<Option<domain::ObservabilityCursor>, WireValidationError> {
-    value
-        .map(|encoded| {
-            if encoded.is_empty() || encoded.len() > MAX_CURSOR_BYTES {
-                return Err(WireValidationError::new("cursor"));
-            }
-            let bytes = URL_SAFE_NO_PAD
-                .decode(encoded)
-                .map_err(|_| WireValidationError::new("cursor"))?;
-            let wire: CursorWire =
-                serde_json::from_slice(&bytes).map_err(|_| WireValidationError::new("cursor"))?;
-            if wire.stable_id.trim().is_empty() {
-                return Err(WireValidationError::new("cursor"));
-            }
-            Ok(domain::ObservabilityCursor {
-                observed_at: wire.observed_at,
-                stable_id: wire.stable_id,
-            })
-        })
-        .transpose()
-}
-
-pub(crate) fn encode_observability_cursor(
-    cursor: &domain::ObservabilityCursor,
-) -> Result<String, WireValidationError> {
-    let bytes = serde_json::to_vec(&CursorWire {
-        observed_at: cursor.observed_at,
-        stable_id: cursor.stable_id.clone(),
-    })
-    .map_err(|_| WireValidationError::new("cursor"))?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub(crate) fn non_empty(value: Option<String>) -> Option<String> {

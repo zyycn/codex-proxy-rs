@@ -156,11 +156,22 @@ pub(crate) async fn list_usage_records(
     query: UsageRecordQuery,
 ) -> StoreResult<UsageRecordPage> {
     query.filter.validate()?;
-    let total = if query.include_total {
-        Some(count_usage_records(pool, query.range, &query.filter).await?)
-    } else {
-        None
-    };
+    let total = count_usage_records(pool, query.range, &query.filter).await?;
+    let items = list_usage_record_items(pool, &query).await?;
+    Ok(UsageRecordPage {
+        items,
+        current_page: query.current_page,
+        page_size: query.page_size.get(),
+        total,
+    })
+}
+
+pub(crate) async fn list_usage_record_items(
+    pool: &PgPool,
+    query: &UsageRecordQuery,
+) -> StoreResult<Vec<UsageListRecord>> {
+    query.filter.validate()?;
+    let offset = observability_page_offset(query.current_page, query.page_size)?;
     let mut statement = QueryBuilder::<Postgres>::new(USAGE_LIST_RECORD_SELECT);
     statement.push(" where mr.started_at >= ");
     statement.push_bind(query.range.start);
@@ -168,41 +179,20 @@ pub(crate) async fn list_usage_records(
     statement.push_bind(query.range.end);
     push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, &query.filter, "mr");
-    if let Some(cursor) = &query.cursor {
-        statement.push(" and (mr.started_at, mr.id) < (");
-        statement.push_bind(cursor.observed_at);
-        statement.push(", ");
-        statement.push_bind(cursor.stable_id.clone());
-        statement.push(")");
-    }
     statement.push(" order by mr.started_at desc, mr.id desc limit ");
-    statement.push_bind(i64::from(query.page_size.get()) + 1);
+    statement.push_bind(i64::from(query.page_size.get()));
+    statement.push(" offset ");
+    statement.push_bind(offset);
     let rows = statement
         .build()
         .fetch_all(pool)
         .await
         .map_err(|_| postgres_unavailable("list usage records"))?;
-    let mut items = rows
+    let items = rows
         .iter()
         .map(usage_list_record_from_row)
         .collect::<StoreResult<Vec<_>>>()?;
-    let has_more = items.len() > usize::from(query.page_size.get());
-    if has_more {
-        items.pop();
-    }
-    let next_cursor = if has_more {
-        items
-            .last()
-            .map(|item| ObservabilityCursor::new(item.started_at, item.id.clone()))
-            .transpose()?
-    } else {
-        None
-    };
-    Ok(UsageRecordPage {
-        items,
-        total,
-        next_cursor,
-    })
+    Ok(items)
 }
 
 pub(crate) async fn count_usage_records(

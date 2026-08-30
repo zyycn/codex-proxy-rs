@@ -3,10 +3,10 @@
 use chrono::{TimeZone, Utc};
 use gateway_admin::model::observability::DesktopReleaseStatus;
 use gateway_api::admin::observability::{
-    BillingView, CostCoverageView, CursorWire, DashboardAccountRequestBucketView,
-    DashboardAccountUsageView, DashboardDesktopReleaseStatusView, DashboardWireAttributeView,
-    DashboardWireProfileView, DashboardWireTargetView, PageData, TokenDetailsView, TrendData,
-    TrendKind, TrendPointView, TrendSummaryView,
+    BillingView, CostCoverageView, DashboardAccountRequestBucketView, DashboardAccountUsageView,
+    DashboardDesktopReleaseStatusView, DashboardWireAttributeView, DashboardWireProfileView,
+    DashboardWireTargetView, PageData, TokenDetailsView, TrendData, TrendKind, TrendPointView,
+    TrendSummaryView,
 };
 use serde_json::json;
 
@@ -14,12 +14,15 @@ use serde_json::json;
 fn usage_page_should_keep_terminal_camel_case_shape() {
     let data = PageData {
         items: vec![json!({"id": "request_1"})],
-        total: Some(1),
-        next_cursor: Some("cursor".to_owned()),
+        current_page: 129,
+        page_size: 10,
+        total: 1287,
     };
     let value = serde_json::to_value(data).unwrap();
-    assert_eq!(value["total"], 1);
-    assert_eq!(value["nextCursor"], "cursor");
+    assert_eq!(value["currentPage"], 129);
+    assert_eq!(value["pageSize"], 10);
+    assert_eq!(value["total"], 1287);
+    assert!(value.get("nextCursor").is_none());
 }
 
 #[test]
@@ -154,11 +157,7 @@ fn sensitive_response_views_do_not_require_debug_or_add_secret_fields() {
         image_output_tokens_display: "-".to_owned(),
         total_tokens_display: "3".to_owned(),
     };
-    let cursor = CursorWire {
-        observed_at: Utc.timestamp_opt(0, 0).single().unwrap(),
-        stable_id: "request_1".to_owned(),
-    };
-    let value = serde_json::to_value((&coverage, &token_details, &cursor)).unwrap();
+    let value = serde_json::to_value((&coverage, &token_details)).unwrap();
     assert!(value.to_string().contains("known"));
     assert!(!value.to_string().contains("secret"));
 }

@@ -14,7 +14,7 @@ interface PageRequest {
   pageSize: number
 }
 
-/** Element Plus 风格的页面分页状态；稳定深分页由 API pager 内部完成。 */
+/** Element Plus 风格的服务端页码分页；一次 execute 只发起一次列表请求。 */
 export function useStablePagedQuery<Result extends PageResult>(options: {
   initialPageSize: number
   load: (pagination: PageRequest) => Promise<Result>

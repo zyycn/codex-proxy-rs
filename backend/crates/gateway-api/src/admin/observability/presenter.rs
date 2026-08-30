@@ -515,18 +515,13 @@ pub(crate) fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetai
     }
 }
 
-pub(crate) fn usage_page_view(
-    page: domain::UsagePage,
-) -> Result<PageData<UsageListRecordView>, WireValidationError> {
-    Ok(PageData {
+pub(crate) fn usage_page_view(page: domain::UsagePage) -> PageData<UsageListRecordView> {
+    PageData {
         items: page.items.into_iter().map(usage_list_record_view).collect(),
+        current_page: page.current_page,
+        page_size: page.page_size,
         total: page.total,
-        next_cursor: page
-            .next_cursor
-            .as_ref()
-            .map(encode_observability_cursor)
-            .transpose()?,
-    })
+    }
 }
 
 pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
@@ -566,18 +561,13 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
     }
 }
 
-pub(crate) fn ops_page_view(
-    page: domain::OpsErrorPage,
-) -> Result<PageData<OpsErrorView>, WireValidationError> {
-    Ok(PageData {
+pub(crate) fn ops_page_view(page: domain::OpsErrorPage) -> PageData<OpsErrorView> {
+    PageData {
         items: page.items.into_iter().map(ops_error_view).collect(),
+        current_page: page.current_page,
+        page_size: page.page_size,
         total: page.total,
-        next_cursor: page
-            .next_cursor
-            .as_ref()
-            .map(encode_observability_cursor)
-            .transpose()?,
-    })
+    }
 }
 
 pub(crate) fn trend_point_view(point: domain::TrendPoint) -> TrendPointView {

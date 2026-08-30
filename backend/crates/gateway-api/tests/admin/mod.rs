@@ -858,9 +858,10 @@ impl ObservabilityStore for UnusedStore {
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
         let items = self.usage_records.lock().expect("usage records").clone();
         Ok(UsagePage {
-            total: query.include_total.then_some(items.len() as u64),
+            current_page: query.current_page,
+            page_size: query.page_size.get(),
+            total: items.len() as u64,
             items,
-            next_cursor: None,
         })
     }
 
@@ -888,9 +889,10 @@ impl ObservabilityStore for UnusedStore {
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {
         let items = self.ops_errors.lock().expect("ops errors").clone();
         Ok(OpsErrorPage {
-            total: query.include_total.then_some(items.len() as u64),
+            current_page: query.current_page,
+            page_size: query.page_size.get(),
+            total: items.len() as u64,
             items,
-            next_cursor: None,
         })
     }
 }

@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use gateway_admin::model::{PageSize as DomainPageSize, observability as domain};
 use serde::{Deserialize, Serialize};

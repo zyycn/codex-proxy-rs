@@ -43,21 +43,17 @@ impl ObservabilityPageSize {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObservabilityCursor {
-    pub observed_at: DateTime<Utc>,
-    pub stable_id: String,
-}
-
-impl ObservabilityCursor {
-    pub fn new(observed_at: DateTime<Utc>, stable_id: impl Into<String>) -> StoreResult<Self> {
-        let stable_id = stable_id.into();
-        validate_text(&stable_id, MAX_FILTER_BYTES, "cursor ID")?;
-        Ok(Self {
-            observed_at,
-            stable_id,
-        })
-    }
+pub(crate) fn observability_page_offset(
+    current_page: u32,
+    page_size: ObservabilityPageSize,
+) -> StoreResult<i64> {
+    let page_index = current_page
+        .checked_sub(1)
+        .ok_or_else(|| invalid("current page must be positive"))?;
+    u64::from(page_index)
+        .checked_mul(u64::from(page_size.get()))
+        .and_then(|offset| i64::try_from(offset).ok())
+        .ok_or_else(|| invalid("page offset is too large"))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -119,9 +115,8 @@ impl UsageRecordFilter {
 pub struct UsageRecordQuery {
     pub range: ObservabilityRange,
     pub filter: UsageRecordFilter,
-    pub cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
     pub page_size: ObservabilityPageSize,
-    pub include_total: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -183,9 +178,8 @@ impl OpsErrorFilter {
 pub struct OpsErrorQuery {
     pub range: ObservabilityRange,
     pub filter: OpsErrorFilter,
-    pub cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
     pub page_size: ObservabilityPageSize,
-    pub include_total: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -609,8 +603,9 @@ pub struct UsageRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRecordPage {
     pub items: Vec<UsageListRecord>,
-    pub total: Option<u64>,
-    pub next_cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -723,8 +718,9 @@ pub struct OpsErrorRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsErrorPage {
     pub items: Vec<OpsErrorRecord>,
-    pub total: Option<u64>,
-    pub next_cursor: Option<ObservabilityCursor>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub total: u64,
 }
 
 #[async_trait]
