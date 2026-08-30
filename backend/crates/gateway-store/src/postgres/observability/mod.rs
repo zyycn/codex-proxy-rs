@@ -22,8 +22,10 @@ mod admin_adapter;
 mod mapping;
 mod model;
 mod queries;
+mod query_budget;
 
 pub use admin_adapter::*;
 pub(crate) use mapping::*;
 pub use model::*;
 pub(crate) use queries::*;
+pub use query_budget::*;

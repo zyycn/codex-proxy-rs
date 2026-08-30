@@ -1,10 +1,14 @@
 //! PostgreSQL 业务表的 adapters。
 
 use async_trait::async_trait;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 
 use crate::{
-    Revision, StoreBackend, StoreError, StorePoolConfig, StoreResult, postgres_unavailable,
+    POSTGRES_IDLE_TRANSACTION_TIMEOUT, POSTGRES_LOCK_TIMEOUT, POSTGRES_STATEMENT_TIMEOUT, Revision,
+    StoreBackend, StoreError, StorePoolConfig, StoreResult, postgres_unavailable,
 };
 
 mod account_groups;
@@ -45,22 +49,63 @@ pub async fn connect_and_migrate(
     if database_url.trim().is_empty() {
         return Err(postgres_unavailable("connect PostgreSQL"));
     }
-    let pool = PgPoolOptions::new()
-        .max_connections(pool_config.max_connections)
-        .acquire_timeout(std::time::Duration::from_secs(
-            pool_config.acquire_timeout_seconds,
-        ))
-        .connect(database_url)
+    pool_config.validate()?;
+    let connect_options = database_url
+        .parse::<PgConnectOptions>()
+        .map_err(|_| postgres_unavailable("parse PostgreSQL connection options"))?;
+    let migration_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            connect_options
+                .clone()
+                .application_name("codex-proxy-rs:migration"),
+        )
         .await
-        .map_err(|_| postgres_unavailable("connect PostgreSQL"))?;
-    if let Err(error) = MIGRATOR.run(&pool).await {
-        pool.close().await;
+        .map_err(|_| postgres_unavailable("connect PostgreSQL for migrations"))?;
+    if let Err(error) = MIGRATOR.run(&migration_pool).await {
+        migration_pool.close().await;
         return Err(StoreError::Unavailable {
             backend: StoreBackend::PostgreSql,
             message: format!("apply PostgreSQL migrations: {error}"),
         });
     }
+    migration_pool.close().await;
+
+    let statement_timeout = postgres_duration_setting(POSTGRES_STATEMENT_TIMEOUT);
+    let lock_timeout = postgres_duration_setting(POSTGRES_LOCK_TIMEOUT);
+    let idle_in_transaction_session_timeout =
+        postgres_duration_setting(POSTGRES_IDLE_TRANSACTION_TIMEOUT);
+    let pool = PgPoolOptions::new()
+        .max_connections(pool_config.max_connections)
+        .acquire_timeout(std::time::Duration::from_secs(
+            pool_config.acquire_timeout_seconds,
+        ))
+        .after_connect(move |connection, _metadata| {
+            let statement_timeout = statement_timeout.clone();
+            let lock_timeout = lock_timeout.clone();
+            let idle_in_transaction_session_timeout = idle_in_transaction_session_timeout.clone();
+            Box::pin(async move {
+                sqlx::query(
+                    "select set_config('statement_timeout', $1, false),
+                            set_config('lock_timeout', $2, false),
+                            set_config('idle_in_transaction_session_timeout', $3, false)",
+                )
+                .bind(statement_timeout)
+                .bind(lock_timeout)
+                .bind(idle_in_transaction_session_timeout)
+                .execute(connection)
+                .await?;
+                Ok(())
+            })
+        })
+        .connect_with(connect_options.application_name("codex-proxy-rs"))
+        .await
+        .map_err(|_| postgres_unavailable("connect PostgreSQL"))?;
     Ok(pool)
+}
+
+fn postgres_duration_setting(duration: std::time::Duration) -> String {
+    format!("{}ms", duration.as_millis())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,21 +176,8 @@ impl PgControlPlaneRepository {
 #[async_trait]
 impl ControlPlaneRepository for PgControlPlaneRepository {
     async fn load_control_plane(&self) -> StoreResult<ControlPlaneSnapshot> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin control plane snapshot"))?;
-        sqlx::query("set transaction isolation level repeatable read read only")
-            .execute(&mut *transaction)
-            .await
-            .map_err(|_| postgres_unavailable("configure control plane snapshot"))?;
-        let snapshot = load_control_plane_in_transaction(&mut transaction).await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| postgres_unavailable("commit control plane snapshot"))?;
-        Ok(snapshot)
+        let settings = load_runtime_settings_from_pool(&self.pool).await?;
+        Ok(ControlPlaneSnapshot { settings })
     }
 
     async fn replace_control_plane(

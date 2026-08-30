@@ -1,6 +1,9 @@
 //! Store 启动配置、环境变量解析与校验。
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use super::*;
 
@@ -8,6 +11,9 @@ pub(crate) const DATABASE_URL_ENV: &str = "CPR_DATABASE_URL";
 pub(crate) const REDIS_URL_ENV: &str = "CPR_REDIS_URL";
 pub(crate) const DATABASE_PASSWORD_ENV: &str = "CPR_DATABASE_PASSWORD";
 pub(crate) const REDIS_PASSWORD_ENV: &str = "CPR_REDIS_PASSWORD";
+pub(crate) const POSTGRES_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const POSTGRES_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const POSTGRES_IDLE_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Store 自己拥有并校验的启动配置。
 #[derive(Clone, Deserialize)]
@@ -32,21 +38,29 @@ pub struct StorePoolConfig {
 impl Default for StorePoolConfig {
     fn default() -> Self {
         Self {
-            max_connections: 10,
+            max_connections: 20,
             acquire_timeout_seconds: 5,
         }
     }
 }
 
 impl StorePoolConfig {
-    fn validate(&self) -> StoreResult<()> {
-        if self.max_connections == 0 || self.acquire_timeout_seconds == 0 {
+    pub(crate) fn validate(&self) -> StoreResult<()> {
+        if self.max_connections < 2 || self.acquire_timeout_seconds == 0 {
             return Err(StoreError::InvalidData {
                 entity: "store config",
-                message: "pool limits must be positive".to_owned(),
+                message:
+                    "pool.max_connections must be at least 2 and acquire timeout must be positive"
+                        .to_owned(),
             });
         }
         Ok(())
+    }
+
+    /// 管理观测查询可并发占用的连接数；始终为数据面保留约 20% 的池容量。
+    #[must_use]
+    pub const fn observability_max_connections(self) -> u32 {
+        self.max_connections - self.max_connections.div_ceil(5)
     }
 }
 
@@ -123,6 +137,7 @@ impl fmt::Debug for StoreConfig {
             .debug_struct("StoreConfig")
             .field("database", &"[REDACTED]")
             .field("redis", &"[REDACTED]")
+            .field("pool", &self.pool)
             .finish()
     }
 }

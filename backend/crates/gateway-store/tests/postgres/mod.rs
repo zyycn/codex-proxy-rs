@@ -17,6 +17,7 @@ mod execution_buffer;
 mod observability;
 mod ops_events;
 mod provider_accounts;
+mod query_budget;
 mod retention;
 mod runtime_settings;
 mod snapshot;
@@ -106,18 +107,33 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
         .database(&database)
         .to_url_lossy()
         .to_string();
-    let first = connect_and_migrate(&isolated_url, gateway_store::StorePoolConfig::default())
+    let pool_config = gateway_store::StorePoolConfig::default();
+    let first = connect_and_migrate(&isolated_url, pool_config)
         .await
         .expect("apply migrations through production migrator");
-    let first_table_count = sqlx::query_scalar::<_, i64>(
-        "select count(*) from information_schema.tables where table_schema = 'public'",
+    let session_settings = sqlx::query_as::<_, (String, i64, i64, i64)>(
+        "select current_setting('application_name'),
+                extract(epoch from current_setting('statement_timeout')::interval)::bigint,
+                extract(epoch from current_setting('lock_timeout')::interval)::bigint,
+                extract(epoch from current_setting(
+                    'idle_in_transaction_session_timeout'
+                )::interval)::bigint",
     )
     .fetch_one(&first)
     .await
-    .expect("count migrated tables");
+    .expect("load runtime PostgreSQL session settings");
+    let first_tables = sqlx::query_scalar::<_, String>(
+        "select table_name
+         from information_schema.tables
+         where table_schema = 'public'
+         order by table_name",
+    )
+    .fetch_all(&first)
+    .await
+    .expect("load migrated tables");
     first.close().await;
 
-    let second = connect_and_migrate(&isolated_url, gateway_store::StorePoolConfig::default())
+    let second = connect_and_migrate(&isolated_url, pool_config)
         .await
         .expect("reopen database through production migrator");
     let migration_count =
@@ -180,7 +196,25 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .expect("drop migration test database");
     admin.close().await;
 
-    assert_eq!(first_table_count, 13);
+    assert_eq!(
+        first_tables,
+        [
+            "_sqlx_migrations",
+            "account_group_accounts",
+            "account_groups",
+            "admin_audit_events",
+            "admin_users",
+            "backup_records",
+            "backup_settings",
+            "client_api_key_groups",
+            "client_api_keys",
+            "model_requests",
+            "ops_events",
+            "provider_accounts",
+            "runtime_settings",
+        ]
+    );
+    assert_eq!(session_settings, ("codex-proxy-rs".to_owned(), 30, 5, 30));
     assert_eq!(
         migration_count,
         i64::try_from(TEST_MIGRATOR.iter().count())

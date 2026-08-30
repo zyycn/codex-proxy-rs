@@ -128,38 +128,7 @@ impl PgRuntimeSettingsRepository {
 #[async_trait]
 impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
     async fn load_runtime_settings(&self) -> StoreResult<RuntimeSettings> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                i64,
-                Option<String>,
-                i64,
-                i64,
-                i64,
-                i64,
-                String,
-                sqlx::types::Json<BTreeMap<String, String>>,
-                i64,
-                i64,
-                i64,
-                DateTime<Utc>,
-            ),
-        >(
-            "select config_revision, admin_api_key, refresh_margin_seconds,
-                    refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                    rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
-                    audit_retention_days, updated_at
-             from runtime_settings where id = 1",
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| postgres_unavailable("load runtime settings"))?
-        .ok_or_else(|| StoreError::NotFound {
-            entity: "runtime settings",
-            id: "1".to_owned(),
-        })?;
-
-        runtime_settings_from_row(row)
+        load_runtime_settings_from_pool(&self.pool).await
     }
 
     async fn update_runtime_settings(
@@ -178,6 +147,24 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
             .map_err(|_| postgres_unavailable("commit runtime settings update"))?;
         Ok(revision)
     }
+}
+
+pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
+    let row = sqlx::query_as::<_, RuntimeSettingsRow>(
+            "select config_revision, admin_api_key, refresh_margin_seconds,
+                    refresh_concurrency, max_concurrent_per_account, request_interval_ms,
+                    rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                    audit_retention_days, updated_at
+             from runtime_settings where id = 1",
+        )
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| postgres_unavailable("load runtime settings"))?
+    .ok_or_else(|| StoreError::NotFound {
+        entity: "runtime settings",
+        id: "1".to_owned(),
+    })?;
+    runtime_settings_from_row(row)
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
