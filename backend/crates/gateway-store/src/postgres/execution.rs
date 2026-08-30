@@ -451,16 +451,15 @@ impl ModelRequestRepository for PgExecutionStore {
                upstream_model_id, upstream_transport, http_version,
                attempt_count, upstream_send_state, account_selection_wait_ms,
                capacity_used_slots, capacity_total_slots
-             ) values (
+             ) select
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
                $16, $17, $18, $19, $20, $21, $22, $23,
                $24, $25, $26,
-               (select name from provider_accounts where id = $25),
-               (select email from provider_accounts where id = $25),
-               (select authentication_kind from provider_accounts where id = $25),
+               account.name, account.email, account.authentication_kind,
                $27, $28, $29, 1, 'not_sent', $30, $31, $32
-             )",
+             from (values (true)) as seed(present)
+             left join provider_accounts account on account.id = $25",
         )
         .bind(request.id)
         .bind(request.client_api_key_id)
@@ -525,14 +524,11 @@ impl ModelRequestRepository for PgExecutionStore {
              set provider_kind = $2,
                  provider_account_id = $3,
                  provider_account_ref = $4,
-                 provider_account_name_snapshot = (
-                   select name from provider_accounts where id = $3
-                 ),
-                 provider_account_email_snapshot = (
-                   select email from provider_accounts where id = $3
-                 ),
-                 provider_account_authentication_kind_snapshot = (
-                   select authentication_kind from provider_accounts where id = $3
+                 (provider_account_name_snapshot,
+                  provider_account_email_snapshot,
+                  provider_account_authentication_kind_snapshot) = (
+                   select name, email, authentication_kind
+                   from provider_accounts where id = $3
                  ),
                  upstream_model_id = $5,
                  upstream_transport = $6,

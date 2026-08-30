@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::routing::{
     AccountGroupId, ConfigRevision,
@@ -27,14 +26,6 @@ pub struct SnapshotRuntimeSettings {
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialRevisionVectorEntry {
-    pub provider_account_id: String,
-    pub credential_revision: Revision,
-    pub credential_observed_at: DateTime<Utc>,
-    pub quota_observed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +62,6 @@ pub struct SnapshotGroupMembershipData {
 pub trait RuntimeSnapshotRepository: Send + Sync {
     async fn load_runtime_snapshot(&self) -> StoreResult<RuntimeSnapshotData>;
     async fn current_config_revision(&self) -> StoreResult<Revision>;
-    async fn credential_revision_vector(&self) -> StoreResult<Vec<CredentialRevisionVectorEntry>>;
 }
 
 #[derive(Clone)]
@@ -134,26 +124,6 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
             id: "1".to_owned(),
         })?;
         revision_from_i64(revision)
-    }
-
-    async fn credential_revision_vector(&self) -> StoreResult<Vec<CredentialRevisionVectorEntry>> {
-        let rows = sqlx::query_as::<_, (String, i64, DateTime<Utc>, Option<DateTime<Utc>>)>(
-            "select id, credential_revision, credential_observed_at, quota_observed_at
-             from provider_accounts order by id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|_| postgres_unavailable("read credential revision vector"))?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(CredentialRevisionVectorEntry {
-                    provider_account_id: row.0,
-                    credential_revision: revision_from_i64(row.1)?,
-                    credential_observed_at: row.2,
-                    quota_observed_at: row.3,
-                })
-            })
-            .collect()
     }
 }
 
