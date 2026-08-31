@@ -16,12 +16,14 @@ const props = withDefaults(
     showPlan?: boolean
     titleMode?: 'local-part' | 'email'
     metaPosition?: 'title' | 'secondary'
+    metaSize?: 'xs' | 'sm'
   }>(),
   {
     size: 'md',
     showPlan: false,
     titleMode: 'local-part',
     metaPosition: 'title',
+    metaSize: 'sm',
   },
 )
 
@@ -54,6 +56,8 @@ const secondaryClass = computed(() =>
     : 'mt-0.5 font-mono text-cp-xs text-cp-text-quaternary',
 )
 
+const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
+
 const avatarToneClass = computed(() => {
   const identity = props.account.id || props.account.email || displayTitle.value
   return stablePresetVisualToneClass(identity)
@@ -75,18 +79,20 @@ const avatarToneClass = computed(() => {
         </span>
         <span
           v-if="metaPosition === 'title' && (showPlan || $slots.meta)"
-          class="inline-flex shrink-0 items-center justify-end gap-1.5"
+          class="inline-flex shrink-0 items-center justify-end"
+          :class="metaGapClass"
         >
           <slot name="meta" />
-          <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />
+          <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :size="metaSize" />
         </span>
       </div>
       <div
         v-if="metaPosition === 'secondary' && (showPlan || $slots.meta)"
-        class="mt-0.5 inline-flex min-w-0 items-center gap-1.5"
+        class="mt-0.5 inline-flex min-w-0 items-center"
+        :class="metaGapClass"
       >
         <slot name="meta" />
-        <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" size="sm" />
+        <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :size="metaSize" />
       </div>
       <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
         {{ secondaryText }}

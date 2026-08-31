@@ -240,13 +240,14 @@ const statusBars = computed(() => {
                 show-plan
                 title-mode="email"
                 meta-position="secondary"
+                meta-size="xs"
                 class="min-w-0"
               >
                 <template #meta>
                   <ProviderIconGroup
                     :provider="account.provider"
                     :authentication-kind="account.authenticationKind"
-                    size="sm"
+                    size="xs"
                   />
                 </template>
               </AccountIdentityCell>

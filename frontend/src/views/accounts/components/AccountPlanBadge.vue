@@ -6,7 +6,7 @@ import { stableVisualIndex } from '../utils/visualTone'
 const props = withDefaults(
   defineProps<{
     planType?: string | null
-    size?: 'sm' | 'md'
+    size?: 'xs' | 'sm' | 'md'
   }>(),
   {
     planType: null,
@@ -29,11 +29,13 @@ const fallbackPalettes = [
 
 const label = computed(() => props.planType?.trim() || 'Free')
 
-const sizeClass = computed(() =>
-  props.size === 'sm'
+const sizeClass = computed(() => {
+  if (props.size === 'xs')
+    return 'h-4.5 rounded-full px-1.5 text-[10px] font-bold'
+  return props.size === 'sm'
     ? 'h-5 rounded-full px-1.75 text-cp-xs font-bold'
-    : 'h-5.5 rounded-full px-2 text-cp-xs font-heavy',
-)
+    : 'h-5.5 rounded-full px-2 text-cp-xs font-heavy'
+})
 
 const paletteClass = computed(() => {
   const key = label.value.toLowerCase()

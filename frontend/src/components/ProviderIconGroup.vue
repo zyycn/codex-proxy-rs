@@ -7,7 +7,7 @@ const props = withDefaults(
   defineProps<{
     provider?: string | null
     authenticationKind?: string | null
-    size?: 'sm' | 'md'
+    size?: 'xs' | 'sm' | 'md'
   }>(),
   {
     size: 'md',
@@ -17,9 +17,21 @@ const props = withDefaults(
 const normalizedProvider = computed(() => (props.provider ?? '').trim().toLowerCase())
 const normalizedAuthenticationKind = computed(() => (props.authenticationKind ?? '').trim().toLowerCase())
 const showAuthenticationKind = computed(() => props.authenticationKind !== undefined)
-const groupGapClass = computed(() => (props.size === 'sm' ? 'gap-1' : 'gap-2'))
-const iconContainerClass = computed(() => (props.size === 'sm' ? 'size-5 rounded-md' : 'size-7 rounded-lg'))
-const iconClass = computed(() => (props.size === 'sm' ? 'size-3' : 'size-4'))
+const groupGapClass = computed(() => {
+  if (props.size === 'xs')
+    return 'gap-0.75'
+  return props.size === 'sm' ? 'gap-1' : 'gap-2'
+})
+const iconContainerClass = computed(() => {
+  if (props.size === 'xs')
+    return 'size-4.5 rounded-md'
+  return props.size === 'sm' ? 'size-5 rounded-md' : 'size-7 rounded-lg'
+})
+const iconClass = computed(() => {
+  if (props.size === 'xs')
+    return 'size-2.5'
+  return props.size === 'sm' ? 'size-3' : 'size-4'
+})
 
 const providerLabel = computed(() => formatProviderLabel(props.provider, '未知平台'))
 
