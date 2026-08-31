@@ -22,6 +22,7 @@ use reqwest::{
 };
 use serde_json::{Value, map::Map};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::transport::protocol::responses::{CodexResponsesRequest, TransportRequirement};
 
@@ -538,6 +539,8 @@ pub struct CodexBackendStreamingResponse {
     pub body: CodexBackendSseStream,
     /// 实际使用的上游传输。
     pub transport: CodexBackendTransport,
+    /// WebSocket 响应所绑定的连接；HTTP transport 为 `None`。
+    pub websocket_connection_id: Option<Uuid>,
     /// 响应头里的最新 turn state。
     pub turn_state: Option<String>,
     /// 上游透传的 `set-cookie` 列表。

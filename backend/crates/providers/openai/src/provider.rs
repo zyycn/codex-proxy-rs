@@ -47,6 +47,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use url::Url;
+use uuid::Uuid;
 
 use crate::credential::{
     CodexAccountFailure, CodexCredentialCatalogError, CodexCredentialCatalogService,
@@ -754,6 +755,12 @@ fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
             account_selection,
         )
         .await;
+        if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
+            log_client_upstream_error(
+                UpstreamErrorLogContext::new(&request.context, &active_account, None),
+                error,
+            );
+        }
         let response = match response.map_err(map_handshake_attempt_error) {
             Ok(response) => response,
             Err(mut failure) => {
@@ -880,6 +887,12 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             &cancellation,
         )
         .await;
+        if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
+            log_client_upstream_error(
+                UpstreamErrorLogContext::new(&context, &active_account, None),
+                error,
+            );
+        }
         let response = response.map_err(map_handshake_attempt_error);
         let response = match response {
             Ok(response) => response,
@@ -948,6 +961,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             active_account = current;
         }
         let response_transport = response.transport;
+        let websocket_connection_id = response.websocket_connection_id;
         let mut body = response.body;
         let failure_diagnostics = response.diagnostics.clone();
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
@@ -992,7 +1006,17 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                 _ = wait_for_replay_grace(replay_grace_deadline) => Ok(PreCommitPoll::GraceElapsed),
                 chunk = body.next() => match chunk {
                     Some(Ok(chunk)) => Ok(PreCommitPoll::Upstream(Some(chunk))),
-                    Some(Err(error)) => Err(map_stream_error(error)),
+                    Some(Err(error)) => {
+                        log_client_upstream_error(
+                            UpstreamErrorLogContext::new(
+                                &context,
+                                &active_account,
+                                websocket_connection_id,
+                            ),
+                            &error,
+                        );
+                        Err(map_stream_error(error))
+                    }
                     None => Ok(PreCommitPoll::Upstream(None)),
                 },
             };
@@ -1068,6 +1092,15 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             let service_tier_changed = observation_state
                 .observe_upstream_service_tier(decoder.response_service_tier());
             let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
+                log_canonical_upstream_error(
+                    UpstreamErrorLogContext::new(
+                        &context,
+                        &active_account,
+                        websocket_connection_id,
+                    ),
+                    response_transport,
+                    &error,
+                );
                 let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
                 (
                     map_canonical_error(
@@ -1159,6 +1192,15 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
         };
         let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
+            log_canonical_upstream_error(
+                UpstreamErrorLogContext::new(
+                    &context,
+                    &active_account,
+                    websocket_connection_id,
+                ),
+                response_transport,
+                &error,
+            );
             let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
             (
                 map_canonical_error(
@@ -2203,6 +2245,141 @@ struct OpenAiFailureContext<'a> {
     response_origin: &'a Url,
     cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
     allows_account_state_mutation: bool,
+}
+
+#[derive(Clone, Copy)]
+struct UpstreamErrorLogContext<'a> {
+    request_id: &'a str,
+    account_id: &'a str,
+    attempt_index: u32,
+    websocket_connection_id: Option<Uuid>,
+}
+
+impl<'a> UpstreamErrorLogContext<'a> {
+    fn new(
+        context: &'a AttemptContext,
+        account: &'a ProviderAccount,
+        websocket_connection_id: Option<Uuid>,
+    ) -> Self {
+        Self {
+            request_id: context.request_id().as_str(),
+            account_id: account.id().as_str(),
+            attempt_index: context.attempt_index().get(),
+            websocket_connection_id,
+        }
+    }
+
+    fn with_websocket_connection_id(mut self, connection_id: Option<Uuid>) -> Self {
+        self.websocket_connection_id = self.websocket_connection_id.or(connection_id);
+        self
+    }
+}
+
+fn log_client_upstream_error(context: UpstreamErrorLogContext<'_>, error: &CodexClientError) {
+    match error {
+        CodexClientError::Upstream {
+            status,
+            body,
+            transport,
+            ..
+        } => log_raw_upstream_body(
+            context,
+            *transport,
+            "http_error_response",
+            Some(status.as_u16()),
+            None,
+            None,
+            body,
+        ),
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => {
+            log_raw_upstream_body(
+                context,
+                CodexBackendTransport::WebSocket,
+                "websocket_opening_response",
+                Some(upstream.status_code),
+                None,
+                None,
+                &upstream.body,
+            );
+        }
+        CodexClientError::WebSocket(error) => {
+            let Some(close) = error.close_before_terminal() else {
+                return;
+            };
+            let context = context.with_websocket_connection_id(close.connection_id());
+            let websocket_connection_id = context
+                .websocket_connection_id
+                .map(|connection_id| connection_id.to_string())
+                .unwrap_or_default();
+            let upstream_error_raw = close.reason().unwrap_or_default();
+            tracing::warn!(
+                request_id = %context.request_id,
+                account_id = %context.account_id,
+                attempt_index = context.attempt_index,
+                websocket_connection_id,
+                upstream_transport = WEBSOCKET_TRANSPORT,
+                upstream_error_kind = "websocket_close",
+                upstream_close_code = close.code().unwrap_or_default(),
+                upstream_close_code_present = close.code().is_some(),
+                upstream_error_raw,
+                upstream_error_raw_bytes = upstream_error_raw.len(),
+                upstream_error_raw_present = close.reason().is_some(),
+                "OpenAI upstream WebSocket closed before terminal event"
+            );
+        }
+        _ => {}
+    }
+}
+
+fn log_canonical_upstream_error(
+    context: UpstreamErrorLogContext<'_>,
+    transport: CodexBackendTransport,
+    error: &CodexCanonicalError,
+) {
+    let CodexCanonicalError::Upstream(failure) = error else {
+        return;
+    };
+    log_raw_upstream_body(
+        context,
+        transport,
+        "responses_error_event",
+        failure.explicit_status_code,
+        failure.upstream_code.as_deref(),
+        failure.upstream_type.as_deref(),
+        failure.raw_body(),
+    );
+}
+
+fn log_raw_upstream_body(
+    context: UpstreamErrorLogContext<'_>,
+    transport: CodexBackendTransport,
+    error_kind: &'static str,
+    status_code: Option<u16>,
+    upstream_code: Option<&str>,
+    upstream_type: Option<&str>,
+    upstream_error_raw: &str,
+) {
+    let websocket_connection_id = context
+        .websocket_connection_id
+        .map(|connection_id| connection_id.to_string())
+        .unwrap_or_default();
+    tracing::warn!(
+        request_id = %context.request_id,
+        account_id = %context.account_id,
+        attempt_index = context.attempt_index,
+        websocket_connection_id,
+        upstream_transport = actual_transport_name(transport),
+        upstream_error_kind = error_kind,
+        upstream_status_code = status_code.unwrap_or_default(),
+        upstream_status_code_present = status_code.is_some(),
+        upstream_error_code = upstream_code.unwrap_or_default(),
+        upstream_error_code_present = upstream_code.is_some(),
+        upstream_error_type = upstream_type.unwrap_or_default(),
+        upstream_error_type_present = upstream_type.is_some(),
+        upstream_error_raw,
+        upstream_error_raw_bytes = upstream_error_raw.len(),
+        "OpenAI upstream returned an error payload"
+    );
 }
 
 async fn apply_failure(

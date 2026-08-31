@@ -556,12 +556,19 @@ fn log_pump_exit(
             "Responses WebSocket pump stopped unexpectedly"
         );
     } else if matches!(reason, PumpExitReason::UpstreamCloseFrame { .. }) {
+        let upstream_close = reason.upstream_close();
+        let upstream_error_raw = upstream_close
+            .and_then(CodexWebSocketCloseError::reason)
+            .unwrap_or_default();
         tracing::info!(
             websocket_connection_id = %connection_id,
             account_id = %account_id,
             conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
             pump_exit_detail = detail,
+            upstream_close_code = ?upstream_close.and_then(CodexWebSocketCloseError::code),
+            upstream_error_raw,
+            upstream_error_raw_present = upstream_close.is_some_and(|close| close.reason().is_some()),
             backpressure_events,
             "Responses WebSocket pump received close frame"
         );

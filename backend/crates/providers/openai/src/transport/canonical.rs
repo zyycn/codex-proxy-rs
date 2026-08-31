@@ -59,7 +59,7 @@ pub enum CodexCanonicalError {
     Protocol(#[source] ProviderError),
     /// 上游在成功建立流后发送了明确的失败事件。
     #[error("Codex upstream reported a failed response")]
-    Upstream(ResponsesSseFailure),
+    Upstream(Box<ResponsesSseFailure>),
 }
 
 impl fmt::Debug for CodexCanonicalError {
@@ -291,7 +291,11 @@ impl CodexCanonicalDecoder {
         let signals = response_event_signals(event_type, &value);
         self.merge_timing_signals(signals);
         if matches!(event_type, Some("response.failed" | "error")) {
-            let failure = ResponsesSseFailure::from_event(event_type.unwrap_or_default(), &value);
+            let failure = ResponsesSseFailure::from_raw_event(
+                event_type.unwrap_or_default(),
+                &event.data,
+                &value,
+            );
             let mut canonical = Vec::new();
             if !self.started {
                 // 失败首帧可能是唯一携带 response_id 的上游事实。身份投影只做
@@ -307,7 +311,7 @@ impl CodexCanonicalDecoder {
             } else {
                 output.extend(canonical.into_iter().map(ProviderEvent::canonical));
             }
-            return Err(CodexCanonicalError::Upstream(failure));
+            return Err(CodexCanonicalError::Upstream(Box::new(failure)));
         }
         let mut canonical = Vec::new();
         if let Some(event_type) = event_type {

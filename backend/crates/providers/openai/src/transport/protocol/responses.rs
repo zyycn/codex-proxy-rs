@@ -404,6 +404,8 @@ pub struct ResponsesSseFailure {
     pub explicit_status_code: Option<u16>,
     /// 上游显式重试间隔，或从官方限流消息中解析出的重试间隔。
     pub retry_after_seconds: Option<u64>,
+    /// 上游错误事件的原始 JSON data；只应在明确的失败审计边界读取。
+    raw_body: String,
 }
 
 impl fmt::Debug for ResponsesSseFailure {
@@ -422,6 +424,10 @@ impl fmt::Debug for ResponsesSseFailure {
 
 impl ResponsesSseFailure {
     pub fn from_event(event: &str, value: &Value) -> Self {
+        Self::from_raw_event(event, &value.to_string(), value)
+    }
+
+    pub(crate) fn from_raw_event(event: &str, raw_body: &str, value: &Value) -> Self {
         Self {
             event: event.to_string(),
             message: failure_message(value).unwrap_or_else(|| "Codex upstream SSE failed".into()),
@@ -429,7 +435,14 @@ impl ResponsesSseFailure {
             upstream_type: failure_type(value),
             explicit_status_code: failure_explicit_status_code(value),
             retry_after_seconds: events::retry_after_seconds_from_value(value),
+            raw_body: raw_body.to_owned(),
         }
+    }
+
+    /// 返回上游错误事件未经重编码的 JSON data。
+    #[must_use]
+    pub fn raw_body(&self) -> &str {
+        &self.raw_body
     }
 }
 

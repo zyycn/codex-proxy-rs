@@ -234,6 +234,7 @@ async fn collect_backend_response(
     let CodexBackendStreamingResponse {
         mut body,
         transport,
+        websocket_connection_id: _,
         mut turn_state,
         set_cookie_headers,
         mut rate_limit_headers,

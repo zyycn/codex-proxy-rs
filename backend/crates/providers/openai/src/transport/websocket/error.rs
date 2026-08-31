@@ -4,6 +4,7 @@ use std::{fmt, time::Duration};
 
 use gateway_protocol::openai::sse::SseError;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::transport::client::CodexClientVisibleUpstreamResponse;
 use crate::transport::diagnostics::CodexUpstreamDiagnostics;
@@ -104,13 +105,29 @@ pub enum CodexWebSocketExchangeError {
 /// close reason 只供原请求的客户端错误响应使用；`Debug` 与 `Display` 均不会输出它。
 #[derive(Clone, PartialEq, Eq)]
 pub struct CodexWebSocketCloseError {
+    connection_id: Option<Uuid>,
     code: Option<u16>,
     reason: Option<String>,
 }
 
 impl CodexWebSocketCloseError {
     pub(crate) fn new(code: Option<u16>, reason: Option<String>) -> Self {
-        Self { code, reason }
+        Self {
+            connection_id: None,
+            code,
+            reason,
+        }
+    }
+
+    pub(crate) fn with_connection_id(mut self, connection_id: Uuid) -> Self {
+        self.connection_id = Some(connection_id);
+        self
+    }
+
+    /// 返回承载该 close frame 的 WebSocket 连接标识。
+    #[must_use]
+    pub const fn connection_id(&self) -> Option<Uuid> {
+        self.connection_id
     }
 
     /// 返回上游 close code；没有 close frame 时为 `None`。
@@ -130,6 +147,7 @@ impl fmt::Debug for CodexWebSocketCloseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CodexWebSocketCloseError")
+            .field("connection_id", &self.connection_id)
             .field("code", &self.code)
             .field("reason", &self.reason.as_ref().map(|_| "<redacted>"))
             .finish()
@@ -192,8 +210,14 @@ impl fmt::Display for CodexWebSocketUpstreamError {
 }
 
 impl CodexWebSocketExchangeError {
-    pub(crate) fn closed_before_terminal(code: Option<u16>, reason: Option<String>) -> Self {
-        Self::ClosedBeforeTerminal(CodexWebSocketCloseError::new(code, reason))
+    pub(crate) fn closed_before_terminal_on(
+        connection_id: Uuid,
+        code: Option<u16>,
+        reason: Option<String>,
+    ) -> Self {
+        Self::ClosedBeforeTerminal(
+            CodexWebSocketCloseError::new(code, reason).with_connection_id(connection_id),
+        )
     }
 
     pub(crate) fn close_before_terminal(&self) -> Option<&CodexWebSocketCloseError> {

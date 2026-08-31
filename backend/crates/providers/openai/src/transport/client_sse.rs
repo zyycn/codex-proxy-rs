@@ -151,6 +151,7 @@ impl CodexBackendClient {
         Ok(CodexBackendStreamingResponse {
             body: http_sse_stream(response, Arc::clone(&rate_limit_updates)),
             transport: CodexBackendTransport::HttpSse,
+            websocket_connection_id: None,
             turn_state,
             set_cookie_headers,
             rate_limit_headers,
@@ -387,7 +388,20 @@ impl CodexBackendClient {
                     loop {
                         match await_websocket_delivery_boundary(&mut exchange).await {
                             Ok(DeliveryBoundary::Ready) => break,
-                            Ok(DeliveryBoundary::ConnectionLimitReached { message }) => {
+                            Ok(DeliveryBoundary::ConnectionLimitReached {
+                                message,
+                                raw_frame,
+                            }) => {
+                                let upstream_error_raw = String::from_utf8_lossy(&raw_frame);
+                                tracing::warn!(
+                                    request_id = %context.request_id,
+                                    account_id = context.account_id.unwrap_or_default(),
+                                    websocket_connection_id = %exchange.websocket_connection_id,
+                                    upstream_transport = "websocket",
+                                    upstream_error_kind = "websocket_error_frame",
+                                    upstream_error_raw = %upstream_error_raw,
+                                    "OpenAI upstream returned a recoverable WebSocket error frame"
+                                );
                                 if fresh_retry_used {
                                     // 新连接仍被限流：与官方重试预算耗尽一致，降级同账号 HTTP/SSE。
                                     return self
@@ -513,6 +527,7 @@ impl CodexBackendClient {
                             .map_err(websocket_exchange_error_to_client_error),
                     ),
                     transport: CodexBackendTransport::WebSocket,
+                    websocket_connection_id: Some(exchange.websocket_connection_id),
                     turn_state: exchange.turn_state,
                     set_cookie_headers: exchange.set_cookie_headers,
                     rate_limit_headers: exchange.rate_limit_headers,
@@ -546,6 +561,7 @@ impl CodexBackendClient {
         delivery_wait_started_at: Instant,
         error: CodexWebSocketExchangeError,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        log_raw_websocket_close(context, &error);
         self.http_fallback_before_delivery(
             request,
             context,
@@ -807,6 +823,8 @@ enum DeliveryBoundary {
     ConnectionLimitReached {
         /// 上游错误说明。
         message: String,
+        /// 从 WebSocket 文本事件构造的完整 SSE 错误帧。
+        raw_frame: bytes::Bytes,
     },
 }
 
@@ -819,24 +837,52 @@ async fn await_websocket_delivery_boundary(
             Some(Ok(frame)) if is_websocket_lifecycle_prelude(&frame) => prelude.push(frame),
             Some(Ok(frame)) => {
                 let limit_message = websocket_connection_limit_message(&frame);
+                let raw_frame = limit_message.as_ref().map(|_| frame.clone());
                 prelude.push(frame);
                 let remaining =
                     std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
                 exchange.body =
                     Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
                 return Ok(match limit_message {
-                    Some(message) => DeliveryBoundary::ConnectionLimitReached { message },
+                    Some(message) => DeliveryBoundary::ConnectionLimitReached {
+                        message,
+                        raw_frame: raw_frame.unwrap_or_default(),
+                    },
                     None => DeliveryBoundary::Ready,
                 });
             }
             Some(Err(error)) => return Err(error),
             None => {
-                return Err(CodexWebSocketExchangeError::closed_before_terminal(
-                    None, None,
+                return Err(CodexWebSocketExchangeError::closed_before_terminal_on(
+                    exchange.websocket_connection_id,
+                    None,
+                    None,
                 ));
             }
         }
     }
+}
+
+fn log_raw_websocket_close(context: CodexRequestContext<'_>, error: &CodexWebSocketExchangeError) {
+    let Some(close) = error.close_before_terminal() else {
+        return;
+    };
+    let websocket_connection_id = close
+        .connection_id()
+        .map(|connection_id| connection_id.to_string())
+        .unwrap_or_default();
+    let upstream_error_raw = close.reason().unwrap_or_default();
+    tracing::warn!(
+        request_id = %context.request_id,
+        account_id = context.account_id.unwrap_or_default(),
+        websocket_connection_id,
+        upstream_transport = "websocket",
+        upstream_error_kind = "websocket_close",
+        upstream_close_code = ?close.code(),
+        upstream_error_raw,
+        upstream_error_raw_present = close.reason().is_some(),
+        "OpenAI upstream WebSocket closed before delivery"
+    );
 }
 
 fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {

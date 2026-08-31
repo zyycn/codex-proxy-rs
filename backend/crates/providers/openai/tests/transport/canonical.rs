@@ -854,9 +854,10 @@ fn decoder_should_preserve_changed_upstream_response_ids_as_wire() {
 }
 
 fn assert_failed_event(code: &str, marker: &str) {
-    let body = format!(
-        "event: response.failed\ndata: {{\"response\":{{\"id\":\"resp_failed\",\"status\":\"failed\",\"error\":{{\"code\":\"{code}\",\"message\":\"{marker}\"}}}}}}\n\n"
+    let raw_error = format!(
+        "{{\"response\":{{\"id\":\"resp_failed\",\"status\":\"failed\",\"error\":{{\"code\":\"{code}\",\"message\":\"{marker}\"}}}}}}"
     );
+    let body = format!("event: response.failed\ndata: {raw_error}\n\n");
     let failure = CodexCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect_err("failed event must become a typed error");
@@ -865,6 +866,7 @@ fn assert_failed_event(code: &str, marker: &str) {
         panic!("response.failed must preserve its typed upstream failure");
     };
     assert_eq!(upstream.upstream_code.as_deref(), Some(code));
+    assert_eq!(upstream.raw_body(), raw_error);
     assert!(!failure.semantic_output_seen());
     assert!(!format!("{failure:?}").contains(marker));
 }

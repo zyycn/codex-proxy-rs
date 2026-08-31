@@ -208,13 +208,15 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 return;
             }
             tungstenite::Message::Close(frame) => {
+                let websocket_connection_id = websocket.connection_id();
                 discard_stream_websocket(
                     websocket,
                     pool_return,
                     StreamWebSocketDiscardReason::UpstreamClosed,
                 )
                 .await;
-                let error = CodexWebSocketExchangeError::closed_before_terminal(
+                let error = CodexWebSocketExchangeError::closed_before_terminal_on(
+                    websocket_connection_id,
                     frame.as_ref().map(|frame| u16::from(frame.code)),
                     frame.map(|frame| frame.reason.to_string()),
                 );
@@ -287,9 +289,11 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         }
     }
 
+    let websocket_connection_id = websocket.connection_id();
     let upstream_close = websocket
         .exit_reason()
-        .and_then(|reason| reason.upstream_close().cloned());
+        .and_then(|reason| reason.upstream_close().cloned())
+        .map(|close| close.with_connection_id(websocket_connection_id));
     discard_stream_websocket(
         websocket,
         pool_return,
@@ -297,7 +301,13 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     )
     .await;
     let error = upstream_close.map_or_else(
-        || CodexWebSocketExchangeError::closed_before_terminal(None, None),
+        || {
+            CodexWebSocketExchangeError::closed_before_terminal_on(
+                websocket_connection_id,
+                None,
+                None,
+            )
+        },
         CodexWebSocketExchangeError::ClosedBeforeTerminal,
     );
     let error = if reused_connection {

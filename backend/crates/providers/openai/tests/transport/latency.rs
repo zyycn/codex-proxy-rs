@@ -1117,6 +1117,10 @@ async fn websocket_failure_after_first_delivery_should_not_open_http_fallback() 
     let CodexWebSocketExchangeError::ClosedBeforeTerminal(close) = *source else {
         panic!("expected upstream close frame source");
     };
+    assert!(
+        close.connection_id().is_some(),
+        "close failures must retain their WebSocket connection correlation"
+    );
     assert_eq!(close.code(), Some(1009));
     assert_eq!(close.reason(), Some("message too big after output"));
 }
