@@ -1,5 +1,6 @@
 import type { LineSeriesOption } from 'echarts'
 import type { useChartPalette } from '@/composables/useChartPalette'
+import { sampleGapBridgeSeries } from '@/components/charts/timeSeriesGap'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
 import { escapeTooltip } from './format'
 
@@ -9,6 +10,8 @@ type UsageAreaStrength = 'strong' | 'subtle'
 interface UsageLineSeriesOptions {
   stack?: string
   area?: UsageAreaStrength | false
+  xAxisIndex?: number
+  yAxisIndex?: number
 }
 
 const areaAlpha: Record<UsageAreaStrength, readonly [string, string]> = {
@@ -36,6 +39,8 @@ export function usageLineSeries(
     data: data.map(value => value ?? null),
     connectNulls: false,
     stack: options.stack,
+    xAxisIndex: options.xAxisIndex ?? 0,
+    yAxisIndex: options.yAxisIndex ?? 0,
     smooth: true,
     showSymbol: showSymbols,
     showAllSymbol: showSymbols,
@@ -61,6 +66,26 @@ export function usageLineSeries(
   }
 }
 
+export function usageGapAwareLineSeries(
+  name: string,
+  data: Array<number | null | undefined>,
+  color: string,
+  options: UsageLineSeriesOptions = {},
+) {
+  const primary = usageLineSeries(name, data, color, options)
+  return [
+    primary,
+    ...sampleGapBridgeSeries(data, {
+      name,
+      color,
+      xAxisIndex: options.xAxisIndex,
+      yAxisIndex: options.yAxisIndex,
+      width: 2.2,
+      z: 2,
+    }),
+  ]
+}
+
 export function usageTooltip(
   theme: UsageChartPalette,
   formatter: (params: unknown) => string,
@@ -79,6 +104,10 @@ export function usageTooltipContent(
 ) {
   const title = escapeTooltip(label)
   return `<div style="margin:0 0 7px;padding:0 0 7px;border-bottom:1px solid ${theme.divider};color:${theme.textPrimary};font-family:'JetBrains Mono Variable','JetBrains Mono',monospace;font-size:11px;font-weight:750;line-height:1.2">${title}</div><div style="line-height:1.55">${lines.join('<br/>')}</div>`
+}
+
+export function usageTooltipItem(label: string, value: string, color: string) {
+  return `<span style="display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:999px;background:${escapeTooltip(color)}"></span>${escapeTooltip(label)}: ${escapeTooltip(value)}`
 }
 
 export function usageCategoryAxis(labels: string[], theme: UsageChartPalette) {

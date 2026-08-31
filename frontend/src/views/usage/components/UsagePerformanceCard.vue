@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
+import { requestActivityByBucket, zeroInactiveValues } from '@/components/charts/timeSeriesGap'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
@@ -14,20 +15,23 @@ import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
+  usageGapAwareLineSeries,
   usageLegend,
-  usageLineSeries,
   usageTooltip,
   usageTooltipContent,
+  usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
 import { formatDuration, formatDurationAxis, formatPercent } from '../utils/format'
 
 type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
 type PerformancePoint = Performance['points'][number]
+type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
 
 const props = withDefaults(
   defineProps<{
     performance: Performance
+    activity: Activity
     loading?: boolean
   }>(),
   {
@@ -38,6 +42,10 @@ const props = withDefaults(
 const activeView = shallowRef('total')
 const { palette } = useChartPalette()
 const performancePoints = computed<PerformancePoint[]>(() => props.performance.points)
+const requestActivity = computed(() => requestActivityByBucket(
+  performancePoints.value.map(point => point.bucket),
+  props.activity,
+))
 
 const viewOptions = [
   { label: '总耗时', value: 'total' },
@@ -54,14 +62,28 @@ const seriesLabels = computed(() => {
   return ['P50', 'P95', 'P99'] as const
 })
 
-const selectedPoints = computed(() =>
-  performancePoints.value.map(point => ({
+const selectedPoints = computed(() => {
+  const points = performancePoints.value
+  const active = requestActivity.value
+  const firstValues = zeroInactiveValues(
+    points.map(point => seriesValue(point, 'first')),
+    active,
+  )
+  const secondValues = zeroInactiveValues(
+    points.map(point => seriesValue(point, 'second')),
+    active,
+  )
+  const thirdValues = zeroInactiveValues(
+    points.map(point => seriesValue(point, 'third')),
+    active,
+  )
+  return points.map((point, index) => ({
     point,
-    first: seriesValue(point, 'first'),
-    second: seriesValue(point, 'second'),
-    third: seriesValue(point, 'third'),
-  })),
-)
+    first: firstValues[index] ?? null,
+    second: secondValues[index] ?? null,
+    third: thirdValues[index] ?? null,
+  }))
+})
 
 const summaryMetrics = computed(() => {
   const performance = props.performance
@@ -98,6 +120,25 @@ const hasData = computed(
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
   const points = selectedPoints.value
+  const series = [
+    ...usageGapAwareLineSeries(
+      seriesLabels.value[0],
+      points.map(point => point.first),
+      theme.info,
+      { area: 'subtle' },
+    ),
+    ...usageGapAwareLineSeries(
+      seriesLabels.value[1],
+      points.map(point => point.second),
+      theme.warning,
+    ),
+    ...usageGapAwareLineSeries(
+      seriesLabels.value[2],
+      points.map(point => point.third),
+      activeView.value === 'scheduling' ? theme.success : theme.danger,
+      { yAxisIndex: activeView.value === 'scheduling' ? 1 : 0 },
+    ),
+  ]
 
   return {
     animationDuration: 240,
@@ -130,27 +171,7 @@ const chartOption = computed<EChartsOption>(() => {
             ? value => `${formatCompactNumber(value)}/s`
             : formatDurationAxis,
         ),
-    series: [
-      usageLineSeries(
-        seriesLabels.value[0],
-        points.map(point => point.first),
-        theme.info,
-        { area: 'subtle' },
-      ),
-      usageLineSeries(
-        seriesLabels.value[1],
-        points.map(point => point.second),
-        theme.warning,
-      ),
-      {
-        ...usageLineSeries(
-          seriesLabels.value[2],
-          points.map(point => point.third),
-          activeView.value === 'scheduling' ? theme.success : theme.danger,
-        ),
-        yAxisIndex: activeView.value === 'scheduling' ? 1 : 0,
-      },
-    ],
+    series,
   }
 })
 
@@ -180,10 +201,23 @@ function formatTooltip(params: unknown) {
   if (!selected)
     return ''
 
-  return usageTooltipContent(palette.value, selected.point.label, [
-    `${seriesLabels.value[0]}: ${formatSeriesValue(selected.first, 'first')}`,
-    `${seriesLabels.value[1]}: ${formatSeriesValue(selected.second, 'second')}`,
-    `${seriesLabels.value[2]}: ${formatSeriesValue(selected.third, 'third')}`,
+  const theme = palette.value
+  return usageTooltipContent(theme, selected.point.label, [
+    usageTooltipItem(
+      seriesLabels.value[0],
+      formatSeriesValue(selected.first, 'first'),
+      theme.info,
+    ),
+    usageTooltipItem(
+      seriesLabels.value[1],
+      formatSeriesValue(selected.second, 'second'),
+      theme.warning,
+    ),
+    usageTooltipItem(
+      seriesLabels.value[2],
+      formatSeriesValue(selected.third, 'third'),
+      activeView.value === 'scheduling' ? theme.success : theme.danger,
+    ),
   ])
 }
 

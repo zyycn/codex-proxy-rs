@@ -28,7 +28,7 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
 
 <template>
   <section
-    class="mt-5 grid grid-cols-1 gap-3 xl:auto-rows-[24.25rem] xl:grid-cols-2"
+    class="mt-5 grid grid-cols-1 gap-3 xl:auto-rows-97 xl:grid-cols-2"
     aria-label="使用统计观测"
   >
     <UsageHealthCard
@@ -43,8 +43,16 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
       :loading="loading"
     />
 
-    <UsagePerformanceCard :performance="overview.performance" :loading="loading" />
+    <UsagePerformanceCard
+      :performance="overview.performance"
+      :activity="overview.health.points"
+      :loading="loading"
+    />
 
-    <UsageCostCard :cost="overview.cost" :loading="loading" />
+    <UsageCostCard
+      :cost="overview.cost"
+      :activity="overview.health.points"
+      :loading="loading"
+    />
   </section>
 </template>

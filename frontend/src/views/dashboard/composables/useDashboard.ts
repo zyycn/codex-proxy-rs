@@ -373,10 +373,10 @@ function aggregateUsageTrend(points: DashboardTrendPoint[]) {
     )
     const uncachedInputTokensValue = inputTokensValue - cachedTokensValue
     const effectiveTokensValue = uncachedInputTokensValue + outputTokensValue
-    const cacheHitRateValue = inputTokensValue ? cachedTokensValue / inputTokensValue : null
+    const cacheHitRateValue = inputTokensValue ? cachedTokensValue / inputTokensValue : 0
     const successRateValue = requestsValue
       ? ((requestsValue - errorsValue) / requestsValue) * 100
-      : null
+      : 0
 
     return {
       ...first,
@@ -392,12 +392,12 @@ function aggregateUsageTrend(points: DashboardTrendPoint[]) {
       uncachedInputTokensValue,
       effectiveTokens: formatCompactNumber(effectiveTokensValue),
       effectiveTokensValue: effectiveTokensValue > 0 ? effectiveTokensValue : null,
-      cacheHitRate: cacheHitRateValue === null ? '—' : formatDashboardRate(cacheHitRateValue),
+      cacheHitRate: formatDashboardRate(cacheHitRateValue),
       cacheHitRateValue,
       tokensValue: inputTokensValue + outputTokensValue,
       errors: formatCompactNumber(errorsValue),
       errorsValue,
-      successRate: successRateValue === null ? '—' : `${successRateValue.toFixed(1)}%`,
+      successRate: `${successRateValue.toFixed(1)}%`,
       successRateValue,
     }
   })

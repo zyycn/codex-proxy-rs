@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EChartsOption } from 'echarts'
+import type { BarSeriesOption, EChartsOption, LineSeriesOption } from 'echarts'
 import type { getUsageRecordInsightsOverview } from '@/api'
 import { BarChart } from 'echarts/charts'
 import { use } from 'echarts/core'
@@ -15,9 +15,11 @@ import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
+  usageGapAwareLineSeries,
   usageLegend,
   usageTooltip,
   usageTooltipContent,
+  usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
 import { formatPercent } from '../utils/format'
@@ -60,6 +62,26 @@ const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
   const chartPoints = points.value
   const activePointCount = chartPoints.filter(point => requestCount(point) > 0).length
+  const successRateSeries = usageGapAwareLineSeries(
+    '服务成功率',
+    chartPoints.map(serviceSuccessRate),
+    theme.success,
+    { yAxisIndex: 1 },
+  )
+  const series: Array<BarSeriesOption | LineSeriesOption> = [
+    outcomeSeries('成功', chartPoints.map(point => point.successRequests), theme.success),
+    outcomeSeries('服务失败', chartPoints.map(point => point.failedRequests), theme.danger),
+    outcomeSeries('取消', chartPoints.map(point => point.cancelledRequests), theme.info),
+    outcomeSeries('未完成', chartPoints.map(point => point.incompleteRequests), theme.warning),
+    outcomeSeries('调用方错误', chartPoints.map(point => point.callerErrorRequests), theme.normal),
+    ...successRateSeries.map((item, index) => index === 0
+      ? {
+          ...item,
+          symbol: activePointCount <= 16 ? 'circle' : 'none',
+          symbolSize: 4,
+        }
+      : item),
+  ]
 
   return {
     animationDuration: 240,
@@ -85,25 +107,7 @@ const chartOption = computed<EChartsOption>(() => {
         splitLine: false,
       }),
     ],
-    series: [
-      outcomeSeries('成功', chartPoints.map(point => point.successRequests), theme.success),
-      outcomeSeries('服务失败', chartPoints.map(point => point.failedRequests), theme.danger),
-      outcomeSeries('取消', chartPoints.map(point => point.cancelledRequests), theme.info),
-      outcomeSeries('未完成', chartPoints.map(point => point.incompleteRequests), theme.warning),
-      outcomeSeries('调用方错误', chartPoints.map(point => point.callerErrorRequests), theme.normal),
-      {
-        name: '服务成功率',
-        type: 'line',
-        yAxisIndex: 1,
-        data: chartPoints.map(serviceSuccessRate),
-        connectNulls: true,
-        smooth: 0.25,
-        symbol: activePointCount <= 16 ? 'circle' : 'none',
-        symbolSize: 4,
-        lineStyle: { color: theme.success, width: 2.2 },
-        itemStyle: { color: theme.success },
-      },
-    ],
+    series,
   }
 })
 
@@ -113,7 +117,9 @@ function requestCount(point: HealthPoint) {
 
 function serviceSuccessRate(point: HealthPoint) {
   const total = Math.max(0, point.successRequests) + Math.max(0, point.failedRequests)
-  return total > 0 ? Math.max(0, point.successRequests ?? 0) / total : null
+  if (total > 0)
+    return Math.max(0, point.successRequests ?? 0) / total
+  return requestCount(point) === 0 ? 0 : null
 }
 
 function outcomeSeries(name: string, data: number[], color: string) {
@@ -134,15 +140,20 @@ function formatTooltip(params: unknown) {
     return ''
 
   const successRate = serviceSuccessRate(point)
+  const theme = palette.value
 
-  return usageTooltipContent(palette.value, point.label, [
-    `请求量: ${formatCompactNumber(requestCount(point))}`,
-    `成功: ${formatCompactNumber(point.successRequests)}`,
-    `服务失败: ${formatCompactNumber(point.failedRequests)}`,
-    `取消: ${formatCompactNumber(point.cancelledRequests)}`,
-    `未完成: ${formatCompactNumber(point.incompleteRequests)}`,
-    `调用方错误: ${formatCompactNumber(point.callerErrorRequests)}`,
-    `服务成功率: ${successRate == null ? '无服务结果' : formatPercent(successRate)}`,
+  return usageTooltipContent(theme, point.label, [
+    usageTooltipItem('请求量', formatCompactNumber(requestCount(point)), theme.textSecondary),
+    usageTooltipItem('成功', formatCompactNumber(point.successRequests), theme.success),
+    usageTooltipItem('服务失败', formatCompactNumber(point.failedRequests), theme.danger),
+    usageTooltipItem('取消', formatCompactNumber(point.cancelledRequests), theme.info),
+    usageTooltipItem('未完成', formatCompactNumber(point.incompleteRequests), theme.warning),
+    usageTooltipItem('调用方错误', formatCompactNumber(point.callerErrorRequests), theme.normal),
+    usageTooltipItem(
+      '服务成功率',
+      successRate == null ? '无服务结果' : formatPercent(successRate),
+      theme.success,
+    ),
   ])
 }
 </script>

@@ -7,6 +7,10 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
+import {
+  requestActivityByBucket,
+  zeroInactiveValues,
+} from '@/components/charts/timeSeriesGap'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
@@ -14,10 +18,11 @@ import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
+  usageGapAwareLineSeries,
   usageLegend,
-  usageLineSeries,
   usageTooltip,
   usageTooltipContent,
+  usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
 import {
@@ -28,11 +33,13 @@ import {
 } from '../utils/format'
 
 type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
+type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
 type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
 
 const props = withDefaults(
   defineProps<{
     cost: Cost
+    activity: Activity
     loading?: boolean
   }>(),
   {
@@ -43,6 +50,10 @@ const props = withDefaults(
 const activeView = shallowRef('cost')
 const { palette } = useChartPalette()
 const points = computed(() => props.cost.points)
+const requestActivity = computed(() => requestActivityByBucket(
+  points.value.map(point => point.bucket),
+  props.activity,
+))
 const hasNoCacheCost = computed(() =>
   points.value.some(point => point.noCacheCost != null),
 )
@@ -74,6 +85,7 @@ const hasData = computed(() => {
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
   const legend = legendNames()
+  const series = chartSeries(theme)
 
   return {
     animationDuration: 240,
@@ -95,7 +107,7 @@ const chartOption = computed<EChartsOption>(() => {
       min: activeView.value === 'cache' ? 0 : undefined,
       max: activeView.value === 'cache' ? 1 : undefined,
     }),
-    series: chartSeries(theme),
+    series,
   }
 })
 
@@ -119,9 +131,12 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   const chartPoints = points.value
   if (activeView.value === 'savings') {
     return [
-      usageLineSeries(
+      ...usageGapAwareLineSeries(
         '缓存节省',
-        chartPoints.map(point => decimalDisplayNumber(point.cacheSavings)),
+        zeroInactiveValues(
+          chartPoints.map(point => decimalDisplayNumber(point.cacheSavings)),
+          requestActivity.value,
+        ),
         theme.success,
         { area: 'strong' },
       ),
@@ -130,12 +145,12 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
 
   if (activeView.value === 'cache') {
     return [
-      usageLineSeries(
+      ...usageGapAwareLineSeries(
         '缓存 Token 占比',
         chartPoints.map(point => point.cachedTokenRate),
         theme.normal,
       ),
-      usageLineSeries(
+      ...usageGapAwareLineSeries(
         '命中请求率',
         chartPoints.map(point => point.cacheHitRequestRate),
         theme.success,
@@ -144,18 +159,24 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   }
 
   const series = [
-    usageLineSeries(
+    ...usageGapAwareLineSeries(
       '实际费用',
-      chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
+      zeroInactiveValues(
+        chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
+        requestActivity.value,
+      ),
       theme.success,
       { area: 'strong' },
     ),
   ]
   if (hasNoCacheCost.value) {
     series.push(
-      usageLineSeries(
+      ...usageGapAwareLineSeries(
         '无缓存费用',
-        chartPoints.map(point => decimalDisplayNumber(point.noCacheCost)),
+        zeroInactiveValues(
+          chartPoints.map(point => decimalDisplayNumber(point.noCacheCost)),
+          requestActivity.value,
+        ),
         theme.textMuted,
       ),
     )
@@ -165,29 +186,48 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
 
 function formatTooltip(params: unknown) {
   const rows = tooltipRows(params)
-  const point = points.value[tooltipIndex(rows[0])]
+  const pointIndex = tooltipIndex(rows[0])
+  const point = points.value[pointIndex]
   if (!point)
     return ''
+  const theme = palette.value
 
   if (activeView.value === 'savings') {
-    return usageTooltipContent(palette.value, point.label, [
-      `缓存节省: ${formatUsd(point.cacheSavings)}`,
+    return usageTooltipContent(theme, point.label, [
+      usageTooltipItem(
+        '缓存节省',
+        formatUsd(costAmount(point.cacheSavings, pointIndex)),
+        theme.success,
+      ),
     ])
   }
 
   if (activeView.value === 'cache') {
-    return usageTooltipContent(palette.value, point.label, [
-      `缓存 Token 占比: ${formatPercent(point.cachedTokenRate)}`,
-      `命中请求率: ${formatPercent(point.cacheHitRequestRate)}`,
+    return usageTooltipContent(theme, point.label, [
+      usageTooltipItem('缓存 Token 占比', formatPercent(point.cachedTokenRate), theme.normal),
+      usageTooltipItem('命中请求率', formatPercent(point.cacheHitRequestRate), theme.success),
     ])
   }
 
   const lines = [
-    `实际费用: ${formatUsd(point.estimatedCost)}`,
+    usageTooltipItem(
+      '实际费用',
+      formatUsd(costAmount(point.estimatedCost, pointIndex)),
+      theme.success,
+    ),
   ]
-  if (point.noCacheCost != null)
-    lines.push(`无缓存费用: ${formatUsd(point.noCacheCost)}`)
-  return usageTooltipContent(palette.value, point.label, lines)
+  if (point.noCacheCost != null) {
+    lines.push(usageTooltipItem(
+      '无缓存费用',
+      formatUsd(costAmount(point.noCacheCost, pointIndex)),
+      theme.textMuted,
+    ))
+  }
+  return usageTooltipContent(theme, point.label, lines)
+}
+
+function costAmount(value: string | null, pointIndex: number) {
+  return value ?? (requestActivity.value[pointIndex] === false ? '0' : null)
 }
 </script>
 

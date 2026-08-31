@@ -4,6 +4,7 @@ import type { dashboardTrendView, normalizeDashboardTrendKind } from './useDashb
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 
+import { sampleGapBridgeSeries } from '@/components/charts/timeSeriesGap'
 import { chartTooltipStyle, tooltipIndex } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 
@@ -197,7 +198,7 @@ export function useRequestTrendChart(options: {
         ),
         tooltipItem(
           '缓存命中',
-          trendPointText(point, 'cacheHitRate'),
+          zeroAwareRateText(point, 'cacheHitRate', 'inputTokensValue'),
           trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem('请求', point?.requests, palette.value.textSecondary),
@@ -235,19 +236,19 @@ export function useRequestTrendChart(options: {
     if (name === '错误数')
       return point?.errors ?? value
     if (name === '成功率')
-      return point?.successRate ?? value
+      return zeroAwareRateText(point, 'successRate', 'requestsValue') ?? value
     if (name === '总请求')
       return point?.requests ?? value
     return value
   }
 
-  function getSeries() {
+  function getSeries(): Array<BarSeriesOption | LineSeriesOption> {
     if (activeKind.value === 'usage') {
       const cacheColor = trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8')
       const inputColor = trendColor('输入', '--cp-color-blue-solid', '#5983F4')
       const outputColor = trendColor('输出', '--cp-color-green-solid', '#12B981')
       return [
-        lineSeries('缓存', activeSeriesValues('cachedTokensValue'), cacheColor, {
+        lineSeries('缓存', seriesValues('cachedTokensValue'), cacheColor, {
           area: true,
           areaStartAlpha: '30',
           areaEndAlpha: '08',
@@ -257,7 +258,7 @@ export function useRequestTrendChart(options: {
           width: 1.25,
           z: 1,
         }),
-        lineSeries('输入', activeSeriesValues('uncachedInputTokensValue'), inputColor, {
+        lineSeries('输入', seriesValues('uncachedInputTokensValue'), inputColor, {
           area: true,
           areaStartAlpha: '2A',
           areaEndAlpha: '05',
@@ -266,7 +267,7 @@ export function useRequestTrendChart(options: {
           width: 2.3,
           z: 3,
         }),
-        lineSeries('输出', activeSeriesValues('outputTokensValue'), outputColor, {
+        lineSeries('输出', seriesValues('outputTokensValue'), outputColor, {
           smooth: 0.24,
           width: 2.1,
           yAxisIndex: 1,
@@ -277,19 +278,19 @@ export function useRequestTrendChart(options: {
 
     if (activeKind.value === 'latency') {
       return [
-        lineSeries(
+        ...gapLineSeries(
           '总耗时 P95',
           activeSeriesValues('latencyP95Ms'),
           trendColor('总耗时', '--cp-color-orange-solid', '#F59E0B'),
           { lineType: 'dashed', smooth: 0.2, width: 1.8, z: 2 },
         ),
-        lineSeries(
+        ...gapLineSeries(
           '首字 P95',
           activeSeriesValues('firstTokenP95Ms'),
           trendColor('首字', '--cp-color-cyan-solid', '#13C2C2'),
           { area: true, smooth: 0.24, width: 2.5, z: 4 },
         ),
-        lineSeries(
+        ...gapLineSeries(
           '吞吐 P50',
           activeSeriesValues('outputThroughputP50'),
           trendColor('吞吐', '--cp-color-green-solid', '#12B981'),
@@ -304,9 +305,9 @@ export function useRequestTrendChart(options: {
         seriesValues('errorsValue'),
         trendColor('错误', '--cp-color-red-solid', '#EF4444'),
       ),
-      lineSeries(
+      ...gapLineSeries(
         '成功率',
-        seriesValues('successRateValue'),
+        activeSeriesValues('successRateValue'),
         trendColor('成功', '--cp-color-green-solid', '#12B981'),
         { width: 2.4, yAxisIndex: 1 },
       ),
@@ -325,7 +326,7 @@ export function useRequestTrendChart(options: {
 
   function activeSeriesValues(key: string) {
     return points.value.map(point =>
-      Number(point.requestsValue) > 0 ? trendPointNumber(point, key) : null,
+      Number(point.requestsValue) > 0 ? trendPointNumber(point, key) : 0,
     )
   }
 
@@ -375,6 +376,26 @@ export function useRequestTrendChart(options: {
           }
         : undefined,
     }
+  }
+
+  function gapLineSeries(
+    name: string,
+    data: (number | null)[],
+    color: string,
+    lineOptions: LineSeriesOptions = {},
+  ) {
+    const primary = lineSeries(name, data, color, lineOptions)
+    return [
+      primary,
+      ...sampleGapBridgeSeries(data, {
+        name,
+        color,
+        width: lineOptions.width,
+        xAxisIndex: lineOptions.xAxisIndex,
+        yAxisIndex: lineOptions.yAxisIndex,
+        z: lineOptions.z,
+      }),
+    ]
   }
 
   function barSeries(
@@ -490,12 +511,23 @@ function tooltipValue(source: unknown, key: string) {
 function trendPointProperty(point: TrendPoint | undefined, key: string) {
   if (!point || !(key in point))
     return undefined
-  return (point as Record<string, unknown>)[key]
+  return (point as unknown as Record<string, unknown>)[key]
 }
 
 function trendPointText(point: TrendPoint | undefined, key: string) {
   const value = trendPointProperty(point, key)
   return typeof value === 'string' ? value : undefined
+}
+
+function zeroAwareRateText(
+  point: TrendPoint | undefined,
+  valueKey: string,
+  activityKey: string,
+) {
+  const activity = trendPointProperty(point, activityKey)
+  if (typeof activity === 'number' && activity <= 0)
+    return '0.0%'
+  return trendPointText(point, valueKey)
 }
 
 function trendPointNumber(point: TrendPoint, key: string) {
