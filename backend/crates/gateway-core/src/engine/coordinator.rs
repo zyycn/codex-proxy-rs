@@ -12,11 +12,11 @@ use crate::engine::continuation::{
 };
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
-    AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTrigger, CancellationToken,
-    CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
-    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
-    ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
-    RequestAttemptContext, UpstreamSendState,
+    AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTransport, AttemptTrigger,
+    CancellationToken, CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError,
+    ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization,
+    ModelRequestId, ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner,
+    ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError};
 use crate::event::{
@@ -166,6 +166,7 @@ where
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
             recovery_account: None,
+            transport_fallback_account: None,
             current: None,
             send_state_watermark: UpstreamSendState::NotSent,
             downstream_committed_at: None,
@@ -245,6 +246,9 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算。
     /// 与 `required_account`（外部指定、贯穿整个请求）语义不同，不可合并。
     recovery_account: Option<crate::engine::credential::ProviderAccountId>,
+    /// 上游传输在提交边界前失败后的一次性同账号备用传输钉选。
+    /// 与凭据恢复分开保存，避免把 transport fallback 误记为 OAuth 恢复。
+    transport_fallback_account: Option<crate::engine::credential::ProviderAccountId>,
     current: Option<CurrentAttempt>,
     /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档。
     send_state_watermark: UpstreamSendState,
@@ -610,14 +614,26 @@ where
             .checked_add(1)
             .and_then(NonZeroU32::new)
             .ok_or(EngineError::EmptyRoutingPlan)?;
-        // recovery 钉选在此被一次性消费，只绑定本次 replay attempt；
+        // 请求局部恢复钉选在此被一次性消费，只绑定本次 replay attempt；
         // 外部 required_account 每次 attempt 都重新生效。
-        let pinned_account = match &self.account_selection {
-            AccountSelection::Diagnostic(account) => Some(account.clone()),
-            AccountSelection::Scheduled(_) => self
-                .recovery_account
-                .take()
-                .or_else(|| self.account_selection.required_account().cloned()),
+        let (pinned_account, attempt_transport) = match &self.account_selection {
+            AccountSelection::Diagnostic(account) => {
+                (Some(account.clone()), AttemptTransport::Default)
+            }
+            AccountSelection::Scheduled(_) => {
+                let transport_fallback_account = self.transport_fallback_account.take();
+                let transport = if transport_fallback_account.is_some() {
+                    AttemptTransport::Fallback
+                } else {
+                    AttemptTransport::Default
+                };
+                (
+                    transport_fallback_account
+                        .or_else(|| self.recovery_account.take())
+                        .or_else(|| self.account_selection.required_account().cloned()),
+                    transport,
+                )
+            }
         };
         let account_context = match &self.account_selection {
             AccountSelection::Diagnostic(account) => AccountAttemptContext::diagnostic(
@@ -646,7 +662,8 @@ where
             self.continuation.clone(),
             self.cancellation.clone(),
         )
-        .with_continuation_attempt(self.continuation_attempt);
+        .with_continuation_attempt(self.continuation_attempt)
+        .with_transport(attempt_transport);
         let trigger = if self.attempts == 0 {
             AttemptTrigger::Initial
         } else {
@@ -1023,6 +1040,11 @@ where
             && !self.delivery_pending
             && error.allows_pre_delivery_retry()
             && self.attempts < self.plan.max_attempts().get();
+        let transport_fallback_retry = pre_delivery_retry
+            && matches!(
+                error.pre_delivery_retry(),
+                Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
+            );
         let ordinary_retry = self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
@@ -1053,6 +1075,9 @@ where
                 // 只钉住紧随其后的 replay attempt；replay 再遇可重试错误时，
                 // ordinary/continuation 重试门不受影响，仍可换号。
                 self.recovery_account = Some(account);
+            } else if transport_fallback_retry {
+                self.transport_fallback_account =
+                    Some(current.metadata.provider_account_id().clone());
             } else if !continuation_retry {
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());

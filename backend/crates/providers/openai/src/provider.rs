@@ -16,7 +16,7 @@ use gateway_core::engine::provider::{
     ProviderSelectionObservation, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
-    AttemptContext, CancellationToken, ContinuationAttempt, UpstreamSendState,
+    AttemptContext, AttemptTransport, CancellationToken, ContinuationAttempt, UpstreamSendState,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
@@ -70,7 +70,7 @@ use crate::transport::profile::{
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-    PreviousResponseScope, ResponseEventSignals,
+    PreviousResponseScope, ResponseEventSignals, transport_requirement,
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
@@ -287,7 +287,10 @@ impl Provider for CodexProvider {
             derive_codex_session_affinity(&upstream_request, context.client_api_key_ref());
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
-        let transport = selected_transport(&upstream_request);
+        let transport = match context.transport() {
+            AttemptTransport::Default => selected_transport(&upstream_request),
+            AttemptTransport::Fallback => CodexProviderTransport::HttpOnly,
+        };
         apply_transport(&mut upstream_request, transport);
 
         let selection_started_at = Instant::now();
@@ -944,6 +947,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         {
             active_account = current;
         }
+        let response_transport = response.transport;
         let mut body = response.body;
         let failure_diagnostics = response.diagnostics.clone();
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
@@ -1000,7 +1004,14 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     }
                     continue;
                 }
-                Err(failure) => {
+                Err(mut failure) => {
+                    if failure.error.allows_pre_delivery_retry()
+                        && response_transport == CodexBackendTransport::WebSocket
+                        && transport_requirement(&request).allows_pre_delivery_http_fallback()
+                        && !pre_commit_events.is_committed()
+                    {
+                        failure.error = failure.error.with_pre_delivery_transport_fallback();
+                    }
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     if !updates.is_empty() {
                         passive_quota_observation.observe(&updates);
@@ -2415,11 +2426,20 @@ fn map_client_error(
             ))
         }
         CodexClientError::WebSocket(error) => {
+            let close_code = error.close_before_terminal().and_then(|close| close.code());
             let client_visible_error = websocket_client_visible_error(&error);
             let mut failure = MappedProviderFailure::plain(provider_error(
                 websocket_error_kind(&error),
                 websocket_send_state(&error),
             ));
+            if let Some(close_code) = close_code {
+                failure.error =
+                    failure
+                        .error
+                        .with_upstream_code(OpaqueUpstreamValue::new(format!(
+                            "websocket_close_{close_code}"
+                        )));
+            }
             if let Some(client_visible_error) = client_visible_error {
                 failure.error = failure
                     .error

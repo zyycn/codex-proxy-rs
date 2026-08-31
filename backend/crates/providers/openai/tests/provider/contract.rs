@@ -18,10 +18,11 @@ use gateway_core::engine::credential::{
 };
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, CancellationToken, ContinuationAttempt, ModelRequestId,
-    ProviderAccountStateOwner, RequestAttemptContext, UpstreamSendState,
+    AccountAttemptContext, AttemptContext, AttemptTransport, CancellationToken,
+    ContinuationAttempt, ModelRequestId, ProviderAccountStateOwner, RequestAttemptContext,
+    UpstreamSendState,
 };
-use gateway_core::error::{ContinuationFailure, ProviderErrorKind};
+use gateway_core::error::{ContinuationFailure, PreDeliveryRetry, ProviderErrorKind};
 use gateway_core::event::GatewayEvent;
 use gateway_core::operation::{
     CapabilityRequirements, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
@@ -443,6 +444,10 @@ fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext 
         None,
         cancellation,
     )
+}
+
+fn fallback_transport_context(request_id: &str) -> AttemptContext {
+    context(request_id, CancellationToken::new()).with_transport(AttemptTransport::Fallback)
 }
 
 fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
@@ -1194,6 +1199,125 @@ async fn websocket_close_details_are_only_exposed_through_the_client_error() {
     assert_eq!(detail.message(), "message too big");
     assert_eq!(detail.code(), Some("1009"));
     assert_eq!(detail.error_type(), Some("websocket_close_error"));
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("websocket_close_1009")
+    );
+}
+
+#[tokio::test]
+async fn websocket_normal_close_before_semantic_output_requests_same_account_http_fallback() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_websocket_close").await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("WebSocket request")
+            .expect("valid WebSocket request");
+        for event in [
+            json!({
+                "type": "response.created",
+                "response": {"id": "resp_structural", "model": "gpt-5.4"}
+            }),
+            json!({
+                "type": "response.in_progress",
+                "response": {"id": "resp_structural", "model": "gpt-5.4"}
+            }),
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "id": "msg_structural",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "content": []
+                }
+            }),
+        ] {
+            websocket
+                .send(Message::Text(event.to_string().into()))
+                .await
+                .expect("send structural WebSocket event");
+        }
+        websocket
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            }))
+            .await
+            .expect("close WebSocket");
+    });
+
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_websocket_normal_close", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket provider stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(event)) => assert!(
+                !event.has_client_event(),
+                "structural events must remain behind the replay boundary"
+            ),
+            Some(Err(error)) => break error,
+            None => panic!("WebSocket close must surface a provider error"),
+        }
+    };
+    server.await.expect("WebSocket server");
+
+    assert_eq!(
+        error.pre_delivery_retry(),
+        Some(PreDeliveryRetry::SameAccountTransportFallback),
+        "unexpected provider error: {error:?}"
+    );
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("websocket_close_1000")
+    );
+}
+
+#[tokio::test]
+async fn fallback_attempt_transport_forces_http_sse_for_a_websocket_request() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_http_sse_exhausted").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", generate_operation()),
+            fallback_transport_context("req_fallback_transport_http"),
+        )
+        .await
+        .expect("prepare fallback HTTP stream");
+    while let Some(event) = stream.next().await {
+        event.expect("fallback HTTP response");
+    }
 }
 
 #[tokio::test]

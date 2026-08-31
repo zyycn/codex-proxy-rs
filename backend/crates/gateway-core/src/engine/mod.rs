@@ -106,6 +106,16 @@ pub enum AttemptTrigger {
     AccountRetry,
 }
 
+/// Provider 可为当前 attempt 选择的请求局部传输档位。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum AttemptTransport {
+    /// 使用 Provider 的默认传输策略。
+    #[default]
+    Default,
+    /// 使用 Provider 定义的备用传输。
+    Fallback,
+}
+
 impl AttemptTrigger {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -224,8 +234,8 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// 单次 attempt 的账号选择与账号绑定状态事实。
 ///
-/// `required_account` 只用于管理端 connection test 等必须命中唯一账号的内部请求；
-/// 一旦设置，Core 与 Provider 都不得换号或切换 target。
+/// `required_account` 用于管理端 connection test，或请求局部的同账号恢复 attempt；
+/// 一旦设置，Provider 在本 attempt 内不得换号或切换 target。
 #[derive(Debug, Clone, Default)]
 pub struct AccountAttemptContext {
     excluded_accounts: BTreeSet<ProviderAccountId>,
@@ -425,6 +435,7 @@ pub struct AttemptContext {
     account: AccountAttemptContext,
     continuation: Option<ContinuationBinding>,
     continuation_attempt: ContinuationAttempt,
+    transport: AttemptTransport,
     cancellation: CancellationToken,
 }
 
@@ -452,6 +463,7 @@ impl AttemptContext {
             account,
             continuation,
             continuation_attempt,
+            transport: AttemptTransport::Default,
             cancellation,
         }
     }
@@ -463,6 +475,13 @@ impl AttemptContext {
         continuation_attempt: ContinuationAttempt,
     ) -> Self {
         self.continuation_attempt = continuation_attempt;
+        self
+    }
+
+    /// 覆盖本次 attempt 的 Provider 传输档位。
+    #[must_use]
+    pub const fn with_transport(mut self, transport: AttemptTransport) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -503,7 +522,7 @@ impl AttemptContext {
         self.account.excluded_accounts()
     }
 
-    /// 管理端 connection test 等内部请求强制使用的唯一账号。
+    /// 管理端诊断或请求局部恢复 attempt 强制使用的唯一账号。
     #[must_use]
     pub const fn required_account(&self) -> Option<&ProviderAccountId> {
         self.account.required_account()
@@ -540,6 +559,12 @@ impl AttemptContext {
     #[must_use]
     pub const fn continuation_attempt(&self) -> ContinuationAttempt {
         self.continuation_attempt
+    }
+
+    /// 返回本次 attempt 的 Provider 传输档位。
+    #[must_use]
+    pub const fn transport(&self) -> AttemptTransport {
+        self.transport
     }
 
     #[must_use]

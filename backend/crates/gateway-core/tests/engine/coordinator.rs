@@ -23,9 +23,9 @@ use gateway_core::engine::provider::{
     ProviderRegistry, ProviderRequest, ProviderStream, UpstreamTransport,
 };
 use gateway_core::engine::{
-    AttemptContext, AttemptCoordinator, AttemptRecord, CancellationToken, CommitRequirement,
-    ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore, GatewayEngine,
-    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, CancellationToken,
+    CommitRequirement, ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore,
+    GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
     ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
 };
 use gateway_core::error::{
@@ -2755,6 +2755,49 @@ fn pre_delivery_transport_failure_rotates_account_for_non_idempotent_generation(
 }
 
 #[test]
+fn pre_delivery_transport_fallback_retries_the_same_account_with_fallback_transport() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Ambiguous,
+            )
+            .with_pre_delivery_transport_fallback())],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("same-account fallback succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit winning response");
+
+    let original = ProviderAccountId::new("acct_first").expect("account id");
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(contexts[0].transport(), AttemptTransport::Default);
+    assert_eq!(contexts[1].transport(), AttemptTransport::Fallback);
+    assert_eq!(contexts[1].required_account(), Some(&original));
+    assert!(!contexts[1].excluded_accounts().contains(&original));
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+}
+
+#[test]
 fn final_capacity_exhaustion_returns_the_last_retryable_upstream_failure() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
@@ -2890,7 +2933,7 @@ fn pre_delivery_retry_marker_is_ignored_after_downstream_commit() {
                 ))),
                 Err(
                     ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
-                        .with_pre_delivery_retry(),
+                        .with_pre_delivery_transport_fallback(),
                 ),
             ],
         },

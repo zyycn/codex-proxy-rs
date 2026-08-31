@@ -197,6 +197,15 @@ pub enum ContinuationFailure {
     HistoryUnavailable,
 }
 
+/// Provider 在下游尚未提交事件时请求的隐藏恢复方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreDeliveryRetry {
+    /// 排除本次账号，按普通调度策略重新选号。
+    AccountRotation,
+    /// 固定本次账号，并要求 Provider 使用备用传输。
+    SameAccountTransportFallback,
+}
+
 /// Adapter 已明确分类为非 bearer 的不透明上游值。
 ///
 /// Core 不解释或校验内容，只通过自定义 [`Debug`] 避免它意外进入日志。协议 adapter
@@ -360,7 +369,7 @@ pub struct ProviderError {
     retry_after: Option<Duration>,
     continuation_failure: Option<ContinuationFailure>,
     replay_safe: bool,
-    pre_delivery_retry: bool,
+    pre_delivery_retry: Option<PreDeliveryRetry>,
     credential_recovery_required: bool,
     retry_same_account: bool,
     sensitive_context_redacted: bool,
@@ -390,7 +399,7 @@ impl ProviderError {
             retry_after: None,
             continuation_failure: None,
             replay_safe: false,
-            pre_delivery_retry: false,
+            pre_delivery_retry: None,
             credential_recovery_required: false,
             retry_same_account: false,
             sensitive_context_redacted: false,
@@ -456,7 +465,17 @@ impl ProviderError {
     /// 指定账号或下游已经进入提交状态时必须忽略它。
     #[must_use]
     pub const fn with_pre_delivery_retry(mut self) -> Self {
-        self.pre_delivery_retry = true;
+        self.pre_delivery_retry = Some(PreDeliveryRetry::AccountRotation);
+        self
+    }
+
+    /// 允许 Core 在首个客户端事件前固定原账号并改用 Provider 备用传输。
+    ///
+    /// 与普通换号恢复相同，Core 仍会拒绝 continuation、指定账号、预算耗尽或
+    /// 下游已提交后的隐藏重放。
+    #[must_use]
+    pub const fn with_pre_delivery_transport_fallback(mut self) -> Self {
+        self.pre_delivery_retry = Some(PreDeliveryRetry::SameAccountTransportFallback);
         self
     }
 
@@ -561,9 +580,15 @@ impl ProviderError {
         self.replay_safe
     }
 
-    /// 返回 Provider 是否允许在首个客户端事件前换号恢复传输失败。
+    /// 返回 Provider 是否允许在首个客户端事件前隐藏恢复传输失败。
     #[must_use]
     pub const fn allows_pre_delivery_retry(&self) -> bool {
+        self.pre_delivery_retry.is_some()
+    }
+
+    /// 返回下游提交前由 Provider 选择的隐藏恢复方式。
+    #[must_use]
+    pub const fn pre_delivery_retry(&self) -> Option<PreDeliveryRetry> {
         self.pre_delivery_retry
     }
 
