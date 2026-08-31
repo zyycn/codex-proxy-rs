@@ -6,6 +6,7 @@ const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
        mr.id as event_id, mr.id as request_id,
        nullif(mr.attempt_count, 0) as attempt_index,
        mr.client_api_key_ref, 'model_request'::text as component, mr.operation,
+       mr.protocol, mr.client_transport, mr.requested_model_id, mr.service_tier,
        mr.endpoint, mr.provider_kind, mr.provider_account_ref,
        mr.provider_account_name_snapshot as provider_account_name,
        mr.provider_account_email_snapshot as provider_account_email,
@@ -17,7 +18,11 @@ const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
        mr.provider_error_code, mr.client_response_id, mr.upstream_request_id,
        mr.latency_ms,
        coalesce(mr.error_message, mr.error_kind, 'request failed') as message,
-       1::integer as occurrence_count, mr.completed_at as occurred_at,
+       1::integer as occurrence_count,
+       mr.client_ip::text as client_ip, mr.user_agent,
+       mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
+       mr.subagent_kind, mr.compact,
+       mr.completed_at as occurred_at,
        'model_request:' || mr.id as stable_sort_id
 from model_requests mr
 where mr.outcome = 'failed'";
@@ -25,7 +30,8 @@ where mr.outcome = 'failed'";
 const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
        oe.id as event_id, oe.model_request_id as request_id, oe.attempt_index,
        mr.client_api_key_ref, oe.component, oe.operation,
-       null::text as endpoint, oe.provider_kind, oe.provider_account_ref,
+       mr.protocol, mr.client_transport, mr.requested_model_id, mr.service_tier,
+       mr.endpoint, oe.provider_kind, oe.provider_account_ref,
        oe.provider_account_name_snapshot as provider_account_name,
        oe.provider_account_email_snapshot as provider_account_email,
        oe.provider_account_authentication_kind_snapshot
@@ -33,7 +39,11 @@ const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
        oe.upstream_model_id, null::text as upstream_transport, oe.failure_kind,
        null::integer as client_status_code, oe.status_code as upstream_status_code,
        oe.provider_error_code, mr.client_response_id, oe.upstream_request_id,
-       oe.latency_ms, oe.message, oe.occurrence_count, oe.created_at as occurred_at,
+       oe.latency_ms, oe.message, oe.occurrence_count,
+       mr.client_ip::text as client_ip, mr.user_agent,
+       mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
+       mr.subagent_kind, mr.compact,
+       oe.created_at as occurred_at,
        'ops_event:' || oe.id as stable_sort_id
 from ops_events oe
 left join model_requests mr on mr.id = oe.model_request_id
@@ -107,6 +117,7 @@ fn push_request_error_predicates(
         ("mr.provider_account_ref", &filter.provider_account_ref),
         ("mr.provider_kind", &filter.provider_kind),
         ("mr.operation", &filter.operation),
+        ("mr.endpoint", &filter.endpoint),
         ("mr.upstream_transport", &filter.transport),
         ("mr.upstream_request_id", &filter.upstream_request_id),
     ] {
@@ -153,6 +164,7 @@ fn push_ops_event_predicates(
         ("oe.provider_account_ref", &filter.provider_account_ref),
         ("oe.provider_kind", &filter.provider_kind),
         ("oe.operation", &filter.operation),
+        ("mr.endpoint", &filter.endpoint),
         ("oe.upstream_request_id", &filter.upstream_request_id),
         ("oe.failure_kind", &filter.failure_kind),
     ] {

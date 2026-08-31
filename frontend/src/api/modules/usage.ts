@@ -211,19 +211,36 @@ export interface OpsError {
   requestId: string | null
   clientApiKeyId: string | null
   kind: string
+  operation: string
+  protocol: string | null
+  clientTransport: string | null
   provider: string | null
   authenticationKind: string | null
   accountId: string | null
+  accountName: string | null
+  accountEmail: string | null
   route: string
   model: string | null
+  requestedModel: string | null
+  upstreamModel: string | null
+  serviceTier: string | null
   clientStatusCode: number | null
   upstreamStatusCode: number | null
   transport: string | null
   attemptIndex: number | null
   failureClass: string
+  providerErrorCode: string | null
+  occurrenceCount: number
   responseId: string | null
   upstreamRequestId: string | null
   latencyMs: number | null
+  clientIp: string | null
+  userAgent: string | null
+  reasoningEffort: string | null
+  reasoningPreset: string | null
+  requestKind: string | null
+  subagentKind: string | null
+  compact: boolean | null
   message: string
   metadata: OpsErrorMetadata
   createdAt: string

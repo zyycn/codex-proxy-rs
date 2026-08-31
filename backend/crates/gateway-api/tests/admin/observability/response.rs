@@ -539,6 +539,10 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             client_api_key_ref: Some("key_err".to_owned()),
             component: "model_request".to_owned(),
             operation: "responses".to_owned(),
+            protocol: Some("openai".to_owned()),
+            client_transport: Some("http_sse".to_owned()),
+            requested_model_id: Some("gpt-5.4".to_owned()),
+            service_tier: Some("priority".to_owned()),
             endpoint: Some("/v1/responses".to_owned()),
             provider_kind: Some("openai".to_owned()),
             provider_account_ref: Some("acct_err".to_owned()),
@@ -556,6 +560,13 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             latency_ms: Some(90),
             message: "snapshot error".to_owned(),
             occurrence_count: 1,
+            client_ip: Some("203.0.113.8".to_owned()),
+            user_agent: Some("codex-cli/0.144.0".to_owned()),
+            reasoning_effort: Some("medium".to_owned()),
+            reasoning_preset: None,
+            request_kind: Some("root".to_owned()),
+            subagent_kind: None,
+            compact: Some(false),
             occurred_at: Utc::now(),
             stable_sort_id: "model_request:req_err".to_owned(),
         });
@@ -585,6 +596,11 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "accountLabel": value["data"]["items"][0]["metadata"]["accountLabel"],
             "clientStatusCode": value["data"]["items"][0]["clientStatusCode"],
             "route": value["data"]["items"][0]["route"],
+            "requestedModel": value["data"]["items"][0]["requestedModel"],
+            "clientTransport": value["data"]["items"][0]["clientTransport"],
+            "clientIp": value["data"]["items"][0]["clientIp"],
+            "userAgent": value["data"]["items"][0]["userAgent"],
+            "providerErrorCode": value["data"]["items"][0]["providerErrorCode"],
         }),
         serde_json::json!({
             "provider": "openai",
@@ -594,6 +610,11 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "accountLabel": "err@example.invalid",
             "clientStatusCode": 502,
             "route": "/v1/responses",
+            "requestedModel": "gpt-5.4",
+            "clientTransport": "http_sse",
+            "clientIp": "203.0.113.8",
+            "userAgent": "codex-cli/0.144.0",
+            "providerErrorCode": "upstream",
         })
     );
 }

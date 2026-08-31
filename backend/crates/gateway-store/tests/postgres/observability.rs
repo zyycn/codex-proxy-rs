@@ -761,6 +761,8 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 request_id: Some("req_observe_failed".to_owned()),
                 provider_kind: Some("openai".to_owned()),
                 provider_account_ref: Some("acct_observe".to_owned()),
+                operation: Some("responses".to_owned()),
+                endpoint: Some("/v1/responses".to_owned()),
                 model: Some("upstream-model".to_owned()),
                 failure_kind: Some("rate_limited".to_owned()),
                 status_code: Some(429),
@@ -1191,6 +1193,15 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("request error");
     assert_eq!(request_error.client_status_code, Some(502));
     assert_eq!(request_error.upstream_status_code, Some(429));
+    assert_eq!(request_error.client_ip.as_deref(), Some("203.0.113.9"));
+    assert_eq!(
+        request_error.user_agent.as_deref(),
+        Some("codex-cli/0.144.0")
+    );
+    assert_eq!(
+        request_error.requested_model_id.as_deref(),
+        Some("public-model")
+    );
     let attempt_error = errors
         .items
         .iter()
@@ -1198,6 +1209,12 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
         .expect("attempt error");
     assert_eq!(attempt_error.client_status_code, None);
     assert_eq!(attempt_error.upstream_status_code, Some(429));
+    assert_eq!(attempt_error.endpoint.as_deref(), Some("/v1/responses"));
+    assert_eq!(attempt_error.client_ip.as_deref(), Some("203.0.113.9"));
+    assert_eq!(
+        attempt_error.user_agent.as_deref(),
+        Some("codex-cli/0.144.0")
+    );
 
     database.close().await;
 }
@@ -1286,7 +1303,7 @@ async fn seed_observability_facts(
     sqlx::query(
         "insert into model_requests (
            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
-           client_transport, requested_model_id,
+           client_transport, requested_model_id, service_tier,
            provider_kind, provider_account_id,
            provider_account_ref, upstream_model_id, upstream_transport, attempt_count,
            provider_account_name_snapshot, provider_account_email_snapshot,
@@ -1295,16 +1312,20 @@ async fn seed_observability_facts(
            error_kind, provider_error_code, error_message, retry_after_ms,
            input_tokens, cached_tokens, image_generation_requested,
            image_generation_succeeded, cost_source, latency_ms,
+           client_ip, user_agent, reasoning_effort, reasoning_preset,
+           request_kind, subagent_kind, compact,
            started_at, deadline_at, completed_at,
            routing_scope, routing_group_refs, routing_group_names_snapshot
          ) values (
            'req_observe_failed', 'key_observe', 1, 'openai', 'responses', '/v1/responses',
-           'http_sse', 'public-model', 'openai', 'acct_observe',
+           'http_sse', 'public-model', 'priority', 'openai', 'acct_observe',
            'acct_observe', 'upstream-model',
            'http_sse', 2,
            'primary', 'account@example.invalid', 'oauth',
            'sent', 'failed', 502, 429, 'rate_limited', 'rate_limit',
            'upstream limited', 1000, 0, 0, true, false, 'unavailable', 700,
+           '203.0.113.9', 'codex-cli/0.144.0', 'medium', null,
+           'root', null, false,
            $1 - interval '10 minutes', $1 + interval '20 minutes', $1 - interval '9 minutes',
            'all', '{}'::text[], '[]'::jsonb
          )",

@@ -8,11 +8,13 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
 import { presentOpsError } from '../utils/opsErrorPresentation'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
+import UsageTransportBadge from './UsageTransportBadge.vue'
 
 const props = defineProps<{
   timeRangeParams: UsageTimeRangeParams
@@ -45,6 +47,30 @@ function failureClassText(record: OpsError) {
 
 function errorSummary(record: OpsError) {
   return presentOpsError(record).summary
+}
+
+function accountText(record: OpsError) {
+  return record.accountEmail
+    || record.accountName
+    || record.metadata.accountLabel
+    || record.accountId
+    || '—'
+}
+
+function modelText(record: OpsError) {
+  return record.requestedModel || record.model || record.upstreamModel || '—'
+}
+
+function modelTitle(record: OpsError) {
+  const requested = record.requestedModel
+  const upstream = record.upstreamModel
+  return requested && upstream && requested !== upstream
+    ? `${requested} → ${upstream}`
+    : modelText(record)
+}
+
+function reasoningText(record: OpsError) {
+  return record.reasoningPreset || record.reasoningEffort || '—'
 }
 </script>
 
@@ -111,6 +137,12 @@ function errorSummary(record: OpsError) {
             {{ failureClassText(row) }}
           </span>
         </template>
+        <template #provider="{ row }">
+          <ProviderIconGroup
+            :provider="String(row.provider || '')"
+            :authentication-kind="row.authenticationKind"
+          />
+        </template>
         <template #message="{ row }">
           <span class="block max-w-full truncate text-cp-sm font-emphasis text-cp-text" :title="errorSummary(row)">
             {{ errorSummary(row) }}
@@ -119,9 +151,41 @@ function errorSummary(record: OpsError) {
         <template #accountId="{ row }">
           <span
             class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"
-            :title="row.accountId || ''"
+            :title="accountText(row)"
           >
-            {{ row.metadata.accountLabel || '—' }}
+            {{ accountText(row) }}
+          </span>
+        </template>
+        <template #model="{ row }">
+          <span
+            class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"
+            :title="modelTitle(row)"
+          >
+            {{ modelText(row) }}
+          </span>
+        </template>
+        <template #reasoningEffort="{ row }">
+          <span class="text-cp-sm font-bold text-cp-text-secondary">
+            {{ reasoningText(row) }}
+          </span>
+        </template>
+        <template #transport="{ row }">
+          <UsageTransportBadge :transport="row.transport" />
+        </template>
+        <template #clientTransport="{ row }">
+          <UsageTransportBadge :transport="row.clientTransport" />
+        </template>
+        <template #clientIp="{ row }">
+          <span
+            class="inline-flex h-6 max-w-full items-center rounded-full bg-cp-blue-bg px-2.5 font-mono text-cp-sm leading-none font-bold text-cp-blue-text-on-bg"
+            :title="row.clientIp || '—'"
+          >
+            <span class="min-w-0 truncate">{{ row.clientIp || '—' }}</span>
+          </span>
+        </template>
+        <template #userAgent="{ row }">
+          <span class="block max-w-full wrap-break-word whitespace-normal font-mono text-cp-sm leading-[1.4] font-emphasis text-cp-text-secondary">
+            {{ row.userAgent || '—' }}
           </span>
         </template>
         <template #actions="{ row }">

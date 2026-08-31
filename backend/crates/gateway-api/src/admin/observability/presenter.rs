@@ -531,24 +531,45 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
         .or(error.provider_account_name.as_ref())
         .or(error.provider_account_ref.as_ref())
         .cloned();
+    let model = error
+        .upstream_model_id
+        .clone()
+        .or_else(|| error.requested_model_id.clone());
     OpsErrorView {
         id: error.event_id,
         request_id: error.request_id,
         client_api_key_id: error.client_api_key_ref,
         kind: error.component.clone(),
+        operation: error.operation,
+        protocol: error.protocol,
+        client_transport: error.client_transport,
         provider: error.provider_kind,
         authentication_kind: error.provider_account_authentication_kind,
         account_id: error.provider_account_ref,
+        account_name: error.provider_account_name,
+        account_email: error.provider_account_email,
         route: error.endpoint.unwrap_or_else(|| "—".to_owned()),
-        model: error.upstream_model_id,
+        model,
+        requested_model: error.requested_model_id,
+        upstream_model: error.upstream_model_id,
+        service_tier: error.service_tier,
         client_status_code: error.client_status_code.map(i64::from),
         upstream_status_code: error.upstream_status_code.map(i64::from),
         transport: error.upstream_transport,
         attempt_index: error.attempt_index,
         failure_class: error.failure_kind,
+        provider_error_code: error.provider_error_code,
+        occurrence_count: error.occurrence_count,
         response_id: error.client_response_id,
         upstream_request_id: error.upstream_request_id,
         latency_ms: error.latency_ms,
+        client_ip: error.client_ip,
+        user_agent: error.user_agent,
+        reasoning_effort: error.reasoning_effort,
+        reasoning_preset: error.reasoning_preset,
+        request_kind: error.request_kind,
+        subagent_kind: error.subagent_kind,
+        compact: error.compact,
         message: error.message,
         metadata: OpsErrorMetadataView {
             source: error.source,
