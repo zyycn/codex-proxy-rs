@@ -72,7 +72,7 @@ pub struct CodexResponsesRequest {
     pub turn_metadata: Option<String>,
     /// beta features 透传头。
     pub beta_features: Option<String>,
-    /// 客户端版本头。
+    /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成。
     pub version: Option<String>,
     /// timing metrics 透传头。
     pub include_timing_metrics: Option<String>,

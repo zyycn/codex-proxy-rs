@@ -320,8 +320,8 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
     );
     assert_eq!(
-        values("version"),
-        vec![b"future-v1".to_vec(), b"future-\x80".to_vec()]
+        openai_protocol_context(&decoded).get("version"),
+        Some(&json!("future-v1"))
     );
     assert_eq!(
         values("openai-beta"),
@@ -349,6 +349,7 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         // 上游指纹由运行时画像统一生成，客户端不得覆盖。
         "user-agent",
         "originator",
+        "version",
         "x-oai-attestation",
         "x-oai-is",
         "x-oai-is-update",

@@ -63,25 +63,25 @@ openai:
     # 版本元组来自同一个官方 macOS Desktop ZIP；Provider 每 24 小时检查 appcast，
     # 仅在包内 Core 核验和 Redis 条件覆盖都成功后原子更新。
     originator: 'Codex Desktop'
-    codex_version: '0.147.0-alpha.6.6'
-    desktop_version: '26.803.81509'
-    desktop_build: '6415'
+    codex_version: '0.151.0-alpha.7.2'
+    desktop_version: '26.825.51511'
+    desktop_build: '7377'
     os_type: 'Mac OS'
     os_version: '15.7.1'
     arch: 'arm64'
     terminal: 'unknown'
-    verified_at: '2026-08-03T00:00:00+08:00'
+    verified_at: '2026-08-31T00:00:00+08:00'
 
 xai:
   # OAuth 端点、额度与模型目录策略由 xAI Provider 固定管理；这里只声明请求画像启动基线。
   wire_profile:
     # Provider 每 24 小时读取官方 npm metadata，仅在进程内更新 client_version。
-    client_identifier: 'grok-shell'
-    client_version: '0.2.118'
+    client_identifier: 'GrokShell'
+    client_version: '1.0.13'
     client_mode: 'headless'
     target_os: 'linux'
     target_arch: 'x86_64'
-    verified_at: '2026-07-21T00:00:00+08:00'
+    verified_at: '2026-08-31T00:00:00+08:00'
 
 # Compose 凭据桥接区；密码仍只维护在 store 中。
 services:

@@ -402,7 +402,7 @@ pub struct CodexRequestContext<'a> {
     pub beta_features: Option<&'a str>,
     /// x-responsesapi-include-timing-metrics 头值。
     pub include_timing_metrics: Option<&'a str>,
-    /// 客户端版本号。
+    /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成。
     pub version: Option<&'a str>,
     /// 客户端 window ID。
     pub codex_window_id: Option<&'a str>,

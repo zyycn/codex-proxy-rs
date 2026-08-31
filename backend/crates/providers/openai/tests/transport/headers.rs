@@ -32,6 +32,8 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 ],
                 ["user-agent", STANDARD.encode(b"Codex future-client")],
                 ["originator", STANDARD.encode(b"future-originator")],
+                ["version", STANDARD.encode(b"26.999.10001")],
+                ["version", STANDARD.encode(b"26.999.10002")],
                 ["openai-beta", STANDARD.encode(b"future_responses=v2")],
                 ["openai-beta", STANDARD.encode(b"future_tools=v3")],
                 [
@@ -321,7 +323,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("x-codex-turn-metadata", "{\"thread_source\":\"subagent\"}"),
         ("x-codex-beta-features", "feature-a"),
         ("x-responsesapi-include-timing-metrics", "true"),
-        ("version", "26.318.11754"),
+        ("version", "1.2.3"),
         ("x-codex-window-id", "cw_derived"),
         ("x-codex-parent-thread-id", "parent-456"),
         ("x-openai-subagent", "future_codex_mode"),
@@ -356,14 +358,17 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
         request
     });
     let request = request_with_opaque_headers(false);
-    let expected_user_agent = test_wire_profile().snapshot().user_agent();
+    let profile = test_wire_profile();
+    let profile_snapshot = profile.snapshot();
+    let expected_user_agent = profile_snapshot.user_agent();
+    let expected_desktop_version = profile_snapshot.desktop_version;
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("HTTP client"),
         format!("http://{address}"),
-        test_wire_profile(),
+        profile,
     );
 
     client
@@ -374,6 +379,7 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
                 account_id: Some("lease-account"),
                 installation_id: Some("lease-installation"),
                 turn_state: request.turn_state.as_deref(),
+                version: Some("26.825.51511"),
                 ..request_context("req_opaque_http", Some("lease-account"))
             },
         )
@@ -412,6 +418,10 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
     assert_eq!(
         raw_header_values(&raw, "originator"),
         vec![b"codex_cli_rs".to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "version"),
+        vec![expected_desktop_version.into_bytes()]
     );
     for dropped in [
         "openai-beta",
@@ -490,6 +500,7 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
                 account_id: Some("lease-account"),
                 installation_id: Some("lease-installation"),
                 turn_state: request.turn_state.as_deref(),
+                version: Some("26.825.51511"),
                 ..request_context("req_opaque_ws", Some("lease-account"))
             },
         )
@@ -526,6 +537,7 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
         vec![test_wire_profile().snapshot().user_agent().into_bytes()]
     );
     assert_eq!(values("originator"), vec![b"codex_cli_rs".to_vec()]);
+    assert_eq!(values("version"), vec![b"1.2.3".to_vec()]);
     assert_eq!(
         values("x-openai-internal-codex-residency"),
         vec![b"us".to_vec()]
@@ -569,7 +581,9 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     request.codex_window_id = Some("cw_1".to_owned());
     request.parent_thread_id = Some("parent-1".to_owned());
     let profile = test_wire_profile();
-    let expected_user_agent = profile.snapshot().user_agent();
+    let profile_snapshot = profile.snapshot();
+    let expected_user_agent = profile_snapshot.user_agent();
+    let expected_desktop_version = profile_snapshot.desktop_version;
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()
@@ -628,6 +642,10 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
             Some("req_order"),
             Some("turn-state"),
         )
+    );
+    assert_eq!(
+        read_header_value(&raw_request, "version"),
+        Some(expected_desktop_version.as_str())
     );
     for required in [
         "authorization",

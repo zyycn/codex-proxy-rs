@@ -688,15 +688,16 @@ impl CodexBackendClient {
             X_OPENAI_MEMGEN_REQUEST_HEADER,
             request.memgen_request.as_deref(),
         );
-        // 客户端确实携带的普通协议头优先；没有携带时才使用上面的 Codex profile 默认值。
+        // 客户端确实携带的普通协议头优先；画像身份头只能由 Codex profile 生成。
         for name in request.passthrough_headers.keys() {
-            // 上游指纹必须由运行时画像统一生成：originator/User-Agent 即使绕过
-            // API 透传黑名单也不能覆盖画像，避免下游客户端暴露不一致指纹。
+            // 上游指纹必须由运行时画像统一生成：originator/User-Agent/version 即使
+            // 绕过 API 透传黑名单也不能覆盖画像，避免下游客户端暴露不一致指纹。
             if matches!(
                 name.as_str(),
                 "openai-beta"
                     | "originator"
                     | "user-agent"
+                    | "version"
                     | "x-oai-attestation"
                     | "x-oai-is"
                     | "x-oai-is-update"
@@ -770,7 +771,17 @@ impl CodexBackendClient {
             "x-responsesapi-include-timing-metrics",
             context.include_timing_metrics,
         );
-        insert_optional_protocol_header(&mut headers, "version", context.version);
+        // 官方 Desktop 的版本画像来自 clientInfo.version。保留下游是否携带
+        // `version` 扩展头的协议形状，但上游值统一使用当前 Desktop 制品版本。
+        if context
+            .version
+            .is_some_and(|version| HeaderValue::from_str(version).is_ok())
+        {
+            headers.insert(
+                HeaderName::from_static("version"),
+                HeaderValue::from_str(&profile.desktop_version)?,
+            );
+        }
         insert_optional_protocol_header(
             &mut headers,
             "x-codex-parent-thread-id",
