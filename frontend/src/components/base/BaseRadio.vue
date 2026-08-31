@@ -27,7 +27,7 @@ const indicatorClasses = computed(() => [
     ? 'bg-cp-bg-container-disabled text-cp-text-disabled'
     : checked.value
       ? 'bg-cp-primary text-(--cp-button-primary-color)'
-      : 'bg-cp-fill-tertiary text-transparent group-hover:bg-cp-bg-text-active',
+      : 'bg-cp-fill-secondary text-transparent',
 ])
 </script>
 
