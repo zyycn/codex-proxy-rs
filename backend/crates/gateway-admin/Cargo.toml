@@ -12,7 +12,7 @@ name = "main"
 path = "tests/main.rs"
 
 [dependencies]
-argon2 = "0.5.3"
+argon2 = "0.6.0"
 async-trait = "0.1.89"
 base64 = "0.23.0"
 bytes = "1.11.1"
