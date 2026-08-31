@@ -5,6 +5,7 @@ use std::time::SystemTime;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt as _;
 use gateway_admin::model::accounts::AccountRecord;
 use gateway_admin::model::observability::{
     CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireAttribute,
@@ -19,9 +20,10 @@ use gateway_admin::model::provider_credentials::{
     PreparedCredentialCreate, PreparedCredentialImport, PreparedCredentialRotation,
     PreparedCredentialRotationFacts, ProviderDocument, ProviderExport,
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderProfileActivityInsights,
-    ProviderProfileDailyUsage, ProviderProfileInvocation, ProviderProfileStatistics,
-    ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
-    ProviderQuotaWindowRole, ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
+    ProviderProfileAvatar, ProviderProfileAvatarStreamError, ProviderProfileDailyUsage,
+    ProviderProfileInvocation, ProviderProfileStatistics, ProviderProfileStatisticsSummary,
+    ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole,
+    ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
     QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
@@ -49,10 +51,10 @@ use crate::credential::{
     CodexCredentialAdminService, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialProfileService, CodexCredentialQuotaError, CodexCredentialQuotaService,
     CodexOAuthAdmin, CodexOAuthAdminError, CodexOAuthPendingClaimOutcome, CodexOAuthPendingStore,
-    CodexOAuthPendingStoreError, CodexPendingAuthorization, CodexProfileStatisticsError,
-    CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole, CodexResetCreditsError,
-    CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential, ExportManagedCodexCredential,
-    StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
+    CodexOAuthPendingStoreError, CodexPendingAuthorization, CodexProfileAvatarError,
+    CodexProfileStatisticsError, CodexQuotaWindow, CodexQuotaWindowKind, CodexQuotaWindowRole,
+    CodexResetCreditsError, CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential,
+    ExportManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
 use crate::credential::{
     CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
@@ -61,7 +63,9 @@ use crate::transport::CodexWebSocketPool;
 use crate::transport::profile::{
     CodexDesktopReleaseSnapshot, CodexDesktopReleaseStatus, CodexWireProfile, CodexWireProfileState,
 };
-use crate::transport::{CodexProfileStatistics, OpenAiBillingUsage, openai_billing_breakdown};
+use crate::transport::{
+    CodexProfileAvatar, CodexProfileStatistics, OpenAiBillingUsage, openai_billing_breakdown,
+};
 
 const PROVIDER_NAME: &str = "openai";
 const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
@@ -460,6 +464,18 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .await
             .map_err(map_profile_statistics_error)?;
         Ok(project_profile_statistics(statistics))
+    }
+
+    async fn profile_avatar(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileAvatar, ProviderAdminError> {
+        self.account(account_id).await?;
+        self.profile_statistics
+            .profile_avatar(account_id)
+            .await
+            .map(project_profile_avatar)
+            .map_err(map_profile_avatar_error)
     }
 
     async fn reset_credits(
@@ -862,6 +878,15 @@ fn project_profile_statistics(statistics: CodexProfileStatistics) -> ProviderPro
                     .collect()
             }),
         },
+    }
+}
+
+fn project_profile_avatar(avatar: CodexProfileAvatar) -> ProviderProfileAvatar {
+    ProviderProfileAvatar {
+        content_type: avatar.content_type,
+        content_length: avatar.content_length,
+        etag: avatar.etag,
+        body: Box::pin(avatar.body.map_err(|_| ProviderProfileAvatarStreamError)),
     }
 }
 
@@ -1494,6 +1519,19 @@ fn map_profile_statistics_error(error: CodexProfileStatisticsError) -> ProviderA
                 "OpenAI profile-statistics upstream returned HTTP {status}{retry_after}: {}",
                 bounded_upstream_body(&body)
             ))
+        }
+    }
+}
+
+fn map_profile_avatar_error(error: CodexProfileAvatarError) -> ProviderAdminError {
+    match error {
+        CodexProfileAvatarError::ProfileStatistics(error) => map_profile_statistics_error(error),
+        CodexProfileAvatarError::Missing => provider_admin_error(ProviderAdminErrorKind::NotFound),
+        CodexProfileAvatarError::InvalidSource | CodexProfileAvatarError::Upstream { .. } => {
+            provider_admin_error(ProviderAdminErrorKind::BadGateway)
+        }
+        CodexProfileAvatarError::TransportUnavailable => {
+            provider_admin_error(ProviderAdminErrorKind::Unavailable)
         }
     }
 }

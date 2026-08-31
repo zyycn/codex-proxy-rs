@@ -368,6 +368,21 @@ export function getAccountProfileStatistics(data: AccountIdParam) {
   })
 }
 
+export function accountProfileAvatarUrl(accountId: string, sourceUrl: string) {
+  const params = new URLSearchParams({
+    accountId,
+    version: stableAvatarVersion(sourceUrl),
+  })
+  return `/api/admin/accounts/profile-avatar?${params.toString()}`
+}
+
+function stableAvatarVersion(value: string) {
+  let hash = 0
+  for (const character of value)
+    hash = (hash * 33 + (character.codePointAt(0) ?? 0)) % 2_147_483_647
+  return hash.toString(36)
+}
+
 export function refreshAccountQuota(data: AccountIdParam) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',

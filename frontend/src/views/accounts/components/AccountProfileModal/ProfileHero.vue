@@ -4,6 +4,7 @@ import type { AccountProfileStatisticsResponse } from '@/api'
 import { UserRound } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 
+import { accountProfileAvatarUrl } from '@/api'
 import { formatCompactNumber, formatInteger } from '@/utils/number'
 import { stablePresetVisualToneClass } from '../../utils/visualTone'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
@@ -23,6 +24,10 @@ const initial = computed(() => Array.from(displayName.value.trim())[0]?.toUpperC
 const avatarToneClass = computed(() =>
   stablePresetVisualToneClass(props.account.id || accountIdentity.value || displayName.value),
 )
+const avatarUrl = computed(() => {
+  const sourceUrl = props.profile.imageUrl?.trim()
+  return sourceUrl ? accountProfileAvatarUrl(props.account.id, sourceUrl) : null
+})
 const metrics = computed(() => [
   {
     label: '累计 Token 数',
@@ -49,7 +54,7 @@ const metrics = computed(() => [
 ])
 
 watch(
-  () => props.profile.imageUrl,
+  avatarUrl,
   () => {
     imageFailed.value = false
   },
@@ -95,8 +100,8 @@ function formatDuration(value: number | null) {
         :class="avatarToneClass"
       >
         <img
-          v-if="profile.imageUrl && !imageFailed"
-          :src="profile.imageUrl"
+          v-if="avatarUrl && !imageFailed"
+          :src="avatarUrl"
           :alt="`${displayName} 的头像`"
           class="size-full object-cover"
           referrerpolicy="no-referrer"

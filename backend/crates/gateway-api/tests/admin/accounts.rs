@@ -76,7 +76,7 @@ mod profile_statistics {
         ProviderProfileActivityInsights, ProviderProfileDailyUsage, ProviderProfileInvocation,
         ProviderProfileStatistics, ProviderProfileStatisticsSummary,
     };
-    use gateway_api::admin::accounts::AccountProfileStatisticsData;
+    use gateway_api::admin::accounts::{AccountProfileAvatarQuery, AccountProfileStatisticsData};
     use serde_json::json;
 
     #[test]
@@ -133,6 +133,74 @@ mod profile_statistics {
         assert!(value.get("cycle").is_none());
         assert!(value.get("models").is_none());
         assert!(value.get("estimatedCost").is_none());
+    }
+
+    #[test]
+    fn profile_avatar_query_accepts_only_bounded_cache_versions() {
+        let valid: AccountProfileAvatarQuery = serde_json::from_value(json!({
+            "accountId": "acct_openai",
+            "version": "k9m2z1"
+        }))
+        .expect("decode avatar query");
+        valid.validate().expect("validate avatar query");
+
+        for version in ["", "contains-dash", "x23456789012345678901234567890123"] {
+            let query: AccountProfileAvatarQuery = serde_json::from_value(json!({
+                "accountId": "acct_openai",
+                "version": version
+            }))
+            .expect("decode invalid avatar query");
+            assert_eq!(
+                query.validate().expect_err("reject version").field(),
+                "version"
+            );
+        }
+        assert!(
+            serde_json::from_value::<AccountProfileAvatarQuery>(json!({
+                "accountId": "acct_openai",
+                "sourceUrl": "https://example.test/avatar"
+            }))
+            .is_err()
+        );
+    }
+}
+
+mod profile_avatar {
+    use axum::body::to_bytes;
+    use bytes::Bytes;
+    use futures::stream;
+    use gateway_admin::model::provider_credentials::ProviderProfileAvatar;
+    use gateway_api::admin::accounts::profile_avatar_response;
+
+    #[tokio::test]
+    async fn profile_avatar_response_preserves_stream_metadata_and_private_cache() {
+        let response = profile_avatar_response(ProviderProfileAvatar {
+            content_type: Some("image/svg+xml".to_owned()),
+            content_length: Some(6),
+            etag: Some("\"v1\"".to_owned()),
+            body: Box::pin(stream::iter([Ok(Bytes::from_static(b"avatar"))])),
+        });
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["content-type"], "image/svg+xml");
+        assert_eq!(response.headers()["content-length"], "6");
+        assert_eq!(response.headers()["etag"], "\"v1\"");
+        assert_eq!(response.headers()["cache-control"], "private, max-age=3600");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            response.headers()["cross-origin-resource-policy"],
+            "same-origin"
+        );
+        assert_eq!(
+            response.headers()["content-security-policy"],
+            "sandbox; default-src 'none'"
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), 16)
+                .await
+                .expect("avatar response body"),
+            Bytes::from_static(b"avatar")
+        );
     }
 }
 

@@ -4,8 +4,9 @@ use std::{collections::BTreeSet, convert::Infallible, fmt};
 
 use axum::{
     Router,
+    body::Body,
     extract::State,
-    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+    http::{HeaderName, HeaderValue, StatusCode, header},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -28,10 +29,10 @@ use gateway_admin::model::{
         AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit,
         CredentialDeletion, CredentialDeletionResult, CredentialImportResult, CredentialMutation,
         CredentialMutationResult, ImportCredentials, ProviderDocument, ProviderModels,
-        ProviderProfileActivityInsights, ProviderProfileDailyUsage, ProviderProfileInvocation,
-        ProviderProfileStatistics, ProviderProfileStatisticsSummary, ProviderQuota,
-        ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
-        RotateCredential, StartAuthorization,
+        ProviderProfileActivityInsights, ProviderProfileAvatar, ProviderProfileDailyUsage,
+        ProviderProfileInvocation, ProviderProfileStatistics, ProviderProfileStatisticsSummary,
+        ProviderQuota, ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult,
+        ProviderResetCredits, RotateCredential, StartAuthorization,
     },
 };
 use gateway_core::{
@@ -60,6 +61,7 @@ const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 64 * 1024;
 const MAX_ACCOUNT_DELETE_BATCH: usize = 200;
 const MAX_ACCOUNT_GROUP_BATCH: usize = 1000;
+const MAX_AVATAR_VERSION_BYTES: usize = 32;
 
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -414,6 +416,33 @@ pub struct AccountIdQuery {
 impl AccountIdQuery {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_account_id(&self.account_id, "accountId")
+    }
+
+    fn into_id(self) -> Result<ProviderAccountId, WireValidationError> {
+        self.validate()?;
+        ProviderAccountId::new(self.account_id).map_err(|_| WireValidationError::new("accountId"))
+    }
+}
+
+/// 头像 GET 的固定 query；`version` 只参与浏览器缓存键，不进入上游请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountProfileAvatarQuery {
+    pub account_id: String,
+    pub version: Option<String>,
+}
+
+impl AccountProfileAvatarQuery {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        require_account_id(&self.account_id, "accountId")?;
+        if self.version.as_deref().is_some_and(|version| {
+            version.is_empty()
+                || version.len() > MAX_AVATAR_VERSION_BYTES
+                || !version.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        }) {
+            return Err(WireValidationError::new("version"));
+        }
+        Ok(())
     }
 
     fn into_id(self) -> Result<ProviderAccountId, WireValidationError> {
@@ -1292,6 +1321,10 @@ where
             get(account_profile_statistics::<S>),
         )
         .route(
+            "/api/admin/accounts/profile-avatar",
+            get(account_profile_avatar::<S>),
+        )
+        .route(
             "/api/admin/accounts/reset-credits",
             get(account_reset_credits::<S>).post(consume_account_reset_credit::<S>),
         )
@@ -1400,7 +1433,7 @@ where
     let mut response = AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)).into_response();
     response
         .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -1644,6 +1677,69 @@ where
         StatusCode::OK,
         AdminEnvelope::ok(AccountProfileStatisticsData::from(result)),
     ))
+}
+
+async fn account_profile_avatar<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountProfileAvatarQuery>,
+) -> Result<Response, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let avatar = state
+        .admin_services()
+        .accounts()
+        .profile_avatar(&account_id)
+        .await
+        .map_err(map_service_error)?;
+    Ok(profile_avatar_response(avatar))
+}
+
+/// 将 Provider 头像流投影为受保护的同源 HTTP 响应。
+#[must_use]
+pub fn profile_avatar_response(avatar: ProviderProfileAvatar) -> Response {
+    let ProviderProfileAvatar {
+        content_type,
+        content_length,
+        etag,
+        body,
+    } = avatar;
+    let mut response = Response::new(Body::from_stream(body));
+    *response.status_mut() = StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        content_type
+            .and_then(|value| HeaderValue::from_str(&value).ok())
+            .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream")),
+    );
+    if let Some(value) =
+        content_length.and_then(|length| HeaderValue::from_str(&length.to_string()).ok())
+    {
+        headers.insert(header::CONTENT_LENGTH, value);
+    }
+    if let Some(value) = etag.and_then(|value| HeaderValue::from_str(&value).ok()) {
+        headers.insert(header::ETAG, value);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("sandbox; default-src 'none'"),
+    );
+    response
 }
 
 async fn refresh_account_quota<S>(

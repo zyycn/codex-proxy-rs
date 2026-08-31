@@ -38,7 +38,9 @@ pub use oauth::{
     CodexPendingAuthorization, CompleteCodexOAuthAuthorization, CompletedCodexOAuthAuthorization,
     CompletedCodexOAuthCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
-pub use profile_statistics::{CodexCredentialProfileService, CodexProfileStatisticsError};
+pub use profile_statistics::{
+    CodexCredentialProfileService, CodexProfileAvatarError, CodexProfileStatisticsError,
+};
 pub use quota::{
     CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexCredentialQuotaService,
     CodexQuotaFact, CodexQuotaRefreshPolicy, CodexQuotaSyncSummary, CodexQuotaWindow,

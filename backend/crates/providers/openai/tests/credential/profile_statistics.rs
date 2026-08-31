@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{TimeZone as _, Utc};
+use futures::TryStreamExt as _;
 use gateway_core::engine::credential::ProviderAccountId;
 use provider_openai::credential::{CodexCredentialProfileService, ImportCodexOAuthCredential};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
@@ -154,4 +155,63 @@ async fn profile_statistics_keeps_profile_when_stats_are_unavailable() {
     assert!(statistics.has_stats_error);
     assert_eq!(statistics.summary.total_text_tokens, None);
     assert_eq!(statistics.daily_usage, None);
+}
+
+#[tokio::test]
+async fn profile_avatar_reuses_cached_source_and_sends_no_account_credentials() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/wham/profiles/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "profile": {
+                "display_name": "Ada",
+                "profile_picture_url": "https://chatgpt.com/backend-api/estuary/public_content/enc/avatar-token="
+            },
+            "stats": {},
+            "metadata": {"stats_error": null}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/estuary/public_content/enc/avatar-token="))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/svg+xml")
+                .set_body_bytes(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (store, service) = service("acct_profile_avatar", &server).await;
+    let account = store
+        .account("acct_profile_avatar")
+        .expect("profile account");
+
+    service
+        .profile_statistics(account.id())
+        .await
+        .expect("profile statistics");
+    let avatar = service
+        .profile_avatar(account.id())
+        .await
+        .expect("profile avatar");
+    let content_type = avatar.content_type.clone();
+    let chunks = avatar
+        .body
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("avatar body");
+    let body = chunks.into_iter().flatten().collect::<Vec<_>>();
+    let requests = server.received_requests().await.expect("recorded requests");
+    let avatar_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/estuary/public_content/enc/avatar-token=")
+        .expect("avatar request");
+
+    assert_eq!(content_type.as_deref(), Some("image/svg+xml"));
+    assert_eq!(body, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+    assert!(!avatar_request.headers.contains_key("authorization"));
+    assert!(!avatar_request.headers.contains_key("cookie"));
+    assert!(!avatar_request.headers.contains_key("chatgpt-account-id"));
 }

@@ -58,6 +58,7 @@ async fn admin_not_found() -> AdminError {
 async fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     response
 }

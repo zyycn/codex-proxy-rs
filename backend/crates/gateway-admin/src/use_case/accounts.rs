@@ -25,8 +25,9 @@ use crate::{
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
             ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels,
-            ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
-            ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
+            ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
+            ProviderQuotaWindow, ProviderResetCreditResult, ProviderResetCredits,
+            QuotaLocalUsageAttribution,
         },
     },
     ports::{
@@ -88,6 +89,13 @@ pub trait AccountsService: Send + Sync {
         _account_id: &ProviderAccountId,
     ) -> Result<ProviderProfileStatistics, AdminError> {
         Err(AdminError::invalid("当前 Provider 不支持账号统计"))
+    }
+
+    async fn profile_avatar(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileAvatar, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持账号头像"))
     }
 
     async fn reset_credits(
@@ -564,6 +572,17 @@ impl AccountsService for DefaultAccountsService {
             .profile_statistics(account_id)
             .await
             .map_err(|error| map_provider_error(error, "provider profile statistics"))
+    }
+
+    async fn profile_avatar(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileAvatar, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
+        provider
+            .profile_avatar(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "provider profile avatar"))
     }
 
     async fn reset_credits(

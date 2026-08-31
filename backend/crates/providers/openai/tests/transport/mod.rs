@@ -54,6 +54,7 @@ mod headers;
 mod http_client;
 mod latency;
 mod profile;
+mod profile_avatar;
 mod protocol;
 mod request;
 mod reset_credits;

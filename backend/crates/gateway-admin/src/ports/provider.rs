@@ -17,8 +17,8 @@ use crate::model::provider_credentials::{
     PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
     PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput, ProviderModels,
-    ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest, ProviderResetCreditResult,
-    ProviderResetCredits,
+    ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
+    ProviderResetCreditResult, ProviderResetCredits,
 };
 
 /// Provider 管理失败的稳定分类。
@@ -154,6 +154,14 @@ pub trait ProviderAdmin: Send + Sync {
         &self,
         _account_id: &ProviderAccountId,
     ) -> Result<ProviderProfileStatistics, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// 打开 Provider 官方头像字节流；不支持该能力的 Provider 使用默认拒绝。
+    async fn profile_avatar(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderProfileAvatar, ProviderAdminError> {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 

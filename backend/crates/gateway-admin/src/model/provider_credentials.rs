@@ -1,9 +1,11 @@
 //! Provider 管理能力交换的中立 Command 与 Result。
 
-use std::fmt;
+use std::{fmt, pin::Pin};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
+use futures::Stream;
 use gateway_core::{
     engine::credential::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
     routing::{ProviderKind, UpstreamModelId},
@@ -677,6 +679,35 @@ pub struct ProviderProfileStatistics {
     pub summary: ProviderProfileStatisticsSummary,
     pub daily_usage: Option<Vec<ProviderProfileDailyUsage>>,
     pub activity_insights: ProviderProfileActivityInsights,
+}
+
+/// Provider 头像正文的中立字节流；公共层不解释 MIME，也不限制总字节数。
+pub type ProviderProfileAvatarStream =
+    Pin<Box<dyn Stream<Item = Result<Bytes, ProviderProfileAvatarStreamError>> + Send + 'static>>;
+
+/// Provider 头像流在响应开始后的通用失败，不携带上游 URL 或正文。
+#[derive(Debug, thiserror::Error)]
+#[error("provider profile avatar stream failed")]
+pub struct ProviderProfileAvatarStreamError;
+
+/// Provider 已校验并打开的官方头像响应。
+pub struct ProviderProfileAvatar {
+    pub content_type: Option<String>,
+    pub content_length: Option<u64>,
+    pub etag: Option<String>,
+    pub body: ProviderProfileAvatarStream,
+}
+
+impl fmt::Debug for ProviderProfileAvatar {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderProfileAvatar")
+            .field("content_type", &self.content_type)
+            .field("content_length", &self.content_length)
+            .field("etag", &self.etag)
+            .field("body", &"<stream>")
+            .finish()
+    }
 }
 
 /// Provider 返回的一张安全主动额度重置卡。

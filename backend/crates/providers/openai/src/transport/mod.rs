@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod endpoints;
 pub mod headers;
 pub mod profile;
+pub mod profile_avatar;
 pub mod profile_statistics;
 pub mod protocol;
 pub mod request;
@@ -41,6 +42,10 @@ pub use self::{
         WHAM_USAGE_PATH, endpoint_url, usage_endpoint_url,
     },
     headers::build_codex_base_headers,
+    profile_avatar::{
+        CodexProfileAvatar, CodexProfileAvatarFetchError, CodexProfileAvatarStreamError,
+        fetch_profile_avatar,
+    },
     profile_statistics::{
         CodexProfileActivityInsights, CodexProfileDailyUsage, CodexProfileInvocation,
         CodexProfileStatistics, CodexProfileStatisticsSummary,
