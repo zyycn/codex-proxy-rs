@@ -15,7 +15,17 @@ use super::error::RequestDecodeError;
 const OPENAI_PROTOCOL: &str = "openai";
 const REVIEW_SUBAGENT: &str = "review";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
+const CODEX_TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
+
+/// Responses 请求进入共享解码内核时的下游传输来源。
+#[derive(Clone, Copy)]
+pub(super) enum RequestDecodeSource {
+    /// 单次 HTTP 请求，请求头与正文属于同一请求。
+    Http,
+    /// 复用连接上的 WebSocket `response.create` 帧。
+    WebSocketFrame,
+}
 
 #[derive(Clone, Default)]
 pub struct OpenAiRequestHeaders {
@@ -71,10 +81,18 @@ impl OpenAiRequestHeaders {
         }
     }
 
-    fn protocol_context(&self, use_websocket: Option<bool>) -> Map<String, Value> {
+    fn protocol_context(
+        &self,
+        use_websocket: Option<bool>,
+        frame_turn_metadata: Option<&String>,
+    ) -> Map<String, Value> {
         let mut context = Map::new();
         insert_protocol_context(&mut context, "turn_state", self.turn_state.as_ref());
-        insert_protocol_context(&mut context, "turn_metadata", self.turn_metadata.as_ref());
+        insert_protocol_context(
+            &mut context,
+            "turn_metadata",
+            frame_turn_metadata.or(self.turn_metadata.as_ref()),
+        );
         insert_protocol_context(&mut context, "beta_features", self.beta_features.as_ref());
         insert_protocol_context(&mut context, "version", self.version.as_ref());
         insert_protocol_context(
@@ -304,14 +322,15 @@ pub(super) fn decode_request_inner(
     let Value::Object(object) = value else {
         return Err(RequestDecodeError::ExpectedObject);
     };
-    decode_request_object(object, review, request_headers)
+    decode_request_object(object, review, request_headers, RequestDecodeSource::Http)
 }
 
-/// 解码已解析的顶层 object；WebSocket 帧解码复用此内核，避免序列化往返。
+/// 解码已解析的顶层 object；按下游传输来源恢复连接级协议上下文。
 pub(super) fn decode_request_object(
     mut object: Map<String, Value>,
     review: bool,
     request_headers: &OpenAiRequestHeaders,
+    source: RequestDecodeSource,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
     // 仅消费已识别的本地 transport 开关；未知同名值保留给未来上游协议。
     let use_websocket = object.get("use_websocket").and_then(Value::as_bool);
@@ -341,7 +360,11 @@ pub(super) fn decode_request_object(
         .unwrap_or(ContinuationIntent::None);
 
     request_headers.apply_subagent(&mut object, review.then_some(REVIEW_SUBAGENT));
-    let protocol_context = request_headers.protocol_context(use_websocket);
+    let frame_turn_metadata = match source {
+        RequestDecodeSource::Http => None,
+        RequestDecodeSource::WebSocketFrame => frame_turn_metadata(&object),
+    };
+    let protocol_context = request_headers.protocol_context(use_websocket, frame_turn_metadata);
 
     let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object)
         .map_err(|_| RequestDecodeError::CanonicalContract {
@@ -360,6 +383,16 @@ pub(super) fn decode_request_object(
             user_agent: None,
         },
     })
+}
+
+fn frame_turn_metadata(body: &Map<String, Value>) -> Option<&String> {
+    body.get("client_metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(CODEX_TURN_METADATA_KEY))
+        .and_then(|value| match value {
+            Value::String(value) if !value.trim().is_empty() => Some(value),
+            _ => None,
+        })
 }
 
 fn inject_subagent_metadata(body: &mut Map<String, Value>, subagent: &str) {

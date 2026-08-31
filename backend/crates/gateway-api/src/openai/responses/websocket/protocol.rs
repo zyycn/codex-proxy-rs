@@ -6,7 +6,8 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use super::super::{
-    DecodedResponsesRequest, ProtocolErrorBody, RequestDecodeError, request::OpenAiRequestHeaders,
+    DecodedResponsesRequest, ProtocolErrorBody, RequestDecodeError,
+    request::{OpenAiRequestHeaders, RequestDecodeSource},
 };
 
 /// 使用连接级请求头和 Provider 上下文解码官方 `response.create` 文本帧。
@@ -40,8 +41,13 @@ fn decode_response_create_inner(
     if matches!(body.get("stream"), Some(value) if value.as_bool() != Some(true)) {
         return Err(ResponseCreateFrameError::StreamingRequired);
     }
-    super::super::request::decode_request_object(body, false, request_headers)
-        .map_err(ResponseCreateFrameError::Request)
+    super::super::request::decode_request_object(
+        body,
+        false,
+        request_headers,
+        RequestDecodeSource::WebSocketFrame,
+    )
+    .map_err(ResponseCreateFrameError::Request)
 }
 
 /// `response.create` 帧的稳定安全错误。

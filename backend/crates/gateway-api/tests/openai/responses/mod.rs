@@ -196,7 +196,13 @@ fn decoder_should_preserve_connection_metadata_outside_the_openai_wire_body() {
         HeaderValue::from_static("{\"kind\":\"review\"}"),
     );
     headers.insert("conversation-id", HeaderValue::from_static("conversation"));
-    let body = json!({"model": "smart-code", "input": "hello"});
+    let body = json!({
+        "model": "smart-code",
+        "input": "hello",
+        "client_metadata": {
+            "x-codex-turn-metadata": "{\"kind\":\"turn\"}"
+        }
+    });
 
     let decoded = decode_request_with_headers(body.to_string().as_bytes(), &headers)
         .expect("request should decode");

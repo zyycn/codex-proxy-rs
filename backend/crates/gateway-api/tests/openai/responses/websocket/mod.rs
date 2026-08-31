@@ -9,11 +9,14 @@ use std::time::{Duration, SystemTime};
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header::AUTHORIZATION},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header::AUTHORIZATION},
 };
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt, future::BoxFuture};
-use gateway_api::openai::responses::ResponseCreateFrameError;
+use gateway_api::openai::responses::{
+    DecodedResponsesRequest, OpenAiRequestHeaders, ResponseCreateFrameError,
+    decode_response_create_with_context,
+};
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
     StartExecution, StartProviderExecution, StartedExecution,
@@ -25,6 +28,7 @@ use gateway_core::event::{
 };
 use gateway_core::operation::Operation;
 use gateway_core::routing::PublicModelId;
+use gateway_protocol::openai::codex_responses_request_semantics;
 use serde_json::{Value, json};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as ClientMessage;
@@ -33,6 +37,22 @@ use tower::ServiceExt;
 
 use super::decode_response_create;
 use crate::openai::{api_router, authenticated_client, models::ModelsExecution};
+
+fn decode_response_create_with_turn_header(
+    payload: Value,
+    opening_turn_metadata: &'static str,
+) -> DecodedResponsesRequest {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-codex-turn-metadata",
+        HeaderValue::from_static(opening_turn_metadata),
+    );
+    decode_response_create_with_context(
+        &payload.to_string(),
+        &OpenAiRequestHeaders::from_headers(&headers),
+    )
+    .expect("response.create should decode")
+}
 
 #[test]
 fn response_create_should_default_to_the_websocket_streaming_contract() {
@@ -115,6 +135,87 @@ fn response_create_should_preserve_compaction_trigger_for_openai() {
             .get("input")
             .and_then(|input| input.pointer("/1/type")),
         Some(&json!("compaction_trigger"))
+    );
+}
+
+#[test]
+fn response_create_should_prefer_frame_turn_metadata_over_opening_headers() {
+    let decoded = decode_response_create_with_turn_header(
+        json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "client_metadata": {
+                "x-codex-turn-metadata": r#"{"request_kind":"turn"}"#
+            }
+        }),
+        r#"{"request_kind":"compaction"}"#,
+    );
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+
+    let semantics = codex_responses_request_semantics(
+        request.protocol_payload().body(),
+        request.protocol_payload().context(),
+    );
+
+    assert_eq!(
+        (semantics.request_kind.as_deref(), semantics.compact),
+        (Some("turn"), false)
+    );
+}
+
+#[test]
+fn response_create_should_accept_frame_compaction_after_a_turn_opening_header() {
+    let decoded = decode_response_create_with_turn_header(
+        json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello",
+            "client_metadata": {
+                "x-codex-turn-metadata": r#"{"request_kind":"compaction"}"#
+            }
+        }),
+        r#"{"request_kind":"turn"}"#,
+    );
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+
+    let semantics = codex_responses_request_semantics(
+        request.protocol_payload().body(),
+        request.protocol_payload().context(),
+    );
+
+    assert_eq!(
+        (semantics.request_kind.as_deref(), semantics.compact),
+        (Some("compaction"), true)
+    );
+}
+
+#[test]
+fn response_create_should_fall_back_to_opening_turn_metadata_when_the_frame_omits_it() {
+    let decoded = decode_response_create_with_turn_header(
+        json!({
+            "type": "response.create",
+            "model": "smart-code",
+            "input": "hello"
+        }),
+        r#"{"request_kind":"compaction"}"#,
+    );
+    let Operation::Generate(request) = decoded.operation() else {
+        panic!("Responses must map to Generate");
+    };
+
+    let semantics = codex_responses_request_semantics(
+        request.protocol_payload().body(),
+        request.protocol_payload().context(),
+    );
+
+    assert_eq!(
+        (semantics.request_kind.as_deref(), semantics.compact),
+        (Some("compaction"), true)
     );
 }
 
