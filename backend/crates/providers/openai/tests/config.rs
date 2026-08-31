@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use chrono::{TimeZone as _, Utc};
-use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
+use provider_openai::config::{
+    CodexWireProfileConfig, DEFAULT_STREAM_MAX_RETRIES, MAX_STREAM_MAX_RETRIES, OpenAiConfig,
+};
 
 #[test]
 fn openai_config_builds_the_audited_wire_profile() {
@@ -95,6 +97,7 @@ fn openai_config_restricts_upstream_base_url_to_https_or_loopback_http() {
 #[test]
 fn openai_config_defaults_to_the_provider_owned_operating_values() {
     let config = OpenAiConfig::default();
+    assert_eq!(DEFAULT_STREAM_MAX_RETRIES, 3);
 
     assert_eq!(
         (
@@ -107,6 +110,7 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             config.auth.refresh_enabled,
             config.auth.oauth_client_id.as_str(),
             config.auth.oauth_token_endpoint.as_str(),
+            config.stream_max_retries(),
         ),
         (
             "https://chatgpt.com/backend-api",
@@ -118,11 +122,23 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             true,
             "app_EMoamEEZ73f0CkXaXp7hrann",
             "https://auth.openai.com/oauth/token",
+            u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
         )
     );
     assert_eq!(
         config.wire_profile_state().snapshot().user_agent(),
         "Codex Desktop/0.147.0-alpha.6.6 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.803.81509)"
+    );
+}
+
+#[test]
+fn openai_stream_retry_budget_uses_the_official_hard_cap() {
+    let mut config = OpenAiConfig::default();
+    config.stream_max_retries = MAX_STREAM_MAX_RETRIES + 1;
+
+    assert_eq!(
+        config.stream_max_retries(),
+        u32::try_from(MAX_STREAM_MAX_RETRIES).expect("retry cap fits u32")
     );
 }
 

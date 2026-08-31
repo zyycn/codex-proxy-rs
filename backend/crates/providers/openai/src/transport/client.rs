@@ -599,6 +599,7 @@ pub(crate) struct PreparedResponseTransport {
     pub(super) requirement: TransportRequirement,
     pub(super) route: PreparedResponseRoute,
     pub(super) metrics: CodexTransportMetrics,
+    pub(super) defer_websocket_recovery: bool,
 }
 
 pub(super) enum PreparedResponseRoute {

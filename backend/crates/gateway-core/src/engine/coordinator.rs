@@ -162,11 +162,12 @@ where
             account_state_owner,
             cancellation,
             attempts: 0,
+            routing_attempts: 0,
             candidate_index,
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
             recovery_account: None,
-            transport_fallback_account: None,
+            transport_recovery: None,
             current: None,
             send_state_watermark: UpstreamSendState::NotSent,
             downstream_committed_at: None,
@@ -217,6 +218,13 @@ struct FailureFinalization {
     retry_after_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+struct PendingTransportRecovery {
+    account: crate::engine::credential::ProviderAccountId,
+    transport: AttemptTransport,
+    delay: Duration,
+}
+
 /// API 可逐事件消费的 Core 执行会话。
 ///
 /// API 只能提交下游 delivery 边界；账号重试、断流终结与
@@ -238,7 +246,10 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     continuation_attempt: ContinuationAttempt,
     account_state_owner: Option<ProviderAccountStateOwner>,
     cancellation: CancellationToken,
+    /// 所有实际上游 attempt 数；包含同账号传输重试，作为持久化序号。
     attempts: u32,
+    /// 路由预算只统计正常选号/账号恢复，不被 Provider-owned 传输预算消耗。
+    routing_attempts: u32,
     candidate_index: usize,
     excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
@@ -246,9 +257,9 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算。
     /// 与 `required_account`（外部指定、贯穿整个请求）语义不同，不可合并。
     recovery_account: Option<crate::engine::credential::ProviderAccountId>,
-    /// 上游传输在提交边界前失败后的一次性同账号备用传输钉选。
-    /// 与凭据恢复分开保存，避免把 transport fallback 误记为 OAuth 恢复。
-    transport_fallback_account: Option<crate::engine::credential::ProviderAccountId>,
+    /// 上游传输在提交边界前失败后的一次性同账号重试或备用传输钉选。
+    /// 与凭据恢复分开保存，避免把 transport recovery 误记为 OAuth 恢复。
+    transport_recovery: Option<PendingTransportRecovery>,
     current: Option<CurrentAttempt>,
     /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档。
     send_state_watermark: UpstreamSendState,
@@ -590,8 +601,24 @@ where
     }
 
     async fn prepare_attempt(&mut self) -> Result<Option<PullOutcome>, EngineError> {
-        if self.attempts >= self.plan.max_attempts().get() {
+        let transport_recovery = self.transport_recovery.take();
+        if transport_recovery.is_none() && self.routing_attempts >= self.plan.max_attempts().get() {
             return Err(EngineError::EmptyRoutingPlan);
+        }
+        if let Some(recovery) = transport_recovery.as_ref()
+            && !recovery.delay.is_zero()
+        {
+            match poll_retry_delay(recovery.delay, self.cancellation.clone(), self.deadline).await {
+                RetryDelayBoundary::Elapsed => {}
+                RetryDelayBoundary::Cancelled => {
+                    self.finish_interruption(EngineError::Cancelled).await?;
+                    return Err(EngineError::Cancelled);
+                }
+                RetryDelayBoundary::Deadline => {
+                    self.finish_interruption(EngineError::Deadline).await?;
+                    return Err(EngineError::Deadline);
+                }
+            }
         }
         let Some(candidate) = self.plan.candidates().get(self.candidate_index).cloned() else {
             let error = GatewayError::new(
@@ -616,23 +643,20 @@ where
             .ok_or(EngineError::EmptyRoutingPlan)?;
         // 请求局部恢复钉选在此被一次性消费，只绑定本次 replay attempt；
         // 外部 required_account 每次 attempt 都重新生效。
-        let (pinned_account, attempt_transport) = match &self.account_selection {
-            AccountSelection::Diagnostic(account) => {
-                (Some(account.clone()), AttemptTransport::Default)
-            }
-            AccountSelection::Scheduled(_) => {
-                let transport_fallback_account = self.transport_fallback_account.take();
-                let transport = if transport_fallback_account.is_some() {
-                    AttemptTransport::Fallback
-                } else {
-                    AttemptTransport::Default
-                };
-                (
-                    transport_fallback_account
-                        .or_else(|| self.recovery_account.take())
+        let is_transport_recovery = transport_recovery.is_some();
+        let (pinned_account, attempt_transport) = if let Some(recovery) = transport_recovery {
+            (Some(recovery.account), recovery.transport)
+        } else {
+            match &self.account_selection {
+                AccountSelection::Diagnostic(account) => {
+                    (Some(account.clone()), AttemptTransport::Default)
+                }
+                AccountSelection::Scheduled(_) => (
+                    self.recovery_account
+                        .take()
                         .or_else(|| self.account_selection.required_account().cloned()),
-                    transport,
-                )
+                    AttemptTransport::Default,
+                ),
             }
         };
         let account_context = match &self.account_selection {
@@ -881,6 +905,9 @@ where
             }
         }
         self.attempts = next_attempt.get();
+        if !is_transport_recovery {
+            self.routing_attempts = self.routing_attempts.saturating_add(1);
+        }
         self.current = Some(CurrentAttempt {
             stream,
             metadata,
@@ -1034,35 +1061,50 @@ where
             attempt_send_state,
             provider_proved_replay_safe,
         );
-        let pre_delivery_retry = self.account_selection.required_account().is_none()
+        let account_rotation_retry = self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
-            && error.allows_pre_delivery_retry()
-            && self.attempts < self.plan.max_attempts().get();
-        let transport_fallback_retry = pre_delivery_retry
             && matches!(
                 error.pre_delivery_retry(),
-                Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
-            );
+                Some(crate::error::PreDeliveryRetry::AccountRotation)
+            )
+            && self.routing_attempts < self.plan.max_attempts().get();
+        let transport_recovery = match error.pre_delivery_retry() {
+            Some(crate::error::PreDeliveryRetry::SameAccountTransportRetry {
+                retry_index,
+                delay,
+            }) if self.downstream_committed_at.is_none() && !self.delivery_pending => {
+                Some((AttemptTransport::Retry(retry_index), delay))
+            }
+            Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
+                if self.downstream_committed_at.is_none() && !self.delivery_pending =>
+            {
+                Some((AttemptTransport::Fallback, Duration::ZERO))
+            }
+            _ => None,
+        };
         let ordinary_retry = self.account_selection.required_account().is_none()
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
             && attempt_send_state != UpstreamSendState::Ambiguous
             && provider_proved_replay_safe
-            && self.attempts < self.plan.max_attempts().get();
+            && self.routing_attempts < self.plan.max_attempts().get();
         let same_account_retry = error.retries_same_account()
             && provider_proved_replay_safe
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
             && attempt_send_state != UpstreamSendState::Ambiguous
-            && self.attempts < self.plan.max_attempts().get()
+            && self.routing_attempts < self.plan.max_attempts().get()
             && !self
                 .credential_recovery_attempted_accounts
                 .contains(current.metadata.provider_account_id());
-        let retryable =
-            continuation_retry || same_account_retry || ordinary_retry || pre_delivery_retry;
+        let retryable = continuation_retry
+            || same_account_retry
+            || ordinary_retry
+            || account_rotation_retry
+            || transport_recovery.is_some();
 
         if retryable {
             // 普通 clone 只保留稳定事实；原始 wire/HTTP response 由 request-local
@@ -1075,9 +1117,12 @@ where
                 // 只钉住紧随其后的 replay attempt；replay 再遇可重试错误时，
                 // ordinary/continuation 重试门不受影响，仍可换号。
                 self.recovery_account = Some(account);
-            } else if transport_fallback_retry {
-                self.transport_fallback_account =
-                    Some(current.metadata.provider_account_id().clone());
+            } else if let Some((transport, delay)) = transport_recovery {
+                self.transport_recovery = Some(PendingTransportRecovery {
+                    account: current.metadata.provider_account_id().clone(),
+                    transport,
+                    delay,
+                });
             } else if !continuation_retry {
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
@@ -1155,7 +1200,7 @@ where
             || self.delivery_pending
             || send_state == UpstreamSendState::Ambiguous
             || !provider_proved_replay_safe
-            || self.attempts >= self.plan.max_attempts().get()
+            || self.routing_attempts >= self.plan.max_attempts().get()
             || self
                 .operation
                 .provider_session_state(current.metadata.provider().as_str())
@@ -1634,6 +1679,31 @@ enum ProviderBoundary {
     Result(Box<Result<ProviderStream, ProviderError>>),
     Cancelled,
     Deadline,
+}
+
+enum RetryDelayBoundary {
+    Elapsed,
+    Cancelled,
+    Deadline,
+}
+
+async fn poll_retry_delay(
+    delay: Duration,
+    cancellation: CancellationToken,
+    deadline: SystemTime,
+) -> RetryDelayBoundary {
+    let Ok(remaining) = deadline.duration_since(SystemTime::now()) else {
+        return RetryDelayBoundary::Deadline;
+    };
+    let retry_delay = Delay::new(delay).fuse();
+    let cancelled = cancellation.cancelled().fuse();
+    let timeout = Delay::new(remaining).fuse();
+    pin_mut!(retry_delay, cancelled, timeout);
+    select_biased! {
+        _ = cancelled => RetryDelayBoundary::Cancelled,
+        _ = timeout => RetryDelayBoundary::Deadline,
+        _ = retry_delay => RetryDelayBoundary::Elapsed,
+    }
 }
 
 async fn poll_provider(

@@ -34,6 +34,7 @@ use gateway_core::routing::{
     ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
     RuntimeSnapshot, UpstreamModelId,
 };
+use provider_openai::config::DEFAULT_STREAM_MAX_RETRIES;
 use provider_openai::credential::{
     CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialQuotaService,
     CodexCredentialSelector, ImportCodexOAuthCredential,
@@ -148,7 +149,26 @@ fn provider_with_affinity(
 }
 
 fn provider_with_base_url(store: &Arc<MemoryAccountStore>, base_url: String) -> CodexProvider {
-    provider_with_affinity_and_base_url(store, Arc::new(MemorySessionAffinity::default()), base_url)
+    provider_with_base_url_and_retry_budget(
+        store,
+        base_url,
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
+    )
+}
+
+fn provider_with_base_url_and_retry_budget(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+    stream_max_retries: u32,
+) -> CodexProvider {
+    provider_and_quota_with_affinity_and_base_url_and_leases(
+        store,
+        Arc::new(MemorySessionAffinity::default()),
+        base_url,
+        Arc::new(TestLeaseCoordinator::default()),
+        stream_max_retries,
+    )
+    .0
 }
 
 fn provider_with_leases(
@@ -187,6 +207,7 @@ fn provider_with_affinity_and_base_url_and_leases(
         session_affinity,
         base_url,
         leases,
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
     )
     .0
 }
@@ -196,6 +217,7 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
     session_affinity: Arc<MemorySessionAffinity>,
     base_url: String,
     leases: Arc<TestLeaseCoordinator>,
+    stream_max_retries: u32,
 ) -> (CodexProvider, Arc<CodexCredentialQuotaService>) {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
@@ -239,6 +261,7 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         profile,
         base_url,
         websocket_pool,
+        stream_max_retries,
     )
     .expect("official OpenAI provider");
     (provider, quota)
@@ -769,19 +792,23 @@ async fn truncated_chunked_sse_server() -> (String, tokio::task::JoinHandle<()>)
     (base_url, server)
 }
 
-async fn read_http_request(stream: &mut TcpStream) {
+async fn capture_http_request(stream: &mut TcpStream) -> Vec<u8> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
     loop {
         let read = stream.read(&mut buffer).await.expect("read HTTP request");
         if read == 0 {
-            return;
+            return request;
         }
         request.extend_from_slice(&buffer[..read]);
         if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            return;
+            return request;
         }
     }
+}
+
+async fn read_http_request(stream: &mut TcpStream) {
+    drop(capture_http_request(stream).await);
 }
 
 async fn write_http_chunk(stream: &mut TcpStream, body: &str) {
@@ -1131,7 +1158,7 @@ async fn selection_infrastructure_errors_have_a_distinct_classification() {
 }
 
 #[tokio::test]
-async fn websocket_close_details_are_only_exposed_through_the_client_error() {
+async fn websocket_close_after_delivery_preserves_details_without_enabling_sticky_http() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_websocket_close").await;
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1170,11 +1197,49 @@ async fn websocket_close_details_are_only_exposed_through_the_client_error() {
             }))
             .await
             .expect("close WebSocket");
+
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept next-turn WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("next-turn WebSocket request")
+            .expect("valid next-turn WebSocket request");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_after_committed_close",
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("complete next-turn WebSocket request");
     });
 
-    let mut stream = provider_with_base_url(&store, base_url)
+    let provider = provider_with_base_url(&store, base_url);
+    let first_operation = Operation::Generate(generate_with_session_context(
+        "committed-websocket-session",
+        Some("thread-first"),
+        None,
+    ));
+    let mut stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", first_operation),
             context("req_websocket_close", CancellationToken::new()),
         )
         .await
@@ -1186,13 +1251,16 @@ async fn websocket_close_details_are_only_exposed_through_the_client_error() {
             None => panic!("WebSocket close must surface a provider error"),
         }
     };
-    server.await.expect("WebSocket server");
+    drop(stream);
 
     assert!(!format!("{error:?}").contains("message too big"));
     assert!(!error.to_string().contains("message too big"));
     assert_eq!(error.kind(), ProviderErrorKind::Transport);
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
-    assert!(error.allows_pre_delivery_retry());
+    assert!(
+        !error.allows_pre_delivery_retry(),
+        "a close after the delivery boundary must not request a hidden replay"
+    );
     let detail = error
         .client_visible_upstream_error()
         .expect("WebSocket close detail");
@@ -1203,10 +1271,28 @@ async fn websocket_close_details_are_only_exposed_through_the_client_error() {
         error.upstream_code().map(|code| code.as_str()),
         Some("websocket_close_1009")
     );
+
+    let second_operation = Operation::Generate(generate_with_session_context(
+        "committed-websocket-session",
+        Some("thread-second"),
+        None,
+    ));
+    let mut next_stream = provider
+        .execute(
+            planned_request("openai", second_operation),
+            context("req_after_committed_close", CancellationToken::new()),
+        )
+        .await
+        .expect("post-delivery close must not enable sticky HTTP fallback");
+    assert_eq!(next_stream.metadata().transport().as_str(), "websocket");
+    while let Some(event) = next_stream.next().await {
+        event.expect("next turn WebSocket response");
+    }
+    server.await.expect("WebSocket server");
 }
 
 #[tokio::test]
-async fn websocket_normal_close_before_semantic_output_requests_same_account_http_fallback() {
+async fn websocket_retry_budget_exhaustion_is_sticky_only_for_the_current_session() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_websocket_close").await;
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1217,79 +1303,350 @@ async fn websocket_normal_close_before_semantic_output_requests_same_account_htt
         listener.local_addr().expect("listener address")
     );
     let server = tokio::spawn(async move {
+        for retry_count in 0..=2 {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept WebSocket retry connection");
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _request = websocket
+                .next()
+                .await
+                .expect("WebSocket request")
+                .expect("valid WebSocket request");
+            for event in [
+                json!({
+                    "type": "response.created",
+                    "response": {"id": format!("resp_structural_{retry_count}"), "model": "gpt-5.4"}
+                }),
+                json!({
+                    "type": "response.in_progress",
+                    "response": {"id": format!("resp_structural_{retry_count}"), "model": "gpt-5.4"}
+                }),
+            ] {
+                websocket
+                    .send(Message::Text(event.to_string().into()))
+                    .await
+                    .expect("send structural WebSocket event");
+            }
+            if retry_count == 1 {
+                websocket
+                    .send(Message::Text(
+                        json!({
+                            "type": "error",
+                            "status": 400,
+                            "error": {
+                                "type": "invalid_request_error",
+                                "code": "websocket_connection_limit_reached",
+                                "message": "create a new websocket connection"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .expect("send connection-limit error");
+                continue;
+            }
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {
+                            "id": format!("msg_structural_{retry_count}"),
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "in_progress",
+                            "content": []
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send structural output event");
+            let close_code = match retry_count {
+                0 => CloseCode::Normal,
+                _ => CloseCode::Error,
+            };
+            websocket
+                .close(Some(CloseFrame {
+                    code: close_code,
+                    reason: "".into(),
+                }))
+                .await
+                .expect("close WebSocket retry attempt");
+        }
+
+        let (mut http, _) = listener.accept().await.expect("accept sticky HTTP request");
+        let request = capture_http_request(&mut http).await;
+        let request_head = String::from_utf8_lossy(&request).to_ascii_lowercase();
+        assert!(!request_head.contains("upgrade: websocket"));
+        http.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
+                CAPTURE_COMPLETED_SSE.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write sticky HTTP response");
+
         let (stream, _) = listener
             .accept()
             .await
-            .expect("accept WebSocket connection");
+            .expect("accept other-session WebSocket connection");
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _request = websocket
             .next()
             .await
-            .expect("WebSocket request")
-            .expect("valid WebSocket request");
-        for event in [
-            json!({
-                "type": "response.created",
-                "response": {"id": "resp_structural", "model": "gpt-5.4"}
-            }),
-            json!({
-                "type": "response.in_progress",
-                "response": {"id": "resp_structural", "model": "gpt-5.4"}
-            }),
-            json!({
-                "type": "response.output_item.added",
-                "output_index": 0,
-                "item": {
-                    "id": "msg_structural",
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "in_progress",
-                    "content": []
-                }
-            }),
-        ] {
-            websocket
-                .send(Message::Text(event.to_string().into()))
-                .await
-                .expect("send structural WebSocket event");
-        }
+            .expect("other-session WebSocket request")
+            .expect("valid other-session WebSocket request");
         websocket
-            .close(Some(CloseFrame {
-                code: CloseCode::Normal,
-                reason: "".into(),
-            }))
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_other_session",
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
             .await
-            .expect("close WebSocket");
+            .expect("complete other-session WebSocket request");
     });
 
-    let mut stream = provider_with_base_url(&store, base_url)
+    let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
+    let mut saw_websocket_observation = false;
+    for retry_count in 0..=2 {
+        let operation = Operation::Generate(generate_with_session_context(
+            "sticky-websocket-session",
+            Some("thread-first"),
+            None,
+        ));
+        let attempt_context = match NonZeroU32::new(retry_count) {
+            Some(retry_index) => context(
+                &format!("req_websocket_normal_close_{retry_count}"),
+                CancellationToken::new(),
+            )
+            .with_transport(AttemptTransport::Retry(retry_index)),
+            None => context("req_websocket_normal_close_0", CancellationToken::new()),
+        };
+        let mut stream = provider
+            .execute(planned_request("openai", operation), attempt_context)
+            .await
+            .expect("prepare WebSocket provider stream");
+        let error = loop {
+            match stream.next().await {
+                Some(Ok(event)) => {
+                    if let Some(observation) = event.response_observation() {
+                        saw_websocket_observation = true;
+                        assert_eq!(observation.status_code(), None);
+                        if let Some(provider_metadata) = observation.provider_metadata() {
+                            let metadata: Value = serde_json::from_str(provider_metadata.as_json())
+                                .expect("OpenAI provider metadata JSON");
+                            assert_eq!(
+                                metadata.get("upstreamStatus").and_then(Value::as_u64),
+                                Some(101),
+                                "successful upgrade remains provider-owned diagnostics"
+                            );
+                        }
+                    }
+                    assert!(
+                        !event.has_client_event(),
+                        "structural events must remain behind the replay boundary"
+                    );
+                }
+                Some(Err(error)) => break error,
+                None => panic!("WebSocket close must surface a provider error"),
+            }
+        };
+        drop(stream);
+
+        if retry_count < 2 {
+            let Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, delay }) =
+                error.pre_delivery_retry()
+            else {
+                panic!("expected a same-account WebSocket retry: {error:?}");
+            };
+            assert_eq!(retry_index.get(), retry_count + 1);
+            assert!(!delay.is_zero());
+        } else {
+            assert_eq!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransportFallback),
+                "unexpected provider error at retry {retry_count}: {error:?}"
+            );
+        }
+        let expected_close_code = match retry_count {
+            0 => "websocket_close_1000",
+            1 => "websocket_connection_limit_reached",
+            _ => "websocket_close_1011",
+        };
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            Some(expected_close_code)
+        );
+    }
+
+    assert!(saw_websocket_observation);
+
+    let second_operation = Operation::Generate(generate_with_session_context(
+        "sticky-websocket-session",
+        Some("thread-second"),
+        None,
+    ));
+    let mut sticky_stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
-            context("req_websocket_normal_close", CancellationToken::new()),
+            planned_request("openai", second_operation),
+            context("req_websocket_sticky_http", CancellationToken::new()),
         )
         .await
-        .expect("prepare WebSocket provider stream");
-    let error = loop {
-        match stream.next().await {
-            Some(Ok(event)) => assert!(
-                !event.has_client_event(),
-                "structural events must remain behind the replay boundary"
+        .expect("same session should prepare an HTTP stream");
+    assert_eq!(sticky_stream.metadata().transport().as_str(), "http_sse");
+    while let Some(event) = sticky_stream.next().await {
+        event.expect("sticky HTTP response");
+    }
+    drop(sticky_stream);
+
+    let other_operation = Operation::Generate(generate_with_session_context(
+        "other-websocket-session",
+        Some("thread-first"),
+        None,
+    ));
+    let mut other_stream = provider
+        .execute(
+            planned_request("openai", other_operation),
+            context("req_other_session_websocket", CancellationToken::new()),
+        )
+        .await
+        .expect("another session should still prepare a WebSocket stream");
+    assert_eq!(other_stream.metadata().transport().as_str(), "websocket");
+    while let Some(event) = other_stream.next().await {
+        event.expect("other-session WebSocket response");
+    }
+    drop(other_stream);
+
+    let warmup_operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("warm up")),
+                ("session_id".to_owned(), json!("sticky-websocket-session")),
+                ("generate".to_owned(), json!(false)),
+                ("store".to_owned(), json!(false)),
+            ]),
+        )
+        .expect("warmup payload"),
+    ));
+    let warmup_stream = provider
+        .execute(
+            planned_request("openai", warmup_operation),
+            context(
+                "req_sticky_session_required_warmup",
+                CancellationToken::new(),
             ),
+        )
+        .await
+        .expect("required warmup must bypass sticky HTTP fallback");
+    assert_eq!(warmup_stream.metadata().transport().as_str(), "websocket");
+    drop(warmup_stream);
+    server.await.expect("WebSocket and HTTP server");
+}
+
+#[tokio::test]
+async fn websocket_upgrade_required_immediately_enables_session_http_fallback() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_websocket_close").await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let (mut opening, _) = listener.accept().await.expect("accept WS opening");
+        let request = capture_http_request(&mut opening).await;
+        assert!(String::from_utf8_lossy(&request).starts_with("GET /codex/responses"));
+        let body = r#"{"error":{"code":"upgrade_required","message":"use HTTP"}}"#;
+        opening
+            .write_all(
+                format!(
+                    "HTTP/1.1 426 Upgrade Required\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write 426 response");
+
+        let (mut http, _) = listener.accept().await.expect("accept sticky HTTP request");
+        let request = capture_http_request(&mut http).await;
+        assert!(String::from_utf8_lossy(&request).starts_with("POST /codex/responses"));
+        http.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
+                CAPTURE_COMPLETED_SSE.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write HTTP fallback response");
+    });
+
+    let provider = provider_with_base_url(&store, base_url);
+    let operation = || {
+        Operation::Generate(generate_with_session_context(
+            "sticky-websocket-session",
+            Some("thread-first"),
+            None,
+        ))
+    };
+    let mut first = provider
+        .execute(
+            planned_request("openai", operation()),
+            context("req_upgrade_required", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket stream");
+    let error = loop {
+        match first.next().await {
+            Some(Ok(_)) => {}
             Some(Err(error)) => break error,
-            None => panic!("WebSocket close must surface a provider error"),
+            None => panic!("426 opening must surface a fallback signal"),
         }
     };
-    server.await.expect("WebSocket server");
-
+    assert_eq!(error.upstream_status(), Some(426));
     assert_eq!(
         error.pre_delivery_retry(),
-        Some(PreDeliveryRetry::SameAccountTransportFallback),
-        "unexpected provider error: {error:?}"
+        Some(PreDeliveryRetry::SameAccountTransportFallback)
     );
-    assert_eq!(
-        error.upstream_code().map(|code| code.as_str()),
-        Some("websocket_close_1000")
-    );
+    drop(first);
+
+    let mut second = provider
+        .execute(
+            planned_request("openai", operation()),
+            context("req_upgrade_required_next_turn", CancellationToken::new()),
+        )
+        .await
+        .expect("same session should select HTTP");
+    assert_eq!(second.metadata().transport().as_str(), "http_sse");
+    while let Some(event) = second.next().await {
+        event.expect("HTTP fallback response");
+    }
+    server.await.expect("upstream server");
 }
 
 #[tokio::test]
@@ -2230,6 +2587,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
         Arc::clone(&affinity),
         server.uri(),
         Arc::new(TestLeaseCoordinator::default()),
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
     );
     let session_id = "stable-affinity-switch-session";
     let first_payload = ProtocolPayload::json_object(
@@ -3585,6 +3943,7 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
         Arc::new(MemorySessionAffinity::default()),
         server.uri(),
         Arc::new(TestLeaseCoordinator::default()),
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
     );
     quota
         .prepare_scheduling(std::slice::from_ref(&account))

@@ -112,6 +112,8 @@ pub enum AttemptTransport {
     /// 使用 Provider 的默认传输策略。
     #[default]
     Default,
+    /// 固定账号重试 Provider 的首选传输；序号由 Provider 的独立预算驱动。
+    Retry(NonZeroU32),
     /// 使用 Provider 定义的备用传输。
     Fallback,
 }

@@ -22,7 +22,7 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 use url::Url;
 
-use super::affinity::CodexSessionAffinity;
+use super::affinity::{CODEX_ROOT_SESSION_TTL, CodexSessionAffinity};
 use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
@@ -41,7 +41,6 @@ const CLOUDFLARE_CHALLENGE_BACKOFF: [Duration; 4] = [
     Duration::from_secs(120),
 ];
 const CLOUDFLARE_PATH_BLOCK_THRESHOLD: u32 = 3;
-const SESSION_AFFINITY_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
 const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -681,7 +680,7 @@ impl CodexCredentialSelector {
                 &self.provider_kind,
                 key,
                 selected_account_id,
-                SESSION_AFFINITY_TTL,
+                CODEX_ROOT_SESSION_TTL,
             ),
         )
         .await
@@ -955,7 +954,7 @@ impl CodexCredentialSelector {
                 key,
                 expected_affinity_account_id,
                 account.id(),
-                SESSION_AFFINITY_TTL,
+                CODEX_ROOT_SESSION_TTL,
             ),
         )
         .await

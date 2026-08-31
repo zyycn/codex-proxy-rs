@@ -3,6 +3,7 @@
 mod admin;
 pub mod config;
 mod provider;
+mod session_transport;
 
 use std::sync::Arc;
 
@@ -138,6 +139,7 @@ pub async fn initialize(
             profile.clone(),
             config.base_url().to_owned(),
             Arc::clone(&websocket_pool),
+            config.stream_max_retries(),
         )
         .map_err(OpenAiInitializeError::Provider)?
         .with_session_identity(session_identity),

@@ -143,6 +143,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         .map(|pool_return| std::mem::take(&mut pool_return.continuation))
         .unwrap_or_default();
     let mut saw_upstream_activity = false;
+    let mut last_event_type = None;
     loop {
         let message = tokio::select! {
             biased;
@@ -219,6 +220,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                     websocket_connection_id,
                     frame.as_ref().map(|frame| u16::from(frame.code)),
                     frame.map(|frame| frame.reason.to_string()),
+                    last_event_type.clone(),
                 );
                 let error = if reused_connection {
                     reused_stream_receive_error(error)
@@ -230,18 +232,8 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             }
             _ => continue,
         };
-        let (frame, terminal) = match reduce_websocket_event(&raw, &mut metadata, &mut continuation)
-        {
-            Ok(ExchangeAction::RateLimits(rate_limits)) => {
-                rate_limit_updates.lock().await.push(rate_limits);
-                continue;
-            }
-            Ok(ExchangeAction::TurnState(turn_state)) => {
-                *turn_state_update.lock().await = Some(turn_state);
-                continue;
-            }
-            Ok(ExchangeAction::Forward { frame, terminal }) => (frame, terminal),
-            Ok(ExchangeAction::Ignore) => continue,
+        let reduced = match reduce_websocket_event(&raw, &mut metadata, &mut continuation) {
+            Ok(reduced) => reduced,
             Err(error) => {
                 discard_stream_websocket(
                     websocket,
@@ -252,6 +244,21 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 let _ = tx.send(Err(error)).await;
                 return;
             }
+        };
+        if let Some(event_type) = reduced.diagnostic_event_type {
+            last_event_type = Some(event_type);
+        }
+        let (frame, terminal) = match reduced.action {
+            ExchangeAction::RateLimits(rate_limits) => {
+                rate_limit_updates.lock().await.push(rate_limits);
+                continue;
+            }
+            ExchangeAction::TurnState(turn_state) => {
+                *turn_state_update.lock().await = Some(turn_state);
+                continue;
+            }
+            ExchangeAction::Forward { frame, terminal } => (frame, terminal),
+            ExchangeAction::Ignore => continue,
         };
         if tx.send(Ok(Bytes::from(frame))).await.is_err() {
             discard_stream_websocket(
@@ -300,16 +307,17 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         StreamWebSocketDiscardReason::UpstreamClosed,
     )
     .await;
-    let error = upstream_close.map_or_else(
-        || {
-            CodexWebSocketExchangeError::closed_before_terminal_on(
-                websocket_connection_id,
-                None,
-                None,
-            )
-        },
-        CodexWebSocketExchangeError::ClosedBeforeTerminal,
-    );
+    let error = match upstream_close {
+        Some(close) => CodexWebSocketExchangeError::ClosedBeforeTerminal(
+            close.with_last_event_type(last_event_type),
+        ),
+        None => CodexWebSocketExchangeError::closed_before_terminal_on(
+            websocket_connection_id,
+            None,
+            None,
+            last_event_type,
+        ),
+    };
     let error = if reused_connection {
         reused_stream_receive_error(error)
     } else {

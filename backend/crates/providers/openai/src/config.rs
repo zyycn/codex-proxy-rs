@@ -18,6 +18,15 @@ use crate::{
     },
 };
 
+/// 本服务的流式请求默认重试次数。
+pub const DEFAULT_STREAM_MAX_RETRIES: u64 = 3;
+/// 防止错误配置产生无界隐藏重放；与官方 Codex 的硬上限一致。
+pub const MAX_STREAM_MAX_RETRIES: u64 = 100;
+
+const fn default_stream_max_retries() -> u64 {
+    DEFAULT_STREAM_MAX_RETRIES
+}
+
 /// OpenAI Provider 唯一启动配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +39,8 @@ pub struct OpenAiConfig {
     pub quota: CodexQuotaSettings,
     #[serde(default)]
     pub auth: CodexAuthSettings,
+    #[serde(default = "default_stream_max_retries")]
+    pub stream_max_retries: u64,
     pub wire_profile: CodexWireProfileConfig,
     #[serde(skip)]
     identity_secret_path: PathBuf,
@@ -88,6 +99,13 @@ impl OpenAiConfig {
         self.auth.refresh_enabled
     }
 
+    /// 返回经官方同款硬上限约束后的上游流重试预算。
+    #[must_use]
+    pub fn stream_max_retries(&self) -> u32 {
+        u32::try_from(self.stream_max_retries.min(MAX_STREAM_MAX_RETRIES))
+            .unwrap_or(MAX_STREAM_MAX_RETRIES as u32)
+    }
+
     pub(crate) fn session_identity(
         &self,
     ) -> Result<CodexSessionIdentity, CodexSessionIdentityError> {
@@ -102,6 +120,7 @@ impl Default for OpenAiConfig {
             ws_pool: CodexWebSocketPoolSettings::default(),
             quota: CodexQuotaSettings::default(),
             auth: CodexAuthSettings::default(),
+            stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
             wire_profile: CodexWireProfileConfig::default(),
             identity_secret_path: PathBuf::new(),
         }

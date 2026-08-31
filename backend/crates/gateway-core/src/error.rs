@@ -1,6 +1,7 @@
 //! 网关核心使用的稳定错误分类。
 
 use std::fmt;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -202,6 +203,13 @@ pub enum ContinuationFailure {
 pub enum PreDeliveryRetry {
     /// 排除本次账号，按普通调度策略重新选号。
     AccountRotation,
+    /// 固定本次账号，并按 Provider 给出的序号重试当前传输。
+    SameAccountTransportRetry {
+        /// Provider-owned 传输重试序号，从 1 开始。
+        retry_index: NonZeroU32,
+        /// 发起下一次传输尝试前的退避时长。
+        delay: Duration,
+    },
     /// 固定本次账号，并要求 Provider 使用备用传输。
     SameAccountTransportFallback,
 }
@@ -475,8 +483,37 @@ impl ProviderError {
     /// 下游已提交后的隐藏重放。
     #[must_use]
     pub const fn with_pre_delivery_transport_fallback(mut self) -> Self {
-        self.pre_delivery_retry = Some(PreDeliveryRetry::SameAccountTransportFallback);
+        self.set_pre_delivery_transport_fallback();
         self
+    }
+
+    /// 原地设置同账号备用传输恢复，保留当前错误携带的原客户端响应。
+    pub const fn set_pre_delivery_transport_fallback(&mut self) {
+        self.pre_delivery_retry = Some(PreDeliveryRetry::SameAccountTransportFallback);
+    }
+
+    /// 允许 Core 在首个客户端事件前固定原账号并重试当前 Provider 传输。
+    ///
+    /// 重试预算和退避策略由 Provider 所属协议定义；Core 只负责同账号钉选、
+    /// deadline/取消边界以及下游 commit barrier。
+    #[must_use]
+    pub const fn with_pre_delivery_transport_retry(
+        mut self,
+        retry_index: NonZeroU32,
+        delay: Duration,
+    ) -> Self {
+        self.set_pre_delivery_transport_retry(retry_index, delay);
+        self
+    }
+
+    /// 原地设置同账号当前传输重试，保留当前错误携带的原客户端响应。
+    pub const fn set_pre_delivery_transport_retry(
+        &mut self,
+        retry_index: NonZeroU32,
+        delay: Duration,
+    ) {
+        self.pre_delivery_retry =
+            Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, delay });
     }
 
     /// 要求 Core 在账号凭据已恢复后仅对原账号重放一次。

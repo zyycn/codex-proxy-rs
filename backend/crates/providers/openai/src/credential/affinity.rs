@@ -1,5 +1,7 @@
 //! OpenAI 根会话锚点到 Store 不透明账号亲和键及诊断上下文的单向派生。
 
+use std::time::Duration;
+
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
 use sha2::{Digest, Sha256};
@@ -8,6 +10,7 @@ use crate::transport::protocol::responses::CodexResponsesRequest;
 use crate::transport::request::derive_conversation_anchor;
 
 const AFFINITY_KEY_HASH_LENGTH: usize = 12;
+pub(crate) const CODEX_ROOT_SESSION_TTL: Duration = Duration::from_secs(4 * 60 * 60);
 
 /// 一次请求派生出的账号亲和键及其结构化日志上下文。
 pub(crate) struct CodexSessionAffinity {

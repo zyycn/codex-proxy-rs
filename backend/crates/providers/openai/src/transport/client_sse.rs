@@ -182,6 +182,20 @@ impl CodexBackendClient {
             .await
     }
 
+    /// Provider 生产路径：保留所有 WebSocket 失败，交由统一重试预算处理。
+    pub(crate) async fn create_response_stream_with_deferred_websocket_recovery(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        pool_account_id: Option<&str>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        let prepared = self
+            .prepare_response_transport(request, context, pool_account_id, false, true)
+            .await?;
+        self.create_response_stream_with_prepared(request, context, prepared)
+            .await
+    }
+
     /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening。
     #[doc(hidden)]
     pub(crate) async fn prepare_response_transport_with_pool_account(
@@ -190,7 +204,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<PreparedResponseTransport> {
-        self.prepare_response_transport(request, context, pool_account_id, false)
+        self.prepare_response_transport(request, context, pool_account_id, false, false)
             .await
     }
 
@@ -202,12 +216,14 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
         force_fresh: bool,
+        defer_websocket_recovery: bool,
     ) -> CodexClientResult<PreparedResponseTransport> {
         let requirement = transport_requirement(request);
         if requirement == TransportRequirement::HttpRequired {
             return Ok(PreparedResponseTransport {
                 requirement,
                 route: PreparedResponseRoute::Http,
+                defer_websocket_recovery,
                 metrics: CodexTransportMetrics {
                     decision: Some(CodexTransportDecision::HttpRequired),
                     ..CodexTransportMetrics::default()
@@ -268,7 +284,8 @@ impl CodexBackendClient {
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error)
-                if requirement.allows_pre_send_http_fallback()
+                if (!defer_websocket_recovery || error.requires_immediate_pool_fallback())
+                    && requirement.allows_pre_send_http_fallback()
                     && error.allows_pre_send_http_fallback() =>
             {
                 let decision = http_fallback_decision(&error);
@@ -291,6 +308,7 @@ impl CodexBackendClient {
                         transport_decision_wait_ms: Some(wait_ms),
                         ..CodexTransportMetrics::default()
                     },
+                    defer_websocket_recovery,
                 });
             }
             Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
@@ -328,6 +346,7 @@ impl CodexBackendClient {
                 prepared,
             })),
             metrics,
+            defer_websocket_recovery,
         })
     }
 
@@ -342,6 +361,7 @@ impl CodexBackendClient {
             requirement,
             route,
             metrics,
+            defer_websocket_recovery,
         } = prepared;
         match route {
             PreparedResponseRoute::Http => self
@@ -365,7 +385,8 @@ impl CodexBackendClient {
                 {
                     Ok(exchange) => exchange,
                     Err(error)
-                        if requirement.allows_pre_delivery_http_fallback()
+                        if !defer_websocket_recovery
+                            && requirement.allows_pre_delivery_http_fallback()
                             && error.allows_pre_delivery_http_fallback() =>
                     {
                         return self
@@ -381,29 +402,20 @@ impl CodexBackendClient {
                     }
                     Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
                 };
-                // 仅普通新链请求允许交付前降级/重试；延续类请求保持旧语义：
-                // 不进入交付边界，错误由 exchange 流原样上抛给下游。
                 if requirement.allows_pre_delivery_http_fallback() {
                     let mut fresh_retry_used = false;
                     loop {
                         match await_websocket_delivery_boundary(&mut exchange).await {
                             Ok(DeliveryBoundary::Ready) => break,
-                            Ok(DeliveryBoundary::ConnectionLimitReached {
-                                message,
-                                raw_frame,
-                            }) => {
-                                let upstream_error_raw = String::from_utf8_lossy(&raw_frame);
-                                tracing::warn!(
-                                    request_id = %context.request_id,
-                                    account_id = context.account_id.unwrap_or_default(),
-                                    websocket_connection_id = %exchange.websocket_connection_id,
-                                    upstream_transport = "websocket",
-                                    upstream_error_kind = "websocket_error_frame",
-                                    upstream_error_raw = %upstream_error_raw,
-                                    "OpenAI upstream returned a recoverable WebSocket error frame"
-                                );
+                            Ok(DeliveryBoundary::ConnectionLimitReached)
+                                if defer_websocket_recovery =>
+                            {
+                                return Err(CodexClientError::WebSocket(
+                                    CodexWebSocketExchangeError::ConnectionLimitReached,
+                                ));
+                            }
+                            Ok(DeliveryBoundary::ConnectionLimitReached) => {
                                 if fresh_retry_used {
-                                    // 新连接仍被限流：与官方重试预算耗尽一致，降级同账号 HTTP/SSE。
                                     return self
                                         .http_fallback_before_delivery(
                                             request,
@@ -411,20 +423,18 @@ impl CodexBackendClient {
                                             requirement,
                                             metrics,
                                             delivery_wait_started_at,
-                                            &message,
+                                            "websocket connection limit reached",
                                         )
-                                        .await
-                                        ;
+                                        .await;
                                 }
                                 fresh_retry_used = true;
                                 tracing::warn!(
                                     request_id = %context.request_id,
-                                    %message,
                                     "WebSocket connection limit reached; retrying on a fresh connection"
                                 );
                                 drop(exchange);
                                 match self
-                                    .prepare_response_transport(request, context, None, true)
+                                    .prepare_response_transport(request, context, None, true, false)
                                     .await
                                 {
                                     Ok(PreparedResponseTransport {
@@ -493,19 +503,21 @@ impl CodexBackendClient {
                                     }
                                 }
                             }
+                            Err(error) if !defer_websocket_recovery
+                                && error.allows_pre_delivery_http_fallback() =>
+                            {
+                                return self
+                                    .fallback_to_http_before_websocket_delivery(
+                                        request,
+                                        context,
+                                        requirement,
+                                        metrics,
+                                        delivery_wait_started_at,
+                                        error,
+                                    )
+                                    .await;
+                            }
                             Err(error) => {
-                                if error.allows_pre_delivery_http_fallback() {
-                                    return self
-                                        .fallback_to_http_before_websocket_delivery(
-                                            request,
-                                            context,
-                                            requirement,
-                                            metrics,
-                                            delivery_wait_started_at,
-                                            error,
-                                        )
-                                        .await;
-                                }
                                 return Err(websocket_exchange_error_to_client_error(
                                     post_send_ambiguous(error),
                                 ));
@@ -561,7 +573,6 @@ impl CodexBackendClient {
         delivery_wait_started_at: Instant,
         error: CodexWebSocketExchangeError,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        log_raw_websocket_close(context, &error);
         self.http_fallback_before_delivery(
             request,
             context,
@@ -573,7 +584,6 @@ impl CodexBackendClient {
         .await
     }
 
-    /// 交付前降级同账号 HTTP/SSE 的公共路径：统一标记 decision 与等待耗时。
     async fn http_fallback_before_delivery(
         &self,
         request: &CodexResponsesRequest,
@@ -829,14 +839,8 @@ impl CodexBackendClient {
 enum DeliveryBoundary {
     /// 已越过边界，可开始向下游投递。
     Ready,
-    /// 首个可投递帧是上游连接寿命限制错误；该帧已放回流，
-    /// 调用方可选择丢弃并换新连接重试，或原样投递。
-    ConnectionLimitReached {
-        /// 上游错误说明。
-        message: String,
-        /// 从 WebSocket 文本事件构造的完整 SSE 错误帧。
-        raw_frame: bytes::Bytes,
-    },
+    /// 首个可投递帧是上游连接寿命限制错误。
+    ConnectionLimitReached,
 }
 
 async fn await_websocket_delivery_boundary(
@@ -847,19 +851,16 @@ async fn await_websocket_delivery_boundary(
         match exchange.body.next().await {
             Some(Ok(frame)) if is_websocket_lifecycle_prelude(&frame) => prelude.push(frame),
             Some(Ok(frame)) => {
-                let limit_message = websocket_connection_limit_message(&frame);
-                let raw_frame = limit_message.as_ref().map(|_| frame.clone());
+                let connection_limit_reached = websocket_connection_limit_message(&frame).is_some();
                 prelude.push(frame);
                 let remaining =
                     std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
                 exchange.body =
                     Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
-                return Ok(match limit_message {
-                    Some(message) => DeliveryBoundary::ConnectionLimitReached {
-                        message,
-                        raw_frame: raw_frame.unwrap_or_default(),
-                    },
-                    None => DeliveryBoundary::Ready,
+                return Ok(if connection_limit_reached {
+                    DeliveryBoundary::ConnectionLimitReached
+                } else {
+                    DeliveryBoundary::Ready
                 });
             }
             Some(Err(error)) => return Err(error),
@@ -868,32 +869,11 @@ async fn await_websocket_delivery_boundary(
                     exchange.websocket_connection_id,
                     None,
                     None,
+                    None,
                 ));
             }
         }
     }
-}
-
-fn log_raw_websocket_close(context: CodexRequestContext<'_>, error: &CodexWebSocketExchangeError) {
-    let Some(close) = error.close_before_terminal() else {
-        return;
-    };
-    let websocket_connection_id = close
-        .connection_id()
-        .map(|connection_id| connection_id.to_string())
-        .unwrap_or_default();
-    let upstream_error_raw = close.reason().unwrap_or_default();
-    tracing::warn!(
-        request_id = %context.request_id,
-        account_id = context.account_id.unwrap_or_default(),
-        websocket_connection_id,
-        upstream_transport = "websocket",
-        upstream_error_kind = "websocket_close",
-        upstream_close_code = ?close.code(),
-        upstream_error_raw,
-        upstream_error_raw_present = close.reason().is_some(),
-        "OpenAI upstream WebSocket closed before delivery"
-    );
 }
 
 fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {

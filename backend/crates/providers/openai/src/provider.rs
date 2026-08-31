@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -57,6 +58,7 @@ use crate::credential::{
     SelectCodexCredential, SelectCodexProviderEndpointCredential,
     derive_codex_cyber_policy_session_key, derive_codex_session_affinity,
 };
+use crate::session_transport::CodexSessionTransportFallbacks;
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
 };
@@ -71,8 +73,9 @@ use crate::transport::profile::{
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-    PreviousResponseScope, ResponseEventSignals, transport_requirement,
+    PreviousResponseScope, ResponseEventSignals, TransportRequirement, transport_requirement,
 };
+use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
 };
@@ -126,6 +129,8 @@ pub struct CodexProvider {
     image_generations_url: Url,
     image_edits_url: Url,
     session_identity: Option<CodexSessionIdentity>,
+    session_transport_fallbacks: CodexSessionTransportFallbacks,
+    stream_max_retries: u32,
 }
 
 impl CodexProvider {
@@ -140,6 +145,7 @@ impl CodexProvider {
         profile: CodexWireProfileState,
         base_url: String,
         websocket_pool: Arc<CodexWebSocketPool>,
+        stream_max_retries: u32,
     ) -> Result<Self, CodexProviderConfigError> {
         let responses_url = Url::parse(&endpoint_url(&base_url, CODEX_RESPONSES_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
@@ -160,6 +166,8 @@ impl CodexProvider {
             image_generations_url,
             image_edits_url,
             session_identity: None,
+            session_transport_fallbacks: CodexSessionTransportFallbacks::default(),
+            stream_max_retries,
         })
     }
 
@@ -288,11 +296,6 @@ impl Provider for CodexProvider {
             derive_codex_session_affinity(&upstream_request, context.client_api_key_ref());
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
-        let transport = match context.transport() {
-            AttemptTransport::Default => selected_transport(&upstream_request),
-            AttemptTransport::Fallback => CodexProviderTransport::HttpOnly,
-        };
-        apply_transport(&mut upstream_request, transport);
 
         let selection_started_at = Instant::now();
         let lease = self
@@ -388,6 +391,39 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        let requirement = transport_requirement(&upstream_request);
+        let requested_transport = selected_transport(&upstream_request);
+        let sticky_http_fallback = context.transport() == AttemptTransport::Default
+            && requested_transport == CodexProviderTransport::PreferWebSocket
+            && !requirement.requires_websocket()
+            && session_affinity.as_ref().is_some_and(|affinity| {
+                self.session_transport_fallbacks
+                    .is_http_only(affinity.key())
+            });
+        let transport = if requirement.requires_websocket() {
+            CodexProviderTransport::PreferWebSocket
+        } else {
+            match context.transport() {
+                AttemptTransport::Default if sticky_http_fallback => {
+                    CodexProviderTransport::HttpOnly
+                }
+                AttemptTransport::Default => requested_transport,
+                AttemptTransport::Retry(_) => requested_transport,
+                AttemptTransport::Fallback => CodexProviderTransport::HttpOnly,
+            }
+        };
+        if sticky_http_fallback {
+            tracing::info!(
+                request_id = %context.request_id(),
+                attempt_index = context.attempt_index().get(),
+                session_affinity_key_hash = session_affinity
+                    .as_ref()
+                    .map_or("", CodexSessionAffinity::key_hash),
+                transport_requirement = requirement.as_str(),
+                "Reusing session-sticky OpenAI upstream HTTP fallback"
+            );
+        }
+        apply_transport(&mut upstream_request, transport);
         let metadata = ProviderCallMetadata::new(
             provider_kind,
             upstream_model.clone(),
@@ -411,7 +447,14 @@ impl Provider for CodexProvider {
                 continuation_scope: None,
             });
         let allows_account_state_mutation = lease.allows_account_state_mutation();
+        let session_affinity_key_hash = session_affinity
+            .as_ref()
+            .map(|affinity| affinity.key_hash().to_owned());
         let session_affinity_key = session_affinity.map(CodexSessionAffinity::into_key);
+        let websocket_retry_count = match context.transport() {
+            AttemptTransport::Retry(retry_index) => retry_index.get(),
+            AttemptTransport::Default | AttemptTransport::Fallback => 0,
+        };
         let events = cold_response_stream(ColdResponse {
             client: self.client.clone(),
             response_origin: self.responses_url.clone(),
@@ -425,6 +468,10 @@ impl Provider for CodexProvider {
             lease: Arc::clone(&lease),
             output_started_at,
             session_affinity_key,
+            session_affinity_key_hash,
+            session_transport_fallbacks: self.session_transport_fallbacks.clone(),
+            websocket_retry_count,
+            stream_max_retries: self.stream_max_retries,
             session_capture,
         });
         let stream = ProviderStream::new(metadata, events, lease);
@@ -522,6 +569,10 @@ struct ColdResponse {
     lease: Arc<CodexCredentialLease>,
     output_started_at: Instant,
     session_affinity_key: Option<ProviderSessionAffinityKey>,
+    session_affinity_key_hash: Option<String>,
+    session_transport_fallbacks: CodexSessionTransportFallbacks,
+    websocket_retry_count: u32,
+    stream_max_retries: u32,
     session_capture: Option<OpenAiSessionCapture>,
 }
 
@@ -663,7 +714,7 @@ async fn create_response_attempt(
         biased;
         _ = cancellation.cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
         _ = tokio::time::sleep(handshake_deadline) => Err(CodexHandshakeAttemptError::Timeout),
-        response = client.create_response_stream_with_pool_account(
+        response = client.create_response_stream_with_deferred_websocket_recovery(
             request,
             request_context,
             Some(account_id),
@@ -839,6 +890,10 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         lease,
         output_started_at,
         session_affinity_key,
+        session_affinity_key_hash,
+        session_transport_fallbacks,
+        websocket_retry_count,
+        stream_max_retries,
         mut session_capture,
     } = response;
     Box::pin(async_stream::try_stream! {
@@ -870,6 +925,7 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             lease.escape_reason(),
             lease.account_switch(),
         );
+        let request_transport_requirement = transport_requirement(&request);
         let response = create_response_attempt(
             &client,
             &request,
@@ -887,6 +943,14 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
             &cancellation,
         )
         .await;
+        let websocket_failure_policy = match &response {
+            Err(CodexHandshakeAttemptError::Client(error))
+                if transport_policy == CodexProviderTransport::PreferWebSocket =>
+            {
+                websocket_client_failure_policy(error)
+            }
+            _ => None,
+        };
         if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
             log_client_upstream_error(
                 UpstreamErrorLogContext::new(&context, &active_account, None),
@@ -897,6 +961,23 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {
+                if let Some(policy) = websocket_failure_policy {
+                    apply_websocket_recovery_policy(
+                        &mut failure,
+                        WebSocketRecoveryContext {
+                            policy,
+                            requirement: request_transport_requirement,
+                            retry_count: websocket_retry_count,
+                            max_retries: stream_max_retries,
+                            request_id: context.request_id().as_str(),
+                            attempt_index: context.attempt_index().get(),
+                            account_id: active_account.id().as_str(),
+                            session_affinity_key: session_affinity_key.as_ref(),
+                            session_affinity_key_hash: session_affinity_key_hash.as_deref(),
+                            session_transport_fallbacks: &session_transport_fallbacks,
+                        },
+                    );
+                }
                 if let Some(observation) = failure.observation.take() {
                     yield ProviderEvent::observation(observation);
                 }
@@ -1029,12 +1110,25 @@ fn cold_response_stream(response: ColdResponse) -> EventStream {
                     continue;
                 }
                 Err(mut failure) => {
-                    if failure.error.allows_pre_delivery_retry()
+                    if failure.websocket_transport_retryable
                         && response_transport == CodexBackendTransport::WebSocket
-                        && transport_requirement(&request).allows_pre_delivery_http_fallback()
                         && !pre_commit_events.is_committed()
                     {
-                        failure.error = failure.error.with_pre_delivery_transport_fallback();
+                        apply_websocket_recovery_policy(
+                            &mut failure,
+                            WebSocketRecoveryContext {
+                                policy: WebSocketFailurePolicy::Budgeted,
+                                requirement: request_transport_requirement,
+                                retry_count: websocket_retry_count,
+                                max_retries: stream_max_retries,
+                                request_id: context.request_id().as_str(),
+                                attempt_index: context.attempt_index().get(),
+                                account_id: active_account.id().as_str(),
+                                session_affinity_key: session_affinity_key.as_ref(),
+                                session_affinity_key_hash: session_affinity_key_hash.as_deref(),
+                                session_transport_fallbacks: &session_transport_fallbacks,
+                            },
+                        );
                     }
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     if !updates.is_empty() {
@@ -1645,7 +1739,11 @@ fn codex_response_observation(
             WebSocketPoolKind::New
         });
     }
-    if let Some(status_code) = diagnostics.status_code {
+    // WebSocket opening 的 101 是成功升级事实，不是业务请求的失败 HTTP 状态。
+    // opening 明确拒绝仍由 `codex_error_observation` 保存真实上游状态。
+    if transport != CodexBackendTransport::WebSocket
+        && let Some(status_code) = diagnostics.status_code
+    {
         observation = observation.with_status_code(status_code);
     }
     if let Some(request_id) = diagnostics.request_id.as_deref() {
@@ -2084,6 +2182,7 @@ fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
 
 struct MappedProviderFailure {
     error: ProviderError,
+    websocket_transport_retryable: bool,
     account_failure: Option<CodexAccountFailure>,
     /// 原始上游错误描述，仅在凭据错误状态下持久化。
     error_message: Option<String>,
@@ -2098,6 +2197,7 @@ impl MappedProviderFailure {
     fn plain(error: ProviderError) -> Self {
         Self {
             error,
+            websocket_transport_retryable: false,
             account_failure: None,
             error_message: None,
             cyber_policy_failure: false,
@@ -2311,7 +2411,7 @@ fn log_client_upstream_error(context: UpstreamErrorLogContext<'_>, error: &Codex
                 .websocket_connection_id
                 .map(|connection_id| connection_id.to_string())
                 .unwrap_or_default();
-            let upstream_error_raw = close.reason().unwrap_or_default();
+            let close_reason_bytes = close.reason().map_or(0, str::len);
             tracing::warn!(
                 request_id = %context.request_id,
                 account_id = %context.account_id,
@@ -2321,8 +2421,11 @@ fn log_client_upstream_error(context: UpstreamErrorLogContext<'_>, error: &Codex
                 upstream_error_kind = "websocket_close",
                 upstream_close_code = close.code().unwrap_or_default(),
                 upstream_close_code_present = close.code().is_some(),
-                upstream_error_raw,
-                upstream_error_raw_bytes = upstream_error_raw.len(),
+                upstream_last_event_type = close.last_event_type().unwrap_or_default(),
+                upstream_last_event_type_present = close.last_event_type().is_some(),
+                upstream_terminal_seen = false,
+                upstream_close_reason_bytes = close_reason_bytes,
+                upstream_close_reason_present = close.reason().is_some(),
                 upstream_error_raw_present = close.reason().is_some(),
                 "OpenAI upstream WebSocket closed before terminal event"
             );
@@ -2480,6 +2583,151 @@ fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
     map_client_error(error, UpstreamSendState::Ambiguous, true)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebSocketFailurePolicy {
+    Budgeted,
+    ImmediateFallback,
+}
+
+struct WebSocketRecoveryContext<'a> {
+    policy: WebSocketFailurePolicy,
+    requirement: TransportRequirement,
+    retry_count: u32,
+    max_retries: u32,
+    request_id: &'a str,
+    attempt_index: u32,
+    account_id: &'a str,
+    session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
+    session_affinity_key_hash: Option<&'a str>,
+    session_transport_fallbacks: &'a CodexSessionTransportFallbacks,
+}
+
+fn websocket_client_failure_policy(error: &CodexClientError) -> Option<WebSocketFailurePolicy> {
+    match error {
+        CodexClientError::Upstream {
+            status,
+            transport: CodexBackendTransport::WebSocket,
+            ..
+        } if *status == reqwest::StatusCode::UPGRADE_REQUIRED => {
+            Some(WebSocketFailurePolicy::ImmediateFallback)
+        }
+        CodexClientError::Upstream {
+            status,
+            transport: CodexBackendTransport::WebSocket,
+            ..
+        } if status.is_server_error()
+            || matches!(
+                *status,
+                reqwest::StatusCode::REQUEST_TIMEOUT
+                    | reqwest::StatusCode::CONFLICT
+                    | reqwest::StatusCode::TOO_EARLY
+                    | reqwest::StatusCode::TOO_MANY_REQUESTS
+            ) =>
+        {
+            Some(WebSocketFailurePolicy::Budgeted)
+        }
+        CodexClientError::WebSocket(error)
+            if !matches!(error, CodexWebSocketExchangeError::InvalidRequest(_)) =>
+        {
+            Some(WebSocketFailurePolicy::Budgeted)
+        }
+        _ => None,
+    }
+}
+
+fn apply_websocket_recovery_policy(
+    failure: &mut MappedProviderFailure,
+    context: WebSocketRecoveryContext<'_>,
+) {
+    let recovery_is_safe = match failure.error.send_state() {
+        UpstreamSendState::NotSent => context.requirement.allows_pre_send_http_fallback(),
+        UpstreamSendState::Sent | UpstreamSendState::Ambiguous => {
+            context.requirement.allows_pre_delivery_http_fallback()
+        }
+    };
+    if !recovery_is_safe {
+        return;
+    }
+
+    // 传输恢复必须保持原账号可调度；最终 HTTP attempt 若仍失败，再按真实 HTTP
+    // 结果更新账号健康度，避免中间 WS 错误把同账号钉选提前冷却掉。
+    failure.account_failure = None;
+    let fallback_now = context.policy == WebSocketFailurePolicy::ImmediateFallback
+        || context.retry_count >= context.max_retries;
+    if !fallback_now {
+        let Some(retry_index) = context.retry_count.checked_add(1).and_then(NonZeroU32::new) else {
+            return;
+        };
+        let delay = failure
+            .error
+            .retry_after()
+            .unwrap_or_else(|| websocket_retry_backoff(retry_index));
+        failure
+            .error
+            .set_pre_delivery_transport_retry(retry_index, delay);
+        tracing::warn!(
+            request_id = context.request_id,
+            attempt_index = context.attempt_index,
+            account_id = context.account_id,
+            websocket_failure_kind = failure.error.kind().as_str(),
+            websocket_failure_code = failure
+                .error
+                .upstream_code()
+                .map_or("", OpaqueUpstreamValue::as_str),
+            upstream_status_code = failure.error.upstream_status().unwrap_or_default(),
+            upstream_status_code_present = failure.error.upstream_status().is_some(),
+            websocket_retry_count = retry_index.get(),
+            websocket_max_retries = context.max_retries,
+            websocket_retry_delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            transport_requirement = context.requirement.as_str(),
+            "OpenAI upstream WebSocket failed; retrying the same account"
+        );
+        return;
+    }
+
+    failure.error.set_pre_delivery_transport_fallback();
+    let sticky_state_transition = context
+        .session_affinity_key
+        .map(|key| context.session_transport_fallbacks.disable_websocket(key));
+    tracing::warn!(
+        request_id = context.request_id,
+        attempt_index = context.attempt_index,
+        account_id = context.account_id,
+        websocket_failure_kind = failure.error.kind().as_str(),
+        websocket_failure_code = failure
+            .error
+            .upstream_code()
+            .map_or("", OpaqueUpstreamValue::as_str),
+        upstream_status_code = failure.error.upstream_status().unwrap_or_default(),
+        upstream_status_code_present = failure.error.upstream_status().is_some(),
+        websocket_retry_count = context.retry_count,
+        websocket_max_retries = context.max_retries,
+        websocket_fallback_reason = match context.policy {
+            WebSocketFailurePolicy::Budgeted => "retry_budget_exhausted",
+            WebSocketFailurePolicy::ImmediateFallback => "upgrade_required",
+        },
+        session_affinity_present = context.session_affinity_key.is_some(),
+        session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
+        sticky_http_enabled = sticky_state_transition.is_some(),
+        sticky_state_transition = sticky_state_transition.unwrap_or(false),
+        "OpenAI upstream WebSocket disabled for the current session"
+    );
+}
+
+fn websocket_retry_backoff(retry_index: NonZeroU32) -> Duration {
+    const INITIAL_DELAY_MS: u64 = 200;
+
+    let shift = retry_index.get().saturating_sub(1).min(63);
+    let base_ms = INITIAL_DELAY_MS.saturating_mul(1_u64.checked_shl(shift).unwrap_or(u64::MAX));
+    let mut random = [0_u8; 2];
+    let jitter_per_mille = if getrandom::fill(&mut random).is_ok() {
+        900_u64 + u64::from(u16::from_le_bytes(random) % 200)
+    } else {
+        1_000
+    };
+    Duration::from_millis(base_ms.saturating_mul(jitter_per_mille) / 1_000)
+}
+
 fn continuation_replay_required_error() -> ProviderError {
     ProviderError::new(
         ProviderErrorKind::InvalidRequest,
@@ -2495,8 +2743,10 @@ fn continuation_replay_required_error() -> ProviderError {
 
 fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {
     let allows_pre_delivery_retry = stream_transport_allows_pre_delivery_retry(&error);
+    let websocket_failure = error.transport() == Some(CodexBackendTransport::WebSocket);
     let mut failure = map_client_error(error, UpstreamSendState::Sent, false);
-    if allows_pre_delivery_retry {
+    failure.websocket_transport_retryable = allows_pre_delivery_retry && websocket_failure;
+    if allows_pre_delivery_retry && !websocket_failure {
         failure.error = failure.error.with_pre_delivery_retry();
     }
     failure
@@ -2507,15 +2757,11 @@ fn stream_transport_allows_pre_delivery_retry(error: &CodexClientError) -> bool 
         CodexClientError::Http(_)
         | CodexClientError::HttpJson(_)
         | CodexClientError::StreamIdleTimeout { .. } => true,
-        CodexClientError::WebSocket(error) => matches!(
+        CodexClientError::WebSocket(error) => !matches!(
             error,
-            CodexWebSocketExchangeError::Transport(_)
-                | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
-                | CodexWebSocketExchangeError::SendTimeout { .. }
-                | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
-                | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
-                | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. }
-                | CodexWebSocketExchangeError::InitialEventTimeout { .. }
+            CodexWebSocketExchangeError::InvalidRequest(_)
+                | CodexWebSocketExchangeError::Upstream(_)
+                | CodexWebSocketExchangeError::ContinuationUnavailable { .. }
         ),
         _ => false,
     }
@@ -2617,6 +2863,11 @@ fn map_client_error(
                             "websocket_close_{close_code}"
                         )));
             }
+            if matches!(error, CodexWebSocketExchangeError::ConnectionLimitReached) {
+                failure.error = failure.error.with_upstream_code(OpaqueUpstreamValue::new(
+                    WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE.to_owned(),
+                ));
+            }
             if let Some(client_visible_error) = client_visible_error {
                 failure.error = failure
                     .error
@@ -2637,6 +2888,13 @@ fn map_client_error(
 fn websocket_client_visible_error(
     error: &CodexWebSocketExchangeError,
 ) -> Option<ClientVisibleUpstreamError> {
+    if matches!(error, CodexWebSocketExchangeError::ConnectionLimitReached) {
+        return Some(ClientVisibleUpstreamError::new(
+            "websocket connection limit reached",
+            Some(WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE.to_owned()),
+            Some("websocket_error".to_owned()),
+        ));
+    }
     let close = error.close_before_terminal()?;
     let message = close
         .reason()
@@ -2711,6 +2969,7 @@ fn map_upstream_failure(
     }
     MappedProviderFailure {
         error,
+        websocket_transport_retryable: false,
         account_failure: account_failure(
             category,
             failure.retry_after_seconds,
@@ -2822,6 +3081,7 @@ const fn websocket_send_state(error: &CodexWebSocketExchangeError) -> UpstreamSe
         | CodexWebSocketExchangeError::SharedConnectFailed
         | CodexWebSocketExchangeError::ContinuationUnavailable { .. } => UpstreamSendState::NotSent,
         CodexWebSocketExchangeError::Upstream(_)
+        | CodexWebSocketExchangeError::ConnectionLimitReached
         | CodexWebSocketExchangeError::InvalidSse(_)
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => UpstreamSendState::Sent,
         CodexWebSocketExchangeError::Transport(_)
@@ -2851,6 +3111,7 @@ const fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> ProviderEr
             ProviderErrorKind::Unavailable
         }
         CodexWebSocketExchangeError::Upstream(_) => ProviderErrorKind::Unavailable,
+        CodexWebSocketExchangeError::ConnectionLimitReached => ProviderErrorKind::RateLimited,
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }

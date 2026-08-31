@@ -66,6 +66,9 @@ pub enum CodexWebSocketExchangeError {
     /// 上游 WebSocket 错误帧。
     #[error("{0}")]
     Upstream(Box<CodexWebSocketUpstreamError>),
+    /// 上游要求结束当前 WebSocket 连接并在新连接上重试。
+    #[error("websocket connection limit reached")]
+    ConnectionLimitReached,
     /// 请求依赖的连接本地 previous response 无法在当前连接满足。
     #[error("websocket continuation unavailable: {reason}")]
     ContinuationUnavailable {
@@ -108,6 +111,7 @@ pub struct CodexWebSocketCloseError {
     connection_id: Option<Uuid>,
     code: Option<u16>,
     reason: Option<String>,
+    last_event_type: Option<String>,
 }
 
 impl CodexWebSocketCloseError {
@@ -116,11 +120,17 @@ impl CodexWebSocketCloseError {
             connection_id: None,
             code,
             reason,
+            last_event_type: None,
         }
     }
 
     pub(crate) fn with_connection_id(mut self, connection_id: Uuid) -> Self {
         self.connection_id = Some(connection_id);
+        self
+    }
+
+    pub(crate) fn with_last_event_type(mut self, event_type: Option<String>) -> Self {
+        self.last_event_type = event_type;
         self
     }
 
@@ -141,6 +151,12 @@ impl CodexWebSocketCloseError {
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
     }
+
+    /// 返回关闭前最后一条经过白名单校验的事件类型；不包含事件 payload。
+    #[must_use]
+    pub fn last_event_type(&self) -> Option<&str> {
+        self.last_event_type.as_deref()
+    }
 }
 
 impl fmt::Debug for CodexWebSocketCloseError {
@@ -150,6 +166,7 @@ impl fmt::Debug for CodexWebSocketCloseError {
             .field("connection_id", &self.connection_id)
             .field("code", &self.code)
             .field("reason", &self.reason.as_ref().map(|_| "<redacted>"))
+            .field("last_event_type", &self.last_event_type)
             .finish()
     }
 }
@@ -214,9 +231,12 @@ impl CodexWebSocketExchangeError {
         connection_id: Uuid,
         code: Option<u16>,
         reason: Option<String>,
+        last_event_type: Option<String>,
     ) -> Self {
         Self::ClosedBeforeTerminal(
-            CodexWebSocketCloseError::new(code, reason).with_connection_id(connection_id),
+            CodexWebSocketCloseError::new(code, reason)
+                .with_connection_id(connection_id)
+                .with_last_event_type(last_event_type),
         )
     }
 
@@ -267,6 +287,11 @@ impl CodexWebSocketExchangeError {
                 | Self::SharedConnectFailed
                 | Self::ContinuationUnavailable { .. }
         )
+    }
+
+    /// 精确连接状态不可用属于本地池路由事实，不消耗上游 WS 重试预算。
+    pub(in crate::transport) fn requires_immediate_pool_fallback(&self) -> bool {
+        matches!(self, Self::ContinuationUnavailable { .. })
     }
 
     /// 首个业务事件交付前，普通 WebSocket 失败可切到同账号 HTTP。

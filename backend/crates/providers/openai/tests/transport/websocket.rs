@@ -1507,6 +1507,17 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
             ))
             .await
             .unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "secret@example.com",
+                    "payload": "must not become a diagnostic event type"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
         websocket.close(None).await.unwrap();
     });
     let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
@@ -1533,13 +1544,26 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
         .expect("stream should yield partial frame")
         .expect("partial frame should be valid");
     assert!(std::str::from_utf8(&first).unwrap().contains("partial"));
-    let error = response
-        .body
-        .next()
-        .await
-        .expect("stream should yield close-before-terminal error")
-        .expect_err("close before terminal should be an error");
+    let error = loop {
+        match response.body.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("stream should yield close-before-terminal error"),
+        }
+    };
     server.await.unwrap();
+
+    let CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
+        source: Some(source),
+        ..
+    }) = &error
+    else {
+        panic!("close-before-terminal should preserve its typed source: {error:?}");
+    };
+    let CodexWebSocketExchangeError::ClosedBeforeTerminal(close) = source.as_ref() else {
+        panic!("post-send ambiguity should wrap a close-before-terminal error: {source:?}");
+    };
+    assert_eq!(close.last_event_type(), Some("response.output_text.delta"));
 
     std::assert_matches!(
         error,
