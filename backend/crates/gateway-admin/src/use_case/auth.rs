@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
@@ -195,9 +195,8 @@ impl AuthService for DefaultAuthService {
 }
 
 fn hash_admin_password(password: &str) -> Result<String, AdminError> {
-    let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(|_| AdminError::internal("管理员密码哈希失败"))
 }
