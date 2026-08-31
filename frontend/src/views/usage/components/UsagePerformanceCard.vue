@@ -239,7 +239,7 @@ function formatThroughput(value: number | null) {
     as="article"
     title="响应速度"
     description="延迟、吞吐与调度分位"
-    class="h-full min-h-90"
+    class="min-h-90 xl:h-full"
   >
     <template #actions>
       <BaseSegmented v-model="activeView" label="性能指标" :options="viewOptions" :disabled="loading" class="w-68" />

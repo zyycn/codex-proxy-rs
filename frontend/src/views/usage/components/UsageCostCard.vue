@@ -236,7 +236,7 @@ function costAmount(value: string | null, pointIndex: number) {
     as="article"
     title="成本效率"
     description="实际费用、缓存节省、服务层溢价与单位成本"
-    class="h-full min-h-90"
+    class="min-h-90 xl:h-full"
   >
     <template #actions>
       <BaseSegmented v-model="activeView" label="成本视图" :options="viewOptions" :disabled="loading" class="w-50" />

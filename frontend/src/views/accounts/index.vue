@@ -157,7 +157,7 @@ const {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
+  <div class="flex min-h-0 w-full flex-col xl:h-full xl:overflow-hidden">
     <BasePageHeader
       class="h-17"
       title="账号管理"
@@ -167,7 +167,7 @@ const {
     <AccountOverviewCards :summary="accountSummary" />
 
     <BaseCard
-      class="mt-4 flex h-[calc(100dvh-250px)] min-h-125 flex-col"
+      class="mt-4 flex flex-col xl:h-[calc(100dvh-250px)] xl:min-h-125"
     >
       <template #header>
         <AccountFilters
@@ -188,9 +188,9 @@ const {
       </template>
 
       <template #body>
-        <div class="flex h-full min-h-0 flex-col">
+        <div class="flex min-h-0 flex-col xl:h-full">
           <BaseTable
-            class="min-h-0 flex-1 [--cp-table-row-height:72px]"
+            class="h-100! min-h-100 flex-none [--cp-table-row-height:72px] xl:h-auto! xl:min-h-0 xl:flex-1"
             :columns="accountColumns"
             :rows="accounts"
             :loading="loading"

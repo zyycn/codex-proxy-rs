@@ -163,7 +163,7 @@ function formatTooltip(params: unknown) {
     as="article"
     title="请求健康"
     :description="`按${granularityText}区分服务结果、取消、未完成与调用方错误`"
-    class="h-full min-h-90"
+    class="min-h-90 xl:h-full"
   >
     <template #body>
       <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'h-full'">
