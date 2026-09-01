@@ -21,7 +21,9 @@ use gateway_core::engine::{
     AccountAttemptContext, AttemptContext, AttemptTransport, ContinuationAttempt, ModelRequestId,
     ProviderAccountStateOwner, RequestAttemptContext,
 };
-use gateway_core::error::{ContinuationFailure, PreDeliveryRetry, ProviderErrorKind};
+use gateway_core::error::{
+    ContinuationFailure, ContinuationRecoveryDisposition, PreDeliveryRetry, ProviderErrorKind,
+};
 use gateway_core::event::GatewayEvent;
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{
@@ -1293,7 +1295,7 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
 }
 
 #[tokio::test]
-async fn websocket_retry_budget_exhaustion_is_sticky_only_for_the_current_session() {
+async fn ambiguous_websocket_close_is_terminal_and_sticky_only_for_the_current_session() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_websocket_close").await;
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1304,81 +1306,56 @@ async fn websocket_retry_budget_exhaustion_is_sticky_only_for_the_current_sessio
         listener.local_addr().expect("listener address")
     );
     let server = tokio::spawn(async move {
-        for retry_count in 0..=2 {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .expect("accept WebSocket retry connection");
-            let mut websocket = accept_codex_test_websocket(stream).await;
-            let _request = websocket
-                .next()
-                .await
-                .expect("WebSocket request")
-                .expect("valid WebSocket request");
-            for event in [
-                json!({
-                    "type": "response.created",
-                    "response": {"id": format!("resp_structural_{retry_count}"), "model": "gpt-5.4"}
-                }),
-                json!({
-                    "type": "response.in_progress",
-                    "response": {"id": format!("resp_structural_{retry_count}"), "model": "gpt-5.4"}
-                }),
-            ] {
-                websocket
-                    .send(Message::Text(event.to_string().into()))
-                    .await
-                    .expect("send structural WebSocket event");
-            }
-            if retry_count == 1 {
-                websocket
-                    .send(Message::Text(
-                        json!({
-                            "type": "error",
-                            "status": 400,
-                            "error": {
-                                "type": "invalid_request_error",
-                                "code": "websocket_connection_limit_reached",
-                                "message": "create a new websocket connection"
-                            }
-                        })
-                        .to_string()
-                        .into(),
-                    ))
-                    .await
-                    .expect("send connection-limit error");
-                continue;
-            }
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("WebSocket request")
+            .expect("valid WebSocket request");
+        for event in [
+            json!({
+                "type": "response.created",
+                "response": {"id": "resp_structural", "model": "gpt-5.4"}
+            }),
+            json!({
+                "type": "response.in_progress",
+                "response": {"id": "resp_structural", "model": "gpt-5.4"}
+            }),
+        ] {
             websocket
-                .send(Message::Text(
-                    json!({
-                        "type": "response.output_item.added",
-                        "output_index": 0,
-                        "item": {
-                            "id": format!("msg_structural_{retry_count}"),
-                            "type": "message",
-                            "role": "assistant",
-                            "status": "in_progress",
-                            "content": []
-                        }
-                    })
-                    .to_string()
-                    .into(),
-                ))
+                .send(Message::Text(event.to_string().into()))
                 .await
-                .expect("send structural output event");
-            let close_code = match retry_count {
-                0 => CloseCode::Normal,
-                _ => CloseCode::Error,
-            };
-            websocket
-                .close(Some(CloseFrame {
-                    code: close_code,
-                    reason: "".into(),
-                }))
-                .await
-                .expect("close WebSocket retry attempt");
+                .expect("send structural WebSocket event");
         }
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": {
+                        "id": "msg_structural",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "in_progress",
+                        "content": []
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send structural output event");
+        websocket
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            }))
+            .await
+            .expect("close WebSocket before terminal event");
 
         let (mut http, _) = listener.accept().await.expect("accept sticky HTTP request");
         let request = capture_http_request(&mut http).await;
@@ -1429,78 +1406,72 @@ async fn websocket_retry_budget_exhaustion_is_sticky_only_for_the_current_sessio
 
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
     let mut saw_websocket_observation = false;
-    for retry_count in 0..=2 {
-        let operation = Operation::Generate(generate_with_session_context(
-            "sticky-websocket-session",
-            Some("thread-first"),
-            None,
-        ));
-        let attempt_context = match NonZeroU32::new(retry_count) {
-            Some(retry_index) => context(
-                &format!("req_websocket_normal_close_{retry_count}"),
-                CancellationToken::new(),
-            )
-            .with_transport(AttemptTransport::Retry(retry_index)),
-            None => context("req_websocket_normal_close_0", CancellationToken::new()),
-        };
-        let mut stream = provider
-            .execute(planned_request("openai", operation), attempt_context)
-            .await
-            .expect("prepare WebSocket provider stream");
-        let error = loop {
-            match stream.next().await {
-                Some(Ok(event)) => {
-                    if let Some(observation) = event.response_observation() {
-                        saw_websocket_observation = true;
-                        assert_eq!(observation.status_code(), None);
-                        if let Some(provider_metadata) = observation.provider_metadata() {
-                            let metadata: Value = serde_json::from_str(provider_metadata.as_json())
-                                .expect("OpenAI provider metadata JSON");
-                            assert_eq!(
-                                metadata.get("upstreamStatus").and_then(Value::as_u64),
-                                Some(101),
-                                "successful upgrade remains provider-owned diagnostics"
-                            );
-                        }
+    let operation = Operation::Generate(generate_with_session_context(
+        "sticky-websocket-session",
+        Some("thread-first"),
+        None,
+    ));
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_websocket_normal_close", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket provider stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(event)) => {
+                if let Some(observation) = event.response_observation() {
+                    saw_websocket_observation = true;
+                    assert_eq!(observation.status_code(), None);
+                    if let Some(provider_metadata) = observation.provider_metadata() {
+                        let metadata: Value = serde_json::from_str(provider_metadata.as_json())
+                            .expect("OpenAI provider metadata JSON");
+                        assert_eq!(
+                            metadata.get("upstreamStatus").and_then(Value::as_u64),
+                            Some(101),
+                            "successful upgrade remains provider-owned diagnostics"
+                        );
                     }
-                    assert!(
-                        !event.has_client_event(),
-                        "structural events must remain behind the replay boundary"
-                    );
                 }
-                Some(Err(error)) => break error,
-                None => panic!("WebSocket close must surface a provider error"),
+                assert!(
+                    !event.has_client_event(),
+                    "structural events must remain behind the replay boundary"
+                );
             }
-        };
-        drop(stream);
-
-        if retry_count < 2 {
-            let Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, delay }) =
-                error.pre_delivery_retry()
-            else {
-                panic!("expected a same-account WebSocket retry: {error:?}");
-            };
-            assert_eq!(retry_index.get(), retry_count + 1);
-            assert!(!delay.is_zero());
-        } else {
-            assert_eq!(
-                error.pre_delivery_retry(),
-                Some(PreDeliveryRetry::SameAccountTransportFallback),
-                "unexpected provider error at retry {retry_count}: {error:?}"
-            );
+            Some(Err(error)) => break error,
+            None => panic!("WebSocket close must surface a provider error"),
         }
-        let expected_close_code = match retry_count {
-            0 => "websocket_close_1000",
-            1 => "websocket_connection_limit_reached",
-            _ => "websocket_close_1011",
-        };
-        assert_eq!(
-            error.upstream_code().map(|code| code.as_str()),
-            Some(expected_close_code)
-        );
-    }
+    };
+    drop(stream);
 
     assert!(saw_websocket_observation);
+    assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+    assert_eq!(error.pre_delivery_retry(), None);
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("websocket_close_1000")
+    );
+    assert_eq!(
+        error.diagnostic().map(|diagnostic| diagnostic.as_str()),
+        Some(
+            "OpenAI WebSocket closed before a terminal response (close code 1000); last event type: response.output_item.added"
+        )
+    );
+    let raw_close: Value = serde_json::from_str(
+        error
+            .raw_upstream_error()
+            .expect("raw WebSocket close")
+            .as_str(),
+    )
+    .expect("raw WebSocket close JSON");
+    assert_eq!(raw_close.get("type"), Some(&json!("websocket.close")));
+    assert_eq!(raw_close.get("code"), Some(&json!(1000)));
+    assert_eq!(raw_close.get("reason"), Some(&json!("")));
+    assert_eq!(
+        raw_close.get("last_event_type"),
+        Some(&json!("response.output_item.added"))
+    );
 
     let second_operation = Operation::Generate(generate_with_session_context(
         "sticky-websocket-session",
@@ -2905,6 +2876,13 @@ async fn response_failed_before_semantic_output_is_atomic_and_persists_quota_loc
     assert_eq!(failure.send_state(), UpstreamSendState::Sent);
     assert_eq!(failure.upstream_status(), Some(429));
     assert!(failure.replay_is_safe());
+    assert_eq!(
+        failure
+            .raw_upstream_error()
+            .expect("raw response.failed data")
+            .as_str(),
+        r#"{"type":"response.failed","status_code":429,"retry_after_seconds":17,"response":{"id":"resp_atomic_failure","status":"failed","error":{"code":"rate_limit_exceeded","message":"atomic upstream failure"}}}"#
+    );
     let events = failure.take_atomic_client_events();
     assert_eq!(
         events
@@ -3438,7 +3416,7 @@ async fn same_account_previous_response_not_found_should_remain_client_visible()
 }
 
 #[tokio::test]
-async fn exact_websocket_busy_then_http_invalid_previous_response_should_request_official_replay() {
+async fn exact_websocket_busy_then_replay_scope_relaxation_is_rejected_before_send() {
     const ACCOUNT_ID: &str = "acct_websocket_busy_replay";
     const CONVERSATION_ID: &str = "conversation-websocket-busy-replay";
     const CLIENT_PREVIOUS_RESPONSE_ID: &str = "client-resp-busy-seed";
@@ -3537,26 +3515,6 @@ async fn exact_websocket_busy_then_http_invalid_previous_response_should_request
             .await
             .expect("send busy stream output");
 
-        let (mut http, _) = listener.accept().await.expect("accept HTTP fallback");
-        read_http_request(&mut http).await;
-        let body = json!({
-            "error": {
-                "code": null,
-                "type": "invalid_request_error",
-                "message": "Invalid `previous_response_id`."
-            }
-        })
-        .to_string();
-        http.write_all(
-            format!(
-                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .as_bytes(),
-        )
-        .await
-        .expect("write HTTP 400");
-
         release_busy_receiver.await.expect("release busy stream");
         websocket
             .send(Message::Text(
@@ -3579,6 +3537,12 @@ async fn exact_websocket_busy_then_http_invalid_previous_response_should_request
             ))
             .await
             .expect("complete busy stream");
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "connection-local replay must not open another upstream connection"
+        );
     });
     let provider = provider_with_base_url(&store, base_url);
     let initial_session_state = ProviderSessionState::new(
@@ -3665,48 +3629,60 @@ async fn exact_websocket_busy_then_http_invalid_previous_response_should_request
         exact_error.continuation_failure(),
         Some(ContinuationFailure::Busy)
     );
-
-    let mut replay = provider
-        .execute(
-            planned_request("openai", continuation),
-            pinned_continuation_context(
-                "req_ws_busy_replay",
-                ACCOUNT_ID,
-                CLIENT_PREVIOUS_RESPONSE_ID,
-                UPSTREAM_PREVIOUS_RESPONSE_ID,
-                2,
-                ContinuationAttempt::ReplayAny,
-            ),
-        )
-        .await
-        .expect("prepare replay-any continuation");
-    let replay_error = loop {
-        match replay.next().await {
-            Some(Ok(_)) => {}
-            Some(Err(error)) => break error,
-            None => panic!("HTTP fallback 400 must produce a provider error"),
-        }
-    };
-    let detail = replay_error
-        .client_visible_upstream_error()
-        .expect("client-visible replay error");
-
     assert_eq!(
-        (
-            replay_error.kind(),
-            replay_error.continuation_failure(),
-            detail.code(),
-            detail.error_type(),
-            detail.message(),
-        ),
-        (
-            ProviderErrorKind::InvalidRequest,
-            Some(ContinuationFailure::HistoryUnavailable),
-            Some("previous_response_not_found"),
-            Some("invalid_request_error"),
-            "Invalid `previous_response_id`.",
-        )
+        exact_error.continuation_recovery_disposition(),
+        Some(ContinuationRecoveryDisposition::ClientReplayRequired)
     );
+
+    for (request_id, attempt_index, attempt) in [
+        (
+            "req_ws_busy_replay_owner",
+            2,
+            ContinuationAttempt::ReplayOwner,
+        ),
+        ("req_ws_busy_replay_any", 3, ContinuationAttempt::ReplayAny),
+    ] {
+        let result = provider
+            .execute(
+                planned_request("openai", continuation.clone()),
+                pinned_continuation_context(
+                    request_id,
+                    ACCOUNT_ID,
+                    CLIENT_PREVIOUS_RESPONSE_ID,
+                    UPSTREAM_PREVIOUS_RESPONSE_ID,
+                    attempt_index,
+                    attempt,
+                ),
+            )
+            .await;
+        let Err(replay_error) = result else {
+            panic!("connection-local scope relaxation must fail before stream creation");
+        };
+        let detail = replay_error
+            .client_visible_upstream_error()
+            .expect("client-visible replay error");
+
+        assert_eq!(
+            (
+                replay_error.kind(),
+                replay_error.send_state(),
+                replay_error.continuation_failure(),
+                replay_error.continuation_recovery_disposition(),
+                detail.code(),
+                detail.error_type(),
+                detail.message(),
+            ),
+            (
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+                Some(ContinuationFailure::HistoryUnavailable),
+                Some(ContinuationRecoveryDisposition::ClientReplayRequired),
+                Some("previous_response_not_found"),
+                Some("invalid_request_error"),
+                "Previous response was not found. Retrying the full request.",
+            )
+        );
+    }
 
     release_busy_sender.send(()).expect("release busy stream");
     while busy

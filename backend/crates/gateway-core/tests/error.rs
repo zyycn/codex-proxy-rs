@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, OpaqueUpstreamValue,
-    ProviderError, ProviderErrorKind,
+    ProviderDiagnostic, ProviderError, ProviderErrorKind, RawUpstreamError,
 };
 use gateway_core::event::{ProtocolWireEvent, ProviderEvent, ProviderResponseHeader};
 use gateway_core::upstream::UpstreamSendState;
@@ -24,6 +24,36 @@ fn provider_error_debug_should_not_print_classified_upstream_values() {
         .with_upstream_request_id(value);
 
     assert!(!format!("{error:?}").contains(diagnostic));
+}
+
+#[test]
+fn classified_provider_diagnostic_survives_clone_without_entering_debug() {
+    let message = "OpenAI WebSocket closed before terminal response (close code 1000)";
+    let error = ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+        .with_diagnostic(ProviderDiagnostic::new(message));
+    let cloned = error.clone();
+    let gateway = GatewayError::from_provider(&cloned);
+
+    assert_eq!(
+        gateway.diagnostic().map(ProviderDiagnostic::as_str),
+        Some(message)
+    );
+    assert!(!format!("{error:?}").contains(message));
+    assert!(!format!("{gateway:?}").contains(message));
+}
+
+#[test]
+fn raw_upstream_error_survives_clone_without_entering_debug() {
+    let raw = r#"{"error":{"message":"verbatim upstream marker"}}"#;
+    let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+        .with_raw_upstream_error(RawUpstreamError::new(raw));
+    let cloned = error.clone();
+
+    assert_eq!(
+        cloned.raw_upstream_error().map(RawUpstreamError::as_str),
+        Some(raw)
+    );
+    assert!(!format!("{error:?}").contains("verbatim upstream marker"));
 }
 
 #[test]

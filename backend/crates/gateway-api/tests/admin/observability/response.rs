@@ -552,6 +552,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             upstream_model_id: Some("upstream-err".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
             failure_kind: "upstream_error".to_owned(),
+            upstream_send_state: Some("sent".to_owned()),
             client_status_code: Some(502),
             upstream_status_code: Some(502),
             provider_error_code: Some("upstream".to_owned()),
@@ -559,6 +560,9 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             upstream_request_id: None,
             latency_ms: Some(90),
             message: "snapshot error".to_owned(),
+            raw_upstream_error: Some(
+                r#"{"error":{"code":"upstream","message":"raw upstream marker"}}"#.to_owned(),
+            ),
             occurrence_count: 1,
             client_ip: Some("203.0.113.8".to_owned()),
             user_agent: Some("codex-cli/0.144.0".to_owned()),
@@ -601,6 +605,8 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "clientIp": value["data"]["items"][0]["clientIp"],
             "userAgent": value["data"]["items"][0]["userAgent"],
             "providerErrorCode": value["data"]["items"][0]["providerErrorCode"],
+            "upstreamSendState": value["data"]["items"][0]["upstreamSendState"],
+            "rawUpstreamError": value["data"]["items"][0]["rawUpstreamError"],
         }),
         serde_json::json!({
             "provider": "openai",
@@ -615,6 +621,8 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "clientIp": "203.0.113.8",
             "userAgent": "codex-cli/0.144.0",
             "providerErrorCode": "upstream",
+            "upstreamSendState": "sent",
+            "rawUpstreamError": "{\"error\":{\"code\":\"upstream\",\"message\":\"raw upstream marker\"}}",
         })
     );
 }

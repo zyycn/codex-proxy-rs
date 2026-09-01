@@ -3,6 +3,7 @@ use gateway_core::engine::{
     ExecutionOutcome, ExecutionStore, ModelRequestFinalization as CoreModelRequestFinalization,
     ModelRequestId, ModelRequestTimings as CoreModelRequestTimings,
 };
+use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::metering::{CalculatedCost, CostEstimate, Usage};
 use gateway_core::upstream::UpstreamSendState;
 use gateway_store::postgres::{
@@ -475,6 +476,7 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         provider_metadata_json: None,
         error: None,
         provider_error_code: None,
+        raw_upstream_error: None,
         retry_after_ms: None,
         usage: Usage::new(),
         image_generation_succeeded: None,
@@ -511,6 +513,41 @@ async fn core_adapter_persists_opaque_response_ids_as_bytes() {
     .expect("load opaque response IDs");
     assert_eq!(persisted.0.as_deref(), Some(response_id.as_bytes()));
     assert_eq!(persisted.1.as_deref(), Some(response_id.as_bytes()));
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn core_adapter_persists_raw_upstream_error_verbatim() {
+    let Some(database) = TestDatabase::create("execution_raw_upstream_error").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_raw_upstream_error")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let raw = r#"{"error":{"message":"raw upstream body","opaque":"\u0000"}}"#;
+    let mut finalization = successful_core_finalization("req_raw_upstream_error");
+    finalization.outcome = ExecutionOutcome::Failed;
+    finalization.client_status_code = Some(502);
+    finalization.upstream_status_code = Some(500);
+    finalization.error = Some(GatewayError::new(
+        GatewayErrorKind::UpstreamUnavailable,
+        "upstream service is unavailable",
+    ));
+    finalization.raw_upstream_error = Some(raw.to_owned());
+
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("persist raw upstream error");
+
+    let persisted: Option<String> = sqlx::query_scalar(
+        "select raw_upstream_error from model_requests where id = 'req_raw_upstream_error'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load raw upstream error");
+    assert_eq!(persisted.as_deref(), Some(raw));
 
     database.close().await;
 }

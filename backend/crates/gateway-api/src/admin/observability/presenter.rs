@@ -558,6 +558,7 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
         transport: error.upstream_transport,
         attempt_index: error.attempt_index,
         failure_class: error.failure_kind,
+        upstream_send_state: error.upstream_send_state,
         provider_error_code: error.provider_error_code,
         occurrence_count: error.occurrence_count,
         response_id: error.client_response_id,
@@ -571,6 +572,7 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
         subagent_kind: error.subagent_kind,
         compact: error.compact,
         message: error.message,
+        raw_upstream_error: error.raw_upstream_error,
         metadata: OpsErrorMetadataView {
             source: error.source,
             component: error.component,

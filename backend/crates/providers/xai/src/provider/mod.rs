@@ -18,7 +18,8 @@ use gateway_core::engine::provider::{
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::error::{
-    ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
+    ClientVisibleUpstreamError, ContinuationFailure, ContinuationRecoveryDisposition,
+    ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{
     GatewayEvent, ProviderEvent, ProviderResponseMetadata, ProviderResponseObservation,

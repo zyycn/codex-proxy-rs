@@ -198,6 +198,20 @@ pub enum ContinuationFailure {
     HistoryUnavailable,
 }
 
+/// Provider 对 previous-response 失败给出的显式恢复边界。
+///
+/// Core 不根据失败分类猜测 continuation 是否可迁移；只有 Provider 明确允许时，
+/// 才能放宽 owner 范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContinuationRecoveryDisposition {
+    /// 只能再次取得同账号、同一精确连接，不能改变 continuation scope。
+    RetryExactConnection,
+    /// 代理停止内部恢复，由客户端携带完整输入创建新链。
+    ClientReplayRequired,
+    /// Provider 已证明可以进入 owner 或其他合法目标的恢复流程。
+    ProviderReplayAllowed,
+}
+
 /// Provider 在下游尚未提交事件时请求的隐藏恢复方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PreDeliveryRetry {
@@ -292,6 +306,57 @@ impl fmt::Debug for ClientVisibleUpstreamError {
     }
 }
 
+/// Provider 已分类为可安全持久化和展示的诊断摘要。
+///
+/// Adapter 只能放入不含凭据、cookie、原始请求正文和 opaque response ID 的有界摘要；
+/// 原始上游错误返回由 [`RawUpstreamError`] 单独承载。
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderDiagnostic(String);
+
+impl ProviderDiagnostic {
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ProviderDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProviderDiagnostic(<redacted-from-Debug>)")
+    }
+}
+
+/// 运维错误详情中按原样展示的上游错误返回。
+///
+/// 该值只接收响应方向的错误正文或 WebSocket close/error frame；不得放入请求
+/// Authorization、Cookie 或客户端输入。它会被持久化并由管理端显式返回，但普通
+/// `Debug`/`Display` 不输出正文，避免在非运维日志中重复扩散。
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawUpstreamError(String);
+
+impl RawUpstreamError {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RawUpstreamError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RawUpstreamError(<present>)")
+    }
+}
+
 /// 只供当前客户端请求使用的原始上游 HTTP 失败响应。
 ///
 /// 该值不属于稳定诊断事实，不能进入日志或持久化。它刻意不实现 [`Clone`]；
@@ -376,11 +441,14 @@ pub struct ProviderError {
     upstream_values: Option<Box<ProviderErrorUpstreamValues>>,
     retry_after: Option<Duration>,
     continuation_failure: Option<ContinuationFailure>,
+    continuation_recovery_disposition: Option<ContinuationRecoveryDisposition>,
     replay_safe: bool,
     pre_delivery_retry: Option<PreDeliveryRetry>,
     credential_recovery_required: bool,
     retry_same_account: bool,
     sensitive_context_redacted: bool,
+    diagnostic: Option<Box<ProviderDiagnostic>>,
+    raw_upstream_error: Option<Box<RawUpstreamError>>,
     client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
     client_visible_upstream_response: Option<Box<ClientVisibleUpstreamResponse>>,
     atomic_client_events: Option<Box<AtomicClientEvents>>,
@@ -406,11 +474,14 @@ impl ProviderError {
             upstream_values: None,
             retry_after: None,
             continuation_failure: None,
+            continuation_recovery_disposition: None,
             replay_safe: false,
             pre_delivery_retry: None,
             credential_recovery_required: false,
             retry_same_account: false,
             sensitive_context_redacted: false,
+            diagnostic: None,
+            raw_upstream_error: None,
             client_visible_upstream_error: None,
             client_visible_upstream_response: None,
             atomic_client_events: None,
@@ -456,6 +527,16 @@ impl ProviderError {
     #[must_use]
     pub const fn with_continuation_failure(mut self, failure: ContinuationFailure) -> Self {
         self.continuation_failure = Some(failure);
+        self
+    }
+
+    /// 附加 Provider 明确选择的 previous-response 恢复边界。
+    #[must_use]
+    pub const fn with_continuation_recovery_disposition(
+        mut self,
+        disposition: ContinuationRecoveryDisposition,
+    ) -> Self {
+        self.continuation_recovery_disposition = Some(disposition);
         self
     }
 
@@ -565,6 +646,20 @@ impl ProviderError {
         self
     }
 
+    /// 附加 Adapter 已确认可安全持久化和展示的诊断摘要。
+    #[must_use]
+    pub fn with_diagnostic(mut self, diagnostic: ProviderDiagnostic) -> Self {
+        self.diagnostic = Some(Box::new(diagnostic));
+        self
+    }
+
+    /// 附加将由运维错误详情原样展示的上游错误返回。
+    #[must_use]
+    pub fn with_raw_upstream_error(mut self, error: RawUpstreamError) -> Self {
+        self.raw_upstream_error = Some(Box::new(error));
+        self
+    }
+
     /// 返回稳定错误分类。
     #[must_use]
     pub const fn kind(&self) -> ProviderErrorKind {
@@ -611,6 +706,14 @@ impl ProviderError {
         self.continuation_failure
     }
 
+    /// 返回 Provider 明确选择的 previous-response 恢复边界。
+    #[must_use]
+    pub const fn continuation_recovery_disposition(
+        &self,
+    ) -> Option<ContinuationRecoveryDisposition> {
+        self.continuation_recovery_disposition
+    }
+
     /// 返回 Provider 是否已证明本次失败可安全重放。
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
@@ -644,6 +747,18 @@ impl ProviderError {
     #[must_use]
     pub const fn sensitive_context_was_redacted(&self) -> bool {
         self.sensitive_context_redacted
+    }
+
+    /// 返回可安全持久化和展示的 Provider 诊断摘要。
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&ProviderDiagnostic> {
+        self.diagnostic.as_deref()
+    }
+
+    /// 返回将由运维错误详情原样展示的上游错误返回。
+    #[must_use]
+    pub fn raw_upstream_error(&self) -> Option<&RawUpstreamError> {
+        self.raw_upstream_error.as_deref()
     }
 
     /// 返回仅供原客户端协议展示的结构化上游错误。
@@ -685,11 +800,14 @@ impl Clone for ProviderError {
             upstream_values: self.upstream_values.clone(),
             retry_after: self.retry_after,
             continuation_failure: self.continuation_failure,
+            continuation_recovery_disposition: self.continuation_recovery_disposition,
             replay_safe: self.replay_safe,
             pre_delivery_retry: self.pre_delivery_retry,
             credential_recovery_required: self.credential_recovery_required,
             retry_same_account: self.retry_same_account,
             sensitive_context_redacted: self.sensitive_context_redacted,
+            diagnostic: self.diagnostic.clone(),
+            raw_upstream_error: self.raw_upstream_error.clone(),
             client_visible_upstream_error: self.client_visible_upstream_error.clone(),
             client_visible_upstream_response: None,
             atomic_client_events: None,
@@ -714,6 +832,10 @@ impl fmt::Debug for ProviderError {
             )
             .field("retry_after", &self.retry_after)
             .field("continuation_failure", &self.continuation_failure)
+            .field(
+                "continuation_recovery_disposition",
+                &self.continuation_recovery_disposition,
+            )
             .field("replay_safe", &self.replay_safe)
             .field("pre_delivery_retry", &self.pre_delivery_retry)
             .field(
@@ -724,6 +846,11 @@ impl fmt::Debug for ProviderError {
             .field(
                 "sensitive_context",
                 &self.sensitive_context_redacted.then_some("<redacted>"),
+            )
+            .field("diagnostic", &self.diagnostic.as_ref().map(|_| "<present>"))
+            .field(
+                "raw_upstream_error",
+                &self.raw_upstream_error.as_ref().map(|_| "<present>"),
             )
             .field(
                 "client_visible_upstream_error",
@@ -818,6 +945,7 @@ impl GatewayErrorKind {
 pub struct GatewayError {
     kind: GatewayErrorKind,
     message: &'static str,
+    diagnostic: Option<ProviderDiagnostic>,
     client_visible_upstream_error: Option<ClientVisibleUpstreamError>,
 }
 
@@ -828,6 +956,7 @@ impl GatewayError {
         Self {
             kind,
             message,
+            diagnostic: None,
             client_visible_upstream_error: None,
         }
     }
@@ -877,10 +1006,21 @@ impl GatewayError {
                 "upstream service is unavailable",
             ),
         };
+        let gateway = match error.diagnostic() {
+            Some(diagnostic) => gateway.with_diagnostic(diagnostic.clone()),
+            None => gateway,
+        };
         match error.client_visible_upstream_error() {
             Some(upstream) => gateway.with_client_visible_upstream_error(upstream.clone()),
             None => gateway,
         }
+    }
+
+    /// 附加只供运维观测使用的脱敏 Provider 摘要。
+    #[must_use]
+    pub fn with_diagnostic(mut self, diagnostic: ProviderDiagnostic) -> Self {
+        self.diagnostic = Some(diagnostic);
+        self
     }
 
     /// 附加只供请求方协议展示的结构化上游错误。
@@ -900,6 +1040,12 @@ impl GatewayError {
     #[must_use]
     pub const fn safe_message(&self) -> &'static str {
         self.message
+    }
+
+    /// 返回可安全持久化和展示的 Provider 诊断摘要。
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&ProviderDiagnostic> {
+        self.diagnostic.as_ref()
     }
 
     /// 返回优先用于原客户端协议响应的 message；持久化和日志必须继续使用
@@ -934,6 +1080,7 @@ impl fmt::Debug for GatewayError {
             .debug_struct("GatewayError")
             .field("kind", &self.kind)
             .field("message", &self.message)
+            .field("diagnostic", &self.diagnostic.as_ref().map(|_| "<present>"))
             .field(
                 "client_visible_upstream_error",
                 &self

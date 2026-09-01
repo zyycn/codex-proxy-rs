@@ -322,6 +322,7 @@ pub(super) fn invalid_continuation() -> ProviderError {
         UpstreamSendState::NotSent,
     )
     .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+    .with_continuation_recovery_disposition(ContinuationRecoveryDisposition::ClientReplayRequired)
 }
 
 pub(super) fn protocol_not_sent() -> ProviderError {

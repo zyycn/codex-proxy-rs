@@ -58,9 +58,11 @@ export function presentOpsError(record: OpsError): OpsErrorPresentation {
     statusText('上游', record.upstreamStatusCode),
   ].filter(Boolean)
   const statusSuffix = statuses.length > 0 ? `（${statuses.join('，')}）` : ''
+  const providerCode = record.providerErrorCode?.trim()
+  const codeSuffix = providerCode ? ` [${providerCode}]` : ''
 
   return {
-    summary: `${componentLabel}：${failureClassLabel}${statusSuffix}`,
+    summary: `${componentLabel}：${failureClassLabel}${codeSuffix}${statusSuffix}`,
     failureClassLabel,
     componentLabel,
     sourceLabel,

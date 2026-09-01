@@ -58,6 +58,7 @@ const diagnosticFields = computed(() => [
   { label: '组件', value: presentation.value?.componentLabel },
   { label: '操作/触发', value: props.record?.operation, mono: true },
   { label: '失败分类', value: presentation.value?.failureClassLabel },
+  { label: '发送状态', value: props.record?.upstreamSendState, mono: true },
   { label: '平台/类型', value: providerKindLabel(props.record) },
   { label: '账号 ID', value: props.record?.accountId, mono: true },
   { label: 'Provider 错误码', value: props.record?.providerErrorCode, mono: true },
@@ -97,7 +98,7 @@ function providerKindLabel(record: OpsError | null) {
   <BaseModal
     v-model="open"
     title="错误明细"
-    description="请求来源、链路上下文与原始诊断"
+    description="请求来源、链路上下文与上游错误原文"
     tone="danger"
     size="xl"
   >
@@ -141,7 +142,15 @@ function providerKindLabel(record: OpsError | null) {
       </section>
 
       <section class="mt-3" :class="panelClass">
-        <UsageDetailCodePanel title="原始诊断" max-height="260px" :content="record.message" />
+        <UsageDetailCodePanel title="诊断摘要" max-height="260px" :content="record.message" />
+      </section>
+
+      <section
+        v-if="record.rawUpstreamError"
+        class="mt-3"
+        :class="panelClass"
+      >
+        <UsageDetailCodePanel title="上游返回原文" max-height="360px" :content="record.rawUpstreamError" />
       </section>
 
       <section

@@ -229,6 +229,7 @@ export interface OpsError {
   transport: string | null
   attemptIndex: number | null
   failureClass: string
+  upstreamSendState: string | null
   providerErrorCode: string | null
   occurrenceCount: number
   responseId: string | null
@@ -242,6 +243,7 @@ export interface OpsError {
   subagentKind: string | null
   compact: boolean | null
   message: string
+  rawUpstreamError: string | null
   metadata: OpsErrorMetadata
   createdAt: string
   createdAtDisplay: string

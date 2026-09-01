@@ -292,6 +292,18 @@ pub enum ContinuationAttempt {
     ReplayAny,
 }
 
+impl ContinuationAttempt {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Native => "native",
+            Self::ReplayOwner => "replay_owner",
+            Self::ReplayAny => "replay_any",
+        }
+    }
+}
+
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
@@ -588,6 +600,8 @@ pub struct ModelRequestFinalization {
     pub provider_metadata_json: Option<String>,
     pub error: Option<GatewayError>,
     pub provider_error_code: Option<String>,
+    /// Provider 返回的原始错误正文或 WebSocket close/error frame。
+    pub raw_upstream_error: Option<String>,
     pub retry_after_ms: Option<u64>,
     pub usage: Usage,
     pub image_generation_succeeded: Option<bool>,

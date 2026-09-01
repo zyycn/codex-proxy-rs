@@ -115,6 +115,8 @@ pub struct CodexUpstreamFailure {
     pub(crate) client_message: Option<String>,
     pub(crate) client_code: Option<String>,
     pub(crate) client_error_type: Option<String>,
+    /// HTTP 错误正文或 SSE error/response.failed 的原始 JSON data。
+    pub(crate) raw_body: String,
     pub(crate) client_response: Option<Box<CodexClientVisibleUpstreamResponse>>,
     pub(crate) identity_error_code: Option<String>,
     /// 官方 `usage_limit_reached` 错误体携带的窗口重置时间（Unix 秒）。
@@ -158,6 +160,7 @@ impl CodexUpstreamFailure {
             client_message: fields.client_message,
             client_code: fields.code,
             client_error_type: fields.error_type,
+            raw_body: body.to_owned(),
             client_response: client_response.cloned().map(Box::new),
             identity_error_code: diagnostics.identity_error_code.clone(),
             usage_limit_resets_at: (category == CodexFailureCategory::UsageLimitExhausted)
@@ -203,6 +206,7 @@ impl CodexUpstreamFailure {
             client_message: Some(fields.message),
             client_code: fields.code,
             client_error_type: fields.error_type,
+            raw_body: failure.raw_body().to_owned(),
             client_response: None,
             identity_error_code: diagnostics.identity_error_code.clone(),
             usage_limit_resets_at: None,

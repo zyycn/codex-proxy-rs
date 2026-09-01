@@ -27,8 +27,8 @@ use gateway_core::engine::{
 };
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
-    GatewayErrorKind, OpaqueUpstreamValue, ProviderError, ProviderErrorKind, StoreError,
-    StoreErrorKind,
+    ContinuationRecoveryDisposition, GatewayErrorKind, OpaqueUpstreamValue, ProviderError,
+    ProviderErrorKind, StoreError, StoreErrorKind,
 };
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent,
@@ -1517,6 +1517,9 @@ fn native_continuation_uses_provider_defined_owner_then_cross_account_recovery()
                 Err(
                     ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
                         .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+                        .with_continuation_recovery_disposition(
+                            ContinuationRecoveryDisposition::ProviderReplayAllowed,
+                        )
                         .with_replay_safe(),
                 ),
             ],
@@ -1573,6 +1576,122 @@ fn native_continuation_uses_provider_defined_owner_then_cross_account_recovery()
             .excluded_accounts()
             .contains(&ProviderAccountId::new("acct_one").expect("account"))
     );
+}
+
+#[test]
+fn native_continuation_client_replay_required_is_terminal() {
+    let Operation::Generate(generate) = generate_operation() else {
+        panic!("generate operation");
+    };
+    let operation = Operation::Generate(generate.with_provider_session_state(
+        ProviderSessionState::new("openai", Map::new()).expect("provider session state"),
+    ));
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_one",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+            .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            ))],
+        },
+        Script::Stream {
+            account_id: "acct_one",
+            items: complete_stream(None),
+        },
+    ]);
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-secret-id"),
+        PreviousResponseId::new("provider-native-id"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new("acct_one").expect("account"),
+    );
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("client replay requirement must stop proxy recovery");
+
+    assert!(matches!(error, EngineError::Provider(_)));
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(
+        contexts[0].continuation_attempt(),
+        ContinuationAttempt::Native
+    );
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 0);
+    assert_eq!(state.finalizations[0].attempt_count, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+}
+
+#[test]
+fn native_continuation_exact_retry_keeps_scope_and_account() {
+    let Operation::Generate(generate) = generate_operation() else {
+        panic!("generate operation");
+    };
+    let operation = Operation::Generate(generate.with_provider_session_state(
+        ProviderSessionState::new("openai", Map::new()).expect("provider session state"),
+    ));
+    let route_plan = plan(&operation);
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_one",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Unavailable,
+                UpstreamSendState::NotSent,
+            )
+            .with_continuation_failure(ContinuationFailure::Busy)
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::RetryExactConnection,
+            ))],
+        },
+        Script::Stream {
+            account_id: "acct_one",
+            items: complete_stream(None),
+        },
+    ]);
+    let account = ProviderAccountId::new("acct_one").expect("account");
+    let continuation = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-secret-id"),
+        PreviousResponseId::new("provider-native-id"),
+        ClientApiKeyId::new("key_client_1").expect("client key"),
+        ProviderKind::new("openai").expect("provider"),
+        account.clone(),
+    );
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        Some(ContinuationBinding::Pinned(continuation)),
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("exact continuation retry succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit response");
+
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert!(
+        contexts
+            .iter()
+            .all(|context| context.continuation_attempt() == ContinuationAttempt::Native)
+    );
+    assert_eq!(contexts[1].required_account(), Some(&account));
 }
 
 #[test]
@@ -2712,7 +2831,7 @@ fn ambiguous_send_state_stops_retry() {
 }
 
 #[test]
-fn pre_delivery_transport_failure_rotates_account_for_non_idempotent_generation() {
+fn ambiguous_pre_delivery_retry_marker_does_not_rotate_account() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
@@ -2739,19 +2858,16 @@ fn pre_delivery_transport_failure_rotates_account_for_non_idempotent_generation(
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("second account succeeds before delivery");
-    block_on(session.commit_downstream(Some(200))).expect("commit winning response");
+    let error = block_on(session.collect_uncommitted())
+        .expect_err("ambiguous payload state must suppress provider-requested replay");
 
+    assert!(matches!(error, EngineError::Provider(_)));
     let contexts = provider.contexts.lock().expect("contexts lock");
-    assert_eq!(contexts.len(), 2);
-    assert!(
-        contexts[1]
-            .excluded_accounts()
-            .contains(&ProviderAccountId::new("acct_first").expect("account id"))
-    );
+    assert_eq!(contexts.len(), 1);
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.intermediate_failures, 1);
-    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert_eq!(state.intermediate_failures, 0);
+    assert_eq!(state.finalizations[0].attempt_count, 1);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
 }
 
 #[test]
@@ -2763,7 +2879,7 @@ fn pre_delivery_transport_fallback_retries_the_same_account_with_fallback_transp
             account_id: "acct_first",
             items: vec![Err(ProviderError::new(
                 ProviderErrorKind::Transport,
-                UpstreamSendState::Ambiguous,
+                UpstreamSendState::NotSent,
             )
             .with_pre_delivery_transport_fallback())],
         },
@@ -2804,7 +2920,7 @@ fn provider_owned_transport_retries_keep_the_same_account_until_fallback() {
     let retry_one = NonZeroU32::new(1).expect("non-zero retry index");
     let retry_two = NonZeroU32::new(2).expect("non-zero retry index");
     let transport_error =
-        || ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous);
+        || ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent);
     let (coordinator, store, provider) = coordinator(vec![
         Script::Stream {
             account_id: "acct_first",
@@ -2863,7 +2979,7 @@ fn final_capacity_exhaustion_returns_the_last_retryable_upstream_failure() {
     let route_plan = plan(&operation);
     let raw_body = Bytes::from_static(b"{\"error\":\"last upstream body\"}\x00");
     let upstream_error =
-        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
             .with_pre_delivery_retry()
             .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
                 "message too big",
@@ -2920,7 +3036,7 @@ fn final_capacity_exhaustion_returns_the_last_retryable_upstream_failure() {
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
     assert_eq!(
         state.finalizations[0].send_state,
-        UpstreamSendState::Ambiguous
+        UpstreamSendState::NotSent
     );
 }
 
@@ -2929,7 +3045,7 @@ fn provider_infrastructure_failure_does_not_restore_the_last_upstream_failure() 
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let upstream_error =
-        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
             .with_pre_delivery_retry()
             .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
                 "upstream marker",

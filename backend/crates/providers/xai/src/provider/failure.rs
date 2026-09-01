@@ -328,6 +328,9 @@ pub(super) fn map_continuation_failure(
     if is_reasoning_decode_failure || is_missing_native_response {
         error
             .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ProviderReplayAllowed,
+            )
             .with_replay_safe()
     } else {
         error

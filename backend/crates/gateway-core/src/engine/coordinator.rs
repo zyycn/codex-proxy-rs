@@ -17,7 +17,10 @@ use crate::engine::{
     ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
     RequestAttemptContext, UpstreamSendState,
 };
-use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError};
+use crate::error::{
+    ContinuationRecoveryDisposition, GatewayError, GatewayErrorKind, ProviderError,
+    ProviderErrorKind, StoreError,
+};
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
@@ -216,6 +219,7 @@ struct FailureFinalization {
     error: GatewayError,
     upstream_status_code: Option<u16>,
     provider_error_code: Option<String>,
+    raw_upstream_error: Option<String>,
     retry_after_ms: Option<u64>,
 }
 
@@ -632,6 +636,7 @@ where
                 error,
                 upstream_status_code: None,
                 provider_error_code: None,
+                raw_upstream_error: None,
                 retry_after_ms: None,
             })
             .await?;
@@ -788,6 +793,7 @@ where
                 error,
                 upstream_status_code: None,
                 provider_error_code: None,
+                raw_upstream_error: None,
                 retry_after_ms: None,
             })
             .await?;
@@ -812,6 +818,7 @@ where
                 error,
                 upstream_status_code: None,
                 provider_error_code: None,
+                raw_upstream_error: None,
                 retry_after_ms: None,
             })
             .await?;
@@ -831,6 +838,7 @@ where
                 error,
                 upstream_status_code: None,
                 provider_error_code: None,
+                raw_upstream_error: None,
                 retry_after_ms: None,
             })
             .await?;
@@ -853,6 +861,7 @@ where
                 error,
                 upstream_status_code: None,
                 provider_error_code: None,
+                raw_upstream_error: None,
                 retry_after_ms: None,
             })
             .await?;
@@ -1066,6 +1075,7 @@ where
             && self.continuation_attempt == ContinuationAttempt::None
             && self.downstream_committed_at.is_none()
             && !self.delivery_pending
+            && attempt_send_state != UpstreamSendState::Ambiguous
             && matches!(
                 error.pre_delivery_retry(),
                 Some(crate::error::PreDeliveryRetry::AccountRotation)
@@ -1075,11 +1085,16 @@ where
             Some(crate::error::PreDeliveryRetry::SameAccountTransportRetry {
                 retry_index,
                 delay,
-            }) if self.downstream_committed_at.is_none() && !self.delivery_pending => {
+            }) if self.downstream_committed_at.is_none()
+                && !self.delivery_pending
+                && attempt_send_state != UpstreamSendState::Ambiguous =>
+            {
                 Some((AttemptTransport::Retry(retry_index), delay))
             }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
-                if self.downstream_committed_at.is_none() && !self.delivery_pending =>
+                if self.downstream_committed_at.is_none()
+                    && !self.delivery_pending
+                    && attempt_send_state != UpstreamSendState::Ambiguous =>
             {
                 Some((AttemptTransport::Fallback, Duration::ZERO))
             }
@@ -1211,10 +1226,27 @@ where
         }
 
         match self.continuation_attempt {
-            ContinuationAttempt::Native if error.continuation_failure().is_some() => {
-                self.continuation_attempt = ContinuationAttempt::ReplayOwner;
+            ContinuationAttempt::Native => match error.continuation_recovery_disposition() {
+                Some(ContinuationRecoveryDisposition::RetryExactConnection) => {
+                    self.recovery_account = Some(current.metadata.provider_account_id().clone());
+                }
+                Some(ContinuationRecoveryDisposition::ProviderReplayAllowed) => {
+                    self.continuation_attempt = ContinuationAttempt::ReplayOwner;
+                }
+                Some(ContinuationRecoveryDisposition::ClientReplayRequired) | None => return false,
+            },
+            ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
+                if matches!(
+                    error.continuation_recovery_disposition(),
+                    Some(
+                        ContinuationRecoveryDisposition::RetryExactConnection
+                            | ContinuationRecoveryDisposition::ClientReplayRequired
+                    )
+                ) =>
+            {
+                return false;
             }
-            ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner => {
+            ContinuationAttempt::ReplayOwner => {
                 self.continuation_attempt = ContinuationAttempt::ReplayAny;
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
@@ -1335,6 +1367,7 @@ where
                         provider_metadata_json,
                         error: None,
                         provider_error_code: None,
+                        raw_upstream_error: None,
                         retry_after_ms: None,
                         usage: self.usage.clone(),
                         image_generation_succeeded: self.image_generation_succeeded(),
@@ -1373,6 +1406,9 @@ where
             error: GatewayError::from_provider(error),
             upstream_status_code: error.upstream_status(),
             provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
+            raw_upstream_error: error
+                .raw_upstream_error()
+                .map(|raw| raw.as_str().to_owned()),
             retry_after_ms: error.retry_after().map(duration_ms),
         })
         .await
@@ -1426,6 +1462,7 @@ where
             error: gateway_error,
             upstream_status_code: None,
             provider_error_code: None,
+            raw_upstream_error: None,
             retry_after_ms: None,
         })
         .await
@@ -1494,6 +1531,7 @@ where
                     provider_metadata_json,
                     error: Some(finalization.error),
                     provider_error_code: finalization.provider_error_code,
+                    raw_upstream_error: finalization.raw_upstream_error,
                     retry_after_ms: finalization.retry_after_ms,
                     usage: self.usage.clone(),
                     image_generation_succeeded: self.image_generation_succeeded(),

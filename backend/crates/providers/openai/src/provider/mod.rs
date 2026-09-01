@@ -19,7 +19,8 @@ use gateway_core::engine::provider::{
 use gateway_core::engine::{AttemptContext, AttemptTransport, ContinuationAttempt};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
-    OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
+    ContinuationRecoveryDisposition, OpaqueUpstreamValue, ProviderDiagnostic, ProviderError,
+    ProviderErrorKind, RawUpstreamError,
 };
 use gateway_core::event::{
     FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader,
@@ -350,29 +351,44 @@ impl Provider for CodexProvider {
         {
             match continuation {
                 ContinuationBinding::Pinned(continuation) => {
-                    let previous_response_scope = match context.continuation_attempt() {
-                        ContinuationAttempt::Native => match previous_session
-                            .as_ref()
-                            .map(|state| state.continuation_scope)
-                        {
-                            Some(OpenAiContinuationScope::Persisted) => {
-                                PreviousResponseScope::Persisted
-                            }
-                            Some(OpenAiContinuationScope::ConnectionLocal) => {
+                    let native_scope = match previous_session
+                        .as_ref()
+                        .map(|state| state.continuation_scope)
+                    {
+                        Some(OpenAiContinuationScope::Persisted) => {
+                            PreviousResponseScope::Persisted
+                        }
+                        Some(OpenAiContinuationScope::ConnectionLocal) => {
+                            PreviousResponseScope::ConnectionLocal
+                        }
+                        Some(OpenAiContinuationScope::ReplayRequired) => {
+                            PreviousResponseScope::ExternalUnknown
+                        }
+                        None => match continuation.scope() {
+                            NativeContinuationScope::Persisted => PreviousResponseScope::Persisted,
+                            NativeContinuationScope::ConnectionLocal => {
                                 PreviousResponseScope::ConnectionLocal
                             }
-                            Some(OpenAiContinuationScope::ReplayRequired) => {
-                                PreviousResponseScope::ExternalUnknown
-                            }
-                            None => match continuation.scope() {
-                                NativeContinuationScope::Persisted => {
-                                    PreviousResponseScope::Persisted
-                                }
-                                NativeContinuationScope::ConnectionLocal => {
-                                    PreviousResponseScope::ConnectionLocal
-                                }
-                            },
                         },
+                    };
+                    if matches!(
+                        context.continuation_attempt(),
+                        ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
+                    ) && native_scope == PreviousResponseScope::ConnectionLocal
+                    {
+                        tracing::warn!(
+                            request_id = context.request_id().as_str(),
+                            attempt_index = context.attempt_index().get(),
+                            continuation_scope = "connection_local",
+                            continuation_attempt = context.continuation_attempt().as_str(),
+                            continuation_recovery_disposition = "client_replay_required",
+                            continuation_recovery_action = "stop_proxy_recovery",
+                            "OpenAI connection-local continuation replay was rejected before send"
+                        );
+                        return Err(continuation_replay_required_error());
+                    }
+                    let previous_response_scope = match context.continuation_attempt() {
+                        ContinuationAttempt::Native => native_scope,
                         ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
                             PreviousResponseScope::ExternalUnknown
                         }

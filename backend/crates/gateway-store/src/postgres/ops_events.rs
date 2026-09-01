@@ -37,6 +37,8 @@ pub struct OpsEvent {
     pub provider_account_ref: Option<String>,
     pub upstream_model_id: Option<String>,
     pub failure_kind: String,
+    pub upstream_send_state: Option<String>,
+    pub raw_upstream_error: Option<String>,
     pub status_code: Option<u16>,
     pub provider_error_code: Option<String>,
     pub retry_after_ms: Option<u64>,
@@ -71,6 +73,13 @@ impl OpsEvent {
             .is_some_and(|status| !(100..=599).contains(&status))
         {
             return Err(invalid("status_code must be between 100 and 599"));
+        }
+        if self
+            .upstream_send_state
+            .as_deref()
+            .is_some_and(|state| !matches!(state, "not_sent" | "sent" | "ambiguous"))
+        {
+            return Err(invalid("upstream_send_state is invalid"));
         }
         if self
             .provider_account_id
@@ -112,14 +121,15 @@ impl OpsEventRepository for PgOpsEventRepository {
                provider_kind, provider_account_id, provider_account_ref, upstream_model_id,
                provider_account_name_snapshot, provider_account_email_snapshot,
                provider_account_authentication_kind_snapshot,
-               failure_kind, status_code, provider_error_code, retry_after_ms,
-               upstream_request_id, latency_ms, message, occurrence_count, created_at
+               failure_kind, upstream_send_state, status_code, provider_error_code, retry_after_ms,
+               upstream_request_id, latency_ms, message, raw_upstream_error,
+               occurrence_count, created_at
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                (select name from provider_accounts where id = $8),
                (select email from provider_accounts where id = $8),
                (select authentication_kind from provider_accounts where id = $8),
-               $11, $12, $13, $14, $15, $16, $17, $18, $19
+               $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
              )",
         )
         .bind(event.id)
@@ -139,6 +149,7 @@ impl OpsEventRepository for PgOpsEventRepository {
         .bind(event.provider_account_ref)
         .bind(event.upstream_model_id)
         .bind(event.failure_kind)
+        .bind(event.upstream_send_state)
         .bind(event.status_code.map(i32::from))
         .bind(event.provider_error_code)
         .bind(
@@ -157,6 +168,7 @@ impl OpsEventRepository for PgOpsEventRepository {
                 .map_err(|_| invalid("latency_ms is too large"))?,
         )
         .bind(event.message)
+        .bind(event.raw_upstream_error)
         .bind(
             i32::try_from(event.occurrence_count)
                 .map_err(|_| invalid("occurrence_count is too large"))?,

@@ -251,6 +251,7 @@ pub struct ModelRequestFinalization {
     pub error_kind: Option<String>,
     pub provider_error_code: Option<String>,
     pub error_message: Option<String>,
+    pub raw_upstream_error: Option<String>,
     pub retry_after_ms: Option<u64>,
     pub usage: ModelRequestUsage,
     pub image_generation_succeeded: Option<bool>,
@@ -662,7 +663,8 @@ impl ModelRequestRepository for PgExecutionStore {
                  latency_ms = $35, completed_at = $36,
                  upstream_transport = coalesce($37, upstream_transport),
                  http_version = coalesce($38, http_version), websocket_pool = $39,
-                 service_tier = $40, provider_observation_json = $41
+                 service_tier = $40, provider_observation_json = $41,
+                 raw_upstream_error = $42
              where id = $1 and outcome = 'running'",
         )
         .bind(&finalization.model_request_id)
@@ -751,6 +753,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.websocket_pool)
         .bind(finalization.service_tier)
         .bind(finalization.provider_metadata_json.map(sqlx::types::Json))
+        .bind(finalization.raw_upstream_error)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -894,6 +897,10 @@ impl ExecutionStore for PgExecutionStore {
                     .as_ref()
                     .map(|model| model.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
+                upstream_send_state: Some(error.send_state().as_str().to_owned()),
+                raw_upstream_error: error
+                    .raw_upstream_error()
+                    .map(|raw| raw.as_str().to_owned()),
                 status_code: error.upstream_status().or(failure.upstream_status_code),
                 provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
                 retry_after_ms,
@@ -905,7 +912,10 @@ impl ExecutionStore for PgExecutionStore {
                     u64::try_from(failure.latency.as_millis())
                         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
                 ),
-                message: "intermediate upstream failure".to_owned(),
+                message: error.diagnostic().map_or_else(
+                    || "intermediate upstream failure".to_owned(),
+                    |diagnostic| diagnostic.as_str().to_owned(),
+                ),
                 occurrence_count: 1,
                 created_at: Utc::now(),
             },
@@ -938,12 +948,19 @@ impl ExecutionStore for PgExecutionStore {
                 provider_account_ref: Some(failure.account_id.as_str().to_owned()),
                 upstream_model_id: Some(failure.upstream_model_id.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
+                upstream_send_state: Some(error.send_state().as_str().to_owned()),
+                raw_upstream_error: error
+                    .raw_upstream_error()
+                    .map(|raw| raw.as_str().to_owned()),
                 status_code: error.upstream_status(),
                 provider_error_code,
                 retry_after_ms,
                 upstream_request_id: error.upstream_request_id().map(|id| id.as_str().to_owned()),
                 latency_ms: Some(latency_ms),
-                message: "account connection test failed".to_owned(),
+                message: error.diagnostic().map_or_else(
+                    || "account connection test failed".to_owned(),
+                    |diagnostic| diagnostic.as_str().to_owned(),
+                ),
                 occurrence_count: 1,
                 created_at: Utc::now(),
             },
@@ -986,10 +1003,12 @@ impl ExecutionStore for PgExecutionStore {
             .error
             .as_ref()
             .map(|error| error.kind().as_str().to_owned());
-        let error_message = finalization
-            .error
-            .as_ref()
-            .map(|error| error.safe_message().to_owned());
+        let error_message = finalization.error.as_ref().map(|error| {
+            error.diagnostic().map_or_else(
+                || error.safe_message().to_owned(),
+                |diagnostic| diagnostic.as_str().to_owned(),
+            )
+        });
         let completed = ModelRequestRepository::finalize_model_request(
             self,
             ModelRequestFinalization {
@@ -1013,6 +1032,7 @@ impl ExecutionStore for PgExecutionStore {
                 error_kind,
                 provider_error_code: finalization.provider_error_code,
                 error_message,
+                raw_upstream_error: finalization.raw_upstream_error,
                 retry_after_ms: finalization.retry_after_ms,
                 usage: usage_from_core(finalization.usage),
                 image_generation_succeeded: finalization.image_generation_succeeded,

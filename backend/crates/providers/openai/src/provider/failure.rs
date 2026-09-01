@@ -466,12 +466,38 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
-    let recovery_is_safe = match failure.error.send_state() {
-        UpstreamSendState::NotSent => context.requirement.allows_pre_send_http_fallback(),
-        UpstreamSendState::Sent | UpstreamSendState::Ambiguous => {
-            context.requirement.allows_pre_delivery_http_fallback()
-        }
-    };
+    let send_state = failure.error.send_state();
+    if matches!(
+        send_state,
+        UpstreamSendState::Sent | UpstreamSendState::Ambiguous
+    ) {
+        // payload 已经发送或发送结果不确定时，代理不能用同一业务输入自动重放。
+        // 只为客户端下一次完整请求记住 HTTP 偏好，当前请求保持终态失败。
+        let sticky_state_transition = context
+            .session_affinity_key
+            .map(|key| context.session_transport_fallbacks.disable_websocket(key));
+        tracing::warn!(
+            request_id = context.request_id,
+            attempt_index = context.attempt_index,
+            account_id = context.account_id,
+            websocket_failure_kind = failure.error.kind().as_str(),
+            websocket_failure_code = failure
+                .error
+                .upstream_code()
+                .map_or("", OpaqueUpstreamValue::as_str),
+            upstream_send_state = ?send_state,
+            transport_requirement = context.requirement.as_str(),
+            continuation_recovery_action = "client_replay_required",
+            session_affinity_present = context.session_affinity_key.is_some(),
+            session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
+            sticky_http_enabled = sticky_state_transition.is_some(),
+            sticky_state_transition = sticky_state_transition.unwrap_or(false),
+            "OpenAI upstream WebSocket failed after payload send; proxy replay was suppressed"
+        );
+        return;
+    }
+
+    let recovery_is_safe = context.requirement.allows_pre_send_http_fallback();
     if !recovery_is_safe {
         return;
     }
@@ -561,6 +587,15 @@ pub(super) fn continuation_replay_required_error() -> ProviderError {
         UpstreamSendState::NotSent,
     )
     .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+    .with_continuation_recovery_disposition(
+        ContinuationRecoveryDisposition::ClientReplayRequired,
+    )
+    .with_upstream_code(OpaqueUpstreamValue::new(
+        PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned(),
+    ))
+    .with_diagnostic(ProviderDiagnostic::new(
+        "previous response is unavailable in the selected upstream scope; client replay is required",
+    ))
     .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
         PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
         Some(PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned()),
@@ -622,6 +657,14 @@ pub(super) fn map_client_error(
     uncertain_state: UpstreamSendState,
     observe_transport: bool,
 ) -> MappedProviderFailure {
+    let websocket_diagnostic = match &error {
+        CodexClientError::WebSocket(error) => Some(websocket_diagnostic(error)),
+        _ => None,
+    };
+    let raw_upstream_error = match &error {
+        CodexClientError::WebSocket(error) => websocket_raw_error(error),
+        _ => None,
+    };
     let continuation_failure = match &error {
         CodexClientError::WebSocket(CodexWebSocketExchangeError::ContinuationUnavailable {
             reason: PreviousResponseUnavailableReason::ConnectionBusy,
@@ -675,6 +718,17 @@ pub(super) fn map_client_error(
                 send_state,
             ))
         }
+        CodexClientError::WebSocket(
+            error @ CodexWebSocketExchangeError::ContinuationUnavailable { .. },
+        ) => {
+            let mut failure = MappedProviderFailure::plain(continuation_replay_required_error());
+            if let Some(client_visible_error) = websocket_client_visible_error(&error) {
+                failure.error = failure
+                    .error
+                    .with_client_visible_upstream_error(client_visible_error);
+            }
+            failure
+        }
         CodexClientError::WebSocket(error) => {
             let close_code = error.close_before_terminal().and_then(|close| close.code());
             let client_visible_error = websocket_client_visible_error(&error);
@@ -706,10 +760,107 @@ pub(super) fn map_client_error(
     if let Some(continuation_failure) = continuation_failure {
         failure.error = failure
             .error
-            .with_continuation_failure(continuation_failure);
+            .with_continuation_failure(continuation_failure)
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            );
+    }
+    if let Some(diagnostic) = websocket_diagnostic {
+        failure.error = failure.error.with_diagnostic(diagnostic);
+    }
+    if let Some(raw) = raw_upstream_error {
+        failure.error = failure.error.with_raw_upstream_error(raw);
     }
     failure.observation = observation;
     failure
+}
+
+fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnostic {
+    if let Some(close) = error.close_before_terminal() {
+        let mut message = close.code().map_or_else(
+            || "OpenAI WebSocket closed before a terminal response".to_owned(),
+            |code| {
+                format!("OpenAI WebSocket closed before a terminal response (close code {code})")
+            },
+        );
+        if let Some(last_event_type) = close.last_event_type() {
+            message.push_str("; last event type: ");
+            message.push_str(last_event_type);
+        }
+        return ProviderDiagnostic::new(message);
+    }
+
+    ProviderDiagnostic::new(match error {
+        CodexWebSocketExchangeError::InvalidRequest(_) => {
+            "OpenAI WebSocket request could not be constructed".to_owned()
+        }
+        CodexWebSocketExchangeError::Transport(_)
+        | CodexWebSocketExchangeError::PostSendAmbiguous { .. } => {
+            "OpenAI WebSocket transport failed after payload send; result is ambiguous".to_owned()
+        }
+        CodexWebSocketExchangeError::Connect(_) => {
+            "OpenAI WebSocket connection failed before payload send".to_owned()
+        }
+        CodexWebSocketExchangeError::ConnectTimeout { timeout } => {
+            format!("OpenAI WebSocket connection timed out after {timeout:?}")
+        }
+        CodexWebSocketExchangeError::FastPathTimeout { timeout } => {
+            format!("OpenAI WebSocket fast-path budget expired after {timeout:?}")
+        }
+        CodexWebSocketExchangeError::OriginCircuitOpen => {
+            "OpenAI WebSocket origin circuit is open".to_owned()
+        }
+        CodexWebSocketExchangeError::OriginHalfOpenBusy => {
+            "OpenAI WebSocket origin half-open probe is busy".to_owned()
+        }
+        CodexWebSocketExchangeError::SharedConnectFailed => {
+            "OpenAI shared WebSocket connection failed before payload send".to_owned()
+        }
+        CodexWebSocketExchangeError::SendTimeout { timeout } => {
+            format!("OpenAI WebSocket payload send timed out after {timeout:?}")
+        }
+        CodexWebSocketExchangeError::InvalidSse(_) => {
+            "OpenAI WebSocket returned an invalid Responses event stream".to_owned()
+        }
+        CodexWebSocketExchangeError::Upstream(upstream) => format!(
+            "OpenAI WebSocket opening was rejected with status {}",
+            upstream.status_code
+        ),
+        CodexWebSocketExchangeError::ConnectionLimitReached => {
+            "OpenAI requested a new WebSocket connection".to_owned()
+        }
+        CodexWebSocketExchangeError::ContinuationUnavailable { reason } => {
+            format!("OpenAI connection-local previous response is unavailable: {reason}")
+        }
+        CodexWebSocketExchangeError::ReceiveIdleTimeout { timeout } => {
+            format!("OpenAI WebSocket receive idle timeout after {timeout:?}")
+        }
+        CodexWebSocketExchangeError::UnexpectedBinaryEvent => {
+            "OpenAI WebSocket returned an unexpected binary event".to_owned()
+        }
+        CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
+            "Reused OpenAI WebSocket died before the first upstream event".to_owned()
+        }
+        CodexWebSocketExchangeError::InitialEventTimeout { timeout } => {
+            format!("OpenAI WebSocket first-event timeout after {timeout:?}")
+        }
+        CodexWebSocketExchangeError::ClosedBeforeTerminal(_) => {
+            unreachable!("close-before-terminal errors are handled before the variant match")
+        }
+    })
+}
+
+fn websocket_raw_error(error: &CodexWebSocketExchangeError) -> Option<RawUpstreamError> {
+    let close = error.close_before_terminal()?;
+    Some(RawUpstreamError::new(
+        json!({
+            "type": "websocket.close",
+            "code": close.code(),
+            "reason": close.reason(),
+            "last_event_type": close.last_event_type(),
+        })
+        .to_string(),
+    ))
 }
 
 pub(super) fn websocket_client_visible_error(
@@ -750,6 +901,7 @@ pub(super) fn map_upstream_failure(
         .map(|_| ContinuationFailure::HistoryUnavailable);
     let send_state = upstream_send_state(failure.send_phase);
     let mut error = provider_error(provider_error_kind(category), send_state);
+    error = error.with_raw_upstream_error(RawUpstreamError::new(failure.raw_body.clone()));
     if let Some(message) = failure.client_message.as_ref() {
         error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
             message.clone(),
@@ -783,7 +935,11 @@ pub(super) fn map_upstream_failure(
         error = error.with_replay_safe();
     }
     if let Some(continuation_failure) = continuation_failure {
-        error = error.with_continuation_failure(continuation_failure);
+        error = error
+            .with_continuation_failure(continuation_failure)
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            );
     }
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
@@ -794,6 +950,17 @@ pub(super) fn map_upstream_failure(
     if let Some(request_id) = failure.request_id.as_deref() {
         error = error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id.to_owned()));
     }
+    let status = error
+        .upstream_status()
+        .map_or_else(|| "none".to_owned(), |status| status.to_string());
+    let code = error
+        .upstream_code()
+        .map_or_else(|| "none".to_owned(), |code| code.as_str().to_owned());
+    let kind = error.kind().as_str();
+    error = error.with_diagnostic(ProviderDiagnostic::new(format!(
+        "OpenAI upstream failure: kind={}, status={status}, code={code}",
+        kind
+    )));
     MappedProviderFailure {
         error,
         websocket_transport_retryable: false,

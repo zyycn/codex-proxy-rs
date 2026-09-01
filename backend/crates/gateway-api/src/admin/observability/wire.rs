@@ -776,6 +776,7 @@ pub struct OpsErrorView {
     pub transport: Option<String>,
     pub attempt_index: Option<u32>,
     pub failure_class: String,
+    pub upstream_send_state: Option<String>,
     pub provider_error_code: Option<String>,
     pub occurrence_count: u32,
     pub response_id: Option<String>,
@@ -789,6 +790,8 @@ pub struct OpsErrorView {
     pub subagent_kind: Option<String>,
     pub compact: Option<bool>,
     pub message: String,
+    /// 上游错误正文或 WebSocket close/error frame 原文；不做脱敏。
+    pub raw_upstream_error: Option<String>,
     pub metadata: OpsErrorMetadataView,
     pub created_at: DateTime<Utc>,
     pub created_at_display: String,
