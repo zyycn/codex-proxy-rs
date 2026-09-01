@@ -46,6 +46,8 @@ fn update_body() -> Value {
         "maxConcurrentPerAccount": 5,
         "requestIntervalMs": 25,
         "rotationStrategy": "round_robin",
+        "minCodexDesktopVersion": "26.825.6671",
+        "minCodexCliVersion": "0.40.0",
         "usageRetentionDays": 32,
         "opsEventRetentionDays": 31,
         "auditRetentionDays": 91
@@ -60,6 +62,19 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
         serde_json::from_value(body).expect("decode settings");
 
     assert_eq!(request.validate().unwrap_err().field(), "rotationStrategy");
+}
+
+#[test]
+fn settings_request_should_reject_non_semver_client_min() {
+    let mut body = update_body();
+    body["minCodexCliVersion"] = json!("v0.40.0");
+    let request: UpdateRuntimeSettingsRequest =
+        serde_json::from_value(body).expect("decode settings");
+
+    assert_eq!(
+        request.validate().unwrap_err().field(),
+        "minCodexCliVersion"
+    );
 }
 
 #[test]
@@ -90,6 +105,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         max_concurrent_per_account: 5,
         request_interval_ms: 25,
         rotation_strategy: RotationStrategy::RoundRobin,
+        min_codex_desktop_version: Some("26.825.6671".to_owned()),
+        min_codex_cli_version: Some("0.40.0".to_owned()),
         usage_retention_days: 32,
         ops_event_retention_days: 31,
         audit_retention_days: 91,
@@ -112,6 +129,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "maxConcurrentPerAccount": 5,
             "requestIntervalMs": 25,
             "rotationStrategy": "round_robin",
+            "minCodexDesktopVersion": "26.825.6671",
+            "minCodexCliVersion": "0.40.0",
             "usageRetentionDays": 32,
             "opsEventRetentionDays": 31,
             "auditRetentionDays": 91,
@@ -159,6 +178,8 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         request_interval_ms: request.request_interval_ms,
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),
+        min_codex_desktop_version: request.min_codex_desktop_version,
+        min_codex_cli_version: request.min_codex_cli_version,
         usage_retention_days: u32::try_from(request.usage_retention_days).expect("u32"),
         ops_event_retention_days: u32::try_from(request.ops_event_retention_days).expect("u32"),
         audit_retention_days: u32::try_from(request.audit_retention_days).expect("u32"),
@@ -232,6 +253,31 @@ async fn settings_post_should_replace_global_model_mappings() {
     assert!(data.get("configRevision").is_none());
     assert_eq!(data["modelMappings"]["gpt-5.4"], "gpt-5.5");
     assert_eq!(data["modelMappings"]["grok-latest"], "grok-4.5");
+}
+
+#[tokio::test]
+async fn client_downloads_should_return_validated_direct_links() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = app(fixture.state())
+        .oneshot(request(
+            Method::GET,
+            "/api/admin/settings/client-downloads/codex-desktop/windows?refresh=true",
+            None,
+        ))
+        .await
+        .expect("client downloads response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let data = response_json(response).await["data"].clone();
+    assert_eq!(data["packages"][0]["architecture"], "x64");
+    assert_eq!(data["packages"][0]["source"], "microsoft_store");
+    assert_eq!(data["packages"][0]["version"], "26.825.6671.0");
+    assert!(
+        data["packages"][0]["downloadUrl"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("https://dl.delivery.mp.microsoft.com/"))
+    );
 }
 
 #[test]

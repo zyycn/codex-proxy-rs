@@ -34,7 +34,10 @@ use gateway_core::engine::{
 use gateway_core::error::StoreError;
 use gateway_core::health::{WorkerHealthSnapshot, WorkerHealthSource};
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
-use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
+use gateway_core::policy::{
+    ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,
+    PlaintextClientApiKey, RateLimits,
+};
 use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
@@ -97,6 +100,30 @@ pub(super) fn authenticated_client_for_provider(
 ) -> AuthenticatedClient {
     let source = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot(plaintext, provider_name)),
+        Arc::new(UnusedExecutionStore),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(IgnoredClientApiKeyUsage),
+    );
+    source
+        .authenticate(plaintext)
+        .expect("authenticated client")
+}
+
+pub(super) fn authenticated_client_with_min_versions(
+    plaintext: &str,
+    desktop: Option<&str>,
+    cli: Option<&str>,
+) -> AuthenticatedClient {
+    let snapshot =
+        snapshot(plaintext, "openai").with_min_codex_client_versions(CodexClientMinVersions::new(
+            desktop.map(|version| CodexClientVersion::parse(version).expect("Desktop min version")),
+            cli.map(|version| CodexClientVersion::parse(version).expect("CLI min version")),
+        ));
+    let source = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
         Arc::new(UnusedExecutionStore),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),

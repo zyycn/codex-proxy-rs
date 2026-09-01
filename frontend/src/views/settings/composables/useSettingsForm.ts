@@ -18,6 +18,8 @@ export function useSettingsForm() {
     maxConcurrentPerAccount: null as number | null,
     requestIntervalMs: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
+    minCodexDesktopVersion: '',
+    minCodexCliVersion: '',
     usageRetentionDays: 31,
     opsEventRetentionDays: 30,
     auditRetentionDays: 90,
@@ -41,6 +43,13 @@ export function useSettingsForm() {
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
+  const minCodexDesktopVersionError = computed(() => versionError(form.minCodexDesktopVersion))
+  const minCodexCliVersionError = computed(() => versionError(form.minCodexCliVersion))
+
+  function versionError(value: string): string {
+    const normalized = value.trim()
+    return normalized && !isSemver(normalized) ? '请输入标准 SemVer，例如 0.152.0' : ''
+  }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -48,6 +57,8 @@ export function useSettingsForm() {
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
     form.requestIntervalMs = data.requestIntervalMs
     form.rotationStrategy = data.rotationStrategy
+    form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
+    form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
     form.auditRetentionDays = data.auditRetentionDays
@@ -112,6 +123,10 @@ export function useSettingsForm() {
       toast.warning('请完整填写运行参数和调度策略')
       return
     }
+    if (minCodexDesktopVersionError.value || minCodexCliVersionError.value) {
+      toast.warning('请修正客户端最低版本格式')
+      return
+    }
     try {
       saving.value = true
       const result = await updateSettings({
@@ -121,6 +136,8 @@ export function useSettingsForm() {
         maxConcurrentPerAccount,
         requestIntervalMs,
         rotationStrategy,
+        minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
+        minCodexCliVersion: form.minCodexCliVersion.trim() || null,
         usageRetentionDays: form.usageRetentionDays,
         opsEventRetentionDays: form.opsEventRetentionDays,
         auditRetentionDays: form.auditRetentionDays,
@@ -151,7 +168,50 @@ export function useSettingsForm() {
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
     requestIntervalMsValue,
+    minCodexDesktopVersionError,
+    minCodexCliVersionError,
     saveSettings,
     loadSettings,
   }
+}
+
+function isSemver(value: string): boolean {
+  if (value.length > 64 || value.startsWith('v'))
+    return false
+
+  const buildParts = value.split('+')
+  if (buildParts.length > 2)
+    return false
+  const [versionAndPrerelease = '', build] = buildParts
+  if (build !== undefined && !validIdentifiers(build, false))
+    return false
+
+  const prereleaseSeparator = versionAndPrerelease.indexOf('-')
+  const core = prereleaseSeparator < 0
+    ? versionAndPrerelease
+    : versionAndPrerelease.slice(0, prereleaseSeparator)
+  const prerelease = prereleaseSeparator < 0
+    ? undefined
+    : versionAndPrerelease.slice(prereleaseSeparator + 1)
+  if (prerelease !== undefined && !validIdentifiers(prerelease, true))
+    return false
+
+  const coreParts = core.split('.')
+  return coreParts.length === 3 && coreParts.every(validCoreNumericIdentifier)
+}
+
+function validIdentifiers(value: string, rejectNumericLeadingZeros: boolean): boolean {
+  return Boolean(value) && value.split('.').every((identifier) => {
+    if (!identifier || !/^[\da-z-]+$/i.test(identifier))
+      return false
+    return !rejectNumericLeadingZeros || !/^\d+$/.test(identifier) || validNumericIdentifier(identifier)
+  })
+}
+
+function validNumericIdentifier(value: string): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(value)
+}
+
+function validCoreNumericIdentifier(value: string): boolean {
+  return validNumericIdentifier(value) && BigInt(value) <= 18_446_744_073_709_551_615n
 }

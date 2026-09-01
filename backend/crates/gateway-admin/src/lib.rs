@@ -22,19 +22,22 @@ mod use_case;
 
 pub use use_case::{
     account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
-    backup::BackupService, client_keys::ClientKeyService, observability::ObservabilityService,
-    openai::OpenAiService, settings::SettingsService, system::SystemService, xai::XaiService,
+    backup::BackupService, client_distribution::ClientDistributionService,
+    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
+    settings::SettingsService, system::SystemService, xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
 use ports::{
+    client_distribution::ClientDistributionResolver,
     provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind, ProviderAdminRegistry},
     store::AdminStorePorts,
     system::SystemOperations,
 };
 use use_case::{
     account_groups::DefaultAccountGroupService, accounts::DefaultAccountsService,
-    auth::DefaultAuthService, backup::DefaultBackupService, client_keys::DefaultClientKeyService,
+    auth::DefaultAuthService, backup::DefaultBackupService,
+    client_distribution::DefaultClientDistributionService, client_keys::DefaultClientKeyService,
     observability::DefaultObservabilityService, openai::DefaultOpenAiService,
     settings::DefaultSettingsService, system::DefaultSystemService, xai::DefaultXaiService,
 };
@@ -149,6 +152,7 @@ pub struct AdminServices {
     accounts: Arc<dyn AccountsService>,
     account_groups: Arc<dyn AccountGroupService>,
     client_keys: Arc<dyn ClientKeyService>,
+    client_distribution: Arc<dyn ClientDistributionService>,
     observability: Arc<dyn ObservabilityService>,
     settings: Arc<dyn SettingsService>,
     system: Arc<dyn SystemService>,
@@ -176,6 +180,11 @@ impl AdminServices {
     #[must_use]
     pub fn client_keys(&self) -> &dyn ClientKeyService {
         self.client_keys.as_ref()
+    }
+
+    #[must_use]
+    pub fn client_distribution(&self) -> &dyn ClientDistributionService {
+        self.client_distribution.as_ref()
     }
 
     #[must_use]
@@ -238,6 +247,7 @@ pub async fn initialize(
     providers: Vec<Arc<dyn ProviderAdmin>>,
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
+    client_distribution: Arc<dyn ClientDistributionResolver>,
     system: Arc<dyn SystemOperations>,
 ) -> Result<AdminBundle, AdminError> {
     config
@@ -290,6 +300,7 @@ pub async fn initialize(
             store.client_keys(),
             snapshot.clone(),
         )),
+        client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
         observability: Arc::new(DefaultObservabilityService::new(
             store.observability(),
             store.settings(),

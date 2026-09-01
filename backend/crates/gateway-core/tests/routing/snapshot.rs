@@ -336,7 +336,60 @@ fn publisher_should_contribute_reconciliation_and_subscription_workers() {
     );
 }
 
+#[test]
+fn compiler_should_freeze_valid_client_min_versions() {
+    let store = Arc::new(TestSnapshotStore::new(Ok(facts_with_min_versions(
+        1,
+        1,
+        Some("26.825.6671".to_owned()),
+        Some("0.40.0".to_owned()),
+    ))));
+
+    let snapshot = block_on(compiler(store).compile()).expect("valid min versions");
+
+    assert_eq!(
+        snapshot
+            .min_codex_client_versions()
+            .desktop()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("26.825.6671")
+    );
+    assert_eq!(
+        snapshot
+            .min_codex_client_versions()
+            .cli()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("0.40.0")
+    );
+}
+
+#[test]
+fn compiler_should_reject_invalid_persisted_client_min_version() {
+    let store = Arc::new(TestSnapshotStore::new(Ok(facts_with_min_versions(
+        1,
+        1,
+        None,
+        Some("v0.40.0".to_owned()),
+    ))));
+
+    assert_eq!(
+        block_on(compiler(store).compile()).expect_err("invalid min version"),
+        RuntimeSnapshotCompileError::InvalidData
+    );
+}
+
 fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts {
+    facts_with_min_versions(config_revision, observed_current_revision, None, None)
+}
+
+fn facts_with_min_versions(
+    config_revision: u64,
+    observed_current_revision: u64,
+    desktop: Option<String>,
+    cli: Option<String>,
+) -> SnapshotFacts {
     SnapshotFacts::new(
         revision(config_revision),
         revision(observed_current_revision),
@@ -345,6 +398,8 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
             50,
             "smart",
             BTreeMap::from([("public-model".to_owned(), "upstream-model".to_owned())]),
+            desktop,
+            cli,
         ),
         vec![SnapshotClientPolicyFacts::new(
             ClientApiKeyId::new("key_one").expect("key ID"),

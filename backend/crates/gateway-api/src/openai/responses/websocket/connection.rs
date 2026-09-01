@@ -24,21 +24,23 @@ const INBOUND_EVENT_BUFFER: usize = 32;
 const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONNECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
+/// WebSocket pump 的写入与生命周期预算。
 #[derive(Clone, Copy)]
-pub(super) struct ConnectionConfig {
-    pub(super) write_timeout: Duration,
-    pub(super) max_age: Duration,
+pub struct ConnectionConfig {
+    write_timeout: Duration,
+    max_age: Duration,
 }
 
 impl ConnectionConfig {
-    pub(super) const PRODUCTION: Self = Self {
+    /// 生产环境固定预算。
+    pub const PRODUCTION: Self = Self {
         write_timeout: DOWNSTREAM_WRITE_TIMEOUT,
         max_age: CONNECTION_MAX_AGE,
     };
 }
 
 /// 业务层可观察的客户端输入；Ping/Pong 始终由 pump 消费。
-pub(super) enum ConnectionEvent {
+pub enum ConnectionEvent {
     Text(String),
     Binary,
     Expired,
@@ -47,7 +49,7 @@ pub(super) enum ConnectionEvent {
 
 /// 下游写入阶段；名称刻意使用 write，而不是暗示客户端已消费的 delivery。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FramePhase {
+pub enum FramePhase {
     Metadata,
     First,
     Data,
@@ -85,21 +87,26 @@ impl FramePhase {
     }
 }
 
+/// 一次下游写入的请求归属与协议阶段。
 #[derive(Clone)]
-pub(super) struct WriteContext {
+pub struct WriteContext {
     request_id: Option<Arc<str>>,
     phase: FramePhase,
 }
 
 impl WriteContext {
-    pub(super) fn request(request_id: &Arc<str>, phase: FramePhase) -> Self {
+    /// 创建归属于某个请求的写入上下文。
+    #[must_use]
+    pub fn request(request_id: &Arc<str>, phase: FramePhase) -> Self {
         Self {
             request_id: Some(Arc::clone(request_id)),
             phase,
         }
     }
 
-    pub(super) const fn connection(phase: FramePhase) -> Self {
+    /// 创建连接级写入上下文。
+    #[must_use]
+    pub const fn connection(phase: FramePhase) -> Self {
         Self {
             request_id: None,
             phase,
@@ -107,8 +114,9 @@ impl WriteContext {
     }
 }
 
+/// WebSocket pump 停止的稳定原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PumpExitReason {
+pub enum PumpExitReason {
     ClientClose,
     PeerEof,
     ReadError,
@@ -140,8 +148,9 @@ impl PumpExitReason {
     }
 }
 
+/// 下游 WebSocket 写入失败。
 #[derive(Debug, Error)]
-pub(super) enum ConnectionWriteError {
+pub enum ConnectionWriteError {
     #[error("downstream WebSocket pump is closed")]
     Closed,
     #[error("downstream WebSocket write timed out after {timeout:?}")]
@@ -179,7 +188,8 @@ impl ConnectionStats {
     }
 }
 
-pub(super) struct ResponsesWebSocketConnection {
+/// 协调层持有的单 owner WebSocket 连接句柄。
+pub struct ResponsesWebSocketConnection {
     connection_id: Arc<str>,
     opened_at: Instant,
     expired: Arc<AtomicBool>,
@@ -209,7 +219,9 @@ impl ResponsesWebSocketConnection {
         &self.connection_id
     }
 
-    pub(super) fn is_expired(&self) -> bool {
+    /// 返回连接是否已经达到生命周期上限。
+    #[must_use]
+    pub fn is_expired(&self) -> bool {
         self.expired.load(Ordering::Acquire)
     }
 
@@ -217,7 +229,8 @@ impl ResponsesWebSocketConnection {
         self.opened_at.elapsed()
     }
 
-    pub(super) async fn next_event(&mut self) -> Option<ConnectionEvent> {
+    /// 等待下一个需要业务层处理的客户端事件。
+    pub async fn next_event(&mut self) -> Option<ConnectionEvent> {
         let event = self.incoming.recv().await;
         if let Some(ConnectionEvent::Exited(reason)) = event.as_ref() {
             self.exit_reason.get_or_insert(*reason);
@@ -227,7 +240,12 @@ impl ResponsesWebSocketConnection {
         event
     }
 
-    pub(super) async fn send_text(
+    /// 串行写入文本帧，并等待 pump 确认 transport 写入结果。
+    ///
+    /// # Errors
+    ///
+    /// pump 已关闭、写入超时或 transport 失败时返回稳定错误。
+    pub async fn send_text(
         &mut self,
         payload: String,
         context: WriteContext,
@@ -391,7 +409,8 @@ impl Drop for ResponsesWebSocketConnection {
     }
 }
 
-pub(super) fn spawn_connection<S, E>(
+/// 为一个 socket 启动单 owner pump，并返回协调层句柄。
+pub fn spawn_connection<S, E>(
     socket: S,
     connection_id: Arc<str>,
     cancellation: CancellationToken,

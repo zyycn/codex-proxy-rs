@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use gateway_core::policy::CodexClientVersion;
 use gateway_core::routing::snapshot::SnapshotControl;
 use rand_core::{OsRng, RngCore as _};
 
@@ -119,10 +120,16 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
         && command.usage_retention_days >= 31
         && command.ops_event_retention_days > 0
         && command.audit_retention_days > 0
+        && valid_client_version(command.min_codex_desktop_version.as_deref())
+        && valid_client_version(command.min_codex_cli_version.as_deref())
         && i64::try_from(command.request_interval_ms).is_ok();
     if valid {
         Ok(())
     } else {
         Err(AdminError::invalid("运行时设置不满足约束"))
     }
+}
+
+fn valid_client_version(value: Option<&str>) -> bool {
+    value.is_none_or(|value| CodexClientVersion::parse(value).is_ok())
 }

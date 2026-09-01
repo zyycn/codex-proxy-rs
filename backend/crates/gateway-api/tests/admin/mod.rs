@@ -25,6 +25,10 @@ use gateway_admin::{
             AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         auth::{AdminAuditEvent, AdminSession},
+        client_distribution::{
+            ClientArchitecture, ClientDownloadPackage, ClientDownloadSource,
+            CodexDesktopWindowsDownloads,
+        },
         client_keys::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
@@ -50,6 +54,7 @@ use gateway_admin::{
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
     },
     ports::{
+        client_distribution::ClientDistributionResolver,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
@@ -143,6 +148,7 @@ impl AdminTestFixture {
             providers,
             Arc::new(NoopSnapshot),
             Arc::new(NoopProbe),
+            Arc::new(StaticClientDistribution),
             system,
         )
         .await
@@ -162,6 +168,30 @@ impl AdminTestFixture {
 
     pub fn state(&self) -> AdminTestState {
         AdminTestState(self.services.clone())
+    }
+}
+
+struct StaticClientDistribution;
+
+#[async_trait]
+impl ClientDistributionResolver for StaticClientDistribution {
+    async fn resolve_codex_desktop_windows(&self, _: bool) -> CodexDesktopWindowsDownloads {
+        CodexDesktopWindowsDownloads {
+            resolved_at: Utc::now(),
+            cached: false,
+            warning: None,
+            packages: vec![ClientDownloadPackage {
+                architecture: ClientArchitecture::X64,
+                source: ClientDownloadSource::MicrosoftStore,
+                version: Some("26.825.6671.0".to_owned()),
+                file_name: "OpenAI.Codex_26.825.6671.0_x64__2p2nqsd0c76g0.msix".to_owned(),
+                size_bytes: Some(744_250_000),
+                download_url:
+                    "https://dl.delivery.mp.microsoft.com/filestreamingservice/files/test"
+                        .to_owned(),
+                expires_at: Some(Utc::now() + Duration::hours(1)),
+            }],
+        }
     }
 }
 
@@ -319,6 +349,8 @@ impl SettingsStore for MemorySettingsStore {
             max_concurrent_per_account: command.max_concurrent_per_account,
             request_interval_ms: command.request_interval_ms,
             rotation_strategy: command.rotation_strategy,
+            min_codex_desktop_version: command.min_codex_desktop_version,
+            min_codex_cli_version: command.min_codex_cli_version,
             usage_retention_days: command.usage_retention_days,
             ops_event_retention_days: command.ops_event_retention_days,
             audit_retention_days: command.audit_retention_days,
@@ -1073,6 +1105,8 @@ fn test_runtime_settings() -> RuntimeSettings {
         max_concurrent_per_account: 3,
         request_interval_ms: 50,
         rotation_strategy: RotationStrategy::Smart,
+        min_codex_desktop_version: None,
+        min_codex_cli_version: None,
         usage_retention_days: 31,
         ops_event_retention_days: 30,
         audit_retention_days: 90,

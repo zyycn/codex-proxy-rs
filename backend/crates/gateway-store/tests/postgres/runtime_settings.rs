@@ -19,6 +19,8 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
         ]),
+        min_codex_desktop_version: None,
+        min_codex_cli_version: None,
         usage_retention_days: 31,
         ops_event_retention_days: 30,
         audit_retention_days: 90,
@@ -35,6 +37,16 @@ fn runtime_settings_keep_account_rotation_global() {
 fn runtime_settings_reject_invalid_model_mapping() {
     let settings = RuntimeSettingsUpdate {
         model_mappings: BTreeMap::from([("".to_owned(), "gpt-5.5".to_owned())]),
+        ..settings_with_margin(3_600)
+    };
+
+    assert!(settings.validate().is_err());
+}
+
+#[test]
+fn runtime_settings_reject_non_semver_client_min() {
+    let settings = RuntimeSettingsUpdate {
+        min_codex_cli_version: Some("v0.40.0".to_owned()),
         ..settings_with_margin(3_600)
     };
 
@@ -66,6 +78,33 @@ async fn refresh_margin_change_should_preserve_existing_account_refresh_facts() 
         account_refresh_facts(&database.pool, "acct_refresh_margin_changed").await,
         before
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn client_min_versions_should_round_trip_as_nullable_settings() {
+    let Some(database) = TestDatabase::create("client_min_versions").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let mut update = settings_with_margin(3_600);
+    update.min_codex_desktop_version = Some("26.825.6671".to_owned());
+    update.min_codex_cli_version = Some("0.40.0".to_owned());
+
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("update client min versions");
+    let settings = repository
+        .load_runtime_settings()
+        .await
+        .expect("load client min versions");
+
+    assert_eq!(
+        settings.min_codex_desktop_version.as_deref(),
+        Some("26.825.6671")
+    );
+    assert_eq!(settings.min_codex_cli_version.as_deref(), Some("0.40.0"));
     database.close().await;
 }
 

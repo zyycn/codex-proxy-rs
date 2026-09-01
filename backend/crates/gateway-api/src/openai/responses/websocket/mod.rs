@@ -1,6 +1,6 @@
 //! OpenAI Responses WebSocket 的升级、连接与串行 session 编排。
 
-mod connection;
+pub mod connection;
 mod forward;
 mod protocol;
 
@@ -26,7 +26,7 @@ use gateway_core::{
 use crate::{
     ApiState,
     openai::{
-        auth::{authenticate_client, authentication_error_response},
+        auth::{authenticate_client, client_access_error_response},
         error::runtime_unavailable_response,
         service::OpenAiService,
     },
@@ -54,7 +54,7 @@ pub(crate) async fn responses_websocket(
     let service = state.openai().clone();
     let client = match authenticate_client(&service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
     let (client_ip, user_agent) = request_client_context(
         &headers,

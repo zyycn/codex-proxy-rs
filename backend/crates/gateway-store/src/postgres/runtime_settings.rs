@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use gateway_core::engine::credential::RotationStrategy;
+use gateway_core::policy::CodexClientVersion;
 use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
 };
@@ -25,6 +26,8 @@ pub struct RuntimeSettings {
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
+    pub min_codex_desktop_version: Option<String>,
+    pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
@@ -49,6 +52,8 @@ impl fmt::Debug for RuntimeSettings {
             .field("request_interval_ms", &self.request_interval_ms)
             .field("rotation_strategy", &self.rotation_strategy)
             .field("model_mappings", &self.model_mappings)
+            .field("min_codex_desktop_version", &self.min_codex_desktop_version)
+            .field("min_codex_cli_version", &self.min_codex_cli_version)
             .field("usage_retention_days", &self.usage_retention_days)
             .field("ops_event_retention_days", &self.ops_event_retention_days)
             .field("audit_retention_days", &self.audit_retention_days)
@@ -66,6 +71,8 @@ pub struct RuntimeSettingsUpdate {
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
+    pub min_codex_desktop_version: Option<String>,
+    pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
@@ -94,6 +101,8 @@ impl RuntimeSettingsUpdate {
             || self.ops_event_retention_days == 0
             || self.audit_retention_days == 0
             || !valid_model_mappings(&self.model_mappings)
+            || !valid_client_version(self.min_codex_desktop_version.as_deref())
+            || !valid_client_version(self.min_codex_cli_version.as_deref())
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
         {
             return Err(StoreError::InvalidData {
@@ -154,7 +163,8 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
             "select config_revision, admin_api_key, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
-                    audit_retention_days, updated_at
+                    audit_retention_days, min_codex_desktop_version,
+                    min_codex_cli_version, updated_at
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -192,7 +202,8 @@ pub(crate) async fn load_runtime_settings_in_transaction(
         "select config_revision, admin_api_key, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
-                audit_retention_days, updated_at
+                audit_retention_days, min_codex_desktop_version,
+                min_codex_cli_version, updated_at
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -225,7 +236,9 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 usage_retention_days = $8,
 	                 ops_event_retention_days = $9,
 	                 audit_retention_days = $10,
-	             updated_at = now()
+	                 min_codex_desktop_version = $11,
+	                 min_codex_cli_version = $12,
+	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
     )
@@ -239,6 +252,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.usage_retention_days))
     .bind(i64::from(update.ops_event_retention_days))
     .bind(i64::from(update.audit_retention_days))
+    .bind(update.min_codex_desktop_version.as_deref())
+    .bind(update.min_codex_cli_version.as_deref())
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -298,6 +313,8 @@ type RuntimeSettingsRow = (
     i64,
     i64,
     i64,
+    Option<String>,
+    Option<String>,
     DateTime<Utc>,
 );
 
@@ -314,7 +331,9 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         usage_retention_days: to_u32(row.8)?,
         ops_event_retention_days: to_u32(row.9)?,
         audit_retention_days: to_u32(row.10)?,
-        updated_at: row.11,
+        min_codex_desktop_version: row.11,
+        min_codex_cli_version: row.12,
+        updated_at: row.13,
     })
 }
 
@@ -352,4 +371,8 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
     !value.is_empty()
         && value.len() <= max_len
         && !value.bytes().any(|byte| byte.is_ascii_control())
+}
+
+fn valid_client_version(value: Option<&str>) -> bool {
+    value.is_none_or(|value| CodexClientVersion::parse(value).is_ok())
 }

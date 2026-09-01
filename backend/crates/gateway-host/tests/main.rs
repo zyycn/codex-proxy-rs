@@ -1,3 +1,4 @@
+mod client_distribution;
 mod config;
 mod logging;
 mod serve;

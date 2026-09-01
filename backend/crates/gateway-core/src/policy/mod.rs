@@ -2,6 +2,12 @@
 //!
 //! Client API Key 冻结账号分组权限；模型名称不参与权限判断。
 
+mod client_version;
+
+pub use client_version::{
+    ClientVersionRejection, CodexClientKind, CodexClientMinVersions, CodexClientVersion,
+};
+
 use std::fmt;
 use std::sync::Arc;
 

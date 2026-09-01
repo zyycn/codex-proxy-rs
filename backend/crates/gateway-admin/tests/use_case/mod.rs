@@ -31,6 +31,7 @@ use gateway_admin::{
             BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
         auth::{AdminAuditEvent, AdminSession},
+        client_distribution::CodexDesktopWindowsDownloads,
         client_keys::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
@@ -55,6 +56,7 @@ use gateway_admin::{
     },
     ports::{
         backup::BackupStorePorts,
+        client_distribution::ClientDistributionResolver,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
@@ -205,11 +207,26 @@ impl AdminHarness {
             self.providers,
             Arc::new(NoopSnapshot),
             self.probe,
+            Arc::new(NoopClientDistribution),
             self.system,
         )
         .await
         .expect("initialize admin test harness")
         .services()
+    }
+}
+
+struct NoopClientDistribution;
+
+#[async_trait]
+impl ClientDistributionResolver for NoopClientDistribution {
+    async fn resolve_codex_desktop_windows(&self, _: bool) -> CodexDesktopWindowsDownloads {
+        CodexDesktopWindowsDownloads {
+            resolved_at: Utc::now(),
+            cached: false,
+            warning: None,
+            packages: Vec::new(),
+        }
     }
 }
 

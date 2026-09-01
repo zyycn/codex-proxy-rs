@@ -17,6 +17,28 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 已启用分组成员的并集。分组可以混合 `openai` 与 `xai` 账号；同一请求只会在模型能力明确匹配且满足
 重放安全边界时跨 Provider fallback。
 
+运行设置可以分别配置 `minCodexDesktopVersion` 与 `minCodexCliVersion`。两者只接受 SemVer，`null`
+表示不限制。API 在 Client Key 鉴权成功后识别官方 Desktop/CLI 请求头；已识别客户端没有合法版本，或版本
+低于对应门槛时，所有 `/v1/*` HTTP 请求和新 WebSocket 握手在访问上游前返回 `426 Upgrade Required`。
+未知客户端保持兼容，不应用版本门禁。
+
+低版本响应使用 OpenAI 风格错误合同：
+
+```json
+{
+  "error": {
+    "message": "Codex CLI 0.151.0 is below the minimum required version 0.152.0. Upgrade Codex CLI and retry.",
+    "type": "invalid_request_error",
+    "code": "client_version_too_old",
+    "client": "codex_cli",
+    "current_version": "0.151.0",
+    "min_version": "0.152.0"
+  }
+}
+```
+
+已识别但缺失或携带非法版本时，`code` 为 `client_version_unavailable`，`current_version` 为 `null`。
+
 ### 管理接口
 
 除登录、会话状态和登出外，所有 `/api/admin/*` 请求都需要以下任一鉴权方式：
@@ -375,6 +397,7 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 | --- | --- | --- |
 | `GET` | `/api/admin/settings` | 读取运行设置 |
 | `POST` | `/api/admin/settings/update` | 原子替换全部运行设置 |
+| `GET` | `/api/admin/settings/client-downloads/codex-desktop/windows` | 提取 Codex Desktop Windows 离线安装直链；`refresh=true` 强制刷新进程内短缓存 |
 | `GET` | `/api/admin/settings/admin-api-key` | 只返回管理 API Key 是否存在 |
 | `POST` | `/api/admin/settings/admin-api-key/delete` | 删除管理 API Key |
 | `POST` | `/api/admin/settings/admin-api-key/regenerate` | 重新生成并一次性返回完整管理 API Key |
@@ -388,12 +411,44 @@ refreshConcurrency
 maxConcurrentPerAccount
 requestIntervalMs
 rotationStrategy
+minCodexDesktopVersion
+minCodexCliVersion
 usageRetentionDays
 opsEventRetentionDays
 auditRetentionDays
 ```
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
+两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+Windows 离线包接口固定解析 Microsoft Store Product ID `9PLM9XGG6VKS` 的 Retail 包，不接受调用方提供
+产品 ID、上游地址、ring 或文件名。后端只返回通过包名、架构、Microsoft CDN host/path、scheme 和失效
+时间校验的 `x64` / `arm64` MSIX 直链，不代理安装包字节。Store 内容通道返回 HTTP/80 临时地址时保留
+原始 scheme，不强制改写为该 host 不保证支持的 HTTPS。动态链接不足 10 分钟即失效时不会下发；某个架构
+解析失败时只将该架构降级到 OpenAI 官方 HTTPS 稳定 MSIX，并通过 `warning` 说明。响应形状为：
+
+```json
+{
+  "resolvedAt": "2026-09-01T06:30:00Z",
+  "cached": false,
+  "warning": null,
+  "packages": [
+    {
+      "architecture": "x64",
+      "source": "microsoft_store",
+      "version": "26.825.6671.0",
+      "fileName": "OpenAI.Codex_26.825.6671.0_x64__2p2nqsd0c76g0.msix",
+      "sizeBytes": 744250000,
+      "downloadUrl": "http://dl.delivery.mp.microsoft.com/filestreamingservice/files/...",
+      "expiresAt": "2026-09-01T07:30:00Z"
+    }
+  ]
+}
+```
+
+`source` 为 `microsoft_store` 或 `official_openai`。Store 的四段 package version 只用于下载展示，不参与
+Desktop 三段 SemVer 门禁，也不会自动回写最低版本设置。完整安全与回退设计见
+[客户端最低版本与下载方案](client-min-version-plan.md)。
 
 ## 9. 备份
 

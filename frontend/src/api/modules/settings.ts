@@ -9,10 +9,32 @@ export interface RuntimeSettings {
   maxConcurrentPerAccount: number
   requestIntervalMs: number
   rotationStrategy: RotationStrategy
+  minCodexDesktopVersion: string | null
+  minCodexCliVersion: string | null
   usageRetentionDays: number
   opsEventRetentionDays: number
   auditRetentionDays: number
   updatedAt: string
+}
+
+export type ClientArchitecture = 'x64' | 'arm64'
+export type ClientDownloadSource = 'microsoft_store' | 'official_openai'
+
+export interface ClientDownloadPackage {
+  architecture: ClientArchitecture
+  source: ClientDownloadSource
+  version: string | null
+  fileName: string
+  sizeBytes: number | null
+  downloadUrl: string
+  expiresAt: string | null
+}
+
+export interface CodexDesktopWindowsDownloads {
+  resolvedAt: string
+  cached: boolean
+  warning: string | null
+  packages: ClientDownloadPackage[]
 }
 
 export interface AdminApiKeyStatus {
@@ -62,5 +84,13 @@ export function deleteAdminApiKey() {
   return request<DeletedAdminApiKey>({
     url: '/api/admin/settings/admin-api-key/delete',
     method: 'POST',
+  })
+}
+
+export function getCodexDesktopWindowsDownloads(refresh = false) {
+  return request<CodexDesktopWindowsDownloads>({
+    url: '/api/admin/settings/client-downloads/codex-desktop/windows',
+    method: 'GET',
+    params: refresh ? { refresh: true } : undefined,
   })
 }

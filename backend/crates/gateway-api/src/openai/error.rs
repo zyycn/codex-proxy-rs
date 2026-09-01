@@ -9,6 +9,7 @@ use axum::{
 use gateway_core::{
     engine::EngineError,
     error::{GatewayError, GatewayErrorKind},
+    policy::{ClientVersionRejection, CodexClientKind},
 };
 use serde_json::{Value, json};
 
@@ -55,6 +56,47 @@ pub fn runtime_unavailable_response() -> (StatusCode, Json<Value>) {
         "Gateway runtime configuration is temporarily unavailable",
         "server_error",
         "runtime_configuration_unavailable",
+    )
+}
+
+/// 已识别 Codex 客户端不满足最低版本要求。
+pub fn client_version_rejection_response(
+    rejection: &ClientVersionRejection,
+) -> (StatusCode, Json<Value>) {
+    let client_label = match rejection.kind() {
+        CodexClientKind::Desktop => "Codex Desktop",
+        CodexClientKind::Cli => "Codex CLI",
+    };
+    let (message, code, current_version) = match rejection.current() {
+        Some(current) => (
+            format!(
+                "{client_label} {current} is below the minimum required version {}. Upgrade {client_label} and retry.",
+                rejection.min()
+            ),
+            "client_version_too_old",
+            Some(current.to_string()),
+        ),
+        None => (
+            format!(
+                "A valid {client_label} version is required. Upgrade to version {} or newer and retry.",
+                rejection.min()
+            ),
+            "client_version_unavailable",
+            None,
+        ),
+    };
+    (
+        StatusCode::UPGRADE_REQUIRED,
+        Json(json!({
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": code,
+                "client": rejection.kind().as_str(),
+                "current_version": current_version,
+                "min_version": rejection.min().to_string()
+            }
+        })),
     )
 }
 

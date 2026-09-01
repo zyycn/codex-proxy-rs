@@ -43,6 +43,8 @@ flowchart LR
   Store --> Object[(S3 / R2)]
 
   Host[gateway-host] -. lifecycle / workers / update .-> API
+  Host -. lazy client distribution resolver .-> Admin
+  Host --> StoreLinks[RG-Adguard / Microsoft CDN]
 ```
 
 `backend/apps/gateway` 是唯一组合根，按 Host → Store → Provider → Core → Admin → API → Worker 的顺序
@@ -95,8 +97,13 @@ sequenceDiagram
   E->>S: enqueue terminal observation and accounting
 ```
 
-请求开始时冻结 `RuntimeSnapshot`、Client Key 的账号范围、模型映射、Provider 候选顺序和调度策略。
+请求开始时冻结 `RuntimeSnapshot`、Client Key 的账号范围、模型映射、Codex 客户端最低版本、Provider
+候选顺序和调度策略。
 运行中的请求不再拼接新旧配置，也不在热路径查询分组关系。
+
+Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/CLI，Core 使用同一请求冻结的
+`RuntimeSnapshot` 比较对应最低版本。Desktop 优先于其 User-Agent 内嵌的 CLI/Core 标记；未知客户端不
+应用门禁。低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `426` 合同。
 
 核心不变量：
 
@@ -190,6 +197,7 @@ PostgreSQL 周期对账才是正确性基础。
 | 日志、OAuth 恢复记录、在线更新状态、备份暂存 | `.runtime/` | 部署节点本地运行文件 |
 | 重置卡库存与消费结果 | OpenAI upstream | 后端不建立本地卡库存；前端只保留当前浏览器会话的最近查询 |
 | Provider 公开模型与请求画像 | Provider/runtime cache | 由官方目录或发布源刷新，不写成第二份业务配置 |
+| Windows 安装包临时直链 | Host 进程内短缓存 | 按需解析、严格校验、到期前丢弃；不写 PostgreSQL/Redis，也不代理包字节 |
 
 账号对外状态不是独立列，而是 PostgreSQL credential/quota 事实与 Redis cooldown 的统一投影：
 `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`。只有明确上游证据才能恢复或终态化账号，
@@ -237,6 +245,10 @@ Worker 由各 Bundle 贡献、由 Host 统一监督：
 
 启动只有在配置、PostgreSQL、Redis、Provider、Core、Admin、API 和 Worker 全部初始化成功后才进入服务。
 健康检查综合 Core、Store 与 Worker 状态，但不会把单个 Provider 的业务降级等同于整个进程失活。
+组合根在启动时只把 Host 的 `ClientDistributionResolver` 能力注入 Admin；此时不访问 RG-Adguard，下载
+HTTP Client 构造失败也不会阻断网关启动。外部解析在已认证管理员首次打开客户端下载弹窗时惰性执行，
+失败时按架构使用 OpenAI 官方稳定地址。Microsoft Store 内容通道返回的 HTTP/80 临时链接保留原始 scheme，
+不会被错误改写到该 host 不保证支持的 HTTPS 虚拟主机。
 
 关闭分为两段：先停止接收新连接并 drain HTTP/WS，再取消并等待 Worker；两段各有独立预算，Compose 的
 `stop_grace_period` 必须覆盖二者之和。超时后只丢弃仍未落盘的可恢复观测，不执行隐式业务重放。

@@ -10,6 +10,7 @@ import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
+import ClientVersionSettings from './components/client-version/index.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
@@ -48,6 +49,8 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   requestIntervalMsValue,
+  minCodexDesktopVersionError,
+  minCodexCliVersionError,
   saveSettings,
   loadSettings,
 } = useSettingsForm()
@@ -124,6 +127,14 @@ watch(
         v-model:refresh-margin-seconds="refreshMarginSecondsValue"
         v-model:refresh-concurrency="refreshConcurrencyValue"
         v-model:request-interval-ms="requestIntervalMsValue"
+      />
+
+      <ClientVersionSettings
+        v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
+        v-model:min-codex-cli-version="form.minCodexCliVersion"
+        :loading="loading"
+        :desktop-error="minCodexDesktopVersionError"
+        :cli-error="minCodexCliVersionError"
       />
 
       <ModelAliasesCard

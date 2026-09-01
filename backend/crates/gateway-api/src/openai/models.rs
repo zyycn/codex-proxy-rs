@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::ApiState;
 
 use super::{
-    auth::{authenticate_client, authentication_error_response},
+    auth::{authenticate_client, client_access_error_response},
     error::model_not_found_response,
 };
 
@@ -34,7 +34,7 @@ pub(crate) async fn models(
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
 
     if query
@@ -81,7 +81,7 @@ pub(crate) async fn model_detail(
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
     let Ok(public_model) = PublicModelId::new(model_id) else {
         return model_not_found_response().into_response();
@@ -105,7 +105,7 @@ pub(crate) async fn model_catalog(State(state): State<ApiState>, headers: Header
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
     let models = service
         .public_models(&client)
@@ -125,7 +125,7 @@ pub(crate) async fn model_info(
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
     let Ok(public_model) = PublicModelId::new(model_id) else {
         return model_not_found_response().into_response();

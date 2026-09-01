@@ -16,7 +16,10 @@ use crate::engine::provider::{ProviderCatalogGeneration, ProviderRegistry};
 use crate::error::RoutingError;
 use crate::health::{HealthProbe, HealthState};
 use crate::operation::Operation;
-use crate::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
+use crate::policy::{
+    ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,
+    PlaintextClientApiKey, RateLimits,
+};
 use crate::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerRegistration, WorkerRunnable,
@@ -43,6 +46,8 @@ pub struct SnapshotSettingsFacts {
     request_interval_ms: u64,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
+    min_codex_desktop_version: Option<String>,
+    min_codex_cli_version: Option<String>,
 }
 
 impl SnapshotSettingsFacts {
@@ -52,12 +57,16 @@ impl SnapshotSettingsFacts {
         request_interval_ms: u64,
         rotation_strategy: impl Into<String>,
         model_mappings: BTreeMap<String, String>,
+        min_codex_desktop_version: Option<String>,
+        min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
             max_concurrent_per_account,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             model_mappings,
+            min_codex_desktop_version,
+            min_codex_cli_version,
         }
     }
 }
@@ -356,6 +365,22 @@ async fn compile_runtime_snapshot(
     let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
 
     let model_mappings = facts.settings.model_mappings;
+    let min_client_versions = CodexClientMinVersions::new(
+        facts
+            .settings
+            .min_codex_desktop_version
+            .as_deref()
+            .map(CodexClientVersion::parse)
+            .transpose()
+            .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?,
+        facts
+            .settings
+            .min_codex_cli_version
+            .as_deref()
+            .map(CodexClientVersion::parse)
+            .transpose()
+            .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?,
+    );
     let rotation_strategy = RotationStrategy::parse(facts.settings.rotation_strategy.as_str())
         .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
     let selection_policy = AccountSelectionPolicy::new(
@@ -420,6 +445,7 @@ async fn compile_runtime_snapshot(
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
             .with_known_provider_catalogs(known_provider_catalogs)
+            .with_min_codex_client_versions(min_client_versions)
     })
 }
 
@@ -437,6 +463,7 @@ pub struct RuntimeSnapshot {
     known_provider_catalogs: Arc<BTreeSet<ProviderKind>>,
     account_directory: Arc<RuntimeAccountDirectory>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
+    min_codex_client_versions: CodexClientMinVersions,
 }
 
 impl RuntimeSnapshot {
@@ -518,6 +545,7 @@ impl RuntimeSnapshot {
             known_provider_catalogs: Arc::new(known_provider_catalogs),
             account_directory: Arc::new(RuntimeAccountDirectory::default()),
             client_policies: Arc::new(client_policy_map),
+            min_codex_client_versions: CodexClientMinVersions::default(),
         })
     }
 
@@ -530,6 +558,12 @@ impl RuntimeSnapshot {
     #[must_use]
     pub fn with_account_directory(mut self, directory: Arc<RuntimeAccountDirectory>) -> Self {
         self.account_directory = directory;
+        self
+    }
+
+    #[must_use]
+    pub fn with_min_codex_client_versions(mut self, versions: CodexClientMinVersions) -> Self {
+        self.min_codex_client_versions = versions;
         self
     }
 
@@ -709,6 +743,11 @@ impl RuntimeSnapshot {
 
     pub fn client_policies(&self) -> impl Iterator<Item = &ClientPolicy> {
         self.client_policies.values()
+    }
+
+    #[must_use]
+    pub const fn min_codex_client_versions(&self) -> &CodexClientMinVersions {
+        &self.min_codex_client_versions
     }
 
     pub fn plan(

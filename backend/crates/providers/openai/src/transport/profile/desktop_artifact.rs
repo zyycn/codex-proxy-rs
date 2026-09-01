@@ -58,14 +58,19 @@ struct CentralDirectory {
     entries: u16,
 }
 
+/// ZIP central directory 中已经校验的 Codex Core 条目。
 #[derive(Debug)]
-pub(super) struct CoreEntry {
-    pub(super) name: Vec<u8>,
+pub struct CoreEntry {
+    /// ZIP 内完整条目名。
+    pub name: Vec<u8>,
     flags: u16,
     compression: u16,
-    pub(super) compressed_size: u64,
-    pub(super) uncompressed_size: u64,
-    pub(super) local_header_offset: u64,
+    /// 压缩后的字节数。
+    pub compressed_size: u64,
+    /// 解压后的字节数。
+    pub uncompressed_size: u64,
+    /// local file header 在制品内的偏移。
+    pub local_header_offset: u64,
 }
 
 pub(super) async fn fetch_codex_core_version(
@@ -184,7 +189,9 @@ async fn read_range(
     Ok(body)
 }
 
-pub(super) fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
+/// 解析严格的 `bytes start-end/size` Content-Range。
+#[must_use]
+pub fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
     let value = value.strip_prefix("bytes ")?;
     let (range, size) = value.split_once('/')?;
     let (start, end) = range.split_once('-')?;
@@ -240,7 +247,12 @@ fn parse_eocd(
     })
 }
 
-pub(super) fn find_core_entry(
+/// 在 central directory 中定位唯一的 bundled Codex Core。
+///
+/// # Errors
+///
+/// ZIP 元数据无效、条目不受支持，或 Core 不唯一时返回制品错误。
+pub fn find_core_entry(
     central: &[u8],
     expected_entries: u16,
 ) -> Result<CoreEntry, CodexDesktopArtifactError> {
@@ -466,16 +478,19 @@ fn validate_macho_header(header: &[u8]) -> Result<(), CodexDesktopArtifactError>
     Ok(())
 }
 
+/// 跨分块查找 bundled Core 版本标记的有界扫描器。
 #[derive(Default)]
-pub(super) struct CoreVersionScanner {
+pub struct CoreVersionScanner {
     carry: Vec<u8>,
 }
 
 impl CoreVersionScanner {
-    pub(super) fn push(
-        &mut self,
-        bytes: &[u8],
-    ) -> Result<Option<String>, CodexDesktopArtifactError> {
+    /// 推入一个解压分块，并在发现完整合法版本时返回它。
+    ///
+    /// # Errors
+    ///
+    /// 标记后的版本超过限制或不满足受支持格式时返回制品错误。
+    pub fn push(&mut self, bytes: &[u8]) -> Result<Option<String>, CodexDesktopArtifactError> {
         let mut window = Vec::with_capacity(self.carry.len() + bytes.len());
         window.extend_from_slice(&self.carry);
         window.extend_from_slice(bytes);

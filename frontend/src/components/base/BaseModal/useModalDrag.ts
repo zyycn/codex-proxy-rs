@@ -159,6 +159,7 @@ export function useModalDrag(
 
   return {
     cancelDrag: endDrag,
+    constrainPosition: updatePosition,
     handlePointerDown,
     isDragging,
     resetPosition,

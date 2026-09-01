@@ -15,7 +15,7 @@ use gateway_core::routing::{
 };
 use tower::ServiceExt;
 
-use super::{api_router, authenticated_client};
+use super::{api_router, authenticated_client, authenticated_client_with_min_versions};
 
 pub(super) struct ModelsExecution {
     client: AuthenticatedClient,
@@ -34,6 +34,24 @@ impl ModelsExecution {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
             profiles: true,
+        })
+    }
+
+    fn with_cli_min() -> Arc<Self> {
+        Arc::new(Self {
+            client: authenticated_client_with_min_versions("sk_models_test", None, Some("0.40.0")),
+            profiles: false,
+        })
+    }
+
+    fn with_desktop_min() -> Arc<Self> {
+        Arc::new(Self {
+            client: authenticated_client_with_min_versions(
+                "sk_models_test",
+                Some("26.825.51511"),
+                None,
+            ),
+            profiles: false,
         })
     }
 }
@@ -142,6 +160,111 @@ async fn models_should_encode_the_service_visible_catalog() {
             ]
         })
     );
+}
+
+#[tokio::test]
+async fn models_should_reject_recognized_cli_below_configured_min() {
+    let request = Request::get("/v1/models")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("user-agent", "codex_cli_rs/0.39.0 (Linux; x86_64)")
+        .body(Body::empty())
+        .expect("build models request");
+    let response = api_router(ModelsExecution::with_cli_min())
+        .await
+        .oneshot(request)
+        .await
+        .expect("list models response");
+
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read version rejection body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("version rejection JSON");
+    assert_eq!(value["error"]["code"], "client_version_too_old");
+    assert_eq!(value["error"]["client"], "codex_cli");
+    assert_eq!(value["error"]["current_version"], "0.39.0");
+    assert_eq!(value["error"]["min_version"], "0.40.0");
+}
+
+#[tokio::test]
+async fn models_should_reject_recognized_cli_with_invalid_version() {
+    let request = Request::get("/v1/models")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("user-agent", "codex-cli/not-a-version")
+        .body(Body::empty())
+        .expect("build models request");
+    let response = api_router(ModelsExecution::with_cli_min())
+        .await
+        .oneshot(request)
+        .await
+        .expect("list models response");
+
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read version rejection body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("version rejection JSON");
+    assert_eq!(value["error"]["code"], "client_version_unavailable");
+    assert!(value["error"]["current_version"].is_null());
+    assert_eq!(value["error"]["min_version"], "0.40.0");
+}
+
+#[tokio::test]
+async fn models_should_reject_desktop_below_its_configured_min() {
+    let request = Request::get("/v1/models")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("originator", "Codex Desktop")
+        .header("version", "26.825.50000")
+        .header("user-agent", "codex_cli_rs/99.0.0 (Codex Desktop)")
+        .body(Body::empty())
+        .expect("build models request");
+    let response = api_router(ModelsExecution::with_desktop_min())
+        .await
+        .oneshot(request)
+        .await
+        .expect("list models response");
+
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read version rejection body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("version rejection JSON");
+    assert_eq!(value["error"]["code"], "client_version_too_old");
+    assert_eq!(value["error"]["client"], "codex_desktop");
+    assert_eq!(value["error"]["current_version"], "26.825.50000");
+    assert_eq!(value["error"]["min_version"], "26.825.51511");
+}
+
+#[tokio::test]
+async fn models_should_allow_cli_at_its_configured_min() {
+    let request = Request::get("/v1/models")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("user-agent", "codex_cli_rs/0.40.0 (Linux; x86_64)")
+        .body(Body::empty())
+        .expect("build models request");
+    let response = api_router(ModelsExecution::with_cli_min())
+        .await
+        .oneshot(request)
+        .await
+        .expect("list models response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn models_should_leave_unknown_clients_unrestricted() {
+    let request = Request::get("/v1/models")
+        .header(AUTHORIZATION, "Bearer sk_models_test")
+        .header("user-agent", "curl/8.14.1")
+        .body(Body::empty())
+        .expect("build models request");
+    let response = api_router(ModelsExecution::with_cli_min())
+        .await
+        .oneshot(request)
+        .await
+        .expect("list models response");
+
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -301,11 +424,12 @@ async fn model_info_should_hide_unknown_models() {
 }
 
 #[tokio::test]
-async fn models_should_require_a_valid_bearer_client_key() {
-    let response = api_router(ModelsExecution::new())
+async fn models_should_authenticate_before_applying_the_version_gate() {
+    let response = api_router(ModelsExecution::with_cli_min())
         .await
         .oneshot(
             Request::get("/v1/models")
+                .header("user-agent", "codex_cli_rs/0.1.0 (Linux; x86_64)")
                 .body(Body::empty())
                 .expect("build unauthenticated request"),
         )

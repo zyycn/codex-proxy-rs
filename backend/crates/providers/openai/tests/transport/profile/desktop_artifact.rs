@@ -1,8 +1,6 @@
-#[allow(dead_code)]
-#[path = "../../../src/transport/profile/desktop_artifact.rs"]
-mod subject;
-
-use subject::{CoreVersionScanner, find_core_entry, parse_content_range};
+use provider_openai::transport::profile::desktop_artifact::{
+    CoreVersionScanner, find_core_entry, parse_content_range,
+};
 
 #[test]
 fn scanner_accepts_stable_and_multi_part_alpha_versions_across_chunks() {

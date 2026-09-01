@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 
 use crate::ApiState;
 use crate::openai::{
-    auth::{authenticate_client, authentication_error_response},
+    auth::{authenticate_client, client_access_error_response},
     error::{engine_error_response, gateway_error_response, protocol_error_response},
     responses::{PendingExecution, ProtocolError, ProtocolErrorBody, request_client_context},
 };
@@ -71,7 +71,7 @@ async fn handle_image_request(
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
     let (client_ip, user_agent) = request_client_context(
         &headers,

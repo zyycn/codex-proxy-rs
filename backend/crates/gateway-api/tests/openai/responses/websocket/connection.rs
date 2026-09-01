@@ -190,16 +190,7 @@ fn crossing_limit_terminal_batch() -> CoordinatedEvent {
         .expect("terminal WebSocket batch")
 }
 
-// 连接 runtime 没有正式公共 API；镜像测试直接编译该私有模块，以测试 socket pump，
-// 不把测试钩子暴露给 gateway-api 的消费者。
-#[expect(
-    dead_code,
-    reason = "the mirrored test only exercises pump-facing seams"
-)]
-#[path = "../../../../src/openai/responses/websocket/connection.rs"]
-mod connection_under_test;
-
-use connection_under_test::{
+use gateway_api::openai::responses::websocket::connection::{
     ConnectionConfig, ConnectionEvent, ConnectionWriteError, FramePhase,
     ResponsesWebSocketConnection, WriteContext, spawn_connection,
 };

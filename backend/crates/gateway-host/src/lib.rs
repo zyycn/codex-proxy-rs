@@ -1,5 +1,6 @@
 //! 网关进程与操作系统能力：配置发现、日志、任务、自更新与 serve/drain。
 
+pub mod client_distribution;
 pub mod config;
 mod logging;
 pub mod serve;
@@ -9,7 +10,9 @@ pub mod workers;
 use std::sync::Arc;
 
 use axum::Router;
-use gateway_admin::ports::system::SystemOperations;
+use gateway_admin::ports::{
+    client_distribution::ClientDistributionResolver, system::SystemOperations,
+};
 use gateway_core::engine::CancellationToken;
 use gateway_core::health::WorkerHealthSource;
 use gateway_core::lifecycle::ConnectionLifecycle;
@@ -17,6 +20,7 @@ use gateway_core::task::{WorkerContribution, WorkerLeaderLeasePort};
 
 pub use config::{ConfigError, HostConfig, LoadableConfig, load_config};
 
+use self::client_distribution::RgAdguardClientDistribution;
 use self::logging::{LogGuard, initialize_logging};
 use self::serve::{ConnectionTracker, serve_router};
 use self::system_update::ProcessSystemOperations;
@@ -30,6 +34,7 @@ pub struct HostBundle {
     connections: Arc<ConnectionTracker>,
     workers: WorkerSupervisor,
     system: Arc<ProcessSystemOperations>,
+    client_distribution: Arc<RgAdguardClientDistribution>,
 }
 
 /// 在启动其他包之前初始化进程级能力。
@@ -42,6 +47,7 @@ pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
         cancellation.clone(),
         config.system_update.clone(),
     ));
+    let client_distribution = Arc::new(RgAdguardClientDistribution::new());
     Ok(HostBundle {
         config,
         _log_guard: log_guard,
@@ -49,6 +55,7 @@ pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
         connections,
         workers,
         system,
+        client_distribution,
     })
 }
 
@@ -66,6 +73,12 @@ impl HostBundle {
     #[must_use]
     pub fn system_operations(&self) -> Arc<dyn SystemOperations> {
         self.system.clone()
+    }
+
+    #[must_use]
+    /// 返回惰性下载解析能力；网络请求只会在管理 API 调用时发生。
+    pub fn client_distribution_resolver(&self) -> Arc<dyn ClientDistributionResolver> {
+        self.client_distribution.clone()
     }
 
     #[must_use]

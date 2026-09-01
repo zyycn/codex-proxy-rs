@@ -721,6 +721,8 @@ impl SettingsStore for FixtureSettingsStore {
             max_concurrent_per_account: 1,
             request_interval_ms: 0,
             rotation_strategy: RotationStrategy::Smart,
+            min_codex_desktop_version: None,
+            min_codex_cli_version: None,
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 30,

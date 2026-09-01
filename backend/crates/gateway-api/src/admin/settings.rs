@@ -10,14 +10,18 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
+use gateway_admin::model::client_distribution::{
+    ClientDownloadPackage, CodexDesktopWindowsDownloads,
+};
 use gateway_admin::model::settings::{
     ModelMappings as DomainModelMappings, ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
 };
+use gateway_core::policy::CodexClientVersion;
 use gateway_core::routing::{PublicModelId, UpstreamModelId};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminResponse, AdminSessionState,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
     WireValidationError, wire::map_admin_service_error,
 };
 
@@ -34,6 +38,8 @@ pub struct RuntimeSettingsView {
     pub max_concurrent_per_account: u64,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
+    pub min_codex_desktop_version: Option<String>,
+    pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u64,
     pub ops_event_retention_days: u64,
     pub audit_retention_days: u64,
@@ -50,6 +56,8 @@ pub struct UpdateRuntimeSettingsRequest {
     pub max_concurrent_per_account: u64,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
+    pub min_codex_desktop_version: Option<String>,
+    pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u64,
     pub ops_event_retention_days: u64,
     pub audit_retention_days: u64,
@@ -75,6 +83,14 @@ impl UpdateRuntimeSettingsRequest {
         if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
         }
+        validate_optional_client_version(
+            self.min_codex_desktop_version.as_deref(),
+            "minCodexDesktopVersion",
+        )?;
+        validate_optional_client_version(
+            self.min_codex_cli_version.as_deref(),
+            "minCodexCliVersion",
+        )?;
         Ok(())
     }
 
@@ -90,6 +106,8 @@ impl UpdateRuntimeSettingsRequest {
             request_interval_ms: self.request_interval_ms,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
+            min_codex_desktop_version: self.min_codex_desktop_version,
+            min_codex_cli_version: self.min_codex_cli_version,
             usage_retention_days: u32::try_from(self.usage_retention_days)
                 .map_err(|_| WireValidationError::new("settingsUsageRetentionOverflow"))?,
             ops_event_retention_days: u32::try_from(self.ops_event_retention_days)
@@ -109,6 +127,8 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             max_concurrent_per_account: u64::from(settings.max_concurrent_per_account),
             request_interval_ms: settings.request_interval_ms,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
+            min_codex_desktop_version: settings.min_codex_desktop_version,
+            min_codex_cli_version: settings.min_codex_cli_version,
             usage_retention_days: u64::from(settings.usage_retention_days),
             ops_event_retention_days: u64::from(settings.ops_event_retention_days),
             audit_retention_days: u64::from(settings.audit_retention_days),
@@ -145,6 +165,58 @@ pub struct DeletedAdminApiKey {
     pub message: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ClientDownloadsQuery {
+    refresh: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientDownloadPackageView {
+    architecture: String,
+    source: String,
+    version: Option<String>,
+    file_name: String,
+    size_bytes: Option<u64>,
+    download_url: String,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl From<ClientDownloadPackage> for ClientDownloadPackageView {
+    fn from(package: ClientDownloadPackage) -> Self {
+        Self {
+            architecture: package.architecture.as_str().to_owned(),
+            source: package.source.as_str().to_owned(),
+            version: package.version,
+            file_name: package.file_name,
+            size_bytes: package.size_bytes,
+            download_url: package.download_url,
+            expires_at: package.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexDesktopWindowsDownloadsView {
+    resolved_at: DateTime<Utc>,
+    cached: bool,
+    warning: Option<String>,
+    packages: Vec<ClientDownloadPackageView>,
+}
+
+impl From<CodexDesktopWindowsDownloads> for CodexDesktopWindowsDownloadsView {
+    fn from(downloads: CodexDesktopWindowsDownloads) -> Self {
+        Self {
+            resolved_at: downloads.resolved_at,
+            cached: downloads.cached,
+            warning: downloads.warning,
+            packages: downloads.packages.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl Default for DeletedAdminApiKey {
     fn default() -> Self {
         Self {
@@ -162,6 +234,10 @@ where
         .route("/api/admin/settings", get(settings::<S>))
         .route("/api/admin/settings/update", post(update_settings::<S>))
         .route(
+            "/api/admin/settings/client-downloads/codex-desktop/windows",
+            get(codex_desktop_windows_downloads::<S>),
+        )
+        .route(
             "/api/admin/settings/admin-api-key",
             get(admin_api_key_status::<S>),
         )
@@ -173,6 +249,25 @@ where
             "/api/admin/settings/admin-api-key/regenerate",
             post(regenerate_admin_api_key::<S>),
         )
+}
+
+async fn codex_desktop_windows_downloads<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<ClientDownloadsQuery>,
+) -> impl IntoResponse
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let downloads = state
+        .admin_services()
+        .client_distribution()
+        .codex_desktop_windows(query.refresh)
+        .await;
+    AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(CodexDesktopWindowsDownloadsView::from(downloads)),
+    )
 }
 
 async fn settings<S>(
@@ -322,6 +417,16 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
         && !value.bytes().any(|byte| byte.is_ascii_control())
 }
 
+fn validate_optional_client_version(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<(), WireValidationError> {
+    if value.is_some_and(|value| CodexClientVersion::parse(value).is_err()) {
+        return Err(WireValidationError::new(field));
+    }
+    Ok(())
+}
+
 fn map_wire_error(error: WireValidationError) -> AdminError {
     let message = match error.field() {
         "settingsRefreshConcurrencyOverflow" => "refreshConcurrency 不合法".to_owned(),
@@ -329,6 +434,8 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "settingsUsageRetentionOverflow" => "usageRetentionDays 不合法".to_owned(),
         "settingsOpsRetentionOverflow" => "opsEventRetentionDays 不合法".to_owned(),
         "settingsAuditRetentionOverflow" => "auditRetentionDays 不合法".to_owned(),
+        "minCodexDesktopVersion" => "Codex Desktop 最低版本格式不合法".to_owned(),
+        "minCodexCliVersion" => "Codex CLI 最低版本格式不合法".to_owned(),
         field => format!("{field} 字段不合法"),
     };
     AdminError::bad_request(message)

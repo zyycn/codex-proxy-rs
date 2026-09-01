@@ -23,7 +23,7 @@ use gateway_protocol::openai::sse::{DONE_SSE_FRAME, response_failed_sse_event_wi
 
 use crate::ApiState;
 use crate::openai::{
-    auth::{authenticate_client, authentication_error_response},
+    auth::{authenticate_client, client_access_error_response},
     error::{
         engine_error_response, gateway_error_contract, gateway_error_from_engine,
         gateway_error_response, protocol_error_response, runtime_unavailable_response,
@@ -65,7 +65,7 @@ async fn handle_responses(
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
-        Err(error) => return authentication_error_response(error),
+        Err(error) => return client_access_error_response(error),
     };
     let decoded = match if review {
         decode_review_request_with_headers(&body, &headers)

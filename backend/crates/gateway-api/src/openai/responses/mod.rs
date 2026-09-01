@@ -4,7 +4,7 @@ mod error;
 mod http;
 mod request;
 mod response;
-mod websocket;
+pub mod websocket;
 
 pub use error::{ProtocolError, ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
 pub(super) use http::{PendingExecution, request_client_context};

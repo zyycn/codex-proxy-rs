@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
+import { useResizeObserver } from '@vueuse/core'
 import { nextTick, onBeforeUnmount, useId, useTemplateRef, watch } from 'vue'
 
 import BaseIconButton from '../BaseIconButton.vue'
@@ -34,12 +35,18 @@ const open = defineModel<boolean>({ default: false })
 const panel = useTemplateRef<HTMLElement>('panel')
 const titleId = useId()
 const descriptionId = useId()
-const { cancelDrag, handlePointerDown, isDragging, resetPosition } = useModalDrag(
+const { cancelDrag, constrainPosition, handlePointerDown, isDragging, resetPosition } = useModalDrag(
   panel,
   () => props.draggable,
 )
 let previouslyFocused: HTMLElement | null = null
 let ownsScrollLock = false
+
+// 内容分段可能在弹窗打开期间改变面板高度；拖拽偏移必须随尺寸重新约束到视口内。
+useResizeObserver(panel, () => {
+  if (open.value)
+    constrainPosition()
+})
 
 const focusableSelector = [
   'a[href]',

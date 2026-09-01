@@ -79,6 +79,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         vec![openai.admin_provider(), xai.admin_provider()],
         core.snapshot_control(),
         core.account_probe(),
+        host.client_distribution_resolver(),
         host.system_operations(),
     )
     .await?;
