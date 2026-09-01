@@ -1,7 +1,15 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
+
+#[test]
+fn cancellation_token_should_wake_current_state() {
+    let token = CancellationToken::new();
+    token.cancel();
+
+    assert!(token.is_cancelled());
+}
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
 
 #[derive(Default)]

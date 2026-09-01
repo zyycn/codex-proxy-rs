@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use futures::future::join_all;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     OpaqueProviderData, ProviderAccountStore as _, QuotaAccessState, QuotaObservation, QuotaState,
     QuotaWriteOutcome,
 };
@@ -275,7 +275,7 @@ async fn persisted_access_fact_survives_limit_without_percent_or_reset() {
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
             observed_at: SystemTime::now(),
             state: QuotaState::exhausted(
-                gateway_core::engine::credential::QuotaEvidence::ProviderDenied,
+                gateway_core::account::QuotaEvidence::ProviderDenied,
                 SystemTime::now(),
                 None,
             ),

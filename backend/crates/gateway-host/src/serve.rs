@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::Router;
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
 use tokio::sync::Notify;
 

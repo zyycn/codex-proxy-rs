@@ -1,9 +1,10 @@
 use axum::{body::to_bytes, http::StatusCode};
-use gateway_core::engine::{EngineError, UpstreamSendState};
+use gateway_core::engine::EngineError;
 use gateway_core::error::{
     ClientVisibleUpstreamError, GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind,
     StoreError, StoreErrorKind,
 };
+use gateway_core::upstream::UpstreamSendState;
 
 use gateway_api::openai::error::{
     gateway_error_contract, gateway_error_from_engine, gateway_error_response,

@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Timelike as _, Utc};
-use gateway_core::{engine::credential::ProviderAccountId, routing::ProviderKind};
+use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
 
 use crate::{
     model::{
@@ -654,7 +654,7 @@ fn no_cache_cost(
         .checked_sub(decimal(&breakdown.cache_write_amount.amount)?.scaled())?
         .checked_add(replaced_input_amount)?;
     DecimalAmount::from_str(
-        &gateway_core::accounting::Decimal::from_scaled(total)
+        &gateway_core::metering::Decimal::from_scaled(total)
             .ok()?
             .canonical(),
     )
@@ -669,14 +669,14 @@ fn amount_difference(
         .scaled()
         .checked_sub(decimal(smaller?)?.scaled())?;
     DecimalAmount::from_str(
-        &gateway_core::accounting::Decimal::from_scaled(difference)
+        &gateway_core::metering::Decimal::from_scaled(difference)
             .ok()?
             .canonical(),
     )
     .ok()
 }
 
-fn decimal(value: &DecimalAmount) -> Option<gateway_core::accounting::Decimal> {
+fn decimal(value: &DecimalAmount) -> Option<gateway_core::metering::Decimal> {
     value.as_str().parse().ok()
 }
 

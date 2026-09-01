@@ -21,13 +21,14 @@ use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
     StartExecution, StartProviderExecution, StartedExecution,
 };
-use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, UpstreamSendState};
+use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
 use gateway_core::error::{GatewayError, ProviderError, ProviderErrorKind};
 use gateway_core::event::{
     GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ResponseMeta,
 };
 use gateway_core::operation::Operation;
 use gateway_core::routing::PublicModelId;
+use gateway_core::upstream::UpstreamSendState;
 use gateway_protocol::openai::codex_responses_request_semantics;
 use serde_json::{Value, json};
 use tokio_tungstenite::connect_async;

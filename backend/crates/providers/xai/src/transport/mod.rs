@@ -5,15 +5,11 @@ pub(crate) mod catalog;
 pub(crate) mod compaction;
 pub(crate) mod config;
 pub(crate) mod headers;
+mod inference;
 pub(crate) mod network;
 pub(crate) mod profile;
 mod request;
 mod session;
-#[expect(
-    clippy::module_inception,
-    reason = "冻结架构要求 transport/transport.rs"
-)]
-mod transport;
 
 pub use canonical::{GrokCanonicalDecoder, grok_billing_breakdown};
 pub use catalog::{
@@ -36,6 +32,12 @@ pub use config::{
     XAI_PROVIDER_NAME,
 };
 pub use headers::{GrokClientIdentity, GrokHeader, GrokHeaderValue, build_grok_headers};
+pub use inference::{
+    GrokInferenceChunkStream, GrokInferenceClientCacheStatus, GrokInferenceDnsObservation,
+    GrokInferenceDnsSource, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
+    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
+    GrokInferenceTransportMetrics,
+};
 pub use network::{
     GrokDnsResolutionError, GrokDnsResolutionPlan, GrokDnsResolutionPolicy, GrokEndpointPolicy,
     GrokReqwestTransportBuildError, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
@@ -47,12 +49,6 @@ pub use session::{
     GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokSessionAffinityKey,
     GrokSessionBinding, GrokSessionDataError, GrokSessionLeaseGuard, GrokSessionSelection,
     GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture, SelectedGrokSession,
-};
-pub use transport::{
-    GrokInferenceChunkStream, GrokInferenceClientCacheStatus, GrokInferenceDnsObservation,
-    GrokInferenceDnsSource, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
-    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
-    GrokInferenceTransportMetrics,
 };
 
 const UUID_TEXT_LEN: usize = 36;

@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use gateway_core::{
-    engine::credential::ProviderAccountId,
+    account::ProviderAccountId,
     operation::Operation,
     routing::{ProviderKind, UpstreamModelId},
 };

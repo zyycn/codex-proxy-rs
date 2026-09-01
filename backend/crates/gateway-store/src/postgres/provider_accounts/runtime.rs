@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 
 use futures::future::join_all;
 use gateway_core::{
-    engine::credential::{
+    account::{
         AccountStatusFacts, AccountStatusProjection, ProviderAccountId, resolve_account_status,
     },
     provider_ports::ProviderCooldownPort,

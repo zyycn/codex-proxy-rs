@@ -11,7 +11,7 @@ use gateway_admin::{
     ports::store::ObservabilityStore as AdminObservabilityStore,
 };
 use gateway_core::{
-    engine::credential::{CredentialRevision, ProviderAccountId},
+    account::{CredentialRevision, ProviderAccountId},
     provider_ports::{
         ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown,
         ProviderStoreError,

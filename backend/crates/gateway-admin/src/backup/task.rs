@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use gateway_core::{
-    engine::CancellationToken,
+    lifecycle::CancellationToken,
     task::{DaemonTask, WorkerTaskError},
 };
 use tracing::{info, warn};

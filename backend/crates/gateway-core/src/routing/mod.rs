@@ -9,7 +9,7 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
-use crate::engine::credential::{AccountSelectionPolicy, ProviderAccountId};
+use crate::account::{AccountSelectionPolicy, ProviderAccountId};
 use crate::error::{IdentifierError, RoutingError, validate_text};
 use crate::operation::{CapabilityRequirements, Feature, OperationKind};
 

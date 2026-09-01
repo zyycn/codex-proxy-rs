@@ -6,17 +6,17 @@ use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use futures::{StreamExt, future::BoxFuture};
-use gateway_core::engine::continuation::ContinuationBinding;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountEligibilityPolicy, AccountFeedbackStats, ProviderAccount, ProviderAccountId,
     ProviderAccountStore,
 };
+use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
     ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation,
-    ProviderSelectionObservation, ProviderStream, UpstreamTransport,
+    ProviderSelectionObservation, ProviderStream,
 };
-use gateway_core::engine::{AttemptContext, ContinuationAttempt, UpstreamSendState};
+use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ContinuationFailure, ProviderError, ProviderErrorKind,
 };
@@ -36,6 +36,7 @@ use gateway_core::task::{
     WorkerKind, WorkerLeaseRequest, WorkerRegistration, WorkerRunnable, WorkerSchedule,
     WorkerTaskError,
 };
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use gateway_protocol::openai::codex_responses_request_semantics;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -679,7 +680,7 @@ fn encode_xai_session_state(
 fn continuation_account(
     context: &AttemptContext,
     previous_session: Option<&XaiSessionState>,
-) -> Result<Option<gateway_core::engine::credential::ProviderAccountId>, ProviderError> {
+) -> Result<Option<gateway_core::account::ProviderAccountId>, ProviderError> {
     let Some(continuation) = context.continuation() else {
         return Ok(None);
     };
@@ -695,7 +696,7 @@ fn continuation_account(
         }
         (ContinuationAttempt::ReplayOwner, _) => {
             let previous = previous_session.ok_or_else(invalid_continuation)?;
-            gateway_core::engine::credential::ProviderAccountId::new(previous.account_id.clone())
+            gateway_core::account::ProviderAccountId::new(previous.account_id.clone())
                 .map(Some)
                 .map_err(|_| invalid_continuation())
         }
@@ -708,7 +709,7 @@ fn apply_continuation(
     request: &mut GrokResponsesRequest,
     previous_session: Option<&XaiSessionState>,
     context: &AttemptContext,
-    account: &gateway_core::engine::credential::ProviderAccountId,
+    account: &gateway_core::account::ProviderAccountId,
     current_input: &[Value],
 ) -> Result<(), ProviderError> {
     let Some(continuation) = context.continuation() else {
@@ -1222,7 +1223,7 @@ fn cold_compaction_http_sse_stream(
         }
         yield ProviderEvent::canonical_with_wire(vec![GatewayEvent::Started(started)], created);
         yield ProviderEvent::wire(output_done);
-        let mut terminal_facts = facts.accounting;
+        let mut terminal_facts = facts.metering;
         terminal_facts.push(GatewayEvent::Completed(completed));
         yield ProviderEvent::canonical_with_wire(terminal_facts, terminal);
     })
@@ -1232,7 +1233,7 @@ fn cold_compaction_http_sse_stream(
 struct CompactionFacts {
     started: Option<ResponseMeta>,
     completed: Option<ResponseMeta>,
-    accounting: Vec<GatewayEvent>,
+    metering: Vec<GatewayEvent>,
     created_response: Option<Value>,
     terminal_response: Option<Value>,
 }
@@ -1250,7 +1251,7 @@ impl CompactionFacts {
                 }
                 GatewayEvent::Usage(_)
                 | GatewayEvent::CalculatedCost(_)
-                | GatewayEvent::ProviderCost(_) => self.accounting.push(fact.clone()),
+                | GatewayEvent::ProviderCost(_) => self.metering.push(fact.clone()),
                 _ => {}
             }
         }

@@ -11,10 +11,11 @@ use gateway_core::engine::admission::{
 };
 use gateway_core::engine::{
     AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
-    NewModelRequest, RecoveryReport, UpstreamSendState,
+    NewModelRequest, RecoveryReport,
 };
 use gateway_core::error::{StoreError, StoreErrorKind};
 use gateway_core::policy::ClientApiKeyId;
+use gateway_core::upstream::UpstreamSendState;
 
 #[test]
 fn client_admission_startup_recovery_should_preserve_order_and_exact_facts() {

@@ -4,20 +4,18 @@ use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::{
-    engine::{
-        UpstreamSendState,
-        credential::{
-            AccountStatusFacts, CredentialState, OpaqueProviderData, ProviderAccountId,
-            QuotaEvidence, QuotaState, resolve_account_status,
-        },
-        probe::{
-            AccountProbe, AccountProbeError, AccountProbeErrorSource, AccountProbeRequest,
-            AccountProbeResult,
-        },
+    account::{
+        AccountStatusFacts, CredentialState, OpaqueProviderData, ProviderAccountId, QuotaEvidence,
+        QuotaState, resolve_account_status,
+    },
+    engine::probe::{
+        AccountProbe, AccountProbeError, AccountProbeErrorSource, AccountProbeRequest,
+        AccountProbeResult,
     },
     error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
     operation::{GenerateRequest, Operation, ProtocolPayload},
     routing::ProviderKind,
+    upstream::UpstreamSendState,
 };
 
 use gateway_admin::{
@@ -1112,8 +1110,7 @@ async fn accounts_recover_should_commit_facts_then_return_normal_account() {
         std::time::SystemTime::now(),
         None,
     );
-    account.last_error_reason =
-        Some(gateway_core::engine::credential::AccountErrorReason::CredentialInvalid);
+    account.last_error_reason = Some(gateway_core::account::AccountErrorReason::CredentialInvalid);
     account.last_error_message = Some("invalid credential".to_owned());
     let store = FakeAccountStore::with_account(account, events.clone());
     let services = accounts_service(provider, store.clone()).await;
@@ -1135,7 +1132,7 @@ async fn accounts_recover_should_commit_facts_then_return_normal_account() {
     );
     assert_eq!(
         result.account.account.quota.access(),
-        gateway_core::engine::credential::QuotaAccessState::Allowed
+        gateway_core::account::QuotaAccessState::Allowed
     );
     assert_eq!(
         result.account.projection.status,
@@ -1168,7 +1165,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 concurrency_limit: None,
-                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
             },
         )
@@ -1204,7 +1201,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 concurrency_limit: None,
-                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
             },
         )
@@ -1245,7 +1242,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
                 enabled: false,
                 concurrency_limit: None,
-                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
             },
         )
@@ -1898,7 +1895,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
         concurrency_limit: None,
-        weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
         credential_state: CredentialState::Ready,
         credential_observed_at: now,
         quota: QuotaState::allowed(now.into()),

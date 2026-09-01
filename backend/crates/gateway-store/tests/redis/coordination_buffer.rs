@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
+use gateway_core::engine::ModelRequestId;
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
     ClientAdmissionRequest, ClientAdmissionRestoreResult,
@@ -10,7 +11,7 @@ use gateway_core::engine::admission::{
 use gateway_core::engine::execution::{
     ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
 };
-use gateway_core::engine::{CancellationToken, ModelRequestId};
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;
 use gateway_store::redis::{BufferedClientAdmissionPort, BufferedProviderCircuitPort};

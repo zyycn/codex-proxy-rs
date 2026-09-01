@@ -10,9 +10,8 @@ use gateway_admin::{
     ports::store::ClientKeyStore as _,
 };
 use gateway_core::{
-    engine::{CancellationToken, execution::ClientApiKeyUsageSink as _},
-    policy::ClientApiKeyId,
-    task::DaemonTask as _,
+    engine::execution::ClientApiKeyUsageSink as _, lifecycle::CancellationToken,
+    policy::ClientApiKeyId, task::DaemonTask as _,
 };
 use gateway_store::postgres::{
     ClientApiKeyCursor, ClientApiKeyCursorValue, ClientApiKeyListQuery, ClientApiKeyRepository,

@@ -10,15 +10,13 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{executor::block_on, future::BoxFuture};
+use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
     ClientAdmissionRequest, ClientAdmissionRestoreResult,
 };
 use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
-};
-use gateway_core::engine::credential::{
-    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::{
     ClientApiKeyUsageSink, ClientTransport, DefaultExecutionService, ExecutionRequestMetadata,
@@ -28,11 +26,11 @@ use gateway_core::engine::execution::{
 use gateway_core::engine::probe::{AccountProbe, AccountProbeErrorSource, AccountProbeRequest};
 use gateway_core::engine::provider::{
     Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
-    ProviderRegistry, ProviderRequest, ProviderStream, UpstreamTransport,
+    ProviderRegistry, ProviderRequest, ProviderStream,
 };
 use gateway_core::engine::{
     AttemptContext, AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization,
-    ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport, UpstreamSendState,
+    ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamResponse, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError,
@@ -49,6 +47,7 @@ use gateway_core::routing::{
     ProviderModel, PublicModelId, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
     UpstreamModelId,
 };
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::json;
 
 #[test]

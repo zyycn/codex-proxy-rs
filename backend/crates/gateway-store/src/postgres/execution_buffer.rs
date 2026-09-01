@@ -8,12 +8,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use gateway_core::engine::{
-    AttemptRecord, CancellationToken, ExecutionStore, IntermediateFailure,
-    ModelRequestFinalization, ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport,
-    UpstreamSendState,
+    AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
+    NewModelRequest, ProbeFailure, RecoveryReport,
 };
 use gateway_core::error::{ProviderError, StoreError};
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{DaemonTask, WorkerTaskError};
+use gateway_core::upstream::UpstreamSendState;
 use tokio::sync::{Mutex, mpsc};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 4_096;

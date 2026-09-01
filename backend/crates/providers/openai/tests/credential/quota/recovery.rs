@@ -255,6 +255,6 @@ async fn deactivated_workspace_quota_response_persists_credential_error_reason()
     assert_eq!(current.credential_state(), CredentialState::Banned);
     assert_eq!(
         current.last_error_reason(),
-        Some(gateway_core::engine::credential::AccountErrorReason::AccountBanned)
+        Some(gateway_core::account::AccountErrorReason::AccountBanned)
     );
 }

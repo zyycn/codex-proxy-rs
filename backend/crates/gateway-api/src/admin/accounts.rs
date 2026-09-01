@@ -36,7 +36,7 @@ use gateway_admin::model::{
     },
 };
 use gateway_core::{
-    engine::credential::{OpaqueProviderData, ProviderAccountId},
+    account::{OpaqueProviderData, ProviderAccountId},
     routing::{AccountGroupId, ProviderKind, UpstreamModelId},
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -883,7 +883,7 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
                 "type": "error",
                 "source": source.as_str(),
                 "gatewayErrorCode": gateway_error_code.as_str(),
-                "sendState": send_state.map(gateway_core::engine::UpstreamSendState::as_str),
+                "sendState": send_state.map(gateway_core::upstream::UpstreamSendState::as_str),
                 "error": message,
                 "providerErrorCode": provider_error_code,
                 "providerErrorType": provider_error_type,

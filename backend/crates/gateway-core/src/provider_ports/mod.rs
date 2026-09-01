@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use futures::future::BoxFuture;
 
-use crate::engine::credential::{
+use crate::account::{
     AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };

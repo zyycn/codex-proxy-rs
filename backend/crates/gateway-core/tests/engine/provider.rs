@@ -6,13 +6,12 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use futures_timer::Delay;
 
-use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccountId};
+use gateway_core::account::{AccountFeedbackStats, ProviderAccountId};
+use gateway_core::engine::AttemptContext;
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
     ProviderModelCapabilities, ProviderRegistry, ProviderRequest, ProviderStream, RegistryError,
-    UpstreamTransport,
 };
-use gateway_core::engine::{AttemptContext, UpstreamSendState};
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
     ContentItem, ContentKind, GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta,
@@ -20,6 +19,7 @@ use gateway_core::event::{
 };
 use gateway_core::operation::OperationKind;
 use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::json;
 
 struct NamedProvider(&'static str);

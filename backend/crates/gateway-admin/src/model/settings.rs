@@ -12,7 +12,7 @@ use super::Revision;
 pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 
 /// 账号调度策略；由 Core 拥有稳定值与 wire 映射。
-pub use gateway_core::engine::credential::RotationStrategy;
+pub use gateway_core::account::RotationStrategy;
 
 /// 完整运行设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]

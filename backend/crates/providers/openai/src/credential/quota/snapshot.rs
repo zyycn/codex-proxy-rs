@@ -6,7 +6,7 @@
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountQuotaSignals, CredentialRevision, ProviderAccountId, QuotaEvidence, QuotaObservation,
     QuotaState,
 };

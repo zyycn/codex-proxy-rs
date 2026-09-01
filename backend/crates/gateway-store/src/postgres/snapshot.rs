@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::account::ProviderAccountId;
 use gateway_core::routing::{
     AccountGroupId, ConfigRevision,
     snapshot::{

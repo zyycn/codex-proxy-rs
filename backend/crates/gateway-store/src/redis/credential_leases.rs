@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
-use gateway_core::engine::credential::{AccountRuntimeSignals, ProviderAccountId};
+use gateway_core::account::{AccountRuntimeSignals, ProviderAccountId};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,

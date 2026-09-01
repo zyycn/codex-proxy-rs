@@ -3,7 +3,7 @@ use std::io;
 use chrono::Utc;
 use gateway_admin::model::backup::{BackupObjectMetadata, BackupStorageConfig};
 use gateway_admin::ports::backup::{BackupObjectStorePort, UploadObjectRequest};
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use gateway_store::backup::s3::S3ObjectStoreAdapter;
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};

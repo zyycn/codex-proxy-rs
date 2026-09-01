@@ -10,7 +10,7 @@ use gateway_admin::model::system::{
     SystemOperationKind, SystemOperationStatus, SystemUpdateEventLevel,
 };
 use gateway_admin::ports::system::{SystemOperationErrorKind, SystemOperations};
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use gateway_host::system_update::{
     ProcessSystemOperations, SystemUpdateConfig, validate_download_url,
 };

@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::account::ProviderAccountId;
 use reqwest::Client;
 use secrecy::ExposeSecret as _;
 use thiserror::Error;

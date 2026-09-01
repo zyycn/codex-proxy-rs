@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::account::ProviderAccountId;
 use gateway_core::provider_ports::{
     ProviderSessionAffinityKey, ProviderSessionExclusionPort, ProviderSessionExclusions,
     ProviderStoreError, ProviderStoreErrorKind,

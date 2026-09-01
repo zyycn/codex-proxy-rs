@@ -1,6 +1,6 @@
 //! 额度接口失败到规范化账号事实的唯一分类边界。
 
-use gateway_core::engine::credential::{AccountErrorReason, CredentialState, QuotaEvidence};
+use gateway_core::account::{AccountErrorReason, CredentialState, QuotaEvidence};
 use reqwest::StatusCode;
 use serde_json::Value;
 

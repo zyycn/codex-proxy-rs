@@ -1,4 +1,4 @@
-use gateway_core::accounting::{
+use gateway_core::metering::{
     CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates, CurrencyCode, Decimal,
     Money,
 };

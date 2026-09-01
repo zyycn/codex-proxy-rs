@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use gateway_core::{
-    engine::credential::{AccountStatus, resolve_account_status},
+    account::{AccountStatus, resolve_account_status},
     routing::{AccountGroupId, snapshot::SnapshotControl},
 };
 use uuid::Uuid;

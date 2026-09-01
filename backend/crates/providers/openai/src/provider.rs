@@ -9,16 +9,14 @@ use std::time::{Duration, Instant, SystemTime};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
+use gateway_core::account::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuationScope};
-use gateway_core::engine::credential::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::provider::{
     EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
     ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation,
-    ProviderSelectionObservation, ProviderStream, UpstreamTransport,
+    ProviderSelectionObservation, ProviderStream,
 };
-use gateway_core::engine::{
-    AttemptContext, AttemptTransport, CancellationToken, ContinuationAttempt, UpstreamSendState,
-};
+use gateway_core::engine::{AttemptContext, AttemptTransport, ContinuationAttempt};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
     OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
@@ -28,6 +26,7 @@ use gateway_core::event::{
     ProviderResponseMetadata, ProviderResponseObservation, ProviderResponseTimings, ResponseMeta,
     UpstreamHttpVersion, WebSocketPoolKind,
 };
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{
     GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind, ProviderSessionState,
 };
@@ -40,6 +39,7 @@ use gateway_core::task::{
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use gateway_protocol::openai::events::{
     ParsedRateLimits, parse_rate_limit_headers, rate_limits_to_header_pairs,
 };
@@ -3371,7 +3371,7 @@ impl ScheduledTask for OpenAiQuotaTask {
 impl DaemonTask for OpenAiCatalogEtagTask {
     fn run(
         &self,
-        cancellation: gateway_core::engine::CancellationToken,
+        cancellation: gateway_core::lifecycle::CancellationToken,
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
             loop {

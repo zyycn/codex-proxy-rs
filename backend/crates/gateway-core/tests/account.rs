@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::{Map, Value};
 
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountAttemptFeedback, AccountCandidate, AccountConcurrencyLimit, AccountEligibilityPolicy,
     AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
     AccountSelectionContext, AccountSelectionPolicy, AccountSelector, AccountStatus, AccountWeight,
@@ -190,13 +190,13 @@ fn inconclusive_quota_observation_cannot_erase_confirmed_access() {
         exhausted
             .merge_observation(QuotaState::observed_unknown(now + Duration::from_secs(1)))
             .access(),
-        gateway_core::engine::credential::QuotaAccessState::Exhausted
+        gateway_core::account::QuotaAccessState::Exhausted
     );
     assert_eq!(
         exhausted
             .merge_observation(QuotaState::allowed(now + Duration::from_secs(1)))
             .access(),
-        gateway_core::engine::credential::QuotaAccessState::Allowed
+        gateway_core::account::QuotaAccessState::Allowed
     );
 }
 

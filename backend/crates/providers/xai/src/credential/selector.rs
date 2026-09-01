@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy, AccountFeedbackStats,
     AccountSelectionContext, AccountSelector, CredentialState, ProviderAccount, ProviderAccountId,
     QuotaAccessState, QuotaEvidence, QuotaState,

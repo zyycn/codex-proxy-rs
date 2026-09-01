@@ -7,7 +7,7 @@ use std::fmt;
 
 use futures::future::BoxFuture;
 
-use crate::engine::credential::ProviderAccountId;
+use crate::account::ProviderAccountId;
 use crate::operation::ProviderSessionState;
 use crate::policy::ClientApiKeyId;
 use crate::routing::ProviderKind;

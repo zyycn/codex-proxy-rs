@@ -1,7 +1,7 @@
+use gateway_core::account::ProviderAccountId;
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
 };
-use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;
 

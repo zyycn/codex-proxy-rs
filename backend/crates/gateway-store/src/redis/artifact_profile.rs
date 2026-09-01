@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use gateway_core::engine::credential::OpaqueProviderData;
+use gateway_core::account::OpaqueProviderData;
 use gateway_core::provider_ports::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
     ProviderStoreErrorKind,

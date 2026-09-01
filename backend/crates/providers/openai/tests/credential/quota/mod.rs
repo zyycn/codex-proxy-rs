@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{TimeZone as _, Utc};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountStateChange, AccountStatus, CredentialState, ProviderAccount, ProviderAccountStore as _,
     QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaState,
 };

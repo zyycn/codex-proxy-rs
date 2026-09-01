@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::{TimeZone as _, Utc};
 use futures::TryStreamExt as _;
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::account::ProviderAccountId;
 use provider_openai::credential::{CodexCredentialProfileService, ImportCodexOAuthCredential};
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;

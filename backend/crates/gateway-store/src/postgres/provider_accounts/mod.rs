@@ -29,7 +29,7 @@ use gateway_admin::{
     },
     ports::store::{AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
 };
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountConcurrencyLimit, AccountErrorReason, AccountStateChange, AccountWeight,
     CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts,
     CredentialRevision as CoreCredentialRevision, CredentialState, LoadedCredential,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountErrorReason, CredentialCasOutcome, CredentialRevision, CredentialState,
     NewProviderAccount, PlaintextCredential, ProviderAccount, ProviderAccountStore,
 };

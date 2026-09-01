@@ -8,12 +8,12 @@ use async_trait::async_trait;
 use futures::executor::block_on;
 use futures::future::BoxFuture;
 
-use gateway_core::engine::credential::{AccountSelectionPolicy, RotationStrategy};
+use gateway_core::account::{AccountSelectionPolicy, RotationStrategy};
+use gateway_core::engine::AttemptContext;
 use gateway_core::engine::provider::{
     Provider, ProviderCatalogGeneration, ProviderModelCapabilities, ProviderRegistry,
     ProviderRequest, ProviderStream,
 };
-use gateway_core::engine::{AttemptContext, UpstreamSendState};
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::operation::OperationKind;
 use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
@@ -29,6 +29,7 @@ use gateway_core::routing::{
     RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::task::WorkerKind;
+use gateway_core::upstream::UpstreamSendState;
 
 #[derive(Clone)]
 struct TestSnapshotStore {

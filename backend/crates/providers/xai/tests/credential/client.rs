@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::future::ready;
 use std::sync::{Arc, Mutex};
 
-use gateway_core::engine::credential::CredentialState;
+use gateway_core::account::CredentialState;
 use provider_xai::{
     AuthorizationCallback, FailClosedTokenVerifier, FailureClass, FormValue, GrokCredentialAdmin,
     GrokOAuthClient, GrokOAuthConfig, GrokOAuthImportCandidate, GrokOAuthImportMetadata,

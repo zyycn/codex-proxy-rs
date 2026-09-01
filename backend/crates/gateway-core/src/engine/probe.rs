@@ -7,10 +7,7 @@ use futures::future::BoxFuture;
 
 use crate::error::{ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind};
 use crate::routing::{ProviderKind, UpstreamModelId};
-use crate::{
-    engine::{UpstreamSendState, credential::ProviderAccountId},
-    operation::Operation,
-};
+use crate::{account::ProviderAccountId, operation::Operation, upstream::UpstreamSendState};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountProbeRequest {

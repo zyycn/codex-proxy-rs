@@ -16,7 +16,7 @@ use axum::{
 use futures::{Sink, SinkExt, Stream, StreamExt, future::BoxFuture};
 use gateway_core::{
     engine::{
-        CancellationToken, CommitRequirement, CoordinatedEvent, EngineError,
+        CommitRequirement, CoordinatedEvent, EngineError,
         execution::{
             AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
             StartExecution, StartProviderExecution, StartedExecution,
@@ -24,6 +24,7 @@ use gateway_core::{
     },
     error::GatewayError,
     event::{GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ResponseMeta},
+    lifecycle::CancellationToken,
     routing::PublicModelId,
 };
 use serde_json::{Value, json};

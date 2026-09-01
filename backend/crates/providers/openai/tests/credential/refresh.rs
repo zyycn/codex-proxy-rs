@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone as _, Utc};
 use futures::future::BoxFuture;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountErrorReason, AccountStateChange, AccountStatus, CredentialState, ProviderAccountId,
     ProviderAccountStore, QuotaAccessChange, QuotaEvidence, QuotaState, QuotaWriteOutcome,
 };

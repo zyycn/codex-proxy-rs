@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use gateway_core::{
-    engine::credential::OpaqueProviderData,
+    account::OpaqueProviderData,
     provider_ports::{
         NewOAuthPendingFlow, OAuthPendingBinding, OAuthPendingClaimOutcome,
         OAuthPendingConsumeOutcome, OAuthPendingFlowPort, OAuthPendingPutOutcome,

@@ -3,7 +3,6 @@
 pub mod admission;
 pub mod continuation;
 pub mod coordinator;
-pub mod credential;
 pub mod execution;
 pub mod probe;
 pub mod provider;
@@ -14,25 +13,25 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use futures::channel::oneshot;
 use thiserror::Error;
 
-use crate::accounting::{CostEstimate, Usage};
+use crate::account::{AccountSelectionPolicy, ProviderAccountId};
 use crate::engine::continuation::{ContinuationBinding, NativeContinuationPin};
-use crate::engine::credential::{AccountSelectionPolicy, ProviderAccountId};
 use crate::error::{
     GatewayError, IdentifierError, ProviderError, ProviderErrorKind, StoreError, validate_text,
 };
 use crate::event::ProviderEvent;
+use crate::lifecycle::CancellationToken;
+use crate::metering::{CostEstimate, Usage};
 use crate::operation::OperationKind;
 use crate::operation::ProviderSessionState;
 use crate::policy::ClientApiKeyId;
 use crate::routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId};
+use crate::upstream::UpstreamSendState;
 
 /// `model_requests.id`。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,25 +53,6 @@ impl ModelRequestId {
 impl fmt::Display for ModelRequestId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
-    }
-}
-
-/// 上游是否可能已经收到业务 payload。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum UpstreamSendState {
-    NotSent,
-    Sent,
-    Ambiguous,
-}
-
-impl UpstreamSendState {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NotSent => "not_sent",
-            Self::Sent => "sent",
-            Self::Ambiguous => "ambiguous",
-        }
     }
 }
 
@@ -159,79 +139,6 @@ impl ProviderAttemptOutcome {
             Self::Failed { error_kind, .. } => Some(*error_kind),
         }
     }
-}
-
-struct CancellationState {
-    cancelled: AtomicBool,
-    waiters: Mutex<Vec<oneshot::Sender<()>>>,
-}
-
-/// 可克隆的请求取消信号。
-#[derive(Clone)]
-pub struct CancellationToken(Arc<CancellationState>);
-
-impl fmt::Debug for CancellationToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CancellationToken")
-            .field("cancelled", &self.is_cancelled())
-            .finish()
-    }
-}
-
-impl Default for CancellationToken {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CancellationToken {
-    #[must_use]
-    pub fn new() -> Self {
-        Self(Arc::new(CancellationState {
-            cancelled: AtomicBool::new(false),
-            waiters: Mutex::new(Vec::new()),
-        }))
-    }
-
-    pub fn cancel(&self) {
-        if self.0.cancelled.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let waiters = {
-            let mut guard = lock_unpoisoned(&self.0.waiters);
-            std::mem::take(&mut *guard)
-        };
-        for waiter in waiters {
-            let _ = waiter.send(());
-        }
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(Ordering::Acquire)
-    }
-
-    pub async fn cancelled(&self) {
-        if self.is_cancelled() {
-            return;
-        }
-        let (sender, receiver) = oneshot::channel();
-        {
-            let mut waiters = lock_unpoisoned(&self.0.waiters);
-            if self.is_cancelled() {
-                return;
-            }
-            waiters.push(sender);
-        }
-        let _ = receiver.await;
-    }
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// 单次 attempt 的账号选择与账号绑定状态事实。

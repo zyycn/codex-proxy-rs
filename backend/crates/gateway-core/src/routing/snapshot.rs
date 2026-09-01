@@ -10,11 +10,11 @@ use futures::future::BoxFuture;
 use futures::{FutureExt as _, Stream, StreamExt as _, pin_mut, select_biased};
 use futures_timer::Delay;
 
-use crate::engine::CancellationToken;
-use crate::engine::credential::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
+use crate::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use crate::engine::provider::{ProviderCatalogGeneration, ProviderRegistry};
 use crate::error::RoutingError;
 use crate::health::{HealthProbe, HealthState};
+use crate::lifecycle::CancellationToken;
 use crate::operation::Operation;
 use crate::policy::{
     ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,

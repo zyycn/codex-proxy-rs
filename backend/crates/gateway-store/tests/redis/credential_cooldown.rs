@@ -2,7 +2,7 @@ use std::time::{Duration as StdDuration, SystemTime};
 
 use chrono::{DateTime, Duration, Utc};
 use gateway_core::{
-    engine::credential::{CredentialRevision, ProviderAccountId},
+    account::{CredentialRevision, ProviderAccountId},
     provider_ports::{ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown},
 };
 use gateway_store::{

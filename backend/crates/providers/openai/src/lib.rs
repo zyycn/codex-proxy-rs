@@ -8,7 +8,7 @@ mod session_transport;
 use std::sync::Arc;
 
 use gateway_admin::ports::provider::ProviderAdmin;
-use gateway_core::engine::credential::ProviderAccountStore;
+use gateway_core::account::ProviderAccountStore;
 use gateway_core::engine::provider::Provider;
 use gateway_core::provider_ports::ProviderStorePorts;
 use gateway_core::routing::ProviderKind;
@@ -36,6 +36,7 @@ pub use provider::{
 pub mod credential;
 pub mod transport;
 
+pub use transport::tls::ensure_rustls_provider;
 pub use transport::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexRequestEncodeError, OpenAiBillingUsage,
     encode_generate_request, openai_billing_breakdown,

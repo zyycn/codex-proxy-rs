@@ -17,7 +17,7 @@ use gateway_admin::{
     },
     ports::store::{AccountGroupStore, AdminStoreError, AdminStoreResult},
 };
-use gateway_core::{engine::credential::AccountStatusFacts, routing::AccountGroupId};
+use gateway_core::{account::AccountStatusFacts, routing::AccountGroupId};
 use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
 
 use crate::{

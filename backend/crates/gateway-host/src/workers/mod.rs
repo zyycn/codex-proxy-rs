@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use futures::FutureExt as _;
-use gateway_core::engine::CancellationToken;
 use gateway_core::health::{
     WorkerHealthKey, WorkerHealthSnapshot, WorkerHealthSource, WorkerRuntimeState,
 };
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerDisabledReason, WorkerId, WorkerKind, WorkerLeaderLeaseGuard,

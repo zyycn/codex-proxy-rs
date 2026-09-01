@@ -6,14 +6,13 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 
 use gateway_core::{
-    engine::{UpstreamSendState, probe::AccountProbeErrorSource},
-    error::GatewayErrorKind,
-    routing::ProviderKind,
+    engine::probe::AccountProbeErrorSource, error::GatewayErrorKind, routing::ProviderKind,
+    upstream::UpstreamSendState,
 };
 
 use super::{PageSize, Revision, account_groups::AccountGroupRef, observability::TimeRange};
 
-pub use gateway_core::engine::credential::{
+pub use gateway_core::account::{
     AccountConcurrencyLimit, AccountErrorReason, AccountStatus, AccountStatusFacts,
     AccountStatusProjection, AccountWeight, CredentialState, QuotaAccessState, QuotaEvidence,
     QuotaState, resolve_account_status,
@@ -218,7 +217,7 @@ pub struct UpdateAccount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountUpdateResult {
     pub config_revision: Revision,
-    pub account_id: gateway_core::engine::credential::ProviderAccountId,
+    pub account_id: gateway_core::account::ProviderAccountId,
 }
 
 /// 一批账号可编辑事实的一次性替换命令。
@@ -235,7 +234,7 @@ pub struct BatchUpdateAccounts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountsUpdateResult {
     pub config_revision: Revision,
-    pub account_ids: Vec<gateway_core::engine::credential::ProviderAccountId>,
+    pub account_ids: Vec<gateway_core::account::ProviderAccountId>,
 }
 
 /// 账号批量删除命令。

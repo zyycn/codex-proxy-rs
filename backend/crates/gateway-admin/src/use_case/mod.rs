@@ -30,7 +30,7 @@ use crate::{
     },
 };
 use gateway_core::{
-    engine::credential::ProviderAccountId,
+    account::ProviderAccountId,
     routing::{ConfigRevision, ProviderKind, snapshot::SnapshotControl},
 };
 

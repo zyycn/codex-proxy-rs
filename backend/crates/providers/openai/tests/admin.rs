@@ -19,14 +19,15 @@ use gateway_admin::model::provider_credentials::{
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
     ProviderAccountStore, QuotaAccessChange, QuotaEvidence, QuotaObservation, QuotaState,
 };
 use gateway_core::engine::provider::ProviderRequest;
 use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, CancellationToken, ModelRequestId, RequestAttemptContext,
+    AccountAttemptContext, AttemptContext, ModelRequestId, RequestAttemptContext,
 };
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{

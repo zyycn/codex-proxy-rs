@@ -10,23 +10,20 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::executor::block_on;
 
-use gateway_core::accounting::{CalculatedCost, CostSource, ProviderReportedCost, Usage};
+use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
-};
-use gateway_core::engine::credential::{
-    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::gateway_error_from_engine;
 use gateway_core::engine::provider::{
     Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
-    ProviderRegistry, ProviderRequest, ProviderStream, UpstreamTransport,
+    ProviderRegistry, ProviderRequest, ProviderStream,
 };
 use gateway_core::engine::{
-    AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, CancellationToken,
-    CommitRequirement, ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore,
-    GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
-    ProviderAttemptOutcome, RecoveryReport, UpstreamSendState,
+    AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, CommitRequirement,
+    ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore, GatewayEngine,
+    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    ProviderAttemptOutcome, RecoveryReport,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
@@ -38,6 +35,8 @@ use gateway_core::event::{
     ProviderResponseObservation, ProviderResponseTimings, ResponseMeta, ToolCallDelta,
     UpstreamHttpVersion, WebSocketPoolKind,
 };
+use gateway_core::lifecycle::CancellationToken;
+use gateway_core::metering::{CalculatedCost, CostSource, ProviderReportedCost, Usage};
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
@@ -45,6 +44,7 @@ use gateway_core::routing::{
     ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingPlan,
     RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

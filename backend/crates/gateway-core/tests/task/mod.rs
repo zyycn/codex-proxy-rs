@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerCycleContext, WorkerDefinitionError,
     WorkerFencingToken, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,

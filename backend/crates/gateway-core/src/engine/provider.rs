@@ -11,45 +11,21 @@ use async_trait::async_trait;
 use futures::Stream;
 use thiserror::Error;
 
-use crate::engine::credential::{
+use crate::account::{
     AccountAttemptFeedback, AccountCapacitySnapshot, AccountFeedbackStats, ProviderAccountId,
 };
-use crate::engine::{AttemptContext, UpstreamSendState};
-use crate::error::{
-    IdentifierError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind, validate_text,
-};
+use crate::engine::AttemptContext;
+use crate::error::{OpaqueUpstreamValue, ProviderError, ProviderErrorKind};
 use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
 use crate::routing::{
     ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, UpstreamModelId,
 };
+use crate::upstream::{UpstreamSendState, UpstreamTransport};
 
 /// Box 只出现在 Provider Registry 的统一 event envelope 边界。
 pub type EventStream =
     Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'static>>;
-
-/// 上游 transport 注册名称。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct UpstreamTransport(String);
-
-impl UpstreamTransport {
-    /// 校验 transport 名称。
-    ///
-    /// # Errors
-    ///
-    /// 名称无效时返回错误。
-    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        let value = value.into();
-        validate_text(&value, 64, true, None)?;
-        Ok(Self(value))
-    }
-
-    /// 返回 transport 名称。
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
 
 /// Provider 选定单个 credential 后返回的事实。
 #[derive(Debug, Clone, PartialEq, Eq)]

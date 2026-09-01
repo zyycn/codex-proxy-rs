@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountErrorReason, CredentialState, ProviderAccount, ProviderAccountId, ProviderRefreshQuery,
 };
 use gateway_core::provider_ports::{

@@ -7,8 +7,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use thiserror::Error;
 
-use crate::engine::UpstreamSendState;
 use crate::event::{ProviderEvent, ProviderResponseHeader};
+use crate::upstream::UpstreamSendState;
 
 /// 应用层标识不满足约束。
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -120,7 +120,7 @@ pub enum PolicyError {
 
 /// 用量或价格估算不满足事实约束。
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum AccountingError {
+pub enum MeteringError {
     /// 十进制定点值格式无效或超过 `numeric(20, 10)`。
     #[error("decimal value must fit unsigned numeric(20, 10)")]
     InvalidDecimal,

@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use futures::Stream;
-use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ClientVisibleUpstreamError, OpaqueUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
+use gateway_core::upstream::UpstreamSendState;
 use url::Url;
 use zeroize::Zeroizing;
 

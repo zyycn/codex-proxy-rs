@@ -7,7 +7,7 @@ use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::Stream;
 use gateway_core::{
-    engine::credential::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
+    account::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
     routing::{ProviderKind, UpstreamModelId},
 };
 use uuid::Uuid;
@@ -908,7 +908,7 @@ impl fmt::Debug for ProviderExport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
     pub account: AccountRecord,
-    pub projection: gateway_core::engine::credential::AccountStatusProjection,
+    pub projection: gateway_core::account::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,
 }

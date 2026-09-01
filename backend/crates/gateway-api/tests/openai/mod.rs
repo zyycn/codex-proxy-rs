@@ -12,15 +12,13 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
     ClientAdmissionRequest, ClientAdmissionRestoreResult,
 };
 use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
-};
-use gateway_core::engine::credential::{
-    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
 };
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientApiKeyUsageSink, DefaultExecutionService, ExecutionService,
@@ -29,7 +27,7 @@ use gateway_core::engine::execution::{
 use gateway_core::engine::provider::ProviderRegistry;
 use gateway_core::engine::{
     AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
-    NewModelRequest, RecoveryReport, UpstreamSendState,
+    NewModelRequest, RecoveryReport,
 };
 use gateway_core::error::StoreError;
 use gateway_core::health::{WorkerHealthSnapshot, WorkerHealthSource};
@@ -43,6 +41,7 @@ use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
     ProviderModel, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
+use gateway_core::upstream::UpstreamSendState;
 
 pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Router {
     api_router_with_origins(execution, Vec::new()).await
@@ -187,7 +186,7 @@ fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
 
 #[derive(Default)]
 struct TestLifecycle {
-    cancellation: gateway_core::engine::CancellationToken,
+    cancellation: gateway_core::lifecycle::CancellationToken,
 }
 
 struct TestConnectionGuard;
@@ -199,7 +198,7 @@ impl ConnectionLifecycle for TestLifecycle {
         Ok(Box::new(TestConnectionGuard))
     }
 
-    fn cancellation(&self) -> gateway_core::engine::CancellationToken {
+    fn cancellation(&self) -> gateway_core::lifecycle::CancellationToken {
         self.cancellation.clone()
     }
 

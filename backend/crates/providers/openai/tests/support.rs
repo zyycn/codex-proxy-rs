@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountConcurrencyLimit, AccountErrorReason, AccountRuntimeSignals, AccountStateChange,
     AccountWeight, CredentialCasOutcome, CredentialCasUpdate, CredentialCasUpdateParts,
     CredentialRevision, CredentialState, LoadedCredential, NewProviderAccount, OpaqueProviderData,
@@ -36,7 +36,7 @@ use secrecy::SecretString;
 #[derive(Clone)]
 struct StoredAccount {
     account: ProviderAccount,
-    credential: gateway_core::engine::credential::PlaintextCredential,
+    credential: gateway_core::account::PlaintextCredential,
     quota: Option<QuotaObservation>,
     state_observed_at: Option<SystemTime>,
 }
@@ -901,9 +901,9 @@ pub(crate) fn secret(access_token: &str) -> CodexOAuthSecret {
     }
 }
 
-pub(crate) fn account_policy() -> gateway_core::engine::credential::AccountSelectionPolicy {
-    gateway_core::engine::credential::AccountSelectionPolicy::new(
-        gateway_core::engine::credential::RotationStrategy::Smart,
+pub(crate) fn account_policy() -> gateway_core::account::AccountSelectionPolicy {
+    gateway_core::account::AccountSelectionPolicy::new(
+        gateway_core::account::RotationStrategy::Smart,
         NonZeroU32::new(2).expect("nonzero concurrency"),
         Duration::from_millis(10),
     )

@@ -10,7 +10,6 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use gateway_core::engine::UpstreamSendState;
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ClientTransport, ExecutionService,
     ExecutionSession, StartExecution, StartProviderExecution, StartedExecution,
@@ -22,6 +21,7 @@ use gateway_core::error::{
 use gateway_core::event::{ProtocolWireEvent, ProviderEvent, ProviderResponseHeader};
 use gateway_core::operation::{ImageRequestKind, Operation};
 use gateway_core::routing::PublicModelId;
+use gateway_core::upstream::UpstreamSendState;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 

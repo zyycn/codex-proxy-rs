@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::lifecycle::ConnectionLifecycle as _;
 use gateway_host::HostBundle;
 use gateway_host::serve::{ConnectionTracker, bind_listener};

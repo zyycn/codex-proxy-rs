@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use futures::future::{BoxFuture, join_all};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountStateChange, CredentialCasUpdate, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
     QuotaAccessChange, QuotaEvidence, QuotaObservation, QuotaState,
@@ -705,7 +705,7 @@ async fn billing_percent_does_not_rewrite_quota_access_fact() {
 
     assert_eq!(
         store.account(&id).expect("account").quota().access(),
-        gateway_core::engine::credential::QuotaAccessState::Exhausted
+        gateway_core::account::QuotaAccessState::Exhausted
     );
 }
 
@@ -735,7 +735,7 @@ async fn authoritative_billing_refresh_clears_existing_quota_exhaustion() {
 
     assert_eq!(
         store.account(&id).expect("account").quota().access(),
-        gateway_core::engine::credential::QuotaAccessState::Allowed
+        gateway_core::account::QuotaAccessState::Allowed
     );
 }
 
@@ -758,7 +758,7 @@ async fn full_usage_display_does_not_invent_quota_exhaustion() {
     let quota = store.account(&id).expect("account").quota();
     assert_eq!(
         quota.access(),
-        gateway_core::engine::credential::QuotaAccessState::Unknown
+        gateway_core::account::QuotaAccessState::Unknown
     );
     assert!(quota.reset_at().is_none());
 }
@@ -924,7 +924,7 @@ async fn expired_billing_window_does_not_participate_in_scheduling_rank() {
             .expect("refreshed account")
             .quota()
             .access(),
-        gateway_core::engine::credential::QuotaAccessState::Unknown
+        gateway_core::account::QuotaAccessState::Unknown
     );
 }
 
@@ -952,7 +952,7 @@ async fn non_authoritative_quota_refresh_does_not_clear_existing_quota_exhaustio
     assert!(!snapshot.billing().has_authoritative_quota());
     assert_eq!(
         store.account(&id).expect("account").quota().access(),
-        gateway_core::engine::credential::QuotaAccessState::Exhausted
+        gateway_core::account::QuotaAccessState::Exhausted
     );
 }
 

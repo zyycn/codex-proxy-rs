@@ -3,17 +3,19 @@
 //! 本 crate 只描述协议与 Provider 无关的业务语义。HTTP、数据库、Redis、
 //! 具体客户端协议和具体 Provider 都通过外层 adapter 接入。
 
-pub mod accounting;
+pub mod account;
 pub mod engine;
 pub mod error;
 pub mod event;
 pub mod health;
 pub mod lifecycle;
+pub mod metering;
 pub mod operation;
 pub mod policy;
 pub mod provider_ports;
 pub mod routing;
 pub mod task;
+pub mod upstream;
 
 use std::sync::Arc;
 use std::time::SystemTime;

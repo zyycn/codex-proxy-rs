@@ -55,8 +55,8 @@ flowchart LR
 | 路径 | 责任 |
 | --- | --- |
 | `backend/apps/gateway` | 读取顶层配置、连接 Bundle、注册 Provider 与 Worker |
-| `gateway-protocol` | 跨层共享的 wire contract 和 canonical event，不依赖其他 workspace crate |
-| `gateway-core` | operation、请求快照、路由、admission、attempt 协调、交付边界和计量 |
+| `gateway-protocol` | 跨层共享的 OpenAI wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
+| `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
 | `gateway-admin` | 管理领域、用例、Provider/Store 端口、审计语义和备份策略 |
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin wire、静态管理端；不直接访问 Store 或具体 Provider |
 | `gateway-store` | PostgreSQL、Redis、S3/R2、`pg_dump` 适配器；不拥有业务策略 |
@@ -74,6 +74,35 @@ flowchart LR
 
 `gateway-api` 与 `apps/gateway` 的 architecture tests 冻结关键源码树和依赖禁区；其余边界由 manifest、
 集成测试和评审共同维护。
+
+### 3.1 Rust 模块组织约定
+
+后端采用目录模块的 `mod.rs` 风格；以下规则由组合根的 workspace architecture tests 扫描全部生产源码与
+测试模块树：
+
+1. crate root 作为顶层门面，声明模块并暴露该 crate 的配置、Bundle、端口或稳定领域合同；目录节点使用
+   `目录/mod.rs`，叶子模块使用 `名称.rs`，不混用 `名称.rs` 与 `名称/` 两套入口。
+2. 生产源码不使用内联 `mod name { ... }`、`#[path]` 或 `include!` 隐藏文件归属。`lib.rs` 和各级
+   `mod.rs` 是模块门面，负责声明子模块、选择性 re-export 与少量同层协调。
+3. 子模块默认私有；只有真实的跨 crate 生产合同才能使用 `pub`。当前 adapter/provider 的存量公开模块由
+   allowlist 冻结，集成测试组织完成调整后只允许缩小，不能无审计扩张。
+4. owner 级依赖保持单向。两个模块互相引用时，应把共享值对象、端口或生命周期能力提升到共同 owner，
+   不能依靠同一 crate 内可见性掩盖循环边界。
+
+当前遵守情况、越界点与收敛顺序见 [后端 Rust 模块架构审计](backend-module-audit.md)。
+
+### 3.2 `gateway-core` 内部 owner
+
+`gateway-core` 内共享事实按语义 owner 划分，不再借用 `engine` 作为通用命名空间：
+
+| 模块 | 唯一责任 |
+| --- | --- |
+| `account` | Provider 账号/credential/quota 值对象、持久化端口与请求级账号选择；门面下分 `model`、`store`、`selection`、`error` |
+| `metering` | 标准化 Usage、金额、费用估算与费用明细；不表示账号或开票系统 |
+| `upstream` | 跨 Engine、Event、Error 与 Provider 共用的 transport 名称和发送状态 |
+| `lifecycle` | 取消信号、连接注册与 drain 合同 |
+| `engine` | attempt、发送/提交屏障、执行编排和持久化调用时序 |
+| `routing` | 冻结路由事实、请求计划和运行时快照 |
 
 ## 4. 数据面请求生命周期
 
@@ -94,7 +123,7 @@ sequenceDiagram
   E->>E: enforce send and downstream commit barriers
   E-->>A: committed response stream
   A-->>C: JSON / SSE / WebSocket
-  E->>S: enqueue terminal observation and accounting
+  E->>S: enqueue terminal observation and metering
 ```
 
 请求开始时冻结 `RuntimeSnapshot`、Client Key 的账号范围、模型映射、Codex 客户端最低版本、Provider

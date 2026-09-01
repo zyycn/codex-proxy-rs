@@ -23,7 +23,7 @@ use gateway_admin::{
     },
     ports::store::AccountStore,
 };
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
     CredentialRevision, CredentialState, OpaqueProviderData, PlaintextCredential,
     ProviderAccountId, ProviderAccountIdentity, ProviderAccountStore, ProviderAccountUpdate,
@@ -1127,7 +1127,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
                 concurrency_limit: None,
-                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
             },
             &context,
@@ -1193,8 +1193,8 @@ async fn account_recovery_resets_status_facts_without_changing_credentials_or_sc
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let mut seeded = account("acct_recovery", "user-recovery");
     seeded.enabled = false;
-    seeded.concurrency_limit = gateway_core::engine::credential::AccountConcurrencyLimit::new(7);
-    seeded.weight = gateway_core::engine::credential::AccountWeight::new(25).expect("weight");
+    seeded.concurrency_limit = gateway_core::account::AccountConcurrencyLimit::new(7);
+    seeded.weight = gateway_core::account::AccountWeight::new(25).expect("weight");
     seeded.credential_state = CredentialState::Invalid;
     repository
         .insert_provider_account(seeded)
@@ -1344,10 +1344,8 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
             BatchUpdateAccounts {
                 account_ids: account_ids.clone(),
                 enabled: false,
-                concurrency_limit: gateway_core::engine::credential::AccountConcurrencyLimit::new(
-                    7,
-                ),
-                weight: gateway_core::engine::credential::AccountWeight::new(25).expect("weight"),
+                concurrency_limit: gateway_core::account::AccountConcurrencyLimit::new(7),
+                weight: gateway_core::account::AccountWeight::new(25).expect("weight"),
                 group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
             },
             &context,
@@ -1382,7 +1380,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 account_ids: account_ids.clone(),
                 enabled: true,
                 concurrency_limit: None,
-                weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000072")
                         .expect("missing group ID"),
@@ -1630,7 +1628,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
             next_refresh_at: None,
             enabled: true,
             concurrency_limit: None,
-            weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+            weight: gateway_core::account::AccountWeight::DEFAULT,
             credential_state: CredentialState::Ready,
             credential_observed_at: Utc::now(),
         })
@@ -1952,7 +1950,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: false,
             concurrency_limit: None,
-            weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+            weight: gateway_core::account::AccountWeight::DEFAULT,
             group_ids: Vec::new(),
             audit: audit("audit_account_disable", "disable", "acct_admin_a"),
         })
@@ -2321,7 +2319,7 @@ fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
         next_refresh_at: None,
         enabled: true,
         concurrency_limit: None,
-        weight: gateway_core::engine::credential::AccountWeight::DEFAULT,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
         credential_state: CredentialState::Ready,
         credential_observed_at: Utc::now(),
     }

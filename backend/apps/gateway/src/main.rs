@@ -1,6 +1,6 @@
 use std::{env, error::Error, io};
 
-use provider_openai::transport::tls::ensure_rustls_provider;
+use provider_openai::ensure_rustls_provider;
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     ensure_rustls_provider();

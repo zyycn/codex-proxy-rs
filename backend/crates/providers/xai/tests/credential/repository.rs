@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gateway_core::engine::credential::ProviderAccountStore;
+use gateway_core::account::ProviderAccountStore;
 use provider_xai::{GrokCredentialAdmin, GrokCredentialRepository, GrokCredentialRepositoryError};
 
 use crate::support::{MemoryProviderAccountStore, create_input, seed_input};

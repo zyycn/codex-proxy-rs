@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
     CredentialRevision, CredentialState, LoadedCredential, ProviderAccount, ProviderAccountStore,
     ProviderAccountUpdate, ProviderRefreshQuery,

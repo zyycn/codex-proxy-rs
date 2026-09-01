@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
     ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
 };
@@ -112,7 +112,7 @@ impl ProviderLeasePort for TestRefreshLeases {
         &'a self,
         _: &'a gateway_core::policy::ClientApiKeyId,
         _: &'a gateway_core::routing::ProviderKind,
-        _: &'a [gateway_core::engine::credential::ProviderAccountId],
+        _: &'a [gateway_core::account::ProviderAccountId],
     ) -> futures::future::BoxFuture<
         'a,
         Result<gateway_core::provider_ports::ProviderSchedulingState, ProviderStoreError>,

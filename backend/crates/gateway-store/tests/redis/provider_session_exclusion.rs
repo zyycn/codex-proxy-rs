@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::account::ProviderAccountId;
 use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionExclusionPort};
 use gateway_core::routing::ProviderKind;
 use gateway_store::redis::RedisProviderSessionExclusionRepository;

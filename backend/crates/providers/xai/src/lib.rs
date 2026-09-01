@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gateway_admin::ports::provider::ProviderAdmin;
-use gateway_core::engine::credential::ProviderAccountStore;
+use gateway_core::account::ProviderAccountStore;
 use gateway_core::engine::provider::Provider;
 use gateway_core::provider_ports::ProviderStorePorts;
 use gateway_core::routing::ProviderKind;

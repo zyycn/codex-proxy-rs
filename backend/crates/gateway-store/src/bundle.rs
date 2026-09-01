@@ -1,6 +1,6 @@
 //! 完成连接、迁移与 hydration 的 Store 能力集合与启动屏障。
 
-use gateway_core::engine::credential::ProviderAccountStore;
+use gateway_core::account::ProviderAccountStore;
 use gateway_core::provider_ports::ProviderCooldownPort;
 
 use super::*;

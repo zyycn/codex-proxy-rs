@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use gateway_core::accounting::{
+use gateway_core::metering::{
     CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
     CostEstimate, CostEstimateStatus, CostSource, CurrencyCode, Decimal, Money,
     ProviderReportedCost, Usage,

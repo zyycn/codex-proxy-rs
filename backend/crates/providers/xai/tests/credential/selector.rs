@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountAttemptFeedback, AccountConcurrencyLimit, AccountFeedbackStats, AccountRuntimeSignals,
     AccountSelectionPolicy, AccountWeight, CredentialCasOutcome, CredentialRevision,
     CredentialState, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,

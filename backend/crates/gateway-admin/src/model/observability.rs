@@ -189,11 +189,11 @@ impl DecimalAmount {
         Self::from_decimal(self.to_decimal()?.checked_div_u64(divisor)?)
     }
 
-    fn to_decimal(&self) -> Option<gateway_core::accounting::Decimal> {
+    fn to_decimal(&self) -> Option<gateway_core::metering::Decimal> {
         self.0.parse().ok()
     }
 
-    fn from_decimal(value: gateway_core::accounting::Decimal) -> Option<Self> {
+    fn from_decimal(value: gateway_core::metering::Decimal) -> Option<Self> {
         Some(Self(value.canonical()))
     }
 }

@@ -11,7 +11,7 @@ use std::{
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot},

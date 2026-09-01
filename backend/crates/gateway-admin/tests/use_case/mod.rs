@@ -70,10 +70,8 @@ use gateway_admin::{
     },
 };
 use gateway_core::{
-    engine::{
-        credential::ProviderAccountId,
-        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
-    },
+    account::ProviderAccountId,
+    engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     error::{GatewayError, GatewayErrorKind},
     policy::ClientApiKeyId,
     routing::{ConfigRevision, ProviderKind, snapshot::SnapshotControl},

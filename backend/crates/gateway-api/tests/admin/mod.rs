@@ -69,10 +69,8 @@ use gateway_admin::{
 };
 use gateway_api::admin::AdminSessionState;
 use gateway_core::{
-    engine::{
-        credential::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
-        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
-    },
+    account::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
+    engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     policy::{ClientApiKeyId, RateLimits},
     routing::{
         ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId, snapshot::SnapshotControl,

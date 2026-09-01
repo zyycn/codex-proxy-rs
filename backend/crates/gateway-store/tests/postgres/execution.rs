@@ -1,9 +1,10 @@
 use chrono::{Duration, Utc};
-use gateway_core::accounting::{CalculatedCost, CostEstimate, Usage};
 use gateway_core::engine::{
     ExecutionOutcome, ExecutionStore, ModelRequestFinalization as CoreModelRequestFinalization,
-    ModelRequestId, ModelRequestTimings as CoreModelRequestTimings, UpstreamSendState,
+    ModelRequestId, ModelRequestTimings as CoreModelRequestTimings,
 };
+use gateway_core::metering::{CalculatedCost, CostEstimate, Usage};
+use gateway_core::upstream::UpstreamSendState;
 use gateway_store::postgres::{
     ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest, PgExecutionStore,
 };

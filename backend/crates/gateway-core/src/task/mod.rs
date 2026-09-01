@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
-use crate::engine::CancellationToken;
+use crate::lifecycle::CancellationToken;
 
 /// 冻结架构中的全部后台任务类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

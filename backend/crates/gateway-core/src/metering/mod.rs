@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::error::AccountingError;
+use crate::error::MeteringError;
 
 const DECIMAL_SCALE: u128 = 10_000_000_000;
 const MAX_SCALED_DECIMAL: u128 = 99_999_999_999_999_999_999;
@@ -20,9 +20,9 @@ impl Decimal {
     /// # Errors
     ///
     /// 超出数据库范围时返回错误。
-    pub const fn from_scaled(value: u128) -> Result<Self, AccountingError> {
+    pub const fn from_scaled(value: u128) -> Result<Self, MeteringError> {
         if value > MAX_SCALED_DECIMAL {
-            return Err(AccountingError::InvalidDecimal);
+            return Err(MeteringError::InvalidDecimal);
         }
         Ok(Self(value))
     }
@@ -66,14 +66,14 @@ impl Decimal {
 }
 
 impl FromStr for Decimal {
-    type Err = AccountingError;
+    type Err = MeteringError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value.is_empty() || value.starts_with(['-', '+']) {
-            return Err(AccountingError::InvalidDecimal);
+            return Err(MeteringError::InvalidDecimal);
         }
         let mut parts = value.split('.');
-        let integer = parts.next().ok_or(AccountingError::InvalidDecimal)?;
+        let integer = parts.next().ok_or(MeteringError::InvalidDecimal)?;
         let fraction = parts.next().unwrap_or("");
         if parts.next().is_some()
             || integer.is_empty()
@@ -82,24 +82,24 @@ impl FromStr for Decimal {
             || fraction.len() > 10
             || !fraction.bytes().all(|byte| byte.is_ascii_digit())
         {
-            return Err(AccountingError::InvalidDecimal);
+            return Err(MeteringError::InvalidDecimal);
         }
 
         let integer = integer
             .parse::<u128>()
-            .map_err(|_| AccountingError::InvalidDecimal)?;
+            .map_err(|_| MeteringError::InvalidDecimal)?;
         let fraction = if fraction.is_empty() {
             0
         } else {
             fraction
                 .parse::<u128>()
-                .map_err(|_| AccountingError::InvalidDecimal)?
+                .map_err(|_| MeteringError::InvalidDecimal)?
                 * 10_u128.pow(10_u32.saturating_sub(fraction.len() as u32))
         };
         let scaled = integer
             .checked_mul(DECIMAL_SCALE)
             .and_then(|whole| whole.checked_add(fraction))
-            .ok_or(AccountingError::InvalidDecimal)?;
+            .ok_or(MeteringError::InvalidDecimal)?;
         Self::from_scaled(scaled)
     }
 }
@@ -122,10 +122,10 @@ impl CurrencyCode {
     /// # Errors
     ///
     /// 输入不是三个大写 ASCII 字符时返回错误。
-    pub fn new(value: &str) -> Result<Self, AccountingError> {
+    pub fn new(value: &str) -> Result<Self, MeteringError> {
         let bytes = value.as_bytes();
         if bytes.len() != 3 || !bytes.iter().all(u8::is_ascii_uppercase) {
-            return Err(AccountingError::InvalidCurrency);
+            return Err(MeteringError::InvalidCurrency);
         }
         Ok(Self([bytes[0], bytes[1], bytes[2]]))
     }
@@ -460,7 +460,7 @@ impl ProviderReportedCost {
     /// # Errors
     ///
     /// ticks 超出数据库 `numeric(20, 10)` 范围时失败。
-    pub fn from_usd_ticks(ticks: u128) -> Result<Self, AccountingError> {
+    pub fn from_usd_ticks(ticks: u128) -> Result<Self, MeteringError> {
         Ok(Self {
             total: Money::new(Decimal::from_scaled(ticks)?, CurrencyCode(*b"USD")),
         })
@@ -487,7 +487,7 @@ impl CalculatedCost {
     /// # Errors
     ///
     /// ticks 超出数据库 `numeric(20, 10)` 范围时失败。
-    pub fn from_usd_ticks(ticks: u128) -> Result<Self, AccountingError> {
+    pub fn from_usd_ticks(ticks: u128) -> Result<Self, MeteringError> {
         Ok(Self {
             total: Money::new(Decimal::from_scaled(ticks)?, CurrencyCode(*b"USD")),
         })

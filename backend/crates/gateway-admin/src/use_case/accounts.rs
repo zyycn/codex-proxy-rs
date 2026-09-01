@@ -6,10 +6,8 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use futures::StreamExt as _;
 use gateway_core::{
-    engine::{
-        credential::ProviderAccountId,
-        probe::{AccountProbe, AccountProbeRequest},
-    },
+    account::ProviderAccountId,
+    engine::probe::{AccountProbe, AccountProbeRequest},
     routing::{ProviderKind, UpstreamModelId, snapshot::SnapshotControl},
 };
 

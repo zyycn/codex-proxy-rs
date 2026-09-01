@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{TimeZone as _, Utc};
 use futures::executor::block_on;
-use gateway_core::engine::credential::{ProviderAccount, ProviderAccountId};
+use gateway_core::account::{ProviderAccount, ProviderAccountId};
 use gateway_core::provider_ports::ProviderCatalogCachePort;
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{

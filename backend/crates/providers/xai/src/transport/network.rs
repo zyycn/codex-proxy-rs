@@ -29,9 +29,9 @@ use crate::{
     HttpMethod, MAX_GROK_BILLING_BYTES, MAX_GROK_MODEL_CATALOG_BYTES, OAuthHttpRequest,
     OAuthHttpResponse, OAuthHttpTransport, TransportFailure, TransportFailureKind, TransportFuture,
 };
-use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ClientVisibleUpstreamError, OpaqueUpstreamValue};
 use gateway_core::event::UpstreamHttpVersion;
+use gateway_core::upstream::UpstreamSendState;
 
 use super::{GrokQuotaFailureKind, classify_grok_quota_failure, scrub_account_fingerprints};
 

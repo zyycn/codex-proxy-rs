@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use gateway_core::engine::CancellationToken;
 use gateway_core::health::{WorkerHealthKey, WorkerHealthSnapshot, WorkerRuntimeState};
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDisabledReason,
     WorkerFencingToken, WorkerId, WorkerKind, WorkerLeaderLeaseGuard, WorkerLeaderLeasePort,

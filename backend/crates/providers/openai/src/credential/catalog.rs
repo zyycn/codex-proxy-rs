@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;

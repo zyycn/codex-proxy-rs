@@ -5,23 +5,23 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use futures::{StreamExt, stream};
-use gateway_core::engine::continuation::{
-    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
-};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountFeedbackStats, AccountSelectionPolicy, CredentialRevision, ProviderAccountStore,
     RotationStrategy,
 };
+use gateway_core::engine::continuation::{
+    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
+};
 use gateway_core::engine::provider::{Provider, ProviderRequest};
 use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, CancellationToken, ContinuationAttempt, ModelRequestId,
-    UpstreamSendState,
+    AccountAttemptContext, AttemptContext, ContinuationAttempt, ModelRequestId,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamError, ContinuationFailure, OpaqueUpstreamValue, ProviderError,
     ProviderErrorKind,
 };
 use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{
     Feature, GenerateRequest, Operation, OperationKind, ProtocolPayload, ProviderSessionState,
 };
@@ -30,6 +30,7 @@ use gateway_core::routing::{
     ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
     RuntimeSnapshot, SupportLevel, UpstreamModelId,
 };
+use gateway_core::upstream::UpstreamSendState;
 use provider_xai::{
     GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
     GrokCredentialFeedbackFuture, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
@@ -309,7 +310,7 @@ struct StubSelector {
     calls: AtomicUsize,
     feedback: Mutex<Vec<GrokCredentialFailure>>,
     error: Mutex<Option<GrokSessionSelectorError>>,
-    required_accounts: Mutex<Vec<Option<gateway_core::engine::credential::ProviderAccountId>>>,
+    required_accounts: Mutex<Vec<Option<gateway_core::account::ProviderAccountId>>>,
     upstream_models: Mutex<Vec<String>>,
 }
 
@@ -385,12 +386,12 @@ impl GrokSessionSelector for StubSelector {
 }
 
 struct SequencedAccountSelector {
-    accounts: Mutex<VecDeque<gateway_core::engine::credential::ProviderAccountId>>,
+    accounts: Mutex<VecDeque<gateway_core::account::ProviderAccountId>>,
 }
 
 impl SequencedAccountSelector {
     fn new(
-        accounts: impl IntoIterator<Item = gateway_core::engine::credential::ProviderAccountId>,
+        accounts: impl IntoIterator<Item = gateway_core::account::ProviderAccountId>,
     ) -> Arc<Self> {
         Arc::new(Self {
             accounts: Mutex::new(accounts.into_iter().collect()),
@@ -600,7 +601,7 @@ impl StubRecovery {
 impl GrokCredentialRecovery for StubRecovery {
     async fn recover_unauthorized(
         &self,
-        _: &gateway_core::engine::credential::ProviderAccountId,
+        _: &gateway_core::account::ProviderAccountId,
         _: CredentialRevision,
     ) -> GrokCredentialRecoveryOutcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -984,7 +985,7 @@ fn context(
 fn context_with_required(
     cancellation: CancellationToken,
     continuation: Option<ContinuationBinding>,
-    required_account: Option<gateway_core::engine::credential::ProviderAccountId>,
+    required_account: Option<gateway_core::account::ProviderAccountId>,
 ) -> AttemptContext {
     context_with_recovery_state(cancellation, continuation, required_account, false)
 }
@@ -992,7 +993,7 @@ fn context_with_required(
 fn context_with_recovery_state(
     cancellation: CancellationToken,
     continuation: Option<ContinuationBinding>,
-    required_account: Option<gateway_core::engine::credential::ProviderAccountId>,
+    required_account: Option<gateway_core::account::ProviderAccountId>,
     recovery_attempted: bool,
 ) -> AttemptContext {
     let account_state_owner = continuation

@@ -1,6 +1,6 @@
 //! Codex 明文 credential JSON 的 schema 校验与日志脱敏边界。
 
-use gateway_core::engine::credential::PlaintextCredential;
+use gateway_core::account::PlaintextCredential;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use thiserror::Error;

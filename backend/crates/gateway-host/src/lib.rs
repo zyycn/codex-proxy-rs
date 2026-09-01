@@ -13,8 +13,8 @@ use axum::Router;
 use gateway_admin::ports::{
     client_distribution::ClientDistributionResolver, system::SystemOperations,
 };
-use gateway_core::engine::CancellationToken;
 use gateway_core::health::WorkerHealthSource;
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::lifecycle::ConnectionLifecycle;
 use gateway_core::task::{WorkerContribution, WorkerLeaderLeasePort};
 

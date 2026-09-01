@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use redis::{Script, aio::ConnectionManager};
 
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccountId,
 };
 use gateway_core::provider_ports::{

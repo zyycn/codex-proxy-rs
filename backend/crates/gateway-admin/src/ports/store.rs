@@ -118,13 +118,13 @@ pub trait AccountStore: Send + Sync {
     async fn credential_details(
         &self,
         provider_kind: &gateway_core::routing::ProviderKind,
-        account_id: &gateway_core::engine::credential::ProviderAccountId,
+        account_id: &gateway_core::account::ProviderAccountId,
     ) -> AdminStoreResult<Option<CredentialDetails>>;
 
     async fn load_credentials_for_export(
         &self,
         provider_kind: &gateway_core::routing::ProviderKind,
-        account_ids: &[gateway_core::engine::credential::ProviderAccountId],
+        account_ids: &[gateway_core::account::ProviderAccountId],
     ) -> AdminStoreResult<Vec<ProviderExportCredentialInput>>;
 
     async fn commit_credential_import(
@@ -159,7 +159,7 @@ pub trait AccountStore: Send + Sync {
 
     async fn recover_account(
         &self,
-        account_id: &gateway_core::engine::credential::ProviderAccountId,
+        account_id: &gateway_core::account::ProviderAccountId,
         context: &MutationContext,
     ) -> AdminStoreResult<AccountUpdateResult>;
 
@@ -177,7 +177,7 @@ pub trait AccountStore: Send + Sync {
 
     async fn record_credential_export(
         &self,
-        account_ids: &[gateway_core::engine::credential::ProviderAccountId],
+        account_ids: &[gateway_core::account::ProviderAccountId],
         context: &MutationContext,
     ) -> AdminStoreResult<()>;
 }

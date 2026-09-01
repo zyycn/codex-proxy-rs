@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountStateChange, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
     CredentialState, LoadedCredential, NewProviderAccount, OpaqueProviderData, PlaintextCredential,
     ProviderAccount, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
@@ -336,7 +336,7 @@ impl GrokCredentialRepository {
 
     pub(crate) async fn list_refresh_candidates(
         &self,
-        query: gateway_core::engine::credential::ProviderRefreshQuery,
+        query: gateway_core::account::ProviderRefreshQuery,
     ) -> Result<Vec<LoadedCredential>, GrokCredentialRepositoryError> {
         self.store
             .list_refresh_candidates(query)

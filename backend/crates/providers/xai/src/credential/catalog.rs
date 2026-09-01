@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountQuotaSignals, CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount,
     ProviderAccountId, QuotaObservation, QuotaState,
 };

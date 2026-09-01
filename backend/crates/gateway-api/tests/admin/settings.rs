@@ -85,7 +85,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_admin::model::Revision;
     use gateway_admin::model::settings::RuntimeSettings;
     use gateway_api::admin::settings::RuntimeSettingsView;
-    use gateway_core::engine::credential::RotationStrategy;
+    use gateway_core::account::RotationStrategy;
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
@@ -146,7 +146,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
     use gateway_admin::model::Revision;
     use gateway_admin::model::settings::RuntimeSettings;
     use gateway_api::admin::settings::RuntimeSettingsView;
-    use gateway_core::engine::credential::RotationStrategy;
+    use gateway_core::account::RotationStrategy;
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let request: UpdateRuntimeSettingsRequest =

@@ -1,7 +1,7 @@
 use std::str::FromStr as _;
 
 use chrono::{TimeDelta, Utc};
-use gateway_core::engine::credential::OpaqueProviderData;
+use gateway_core::account::OpaqueProviderData;
 
 use gateway_admin::{
     model::{

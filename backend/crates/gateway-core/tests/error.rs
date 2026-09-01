@@ -1,10 +1,10 @@
 use bytes::Bytes;
-use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, OpaqueUpstreamValue,
     ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{ProtocolWireEvent, ProviderEvent, ProviderResponseHeader};
+use gateway_core::upstream::UpstreamSendState;
 use serde_json::json;
 
 #[test]

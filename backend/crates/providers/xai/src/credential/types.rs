@@ -3,7 +3,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountErrorReason, CredentialCasUpdate, CredentialRevision, CredentialState, LoadedCredential,
     ProviderAccountId, ProviderAccountUpdate,
 };

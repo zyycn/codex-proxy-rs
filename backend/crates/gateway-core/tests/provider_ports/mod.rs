@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::time::{Duration, SystemTime};
 
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountRuntimeSignals, CredentialRevision, OpaqueProviderData, ProviderAccountId,
 };
 use gateway_core::provider_ports::{

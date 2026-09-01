@@ -221,7 +221,7 @@ impl OAuthPendingFlowPort for RedisOAuthPendingFlowRepository {
                         return Err(provider_invalid("decode OAuth pending payload"));
                     };
                     Ok(OAuthPendingClaimOutcome::Claimed(
-                        gateway_core::engine::credential::OpaqueProviderData::new(fields),
+                        gateway_core::account::OpaqueProviderData::new(fields),
                     ))
                 }
                 _ => Err(provider_invalid("decode OAuth pending claim outcome")),

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt;
-use gateway_core::engine::UpstreamSendState;
+use gateway_core::upstream::UpstreamSendState;
 use reqwest::Client;
 use serde_json::json;
 use url::Url;

@@ -404,10 +404,8 @@ mod actions {
         RotateAccountRequest, StartAccountAuthorizationRequest,
     };
     use gateway_core::{
-        engine::{
-            UpstreamSendState, credential::ProviderAccountId, probe::AccountProbeErrorSource,
-        },
-        error::GatewayErrorKind,
+        account::ProviderAccountId, engine::probe::AccountProbeErrorSource,
+        error::GatewayErrorKind, upstream::UpstreamSendState,
     };
     use serde_json::json;
 

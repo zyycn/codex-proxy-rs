@@ -17,11 +17,11 @@ use gateway_admin::model::provider_credentials::{
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
 use gateway_admin::ports::provider::ProviderAdminErrorKind;
-use gateway_core::engine::CancellationToken;
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     AccountRuntimeSignals, CredentialRevision, OpaqueProviderData, ProviderAccount,
     ProviderAccountId, ProviderAccountStore,
 };
+use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::Operation;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{

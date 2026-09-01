@@ -8,7 +8,7 @@ use gateway_admin::model::provider_credentials::{
     AuthorizationMutationTarget, AuthorizationOwnerBinding, PendingAuthorizationMutation,
 };
 use gateway_admin::model::{MutationActor, MutationContext};
-use gateway_core::engine::credential::{AccountStatus, ProviderAccountId};
+use gateway_core::account::{AccountStatus, ProviderAccountId};
 use gateway_core::routing::ProviderKind;
 use provider_openai::OpenAiConfig;
 use provider_openai::credential::token_client::{

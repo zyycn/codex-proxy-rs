@@ -27,7 +27,8 @@ use gateway_admin::{
     ports::store::{AdminStoreResult, ClientKeyStore},
 };
 use gateway_core::{
-    engine::{CancellationToken, execution::ClientApiKeyUsageSink},
+    engine::execution::ClientApiKeyUsageSink,
+    lifecycle::CancellationToken,
     policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
     routing::{AccountGroupId, ProviderKind},
     task::{DaemonTask, WorkerTaskError},

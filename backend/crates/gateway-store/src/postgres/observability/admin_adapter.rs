@@ -61,20 +61,20 @@ impl PgObservabilityRepository {
                 rate_limited_until.get(&account.id).copied(),
             );
             match projection.status {
-                gateway_core::engine::credential::AccountStatus::Normal => {
+                gateway_core::account::AccountStatus::Normal => {
                     metrics.normal = metrics.normal.saturating_add(1);
                     normal_accounts.push(account.clone());
                 }
-                gateway_core::engine::credential::AccountStatus::QuotaExhausted => {
+                gateway_core::account::AccountStatus::QuotaExhausted => {
                     metrics.quota_exhausted = metrics.quota_exhausted.saturating_add(1);
                 }
-                gateway_core::engine::credential::AccountStatus::RateLimited => {
+                gateway_core::account::AccountStatus::RateLimited => {
                     metrics.rate_limited = metrics.rate_limited.saturating_add(1);
                 }
-                gateway_core::engine::credential::AccountStatus::Disabled => {
+                gateway_core::account::AccountStatus::Disabled => {
                     metrics.disabled = metrics.disabled.saturating_add(1);
                 }
-                gateway_core::engine::credential::AccountStatus::Error => {
+                gateway_core::account::AccountStatus::Error => {
                     metrics.error = metrics.error.saturating_add(1);
                 }
             }

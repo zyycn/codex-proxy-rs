@@ -145,7 +145,7 @@ pub trait DatabaseDumpPort: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct DumpRequest {
     pub backup_id: String,
-    pub cancellation: gateway_core::engine::CancellationToken,
+    pub cancellation: gateway_core::lifecycle::CancellationToken,
 }
 
 /// 已完成并落盘的归档事实。
@@ -212,7 +212,7 @@ pub struct UploadObjectRequest {
     pub object_key: String,
     pub source: PathBuf,
     pub metadata: BackupObjectMetadata,
-    pub cancellation: gateway_core::engine::CancellationToken,
+    pub cancellation: gateway_core::lifecycle::CancellationToken,
 }
 
 /// 备份控制面所需的全部 Store 能力集合。

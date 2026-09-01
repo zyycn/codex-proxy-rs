@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gateway_core::engine::credential::ProviderAccountId;
+use gateway_core::account::ProviderAccountId;
 
 use gateway_admin::{
     AdminServices,

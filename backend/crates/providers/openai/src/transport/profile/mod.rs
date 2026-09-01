@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
-use gateway_core::engine::credential::OpaqueProviderData;
+use gateway_core::account::OpaqueProviderData;
 use gateway_core::provider_ports::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
 };

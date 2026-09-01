@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use gateway_core::engine::credential::{
-    AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
-};
+use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use gateway_core::operation::{
     CapabilityRequirements, Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
     OperationKind, ProtocolPayload, RawJsonPayload,

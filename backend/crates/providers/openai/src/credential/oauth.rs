@@ -12,7 +12,7 @@ use gateway_admin::model::{
         PendingAuthorizationMutation,
     },
 };
-use gateway_core::engine::credential::{
+use gateway_core::account::{
     LoadedCredential, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
 use secrecy::{ExposeSecret, SecretString};

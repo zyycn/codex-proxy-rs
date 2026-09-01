@@ -24,7 +24,7 @@ use gateway_admin::{
     },
 };
 use gateway_core::{
-    engine::credential::{AccountStatusFacts, CredentialState, QuotaState},
+    account::{AccountStatusFacts, CredentialState, QuotaState},
     routing::AccountGroupId,
 };
 

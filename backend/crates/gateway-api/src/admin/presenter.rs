@@ -3,7 +3,7 @@
 //! 当前 wire 仍保留 display 字段；统一由本模块提供，避免 accounts/observability
 //! 各自维护格式化规则。
 
-use gateway_core::accounting::Decimal;
+use gateway_core::metering::Decimal;
 
 /// 千分位格式化。
 #[must_use]

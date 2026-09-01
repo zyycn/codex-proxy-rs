@@ -1,8 +1,8 @@
+use gateway_core::account::ProviderAccountId;
 use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationScope,
     NativeContinuationStoreErrorKind, PreviousResponseId,
 };
-use gateway_core::engine::credential::ProviderAccountId;
 use gateway_core::operation::ProviderSessionState;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;

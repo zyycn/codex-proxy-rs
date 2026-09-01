@@ -2,11 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use gateway_core::accounting::{
-    CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
-    CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
-};
-use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{
     ClientVisibleUpstreamError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
 };
@@ -14,6 +9,11 @@ use gateway_core::event::{
     ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
+use gateway_core::metering::{
+    CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
+    CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
+};
+use gateway_core::upstream::UpstreamSendState;
 use gateway_protocol::openai::events::{TokenUsage, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;

@@ -1,12 +1,15 @@
 //! docs/architecture.md 依赖 DAG 与生产源码纪律的 workspace 级机器校验。
 
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
 
+use syn::Item;
+
 /// workspace 成员冻结清单;新增 crate 必须同步扩展本文件的依赖规则。
-const WORKSPACE_MEMBERS: &[&str] = &[
+pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
     "apps/gateway",
     "crates/gateway-admin",
     "crates/gateway-api",
@@ -95,6 +98,30 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("provider-xai", "crates/providers/xai"),
 ];
 
+/// Adapter/provider 根门面暂时允许公开的模块；收窄公开面时必须同步缩小本表。
+const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
+    ("crates/gateway-api", &["admin", "openai"]),
+    (
+        "crates/gateway-host",
+        &[
+            "client_distribution",
+            "config",
+            "serve",
+            "system_update",
+            "workers",
+        ],
+    ),
+    ("crates/gateway-store", &["backup", "postgres", "redis"]),
+    (
+        "crates/providers/openai",
+        &["config", "credential", "transport"],
+    ),
+    (
+        "crates/providers/xai",
+        &["config", "credential", "transport"],
+    ),
+];
+
 /// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表。
 const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("codex-proxy-rs", "gateway-admin"),
@@ -168,6 +195,35 @@ fn workspace_internal_dependency_edges_match_frozen_dag() {
 }
 
 #[test]
+fn adapter_public_module_surfaces_match_allowlist() {
+    for (member, allowed) in ADAPTER_PUBLIC_MODULES {
+        let root = backend_root().join(member).join("src/lib.rs");
+        let source = fs::read_to_string(&root).expect("read adapter crate root");
+        let syntax = syn::parse_file(&source).expect("parse adapter crate root");
+        let actual = syntax
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Mod(module) if matches!(module.vis, syn::Visibility::Public(_)) => {
+                    Some(module.ident.to_string())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let expected = allowed
+            .iter()
+            .map(|module| (*module).to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual,
+            expected,
+            "{} public module surface diverged from its allowlist",
+            root.display()
+        );
+    }
+}
+
+#[test]
 fn production_sources_do_not_host_tests() {
     for member in WORKSPACE_MEMBERS {
         let src = backend_root().join(member).join("src");
@@ -185,7 +241,114 @@ fn production_sources_do_not_host_tests() {
     }
 }
 
-fn backend_root() -> PathBuf {
+#[test]
+fn workspace_modules_follow_conventional_file_layout() {
+    for member in WORKSPACE_MEMBERS {
+        let member_root = backend_root().join(member);
+        assert_module_tree(&member_root.join("src"), &["lib.rs", "main.rs"]);
+
+        let tests = member_root.join("tests");
+        if tests.is_dir() {
+            assert_module_tree(&tests, &["main.rs"]);
+        }
+    }
+}
+
+fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
+    let files = super::rust_files(root);
+    for relative in &files {
+        if crate_roots
+            .iter()
+            .any(|candidate| relative == Path::new(candidate))
+        {
+            continue;
+        }
+
+        let file_name = relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("Rust source file name");
+        let parent = relative.parent().expect("Rust source parent");
+        let module_name = if file_name == "mod.rs" {
+            parent
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("mod.rs module name")
+        } else {
+            relative
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .expect("Rust source module name")
+        };
+
+        if file_name != "mod.rs" {
+            assert_ne!(
+                parent.file_name().and_then(|value| value.to_str()),
+                Some(module_name),
+                "{} repeats its parent module name",
+                root.join(relative).display()
+            );
+            let child_directory = relative.with_extension("");
+            assert!(
+                !files
+                    .iter()
+                    .any(|candidate| candidate.starts_with(&child_directory)),
+                "{} mixes a leaf module with a same-name module directory",
+                root.join(relative).display()
+            );
+        }
+
+        let declaration_parents = if parent.as_os_str().is_empty()
+            || (file_name == "mod.rs"
+                && parent
+                    .parent()
+                    .is_some_and(|ancestor| ancestor.as_os_str().is_empty()))
+        {
+            crate_roots
+                .iter()
+                .map(|candidate| root.join(candidate))
+                .collect::<Vec<_>>()
+        } else {
+            let declaration_directory = if file_name == "mod.rs" {
+                parent.parent().expect("nested mod.rs parent")
+            } else {
+                parent
+            };
+            vec![root.join(declaration_directory).join("mod.rs")]
+        };
+        let declaration_count = declaration_parents
+            .iter()
+            .map(|path| external_module_declaration_count(path, module_name))
+            .sum::<usize>();
+        assert_eq!(
+            declaration_count,
+            1,
+            "{} must be declared exactly once by its parent module",
+            root.join(relative).display()
+        );
+    }
+}
+
+fn external_module_declaration_count(path: &Path, module_name: &str) -> usize {
+    if !path.is_file() {
+        return 0;
+    }
+    let source = fs::read_to_string(path).expect("read parent module source");
+    let syntax = syn::parse_file(&source).expect("parse parent module source");
+    syntax
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                Item::Mod(module)
+                    if module.content.is_none() && module.ident == module_name
+            )
+        })
+        .count()
+}
+
+pub(super) fn backend_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

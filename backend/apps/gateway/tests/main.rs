@@ -43,31 +43,33 @@ fn cargo_library_root_is_conventional_lib() {
 }
 
 #[test]
-fn production_files_have_no_hidden_modules_or_test_hooks() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for relative in ["bootstrap.rs", "lib.rs", "main.rs"] {
-        let path = root.join(relative);
-        let source = fs::read_to_string(&path).expect("read production source");
-        assert!(
-            !source.contains("include!("),
-            "{} uses include!",
-            path.display()
-        );
-        let syntax = syn::parse_file(&source).expect("parse production source");
-        for item in &syntax.items {
-            if let Item::Mod(module) = item {
-                assert!(
-                    module.content.is_none(),
-                    "{} has an inline module",
-                    path.display()
-                );
-            }
-            for attribute in item_attrs(item) {
-                assert!(
-                    !is_path_or_test_cfg(attribute),
-                    "{} has a production test/path hook",
-                    path.display(),
-                );
+fn workspace_production_files_have_no_hidden_modules_or_test_hooks() {
+    for member in architecture::WORKSPACE_MEMBERS {
+        let root = architecture::backend_root().join(member).join("src");
+        for relative in rust_files(&root) {
+            let path = root.join(relative);
+            let source = fs::read_to_string(&path).expect("read production source");
+            assert!(
+                !source.contains("include!("),
+                "{} uses include!",
+                path.display()
+            );
+            let syntax = syn::parse_file(&source).expect("parse production source");
+            for item in &syntax.items {
+                if let Item::Mod(module) = item {
+                    assert!(
+                        module.content.is_none(),
+                        "{} has an inline module",
+                        path.display()
+                    );
+                }
+                for attribute in item_attrs(item) {
+                    assert!(
+                        !is_path_or_test_cfg(attribute),
+                        "{} has a production test/path hook",
+                        path.display(),
+                    );
+                }
             }
         }
     }

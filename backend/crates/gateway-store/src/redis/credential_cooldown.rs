@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_admin::model::accounts::AccountRuntimeSnapshot;
 use gateway_core::{
-    engine::credential::{CredentialRevision, ProviderAccountId},
+    account::{CredentialRevision, ProviderAccountId},
     provider_ports::{
         ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown,
         ProviderStoreError, ProviderStoreErrorKind,

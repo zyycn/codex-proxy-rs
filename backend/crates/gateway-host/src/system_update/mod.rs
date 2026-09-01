@@ -22,7 +22,7 @@ use gateway_admin::model::system::{
 use gateway_admin::ports::system::{
     SystemOperationError, SystemOperationErrorKind, SystemOperations, SystemUpdateEventStream,
 };
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 use serde::Deserialize;
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
 

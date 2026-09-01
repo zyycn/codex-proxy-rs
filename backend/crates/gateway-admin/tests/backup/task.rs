@@ -10,7 +10,7 @@ use gateway_admin::{
     },
     ports::backup::{BackupRepository, DatabaseDumpPort, DumpRequest},
 };
-use gateway_core::engine::CancellationToken;
+use gateway_core::lifecycle::CancellationToken;
 
 use super::support::{
     DUMP_CONTENT, FakeBackupRepository, FakeDumpPort, FakeObjectStore, backup_id,

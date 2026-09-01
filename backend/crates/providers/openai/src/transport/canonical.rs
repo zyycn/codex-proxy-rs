@@ -6,13 +6,13 @@ use std::{
 };
 
 use bytes::Bytes;
-use gateway_core::accounting::Usage;
-use gateway_core::engine::UpstreamSendState;
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
     ContentItem, ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent,
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
+use gateway_core::metering::Usage;
+use gateway_core::upstream::UpstreamSendState;
 use gateway_protocol::openai::events::{TokenUsage, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder, SseFrame, sse_frame_is_done};
 use serde_json::Value;

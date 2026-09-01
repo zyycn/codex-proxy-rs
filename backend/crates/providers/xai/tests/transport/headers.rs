@@ -1,5 +1,5 @@
+use gateway_core::account::{CredentialRevision, ProviderAccountId};
 use gateway_core::engine::ModelRequestId;
-use gateway_core::engine::credential::{CredentialRevision, ProviderAccountId};
 use gateway_core::routing::UpstreamModelId;
 
 use provider_xai::{

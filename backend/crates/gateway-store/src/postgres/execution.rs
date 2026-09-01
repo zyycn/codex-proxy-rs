@@ -6,15 +6,15 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use gateway_core::accounting::{CostSource as CoreCostSource, Usage as CoreUsage};
 use gateway_core::engine::{
     AttemptRecord as CoreAttemptRecord, ExecutionStore, IntermediateFailure,
     ModelRequestFinalization as CoreModelRequestFinalization, ModelRequestId,
     NewModelRequest as CoreNewModelRequest, ProbeFailure, RecoveryReport as CoreRecoveryReport,
-    UpstreamSendState as CoreUpstreamSendState,
 };
 use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
+use gateway_core::metering::{CostSource as CoreCostSource, Usage as CoreUsage};
 use gateway_core::routing::{AccountRoutingScopeKind, AccountRoutingSnapshot};
+use gateway_core::upstream::UpstreamSendState as CoreUpstreamSendState;
 
 use crate::{
     ConflictKind, DecimalAmount, StoreError, StoreResult, postgres_unavailable, require_nonempty,

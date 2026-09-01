@@ -1,10 +1,10 @@
 use bytes::Bytes;
-use gateway_core::engine::provider::UpstreamTransport;
 use gateway_core::event::{
     ContentItem, ContentKind, EventSequenceError, EventSequenceValidator, GatewayEvent,
     ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
+use gateway_core::upstream::UpstreamTransport;
 use serde_json::json;
 
 #[test]

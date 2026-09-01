@@ -6,22 +6,23 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::accounting::{CostEstimate, CostSource, Usage};
 use crate::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, NativeContinuationScope, PreviousResponseId,
 };
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
     AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTransport, AttemptTrigger,
-    CancellationToken, CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError,
-    ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization,
-    ModelRequestId, ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner,
-    ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
+    CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
+    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
+    ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
+    RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError};
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
+use crate::lifecycle::CancellationToken;
+use crate::metering::{CostEstimate, CostSource, Usage};
 use crate::operation::{Operation, ProviderSessionState};
 use crate::routing::RoutingPlan;
 use futures::future::Fuse;
@@ -35,12 +36,12 @@ pub struct AttemptCoordinator<S: ?Sized> {
 
 #[derive(Debug, Clone)]
 enum AccountSelection {
-    Scheduled(Option<crate::engine::credential::ProviderAccountId>),
-    Diagnostic(crate::engine::credential::ProviderAccountId),
+    Scheduled(Option<crate::account::ProviderAccountId>),
+    Diagnostic(crate::account::ProviderAccountId),
 }
 
 impl AccountSelection {
-    fn required_account(&self) -> Option<&crate::engine::credential::ProviderAccountId> {
+    fn required_account(&self) -> Option<&crate::account::ProviderAccountId> {
         match self {
             Self::Scheduled(account) => account.as_ref(),
             Self::Diagnostic(account) => Some(account),
@@ -73,7 +74,7 @@ where
         request: NewModelRequest,
         operation: Operation,
         plan: RoutingPlan,
-        required_account: Option<crate::engine::credential::ProviderAccountId>,
+        required_account: Option<crate::account::ProviderAccountId>,
         continuation: Option<ContinuationBinding>,
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
@@ -96,7 +97,7 @@ where
         request: NewModelRequest,
         operation: Operation,
         plan: RoutingPlan,
-        required_account: crate::engine::credential::ProviderAccountId,
+        required_account: crate::account::ProviderAccountId,
         continuation: Option<ContinuationBinding>,
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
@@ -220,7 +221,7 @@ struct FailureFinalization {
 
 #[derive(Debug, Clone)]
 struct PendingTransportRecovery {
-    account: crate::engine::credential::ProviderAccountId,
+    account: crate::account::ProviderAccountId,
     transport: AttemptTransport,
     delay: Duration,
 }
@@ -251,12 +252,12 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     /// 路由预算只统计正常选号/账号恢复，不被 Provider-owned 传输预算消耗。
     routing_attempts: u32,
     candidate_index: usize,
-    excluded_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
-    credential_recovery_attempted_accounts: BTreeSet<crate::engine::credential::ProviderAccountId>,
+    excluded_accounts: BTreeSet<crate::account::ProviderAccountId>,
+    credential_recovery_attempted_accounts: BTreeSet<crate::account::ProviderAccountId>,
     /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
     /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算。
     /// 与 `required_account`（外部指定、贯穿整个请求）语义不同，不可合并。
-    recovery_account: Option<crate::engine::credential::ProviderAccountId>,
+    recovery_account: Option<crate::account::ProviderAccountId>,
     /// 上游传输在提交边界前失败后的一次性同账号重试或备用传输钉选。
     /// 与凭据恢复分开保存，避免把 transport recovery 误记为 OAuth 恢复。
     transport_recovery: Option<PendingTransportRecovery>,

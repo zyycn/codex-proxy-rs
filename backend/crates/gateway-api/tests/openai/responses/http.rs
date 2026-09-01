@@ -19,7 +19,7 @@ use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
     StartExecution, StartProviderExecution, StartedExecution,
 };
-use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, UpstreamSendState};
+use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind,
     ProviderError, ProviderErrorKind,
@@ -30,6 +30,7 @@ use gateway_core::event::{
 };
 use gateway_core::operation::{Operation, OperationKind};
 use gateway_core::routing::PublicModelId;
+use gateway_core::upstream::UpstreamSendState;
 use serde_json::{Value, json};
 
 use gateway_api::openai::responses::{collect_execution_response, stream_execution_response};
