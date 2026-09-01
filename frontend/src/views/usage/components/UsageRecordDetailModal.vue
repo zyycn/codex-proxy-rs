@@ -130,7 +130,7 @@ const attemptColumns = defineTableColumns<AttemptRow>([
   { key: 'model', label: '模型', kind: 'mono', size: 'lg' },
   { key: 'transport', label: '上游传输', kind: 'status', size: 'md' },
   { key: 'statusCode', label: '状态', kind: 'status', size: 'sm' },
-  { key: 'accountLabel', label: '账号', kind: 'mono', size: '3xl' },
+  { key: 'accountLabel', label: '账号', kind: 'mono', size: '2xl' },
   { key: 'latencyMs', label: '耗时', kind: 'numeric', size: 'sm' },
 ])
 
@@ -395,19 +395,11 @@ const tokenDonutOption = computed<EChartsOption>(() => {
       </section>
 
       <section v-if="attemptRows.length" :class="panelClass">
-        <div class="flex items-center gap-2">
-          <h3 :class="panelTitleClass">
-            尝试链路
-          </h3>
-          <span
-            class="text-cp-xs leading-none font-emphasis text-cp-text-quaternary"
-            title="中间尝试可能有缺口，仅展示可观测到的记录"
-          >
-            尽力观测
-          </span>
-        </div>
+        <h3 :class="panelTitleClass">
+          尝试链路
+        </h3>
         <BaseTable
-          class="attempt-table mt-2.5 min-w-0 font-mono tabular-nums"
+          class="attempt-table mt-2.5 h-auto! min-w-0 font-mono tabular-nums"
           :columns="attemptColumns"
           :rows="attemptRows"
           density="compact"
