@@ -72,8 +72,8 @@ flowchart LR
 3. API 只调用 Core/Admin 抽象；Store 只实现端口。
 4. 具体实现只在组合根相遇。
 
-`gateway-api` 与 `apps/gateway` 的 architecture tests 冻结关键源码树和依赖禁区；其余边界由 manifest、
-集成测试和评审共同维护。
+组合根的 workspace architecture tests 冻结成员清单、依赖 DAG、公开模块面、源码纪律以及生产/测试模块
+镜像关系；具体行为边界由各 crate 的集成测试维护。
 
 ### 3.1 Rust 模块组织约定
 
@@ -84,12 +84,18 @@ flowchart LR
    `目录/mod.rs`，叶子模块使用 `名称.rs`，不混用 `名称.rs` 与 `名称/` 两套入口。
 2. 生产源码不使用内联 `mod name { ... }`、`#[path]` 或 `include!` 隐藏文件归属。`lib.rs` 和各级
    `mod.rs` 是模块门面，负责声明子模块、选择性 re-export 与少量同层协调。
-3. 子模块默认私有；只有真实的跨 crate 生产合同才能使用 `pub`。当前 adapter/provider 的存量公开模块由
-   allowlist 冻结，集成测试组织完成调整后只允许缩小，不能无审计扩张。
+3. 子模块默认私有；只有真实的跨 crate 生产合同才能使用 `pub`。adapter/provider 的公开根模块由
+   allowlist 冻结，变更必须同步完成边界审计，不能为测试或兼容路径创建第二 owner。
 4. owner 级依赖保持单向。两个模块互相引用时，应把共享值对象、端口或生命周期能力提升到共同 owner，
    不能依靠同一 crate 内可见性掩盖循环边界。
+5. 每个 crate 的 `src/` 与 `tests/` 平级，生产源码不承载测试。`tests/` 镜像 `src/` 的模块目录形态：例如
+   `src/foo/mod.rs` 对应 `tests/foo/mod.rs`，`src/foo/bar.rs` 对应 `tests/foo/bar.rs`。一个生产模块可以没有
+   测试；额外场景测试必须放在最近的生产 owner 目录下。根级 `support` 和冻结的 crate/workspace 架构场景
+   是明确例外。
 
-当前遵守情况、越界点与收敛顺序见 [后端 Rust 模块架构审计](backend-module-audit.md)。
+较大的模块门面只负责组合和 re-export：账号 Admin HTTP 边界按 `wire`、`credentials`、`handlers`、
+`presenter` 划分；Provider 执行按 continuation、stream、failure、observation 和 worker 等职责拆分；xAI
+请求转换按 response、tools 与 history 拆分。各子模块之间只使用 owner 内最小可见性。
 
 ### 3.2 `gateway-core` 内部 owner
 
@@ -102,7 +108,8 @@ flowchart LR
 | `upstream` | 跨 Engine、Event、Error 与 Provider 共用的 transport 名称和发送状态 |
 | `lifecycle` | 取消信号、连接注册与 drain 合同 |
 | `engine` | attempt、发送/提交屏障、执行编排和持久化调用时序 |
-| `routing` | 冻结路由事实、请求计划和运行时快照 |
+| `routing` | 冻结路由事实、请求计划以及运行时快照的表示与编译 |
+| `runtime` | 当前快照的发布、读取、revision 订阅与周期对账任务 |
 
 ## 4. 数据面请求生命周期
 
@@ -263,7 +270,7 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 Worker 由各 Bundle 贡献、由 Host 统一监督：
 
 - Store：过期请求恢复、历史保留和 PostgreSQL/Redis 观测队列；
-- Core：RuntimeSnapshot 周期对账和 Redis change 订阅；
+- Core：`runtime` owner 的 RuntimeSnapshot 周期对账和 Redis change 订阅；
 - Admin：S3/R2 备份 daemon，负责调度、执行、删除收敛与保留清理；
 - Provider：credential refresh、quota/catalog 健康和官方版本/etag 检查。
 

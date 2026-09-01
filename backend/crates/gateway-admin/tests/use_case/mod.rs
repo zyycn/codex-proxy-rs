@@ -74,7 +74,8 @@ use gateway_core::{
     engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     error::{GatewayError, GatewayErrorKind},
     policy::ClientApiKeyId,
-    routing::{ConfigRevision, ProviderKind, snapshot::SnapshotControl},
+    routing::{ConfigRevision, ProviderKind},
+    runtime::SnapshotControl,
 };
 
 pub(super) struct AdminHarness {

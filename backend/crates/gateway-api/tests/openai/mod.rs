@@ -36,11 +36,11 @@ use gateway_core::policy::{
     ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,
     PlaintextClientApiKey, RateLimits,
 };
-use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
     ProviderModel, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
+use gateway_core::runtime::RuntimeSnapshotHandle;
 use gateway_core::upstream::UpstreamSendState;
 
 pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Router {

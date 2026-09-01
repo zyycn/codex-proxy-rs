@@ -34,7 +34,11 @@ fn source_tree_should_match_frozen_machine_manifest() {
     actual.sort();
     let mut expected = vec![
         "src/admin/account_groups.rs",
-        "src/admin/accounts.rs",
+        "src/admin/accounts/credentials.rs",
+        "src/admin/accounts/handlers.rs",
+        "src/admin/accounts/mod.rs",
+        "src/admin/accounts/presenter.rs",
+        "src/admin/accounts/wire.rs",
         "src/admin/auth.rs",
         "src/admin/backups.rs",
         "src/admin/client_keys.rs",
@@ -81,7 +85,7 @@ fn test_tree_should_match_frozen_rust_mirror() {
     actual.sort();
     let mut expected = vec![
         "tests/admin/account_groups.rs",
-        "tests/admin/accounts.rs",
+        "tests/admin/accounts/mod.rs",
         "tests/admin/auth.rs",
         "tests/admin/client_keys.rs",
         "tests/admin/errors.rs",
@@ -97,7 +101,7 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/main.rs",
         "tests/openai/auth.rs",
         "tests/openai/error.rs",
-        "tests/openai/images.rs",
+        "tests/openai/images/mod.rs",
         "tests/openai/mod.rs",
         "tests/openai/models.rs",
         "tests/openai/responses/http.rs",

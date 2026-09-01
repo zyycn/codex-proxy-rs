@@ -72,9 +72,8 @@ use gateway_core::{
     account::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
     engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     policy::{ClientApiKeyId, RateLimits},
-    routing::{
-        ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId, snapshot::SnapshotControl,
-    },
+    routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId},
+    runtime::SnapshotControl,
 };
 
 mod account_groups;

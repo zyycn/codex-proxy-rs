@@ -6,7 +6,8 @@ use std::{fmt, path::Path, sync::Arc, time::Duration};
 
 use gateway_core::{
     engine::probe::AccountProbe,
-    routing::{ProviderKind, snapshot::SnapshotControl},
+    routing::ProviderKind,
+    runtime::SnapshotControl,
     task::{
         DaemonRestartPolicy, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
         WorkerRunnable,

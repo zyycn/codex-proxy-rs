@@ -34,11 +34,11 @@ use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
 use crate::lifecycle::CancellationToken;
 use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
-use crate::routing::snapshot::RuntimeSnapshotHandle;
 use crate::routing::{
     ProviderKind, PublicModelId, PublicModelProfile, RoutingContext, RuntimeSnapshot,
     UpstreamModelId,
 };
+use crate::runtime::RuntimeSnapshotHandle;
 
 const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
 const COORDINATION_TIMEOUT: Duration = Duration::from_millis(100);

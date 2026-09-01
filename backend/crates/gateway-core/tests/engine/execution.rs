@@ -41,12 +41,12 @@ use gateway_core::operation::{
     RawJsonPayload,
 };
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
-use gateway_core::routing::snapshot::RuntimeSnapshotHandle;
 use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
     ProviderModel, PublicModelId, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
     UpstreamModelId,
 };
+use gateway_core::runtime::RuntimeSnapshotHandle;
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::json;
 

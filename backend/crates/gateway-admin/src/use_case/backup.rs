@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use gateway_core::routing::snapshot::SnapshotControl;
+use gateway_core::runtime::SnapshotControl;
 use secrecy::ExposeSecret as _;
 use uuid::Uuid;
 

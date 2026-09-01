@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use gateway_core::routing::snapshot::SnapshotControl;
+use gateway_core::runtime::SnapshotControl;
 
 use crate::{
     model::{

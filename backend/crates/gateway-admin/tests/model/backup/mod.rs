@@ -1,4 +1,4 @@
-//! 备份领域模型（model/backup.rs）的纯逻辑测试。
+//! 备份领域模型（model/backup）的纯逻辑测试。
 
 use chrono::{TimeZone as _, Utc};
 use secrecy::SecretString;

@@ -9,7 +9,8 @@ use std::{
 use async_trait::async_trait;
 use gateway_core::{
     account::{AccountStatus, resolve_account_status},
-    routing::{AccountGroupId, snapshot::SnapshotControl},
+    routing::AccountGroupId,
+    runtime::SnapshotControl,
 };
 use uuid::Uuid;
 

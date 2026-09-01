@@ -1235,7 +1235,7 @@ async fn transport_error_observation_should_retain_available_metrics() {
 }
 
 #[tokio::test]
-async fn compaction_stream_should_emit_openai_wire_and_keep_only_accounting_canonical() {
+async fn compaction_stream_should_emit_openai_wire_and_keep_only_metering_canonical() {
     let summary = valid_compaction_summary("validated summary");
     let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(compaction_sse(
         &summary,

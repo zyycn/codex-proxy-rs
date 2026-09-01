@@ -1,7 +1,7 @@
 //! docs/architecture.md 依赖 DAG 与生产源码纪律的 workspace 级机器校验。
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -98,7 +98,7 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("provider-xai", "crates/providers/xai"),
 ];
 
-/// Adapter/provider 根门面暂时允许公开的模块；收窄公开面时必须同步缩小本表。
+/// Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计。
 const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/gateway-api", &["admin", "openai"]),
     (
@@ -120,6 +120,12 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
         "crates/providers/xai",
         &["config", "credential", "transport"],
     ),
+];
+
+/// 不对应单一生产模块、而是校验 crate/workspace 整体契约的根级测试场景。
+const ROOT_TEST_SCENARIOS: &[(&str, &[&str])] = &[
+    ("apps/gateway", &["architecture"]),
+    ("crates/gateway-api", &["architecture"]),
 ];
 
 /// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表。
@@ -252,6 +258,84 @@ fn workspace_modules_follow_conventional_file_layout() {
             assert_module_tree(&tests, &["main.rs"]);
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModuleLayout {
+    File,
+    Directory,
+}
+
+#[test]
+fn integration_tests_mirror_production_module_tree() {
+    for member in WORKSPACE_MEMBERS {
+        let member_root = backend_root().join(member);
+        let tests_root = member_root.join("tests");
+        if !tests_root.is_dir() {
+            continue;
+        }
+
+        let production = module_layouts(&member_root.join("src"), &["lib.rs", "main.rs"]);
+        let tests = module_layouts(&tests_root, &["main.rs"]);
+        for (module, test_layout) in tests {
+            if module == Path::new("support") {
+                continue;
+            }
+
+            if let Some(production_layout) = production.get(&module) {
+                assert_eq!(
+                    test_layout,
+                    *production_layout,
+                    "{} must mirror the production module layout for {}",
+                    tests_root.join(module.with_extension("rs")).display(),
+                    member_root.join("src").join(&module).display(),
+                );
+                continue;
+            }
+
+            let has_production_owner = module
+                .parent()
+                .into_iter()
+                .flat_map(Path::ancestors)
+                .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+                .any(|ancestor| production.contains_key(ancestor));
+            assert!(
+                has_production_owner || root_test_scenario_allowed(member, &module),
+                "{} has no mirrored production module owner",
+                tests_root.join(module.with_extension("rs")).display(),
+            );
+        }
+    }
+}
+
+fn module_layouts(root: &Path, crate_roots: &[&str]) -> BTreeMap<PathBuf, ModuleLayout> {
+    super::rust_files(root)
+        .into_iter()
+        .filter(|relative| {
+            !crate_roots
+                .iter()
+                .any(|candidate| relative == Path::new(candidate))
+        })
+        .map(|relative| {
+            if relative.file_name().and_then(|value| value.to_str()) == Some("mod.rs") {
+                (
+                    relative.parent().expect("mod.rs parent").to_path_buf(),
+                    ModuleLayout::Directory,
+                )
+            } else {
+                (relative.with_extension(""), ModuleLayout::File)
+            }
+        })
+        .collect()
+}
+
+fn root_test_scenario_allowed(member: &str, module: &Path) -> bool {
+    let Some(module) = module.to_str() else {
+        return false;
+    };
+    ROOT_TEST_SCENARIOS
+        .iter()
+        .any(|(candidate, scenarios)| *candidate == member && scenarios.contains(&module))
 }
 
 fn assert_module_tree(root: &Path, crate_roots: &[&str]) {

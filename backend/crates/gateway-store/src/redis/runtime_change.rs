@@ -4,9 +4,9 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use gateway_core::routing::{
-    ConfigRevision,
-    snapshot::{SnapshotRevisionStream, SnapshotSubscriptionError, SnapshotSubscriptionPort},
+use gateway_core::{
+    routing::ConfigRevision,
+    runtime::{SnapshotRevisionStream, SnapshotSubscriptionError, SnapshotSubscriptionPort},
 };
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};

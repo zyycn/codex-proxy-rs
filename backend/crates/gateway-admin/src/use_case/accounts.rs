@@ -8,7 +8,8 @@ use futures::StreamExt as _;
 use gateway_core::{
     account::ProviderAccountId,
     engine::probe::{AccountProbe, AccountProbeRequest},
-    routing::{ProviderKind, UpstreamModelId, snapshot::SnapshotControl},
+    routing::{ProviderKind, UpstreamModelId},
+    runtime::SnapshotControl,
 };
 
 use crate::{

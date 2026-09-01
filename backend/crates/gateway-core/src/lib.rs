@@ -14,6 +14,7 @@ pub mod operation;
 pub mod policy;
 pub mod provider_ports;
 pub mod routing;
+pub mod runtime;
 pub mod task;
 pub mod upstream;
 
@@ -31,9 +32,9 @@ use engine::execution::{
 use engine::probe::AccountProbe;
 use engine::provider::ProviderRegistry;
 use health::HealthProbe;
-use routing::snapshot::{
-    RuntimeSnapshotCompiler, RuntimeSnapshotHandle, RuntimeSnapshotPublisher, SnapshotControl,
-    SnapshotStorePort, SnapshotSubscriptionPort,
+use routing::snapshot::{RuntimeSnapshotCompiler, SnapshotStorePort};
+use runtime::{
+    RuntimeSnapshotHandle, RuntimeSnapshotPublisher, SnapshotControl, SnapshotSubscriptionPort,
 };
 use task::{WorkerContribution, WorkerDefinitionError};
 

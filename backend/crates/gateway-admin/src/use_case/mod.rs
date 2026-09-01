@@ -31,7 +31,8 @@ use crate::{
 };
 use gateway_core::{
     account::ProviderAccountId,
-    routing::{ConfigRevision, ProviderKind, snapshot::SnapshotControl},
+    routing::{ConfigRevision, ProviderKind},
+    runtime::SnapshotControl,
 };
 
 fn map_store_error(error: AdminStoreError, resource: &'static str) -> AdminError {
