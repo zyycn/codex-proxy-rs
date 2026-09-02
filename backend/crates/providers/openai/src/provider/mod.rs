@@ -97,6 +97,8 @@ mod observation;
 mod workers;
 
 use execution::*;
+#[doc(hidden)]
+pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
 pub(crate) use workers::worker_contributions;
@@ -502,7 +504,10 @@ impl Provider for CodexProvider {
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {
-            stream.with_account_feedback(Arc::clone(&self.account_feedback))
+            stream.with_filtered_account_feedback(
+                Arc::clone(&self.account_feedback),
+                openai_failure_affects_account_score,
+            )
         } else {
             stream
         })

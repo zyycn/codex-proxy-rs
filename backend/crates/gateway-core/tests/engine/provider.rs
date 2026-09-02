@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
@@ -243,4 +245,140 @@ fn provider_stream_should_report_confirmed_sent_failure_but_ignore_unconfirmed_f
         feedback.scheduling_signals(&provider, &not_sent_account),
         (None, None)
     );
+}
+
+#[test]
+fn provider_stream_should_ignore_repeated_failures_rejected_by_the_filter() {
+    let feedback = Arc::new(AccountFeedbackStats::default());
+    let provider = ProviderKind::new("openai").expect("valid provider");
+    let account = ProviderAccountId::new("acct_client_config_error").expect("account");
+
+    for _ in 0..100 {
+        let metadata = ProviderCallMetadata::new(
+            provider.clone(),
+            UpstreamModelId::new("gpt-5").expect("valid model"),
+            account.clone(),
+            UpstreamTransport::new("http_sse").expect("valid transport"),
+        );
+        let events: EventStream = Box::pin(stream::iter([Err(ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::Sent,
+        ))]));
+        let mut provider_stream = ProviderStream::new(metadata, events, ())
+            .with_filtered_account_feedback(Arc::clone(&feedback), |_| false);
+
+        futures::executor::block_on(async {
+            assert!(
+                provider_stream
+                    .next()
+                    .await
+                    .is_some_and(|event| event.is_err())
+            );
+        });
+    }
+
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &account),
+        (None, None)
+    );
+}
+
+#[test]
+fn provider_stream_should_score_only_the_final_same_account_failure() {
+    let feedback = Arc::new(AccountFeedbackStats::default());
+    let provider = ProviderKind::new("openai").expect("valid provider");
+    let account = ProviderAccountId::new("acct_same_account_failure").expect("account");
+
+    for retry_index in 1..=3 {
+        let metadata = ProviderCallMetadata::new(
+            provider.clone(),
+            UpstreamModelId::new("gpt-5").expect("valid model"),
+            account.clone(),
+            UpstreamTransport::new("websocket").expect("valid transport"),
+        );
+        let error = ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Sent)
+            .with_pre_delivery_transport_retry(
+                NonZeroU32::new(retry_index).expect("positive retry index"),
+                Duration::ZERO,
+            );
+        let events: EventStream = Box::pin(stream::iter([Err(error)]));
+        let mut provider_stream = ProviderStream::new(metadata, events, ())
+            .with_filtered_account_feedback(Arc::clone(&feedback), |_| true);
+
+        futures::executor::block_on(async {
+            assert!(
+                provider_stream
+                    .next()
+                    .await
+                    .is_some_and(|event| event.is_err())
+            );
+        });
+    }
+
+    let metadata = ProviderCallMetadata::new(
+        provider.clone(),
+        UpstreamModelId::new("gpt-5").expect("valid model"),
+        account.clone(),
+        UpstreamTransport::new("websocket").expect("valid transport"),
+    );
+    let events: EventStream = Box::pin(stream::iter([Err(ProviderError::new(
+        ProviderErrorKind::Transport,
+        UpstreamSendState::Sent,
+    ))]));
+    let mut provider_stream = ProviderStream::new(metadata, events, ())
+        .with_filtered_account_feedback(Arc::clone(&feedback), |_| true);
+    futures::executor::block_on(async {
+        assert!(
+            provider_stream
+                .next()
+                .await
+                .is_some_and(|event| event.is_err())
+        );
+    });
+
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &account).0,
+        Some(2_000)
+    );
+}
+
+#[test]
+fn provider_stream_should_report_one_success_after_same_account_retry() {
+    let feedback = Arc::new(AccountFeedbackStats::default());
+    let provider = ProviderKind::new("openai").expect("valid provider");
+    let account = ProviderAccountId::new("acct_same_account_success").expect("account");
+    let retry_metadata = ProviderCallMetadata::new(
+        provider.clone(),
+        UpstreamModelId::new("gpt-5").expect("valid model"),
+        account.clone(),
+        UpstreamTransport::new("websocket").expect("valid transport"),
+    );
+    let retry_error = ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Sent)
+        .with_pre_delivery_transport_fallback();
+    let retry_events: EventStream = Box::pin(stream::iter([Err(retry_error)]));
+    let mut retry_stream = ProviderStream::new(retry_metadata, retry_events, ())
+        .with_filtered_account_feedback(Arc::clone(&feedback), |_| true);
+    futures::executor::block_on(async {
+        assert!(
+            retry_stream
+                .next()
+                .await
+                .is_some_and(|event| event.is_err())
+        );
+    });
+
+    let success_metadata = ProviderCallMetadata::new(
+        provider.clone(),
+        UpstreamModelId::new("gpt-5").expect("valid model"),
+        account.clone(),
+        UpstreamTransport::new("http_sse").expect("valid transport"),
+    );
+    let success_events: EventStream = Box::pin(stream::empty());
+    let mut success_stream = ProviderStream::new(success_metadata, success_events, ())
+        .with_filtered_account_feedback(Arc::clone(&feedback), |_| true);
+    futures::executor::block_on(async {
+        assert!(success_stream.next().await.is_none());
+    });
+
+    assert_eq!(feedback.scheduling_signals(&provider, &account).0, Some(0));
 }

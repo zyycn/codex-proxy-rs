@@ -2,6 +2,40 @@
 
 use super::*;
 
+/// OpenAI 失败对 Smart 账号分数的结构化 reason 闭集。
+///
+/// 已归一的上游 code 优先；code 缺失时才读取结构化客户端错误的 code/type。
+/// 新增错误、裸 HTTP 状态和内部错误 kind 默认都不会进入该闭集。
+const OPENAI_ACCOUNT_SCORE_FAILURE_REASONS: &[&str] = &[
+    "server_is_overloaded",
+    "slow_down",
+    "rate_limit_exceeded",
+    "rate_limit_error",
+    "server_error",
+    "service_unavailable_error",
+];
+
+fn is_openai_account_score_failure_reason(value: &str) -> bool {
+    let value = value.trim();
+    OPENAI_ACCOUNT_SCORE_FAILURE_REASONS
+        .iter()
+        .any(|reason| value.eq_ignore_ascii_case(reason))
+}
+
+fn openai_account_score_failure_reason(error: &ProviderError) -> Option<&str> {
+    if let Some(code) = error.upstream_code() {
+        return Some(code.as_str());
+    }
+    let upstream = error.client_visible_upstream_error()?;
+    upstream.code().or_else(|| upstream.error_type())
+}
+
+/// 返回该 OpenAI 失败是否属于 Smart 账号计分闭集。
+#[doc(hidden)]
+pub fn openai_failure_affects_account_score(error: &ProviderError) -> bool {
+    openai_account_score_failure_reason(error).is_some_and(is_openai_account_score_failure_reason)
+}
+
 pub(super) struct MappedProviderFailure {
     pub(super) error: ProviderError,
     pub(super) websocket_transport_retryable: bool,

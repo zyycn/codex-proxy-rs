@@ -3,9 +3,9 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroU32;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::sync::{Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::routing::ProviderKind;
 
@@ -94,6 +94,7 @@ pub struct AccountRuntimeSignals {
 }
 
 const ACCOUNT_FEEDBACK_EWMA_ALPHA: f64 = 0.2;
+const ACCOUNT_FAILURE_RATE_HALF_LIFE: Duration = Duration::from_secs(15 * 60);
 const EMPTY_FEEDBACK_SAMPLE: u64 = f64::NAN.to_bits();
 
 /// 一次真实上游 attempt 对账号级 Smart 调度产生的中立反馈。
@@ -111,37 +112,69 @@ struct AccountFeedbackKey {
 
 #[derive(Debug)]
 struct AccountFeedback {
-    failure_rate: AtomicU64,
+    failure_rate: Mutex<DecayingAccountFailureRate>,
     first_output_ms: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct DecayingAccountFailureRate {
+    value: f64,
+    updated_at: Option<Instant>,
+}
+
+impl DecayingAccountFailureRate {
+    fn value_at(&self, now: Instant) -> f64 {
+        let Some(updated_at) = self.updated_at else {
+            return self.value;
+        };
+        let elapsed = now.checked_duration_since(updated_at).unwrap_or_default();
+        self.value
+            * 0.5_f64.powf(elapsed.as_secs_f64() / ACCOUNT_FAILURE_RATE_HALF_LIFE.as_secs_f64())
+    }
+
+    fn report_at(&mut self, sample: f64, now: Instant) {
+        let now = self
+            .updated_at
+            .map_or(now, |updated_at| updated_at.max(now));
+        let decayed = self.value_at(now);
+        self.value =
+            ACCOUNT_FEEDBACK_EWMA_ALPHA * sample + (1.0 - ACCOUNT_FEEDBACK_EWMA_ALPHA) * decayed;
+        self.updated_at = Some(now);
+    }
 }
 
 impl Default for AccountFeedback {
     fn default() -> Self {
         Self {
             // 新账号从健康基线开始，首个失败样本按 EWMA 平滑，而不是直接判死。
-            failure_rate: AtomicU64::new(0.0_f64.to_bits()),
+            failure_rate: Mutex::new(DecayingAccountFailureRate::default()),
             first_output_ms: AtomicU64::new(EMPTY_FEEDBACK_SAMPLE),
         }
     }
 }
 
 impl AccountFeedback {
-    fn report(&self, feedback: AccountAttemptFeedback) {
+    fn report_at(&self, feedback: AccountAttemptFeedback, now: Instant) {
         let (failure, first_output_ms) = match feedback {
             AccountAttemptFeedback::Succeeded { first_output_ms } => (0.0, first_output_ms),
             AccountAttemptFeedback::Failed { first_output_ms } => (1.0, first_output_ms),
         };
-        update_feedback_ewma(&self.failure_rate, failure);
+        self.failure_rate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .report_at(failure, now);
         if let Some(first_output_ms) = first_output_ms.filter(|value| *value > 0) {
             update_feedback_ewma(&self.first_output_ms, first_output_ms as f64);
         }
     }
 
-    fn scheduling_signals(&self) -> (Option<u16>, Option<u64>) {
-        let failure_rate = load_feedback_ewma(&self.failure_rate).map(|value| {
-            let basis_points = (value.clamp(0.0, 1.0) * 10_000.0).round();
-            basis_points as u16
-        });
+    fn scheduling_signals_at(&self, now: Instant) -> (Option<u16>, Option<u64>) {
+        let failure_rate = self
+            .failure_rate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .value_at(now);
+        let failure_rate = Some((failure_rate.clamp(0.0, 1.0) * 10_000.0).round() as u16);
         let first_output_ms = load_feedback_ewma(&self.first_output_ms)
             .filter(|value| value.is_finite() && *value > 0.0)
             .map(|value| value.round() as u64);
@@ -163,6 +196,18 @@ impl AccountFeedbackStats {
         provider_kind: &ProviderKind,
         account_id: &ProviderAccountId,
     ) -> (Option<u16>, Option<u64>) {
+        self.scheduling_signals_at(provider_kind, account_id, Instant::now())
+    }
+
+    /// 读取账号在指定单调时刻的错误率与首个有效输出延迟 EWMA。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn scheduling_signals_at(
+        &self,
+        provider_kind: &ProviderKind,
+        account_id: &ProviderAccountId,
+        now: Instant,
+    ) -> (Option<u16>, Option<u64>) {
         let key = AccountFeedbackKey {
             provider_kind: provider_kind.clone(),
             account_id: account_id.clone(),
@@ -171,7 +216,7 @@ impl AccountFeedbackStats {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
-            .map(AccountFeedback::scheduling_signals)
+            .map(|account| account.scheduling_signals_at(now))
             .unwrap_or_default()
     }
 
@@ -181,6 +226,18 @@ impl AccountFeedbackStats {
         provider_kind: &ProviderKind,
         account_id: &ProviderAccountId,
         feedback: AccountAttemptFeedback,
+    ) {
+        self.report_at(provider_kind, account_id, feedback, Instant::now());
+    }
+
+    /// 回灌一次在指定单调时刻真实发送的上游 attempt。
+    #[doc(hidden)]
+    pub fn report_at(
+        &self,
+        provider_kind: &ProviderKind,
+        account_id: &ProviderAccountId,
+        feedback: AccountAttemptFeedback,
+        observed_at: Instant,
     ) {
         let key = AccountFeedbackKey {
             provider_kind: provider_kind.clone(),
@@ -192,7 +249,7 @@ impl AccountFeedbackStats {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
         {
-            account.report(feedback);
+            account.report_at(feedback, observed_at);
             return;
         }
         self.accounts
@@ -200,7 +257,7 @@ impl AccountFeedbackStats {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(key)
             .or_default()
-            .report(feedback);
+            .report_at(feedback, observed_at);
     }
 }
 

@@ -68,7 +68,10 @@ impl CodexProvider {
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {
-            stream.with_account_feedback(Arc::clone(&self.account_feedback))
+            stream.with_filtered_account_feedback(
+                Arc::clone(&self.account_feedback),
+                openai_failure_affects_account_score,
+            )
         } else {
             stream
         })

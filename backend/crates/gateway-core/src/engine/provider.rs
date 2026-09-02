@@ -15,7 +15,7 @@ use crate::account::{
     AccountAttemptFeedback, AccountCapacitySnapshot, AccountFeedbackStats, ProviderAccountId,
 };
 use crate::engine::AttemptContext;
-use crate::error::{OpaqueUpstreamValue, ProviderError, ProviderErrorKind};
+use crate::error::{OpaqueUpstreamValue, PreDeliveryRetry, ProviderError, ProviderErrorKind};
 use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
 use crate::routing::{
@@ -190,9 +190,14 @@ struct ProviderStreamAccountFeedback {
     stats: Arc<AccountFeedbackStats>,
     provider_kind: ProviderKind,
     account_id: ProviderAccountId,
+    failure_filter: fn(&ProviderError) -> bool,
     started_at: Option<Instant>,
     first_output_ms: Option<u64>,
     reported: bool,
+}
+
+fn score_all_confirmed_failures(_: &ProviderError) -> bool {
+    true
 }
 
 impl ProviderStreamAccountFeedback {
@@ -243,6 +248,15 @@ impl ProviderStreamAccountFeedback {
                 error.kind(),
                 ProviderErrorKind::Cancelled | ProviderErrorKind::ProcessTerminated
             )
+            || matches!(
+                error.pre_delivery_retry(),
+                Some(
+                    PreDeliveryRetry::SameAccountTransportRetry { .. }
+                        | PreDeliveryRetry::SameAccountTransportFallback
+                )
+            )
+            || error.retries_same_account()
+            || !(self.failure_filter)(error)
         {
             return;
         }
@@ -278,15 +292,35 @@ impl ProviderStream {
     /// 让公共 stream 边界统一回灌账号成功率与首个有效输出延迟。
     #[must_use]
     pub fn with_account_feedback(mut self, stats: Arc<AccountFeedbackStats>) -> Self {
+        self.set_account_feedback(stats, score_all_confirmed_failures);
+        self
+    }
+
+    /// 使用 Provider 定义的闭集判断回灌账号成功率与首个有效输出延迟。
+    #[must_use]
+    pub fn with_filtered_account_feedback(
+        mut self,
+        stats: Arc<AccountFeedbackStats>,
+        failure_filter: fn(&ProviderError) -> bool,
+    ) -> Self {
+        self.set_account_feedback(stats, failure_filter);
+        self
+    }
+
+    fn set_account_feedback(
+        &mut self,
+        stats: Arc<AccountFeedbackStats>,
+        failure_filter: fn(&ProviderError) -> bool,
+    ) {
         self.account_feedback = Some(ProviderStreamAccountFeedback {
             stats,
             provider_kind: self.metadata.provider().clone(),
             account_id: self.metadata.provider_account_id().clone(),
+            failure_filter,
             started_at: None,
             first_output_ms: None,
             reported: false,
         });
-        self
     }
 
     /// 返回调用事实。

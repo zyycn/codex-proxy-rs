@@ -58,6 +58,7 @@ const PERSISTABLE_UPSTREAM_CODES: &[&str] = &[
     "rate_limit_exceeded",
     "rate_limit_reached",
     "refresh_token_invalidated",
+    "server_error",
     "server_is_overloaded",
     "slow_down",
     "token_expired",
