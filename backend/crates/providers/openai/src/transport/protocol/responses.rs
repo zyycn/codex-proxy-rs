@@ -162,6 +162,11 @@ impl TransportRequirement {
         matches!(self, Self::NewChain)
     }
 
+    /// 会话级 sticky 状态是否可以把首选 WebSocket 改为 HTTP。
+    pub fn allows_sticky_http_fallback(self) -> bool {
+        matches!(self, Self::NewChain)
+    }
+
     /// 用于审计与遥测的稳定名称。
     pub fn as_str(self) -> &'static str {
         match self {
@@ -193,8 +198,7 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
                 TransportRequirement::ExternalUnknown
             }
         },
-        None if request.use_websocket => TransportRequirement::NewChain,
-        None => TransportRequirement::HttpRequired,
+        None => TransportRequirement::NewChain,
     }
 }
 

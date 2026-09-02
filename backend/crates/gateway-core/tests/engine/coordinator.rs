@@ -501,10 +501,13 @@ fn atomic_history_unavailable(response_id: &str) -> ProviderError {
         )
         .expect("history unavailable wire"),
     );
-    ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
-        .with_status(400)
-        .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
-        .with_atomic_client_events(vec![failed])
+    ProviderError::new(
+        ProviderErrorKind::ContinuationRecoveryRequired,
+        UpstreamSendState::Sent,
+    )
+    .with_status(400)
+    .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+    .with_atomic_client_events(vec![failed])
 }
 
 fn image_stream(image_output_tokens: Option<u64>) -> Vec<Result<GatewayEvent, ProviderError>> {
@@ -1591,7 +1594,7 @@ fn native_continuation_client_replay_required_is_terminal() {
         Script::Stream {
             account_id: "acct_one",
             items: vec![Err(ProviderError::new(
-                ProviderErrorKind::InvalidRequest,
+                ProviderErrorKind::ContinuationRecoveryRequired,
                 UpstreamSendState::NotSent,
             )
             .with_continuation_failure(ContinuationFailure::HistoryUnavailable)

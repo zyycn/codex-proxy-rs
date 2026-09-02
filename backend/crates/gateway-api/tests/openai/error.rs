@@ -398,3 +398,38 @@ async fn gateway_error_response_should_expose_only_structured_client_visible_ups
         })
     );
 }
+
+#[tokio::test]
+async fn continuation_recovery_should_preserve_the_official_retry_signal() {
+    let error = GatewayError::from_provider(
+        &ProviderError::new(
+            ProviderErrorKind::ContinuationRecoveryRequired,
+            UpstreamSendState::NotSent,
+        )
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            "Previous response was not found. Retrying the full request.",
+            Some("previous_response_not_found".to_owned()),
+            Some("invalid_request_error".to_owned()),
+        )),
+    );
+
+    let response = gateway_error_response(&error);
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read continuation recovery response");
+    let body: serde_json::Value =
+        serde_json::from_slice(&body).expect("continuation recovery JSON");
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "error": {
+                "message": "Previous response was not found. Retrying the full request.",
+                "type": "invalid_request_error",
+                "code": "previous_response_not_found"
+            }
+        })
+    );
+}

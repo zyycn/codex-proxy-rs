@@ -423,7 +423,7 @@ impl Provider for CodexProvider {
         let requested_transport = selected_transport(&upstream_request);
         let sticky_http_fallback = context.transport() == AttemptTransport::Default
             && requested_transport == CodexProviderTransport::PreferWebSocket
-            && !requirement.requires_websocket()
+            && requirement.allows_sticky_http_fallback()
             && session_affinity.as_ref().is_some_and(|affinity| {
                 self.session_transport_fallbacks
                     .is_http_only(affinity.key())

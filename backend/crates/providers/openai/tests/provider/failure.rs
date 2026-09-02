@@ -104,6 +104,10 @@ fn account_score_failure_filter_should_prefer_a_structured_code_over_type() {
 fn account_score_failure_filter_should_reject_client_and_unknown_failures() {
     for error in [
         sent_error(ProviderErrorKind::InvalidRequest, Some("invalid_request")),
+        sent_error(
+            ProviderErrorKind::ContinuationRecoveryRequired,
+            Some("previous_response_not_found"),
+        ),
         sent_error(ProviderErrorKind::Unsupported, Some("unsupported")),
         sent_error(ProviderErrorKind::Unauthorized, Some("token_expired")),
         sent_error(ProviderErrorKind::QuotaExhausted, Some("quota_exhausted")),

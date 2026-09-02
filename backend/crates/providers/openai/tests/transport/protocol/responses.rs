@@ -274,6 +274,16 @@ fn transport_should_prefer_websocket_when_requested_without_history() {
 }
 
 #[test]
+fn unspecified_transport_without_history_should_still_be_a_new_chain() {
+    let request = codex_request("gpt-test", "be brief", Vec::new());
+
+    assert_eq!(
+        transport_requirement(&request),
+        TransportRequirement::NewChain
+    );
+}
+
+#[test]
 fn new_chain_should_allow_pre_delivery_http_fallback() {
     let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.use_websocket = true;
@@ -282,6 +292,25 @@ fn new_chain_should_allow_pre_delivery_http_fallback() {
         transport_requirement(&request).allows_pre_delivery_http_fallback(),
         "new chains may follow the TS same-account fallback behavior"
     );
+}
+
+#[test]
+fn sticky_http_fallback_should_only_apply_to_new_chains() {
+    assert!(TransportRequirement::NewChain.allows_sticky_http_fallback());
+
+    for requirement in [
+        TransportRequirement::HttpRequired,
+        TransportRequirement::ExplicitWebSocketWarmup,
+        TransportRequirement::ExactWebSocketContinuation,
+        TransportRequirement::PersistedContinuation,
+        TransportRequirement::ExternalUnknown,
+    ] {
+        assert!(
+            !requirement.allows_sticky_http_fallback(),
+            "sticky HTTP must not override {}",
+            requirement.as_str()
+        );
+    }
 }
 
 #[test]

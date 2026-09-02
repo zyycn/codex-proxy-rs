@@ -135,6 +135,8 @@ pub enum MeteringError {
 pub enum ProviderErrorKind {
     /// 请求语义错误。
     InvalidRequest,
+    /// previous-response 续接状态已不可用，需要客户端重建请求链。
+    ContinuationRecoveryRequired,
     /// Provider 不支持所需能力。
     Unsupported,
     /// Credential 认证失败。
@@ -171,6 +173,7 @@ impl ProviderErrorKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
+            Self::ContinuationRecoveryRequired => "continuation_recovery_required",
             Self::Unsupported => "unsupported",
             Self::Unauthorized => "unauthorized",
             Self::PermissionDenied => "permission_denied",
@@ -968,6 +971,10 @@ impl GatewayError {
             ProviderErrorKind::InvalidRequest => {
                 Self::new(GatewayErrorKind::InvalidRequest, "invalid upstream request")
             }
+            ProviderErrorKind::ContinuationRecoveryRequired => Self::new(
+                GatewayErrorKind::InvalidRequest,
+                "conversation continuation must be rebuilt",
+            ),
             ProviderErrorKind::Unsupported => Self::new(
                 GatewayErrorKind::Unsupported,
                 "requested capability is unsupported",

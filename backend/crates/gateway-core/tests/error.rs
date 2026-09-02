@@ -169,6 +169,30 @@ fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnost
 }
 
 #[test]
+fn continuation_recovery_should_keep_its_internal_classification_and_client_contract() {
+    let error = ProviderError::new(
+        ProviderErrorKind::ContinuationRecoveryRequired,
+        UpstreamSendState::NotSent,
+    )
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "Previous response was not found. Retrying the full request.",
+        Some("previous_response_not_found".to_owned()),
+        Some("invalid_request_error".to_owned()),
+    ));
+    let gateway = GatewayError::from_provider(&error);
+
+    assert_eq!(error.kind().as_str(), "continuation_recovery_required");
+    assert_eq!(
+        gateway.safe_message(),
+        "conversation continuation must be rebuilt"
+    );
+    assert_eq!(
+        gateway.client_error_code(),
+        Some("previous_response_not_found")
+    );
+}
+
+#[test]
 fn client_visible_upstream_error_should_preserve_opaque_structured_fields() {
     let message = format!("\0{}\n", "m".repeat(9_000));
     let code = format!("\0{}", "c".repeat(300));

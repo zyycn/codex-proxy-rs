@@ -617,7 +617,7 @@ pub(super) fn websocket_retry_backoff(retry_index: NonZeroU32) -> Duration {
 
 pub(super) fn continuation_replay_required_error() -> ProviderError {
     ProviderError::new(
-        ProviderErrorKind::InvalidRequest,
+        ProviderErrorKind::ContinuationRecoveryRequired,
         UpstreamSendState::NotSent,
     )
     .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
@@ -934,7 +934,12 @@ pub(super) fn map_upstream_failure(
         .filter(|code| is_history_failure_code(code))
         .map(|_| ContinuationFailure::HistoryUnavailable);
     let send_state = upstream_send_state(failure.send_phase);
-    let mut error = provider_error(provider_error_kind(category), send_state);
+    let error_kind = if continuation_failure.is_some() {
+        ProviderErrorKind::ContinuationRecoveryRequired
+    } else {
+        provider_error_kind(category)
+    };
+    let mut error = provider_error(error_kind, send_state);
     error = error.with_raw_upstream_error(RawUpstreamError::new(failure.raw_body.clone()));
     if let Some(message) = failure.client_message.as_ref() {
         error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(

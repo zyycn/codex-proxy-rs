@@ -1295,7 +1295,7 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
 }
 
 #[tokio::test]
-async fn ambiguous_websocket_close_is_terminal_and_sticky_only_for_the_current_session() {
+async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_websocket_close").await;
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1306,6 +1306,26 @@ async fn ambiguous_websocket_close_is_terminal_and_sticky_only_for_the_current_s
         listener.local_addr().expect("listener address")
     );
     let server = tokio::spawn(async move {
+        let completed_response = |response_id: &str| {
+            Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": response_id,
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            )
+        };
         let (stream, _) = listener
             .accept()
             .await
@@ -1374,6 +1394,31 @@ async fn ambiguous_websocket_close_is_terminal_and_sticky_only_for_the_current_s
         let (stream, _) = listener
             .accept()
             .await
+            .expect("accept same-session continuation WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let request = websocket
+            .next()
+            .await
+            .expect("same-session continuation request")
+            .expect("valid same-session continuation request");
+        let payload: Value = serde_json::from_str(
+            request
+                .to_text()
+                .expect("same-session continuation request text"),
+        )
+        .expect("same-session continuation request JSON");
+        assert_eq!(
+            payload.get("previous_response_id"),
+            Some(&json!("external-previous-response"))
+        );
+        websocket
+            .send(completed_response("resp_external_continuation"))
+            .await
+            .expect("complete same-session continuation request");
+
+        let (stream, _) = listener
+            .accept()
+            .await
             .expect("accept other-session WebSocket connection");
         let mut websocket = accept_codex_test_websocket(stream).await;
         let _request = websocket
@@ -1382,24 +1427,7 @@ async fn ambiguous_websocket_close_is_terminal_and_sticky_only_for_the_current_s
             .expect("other-session WebSocket request")
             .expect("valid other-session WebSocket request");
         websocket
-            .send(Message::Text(
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_other_session",
-                        "model": "gpt-5.4",
-                        "status": "completed",
-                        "output": [],
-                        "usage": {
-                            "input_tokens": 1,
-                            "output_tokens": 1,
-                            "total_tokens": 2
-                        }
-                    }
-                })
-                .to_string()
-                .into(),
-            ))
+            .send(completed_response("resp_other_session"))
             .await
             .expect("complete other-session WebSocket request");
     });
@@ -1490,6 +1518,27 @@ async fn ambiguous_websocket_close_is_terminal_and_sticky_only_for_the_current_s
         event.expect("sticky HTTP response");
     }
     drop(sticky_stream);
+
+    let continuation_operation = Operation::Generate(generate_with_session_context(
+        "sticky-websocket-session",
+        Some("thread-continuation"),
+        None,
+    ));
+    let mut continuation_stream = provider
+        .execute(
+            planned_request("openai", continuation_operation),
+            external_continuation_context("req_sticky_external_continuation"),
+        )
+        .await
+        .expect("sticky state must not force a continuation onto HTTP");
+    assert_eq!(
+        continuation_stream.metadata().transport().as_str(),
+        "websocket"
+    );
+    while let Some(event) = continuation_stream.next().await {
+        event.expect("same-session continuation WebSocket response");
+    }
+    drop(continuation_stream);
 
     let other_operation = Operation::Generate(generate_with_session_context(
         "other-websocket-session",
@@ -2044,7 +2093,7 @@ async fn cross_account_continuation_should_require_client_replay_without_an_upst
             detail.error_type(),
         ),
         (
-            ProviderErrorKind::InvalidRequest,
+            ProviderErrorKind::ContinuationRecoveryRequired,
             UpstreamSendState::NotSent,
             Some(ContinuationFailure::HistoryUnavailable),
             Some("previous_response_not_found"),
@@ -2094,6 +2143,10 @@ async fn missing_affinity_continuation_should_require_client_replay_without_an_u
         .await
         .expect("captured upstream requests");
 
+    assert_eq!(
+        error.kind(),
+        ProviderErrorKind::ContinuationRecoveryRequired
+    );
     assert_eq!(
         error
             .client_visible_upstream_error()
@@ -3397,6 +3450,10 @@ async fn same_account_previous_response_not_found_should_remain_client_visible()
     };
 
     assert_eq!(
+        failure.kind(),
+        ProviderErrorKind::ContinuationRecoveryRequired
+    );
+    assert_eq!(
         failure.continuation_failure(),
         Some(ContinuationFailure::HistoryUnavailable)
     );
@@ -3626,6 +3683,10 @@ async fn exact_websocket_busy_then_replay_scope_relaxation_is_rejected_before_se
         }
     };
     assert_eq!(
+        exact_error.kind(),
+        ProviderErrorKind::ContinuationRecoveryRequired
+    );
+    assert_eq!(
         exact_error.continuation_failure(),
         Some(ContinuationFailure::Busy)
     );
@@ -3673,7 +3734,7 @@ async fn exact_websocket_busy_then_replay_scope_relaxation_is_rejected_before_se
                 detail.message(),
             ),
             (
-                ProviderErrorKind::InvalidRequest,
+                ProviderErrorKind::ContinuationRecoveryRequired,
                 UpstreamSendState::NotSent,
                 Some(ContinuationFailure::HistoryUnavailable),
                 Some(ContinuationRecoveryDisposition::ClientReplayRequired),
