@@ -336,7 +336,10 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
     )]));
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
 
-    let observation = bundle.core_provider().request_observation(&operation);
+    let client_key_id = ClientApiKeyId::new("key_openai_admin_observation").expect("client key");
+    let observation = bundle
+        .core_provider()
+        .request_observation(&operation, &client_key_id);
 
     assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
     assert_eq!(observation.subagent_kind.as_deref(), Some("review"));

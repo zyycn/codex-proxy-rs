@@ -18,3 +18,10 @@ pub(crate) fn completed_usage_fact_predicate(alias: &str) -> String {
 pub(crate) fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
     query.push(format!(" and {}", completed_usage_fact_predicate(alias)));
 }
+
+/// 排除已由后续成功请求恢复的会话续接中间失败。
+///
+/// 原始请求审计仍保留该行；默认业务指标只把最终成功链视为一次结果。
+pub(crate) fn push_unrecovered_request_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
+    query.push(format!(" and {alias}.recovered_at is null"));
+}

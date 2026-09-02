@@ -11,7 +11,9 @@ use super::super::{
         CodexWebSocketConnectionMetadata, PooledWebSocketConnection, WebSocketContinuationState,
         WebSocketPoolLease,
     },
-    pump::{PumpExitReason, PumpedWebSocket},
+    pump::{
+        PumpExitReason, PumpedWebSocket, WebSocketConnectionObservation, transport_metric_reason,
+    },
 };
 use super::io::{next_websocket_message, receive_idle_timeout, reused_stream_receive_error};
 use super::reducer::{ExchangeAction, WebSocketTerminalKind, reduce_websocket_event};
@@ -173,12 +175,22 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         let message = match message {
             Ok(message) => message,
             Err(error) => {
+                let error = match error {
+                    CodexWebSocketExchangeError::ReceiveIdleTimeout { timeout }
+                        if !saw_upstream_activity =>
+                    {
+                        CodexWebSocketExchangeError::InitialEventTimeout { timeout }
+                    }
+                    error => error,
+                };
+                let observation = connection_observation(&websocket, &error);
                 discard_stream_websocket(
                     websocket,
                     pool_return,
                     StreamWebSocketDiscardReason::UpstreamReceiveFailed,
                 )
                 .await;
+                let error = error.with_connection_observation(observation);
                 let error = if reused_connection {
                     reused_stream_receive_error(error)
                 } else {
@@ -197,6 +209,8 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 text.to_string()
             }
             tungstenite::Message::Binary(_) => {
+                let error = CodexWebSocketExchangeError::UnexpectedBinaryEvent;
+                let observation = connection_observation(&websocket, &error);
                 discard_stream_websocket(
                     websocket,
                     pool_return,
@@ -204,24 +218,26 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 )
                 .await;
                 let _ = tx
-                    .send(Err(CodexWebSocketExchangeError::UnexpectedBinaryEvent))
+                    .send(Err(error.with_connection_observation(observation)))
                     .await;
                 return;
             }
             tungstenite::Message::Close(frame) => {
                 let websocket_connection_id = websocket.connection_id();
-                discard_stream_websocket(
-                    websocket,
-                    pool_return,
-                    StreamWebSocketDiscardReason::UpstreamClosed,
-                )
-                .await;
                 let error = CodexWebSocketExchangeError::closed_before_terminal_on(
                     websocket_connection_id,
                     frame.as_ref().map(|frame| u16::from(frame.code)),
                     frame.map(|frame| frame.reason.to_string()),
                     last_event_type.clone(),
                 );
+                let observation = connection_observation(&websocket, &error);
+                discard_stream_websocket(
+                    websocket,
+                    pool_return,
+                    StreamWebSocketDiscardReason::UpstreamClosed,
+                )
+                .await;
+                let error = error.with_connection_observation(observation);
                 let error = if reused_connection {
                     reused_stream_receive_error(error)
                 } else {
@@ -235,12 +251,19 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         let reduced = match reduce_websocket_event(&raw, &mut metadata, &mut continuation) {
             Ok(reduced) => reduced,
             Err(error) => {
+                let observation =
+                    (!matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)))
+                        .then(|| connection_observation(&websocket, &error));
                 discard_stream_websocket(
                     websocket,
                     pool_return,
                     StreamWebSocketDiscardReason::UpstreamReceiveFailed,
                 )
                 .await;
+                let error = match observation {
+                    Some(observation) => error.with_connection_observation(observation),
+                    None => error,
+                };
                 let _ = tx.send(Err(error)).await;
                 return;
             }
@@ -301,12 +324,6 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         .exit_reason()
         .and_then(|reason| reason.upstream_close().cloned())
         .map(|close| close.with_connection_id(websocket_connection_id));
-    discard_stream_websocket(
-        websocket,
-        pool_return,
-        StreamWebSocketDiscardReason::UpstreamClosed,
-    )
-    .await;
     let error = match upstream_close {
         Some(close) => CodexWebSocketExchangeError::ClosedBeforeTerminal(
             close.with_last_event_type(last_event_type),
@@ -318,6 +335,14 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             last_event_type,
         ),
     };
+    let observation = connection_observation(&websocket, &error);
+    discard_stream_websocket(
+        websocket,
+        pool_return,
+        StreamWebSocketDiscardReason::UpstreamClosed,
+    )
+    .await;
+    let error = error.with_connection_observation(observation);
     let error = if reused_connection {
         reused_stream_receive_error(error)
     } else {
@@ -353,6 +378,12 @@ async fn discard_stream_websocket(
     reason: StreamWebSocketDiscardReason,
 ) {
     let websocket_connection_id = websocket.connection_id();
+    let observation = websocket.observation();
+    let tombstone_observation = if observation.exit_reason() == "running" {
+        observation.clone().with_exit_reason(reason.as_str())
+    } else {
+        observation.clone()
+    };
     let pump_exit = websocket.exit_reason();
     let pump_exit_reason = pump_exit
         .as_ref()
@@ -367,11 +398,45 @@ async fn discard_stream_websocket(
         reason = reason.as_str(),
         pump_exit_reason,
         pump_exit_detail,
+        connection_exit_reason = observation.exit_reason(),
+        connection_age_ms = observation.age_ms(),
+        connection_idle_ms = observation.idle_ms(),
         pooled = pool_return.is_some(),
         "Discarding Responses WebSocket stream"
     );
     if let Some(pool_return) = pool_return {
-        pool_return.lease.discard().await;
+        pool_return
+            .lease
+            .discard_with_observation(tombstone_observation)
+            .await;
     }
     websocket.close().await;
+}
+
+fn connection_observation(
+    websocket: &PumpedWebSocket,
+    error: &CodexWebSocketExchangeError,
+) -> WebSocketConnectionObservation {
+    let observation = websocket.observation();
+    if observation.exit_reason() != "running" {
+        return observation;
+    }
+    observation.with_exit_reason(exchange_exit_reason(error))
+}
+
+fn exchange_exit_reason(error: &CodexWebSocketExchangeError) -> &'static str {
+    match error.classified() {
+        CodexWebSocketExchangeError::Transport(error) => transport_metric_reason(error),
+        CodexWebSocketExchangeError::ClosedBeforeTerminal(close) => {
+            if close.code() == Some(1000) {
+                "normal_close"
+            } else {
+                "upstream_close"
+            }
+        }
+        CodexWebSocketExchangeError::ReceiveIdleTimeout { .. } => "receive_idle_timeout",
+        CodexWebSocketExchangeError::InitialEventTimeout { .. } => "initial_event_timeout",
+        CodexWebSocketExchangeError::UnexpectedBinaryEvent => "unexpected_binary_event",
+        _ => "exchange_failure",
+    }
 }

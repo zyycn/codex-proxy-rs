@@ -488,7 +488,10 @@ pub(super) fn websocket_client_failure_policy(
             Some(WebSocketFailurePolicy::Budgeted)
         }
         CodexClientError::WebSocket(error)
-            if !matches!(error, CodexWebSocketExchangeError::InvalidRequest(_)) =>
+            if !matches!(
+                error.classified(),
+                CodexWebSocketExchangeError::InvalidRequest(_)
+            ) =>
         {
             Some(WebSocketFailurePolicy::Budgeted)
         }
@@ -615,7 +618,7 @@ pub(super) fn websocket_retry_backoff(retry_index: NonZeroU32) -> Duration {
     Duration::from_millis(base_ms.saturating_mul(jitter_per_mille) / 1_000)
 }
 
-pub(super) fn continuation_replay_required_error() -> ProviderError {
+pub(super) fn continuation_replay_required_error(reason: &'static str) -> ProviderError {
     ProviderError::new(
         ProviderErrorKind::ContinuationRecoveryRequired,
         UpstreamSendState::NotSent,
@@ -624,6 +627,7 @@ pub(super) fn continuation_replay_required_error() -> ProviderError {
     .with_continuation_recovery_disposition(
         ContinuationRecoveryDisposition::ClientReplayRequired,
     )
+    .with_continuation_unavailable_reason(reason)
     .with_upstream_code(OpaqueUpstreamValue::new(
         PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned(),
     ))
@@ -654,7 +658,7 @@ pub(super) fn stream_transport_allows_pre_delivery_retry(error: &CodexClientErro
         | CodexClientError::HttpJson(_)
         | CodexClientError::StreamIdleTimeout { .. } => true,
         CodexClientError::WebSocket(error) => !matches!(
-            error,
+            error.classified(),
             CodexWebSocketExchangeError::InvalidRequest(_)
                 | CodexWebSocketExchangeError::Upstream(_)
                 | CodexWebSocketExchangeError::ContinuationUnavailable { .. }
@@ -700,12 +704,32 @@ pub(super) fn map_client_error(
         _ => None,
     };
     let continuation_failure = match &error {
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::ContinuationUnavailable {
-            reason: PreviousResponseUnavailableReason::ConnectionBusy,
-        }) => Some(ContinuationFailure::Busy),
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::ContinuationUnavailable {
-            ..
-        }) => Some(ContinuationFailure::HistoryUnavailable),
+        CodexClientError::WebSocket(error)
+            if error.continuation_unavailable_reason()
+                == Some(PreviousResponseUnavailableReason::ConnectionBusy) =>
+        {
+            Some(ContinuationFailure::Busy)
+        }
+        CodexClientError::WebSocket(error) if error.continuation_unavailable_reason().is_some() => {
+            Some(ContinuationFailure::HistoryUnavailable)
+        }
+        _ => None,
+    };
+    let continuation_unavailable_reason = match &error {
+        CodexClientError::WebSocket(error) => error
+            .continuation_unavailable_reason()
+            .map(PreviousResponseUnavailableReason::as_str),
+        _ => None,
+    };
+    let connection_observation = match &error {
+        CodexClientError::WebSocket(error) => error.connection_observation().map(|observation| {
+            ProviderConnectionObservation::new(
+                observation.connection_id().to_string(),
+                observation.exit_reason().to_owned(),
+                observation.age_ms(),
+                observation.idle_ms(),
+            )
+        }),
         _ => None,
     };
     let observation = observe_transport
@@ -752,10 +776,10 @@ pub(super) fn map_client_error(
                 send_state,
             ))
         }
-        CodexClientError::WebSocket(
-            error @ CodexWebSocketExchangeError::ContinuationUnavailable { .. },
-        ) => {
-            let mut failure = MappedProviderFailure::plain(continuation_replay_required_error());
+        CodexClientError::WebSocket(error) if error.continuation_unavailable_reason().is_some() => {
+            let mut failure = MappedProviderFailure::plain(continuation_replay_required_error(
+                continuation_unavailable_reason.unwrap_or("scope_unavailable"),
+            ));
             if let Some(client_visible_error) = websocket_client_visible_error(&error) {
                 failure.error = failure
                     .error
@@ -778,7 +802,10 @@ pub(super) fn map_client_error(
                             "websocket_close_{close_code}"
                         )));
             }
-            if matches!(error, CodexWebSocketExchangeError::ConnectionLimitReached) {
+            if matches!(
+                error.classified(),
+                CodexWebSocketExchangeError::ConnectionLimitReached
+            ) {
                 failure.error = failure.error.with_upstream_code(OpaqueUpstreamValue::new(
                     WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE.to_owned(),
                 ));
@@ -805,6 +832,11 @@ pub(super) fn map_client_error(
     if let Some(raw) = raw_upstream_error {
         failure.error = failure.error.with_raw_upstream_error(raw);
     }
+    if let Some(connection_observation) = connection_observation {
+        failure.error = failure
+            .error
+            .with_connection_observation(connection_observation);
+    }
     failure.observation = observation;
     failure
 }
@@ -824,7 +856,7 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         return ProviderDiagnostic::new(message);
     }
 
-    ProviderDiagnostic::new(match error {
+    ProviderDiagnostic::new(match error.classified() {
         CodexWebSocketExchangeError::InvalidRequest(_) => {
             "OpenAI WebSocket request could not be constructed".to_owned()
         }
@@ -881,6 +913,9 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         CodexWebSocketExchangeError::ClosedBeforeTerminal(_) => {
             unreachable!("close-before-terminal errors are handled before the variant match")
         }
+        CodexWebSocketExchangeError::ConnectionObserved { .. } => {
+            unreachable!("classified websocket errors never retain observation wrappers")
+        }
     })
 }
 
@@ -900,7 +935,10 @@ fn websocket_raw_error(error: &CodexWebSocketExchangeError) -> Option<RawUpstrea
 pub(super) fn websocket_client_visible_error(
     error: &CodexWebSocketExchangeError,
 ) -> Option<ClientVisibleUpstreamError> {
-    if matches!(error, CodexWebSocketExchangeError::ConnectionLimitReached) {
+    if matches!(
+        error.classified(),
+        CodexWebSocketExchangeError::ConnectionLimitReached
+    ) {
         return Some(ClientVisibleUpstreamError::new(
             "websocket connection limit reached",
             Some(WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE.to_owned()),
@@ -978,7 +1016,8 @@ pub(super) fn map_upstream_failure(
             .with_continuation_failure(continuation_failure)
             .with_continuation_recovery_disposition(
                 ContinuationRecoveryDisposition::ClientReplayRequired,
-            );
+            )
+            .with_continuation_unavailable_reason("upstream_rejected");
     }
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
@@ -1103,8 +1142,8 @@ pub(super) fn account_failure(
     }
 }
 
-pub(super) const fn websocket_send_state(error: &CodexWebSocketExchangeError) -> UpstreamSendState {
-    match error {
+pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> UpstreamSendState {
+    match error.classified() {
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::ConnectTimeout { .. }
@@ -1124,11 +1163,14 @@ pub(super) const fn websocket_send_state(error: &CodexWebSocketExchangeError) ->
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. }
         | CodexWebSocketExchangeError::InitialEventTimeout { .. } => UpstreamSendState::Ambiguous,
+        CodexWebSocketExchangeError::ConnectionObserved { .. } => {
+            unreachable!("classified websocket errors never retain observation wrappers")
+        }
     }
 }
 
-pub(super) const fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> ProviderErrorKind {
-    match error {
+pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> ProviderErrorKind {
+    match error.classified() {
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::InvalidSse(_)
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => ProviderErrorKind::Protocol,
@@ -1151,6 +1193,9 @@ pub(super) const fn websocket_error_kind(error: &CodexWebSocketExchangeError) ->
         | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             ProviderErrorKind::Transport
+        }
+        CodexWebSocketExchangeError::ConnectionObserved { .. } => {
+            unreachable!("classified websocket errors never retain observation wrappers")
         }
     }
 }

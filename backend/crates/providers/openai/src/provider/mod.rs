@@ -12,15 +12,15 @@ use futures::{StreamExt, future::BoxFuture};
 use gateway_core::account::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuationScope};
 use gateway_core::engine::provider::{
-    EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation,
-    ProviderSelectionObservation, ProviderStream,
+    ContinuationRequestObservation, EventStream, Provider, ProviderCallMetadata,
+    ProviderCatalogGeneration, ProviderModelCapabilities, ProviderRequest,
+    ProviderRequestObservation, ProviderSelectionObservation, ProviderStream,
 };
 use gateway_core::engine::{AttemptContext, AttemptTransport, ContinuationAttempt};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
-    ContinuationRecoveryDisposition, OpaqueUpstreamValue, ProviderDiagnostic, ProviderError,
-    ProviderErrorKind, RawUpstreamError,
+    ContinuationRecoveryDisposition, OpaqueUpstreamValue, ProviderConnectionObservation,
+    ProviderDiagnostic, ProviderError, ProviderErrorKind, RawUpstreamError,
 };
 use gateway_core::event::{
     FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader,
@@ -58,6 +58,7 @@ use crate::credential::{
     CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError, RuntimeCodexCookie,
     SelectCodexCredential, SelectCodexProviderEndpointCredential,
     derive_codex_cyber_policy_session_key, derive_codex_session_affinity,
+    derive_previous_response_id_hash,
 };
 use crate::session_transport::CodexSessionTransportFallbacks;
 use crate::transport::canonical::{
@@ -210,23 +211,35 @@ impl Provider for CodexProvider {
         self.catalog.catalog_generation()
     }
 
-    fn request_observation(&self, operation: &Operation) -> ProviderRequestObservation {
+    fn request_observation(
+        &self,
+        operation: &Operation,
+        client_api_key_id: &gateway_core::policy::ClientApiKeyId,
+    ) -> ProviderRequestObservation {
         let Operation::Generate(request) = operation else {
             return ProviderRequestObservation::default();
         };
-        let (semantics, reasoning_effort) = encode_generate_request(request, "observability")
-            .map(|encoded| {
-                let semantics = encoded.semantics();
-                let reasoning_effort = semantics.reasoning_effort.clone();
-                (semantics, reasoning_effort)
-            })
-            .unwrap_or_default();
+        let Ok(encoded) = encode_generate_request(request, "observability") else {
+            return ProviderRequestObservation::default();
+        };
+        let semantics = encoded.semantics();
+        let reasoning_effort = semantics.reasoning_effort.clone();
+        let previous_response_id = encoded.previous_response_id();
+        let continuation = ContinuationRequestObservation {
+            affinity_hash: derive_codex_session_affinity(&encoded, client_api_key_id)
+                .map(|affinity| affinity.persistence_hash().to_owned()),
+            previous_response_id_hash: previous_response_id.map(|response_id| {
+                derive_previous_response_id_hash(response_id, client_api_key_id)
+            }),
+            requested: previous_response_id.is_some(),
+        };
         ProviderRequestObservation {
             reasoning_effort,
             reasoning_preset: semantics.reasoning_preset.map(str::to_owned),
             request_kind: semantics.request_kind,
             subagent_kind: semantics.subagent_kind,
             compact: semantics.compact,
+            continuation,
         }
     }
 
@@ -387,7 +400,7 @@ impl Provider for CodexProvider {
                             continuation_recovery_action = "stop_proxy_recovery",
                             "OpenAI connection-local continuation replay was rejected before send"
                         );
-                        return Err(continuation_replay_required_error());
+                        return Err(continuation_replay_required_error("scope_unavailable"));
                     }
                     let previous_response_scope = match context.continuation_attempt() {
                         ContinuationAttempt::Native => native_scope,
@@ -412,7 +425,7 @@ impl Provider for CodexProvider {
         if upstream_request.previous_response_id().is_some()
             && !account_scope.can_reuse_account_state()
         {
-            return Err(continuation_replay_required_error());
+            return Err(continuation_replay_required_error("scope_unavailable"));
         }
         scope_request_to_account(
             &mut upstream_request,

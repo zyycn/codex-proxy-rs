@@ -624,6 +624,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         request_kind: Some("responses".to_owned()),
         subagent_kind: None,
         compact: false,
+        continuation: Default::default(),
         image_generation_requested: operation.image_generation_requested(),
         started_at: SystemTime::now(),
         deadline_at: deadline,

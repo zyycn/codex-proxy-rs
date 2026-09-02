@@ -838,6 +838,40 @@ async fn missing_exact_socket_should_fail_without_opening_a_connection() {
 }
 
 #[tokio::test]
+async fn connection_local_continuation_without_a_pool_should_not_open_http_or_websocket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    );
+    let mut request = new_chain_request("conversation-exact-no-pool");
+    request.set_previous_response_id(Some("resp_no_pool".to_owned()));
+    request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+
+    let error = backend
+        .create_response(
+            &request,
+            request_context("req_exact_no_pool", Some("chatgpt-account")),
+        )
+        .await
+        .expect_err("connection-local continuation requires its owning pool");
+
+    std::assert_matches!(
+        error,
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::ContinuationUnavailable {
+            reason: PreviousResponseUnavailableReason::PoolUnavailable
+        })
+    );
+    assert!(
+        timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn connection_local_continuation_should_fail_after_its_live_socket_disappears() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -852,7 +886,7 @@ async fn connection_local_continuation_should_fail_after_its_live_socket_disappe
             ))
             .await
             .unwrap();
-        websocket.close(None).await.unwrap();
+        drop(websocket);
         closed_tx.send(()).unwrap();
     });
     let backend = CodexBackendClient::new(
@@ -883,12 +917,18 @@ async fn connection_local_continuation_should_fail_after_its_live_socket_disappe
         )
         .await
         .expect_err("a disappeared live socket cannot be reconstructed from the database");
-    std::assert_matches!(
-        error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::ContinuationUnavailable {
-            reason: PreviousResponseUnavailableReason::FreshConnectionRequired
-        })
+    let CodexClientError::WebSocket(error) = error else {
+        panic!("disappeared connection should remain a typed WebSocket error");
+    };
+    assert_eq!(
+        error.continuation_unavailable_reason(),
+        Some(PreviousResponseUnavailableReason::ReusedConnectionLost)
     );
+    let observation = error
+        .connection_observation()
+        .expect("disappeared connection should retain its lifecycle observation");
+    assert_eq!(observation.exit_reason(), "tcp_reset");
+    assert!(observation.age_ms() >= observation.idle_ms());
 }
 
 #[tokio::test]
@@ -1114,9 +1154,9 @@ async fn websocket_failure_after_first_delivery_should_not_open_http_fallback() 
     else {
         panic!("expected typed post-delivery WebSocket failure");
     };
-    let CodexWebSocketExchangeError::ClosedBeforeTerminal(close) = *source else {
-        panic!("expected upstream close frame source");
-    };
+    let close = source
+        .close_before_terminal()
+        .expect("expected upstream close frame source");
     assert!(
         close.connection_id().is_some(),
         "close failures must retain their WebSocket connection correlation"

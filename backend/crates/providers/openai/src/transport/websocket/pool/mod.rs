@@ -19,6 +19,7 @@ use self::state::{
     close_pooled_connections,
 };
 use super::pump::PumpKeepalive;
+use super::pump::WebSocketConnectionObservation;
 
 pub use self::state::CodexWebSocketPoolKey;
 pub(crate) use self::{
@@ -154,6 +155,7 @@ impl CodexWebSocketPool {
         let mut connections_to_close = Vec::new();
         let acquire = {
             let mut state = self.lock_state();
+            let mut continuation_loss = None;
             if !self.config.enabled || state.shutting_down {
                 return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
             }
@@ -163,9 +165,14 @@ impl CodexWebSocketPool {
                         && slot.latest_response_id() == Some(response_id))
                     .then(|| candidate.clone())
                 }) else {
-                    return WebSocketPoolAcquire::Bypass(
-                        WebSocketPoolBypassReason::ContinuationNotFound,
-                    );
+                    return state
+                        .continuation_loss(key, response_id, tokio::time::Instant::now())
+                        .map_or(
+                            WebSocketPoolAcquire::Bypass(
+                                WebSocketPoolBypassReason::ContinuationNotFound,
+                            ),
+                            WebSocketPoolAcquire::ContinuationLost,
+                        );
                 };
                 key
             } else {
@@ -188,9 +195,9 @@ impl CodexWebSocketPool {
                     };
                     // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
                     // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时。
-                    if connection.created_at.elapsed() < self.config.max_age
-                        && !connection.websocket.is_closed()
-                    {
+                    let expired = connection.created_at.elapsed() >= self.config.max_age;
+                    let closed = connection.websocket.is_closed();
+                    if !expired && !closed {
                         let lease = WebSocketPoolLease::reserve(
                             self.clone(),
                             key.clone(),
@@ -202,12 +209,31 @@ impl CodexWebSocketPool {
                         );
                         return WebSocketPoolAcquire::Reused { connection, lease };
                     }
+                    let observation = if expired && !closed {
+                        connection
+                            .websocket
+                            .observation()
+                            .with_exit_reason("max_age_expired")
+                    } else {
+                        connection.websocket.observation()
+                    };
+                    state.remember_continuation_loss(
+                        &key,
+                        connection.continuation.latest_response_id(),
+                        observation.clone(),
+                        tokio::time::Instant::now(),
+                    );
                     connections_to_close.push(*connection);
+                    if required_response_id.is_some() {
+                        continuation_loss = Some(observation);
+                    }
                 }
                 None => {}
             }
 
-            let acquire = if required_response_id.is_some() {
+            let acquire = if let Some(observation) = continuation_loss {
+                WebSocketPoolAcquire::ContinuationLost(observation)
+            } else if required_response_id.is_some() {
                 WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::ContinuationNotFound)
             } else {
                 let connect_permit = self.connect_semaphore.clone().try_acquire_owned().ok();
@@ -259,6 +285,17 @@ impl CodexWebSocketPool {
                     if reservation.id == reservation_id
             );
             if owns_reservation && (expired || state.shutting_down || !self.config.enabled) {
+                if expired && let Some(connection) = connection.as_ref() {
+                    state.remember_continuation_loss(
+                        key,
+                        connection.continuation.latest_response_id(),
+                        connection
+                            .websocket
+                            .observation()
+                            .with_exit_reason("max_age_expired"),
+                        tokio::time::Instant::now(),
+                    );
+                }
                 state.slots.remove(key);
             } else if owns_reservation && let Some(connection) = connection.take() {
                 state.slots.insert(
@@ -274,10 +311,6 @@ impl CodexWebSocketPool {
         }
     }
 
-    async fn discard_reserved(&self, key: &CodexWebSocketPoolKey, reservation_id: Uuid) {
-        self.discard_reserved_now(key, reservation_id);
-    }
-
     fn discard_reserved_now(&self, key: &CodexWebSocketPoolKey, reservation_id: Uuid) {
         let mut state = self.lock_state();
         if matches!(
@@ -286,6 +319,28 @@ impl CodexWebSocketPool {
         ) {
             state.slots.remove(key);
         }
+    }
+
+    fn discard_reserved_with_observation(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        reservation_id: Uuid,
+        observation: WebSocketConnectionObservation,
+    ) {
+        let mut state = self.lock_state();
+        let latest_response_id = match state.slots.get(key) {
+            Some(WebSocketPoolSlot::Busy(reservation)) if reservation.id == reservation_id => {
+                reservation.latest_response_id.clone()
+            }
+            _ => return,
+        };
+        state.remember_continuation_loss(
+            key,
+            latest_response_id.as_deref(),
+            observation,
+            tokio::time::Instant::now(),
+        );
+        state.slots.remove(key);
     }
 
     async fn finish_connect_reserved(

@@ -32,6 +32,12 @@ impl CodexSessionAffinity {
         &self.key_hash
     }
 
+    /// 返回可持久化的客户端作用域不透明会话关联值。
+    #[must_use]
+    pub(crate) fn persistence_hash(&self) -> &str {
+        self.key.expose_to_store()
+    }
+
     #[must_use]
     pub(crate) const fn anchor_source(&self) -> &'static str {
         self.anchor_source
@@ -56,6 +62,20 @@ impl CodexSessionAffinity {
     pub(crate) fn into_key(self) -> ProviderSessionAffinityKey {
         self.key
     }
+}
+
+/// 将原始 response ID 投影为客户端作用域的不可逆关联值。
+#[must_use]
+pub(crate) fn derive_previous_response_id_hash(
+    previous_response_id: &str,
+    client_api_key_id: &ClientApiKeyId,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"codex-previous-response-observation-v1\0");
+    hasher.update(client_api_key_id.as_str().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(previous_response_id.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 pub(crate) fn derive_codex_session_affinity(

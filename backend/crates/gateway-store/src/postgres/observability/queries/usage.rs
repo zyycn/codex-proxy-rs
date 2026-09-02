@@ -360,6 +360,7 @@ pub(crate) async fn usage_diagnostics(
     statement.push_bind(range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(range.end);
+    push_unrecovered_request_filter(&mut statement, "mr");
     push_diagnostic_dimension_filter(&mut statement, dimension);
     push_usage_filter(&mut statement, filter, "mr");
     statement.push(

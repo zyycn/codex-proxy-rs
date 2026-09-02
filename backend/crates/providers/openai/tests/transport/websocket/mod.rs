@@ -647,7 +647,7 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
             .send(Message::Binary(b"unexpected-binary".to_vec().into()))
             .await
             .unwrap();
-        websocket.close(None).await.unwrap();
+        let _client_close = websocket.next().await;
     });
     let mut request = codex_request("gpt-test", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_binary_previous".to_owned()));
@@ -664,15 +664,30 @@ async fn websocket_execute_response_create_request_should_reject_binary_event() 
         .expect_err("binary websocket events should be rejected");
     server.await.unwrap();
 
-    std::assert_matches!(
-        error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::PostSendAmbiguous {
-            message,
-            source: Some(source),
-        })
-            if message.contains("unexpected binary websocket event")
-                && matches!(*source, CodexWebSocketExchangeError::UnexpectedBinaryEvent)
+    let CodexClientError::WebSocket(error) = error else {
+        panic!("binary websocket event should remain a typed WebSocket error");
+    };
+    let CodexWebSocketExchangeError::PostSendAmbiguous {
+        message,
+        source: Some(source),
+    } = error
+    else {
+        panic!("binary websocket event should remain post-send ambiguous");
+    };
+    assert!(message.contains("unexpected binary websocket event"));
+    assert_eq!(
+        source
+            .connection_observation()
+            .map(|observation| observation.exit_reason()),
+        Some("unexpected_binary_event")
     );
+    let CodexWebSocketExchangeError::ConnectionObserved { source, .. } = *source else {
+        panic!("binary websocket event should carry its connection observation");
+    };
+    assert!(matches!(
+        *source,
+        CodexWebSocketExchangeError::UnexpectedBinaryEvent
+    ));
 }
 
 #[tokio::test]
@@ -1560,9 +1575,9 @@ async fn codex_backend_client_stream_should_error_when_websocket_closes_before_t
     else {
         panic!("close-before-terminal should preserve its typed source: {error:?}");
     };
-    let CodexWebSocketExchangeError::ClosedBeforeTerminal(close) = source.as_ref() else {
-        panic!("post-send ambiguity should wrap a close-before-terminal error: {source:?}");
-    };
+    let close = source
+        .close_before_terminal()
+        .unwrap_or_else(|| panic!("post-send ambiguity should retain its close: {source:?}"));
     assert_eq!(close.last_event_type(), Some("response.output_text.delta"));
 
     std::assert_matches!(

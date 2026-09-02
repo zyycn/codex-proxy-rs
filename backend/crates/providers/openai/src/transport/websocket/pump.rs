@@ -89,6 +89,7 @@ pub(crate) enum PumpExitReason {
     LocalClose,
     OutboundTransportError {
         message: String,
+        metric_reason: &'static str,
     },
     UpstreamCloseFrame {
         close: Option<CodexWebSocketCloseError>,
@@ -96,6 +97,7 @@ pub(crate) enum PumpExitReason {
     UpstreamEof,
     InboundTransportError {
         message: String,
+        metric_reason: &'static str,
     },
     PongTimeout {
         timeout: Duration,
@@ -105,6 +107,7 @@ pub(crate) enum PumpExitReason {
     },
     KeepaliveTransportError {
         message: String,
+        metric_reason: &'static str,
     },
     MessageReceiverClosed,
 }
@@ -127,9 +130,9 @@ impl PumpExitReason {
 
     pub(crate) fn detail(&self) -> Option<String> {
         match self {
-            Self::OutboundTransportError { message }
-            | Self::InboundTransportError { message }
-            | Self::KeepaliveTransportError { message } => Some(message.clone()),
+            Self::OutboundTransportError { message, .. }
+            | Self::InboundTransportError { message, .. }
+            | Self::KeepaliveTransportError { message, .. } => Some(message.clone()),
             Self::UpstreamCloseFrame { close } => close.as_ref().map(ToString::to_string),
             Self::PongTimeout { timeout } | Self::LivenessTimeout { timeout } => {
                 Some(format!("{timeout:?}"))
@@ -138,6 +141,27 @@ impl PumpExitReason {
             | Self::LocalClose
             | Self::UpstreamEof
             | Self::MessageReceiverClosed => None,
+        }
+    }
+
+    pub(crate) fn metric_reason(&self) -> &'static str {
+        match self {
+            Self::CommandChannelClosed => "command_channel_closed",
+            Self::LocalClose => "local_close",
+            Self::OutboundTransportError { metric_reason, .. }
+            | Self::InboundTransportError { metric_reason, .. }
+            | Self::KeepaliveTransportError { metric_reason, .. } => metric_reason,
+            Self::UpstreamCloseFrame { close } => {
+                if close.as_ref().and_then(CodexWebSocketCloseError::code) == Some(1000) {
+                    "normal_close"
+                } else {
+                    "upstream_close"
+                }
+            }
+            Self::UpstreamEof => "eof",
+            Self::PongTimeout { .. } => "pong_timeout",
+            Self::LivenessTimeout { .. } => "liveness_timeout",
+            Self::MessageReceiverClosed => "message_receiver_closed",
         }
     }
 
@@ -183,13 +207,71 @@ struct PendingPing {
     deadline: Instant,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSocketConnectionObservation {
+    connection_id: Uuid,
+    exit_reason: String,
+    age_ms: u64,
+    idle_ms: u64,
+}
+
+impl WebSocketConnectionObservation {
+    pub(crate) fn with_exit_reason(mut self, exit_reason: &'static str) -> Self {
+        self.exit_reason = exit_reason.to_owned();
+        self
+    }
+
+    pub const fn connection_id(&self) -> Uuid {
+        self.connection_id
+    }
+
+    pub fn exit_reason(&self) -> &str {
+        &self.exit_reason
+    }
+
+    pub const fn age_ms(&self) -> u64 {
+        self.age_ms
+    }
+
+    pub const fn idle_ms(&self) -> u64 {
+        self.idle_ms
+    }
+}
+
+struct PumpLifecycleState {
+    opened_at: Instant,
+    last_activity: Instant,
+    closed_at: Option<Instant>,
+    exit_reason: Option<PumpExitReason>,
+}
+
+impl PumpLifecycleState {
+    fn observation(
+        &self,
+        connection_id: Uuid,
+        observed_at: Instant,
+    ) -> WebSocketConnectionObservation {
+        let effective_end = self.closed_at.unwrap_or(observed_at);
+        WebSocketConnectionObservation {
+            connection_id,
+            exit_reason: self
+                .exit_reason
+                .as_ref()
+                .map_or("running", PumpExitReason::metric_reason)
+                .to_owned(),
+            age_ms: duration_millis(effective_end.duration_since(self.opened_at)),
+            idle_ms: duration_millis(effective_end.duration_since(self.last_activity)),
+        }
+    }
+}
+
 /// 由后台 pump 任务托管的 WebSocket 连接句柄。
 pub(crate) struct PumpedWebSocket {
     connection_id: Uuid,
     tx_command: mpsc::Sender<PumpCommand>,
     rx_message: mpsc::Receiver<Result<Message, tungstenite::Error>>,
     closed: Arc<AtomicBool>,
-    exit_reason: Arc<Mutex<Option<PumpExitReason>>>,
+    lifecycle: Arc<Mutex<PumpLifecycleState>>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -212,10 +294,16 @@ impl PumpedWebSocket {
         let (tx_command, rx_command) = mpsc::channel::<PumpCommand>(PUMP_COMMAND_BUFFER);
         let (tx_message, rx_message) = mpsc::channel(PUMP_MESSAGE_BUFFER);
         let connection_id = Uuid::new_v4();
+        let opened_at = Instant::now();
         let closed = Arc::new(AtomicBool::new(false));
         let closed_for_task = Arc::clone(&closed);
-        let exit_reason = Arc::new(Mutex::new(None));
-        let exit_reason_for_task = Arc::clone(&exit_reason);
+        let lifecycle = Arc::new(Mutex::new(PumpLifecycleState {
+            opened_at,
+            last_activity: opened_at,
+            closed_at: None,
+            exit_reason: None,
+        }));
+        let lifecycle_for_task = Arc::clone(&lifecycle);
         let pump = tokio::spawn(async move {
             pump_loop(
                 connection_id,
@@ -225,7 +313,7 @@ impl PumpedWebSocket {
                 keepalive,
                 context,
                 closed_for_task,
-                exit_reason_for_task,
+                lifecycle_for_task,
             )
             .await;
         });
@@ -234,7 +322,7 @@ impl PumpedWebSocket {
             tx_command,
             rx_message,
             closed,
-            exit_reason,
+            lifecycle,
             pump: Some(pump),
         }
     }
@@ -272,10 +360,18 @@ impl PumpedWebSocket {
     }
 
     pub(crate) fn exit_reason(&self) -> Option<PumpExitReason> {
-        self.exit_reason
+        self.lifecycle
             .lock()
-            .expect("WebSocket pump exit reason lock poisoned")
+            .expect("WebSocket pump lifecycle lock poisoned")
+            .exit_reason
             .clone()
+    }
+
+    pub(crate) fn observation(&self) -> WebSocketConnectionObservation {
+        self.lifecycle
+            .lock()
+            .expect("WebSocket pump lifecycle lock poisoned")
+            .observation(self.connection_id, Instant::now())
     }
 
     /// 主动关闭连接（best-effort 发送 Close 帧）。
@@ -306,9 +402,12 @@ async fn pump_loop(
     keepalive: PumpKeepalive,
     context: PumpLogContext,
     closed: Arc<AtomicBool>,
-    exit_reason: Arc<Mutex<Option<PumpExitReason>>>,
+    lifecycle: Arc<Mutex<PumpLifecycleState>>,
 ) {
-    let mut last_activity = Instant::now();
+    let mut last_activity = lifecycle
+        .lock()
+        .expect("WebSocket pump lifecycle lock poisoned")
+        .last_activity;
     let ping_interval = keepalive.ping_interval.filter(|d| !d.is_zero());
     let ping_timeout = keepalive.ping_timeout.filter(|d| !d.is_zero());
     let liveness_timeout = keepalive.liveness_timeout.filter(|d| !d.is_zero());
@@ -341,6 +440,7 @@ async fn pump_loop(
                     }
                     // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默。
                     last_activity = Instant::now();
+                    record_activity(&lifecycle, last_activity);
                 }
                 command = rx_command.recv() => {
                     let Some(command) = command else {
@@ -370,12 +470,14 @@ async fn pump_loop(
                     None => break 'pump PumpExitReason::UpstreamEof,
                     Some(Ok(message)) => {
                         last_activity = Instant::now();
+                        record_activity(&lifecycle, last_activity);
                         observe_inbound(connection_id, &mut pending_ping, &message);
                         match message {
                             Message::Ping(payload) => {
                                 if let Err(error) = inner.send(Message::Pong(payload)).await {
                                     break 'pump PumpExitReason::KeepaliveTransportError {
                                         message: error.to_string(),
+                                        metric_reason: transport_metric_reason(&error),
                                     };
                                 }
                             }
@@ -410,6 +512,7 @@ async fn pump_loop(
                     Some(Err(err)) => {
                         let terminal_reason = PumpExitReason::InboundTransportError {
                             message: err.to_string(),
+                            metric_reason: transport_metric_reason(&err),
                         };
                         if let Some(reason) = enqueue_inbound(
                             &tx_message,
@@ -452,10 +555,22 @@ async fn pump_loop(
     };
 
     closed.store(true, Ordering::Release);
-    *exit_reason
-        .lock()
-        .expect("WebSocket pump exit reason lock poisoned") = Some(reason.clone());
-    log_pump_exit(connection_id, &context, &reason, backpressure_events);
+    let observation = {
+        let closed_at = Instant::now();
+        let mut lifecycle = lifecycle
+            .lock()
+            .expect("WebSocket pump lifecycle lock poisoned");
+        lifecycle.closed_at = Some(closed_at);
+        lifecycle.exit_reason = Some(reason.clone());
+        lifecycle.observation(connection_id, closed_at)
+    };
+    log_pump_exit(
+        connection_id,
+        &context,
+        &reason,
+        &observation,
+        backpressure_events,
+    );
 
     if reason.should_send_close() {
         let _ = inner.send(Message::Close(None)).await;
@@ -492,10 +607,16 @@ async fn handle_command(inner: &mut RawWsStream, command: PumpCommand) -> Option
     let PumpCommand::Send { message, ack } = command;
     let is_close = matches!(message, Message::Close(_));
     let result = inner.send(message).await;
-    let transport_error = result.as_ref().err().map(ToString::to_string);
+    let transport_error = result
+        .as_ref()
+        .err()
+        .map(|error| (error.to_string(), transport_metric_reason(error)));
     let _ = ack.send(result);
     match transport_error {
-        Some(message) => Some(PumpExitReason::OutboundTransportError { message }),
+        Some((message, metric_reason)) => Some(PumpExitReason::OutboundTransportError {
+            message,
+            metric_reason,
+        }),
         None if is_close => Some(PumpExitReason::LocalClose),
         None => None,
     }
@@ -517,6 +638,34 @@ fn observe_inbound(connection_id: Uuid, pending_ping: &mut Option<PendingPing>, 
     *pending_ping = None;
 }
 
+fn record_activity(lifecycle: &Mutex<PumpLifecycleState>, observed_at: Instant) {
+    lifecycle
+        .lock()
+        .expect("WebSocket pump lifecycle lock poisoned")
+        .last_activity = observed_at;
+}
+
+pub(crate) fn transport_metric_reason(error: &tungstenite::Error) -> &'static str {
+    match error {
+        tungstenite::Error::Io(error) => match error.kind() {
+            std::io::ErrorKind::ConnectionReset => "tcp_reset",
+            std::io::ErrorKind::ConnectionAborted => "connection_aborted",
+            std::io::ErrorKind::BrokenPipe => "broken_pipe",
+            std::io::ErrorKind::UnexpectedEof => "unexpected_eof",
+            std::io::ErrorKind::TimedOut => "transport_timeout",
+            _ => "transport_error",
+        },
+        tungstenite::Error::Protocol(
+            tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+        ) => "tcp_reset",
+        _ => "transport_error",
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 async fn send_keepalive_ping(
     inner: &mut RawWsStream,
     sequence: &mut u64,
@@ -529,6 +678,7 @@ async fn send_keepalive_ping(
         .await
         .map_err(|error| PumpExitReason::KeepaliveTransportError {
             message: error.to_string(),
+            metric_reason: transport_metric_reason(&error),
         })?;
     Ok(ping_timeout.map(|timeout| PendingPing {
         payload,
@@ -540,6 +690,7 @@ fn log_pump_exit(
     connection_id: Uuid,
     context: &PumpLogContext,
     reason: &PumpExitReason,
+    observation: &WebSocketConnectionObservation,
     backpressure_events: u64,
 ) {
     let detail = reason.detail().unwrap_or_default();
@@ -551,6 +702,9 @@ fn log_pump_exit(
             account_id = %account_id,
             conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
+            connection_exit_reason = observation.exit_reason(),
+            connection_age_ms = observation.age_ms(),
+            connection_idle_ms = observation.idle_ms(),
             pump_exit_detail = detail,
             backpressure_events,
             "Responses WebSocket pump stopped unexpectedly"
@@ -565,6 +719,9 @@ fn log_pump_exit(
             account_id = %account_id,
             conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
+            connection_exit_reason = observation.exit_reason(),
+            connection_age_ms = observation.age_ms(),
+            connection_idle_ms = observation.idle_ms(),
             pump_exit_detail = detail,
             upstream_close_code = ?upstream_close.and_then(CodexWebSocketCloseError::code),
             upstream_error_raw,
@@ -578,6 +735,9 @@ fn log_pump_exit(
             account_id = %account_id,
             conversation_id_hash = %conversation_id_hash,
             pump_exit_reason = reason.as_str(),
+            connection_exit_reason = observation.exit_reason(),
+            connection_age_ms = observation.age_ms(),
+            connection_idle_ms = observation.idle_ms(),
             pump_exit_detail = detail,
             backpressure_events,
             "Responses WebSocket pump stopped"

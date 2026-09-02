@@ -391,7 +391,12 @@ pub(super) fn codex_error_observation(
             )?
             .with_status_code(status.as_u16());
         }
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => {
+        CodexClientError::WebSocket(error)
+            if matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)) =>
+        {
+            let CodexWebSocketExchangeError::Upstream(upstream) = error.classified() else {
+                unreachable!("websocket error was checked above")
+            };
             observation = observation.with_status_code(upstream.status_code);
             if let Some(request_id) = upstream.diagnostics.request_id.as_deref() {
                 observation =

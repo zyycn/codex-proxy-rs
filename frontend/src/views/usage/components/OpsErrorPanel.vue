@@ -11,6 +11,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
+import { opsErrorSummary } from '../utils/opsErrorPresentation'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
 
 const props = defineProps<{
@@ -120,9 +121,9 @@ function upstreamSendStateText(value: string | null | undefined) {
           />
         </template>
         <template #message="{ row }">
-          <div class="min-w-0 py-0.5" :title="row.message || row.providerErrorCode || row.failureClass">
+          <div class="min-w-0 py-0.5" :title="row.message || opsErrorSummary(row)">
             <code class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-error-text">
-              {{ row.providerErrorCode || row.failureClass }}
+              {{ opsErrorSummary(row) }}
             </code>
             <p
               v-if="row.message"

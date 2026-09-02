@@ -1,4 +1,5 @@
 use super::*;
+use provider_openai::transport::websocket::PreviousResponseUnavailableReason;
 
 #[tokio::test]
 async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and_conversation() {
@@ -1108,6 +1109,30 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
         .await
         .expect("server should report the Pong-timeout close");
     tokio::time::resume();
+    let mut continuation = request.clone();
+    continuation.set_previous_response_id(Some("resp_no_pong_first".to_owned()));
+    continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    let error = backend
+        .create_response(
+            &continuation,
+            request_context("req_no_pong_continuation", Some("chatgpt-account")),
+        )
+        .await
+        .expect_err("Pong-timeout connection cannot satisfy an exact continuation");
+    let CodexClientError::WebSocket(error) = error else {
+        panic!("Pong-timeout continuation should remain a typed WebSocket error");
+    };
+    assert_eq!(
+        error.continuation_unavailable_reason(),
+        Some(PreviousResponseUnavailableReason::ReusedConnectionLost)
+    );
+    assert_eq!(
+        error
+            .connection_observation()
+            .expect("Pong-timeout tombstone should retain its lifecycle observation")
+            .exit_reason(),
+        "pong_timeout"
+    );
     let second = backend
         .create_response(
             &request,

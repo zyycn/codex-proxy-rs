@@ -93,6 +93,7 @@ pub(crate) async fn request_metrics(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_unrecovered_request_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     let row = query
         .build()
@@ -113,7 +114,8 @@ pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTota
                 coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
                 sum(cost_amount) filter (where {fact} and cost_currency = 'USD')::text
                   as billing_usd
-           from model_requests mr"
+           from model_requests mr
+          where mr.recovered_at is null"
     ));
     let row = query
         .build()
@@ -247,6 +249,7 @@ async fn request_metric_series_inner(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_unrecovered_request_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by bucket_start order by bucket_start");
     let rows = query
@@ -373,6 +376,7 @@ pub(crate) async fn attempt_metrics(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_unrecovered_request_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(format!(
         "), request_aggregate as (
@@ -517,6 +521,7 @@ pub(crate) async fn provider_observations(
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
     query.push_bind(range.end);
+    push_unrecovered_request_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by coalesce(mr.provider_kind, 'unrouted') order by request_count desc");
     let rows = query

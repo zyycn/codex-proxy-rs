@@ -571,6 +571,18 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             request_kind: Some("root".to_owned()),
             subagent_kind: None,
             compact: Some(false),
+            continuation_affinity_hash: Some("affinity-hash".to_owned()),
+            continuation_previous_response_id_hash: Some("response-hash".to_owned()),
+            continuation_unavailable_reason: Some("reused_connection_lost".to_owned()),
+            upstream_connection_id: Some("connection-id".to_owned()),
+            upstream_connection_exit_reason: Some("tcp_reset".to_owned()),
+            upstream_connection_age_ms: Some(12_000),
+            upstream_connection_idle_ms: Some(4_000),
+            recovery_request_id: None,
+            recovered_at: None,
+            recovery_attempt_count: 0,
+            recovery_retry_delay_ms: None,
+            recovery_total_latency_ms: None,
             occurred_at: Utc::now(),
             stable_sort_id: "model_request:req_err".to_owned(),
         });
@@ -607,6 +619,9 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "providerErrorCode": value["data"]["items"][0]["providerErrorCode"],
             "upstreamSendState": value["data"]["items"][0]["upstreamSendState"],
             "rawUpstreamError": value["data"]["items"][0]["rawUpstreamError"],
+            "continuationUnavailableReason": value["data"]["items"][0]["metadata"]["continuationUnavailableReason"],
+            "upstreamConnectionExitReason": value["data"]["items"][0]["metadata"]["upstreamConnectionExitReason"],
+            "upstreamConnectionAgeMs": value["data"]["items"][0]["metadata"]["upstreamConnectionAgeMs"],
         }),
         serde_json::json!({
             "provider": "openai",
@@ -623,6 +638,9 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "providerErrorCode": "upstream",
             "upstreamSendState": "sent",
             "rawUpstreamError": "{\"error\":{\"code\":\"upstream\",\"message\":\"raw upstream marker\"}}",
+            "continuationUnavailableReason": "reused_connection_lost",
+            "upstreamConnectionExitReason": "tcp_reset",
+            "upstreamConnectionAgeMs": 12000,
         })
     );
 }

@@ -1500,6 +1500,11 @@ async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session
         raw_close.get("last_event_type"),
         Some(&json!("response.output_item.added"))
     );
+    let connection = error
+        .connection_observation()
+        .expect("normal close should retain its connection lifecycle observation");
+    assert_eq!(connection.exit_reason(), "normal_close");
+    assert!(connection.age_ms() >= connection.idle_ms());
 
     let second_operation = Operation::Generate(generate_with_session_context(
         "sticky-websocket-session",
@@ -4146,7 +4151,8 @@ fn request_observation_reads_openai_metadata_without_changing_the_operation() {
     let generation = GenerateRequest::from_protocol_payload(payload);
     let operation = Operation::Generate(generation);
 
-    let observation = provider(&store).request_observation(&operation);
+    let client_key_id = ClientApiKeyId::new("key_openai_observation").expect("client key");
+    let observation = provider(&store).request_observation(&operation, &client_key_id);
 
     assert_eq!(observation.request_kind.as_deref(), Some("review"));
     assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
@@ -4164,7 +4170,8 @@ fn request_observation_preserves_the_raw_reasoning_effort() {
     .expect("protocol payload");
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
 
-    let observation = provider(&store).request_observation(&operation);
+    let client_key_id = ClientApiKeyId::new("key_openai_observation").expect("client key");
+    let observation = provider(&store).request_observation(&operation, &client_key_id);
 
     assert_eq!(
         observation.reasoning_effort.as_deref(),
@@ -4194,7 +4201,8 @@ fn request_observation_ignores_future_session_state_without_rewriting_the_protoc
     );
     let operation = Operation::Generate(generation);
 
-    let _observation = provider(&store).request_observation(&operation);
+    let client_key_id = ClientApiKeyId::new("key_openai_observation").expect("client key");
+    let _observation = provider(&store).request_observation(&operation, &client_key_id);
 
     let Operation::Generate(generation) = &operation else {
         panic!("operation should remain a generate request");

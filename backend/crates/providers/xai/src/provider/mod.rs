@@ -138,7 +138,11 @@ impl Provider for GrokBuildProvider {
         self.catalog.catalog_generation()
     }
 
-    fn request_observation(&self, operation: &Operation) -> ProviderRequestObservation {
+    fn request_observation(
+        &self,
+        operation: &Operation,
+        _client_api_key_id: &gateway_core::policy::ClientApiKeyId,
+    ) -> ProviderRequestObservation {
         let Operation::Generate(request) = operation else {
             return ProviderRequestObservation::default();
         };
@@ -153,6 +157,7 @@ impl Provider for GrokBuildProvider {
             request_kind: semantics.request_kind,
             subagent_kind: semantics.subagent_kind,
             compact: semantics.compact,
+            continuation: Default::default(),
         }
     }
 

@@ -11,7 +11,9 @@ use gateway_core::engine::{
     ModelRequestFinalization as CoreModelRequestFinalization, ModelRequestId,
     NewModelRequest as CoreNewModelRequest, ProbeFailure, RecoveryReport as CoreRecoveryReport,
 };
-use gateway_core::error::{StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind};
+use gateway_core::error::{
+    ProviderErrorKind, StoreError as CoreStoreError, StoreErrorKind as CoreStoreErrorKind,
+};
 use gateway_core::metering::{CostSource as CoreCostSource, Usage as CoreUsage};
 use gateway_core::routing::{AccountRoutingScopeKind, AccountRoutingSnapshot};
 use gateway_core::upstream::UpstreamSendState as CoreUpstreamSendState;
@@ -99,10 +101,18 @@ pub struct NewModelRequest {
     pub request_kind: Option<String>,
     pub subagent_kind: Option<String>,
     pub compact: bool,
+    pub continuation: ContinuationRequestObservation,
     pub image_generation_requested: bool,
     pub admission_decision_ms: Option<u64>,
     pub started_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContinuationRequestObservation {
+    pub affinity_hash: Option<String>,
+    pub previous_response_id_hash: Option<String>,
+    pub requested: bool,
 }
 
 impl NewModelRequest {
@@ -132,6 +142,31 @@ impl NewModelRequest {
             .is_some_and(|id| id != &self.client_api_key_ref)
         {
             return Err(invalid("live client key ID must equal its historical ref"));
+        }
+        self.continuation.validate()?;
+        Ok(())
+    }
+}
+
+impl ContinuationRequestObservation {
+    fn validate(&self) -> StoreResult<()> {
+        for value in [
+            self.affinity_hash.as_deref(),
+            self.previous_response_id_hash.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(invalid("continuation observation hash is invalid"));
+            }
+        }
+        if !self.requested && self.previous_response_id_hash.is_some() {
+            return Err(invalid("continuation request facts do not agree"));
         }
         Ok(())
     }
@@ -252,6 +287,11 @@ pub struct ModelRequestFinalization {
     pub provider_error_code: Option<String>,
     pub error_message: Option<String>,
     pub raw_upstream_error: Option<String>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_id: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub upstream_connection_age_ms: Option<u64>,
+    pub upstream_connection_idle_ms: Option<u64>,
     pub retry_after_ms: Option<u64>,
     pub usage: ModelRequestUsage,
     pub image_generation_succeeded: Option<bool>,
@@ -313,6 +353,11 @@ impl ModelRequestFinalization {
         {
             return Err(invalid("provider observation must be a JSON object"));
         }
+        validate_optional_stable_reason(
+            self.continuation_unavailable_reason.as_deref(),
+            "continuation unavailable reason",
+        )?;
+        validate_connection_observation(self)?;
         self.timings.validate()
     }
 }
@@ -389,11 +434,13 @@ impl ModelRequestRepository for PgExecutionStore {
                operation, endpoint, client_transport, requested_model_id,
                client_ip, user_agent, reasoning_effort,
                reasoning_preset, request_kind, subagent_kind, compact,
-               image_generation_requested, admission_decision_ms, started_at, deadline_at
+               image_generation_requested, admission_decision_ms, started_at, deadline_at,
+               continuation_affinity_hash, continuation_previous_response_id_hash,
+               continuation_requested
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
-               $16, $17, $18, $19, $20, $21, $22, $23
+               $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
              )",
         )
         .bind(request.id)
@@ -422,6 +469,9 @@ impl ModelRequestRepository for PgExecutionStore {
         )?)
         .bind(request.started_at)
         .bind(request.deadline_at)
+        .bind(request.continuation.affinity_hash)
+        .bind(request.continuation.previous_response_id_hash)
+        .bind(request.continuation.requested)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert model request"))?;
@@ -452,13 +502,15 @@ impl ModelRequestRepository for PgExecutionStore {
                upstream_model_id, upstream_transport, http_version,
                attempt_count, upstream_send_state, account_selection_wait_ms,
                capacity_used_slots, capacity_total_slots
+               , continuation_affinity_hash, continuation_previous_response_id_hash,
+               continuation_requested
              ) select
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
                $16, $17, $18, $19, $20, $21, $22, $23,
                $24, $25, $26,
                account.name, account.email, account.authentication_kind,
-               $27, $28, $29, 1, 'not_sent', $30, $31, $32
+               $27, $28, $29, 1, 'not_sent', $30, $31, $32, $33, $34, $35
              from (values (true)) as seed(present)
              left join provider_accounts account on account.id = $25",
         )
@@ -506,6 +558,9 @@ impl ModelRequestRepository for PgExecutionStore {
             attempt.capacity_total_slots,
             "capacity_total_slots",
         )?)
+        .bind(request.continuation.affinity_hash)
+        .bind(request.continuation.previous_response_id_hash)
+        .bind(request.continuation.requested)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert model request with first attempt"))?;
@@ -644,8 +699,9 @@ impl ModelRequestRepository for PgExecutionStore {
         finalization: ModelRequestFinalization,
     ) -> StoreResult<bool> {
         finalization.validate()?;
-        let result = sqlx::query(
-            "update model_requests
+        let finalized = sqlx::query_scalar::<_, i64>(
+            "with finalized as (
+             update model_requests
              set outcome = $2, upstream_send_state = $3, attempt_count = $4,
                  downstream_committed_at = $5,
                  client_status_code = coalesce(client_status_code, $6),
@@ -664,8 +720,64 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_transport = coalesce($37, upstream_transport),
                  http_version = coalesce($38, http_version), websocket_pool = $39,
                  service_tier = $40, provider_observation_json = $41,
-                 raw_upstream_error = $42
-             where id = $1 and outcome = 'running'",
+                 raw_upstream_error = $42,
+                 continuation_unavailable_reason = $43,
+                 upstream_connection_id = $44,
+                 upstream_connection_exit_reason = $45,
+                 upstream_connection_age_ms = $46,
+                 upstream_connection_idle_ms = $47
+             where id = $1 and outcome = 'running'
+             returning id, client_api_key_ref, continuation_affinity_hash,
+                       continuation_requested, outcome, started_at, completed_at
+           ), recovery_target as (
+             select prior.id
+             from model_requests prior
+             cross join finalized current
+             where not current.continuation_requested
+               and current.continuation_affinity_hash is not null
+               and prior.client_api_key_ref = current.client_api_key_ref
+               and prior.continuation_affinity_hash = current.continuation_affinity_hash
+               and prior.continuation_requested
+               and prior.outcome = 'failed'
+               and prior.error_kind = 'continuation_recovery_required'
+               and prior.recovered_at is null
+               and current.started_at >= prior.completed_at
+               and current.started_at <= prior.completed_at + interval '30 seconds'
+             order by prior.completed_at desc, prior.id desc
+             limit 1
+           ), recovery_update as (
+             update model_requests prior
+             set recovery_attempt_count = prior.recovery_attempt_count + 1,
+                 recovery_request_id = case
+                   when current.outcome = 'succeeded' then current.id
+                   else prior.recovery_request_id
+                 end,
+                 recovered_at = case
+                   when current.outcome = 'succeeded' then current.completed_at
+                   else prior.recovered_at
+                 end,
+                 recovery_retry_delay_ms = case
+                   when current.outcome = 'succeeded' then greatest(
+                     0,
+                     floor(extract(epoch from (current.started_at - prior.completed_at)) * 1000)
+                   )::bigint
+                   else prior.recovery_retry_delay_ms
+                 end,
+                 recovery_total_latency_ms = case
+                   when current.outcome = 'succeeded' then greatest(
+                     0,
+                     floor(extract(epoch from (current.completed_at - prior.completed_at)) * 1000)
+                   )::bigint
+                   else prior.recovery_total_latency_ms
+                 end
+             from finalized current
+             join recovery_target target on true
+             where prior.id = target.id
+               and prior.recovered_at is null
+             returning prior.id
+           )
+           select (select count(*) from finalized)::bigint
+                + (select count(*) * 0 from recovery_update)::bigint",
         )
         .bind(&finalization.model_request_id)
         .bind(finalization.outcome.as_str())
@@ -754,10 +866,21 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.service_tier)
         .bind(finalization.provider_metadata_json.map(sqlx::types::Json))
         .bind(finalization.raw_upstream_error)
-        .execute(&self.pool)
+        .bind(finalization.continuation_unavailable_reason)
+        .bind(finalization.upstream_connection_id)
+        .bind(finalization.upstream_connection_exit_reason)
+        .bind(optional_i64(
+            finalization.upstream_connection_age_ms,
+            "upstream_connection_age_ms",
+        )?)
+        .bind(optional_i64(
+            finalization.upstream_connection_idle_ms,
+            "upstream_connection_idle_ms",
+        )?)
+        .fetch_one(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
-        Ok(result.rows_affected() == 1)
+        Ok(finalized == 1)
     }
 
     async fn recover_expired_model_requests(
@@ -973,6 +1096,22 @@ impl ExecutionStore for PgExecutionStore {
         &self,
         finalization: CoreModelRequestFinalization,
     ) -> Result<(), CoreStoreError> {
+        let continuation_unavailable_reason = finalization
+            .failure_observation
+            .continuation_unavailable_reason
+            .clone();
+        let connection_observation = finalization
+            .failure_observation
+            .upstream_connection
+            .as_ref();
+        let upstream_connection_id =
+            connection_observation.map(|observation| observation.connection_id().to_owned());
+        let upstream_connection_exit_reason =
+            connection_observation.map(|observation| observation.exit_reason().to_owned());
+        let upstream_connection_age_ms =
+            connection_observation.map(|observation| observation.age_ms());
+        let upstream_connection_idle_ms =
+            connection_observation.map(|observation| observation.idle_ms());
         let provider_metadata_json = finalization
             .provider_metadata_json
             .as_deref()
@@ -999,10 +1138,18 @@ impl ExecutionStore for PgExecutionStore {
             ),
             None => (CostSource::Unavailable, None, None),
         };
-        let error_kind = finalization
-            .error
-            .as_ref()
-            .map(|error| error.kind().as_str().to_owned());
+        let error_kind = if continuation_unavailable_reason.is_some() {
+            Some(
+                ProviderErrorKind::ContinuationRecoveryRequired
+                    .as_str()
+                    .to_owned(),
+            )
+        } else {
+            finalization
+                .error
+                .as_ref()
+                .map(|error| error.kind().as_str().to_owned())
+        };
         let error_message = finalization.error.as_ref().map(|error| {
             error.diagnostic().map_or_else(
                 || error.safe_message().to_owned(),
@@ -1033,6 +1180,11 @@ impl ExecutionStore for PgExecutionStore {
                 provider_error_code: finalization.provider_error_code,
                 error_message,
                 raw_upstream_error: finalization.raw_upstream_error,
+                continuation_unavailable_reason,
+                upstream_connection_id,
+                upstream_connection_exit_reason,
+                upstream_connection_age_ms,
+                upstream_connection_idle_ms,
                 retry_after_ms: finalization.retry_after_ms,
                 usage: usage_from_core(finalization.usage),
                 image_generation_succeeded: finalization.image_generation_succeeded,
@@ -1162,6 +1314,11 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
         request_kind: request.request_kind,
         subagent_kind: request.subagent_kind,
         compact: request.compact,
+        continuation: ContinuationRequestObservation {
+            affinity_hash: request.continuation.affinity_hash,
+            previous_response_id_hash: request.continuation.previous_response_id_hash,
+            requested: request.continuation.requested,
+        },
         image_generation_requested: request.image_generation_requested,
         admission_decision_ms: request.admission_decision_ms,
         started_at: DateTime::<Utc>::from(request.started_at),
@@ -1242,6 +1399,52 @@ fn optional_i64(value: Option<u64>, field: &'static str) -> StoreResult<Option<i
 fn validate_status_code(status: Option<u16>) -> StoreResult<()> {
     if status.is_some_and(|status| !(100..=599).contains(&status)) {
         return Err(invalid("HTTP status must be between 100 and 599"));
+    }
+    Ok(())
+}
+
+fn validate_optional_stable_reason(value: Option<&str>, field: &str) -> StoreResult<()> {
+    if value.is_some_and(|value| {
+        value.is_empty()
+            || value.len() > 64
+            || !value.bytes().enumerate().all(|(index, byte)| {
+                byte.is_ascii_lowercase() || (index > 0 && (byte.is_ascii_digit() || byte == b'_'))
+            })
+    }) {
+        return Err(invalid(field));
+    }
+    Ok(())
+}
+
+fn validate_connection_observation(finalization: &ModelRequestFinalization) -> StoreResult<()> {
+    let fields_present = [
+        finalization.upstream_connection_id.is_some(),
+        finalization.upstream_connection_exit_reason.is_some(),
+        finalization.upstream_connection_age_ms.is_some(),
+        finalization.upstream_connection_idle_ms.is_some(),
+    ];
+    if fields_present.iter().any(|present| *present)
+        && !fields_present.iter().all(|present| *present)
+    {
+        return Err(invalid("upstream connection observation is incomplete"));
+    }
+    if let Some(connection_id) = finalization.upstream_connection_id.as_deref()
+        && (connection_id.is_empty()
+            || connection_id.len() > 128
+            || connection_id.chars().any(char::is_control))
+    {
+        return Err(invalid("upstream connection ID is invalid"));
+    }
+    validate_optional_stable_reason(
+        finalization.upstream_connection_exit_reason.as_deref(),
+        "upstream connection exit reason is invalid",
+    )?;
+    if finalization
+        .upstream_connection_age_ms
+        .zip(finalization.upstream_connection_idle_ms)
+        .is_some_and(|(age, idle)| idle > age)
+    {
+        return Err(invalid("upstream connection idle time exceeds its age"));
     }
     Ok(())
 }

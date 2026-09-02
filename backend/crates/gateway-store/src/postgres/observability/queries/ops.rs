@@ -24,6 +24,12 @@ const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
        host(mr.client_ip) as client_ip, mr.user_agent,
        mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
        mr.subagent_kind, mr.compact,
+       mr.continuation_affinity_hash, mr.continuation_previous_response_id_hash,
+       mr.continuation_unavailable_reason,
+       mr.upstream_connection_id, mr.upstream_connection_exit_reason,
+       mr.upstream_connection_age_ms, mr.upstream_connection_idle_ms,
+       mr.recovery_request_id, mr.recovered_at, mr.recovery_attempt_count,
+       mr.recovery_retry_delay_ms, mr.recovery_total_latency_ms,
        mr.completed_at as occurred_at,
        'model_request:' || mr.id as stable_sort_id
 from model_requests mr
@@ -46,6 +52,15 @@ const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
        host(mr.client_ip) as client_ip, mr.user_agent,
        mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
        mr.subagent_kind, mr.compact,
+       mr.continuation_affinity_hash, mr.continuation_previous_response_id_hash,
+       null::text as continuation_unavailable_reason,
+       null::text as upstream_connection_id,
+       null::text as upstream_connection_exit_reason,
+       null::bigint as upstream_connection_age_ms,
+       null::bigint as upstream_connection_idle_ms,
+       mr.recovery_request_id, mr.recovered_at,
+       coalesce(mr.recovery_attempt_count, 0) as recovery_attempt_count,
+       mr.recovery_retry_delay_ms, mr.recovery_total_latency_ms,
        oe.created_at as occurred_at,
        'ops_event:' || oe.id as stable_sort_id
 from ops_events oe
@@ -113,6 +128,7 @@ fn push_request_error_predicates(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) {
+    statement.push(" and mr.recovered_at is null");
     push_range(statement, "mr.completed_at", range);
     for (column, value) in [
         ("mr.client_api_key_ref", &filter.client_api_key_ref),
@@ -155,6 +171,7 @@ fn push_ops_event_predicates(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) {
+    statement.push(" and (mr.id is null or mr.recovered_at is null)");
     push_range(statement, "oe.created_at", range);
     for (column, value) in [
         ("mr.client_api_key_ref", &filter.client_api_key_ref),

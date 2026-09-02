@@ -13,9 +13,9 @@ use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, P
 use crate::engine::{
     AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTransport, AttemptTrigger,
     CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
-    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId,
-    ModelRequestTimings, NewModelRequest, ProviderAccountStateOwner, ProviderAttemptOutcome,
-    RequestAttemptContext, UpstreamSendState,
+    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFailureObservation,
+    ModelRequestFinalization, ModelRequestId, ModelRequestTimings, NewModelRequest,
+    ProviderAccountStateOwner, ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{
     ContinuationRecoveryDisposition, GatewayError, GatewayErrorKind, ProviderError,
@@ -221,6 +221,7 @@ struct FailureFinalization {
     provider_error_code: Option<String>,
     raw_upstream_error: Option<String>,
     retry_after_ms: Option<u64>,
+    observation: ModelRequestFailureObservation,
 }
 
 #[derive(Debug, Clone)]
@@ -638,6 +639,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                observation: ModelRequestFailureObservation::default(),
             })
             .await?;
             return Err(EngineError::EmptyRoutingPlan);
@@ -795,6 +797,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                observation: ModelRequestFailureObservation::default(),
             })
             .await?;
             return Err(EngineError::ProviderMetadataMismatch);
@@ -820,6 +823,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                observation: ModelRequestFailureObservation::default(),
             })
             .await?;
             return Err(EngineError::AccountOutsideClientScope);
@@ -840,6 +844,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                observation: ModelRequestFailureObservation::default(),
             })
             .await?;
             return Err(EngineError::RequiredAccountMismatch);
@@ -863,6 +868,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                observation: ModelRequestFailureObservation::default(),
             })
             .await?;
             return Err(EngineError::ContinuationPinMismatch);
@@ -1368,6 +1374,7 @@ where
                         error: None,
                         provider_error_code: None,
                         raw_upstream_error: None,
+                        failure_observation: ModelRequestFailureObservation::default(),
                         retry_after_ms: None,
                         usage: self.usage.clone(),
                         image_generation_succeeded: self.image_generation_succeeded(),
@@ -1410,6 +1417,12 @@ where
                 .raw_upstream_error()
                 .map(|raw| raw.as_str().to_owned()),
             retry_after_ms: error.retry_after().map(duration_ms),
+            observation: ModelRequestFailureObservation {
+                continuation_unavailable_reason: error
+                    .continuation_unavailable_reason()
+                    .map(str::to_owned),
+                upstream_connection: error.connection_observation().cloned(),
+            },
         })
         .await
     }
@@ -1464,6 +1477,7 @@ where
             provider_error_code: None,
             raw_upstream_error: None,
             retry_after_ms: None,
+            observation: ModelRequestFailureObservation::default(),
         })
         .await
     }
@@ -1532,6 +1546,7 @@ where
                     error: Some(finalization.error),
                     provider_error_code: finalization.provider_error_code,
                     raw_upstream_error: finalization.raw_upstream_error,
+                    failure_observation: finalization.observation,
                     retry_after_ms: finalization.retry_after_ms,
                     usage: self.usage.clone(),
                     image_generation_succeeded: self.image_generation_succeeded(),

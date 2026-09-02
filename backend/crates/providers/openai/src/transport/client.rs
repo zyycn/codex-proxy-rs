@@ -313,7 +313,12 @@ impl CodexClientError {
                 rate_limit_headers,
                 *send_phase,
             )),
-            Self::WebSocket(CodexWebSocketExchangeError::Upstream(upstream)) => {
+            Self::WebSocket(error)
+                if matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)) =>
+            {
+                let CodexWebSocketExchangeError::Upstream(upstream) = error.classified() else {
+                    unreachable!("websocket error was checked above")
+                };
                 Some(CodexUpstreamFailure::from_response(
                     StatusCode::from_u16(upstream.status_code).unwrap_or(StatusCode::BAD_GATEWAY),
                     &upstream.body,
@@ -848,7 +853,7 @@ pub(super) fn websocket_success_decision(
 pub(super) fn http_fallback_decision(
     error: &CodexWebSocketExchangeError,
 ) -> CodexTransportDecision {
-    match error {
+    match error.classified() {
         CodexWebSocketExchangeError::FastPathTimeout { .. } => {
             CodexTransportDecision::Http2WebSocketBudgetExhausted
         }

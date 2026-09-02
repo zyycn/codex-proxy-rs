@@ -18,6 +18,7 @@ use crate::engine::AttemptContext;
 use crate::error::{OpaqueUpstreamValue, PreDeliveryRetry, ProviderError, ProviderErrorKind};
 use crate::event::{EventSequenceValidator, ProviderEvent};
 use crate::operation::Operation;
+use crate::policy::ClientApiKeyId;
 use crate::routing::{
     ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, UpstreamModelId,
 };
@@ -421,6 +422,15 @@ pub struct ProviderRequestObservation {
     pub request_kind: Option<String>,
     pub subagent_kind: Option<String>,
     pub compact: bool,
+    pub continuation: ContinuationRequestObservation,
+}
+
+/// 仅用于恢复事件关联的客户端作用域不透明请求事实。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContinuationRequestObservation {
+    pub affinity_hash: Option<String>,
+    pub previous_response_id_hash: Option<String>,
+    pub requested: bool,
 }
 
 /// Provider 实时目录编译后的单模型能力。
@@ -529,7 +539,11 @@ pub trait Provider: Send + Sync {
     fn catalog_generation(&self) -> ProviderCatalogGeneration;
 
     /// 解释 Provider 差异化观测字段；不参与路由和传输。
-    fn request_observation(&self, _operation: &Operation) -> ProviderRequestObservation {
+    fn request_observation(
+        &self,
+        _operation: &Operation,
+        _client_api_key_id: &ClientApiKeyId,
+    ) -> ProviderRequestObservation {
         ProviderRequestObservation::default()
     }
 
@@ -657,11 +671,12 @@ impl ProviderRegistry {
         &self,
         provider: &ProviderKind,
         operation: &Operation,
+        client_api_key_id: &ClientApiKeyId,
     ) -> ProviderRequestObservation {
         self.providers
             .get(provider)
             .map_or_else(ProviderRequestObservation::default, |registered| {
-                registered.request_observation(operation)
+                registered.request_observation(operation, client_api_key_id)
             })
     }
 

@@ -22,7 +22,8 @@ use thiserror::Error;
 use crate::account::{AccountSelectionPolicy, ProviderAccountId};
 use crate::engine::continuation::{ContinuationBinding, NativeContinuationPin};
 use crate::error::{
-    GatewayError, IdentifierError, ProviderError, ProviderErrorKind, StoreError, validate_text,
+    GatewayError, IdentifierError, ProviderConnectionObservation, ProviderError, ProviderErrorKind,
+    StoreError, validate_text,
 };
 use crate::event::ProviderEvent;
 use crate::lifecycle::CancellationToken;
@@ -514,6 +515,7 @@ pub struct NewModelRequest {
     pub request_kind: Option<String>,
     pub subagent_kind: Option<String>,
     pub compact: bool,
+    pub continuation: provider::ContinuationRequestObservation,
     pub image_generation_requested: bool,
     /// Client Key 准入判定的完整耗时；内部探测不经过该阶段。
     pub admission_decision_ms: Option<u64>,
@@ -579,6 +581,13 @@ pub struct ModelRequestTimings {
     pub latency_ms: Option<u64>,
 }
 
+/// 终态失败的 Provider 结构化连接与 continuation 观测。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelRequestFailureObservation {
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection: Option<ProviderConnectionObservation>,
+}
+
 /// 单行模型请求的终态写回。
 #[derive(Debug)]
 pub struct ModelRequestFinalization {
@@ -602,6 +611,7 @@ pub struct ModelRequestFinalization {
     pub provider_error_code: Option<String>,
     /// Provider 返回的原始错误正文或 WebSocket close/error frame。
     pub raw_upstream_error: Option<String>,
+    pub failure_observation: ModelRequestFailureObservation,
     pub retry_after_ms: Option<u64>,
     pub usage: Usage,
     pub image_generation_succeeded: Option<bool>,

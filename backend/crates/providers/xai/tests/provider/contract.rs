@@ -1063,8 +1063,12 @@ async fn model_alias_should_be_canonical_before_account_selection() {
 async fn request_observation_preserves_raw_xai_reasoning_effort() {
     let provider = provider(StubSelector::success(), StubInferenceTransport::success()).await;
 
-    let observation =
-        provider.request_observation(&operation_with_reasoning_effort("future-value"));
+    let client_key_id =
+        gateway_core::policy::ClientApiKeyId::new("key_xai_observation").expect("client key");
+    let observation = provider.request_observation(
+        &operation_with_reasoning_effort("future-value"),
+        &client_key_id,
+    );
 
     assert_eq!(
         observation.reasoning_effort.as_deref(),
@@ -1093,7 +1097,9 @@ async fn request_observation_preserves_codex_semantics_for_xai() {
     )]));
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
 
-    let observation = provider.request_observation(&operation);
+    let client_key_id =
+        gateway_core::policy::ClientApiKeyId::new("key_xai_observation").expect("client key");
+    let observation = provider.request_observation(&operation, &client_key_id);
 
     assert_eq!(observation.reasoning_effort.as_deref(), Some("xhigh"));
     assert_eq!(observation.request_kind.as_deref(), Some("compaction"));

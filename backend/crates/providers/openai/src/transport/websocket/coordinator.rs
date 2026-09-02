@@ -24,7 +24,7 @@ use super::{
         WebSocketPoolConnectLease, WebSocketPoolConnectOutcome, WebSocketPoolDecision,
         WebSocketPoolLease,
     },
-    pump::{PumpKeepalive, PumpLogContext, PumpedWebSocket},
+    pump::{PumpKeepalive, PumpLogContext, PumpedWebSocket, transport_metric_reason},
 };
 
 pub(crate) const WEBSOCKET_FAST_PATH_BUDGET: Duration = Duration::from_millis(800);
@@ -188,9 +188,11 @@ pub(crate) async fn prepare_response_create_request_with_pool(
                 }
             }
         }
-        WebSocketPoolAcquire::Bypass(reason) => {
-            Err(continuation_unavailable(bypass_unavailable_reason(reason)))
-        }
+        WebSocketPoolAcquire::ContinuationLost(observation) => Err(continuation_unavailable(
+            PreviousResponseUnavailableReason::ReusedConnectionLost,
+        )
+        .with_connection_observation(observation)),
+        WebSocketPoolAcquire::Bypass(reason) => Err(bypass_unavailable_error(reason)),
     }
 }
 
@@ -369,6 +371,7 @@ fn start_pooled_websocket_connect(
                 }
             }
             Err(error) => {
+                let connection_exit_reason = opening_failure_reason(&error);
                 let error_message = error.to_string();
                 // 先交付 opening 原始错误，避免连接池清理侵占前台 fast-path 预算。
                 let foreground_waiting = sender.send(Err(error)).is_ok();
@@ -378,6 +381,7 @@ fn start_pooled_websocket_connect(
                     conversation_id_hash = task_key.conversation_id_hash(),
                     ws_preconnect_duration_ms = duration_millis_u64(started_at.elapsed()),
                     foreground_waiting,
+                    connection_exit_reason,
                     error = %error_message,
                     ws_preconnect_outcome = "failed",
                     "WebSocket pool connect finished"
@@ -389,6 +393,21 @@ fn start_pooled_websocket_connect(
         started_at,
         receiver,
         fast_path_reporter,
+    }
+}
+
+fn opening_failure_reason(error: &CodexWebSocketExchangeError) -> &'static str {
+    match error.classified() {
+        CodexWebSocketExchangeError::InvalidRequest(_) => "request_build_failure",
+        CodexWebSocketExchangeError::Connect(error)
+        | CodexWebSocketExchangeError::Transport(error) => transport_metric_reason(error),
+        CodexWebSocketExchangeError::ConnectTimeout { .. }
+        | CodexWebSocketExchangeError::FastPathTimeout { .. } => "connect_timeout",
+        CodexWebSocketExchangeError::Upstream(_) => "upgrade_rejected",
+        CodexWebSocketExchangeError::OriginCircuitOpen
+        | CodexWebSocketExchangeError::OriginHalfOpenBusy => "connect_suppressed",
+        CodexWebSocketExchangeError::SharedConnectFailed => "shared_connect_failed",
+        _ => "connect_failure",
     }
 }
 
@@ -489,16 +508,16 @@ async fn wait_for_shared_connect(
     }
 }
 
-fn bypass_unavailable_reason(
-    reason: WebSocketPoolBypassReason,
-) -> PreviousResponseUnavailableReason {
+fn bypass_unavailable_error(reason: WebSocketPoolBypassReason) -> CodexWebSocketExchangeError {
     match reason {
-        WebSocketPoolBypassReason::Busy => PreviousResponseUnavailableReason::ConnectionBusy,
+        WebSocketPoolBypassReason::Busy => {
+            continuation_unavailable(PreviousResponseUnavailableReason::ConnectionBusy)
+        }
         WebSocketPoolBypassReason::Disabled | WebSocketPoolBypassReason::Cap => {
-            PreviousResponseUnavailableReason::PoolUnavailable
+            continuation_unavailable(PreviousResponseUnavailableReason::PoolUnavailable)
         }
         WebSocketPoolBypassReason::ContinuationNotFound => {
-            PreviousResponseUnavailableReason::FreshConnectionRequired
+            continuation_unavailable(PreviousResponseUnavailableReason::FreshConnectionRequired)
         }
     }
 }
@@ -527,8 +546,13 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         created_at,
     } = connection;
     if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
-        discard_after_send(websocket, lease).await;
-        return Err(post_send_ambiguous(error));
+        let observation = websocket
+            .observation()
+            .with_exit_reason("outbound_transport_error");
+        discard_after_send(websocket, lease, observation.clone()).await;
+        return Err(post_send_ambiguous(
+            error.with_connection_observation(observation),
+        ));
     }
     let connection_local_available = lease.is_some();
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
@@ -548,9 +572,13 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     Ok(exchange)
 }
 
-async fn discard_after_send(websocket: PumpedWebSocket, lease: Option<WebSocketPoolLease>) {
+async fn discard_after_send(
+    websocket: PumpedWebSocket,
+    lease: Option<WebSocketPoolLease>,
+    observation: super::pump::WebSocketConnectionObservation,
+) {
     if let Some(lease) = lease {
-        lease.discard().await;
+        lease.discard_with_observation(observation).await;
     }
     websocket.close().await;
 }

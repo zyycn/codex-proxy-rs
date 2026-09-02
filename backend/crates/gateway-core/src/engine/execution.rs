@@ -505,8 +505,11 @@ impl DefaultExecutionService {
             .candidates()
             .first()
             .map_or_else(Default::default, |candidate| {
-                self.providers
-                    .request_observation(candidate.provider(), &operation)
+                self.providers.request_observation(
+                    candidate.provider(),
+                    &operation,
+                    client.policy.key_id(),
+                )
             });
         let new_request = NewModelRequest {
             id: request_id.clone(),
@@ -526,6 +529,7 @@ impl DefaultExecutionService {
             request_kind: observation.request_kind,
             subagent_kind: observation.subagent_kind,
             compact: observation.compact,
+            continuation: observation.continuation,
             image_generation_requested: operation.image_generation_requested(),
             admission_decision_ms: Some(admission_decision_ms),
             started_at,
@@ -668,6 +672,7 @@ impl DefaultExecutionService {
             request_kind: Some("account_connection_test".to_owned()),
             subagent_kind: None,
             compact: false,
+            continuation: Default::default(),
             image_generation_requested: false,
             admission_decision_ms: None,
             started_at,

@@ -11,6 +11,7 @@ use crate::transport::diagnostics::CodexUpstreamDiagnostics;
 use crate::transport::diagnostics::CodexUpstreamSendPhase;
 
 use super::PreviousResponseUnavailableReason;
+use super::pump::WebSocketConnectionObservation;
 
 /// Responses WebSocket 交互错误。
 #[derive(Debug, Error)]
@@ -100,6 +101,13 @@ pub enum CodexWebSocketExchangeError {
     InitialEventTimeout {
         /// 首个上游事件超时时长。
         timeout: Duration,
+    },
+    /// 将一个已分类交互错误与物理连接生命周期快照绑定。
+    #[error("{source}")]
+    ConnectionObserved {
+        observation: WebSocketConnectionObservation,
+        #[source]
+        source: Box<CodexWebSocketExchangeError>,
     },
 }
 
@@ -240,7 +248,9 @@ impl CodexWebSocketExchangeError {
         )
     }
 
-    pub(crate) fn close_before_terminal(&self) -> Option<&CodexWebSocketCloseError> {
+    /// 返回错误链中的上游终态前 Close 帧（若存在）。
+    #[must_use]
+    pub fn close_before_terminal(&self) -> Option<&CodexWebSocketCloseError> {
         match self {
             Self::ClosedBeforeTerminal(close) => Some(close),
             Self::PostSendAmbiguous {
@@ -250,7 +260,54 @@ impl CodexWebSocketExchangeError {
             | Self::ReusedConnectionDiedBeforeFirstEvent {
                 source: Some(source),
                 ..
-            } => source.close_before_terminal(),
+            }
+            | Self::ConnectionObserved { source, .. } => source.close_before_terminal(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_connection_observation(
+        self,
+        observation: WebSocketConnectionObservation,
+    ) -> Self {
+        match self {
+            Self::ConnectionObserved { .. } => self,
+            source => Self::ConnectionObserved {
+                observation,
+                source: Box::new(source),
+            },
+        }
+    }
+
+    /// 返回错误关联的物理 WebSocket 连接生命周期快照。
+    #[must_use]
+    pub fn connection_observation(&self) -> Option<&WebSocketConnectionObservation> {
+        match self {
+            Self::ConnectionObserved { observation, .. } => Some(observation),
+            Self::PostSendAmbiguous {
+                source: Some(source),
+                ..
+            }
+            | Self::ReusedConnectionDiedBeforeFirstEvent {
+                source: Some(source),
+                ..
+            } => source.connection_observation(),
+            _ => None,
+        }
+    }
+
+    /// 返回去掉观测 wrapper 后的原始分类错误。
+    pub(crate) fn classified(&self) -> &Self {
+        match self {
+            Self::ConnectionObserved { source, .. } => source.classified(),
+            _ => self,
+        }
+    }
+
+    #[must_use]
+    pub fn continuation_unavailable_reason(&self) -> Option<PreviousResponseUnavailableReason> {
+        match self.classified() {
+            Self::ContinuationUnavailable { reason } => Some(*reason),
             _ => None,
         }
     }
@@ -277,6 +334,9 @@ impl CodexWebSocketExchangeError {
 
     /// opening 阶段只有明确的 transport 可用性失败才能切到同账号 HTTP。
     pub(in crate::transport) fn allows_pre_send_http_fallback(&self) -> bool {
+        if let Self::ConnectionObserved { source, .. } = self {
+            return source.allows_pre_send_http_fallback();
+        }
         matches!(
             self,
             Self::Connect(_)
@@ -291,7 +351,7 @@ impl CodexWebSocketExchangeError {
 
     /// 精确连接状态不可用属于本地池路由事实，不消耗上游 WS 重试预算。
     pub(in crate::transport) fn requires_immediate_pool_fallback(&self) -> bool {
-        matches!(self, Self::ContinuationUnavailable { .. })
+        matches!(self.classified(), Self::ContinuationUnavailable { .. })
     }
 
     /// 首个业务事件交付前，普通 WebSocket 失败可切到同账号 HTTP。
@@ -302,6 +362,7 @@ impl CodexWebSocketExchangeError {
                 source: Some(source),
                 ..
             } => source.allows_pre_delivery_http_fallback(),
+            Self::ConnectionObserved { source, .. } => source.allows_pre_delivery_http_fallback(),
             _ => true,
         }
     }

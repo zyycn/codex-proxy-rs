@@ -33,6 +33,7 @@ pub use self::{
         CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey,
         WebSocketPoolBypassReason, WebSocketPoolDecision,
     },
+    pump::WebSocketConnectionObservation,
 };
 pub(crate) use self::{
     coordinator::{

@@ -39,7 +39,10 @@ pub use provider_accounts::*;
 pub use retention::*;
 pub use runtime_settings::*;
 pub use snapshot::*;
-pub(crate) use usage_facts::{completed_usage_fact_predicate, push_completed_usage_fact_filter};
+pub(crate) use usage_facts::{
+    completed_usage_fact_predicate, push_completed_usage_fact_filter,
+    push_unrecovered_request_filter,
+};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 

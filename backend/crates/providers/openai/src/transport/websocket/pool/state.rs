@@ -1,6 +1,9 @@
 //! WebSocket 连接池状态和值对象。
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::Duration,
+};
 
 use sha2::{Digest, Sha256};
 use tokio::{sync::watch, time::Instant};
@@ -10,7 +13,7 @@ use uuid::Uuid;
 use super::super::super::{
     diagnostics::CodexUpstreamDiagnostics, response_meta::CodexResponseMetadata,
 };
-use super::super::pump::PumpedWebSocket;
+use super::super::pump::{PumpedWebSocket, WebSocketConnectionObservation};
 use super::lease::WebSocketPoolConnectOutcome;
 
 /// WebSocket 连接池 key。
@@ -67,10 +70,70 @@ impl CodexWebSocketPoolKey {
     }
 }
 
+const CONTINUATION_TOMBSTONE_TTL: Duration = Duration::from_mins(30);
+const MAX_CONTINUATION_TOMBSTONES: usize = 4_096;
+
 #[derive(Default)]
 pub(super) struct WebSocketPoolState {
     pub(super) slots: HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
+    continuation_tombstones: VecDeque<WebSocketContinuationTombstone>,
     pub(super) shutting_down: bool,
+}
+
+struct WebSocketContinuationTombstone {
+    key: CodexWebSocketPoolKey,
+    response_id: String,
+    observation: WebSocketConnectionObservation,
+    expires_at: Instant,
+}
+
+impl WebSocketPoolState {
+    pub(super) fn remember_continuation_loss(
+        &mut self,
+        key: &CodexWebSocketPoolKey,
+        response_id: Option<&str>,
+        observation: WebSocketConnectionObservation,
+        now: Instant,
+    ) {
+        let Some(response_id) = response_id else {
+            return;
+        };
+        self.prune_continuation_tombstones(now);
+        self.continuation_tombstones.retain(|tombstone| {
+            !(tombstone.key.same_logical_connection(key) && tombstone.response_id == response_id)
+        });
+        while self.continuation_tombstones.len() >= MAX_CONTINUATION_TOMBSTONES {
+            self.continuation_tombstones.pop_front();
+        }
+        self.continuation_tombstones
+            .push_back(WebSocketContinuationTombstone {
+                key: key.clone(),
+                response_id: response_id.to_owned(),
+                observation,
+                expires_at: now + CONTINUATION_TOMBSTONE_TTL,
+            });
+    }
+
+    pub(super) fn continuation_loss(
+        &mut self,
+        key: &CodexWebSocketPoolKey,
+        response_id: &str,
+        now: Instant,
+    ) -> Option<WebSocketConnectionObservation> {
+        self.prune_continuation_tombstones(now);
+        self.continuation_tombstones
+            .iter()
+            .rev()
+            .find(|tombstone| {
+                tombstone.key.same_logical_connection(key) && tombstone.response_id == response_id
+            })
+            .map(|tombstone| tombstone.observation.clone())
+    }
+
+    fn prune_continuation_tombstones(&mut self, now: Instant) {
+        self.continuation_tombstones
+            .retain(|tombstone| tombstone.expires_at > now);
+    }
 }
 
 #[derive(Clone)]

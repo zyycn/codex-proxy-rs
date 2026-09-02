@@ -360,6 +360,55 @@ impl fmt::Debug for RawUpstreamError {
     }
 }
 
+/// Provider 上游物理连接结束时的低基数观测。
+///
+/// 连接标识必须是随机或单向派生值，不得携带凭据、原始会话 ID
+/// 或请求正文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderConnectionObservation {
+    connection_id: String,
+    exit_reason: String,
+    age_ms: u64,
+    idle_ms: u64,
+}
+
+impl ProviderConnectionObservation {
+    #[must_use]
+    pub fn new(
+        connection_id: impl Into<String>,
+        exit_reason: impl Into<String>,
+        age_ms: u64,
+        idle_ms: u64,
+    ) -> Self {
+        Self {
+            connection_id: connection_id.into(),
+            exit_reason: exit_reason.into(),
+            age_ms,
+            idle_ms,
+        }
+    }
+
+    #[must_use]
+    pub fn connection_id(&self) -> &str {
+        &self.connection_id
+    }
+
+    #[must_use]
+    pub fn exit_reason(&self) -> &str {
+        &self.exit_reason
+    }
+
+    #[must_use]
+    pub const fn age_ms(&self) -> u64 {
+        self.age_ms
+    }
+
+    #[must_use]
+    pub const fn idle_ms(&self) -> u64 {
+        self.idle_ms
+    }
+}
+
 /// 只供当前客户端请求使用的原始上游 HTTP 失败响应。
 ///
 /// 该值不属于稳定诊断事实，不能进入日志或持久化。它刻意不实现 [`Clone`]；
@@ -445,6 +494,7 @@ pub struct ProviderError {
     retry_after: Option<Duration>,
     continuation_failure: Option<ContinuationFailure>,
     continuation_recovery_disposition: Option<ContinuationRecoveryDisposition>,
+    failure_observation: Option<Box<ProviderErrorFailureObservation>>,
     replay_safe: bool,
     pre_delivery_retry: Option<PreDeliveryRetry>,
     credential_recovery_required: bool,
@@ -463,6 +513,12 @@ struct ProviderErrorUpstreamValues {
     request_id: Option<OpaqueUpstreamValue>,
 }
 
+#[derive(Clone, Default)]
+struct ProviderErrorFailureObservation {
+    continuation_unavailable_reason: Option<&'static str>,
+    connection: Option<ProviderConnectionObservation>,
+}
+
 #[derive(Clone)]
 struct AtomicClientEvents(Vec<ProviderEvent>);
 
@@ -478,6 +534,7 @@ impl ProviderError {
             retry_after: None,
             continuation_failure: None,
             continuation_recovery_disposition: None,
+            failure_observation: None,
             replay_safe: false,
             pre_delivery_retry: None,
             credential_recovery_required: false,
@@ -541,6 +598,29 @@ impl ProviderError {
     ) -> Self {
         self.continuation_recovery_disposition = Some(disposition);
         self
+    }
+
+    /// 附加 Provider 给出的低基数 continuation 不可用原因。
+    #[must_use]
+    pub fn with_continuation_unavailable_reason(mut self, reason: &'static str) -> Self {
+        self.failure_observation_mut()
+            .continuation_unavailable_reason = Some(reason);
+        self
+    }
+
+    /// 附加上游物理连接结束观测。
+    #[must_use]
+    pub fn with_connection_observation(
+        mut self,
+        observation: ProviderConnectionObservation,
+    ) -> Self {
+        self.failure_observation_mut().connection = Some(observation);
+        self
+    }
+
+    fn failure_observation_mut(&mut self) -> &mut ProviderErrorFailureObservation {
+        self.failure_observation
+            .get_or_insert_with(|| Box::new(ProviderErrorFailureObservation::default()))
     }
 
     /// 标记 Provider 已证明本次拒绝没有执行生成，可在下游提交前重放。
@@ -717,6 +797,21 @@ impl ProviderError {
         self.continuation_recovery_disposition
     }
 
+    #[must_use]
+    pub fn continuation_unavailable_reason(&self) -> Option<&'static str> {
+        match self.failure_observation.as_deref() {
+            Some(observation) => observation.continuation_unavailable_reason,
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub fn connection_observation(&self) -> Option<&ProviderConnectionObservation> {
+        self.failure_observation
+            .as_deref()
+            .and_then(|observation| observation.connection.as_ref())
+    }
+
     /// 返回 Provider 是否已证明本次失败可安全重放。
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
@@ -804,6 +899,7 @@ impl Clone for ProviderError {
             retry_after: self.retry_after,
             continuation_failure: self.continuation_failure,
             continuation_recovery_disposition: self.continuation_recovery_disposition,
+            failure_observation: self.failure_observation.clone(),
             replay_safe: self.replay_safe,
             pre_delivery_retry: self.pre_delivery_retry,
             credential_recovery_required: self.credential_recovery_required,
@@ -839,6 +935,11 @@ impl fmt::Debug for ProviderError {
                 "continuation_recovery_disposition",
                 &self.continuation_recovery_disposition,
             )
+            .field(
+                "continuation_unavailable_reason",
+                &self.continuation_unavailable_reason(),
+            )
+            .field("connection_observation", &self.connection_observation())
             .field("replay_safe", &self.replay_safe)
             .field("pre_delivery_retry", &self.pre_delivery_retry)
             .field(

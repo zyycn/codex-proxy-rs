@@ -875,6 +875,7 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
         request_kind: None,
         subagent_kind: None,
         compact: false,
+        continuation: Default::default(),
         image_generation_requested: false,
         started_at,
         deadline_at: started_at + chrono::Duration::seconds(30),

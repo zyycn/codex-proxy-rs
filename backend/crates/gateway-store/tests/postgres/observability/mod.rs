@@ -216,6 +216,84 @@ async fn ops_search_should_treat_sql_wildcards_as_literals() {
 }
 
 #[tokio::test]
+async fn recovered_continuation_failure_should_be_hidden_from_default_business_metrics() {
+    let Some(database) = TestDatabase::create("observability_recovered_continuation").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    sqlx::query(
+        "update model_requests
+            set error_kind = 'continuation_recovery_required',
+                continuation_affinity_hash = $2,
+                continuation_previous_response_id_hash = $3,
+                continuation_requested = true,
+                continuation_unavailable_reason = 'reused_connection_lost',
+                recovery_request_id = 'req_observe_success', recovered_at = $1,
+                recovery_attempt_count = 1, recovery_retry_delay_ms = 4000,
+                recovery_total_latency_ms = 8000
+          where id = 'req_observe_failed'",
+    )
+    .bind(now)
+    .bind("a".repeat(64))
+    .bind("b".repeat(64))
+    .execute(&database.pool)
+    .await
+    .expect("mark continuation failure recovered");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+    let repository = observability_repository(&database.pool);
+
+    let overview = repository
+        .usage_summary(range, UsageRecordFilter::default())
+        .await
+        .expect("usage summary without recovered intermediates");
+    assert_eq!(overview.requests.request_count, 2);
+    assert_eq!(overview.requests.failure_count, 0);
+    assert_eq!(overview.attempts.attempt_count, 2);
+    assert_eq!(overview.attempts.failure_count, 0);
+    assert_eq!(overview.providers[0].request_count, 2);
+    assert_eq!(overview.providers[0].failure_count, 0);
+
+    let diagnostics = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+        )
+        .await
+        .expect("diagnostics without recovered intermediates");
+    assert_eq!(diagnostics[0].request_count, 2);
+    assert_eq!(diagnostics[0].failure_count, 0);
+
+    let errors = repository
+        .list_ops_errors(OpsErrorQuery {
+            range,
+            filter: OpsErrorFilter::default(),
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("ops errors without recovered intermediates");
+    assert_eq!(errors.total, 0);
+
+    let retained: (String, Option<String>) = sqlx::query_as(
+        "select outcome, recovery_request_id
+           from model_requests where id = 'req_observe_failed'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load retained recovery audit row");
+    assert_eq!(
+        retained,
+        ("failed".to_owned(), Some("req_observe_success".to_owned()))
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn dashboard_account_metrics_should_partition_account_statuses() {
     let Some(database) = TestDatabase::create("dashboard_account_metrics").await else {
         return;

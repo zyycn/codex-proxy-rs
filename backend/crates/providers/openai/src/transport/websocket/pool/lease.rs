@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use super::state::{CodexWebSocketPoolKey, PooledWebSocketConnection, WebSocketPoolReservation};
 use super::{CodexWebSocketPool, WebSocketPoolBypassReason};
+use crate::transport::websocket::pump::WebSocketConnectionObservation;
 
 pub(crate) enum WebSocketPoolAcquire {
     Reused {
@@ -22,6 +23,7 @@ pub(crate) enum WebSocketPoolAcquire {
     },
     Connect(WebSocketPoolConnectLease),
     Wait(WebSocketPoolConnectWaiter),
+    ContinuationLost(WebSocketConnectionObservation),
     Bypass(WebSocketPoolBypassReason),
 }
 
@@ -182,10 +184,12 @@ impl WebSocketPoolLease {
         self.armed = false;
     }
 
-    pub(crate) async fn discard(mut self) {
+    pub(crate) async fn discard_with_observation(
+        mut self,
+        observation: WebSocketConnectionObservation,
+    ) {
         self.pool
-            .discard_reserved(&self.key, self.reservation.id)
-            .await;
+            .discard_reserved_with_observation(&self.key, self.reservation.id, observation);
         self.armed = false;
     }
 }

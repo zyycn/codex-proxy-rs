@@ -174,7 +174,23 @@ impl CodexWebSocketPool {
             .collect::<Vec<_>>();
         for key in keys {
             match state.slots.remove(&key) {
-                Some(WebSocketPoolSlot::Idle { connection, .. }) => close.push(*connection),
+                Some(WebSocketPoolSlot::Idle { connection, .. }) => {
+                    let observation = if connection.websocket.is_closed() {
+                        connection.websocket.observation()
+                    } else {
+                        connection
+                            .websocket
+                            .observation()
+                            .with_exit_reason("max_age_expired")
+                    };
+                    state.remember_continuation_loss(
+                        &key,
+                        connection.continuation.latest_response_id(),
+                        observation,
+                        now,
+                    );
+                    close.push(*connection);
+                }
                 Some(WebSocketPoolSlot::Busy(reservation)) => {
                     tracing::warn!(
                         account_id = key.account_id(),

@@ -1,9 +1,10 @@
 use chrono::{Duration, Utc};
 use gateway_core::engine::{
-    ExecutionOutcome, ExecutionStore, ModelRequestFinalization as CoreModelRequestFinalization,
-    ModelRequestId, ModelRequestTimings as CoreModelRequestTimings,
+    ExecutionOutcome, ExecutionStore, ModelRequestFailureObservation,
+    ModelRequestFinalization as CoreModelRequestFinalization, ModelRequestId,
+    ModelRequestTimings as CoreModelRequestTimings,
 };
-use gateway_core::error::{GatewayError, GatewayErrorKind};
+use gateway_core::error::{GatewayError, GatewayErrorKind, ProviderConnectionObservation};
 use gateway_core::metering::{CalculatedCost, CostEstimate, Usage};
 use gateway_core::upstream::UpstreamSendState;
 use gateway_store::postgres::{
@@ -42,6 +43,7 @@ fn model_request_rejects_mismatched_client_key_live_id() {
         request_kind: None,
         subagent_kind: None,
         compact: false,
+        continuation: Default::default(),
         image_generation_requested: false,
         started_at,
         deadline_at: started_at + Duration::seconds(30),
@@ -93,6 +95,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         request_kind: None,
         subagent_kind: None,
         compact: false,
+        continuation: Default::default(),
         image_generation_requested: false,
         started_at,
         deadline_at: started_at + Duration::seconds(30),
@@ -210,6 +213,7 @@ async fn model_request_persists_group_routing_snapshot_without_live_group_foreig
             request_kind: None,
             subagent_kind: None,
             compact: false,
+            continuation: Default::default(),
             image_generation_requested: false,
             started_at,
             deadline_at: started_at + Duration::seconds(30),
@@ -477,6 +481,7 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         error: None,
         provider_error_code: None,
         raw_upstream_error: None,
+        failure_observation: Default::default(),
         retry_after_ms: None,
         usage: Usage::new(),
         image_generation_succeeded: None,
@@ -598,6 +603,243 @@ async fn core_adapter_should_reject_non_object_provider_observation() {
     );
 
     database.close().await;
+}
+
+#[tokio::test]
+async fn core_adapter_persists_continuation_connection_failure_observation() {
+    let Some(database) = TestDatabase::create("execution_continuation_observation").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_continuation_observation")
+        .await
+        .expect("seed model request");
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_continuation_observation");
+    finalization.outcome = ExecutionOutcome::Failed;
+    finalization.client_status_code = Some(400);
+    finalization.error = Some(GatewayError::new(
+        GatewayErrorKind::InvalidRequest,
+        "conversation continuation must be rebuilt",
+    ));
+    finalization.failure_observation = ModelRequestFailureObservation {
+        continuation_unavailable_reason: Some("reused_connection_lost".to_owned()),
+        upstream_connection: Some(ProviderConnectionObservation::new(
+            "connection-observed",
+            "tcp_reset",
+            12_000,
+            4_000,
+        )),
+    };
+
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("persist continuation failure observation");
+
+    type PersistedContinuationObservation = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+    );
+    let persisted: PersistedContinuationObservation = sqlx::query_as(
+        "select error_kind, continuation_unavailable_reason,
+                upstream_connection_id, upstream_connection_exit_reason,
+                upstream_connection_age_ms, upstream_connection_idle_ms
+           from model_requests where id = 'req_continuation_observation'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load continuation failure observation");
+    assert_eq!(
+        persisted.0.as_deref(),
+        Some("continuation_recovery_required")
+    );
+    assert_eq!(persisted.1.as_deref(), Some("reused_connection_lost"));
+    assert_eq!(persisted.2.as_deref(), Some("connection-observed"));
+    assert_eq!(persisted.3.as_deref(), Some("tcp_reset"));
+    assert_eq!(persisted.4, Some(12_000));
+    assert_eq!(persisted.5, Some(4_000));
+
+    database.close().await;
+}
+
+#[tokio::test]
+async fn successful_new_chain_should_mark_recent_continuation_failure_recovered() {
+    let Some(database) = TestDatabase::create("execution_continuation_recovered").await else {
+        return;
+    };
+    let affinity_hash = "a".repeat(64);
+    let failure_completed_at = Utc::now() - Duration::seconds(8);
+    seed_continuation_failure(
+        &database.pool,
+        "req_continuation_failed",
+        &affinity_hash,
+        failure_completed_at,
+    )
+    .await;
+    seed_recovery_request(
+        &database.pool,
+        "req_continuation_recovery",
+        &affinity_hash,
+        failure_completed_at + Duration::seconds(4),
+    )
+    .await;
+
+    let store = PgExecutionStore::new(database.pool.clone());
+    ExecutionStore::finalize_model_request(
+        &store,
+        successful_core_finalization("req_continuation_recovery"),
+    )
+    .await
+    .expect("finalize successful recovery request");
+
+    type PersistedRecoveryObservation = (
+        Option<String>,
+        Option<chrono::DateTime<Utc>>,
+        i32,
+        Option<i64>,
+        Option<i64>,
+    );
+    let recovered: PersistedRecoveryObservation = sqlx::query_as(
+        "select recovery_request_id, recovered_at, recovery_attempt_count,
+                recovery_retry_delay_ms, recovery_total_latency_ms
+           from model_requests where id = 'req_continuation_failed'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load recovered continuation failure");
+
+    assert_eq!(recovered.0.as_deref(), Some("req_continuation_recovery"));
+    assert!(recovered.1.is_some());
+    assert_eq!(recovered.2, 1);
+    assert_eq!(recovered.3, Some(4_000));
+    assert!(recovered.4.is_some_and(|latency| latency >= 4_000));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn failed_or_late_new_chain_should_leave_continuation_failure_unresolved() {
+    let Some(database) = TestDatabase::create("execution_continuation_unresolved").await else {
+        return;
+    };
+    let affinity_hash = "c".repeat(64);
+    let failure_completed_at = Utc::now() - Duration::seconds(60);
+    seed_continuation_failure(
+        &database.pool,
+        "req_continuation_unresolved",
+        &affinity_hash,
+        failure_completed_at,
+    )
+    .await;
+    seed_recovery_request(
+        &database.pool,
+        "req_continuation_retry_failed",
+        &affinity_hash,
+        failure_completed_at + Duration::seconds(3),
+    )
+    .await;
+
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut failed = successful_core_finalization("req_continuation_retry_failed");
+    failed.outcome = ExecutionOutcome::Failed;
+    failed.client_status_code = Some(502);
+    failed.upstream_status_code = Some(500);
+    failed.error = Some(GatewayError::new(
+        GatewayErrorKind::UpstreamUnavailable,
+        "recovery request failed",
+    ));
+    ExecutionStore::finalize_model_request(&store, failed)
+        .await
+        .expect("finalize failed recovery request");
+
+    let after_failed: (Option<String>, Option<chrono::DateTime<Utc>>, i32) = sqlx::query_as(
+        "select recovery_request_id, recovered_at, recovery_attempt_count
+           from model_requests where id = 'req_continuation_unresolved'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load unresolved continuation failure");
+    assert_eq!(after_failed, (None, None, 1));
+
+    seed_recovery_request(
+        &database.pool,
+        "req_continuation_retry_late",
+        &affinity_hash,
+        failure_completed_at + Duration::seconds(31),
+    )
+    .await;
+    ExecutionStore::finalize_model_request(
+        &store,
+        successful_core_finalization("req_continuation_retry_late"),
+    )
+    .await
+    .expect("finalize late recovery request");
+
+    let after_late: (Option<String>, Option<chrono::DateTime<Utc>>, i32) = sqlx::query_as(
+        "select recovery_request_id, recovered_at, recovery_attempt_count
+           from model_requests where id = 'req_continuation_unresolved'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("load late unresolved continuation failure");
+    assert_eq!(after_late, (None, None, 1));
+    database.close().await;
+}
+
+async fn seed_continuation_failure(
+    pool: &sqlx::PgPool,
+    id: &str,
+    affinity_hash: &str,
+    completed_at: chrono::DateTime<Utc>,
+) {
+    seed_running_request(pool, id)
+        .await
+        .expect("seed continuation failure request");
+    sqlx::query(
+        "update model_requests
+            set client_api_key_ref = 'key_continuation', client_transport = 'websocket',
+                continuation_affinity_hash = $2,
+                continuation_previous_response_id_hash = $3,
+                continuation_requested = true,
+                outcome = 'failed', error_kind = 'continuation_recovery_required',
+                continuation_unavailable_reason = 'reused_connection_lost',
+                started_at = $4 - interval '1 second', deadline_at = $4,
+                completed_at = $4
+          where id = $1",
+    )
+    .bind(id)
+    .bind(affinity_hash)
+    .bind("b".repeat(64))
+    .bind(completed_at)
+    .execute(pool)
+    .await
+    .expect("finalize seeded continuation failure");
+}
+
+async fn seed_recovery_request(
+    pool: &sqlx::PgPool,
+    id: &str,
+    affinity_hash: &str,
+    started_at: chrono::DateTime<Utc>,
+) {
+    seed_running_request(pool, id)
+        .await
+        .expect("seed continuation recovery request");
+    sqlx::query(
+        "update model_requests
+            set client_api_key_ref = 'key_continuation', client_transport = 'websocket',
+                continuation_affinity_hash = $2, continuation_requested = false,
+                started_at = $3, deadline_at = $3 + interval '1 minute'
+          where id = $1",
+    )
+    .bind(id)
+    .bind(affinity_hash)
+    .bind(started_at)
+    .execute(pool)
+    .await
+    .expect("prepare seeded recovery request");
 }
 
 async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx::Error> {

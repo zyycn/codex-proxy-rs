@@ -70,16 +70,23 @@ pub enum PreviousResponseUnavailableReason {
     UpstreamRejected,
 }
 
-impl fmt::Display for PreviousResponseUnavailableReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl PreviousResponseUnavailableReason {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
             Self::PoolUnavailable => "pool_unavailable",
             Self::FreshConnectionRequired => "fresh_connection_required",
             Self::ConnectionBusy => "connection_busy",
             Self::LatestResponseMismatch => "latest_response_mismatch",
             Self::ReusedConnectionLost => "reused_connection_lost",
             Self::UpstreamRejected => "upstream_rejected",
-        })
+        }
+    }
+}
+
+impl fmt::Display for PreviousResponseUnavailableReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

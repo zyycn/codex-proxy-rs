@@ -204,6 +204,18 @@ export interface OpsErrorMetadata {
   component: string
   attemptId: string | null
   accountLabel: string | null
+  continuationAffinityHash: string | null
+  continuationPreviousResponseIdHash: string | null
+  continuationUnavailableReason: string | null
+  upstreamConnectionId: string | null
+  upstreamConnectionExitReason: string | null
+  upstreamConnectionAgeMs: number | null
+  upstreamConnectionIdleMs: number | null
+  recoveryRequestId: string | null
+  recoveredAt: string | null
+  recoveryAttemptCount: number
+  recoveryRetryDelayMs: number | null
+  recoveryTotalLatencyMs: number | null
 }
 
 export interface OpsError {
