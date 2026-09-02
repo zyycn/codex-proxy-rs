@@ -57,58 +57,51 @@ const finalAttemptIndex = computed(() => {
   return last?.attemptIndex ?? props.record?.attemptCount
 })
 const overviewItems = computed(() => [
-  { label: '时间', value: props.record?.createdAtDisplay, mono: true },
-  { label: '客户端传输', value: usageTransportType(props.record?.clientTransport) },
-  { label: '上游传输', value: usageTransportType(props.record?.upstreamTransport) },
-  { label: '耗时', value: props.record?.latencyMsDisplay, mono: true },
+  { label: '端点', value: props.record?.route, mono: true },
+  { label: '客户端传输', value: usageTransportType(props.record?.clientTransport), mono: true },
+  { label: '上游传输', value: usageTransportType(props.record?.upstreamTransport), mono: true },
+  { label: '总耗时', value: props.record?.latencyMsDisplay, mono: true },
   {
     label: latencyDetails.value?.firstOutputLabel ?? '首字',
     value: latencyDetails.value?.firstOutputDisplay ?? '—',
     mono: true,
   },
   { label: '总 Token', value: tokenDetails.value?.totalTokensDisplay, mono: true },
-  { label: '请求 ID', value: props.record?.requestId, mono: true, wide: true },
-  { label: '消息', value: props.record?.message, wide: true },
 ])
 
-const detailGroups = computed(() => [
+const modelRouteItems = computed(() => [
+  { label: '端点', value: props.record?.route, mono: true },
+  { label: '推理强度', value: props.record ? usageReasoningEffort(props.record) : '—' },
+  { label: '请求模型', value: modelDisplay.value.primary, mono: true },
   {
-    title: '模型与链路',
-    items: [
-      { label: '端点', value: props.record?.route, mono: true },
-      { label: '请求模型', value: modelDisplay.value.primary, mono: true },
-      {
-        label: '上游模型',
-        value: modelDisplay.value.secondary || props.record?.upstreamModel,
-        mono: true,
-      },
-      { label: '存储模型', value: props.record?.model, mono: true },
-      { label: '推理强度', value: props.record ? usageReasoningEffort(props.record) : '—' },
-      { label: '账号 ID', value: props.record?.accountId, mono: true },
-      { label: '请求 ID', value: props.record?.requestId, mono: true },
-      { label: '响应 ID', value: props.record?.responseId, mono: true },
-      { label: '上游请求 ID', value: props.record?.upstreamRequestId, mono: true },
-    ],
+    label: '上游模型',
+    value: modelDisplay.value.secondary || props.record?.upstreamModel,
+    mono: true,
   },
+  { label: '存储模型', value: props.record?.model, mono: true },
+])
+
+const clientUpstreamItems = computed(() => [
+  { label: '客户端 IP', value: props.record ? usageClientIp(props.record) : '—', mono: true },
+  { label: '服务档位', value: props.record?.serviceTier, mono: true },
+  { label: '事件类型', value: props.record?.kind, mono: true },
+  { label: '尝试序号', value: finalAttemptIndex.value },
   {
-    title: '客户端与上游',
-    items: [
-      { label: '客户端 IP', value: props.record ? usageClientIp(props.record) : '—', mono: true },
-      {
-        label: 'User-Agent',
-        value: props.record ? usageUserAgent(props.record) : '',
-        mono: true,
-        wrap: true,
-      },
-      { label: '事件类型', value: props.record?.kind, mono: true },
-      { label: '尝试序号', value: finalAttemptIndex.value },
-      { label: '服务档位', value: props.record?.serviceTier, mono: true },
-      { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true },
-    ],
+    label: 'User-Agent',
+    value: props.record ? usageUserAgent(props.record) : '',
+    mono: true,
+    wrap: true,
+    fullWidth: true,
   },
 ])
-const modelRouteGroup = computed(() => detailGroups.value[0])
-const clientUpstreamGroup = computed(() => detailGroups.value[1])
+
+const identifierItems = computed(() => [
+  { label: '请求 ID', value: props.record?.requestId, mono: true, wrap: true, fullWidth: true },
+  { label: '响应 ID', value: props.record?.responseId, mono: true, wrap: true },
+  { label: '上游请求 ID', value: props.record?.upstreamRequestId, mono: true, wrap: true },
+  { label: '账号 ID', value: props.record?.accountId, mono: true, wrap: true },
+  { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true, wrap: true },
+])
 
 interface AttemptRow {
   id: string
@@ -286,34 +279,53 @@ const tokenDonutOption = computed<EChartsOption>(() => {
   >
     <div v-if="record" class="grid min-w-0 gap-3">
       <section :class="panelClass">
-        <div class="min-w-0">
-          <span :class="fieldLabelClass">账号</span>
-          <p
-            class="mt-1.5 mb-0 truncate font-mono text-cp leading-none font-heavy text-cp-text"
-            :title="displayValue(accountDisplay)"
-          >
-            {{ displayValue(accountDisplay) }}
-          </p>
-        </div>
-
         <dl
-          class="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-[120px_120px_repeat(5,minmax(0,1fr))]"
+          class="grid min-w-0 grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4 lg:grid-cols-[minmax(0,2fr)_100px_minmax(0,1fr)_180px]"
         >
+          <div class="col-span-2 min-w-0 lg:col-span-1">
+            <dt :class="fieldLabelClass">
+              账号
+            </dt>
+            <dd
+              class="mt-1.5 mb-0 min-w-0 break-all font-mono text-cp-sm leading-snug font-heavy text-cp-text"
+              :title="displayValue(accountDisplay)"
+            >
+              {{ displayValue(accountDisplay) }}
+            </dd>
+          </div>
+
           <div class="min-w-0">
             <dt :class="fieldLabelClass">
               状态码
             </dt>
-            <dd class="mt-1.5 mb-0">
-              <UsageStatusCodeBadge :status-code="record.statusCode" />
+            <dd :class="fieldValueClass(true)" :title="displayValue(record.statusCode)">
+              {{ displayValue(record.statusCode) }}
             </dd>
           </div>
 
-          <div
-            v-for="item in overviewItems"
-            :key="item.label"
-            class="min-w-0"
-            :class="item.wide ? 'col-span-2 lg:col-span-2' : undefined"
-          >
+          <div class="min-w-0">
+            <dt :class="fieldLabelClass">
+              消息
+            </dt>
+            <dd :class="fieldValueClass()" :title="displayValue(record.message)">
+              {{ displayValue(record.message) }}
+            </dd>
+          </div>
+
+          <div class="col-span-2 min-w-0 lg:col-span-1">
+            <dt :class="fieldLabelClass">
+              时间
+            </dt>
+            <dd :class="fieldValueClass(true)" :title="displayValue(record.createdAtDisplay)">
+              {{ displayValue(record.createdAtDisplay) }}
+            </dd>
+          </div>
+        </dl>
+
+        <dl
+          class="mt-4 grid min-w-0 grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-[minmax(160px,1.4fr)_repeat(5,minmax(0,1fr))]"
+        >
+          <div v-for="item in overviewItems" :key="item.label" class="min-w-0">
             <dt :class="fieldLabelClass">
               {{ item.label }}
             </dt>
@@ -324,74 +336,79 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         </dl>
       </section>
 
-      <section class="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <div class="flex min-h-0 min-w-0 flex-col gap-3">
-          <section :class="panelClass">
-            <h3 :class="panelTitleClass">
-              {{ modelRouteGroup.title }}
-            </h3>
-            <UsageDetailFieldGrid :items="modelRouteGroup.items" />
-          </section>
+      <section class="grid min-w-0 gap-3 lg:grid-cols-2">
+        <section :class="panelClass">
+          <h3 :class="panelTitleClass">
+            模型与路由
+          </h3>
+          <UsageDetailFieldGrid :items="modelRouteItems" />
+        </section>
 
-          <section class="flex min-h-0 flex-1 flex-col" :class="[panelClass]">
-            <h3 :class="panelTitleClass">
-              Token
-            </h3>
-            <div
-              class="mt-3 grid min-h-38 min-w-0 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
-            >
-              <div class="relative mx-auto w-38 sm:mx-0">
-                <BaseChart :option="tokenDonutOption" :height="152" />
-                <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <div class="grid text-center">
-                    <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
-                      总计
-                    </span>
-                    <strong
-                      class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-cp-text"
-                    >
-                      {{ tokenDetails?.totalTokensDisplay ?? '—' }}
-                    </strong>
-                  </div>
+        <section :class="panelClass">
+          <h3 :class="panelTitleClass">
+            客户端与上游
+          </h3>
+          <UsageDetailFieldGrid :items="clientUpstreamItems" />
+        </section>
+      </section>
+
+      <section :class="panelClass">
+        <h3 :class="panelTitleClass">
+          请求标识
+        </h3>
+        <UsageDetailFieldGrid :items="identifierItems" />
+      </section>
+
+      <section class="grid min-w-0 gap-3 lg:grid-cols-2">
+        <section class="flex min-h-0 flex-col" :class="panelClass">
+          <h3 :class="panelTitleClass">
+            Token
+          </h3>
+          <div
+            class="mt-3 grid min-h-38 min-w-0 flex-1 grid-cols-1 content-center items-center gap-3 sm:grid-cols-[150px_minmax(0,1fr)]"
+          >
+            <div class="relative mx-auto w-38 sm:mx-0">
+              <BaseChart :option="tokenDonutOption" :height="152" />
+              <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div class="grid text-center">
+                  <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
+                    总计
+                  </span>
+                  <strong
+                    class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-cp-text"
+                  >
+                    {{ tokenDetails?.totalTokensDisplay ?? '—' }}
+                  </strong>
                 </div>
               </div>
-
-              <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
-                <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
-                  <dt class="flex min-w-0 items-center gap-1.5" :class="fieldLabelClass">
-                    <i
-                      class="size-1.75 shrink-0 rounded-full"
-                      :style="{ backgroundColor: item.color }"
-                    />
-                    <span class="truncate">{{ item.label }}</span>
-                  </dt>
-                  <dd
-                    class="font-mono tabular-nums" :class="[fieldValueBaseClass]"
-                    :title="displayValue(item.display)"
-                  >
-                    {{ displayValue(item.display) }}
-                  </dd>
-                </div>
-              </dl>
             </div>
-          </section>
-        </div>
 
-        <div class="flex min-h-0 min-w-0 flex-col gap-3">
-          <section class="flex-1" :class="[panelClass]">
-            <h3 :class="panelTitleClass">
-              {{ clientUpstreamGroup.title }}
-            </h3>
-            <UsageDetailFieldGrid :items="clientUpstreamGroup.items" />
-          </section>
+            <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-3">
+              <div v-for="item in tokenChartItems" :key="item.label" class="min-w-0">
+                <dt class="flex min-w-0 items-center gap-1.5" :class="fieldLabelClass">
+                  <i
+                    class="size-1.75 shrink-0 rounded-full"
+                    :style="{ backgroundColor: item.color }"
+                  />
+                  <span class="truncate">{{ item.label }}</span>
+                </dt>
+                <dd
+                  class="font-mono tabular-nums" :class="[fieldValueBaseClass]"
+                  :title="displayValue(item.display)"
+                >
+                  {{ displayValue(item.display) }}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </section>
 
-          <section :class="panelClass">
-            <h3 :class="panelTitleClass">
-              费用
-            </h3>
-            <UsageDetailFieldGrid :items="billingItems" />
-          </section>
-        </div>
+        <section :class="panelClass">
+          <h3 :class="panelTitleClass">
+            费用
+          </h3>
+          <UsageDetailFieldGrid :items="billingItems" />
+        </section>
       </section>
 
       <section v-if="attemptRows.length" :class="panelClass">

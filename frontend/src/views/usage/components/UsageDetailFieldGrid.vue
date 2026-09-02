@@ -3,7 +3,7 @@ import { displayValue, fieldLabelClass, fieldValueClass } from '../utils/detail'
 
 // 详情弹窗的两列字段网格：label + 值（可选等宽字体），空值以“—”占位。
 defineProps<{
-  items: Array<{ label: string, value: unknown, mono?: boolean, wrap?: boolean }>
+  items: Array<{ label: string, value: unknown, mono?: boolean, wrap?: boolean, fullWidth?: boolean }>
 }>()
 
 function valueClass(item: { mono?: boolean, wrap?: boolean }) {
@@ -19,7 +19,12 @@ function valueClass(item: { mono?: boolean, wrap?: boolean }) {
 
 <template>
   <dl class="mt-3 grid min-w-0 grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-    <div v-for="item in items" :key="item.label" class="min-w-0">
+    <div
+      v-for="item in items"
+      :key="item.label"
+      class="min-w-0"
+      :class="item.fullWidth ? 'sm:col-span-2' : undefined"
+    >
       <dt :class="fieldLabelClass">
         {{ item.label }}
       </dt>

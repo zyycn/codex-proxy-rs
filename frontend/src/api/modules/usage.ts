@@ -420,10 +420,7 @@ interface PageQuery {
 
 type UsagePageQuery = UsageRangeQuery & PageQuery
 
-type OpsErrorPageQuery = UsagePageQuery & {
-  failureClass?: string
-  route?: string
-}
+type OpsErrorPageQuery = UsagePageQuery
 
 interface UsageDetailQuery {
   id: string

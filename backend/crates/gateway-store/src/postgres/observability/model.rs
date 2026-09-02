@@ -126,13 +126,11 @@ pub struct OpsErrorFilter {
     pub provider_account_ref: Option<String>,
     pub provider_kind: Option<String>,
     pub operation: Option<String>,
-    pub endpoint: Option<String>,
     pub model: Option<String>,
     pub transport: Option<String>,
     pub attempt_index: Option<u32>,
     pub response_id: Option<String>,
     pub upstream_request_id: Option<String>,
-    pub failure_kind: Option<String>,
     pub status_code: Option<u16>,
     pub search: Option<String>,
 }
@@ -148,14 +146,12 @@ impl OpsErrorFilter {
             ),
             (self.provider_kind.as_deref(), "provider filter"),
             (self.operation.as_deref(), "operation filter"),
-            (self.endpoint.as_deref(), "endpoint filter"),
             (self.model.as_deref(), "model filter"),
             (self.transport.as_deref(), "transport filter"),
             (
                 self.upstream_request_id.as_deref(),
                 "upstream request ID filter",
             ),
-            (self.failure_kind.as_deref(), "failure kind filter"),
         ] {
             validate_optional_text(value, MAX_FILTER_BYTES, field)?;
         }

@@ -120,15 +120,10 @@ fn push_request_error_predicates(
         ("mr.provider_account_ref", &filter.provider_account_ref),
         ("mr.provider_kind", &filter.provider_kind),
         ("mr.operation", &filter.operation),
-        ("mr.endpoint", &filter.endpoint),
         ("mr.upstream_transport", &filter.transport),
         ("mr.upstream_request_id", &filter.upstream_request_id),
     ] {
         push_text_equality(statement, column, value);
-    }
-    if let Some(value) = &filter.failure_kind {
-        statement.push(" and coalesce(mr.error_kind, 'failed') = ");
-        statement.push_bind(value.clone());
     }
     push_response_id_filter(statement, "mr.client_response_id", filter);
     push_text_equality(statement, "mr.upstream_model_id", &filter.model);
@@ -167,9 +162,7 @@ fn push_ops_event_predicates(
         ("oe.provider_account_ref", &filter.provider_account_ref),
         ("oe.provider_kind", &filter.provider_kind),
         ("oe.operation", &filter.operation),
-        ("mr.endpoint", &filter.endpoint),
         ("oe.upstream_request_id", &filter.upstream_request_id),
-        ("oe.failure_kind", &filter.failure_kind),
     ] {
         push_text_equality(statement, column, value);
     }

@@ -135,13 +135,11 @@ pub struct OpsErrorFilter {
     pub provider_kind: Option<String>,
     pub provider_account_ref: Option<String>,
     pub operation: Option<String>,
-    pub endpoint: Option<String>,
     pub model: Option<String>,
     pub transport: Option<String>,
     pub attempt_index: Option<u32>,
     pub response_id: Option<String>,
     pub upstream_request_id: Option<String>,
-    pub failure_kind: Option<String>,
     pub status_code: Option<u16>,
     pub search: Option<String>,
 }

@@ -11,16 +11,12 @@ import { errorMessage, withMinimumDuration } from '@/utils/async'
 export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>) {
   const refreshing = shallowRef(false)
   const searchQuery = shallowRef('')
-  const failureClass = shallowRef('')
-  const route = shallowRef('')
   const query = useStablePagedQuery({
     initialPageSize: 10,
     load: ({ currentPage, pageSize }) => getOpsErrors({
       currentPage,
       pageSize,
       search: searchQuery.value.trim() || undefined,
-      failureClass: failureClass.value.trim() || undefined,
-      route: route.value.trim() || undefined,
       ...timeRangeParams.value,
     }),
     onError: error => toast.error(errorMessage(error, '加载错误明细失败')),
@@ -56,7 +52,7 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
   }
 
   watchDebounced(
-    [searchQuery, failureClass, route],
+    searchQuery,
     () => {
       void query.reloadFromStart()
     },
@@ -74,8 +70,6 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
     refreshing,
     records: query.items,
     searchQuery,
-    failureClass,
-    route,
     pagination,
     handlePageChange,
     handlePageSizeChange,

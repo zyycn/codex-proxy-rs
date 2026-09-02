@@ -11,10 +11,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
-import { presentOpsError } from '../utils/opsErrorPresentation'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
-import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
-import UsageTransportBadge from './UsageTransportBadge.vue'
 
 const props = defineProps<{
   timeRangeParams: UsageTimeRangeParams
@@ -25,8 +22,6 @@ const {
   refreshing,
   records,
   searchQuery,
-  failureClass,
-  route,
   pagination,
   handlePageChange,
   handlePageSizeChange,
@@ -36,17 +31,15 @@ const {
 const selectedRecord = shallowRef<OpsError | null>(null)
 const detailOpen = shallowRef(false)
 
+const upstreamSendStateLabels: Record<string, string> = {
+  sent: '已发送',
+  not_sent: '未发送',
+  ambiguous: '状态不明',
+}
+
 function showDetail(record: OpsError) {
   selectedRecord.value = record
   detailOpen.value = true
-}
-
-function failureClassText(record: OpsError) {
-  return presentOpsError(record).failureClassLabel
-}
-
-function errorSummary(record: OpsError) {
-  return presentOpsError(record).summary
 }
 
 function accountText(record: OpsError) {
@@ -54,11 +47,11 @@ function accountText(record: OpsError) {
     || record.accountName
     || record.metadata.accountLabel
     || record.accountId
-    || '—'
+    || '未记录'
 }
 
 function modelText(record: OpsError) {
-  return record.requestedModel || record.model || record.upstreamModel || '—'
+  return record.requestedModel || record.model || record.upstreamModel || '未记录'
 }
 
 function modelTitle(record: OpsError) {
@@ -69,8 +62,10 @@ function modelTitle(record: OpsError) {
     : modelText(record)
 }
 
-function reasoningText(record: OpsError) {
-  return record.reasoningPreset || record.reasoningEffort || '—'
+function upstreamSendStateText(value: string | null | undefined) {
+  if (!value)
+    return '未记录'
+  return upstreamSendStateLabels[value] ?? value
 }
 </script>
 
@@ -79,22 +74,18 @@ function reasoningText(record: OpsError) {
     <div
       class="flex w-full flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center"
       role="group"
-      aria-label="错误明细筛选与操作"
+      aria-label="错误筛选与操作"
     >
       <div class="min-w-0 flex-1">
-        <div class="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:items-center lg:gap-3">
-          <BaseInput
-            v-model="searchQuery"
-            placeholder="事件、请求、Key 或账号 ID 前缀"
-            class="min-w-0 sm:col-span-2 lg:min-w-64 lg:flex-1 lg:max-w-96"
-          >
-            <template #prefix>
-              <Search class="size-4.5 text-cp-text-tertiary" />
-            </template>
-          </BaseInput>
-          <BaseInput v-model="failureClass" placeholder="失败分类（精确）" class="min-w-0" />
-          <BaseInput v-model="route" placeholder="端点（精确）" class="min-w-0" />
-        </div>
+        <BaseInput
+          v-model="searchQuery"
+          placeholder="请求 ID、Key 或账号"
+          class="min-w-0 w-full lg:max-w-96"
+        >
+          <template #prefix>
+            <Search class="size-4.5 text-cp-text-tertiary" />
+          </template>
+        </BaseInput>
       </div>
 
       <div class="flex shrink-0 self-end items-center justify-end gap-2 lg:ml-auto">
@@ -120,23 +111,8 @@ function reasoningText(record: OpsError) {
         :columns="opsErrorColumns"
         :rows="records"
         :loading="loading"
-        empty-text="暂无错误明细"
+        empty-text="当前时段没有错误"
       >
-        <template #upstreamStatusCode="{ row }">
-          <UsageStatusCodeBadge
-            :status-code="typeof row.upstreamStatusCode === 'number' ? row.upstreamStatusCode : null"
-          />
-        </template>
-        <template #clientStatusCode="{ row }">
-          <UsageStatusCodeBadge
-            :status-code="typeof row.clientStatusCode === 'number' ? row.clientStatusCode : null"
-          />
-        </template>
-        <template #failureClass="{ row }">
-          <span class="font-mono text-cp-sm font-bold text-cp-error-text">
-            {{ failureClassText(row) }}
-          </span>
-        </template>
         <template #provider="{ row }">
           <ProviderIconGroup
             :provider="String(row.provider || '')"
@@ -144,8 +120,24 @@ function reasoningText(record: OpsError) {
           />
         </template>
         <template #message="{ row }">
-          <span class="block max-w-full truncate text-cp-sm font-emphasis text-cp-text" :title="errorSummary(row)">
-            {{ errorSummary(row) }}
+          <div class="min-w-0 py-0.5" :title="row.message || row.providerErrorCode || row.failureClass">
+            <code class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-error-text">
+              {{ row.providerErrorCode || row.failureClass }}
+            </code>
+            <p
+              v-if="row.message"
+              class="mt-1 mb-0 line-clamp-1 text-cp-xs leading-[1.45] font-emphasis text-cp-text-secondary"
+            >
+              {{ row.message }}
+            </p>
+          </div>
+        </template>
+        <template #upstreamSendState="{ row }">
+          <span
+            class="inline-flex h-6 max-w-full items-center rounded-full bg-cp-fill-quaternary px-2.5 font-mono text-cp-sm leading-none font-bold text-cp-text-secondary"
+            :title="row.upstreamSendState || '未记录'"
+          >
+            <span class="min-w-0 truncate">{{ upstreamSendStateText(row.upstreamSendState) }}</span>
           </span>
         </template>
         <template #accountId="{ row }">
@@ -164,38 +156,14 @@ function reasoningText(record: OpsError) {
             {{ modelText(row) }}
           </span>
         </template>
-        <template #reasoningEffort="{ row }">
-          <span class="text-cp-sm font-bold text-cp-text-secondary">
-            {{ reasoningText(row) }}
-          </span>
-        </template>
-        <template #transport="{ row }">
-          <UsageTransportBadge :transport="row.transport" />
-        </template>
-        <template #clientTransport="{ row }">
-          <UsageTransportBadge :transport="row.clientTransport" />
-        </template>
-        <template #clientIp="{ row }">
-          <span
-            class="inline-flex h-6 max-w-full items-center rounded-full bg-cp-blue-bg px-2.5 font-mono text-cp-sm leading-none font-bold text-cp-blue-text-on-bg"
-            :title="row.clientIp || '—'"
-          >
-            <span class="min-w-0 truncate">{{ row.clientIp || '—' }}</span>
-          </span>
-        </template>
-        <template #userAgent="{ row }">
-          <span class="block max-w-full wrap-break-word whitespace-normal font-mono text-cp-sm leading-[1.4] font-emphasis text-cp-text-secondary">
-            {{ row.userAgent || '—' }}
-          </span>
-        </template>
         <template #actions="{ row }">
           <BaseIconButton
             variant="ghost"
-            size="sm"
+            size="md"
             label="查看错误详情"
             @click="showDetail(row)"
           >
-            <Eye class="size-3.5" />
+            <Eye class="size-4.5" />
           </BaseIconButton>
         </template>
       </BaseTable>

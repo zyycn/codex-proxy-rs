@@ -50,6 +50,12 @@ fn ops_query_should_reject_page_size_above_terminal_limit() {
 }
 
 #[test]
+fn ops_query_should_reject_removed_filters() {
+    assert!(serde_json::from_value::<OpsQuery>(json!({"route": "/v1/responses"})).is_err());
+    assert!(serde_json::from_value::<OpsQuery>(json!({"failureClass": "rate_limited"})).is_err());
+}
+
+#[test]
 fn diagnostics_query_should_keep_wire_dimension_name() {
     let query: DiagnosticsQuery =
         serde_json::from_value(json!({"dimension": "failure_class"})).unwrap();

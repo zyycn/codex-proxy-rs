@@ -762,9 +762,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 provider_kind: Some("openai".to_owned()),
                 provider_account_ref: Some("acct_observe".to_owned()),
                 operation: Some("responses".to_owned()),
-                endpoint: Some("/v1/responses".to_owned()),
                 model: Some("upstream-model".to_owned()),
-                failure_kind: Some("rate_limited".to_owned()),
                 status_code: Some(429),
                 search: Some("req_observe_failed".to_owned()),
                 ..admin_observability::OpsErrorFilter::default()

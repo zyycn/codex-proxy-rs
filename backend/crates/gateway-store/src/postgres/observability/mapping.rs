@@ -51,13 +51,11 @@ pub(crate) fn store_ops_error_filter(
         provider_account_ref: filter.provider_account_ref,
         provider_kind: filter.provider_kind,
         operation: filter.operation,
-        endpoint: filter.endpoint,
         model: filter.model,
         transport: filter.transport,
         attempt_index: filter.attempt_index,
         response_id: filter.response_id,
         upstream_request_id: filter.upstream_request_id,
-        failure_kind: filter.failure_kind,
         status_code: filter.status_code,
         search: filter.search,
     }
