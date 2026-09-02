@@ -77,7 +77,7 @@ const profileOpen = shallowRef(false)
       </div>
     </div>
 
-    <div class="grid max-h-44 min-h-0 gap-3 overflow-y-auto pr-1">
+    <div class="grid min-h-0 gap-3">
       <AccountQuotaPanelEntry
         v-for="entry in quotaEntries"
         :key="entry.key"

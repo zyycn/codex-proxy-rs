@@ -4,10 +4,13 @@ import type { AccountQuotaWindow } from '../../constants'
 import { computed } from 'vue'
 import { quotaWindowPresentation } from '../AccountUsageWindow/presenter'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   label: string
   windows: AccountQuotaWindow[]
-}>()
+  showPercentage?: boolean
+}>(), {
+  showPercentage: true,
+})
 
 const windowItems = computed(() => props.windows.map(window => ({
   key: window.key,
@@ -16,6 +19,17 @@ const windowItems = computed(() => props.windows.map(window => ({
   usedPercentDisplay: window.usedPercentDisplay,
   presentation: quotaWindowPresentation(window, '2px'),
 })))
+const highestUsageWindow = computed(() => props.windows.reduce((highest, window) => {
+  if (typeof window.usedPercent !== 'number')
+    return highest
+  if (!highest || typeof highest.usedPercent !== 'number' || window.usedPercent > highest.usedPercent)
+    return window
+  return highest
+}, undefined as AccountQuotaWindow | undefined))
+const highestUsageDisplay = computed(() => highestUsageWindow.value?.usedPercentDisplay ?? '—')
+const highestUsageTextClass = computed(() => highestUsageWindow.value
+  ? quotaWindowPresentation(highestUsageWindow.value, '2px').percentTextClass
+  : 'text-cp-text-quaternary')
 
 const trackGridStyle = computed(() => ({
   gridTemplateColumns: `repeat(${Math.max(windowItems.value.length, 1)}, minmax(0, 1fr))`,
@@ -23,16 +37,25 @@ const trackGridStyle = computed(() => ({
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-col">
-    <div class="mb-1 min-w-0 truncate text-cp-xs leading-3.5 font-bold text-cp-text-quaternary">
-      {{ label }}
+  <div class="grid min-w-0 gap-1.5">
+    <div class="flex min-w-0 items-baseline justify-between gap-1 text-[10px] leading-3 font-bold">
+      <span class="min-w-0 truncate text-cp-text-quaternary" :title="label">
+        {{ label }}
+      </span>
+      <strong
+        v-if="showPercentage"
+        class="shrink-0 font-mono font-heavy tabular-nums"
+        :class="highestUsageTextClass"
+      >
+        {{ highestUsageDisplay }}
+      </strong>
     </div>
 
     <div class="grid min-w-0 gap-1" :style="trackGridStyle">
       <div
         v-for="item in windowItems"
         :key="item.key"
-        class="h-0.75 w-full overflow-hidden rounded-full bg-cp-border-secondary"
+        class="h-1 w-full overflow-hidden rounded-full bg-cp-border-secondary"
         role="progressbar"
         :aria-label="item.labelTooltip"
         aria-valuemin="0"
@@ -41,7 +64,7 @@ const trackGridStyle = computed(() => ({
         :aria-valuetext="item.usedPercentDisplay"
       >
         <div
-          class="h-full rounded-full transition-[width,background-color] duration-200"
+          class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"
           :class="item.presentation.barClass"
           :style="item.presentation.barStyle"
         />

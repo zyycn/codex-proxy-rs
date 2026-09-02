@@ -10,15 +10,19 @@ import AccountUsageWindow from '../AccountUsageWindow/index.vue'
 import { resolveAccountUsageWindowPresentation } from '../AccountUsageWindow/presenter'
 import AccountQuotaWindowGroup from './WindowGroup.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   label: string | null
   windows: AccountQuotaWindow[]
-}>()
+  showPercentage?: boolean
+}>(), {
+  showPercentage: true,
+})
 
 const now = useUiClock()
-const grouped = computed(() => props.windows.length > 1 && Boolean(props.label))
 const detailHeading = computed(() => props.label)
 const detailTitle = computed(() => detailHeading.value ?? props.windows[0]?.labelDisplay ?? '额度详情')
+const summaryLabel = computed(() => props.label ?? props.windows[0]?.labelDisplay ?? '额度')
+const hasQuotaWindow = computed(() => props.windows.some(window => typeof window.usedPercent === 'number'))
 const detailItems = computed(() =>
   props.windows.map((window) => {
     const view = resolveAccountUsageWindowPresentation({
@@ -82,7 +86,12 @@ function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow[
         :aria-expanded="open"
         aria-haspopup="dialog"
       >
-        <AccountQuotaWindowGroup v-if="grouped && label" :label="label" :windows="windows" />
+        <AccountQuotaWindowGroup
+          v-if="hasQuotaWindow"
+          :label="summaryLabel"
+          :windows="windows"
+          :show-percentage="showPercentage"
+        />
         <AccountUsageWindow
           v-else
           :window="windows[0]"

@@ -31,15 +31,15 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
 </script>
 
 <template>
-  <section class="grid gap-4 rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary xl:grid-cols-[0.52fr_1.48fr]">
-    <div>
-      <div class="mb-3 flex items-baseline justify-between gap-3">
+  <section class="grid gap-4 rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary xl:min-h-0 xl:grid-cols-[0.52fr_1.48fr]">
+    <div class="xl:flex xl:min-h-0 xl:flex-col">
+      <div class="mb-3 flex shrink-0 items-baseline justify-between gap-3">
         <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
           Token 结构
         </h3>
         <span class="text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
       </div>
-      <div class="grid gap-2">
+      <div class="grid gap-2 xl:min-h-0 xl:flex-1 xl:grid-rows-5">
         <div class="flex items-center justify-between rounded-lg bg-cp-green-bg px-3 py-2">
           <span class="text-cp-sm font-bold text-cp-green-text-on-bg">输入 Tokens</span>
           <strong class="font-mono text-cp text-cp-text">
@@ -73,8 +73,8 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
       </div>
     </div>
 
-    <div class="min-w-0 pt-4 xl:pt-0 xl:pl-4">
-      <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+    <div class="min-w-0 pt-4 xl:flex xl:min-h-0 xl:flex-col xl:pt-0 xl:pl-4">
+      <div class="mb-3 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
         <h3 class="m-0 shrink-0 text-cp-lg font-heavy text-cp-text">
           模型使用排行
         </h3>
@@ -100,7 +100,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
         </div>
       </div>
 
-      <div class="h-52 min-w-0">
+      <div class="h-56 min-w-0 xl:h-auto xl:min-h-0 xl:flex-1 xl:basis-0">
         <BaseTable
           :columns="modelUsageColumns"
           :rows="account.usage.models"
