@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Key, Openai, Xai } from '@boxicons/vue'
+import { Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
 import { formatProviderLabel } from '@/utils/providers'
 
@@ -38,6 +38,8 @@ const providerLabel = computed(() => formatProviderLabel(props.provider, '未知
 const authenticationLabel = computed(() => {
   if (normalizedAuthenticationKind.value === 'oauth')
     return 'OAuth'
+  if (normalizedAuthenticationKind.value === 'api_key')
+    return 'API Key'
   return props.authenticationKind?.trim() || '未知认证类型'
 })
 </script>
@@ -60,7 +62,8 @@ const authenticationLabel = computed(() => {
       :class="iconContainerClass"
       :title="authenticationLabel"
     >
-      <Key v-if="normalizedAuthenticationKind === 'oauth'" :class="iconClass" />
+      <LinkAlt v-if="normalizedAuthenticationKind === 'oauth'" :class="iconClass" />
+      <Key v-else-if="normalizedAuthenticationKind === 'api_key'" :class="iconClass" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 

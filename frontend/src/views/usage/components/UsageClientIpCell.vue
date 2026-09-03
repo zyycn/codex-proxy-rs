@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import type { UsageDisplayRecord } from '../utils/records'
-
 import { computed } from 'vue'
 import { usageClientIp } from '../utils/records'
 
 const props = defineProps<{
-  record: UsageDisplayRecord
+  record: { clientIp?: string | null }
 }>()
 
 const clientIp = computed(() => usageClientIp(props.record))

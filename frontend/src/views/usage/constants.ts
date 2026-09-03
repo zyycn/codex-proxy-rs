@@ -42,8 +42,8 @@ export const opsErrorColumns = defineTableColumns<OpsErrorRow>([
   { key: 'route', label: '端点', kind: 'mono', size: 'xl', emptyText: '未记录' },
   { key: 'createdAtDisplay', label: '时间', kind: 'datetime' },
   { key: 'requestId', label: '请求 ID', kind: 'mono', size: '2xl', emptyText: '未记录' },
-  { key: 'clientIp', label: 'IP', kind: 'mono', size: '3xl', emptyText: '未记录' },
-  { key: 'userAgent', label: 'User-Agent', kind: 'mono', size: '4xl', emptyText: '未记录' },
+  { key: 'clientIp', label: 'IP', kind: 'custom', size: '3xl', emptyText: '未记录' },
+  { key: 'userAgent', label: 'User-Agent', kind: 'custom', size: '4xl', emptyText: '未记录' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'sm' },
 ])
 

@@ -6,6 +6,7 @@ import { groupedAccountQuotaWindows, visibleSummaryQuotaWindows } from '../../co
 import AccountUsageWindow from '../AccountUsageWindow/index.vue'
 import { quotaWindowPresentation } from '../AccountUsageWindow/presenter'
 import AccountQuotaSummaryEntry from './Entry.vue'
+import { recentlyUsedQuotaEntry, representativeQuotaWindow } from './presenter'
 
 const props = defineProps<{
   account: AccountRow
@@ -15,26 +16,15 @@ const quotaWindows = computed(() => props.account.quota.windows)
 const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindows.value))
 const summaryEntries = computed(() => groupedAccountQuotaWindows(visibleQuotaWindows.value))
 const hasUsage = computed(() => (props.account.usage.requestCount ?? 0) > 0)
-const highestUsageWindow = computed(() => visibleQuotaWindows.value.reduce((highest, window) => {
-  if (typeof window.usedPercent !== 'number')
-    return highest
-  if (!highest || typeof highest.usedPercent !== 'number' || window.usedPercent > highest.usedPercent)
-    return window
-  return highest
-}, undefined as (typeof visibleQuotaWindows.value)[number] | undefined))
-const highestUsageDisplay = computed(() => highestUsageWindow.value?.usedPercentDisplay ?? '—')
-const highestUsageTextClass = computed(() => highestUsageWindow.value
-  ? quotaWindowPresentation(highestUsageWindow.value, '2px').percentTextClass
+const recentUsageEntry = computed(() => recentlyUsedQuotaEntry(
+  summaryEntries.value,
+  props.account.usage.models,
+))
+const currentUsageWindow = computed(() => representativeQuotaWindow(recentUsageEntry.value))
+const currentUsageDisplay = computed(() => currentUsageWindow.value?.usedPercentDisplay ?? '—')
+const currentUsageTextClass = computed(() => currentUsageWindow.value
+  ? quotaWindowPresentation(currentUsageWindow.value, '2px').percentTextClass
   : 'text-cp-text-quaternary')
-const highestUsageEntry = computed(() => {
-  const highestWindow = highestUsageWindow.value
-  if (!highestWindow)
-    return summaryEntries.value[0]
-
-  return summaryEntries.value.find(entry =>
-    entry.windows.some(window => window.key === highestWindow.key),
-  ) ?? summaryEntries.value[0]
-})
 const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length - 1, 0))
 </script>
 
@@ -58,20 +48,20 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
         </span>
         <span
           class="flex shrink-0 items-baseline gap-1 text-[9px] font-emphasis text-cp-text-quaternary"
-          title="所有额度窗口中的最高已用比例"
+          title="最近使用额度的当前已用比例"
         >
-          <span>最高占用</span>
-          <strong class="font-mono font-heavy tabular-nums" :class="highestUsageTextClass">
-            {{ highestUsageDisplay }}
+          <span>消耗比例</span>
+          <strong class="font-mono font-heavy tabular-nums" :class="currentUsageTextClass">
+            {{ currentUsageDisplay }}
           </strong>
         </span>
       </div>
 
-      <div v-if="highestUsageEntry" class="flex min-w-0 items-end gap-2">
+      <div v-if="recentUsageEntry" class="flex min-w-0 items-end gap-2">
         <div class="min-w-0 flex-1">
           <AccountQuotaSummaryEntry
-            :label="highestUsageEntry.label"
-            :windows="highestUsageEntry.windows"
+            :label="recentUsageEntry.label"
+            :windows="recentUsageEntry.windows"
             :show-percentage="false"
           />
         </div>

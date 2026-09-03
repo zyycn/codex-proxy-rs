@@ -178,11 +178,11 @@ export function usageAuthenticationKind(record: UsageCommonRecord) {
   return typeof record.authenticationKind === 'string' ? record.authenticationKind : null
 }
 
-export function usageClientIp(record: UsageCommonRecord) {
+export function usageClientIp(record: { clientIp?: string | null }) {
   return record.clientIp || '—'
 }
 
-export function usageUserAgent(record: UsageCommonRecord) {
+export function usageUserAgent(record: { userAgent?: string | null }) {
   return record.userAgent || '—'
 }
 

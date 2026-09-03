@@ -12,7 +12,9 @@ import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
 import { opsErrorSummary } from '../utils/opsErrorPresentation'
+import { usageUserAgent } from '../utils/records'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
+import UsageClientIpCell from './UsageClientIpCell.vue'
 
 const props = defineProps<{
   timeRangeParams: UsageTimeRangeParams
@@ -155,6 +157,14 @@ function upstreamSendStateText(value: string | null | undefined) {
             :title="modelTitle(row)"
           >
             {{ modelText(row) }}
+          </span>
+        </template>
+        <template #clientIp="{ row }">
+          <UsageClientIpCell :record="row" />
+        </template>
+        <template #userAgent="{ row }">
+          <span class="block max-w-full wrap-break-word whitespace-normal font-mono text-cp-sm leading-[1.4] font-emphasis text-cp-text-secondary">
+            {{ usageUserAgent(row) }}
           </span>
         </template>
         <template #actions="{ row }">

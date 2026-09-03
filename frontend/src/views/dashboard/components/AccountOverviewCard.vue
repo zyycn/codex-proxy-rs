@@ -5,11 +5,10 @@ import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
-import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { formatCompactNumber } from '@/utils/number'
-import AccountIdentityCell from '@/views/accounts/components/AccountIdentityCell.vue'
 import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow/index.vue'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
+import DashboardAccountIdentity from './DashboardAccountIdentity.vue'
 
 type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
 
@@ -233,24 +232,12 @@ const statusBars = computed(() => {
             <article
               v-for="account in accounts"
               :key="account.id"
-              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-fill-alter/70 px-3.5 py-3.5 transition-colors xl:h-18.75 xl:grid-cols-[minmax(0,1fr)_minmax(70px,0.36fr)_minmax(74px,0.38fr)_minmax(82px,0.46fr)] xl:items-center xl:gap-4 xl:py-0"
+              class="grid w-full shrink-0 grid-cols-1 gap-3 rounded-xl bg-cp-fill-alter/70 px-3.5 py-3.5 transition-colors xl:h-18.75 xl:grid-cols-[minmax(0,1.32fr)_minmax(64px,0.4fr)_minmax(66px,0.42fr)_minmax(96px,0.7fr)] xl:items-center xl:gap-3 xl:px-4 xl:py-0"
             >
-              <AccountIdentityCell
+              <DashboardAccountIdentity
                 :account="account"
-                show-plan
-                title-mode="email"
-                meta-position="secondary"
-                meta-size="xs"
-                class="min-w-0"
-              >
-                <template #meta>
-                  <ProviderIconGroup
-                    :provider="account.provider"
-                    :authentication-kind="account.authenticationKind"
-                    size="xs"
-                  />
-                </template>
-              </AccountIdentityCell>
+                class="min-w-0 xl:pr-4"
+              />
 
               <span
                 class="grid min-w-0 grid-cols-[minmax(0,0.82fr)_minmax(0,0.64fr)_minmax(104px,1fr)] items-start gap-3 xl:contents"
