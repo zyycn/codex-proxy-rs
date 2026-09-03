@@ -427,7 +427,11 @@ fn metadata_string(request: &CodexResponsesRequest, key: &str) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
-fn scope_turn_metadata(raw: &str, installation_id: &str, cross_account: bool) -> Option<String> {
+pub(crate) fn scope_turn_metadata(
+    raw: &str,
+    installation_id: &str,
+    cross_account: bool,
+) -> Option<String> {
     let Ok(Value::Object(mut metadata)) = serde_json::from_str::<Value>(raw) else {
         return (!cross_account).then(|| raw.to_owned());
     };

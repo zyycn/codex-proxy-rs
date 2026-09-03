@@ -106,7 +106,7 @@ impl OpenAiService {
             .await
     }
 
-    pub(crate) async fn start_image(
+    pub(crate) async fn start_provider_endpoint(
         &self,
         client: AuthenticatedClient,
         operation: gateway_core::operation::Operation,

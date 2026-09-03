@@ -8,7 +8,7 @@
 
 Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时提供：
 
-- 面向客户端的 OpenAI Responses、Images 和模型目录协议；
+- 面向客户端的 OpenAI Responses、Images、standalone Search 和模型目录协议；
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端；
 - OpenAI 与 xAI 两个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
@@ -61,7 +61,7 @@ flowchart LR
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin wire、静态管理端；不直接访问 Store 或具体 Provider |
 | `gateway-store` | PostgreSQL、Redis、S3/R2、`pg_dump` 适配器；不拥有业务策略 |
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督和系统更新 |
-| `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images transport |
+| `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images/Search transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
 | `frontend` | Vue 管理端，仅通过 Admin API 读写状态 |
 
@@ -151,16 +151,17 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果。
 
 Responses 按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
-Images 是 OpenAI Provider 自有端点：它不要求模型字段、不参与文本模型映射，只在 Client Key 的账号范围
-确实包含 OpenAI 账号时生成单一 OpenAI 候选。
+Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
+的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search body 中的模型
+及其他字段保持原始 bytes 并由上游解释。
 
 ## 5. Provider 与协议边界
 
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport。
 
-- OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket 与 Images 的业务正文
-  按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
+- OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
+  Search 的业务正文按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
 - xAI 是翻译边界。Provider 把 Grok wire 转换为 Responses wire；上游结构化错误的 message/code/type
   可以透出，但账号指纹会先脱敏。
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用。

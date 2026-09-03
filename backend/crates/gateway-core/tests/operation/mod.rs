@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use gateway_core::operation::{
     Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind,
-    ProtocolPayload, ProviderSessionState, RawJsonPayload,
+    ProtocolPayload, ProviderSessionState, RawJsonPayload, StandaloneSearchRequest,
 };
 use serde_json::{Map, Value, json};
 
@@ -121,10 +121,43 @@ fn operation_kind_should_remain_stable() {
         ImageRequestKind::Generation,
         json!({"model": "gpt-image-2", "prompt": "draw"}),
     ));
+    let search = Operation::Search(StandaloneSearchRequest::from_raw_json(
+        RawJsonPayload::new(
+            "openai",
+            Bytes::from_static(br#"{ "model":"gpt-test", "commands":{} }"#),
+        )
+        .expect("OpenAI search payload"),
+    ));
 
     assert_eq!(generate.kind(), OperationKind::Generate);
     assert_eq!(image.kind(), OperationKind::GenerateImage);
+    assert_eq!(search.kind(), OperationKind::Search);
+    assert_eq!(OperationKind::Search.as_str(), "search");
     assert!(image.image_generation_requested());
+    assert!(!search.image_generation_requested());
+}
+
+#[test]
+fn standalone_search_should_keep_raw_body_and_context_opaque() {
+    let body = Bytes::from_static(
+        br#"{ "model":"gpt-future", "commands":{}, "future":9007199254740993, "future":2 }"#,
+    );
+    let secret = "private-turn-metadata";
+    let payload = RawJsonPayload::new("openai", body.clone())
+        .expect("OpenAI search payload")
+        .with_context(Map::from_iter([(
+            "turn_metadata".to_owned(),
+            Value::String(secret.to_owned()),
+        )]));
+    let request = StandaloneSearchRequest::from_raw_json(payload);
+
+    assert_eq!(request.payload().body(), &body);
+    assert_eq!(
+        request.payload().context().get("turn_metadata"),
+        Some(&Value::String(secret.to_owned()))
+    );
+    assert!(!format!("{request:?}").contains(secret));
+    assert!(!format!("{request:?}").contains("gpt-future"));
 }
 
 #[test]

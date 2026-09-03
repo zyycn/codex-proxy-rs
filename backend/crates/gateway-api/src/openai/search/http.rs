@@ -1,4 +1,4 @@
-//! Codex Images 非流式 HTTP adapter。
+//! Codex standalone search 非流式 HTTP adapter。
 
 use std::net::SocketAddr;
 
@@ -9,7 +9,7 @@ use axum::{
     response::Response,
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
-use gateway_core::operation::{ImageRequest, ImageRequestKind, Operation, RawJsonPayload};
+use gateway_core::operation::{Operation, RawJsonPayload, StandaloneSearchRequest};
 use serde_json::{Map, Value};
 
 use crate::ApiState;
@@ -21,51 +21,14 @@ use crate::openai::{
 };
 
 const OPENAI_PROTOCOL: &str = "openai";
-const IMAGE_TURN_ID_CONTEXT_KEY: &str = "image_turn_id";
+const TURN_METADATA_CONTEXT_KEY: &str = "turn_metadata";
 
-/// `POST /v1/images/generations`。
-pub(crate) async fn image_generations(
+/// `POST /v1/alpha/search`。
+pub(crate) async fn standalone_search(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response {
-    handle_image_request(
-        state,
-        connect_info,
-        headers,
-        body,
-        ImageRequestKind::Generation,
-        "/v1/images/generations",
-    )
-    .await
-}
-
-/// `POST /v1/images/edits`。
-pub(crate) async fn image_edits(
-    State(state): State<ApiState>,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    handle_image_request(
-        state,
-        connect_info,
-        headers,
-        body,
-        ImageRequestKind::Edit,
-        "/v1/images/edits",
-    )
-    .await
-}
-
-async fn handle_image_request(
-    state: ApiState,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
-    body: Bytes,
-    kind: ImageRequestKind,
-    endpoint: &'static str,
 ) -> Response {
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
@@ -76,12 +39,12 @@ async fn handle_image_request(
         &headers,
         connect_info.map(|Extension(ConnectInfo(address))| address),
     );
-    let operation = match image_operation(body, &headers, kind) {
+    let operation = match search_operation(body, &headers) {
         Ok(operation) => operation,
         Err(error) => return gateway_error_response(&error),
     };
     let started = match service
-        .start_provider_endpoint(client, operation, client_ip, user_agent, endpoint)
+        .start_provider_endpoint(client, operation, client_ip, user_agent, "/v1/alpha/search")
         .await
     {
         Ok(started) => started,
@@ -90,19 +53,15 @@ async fn handle_image_request(
     collect_raw_json_response(started).await
 }
 
-fn image_operation(
-    body: Bytes,
-    headers: &HeaderMap,
-    kind: ImageRequestKind,
-) -> Result<Operation, GatewayError> {
+fn search_operation(body: Bytes, headers: &HeaderMap) -> Result<Operation, GatewayError> {
     let mut context = Map::new();
-    if let Some(turn_id) = headers
-        .get("x-codex-image-turn-id")
+    if let Some(turn_metadata) = headers
+        .get("x-codex-turn-metadata")
         .and_then(|value| value.to_str().ok())
     {
         context.insert(
-            IMAGE_TURN_ID_CONTEXT_KEY.to_owned(),
-            Value::String(turn_id.to_owned()),
+            TURN_METADATA_CONTEXT_KEY.to_owned(),
+            Value::String(turn_metadata.to_owned()),
         );
     }
     let payload = RawJsonPayload::new(OPENAI_PROTOCOL, body)
@@ -113,7 +72,7 @@ fn image_operation(
             )
         })?
         .with_context(context);
-    Ok(Operation::GenerateImage(ImageRequest::from_raw_json(
-        kind, payload,
+    Ok(Operation::Search(StandaloneSearchRequest::from_raw_json(
+        payload,
     )))
 }

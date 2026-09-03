@@ -29,7 +29,8 @@ use gateway_core::event::{
 };
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{
-    GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind, ProviderSessionState,
+    GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind,
+    ProviderSessionState, StandaloneSearchRequest,
 };
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
 use gateway_core::routing::{
@@ -85,11 +86,11 @@ use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
-    CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH, CODEX_RESPONSES_PATH,
-    CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendJsonResponse,
-    CodexBackendStreamingResponse, CodexBackendTransport, CodexClientError, CodexRateLimitUpdates,
-    CodexRequestContext, CodexResponseMetadata, CodexTransportMetrics, CodexUpstreamDiagnostics,
-    CodexWebSocketPool, endpoint_url,
+    CODEX_ALPHA_SEARCH_PATH, CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH,
+    CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
+    CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
+    CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
+    CodexTransportMetrics, CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
 };
 
 mod execution;
@@ -142,6 +143,7 @@ pub struct CodexProvider {
     responses_url: Url,
     image_generations_url: Url,
     image_edits_url: Url,
+    search_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_fallbacks: CodexSessionTransportFallbacks,
     stream_max_retries: u32,
@@ -168,6 +170,8 @@ impl CodexProvider {
                 .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let image_edits_url = Url::parse(&endpoint_url(&base_url, CODEX_IMAGE_EDITS_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let search_url = Url::parse(&endpoint_url(&base_url, CODEX_ALPHA_SEARCH_PATH))
+            .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let client =
             CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
         Ok(Self {
@@ -179,6 +183,7 @@ impl CodexProvider {
             responses_url,
             image_generations_url,
             image_edits_url,
+            search_url,
             session_identity: None,
             session_transport_fallbacks: CodexSessionTransportFallbacks::default(),
             stream_max_retries,
@@ -282,6 +287,9 @@ impl Provider for CodexProvider {
         }
         if let Operation::GenerateImage(image) = request.operation() {
             return self.execute_image(image, candidate, context).await;
+        }
+        if let Operation::Search(search) = request.operation() {
+            return self.execute_search(search, candidate, context).await;
         }
         let Operation::Generate(generate) = request.operation() else {
             return Err(provider_error(

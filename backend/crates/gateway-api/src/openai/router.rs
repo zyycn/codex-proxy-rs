@@ -10,6 +10,7 @@ use super::{
     images::{image_edits, image_generations},
     models::{model_catalog, model_detail, model_info, models},
     responses::{responses, responses_websocket, review_responses},
+    search::standalone_search,
 };
 
 use crate::ApiState;
@@ -19,6 +20,7 @@ pub(crate) fn router() -> Router<ApiState> {
     Router::new()
         .route("/v1/images/generations", post(image_generations))
         .route("/v1/images/edits", post(image_edits))
+        .route("/v1/alpha/search", post(standalone_search))
         .route("/v1/responses", get(responses_websocket).post(responses))
         .route("/v1/responses/review", post(review_responses))
         .route("/v1/models", get(models))

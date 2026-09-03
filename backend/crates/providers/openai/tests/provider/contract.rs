@@ -28,7 +28,7 @@ use gateway_core::event::GatewayEvent;
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{
     CapabilityRequirements, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
-    OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload,
+    OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload, StandaloneSearchRequest,
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
@@ -1103,6 +1103,140 @@ async fn image_endpoint_returns_the_exact_upstream_error_response() {
     assert_eq!(response.body().as_ref(), response_body);
     assert!(response.headers().iter().any(|header| {
         header.name() == "x-future-image-error" && header.value().as_ref() == b"preserved"
+    }));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_selected_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let request_body = br#"{ "id":"search-session", "model":"gpt-future", "commands":{"search_query":[{"q":"private query","future":9007199254740993}]}, "future":1, "future":2 }"#;
+    let response_body = br#"{ "encrypted_output":"ciphertext", "output":"search result", "results":[{"type":"text_result","ref_id":"turn0search0","future":9007199254740993}] }"#;
+    Mock::given(method("POST"))
+        .and(path("/codex/alpha/search"))
+        .and(header("originator", "codex_cli_rs"))
+        .and(body_bytes(request_body.to_vec()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .insert_header("x-future-search-header", "preserved")
+                .set_body_raw(response_body.to_vec(), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let turn_metadata = r#"{"session_id":"session","thread_id":"thread","turn_id":"turn","installation_id":"client-installation","account_id":"client-account","future":true}"#;
+    let payload = RawJsonPayload::new("openai", Bytes::from_static(request_body))
+        .expect("search payload")
+        .with_context(Map::from_iter([(
+            "turn_metadata".to_owned(),
+            json!(turn_metadata),
+        )]));
+    let operation = Operation::Search(StandaloneSearchRequest::from_raw_json(payload));
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_provider_endpoint_request("openai", operation),
+            context("req_search_contract", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare search provider stream");
+    let mut raw_response = None;
+    let mut completed = false;
+    let mut observed_http_json = false;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("search provider event");
+        completed |= event
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+        if let Some(raw) = event.wire_event().and_then(|wire| wire.raw_json_body()) {
+            assert!(raw_response.replace(raw.clone()).is_none());
+        }
+        if let Some(observation) = event.response_observation() {
+            observed_http_json |= observation.transport().as_str() == "http_json"
+                && observation.status_code() == Some(200)
+                && observation.client_headers().iter().any(|header| {
+                    header.name() == "x-future-search-header"
+                        && header.value().as_ref() == b"preserved"
+                });
+        }
+    }
+
+    assert!(completed);
+    assert!(observed_http_json);
+    assert_eq!(raw_response.as_deref(), Some(response_body.as_slice()));
+    let requests = server.received_requests().await.expect("received requests");
+    let request = requests.first().expect("single search request");
+    assert_eq!(request.body.as_slice(), request_body);
+    let metadata_values = captured_header_values(request, "x-codex-turn-metadata");
+    assert_eq!(metadata_values.len(), 1);
+    let metadata: Value = serde_json::from_slice(&metadata_values[0]).expect("turn metadata JSON");
+    assert_eq!(metadata.get("session_id"), Some(&json!("session")));
+    assert_eq!(metadata.get("thread_id"), Some(&json!("thread")));
+    assert_eq!(metadata.get("turn_id"), Some(&json!("turn")));
+    assert_eq!(metadata.get("future"), Some(&json!(true)));
+    assert!(metadata.get("account_id").is_none());
+    assert_ne!(
+        metadata.get("installation_id"),
+        Some(&json!("client-installation"))
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn standalone_search_returns_the_exact_upstream_error_response() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let request_body =
+        br#"{ "id":"search-session", "model":"gpt-future", "commands":{"open":[]} }"#;
+    let response_body = br#"{ "error":{"message":"future search validation","type":"search_error","code":"future_code"}, "future":9007199254740993 }"#;
+    Mock::given(method("POST"))
+        .and(path("/codex/alpha/search"))
+        .and(body_bytes(request_body.to_vec()))
+        .respond_with(
+            ResponseTemplate::new(422)
+                .insert_header("content-type", "application/problem+json")
+                .insert_header("x-future-search-error", "preserved")
+                .set_body_bytes(response_body.to_vec()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let payload =
+        RawJsonPayload::new("openai", Bytes::from_static(request_body)).expect("search payload");
+    let operation = Operation::Search(StandaloneSearchRequest::from_raw_json(payload));
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_provider_endpoint_request("openai", operation),
+            context("req_search_error", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare search provider stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("search rejection must surface an upstream response"),
+        }
+    };
+
+    assert_eq!(error.upstream_status(), Some(422));
+    let response = error
+        .client_visible_upstream_response()
+        .expect("raw upstream search error response");
+    assert_eq!(response.status(), 422);
+    assert_eq!(
+        response.content_type(),
+        Some(b"application/problem+json".as_slice())
+    );
+    assert_eq!(response.body().as_ref(), response_body);
+    assert!(response.headers().iter().any(|header| {
+        header.name() == "x-future-search-error" && header.value().as_ref() == b"preserved"
     }));
     server.verify().await;
 }

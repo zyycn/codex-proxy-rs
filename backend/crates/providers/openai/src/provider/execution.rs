@@ -22,11 +22,66 @@ impl CodexProvider {
             ),
             ImageRequestKind::Edit => (CODEX_IMAGE_EDITS_PATH, self.image_edits_url.clone()),
         };
+        let image_turn_id = image
+            .payload()
+            .context()
+            .get("image_turn_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.execute_raw_json_endpoint(
+            context,
+            RawJsonEndpointRequest {
+                response_origin,
+                endpoint_path,
+                body: image.payload().body().clone(),
+                image_turn_id,
+                turn_metadata: None,
+            },
+        )
+        .await
+    }
+
+    pub(super) async fn execute_search(
+        &self,
+        search: &StandaloneSearchRequest,
+        candidate: &ProviderCandidate,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        if search.payload().protocol() != PROVIDER_NAME || candidate.upstream_model().is_some() {
+            return Err(provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            ));
+        }
+        let turn_metadata = search
+            .payload()
+            .context()
+            .get("turn_metadata")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.execute_raw_json_endpoint(
+            context,
+            RawJsonEndpointRequest {
+                response_origin: self.search_url.clone(),
+                endpoint_path: CODEX_ALPHA_SEARCH_PATH,
+                body: search.payload().body().clone(),
+                image_turn_id: None,
+                turn_metadata,
+            },
+        )
+        .await
+    }
+
+    async fn execute_raw_json_endpoint(
+        &self,
+        context: AttemptContext,
+        request: RawJsonEndpointRequest,
+    ) -> Result<ProviderStream, ProviderError> {
         let selection_started_at = Instant::now();
         let lease = self
             .selector
             .select_for_provider_endpoint(&SelectCodexProviderEndpointCredential {
-                request_url: &response_origin,
+                request_url: &request.response_origin,
                 attempt: &context,
             })
             .await
@@ -48,18 +103,18 @@ impl CodexProvider {
             account_selection_wait_ms,
             lease.capacity_snapshot(),
         ));
-        let image_turn_id = image
-            .payload()
-            .context()
-            .get("image_turn_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        // Standalone Provider 端点没有可证明的账号 owner；Search metadata 必须按
+        // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity。
+        let turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
+            crate::transport::request::scope_turn_metadata(metadata, lease.installation_id(), true)
+        });
         let events = cold_json_response_stream(ColdJsonResponse {
             client: self.client.clone(),
-            response_origin,
-            endpoint_path,
-            body: image.payload().body().clone(),
-            image_turn_id,
+            response_origin: request.response_origin,
+            endpoint_path: request.endpoint_path,
+            body: request.body,
+            image_turn_id: request.image_turn_id,
+            turn_metadata,
             context,
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
@@ -76,6 +131,14 @@ impl CodexProvider {
             stream
         })
     }
+}
+
+struct RawJsonEndpointRequest {
+    response_origin: Url,
+    endpoint_path: &'static str,
+    body: Bytes,
+    image_turn_id: Option<String>,
+    turn_metadata: Option<String>,
 }
 
 pub(super) struct ColdResponse {
@@ -104,6 +167,7 @@ pub(super) struct ColdJsonResponse {
     pub(super) endpoint_path: &'static str,
     pub(super) body: Bytes,
     pub(super) image_turn_id: Option<String>,
+    pub(super) turn_metadata: Option<String>,
     pub(super) context: AttemptContext,
     pub(super) selector: Arc<CodexCredentialSelector>,
     pub(super) quota: Arc<CodexCredentialQuotaService>,
@@ -279,6 +343,7 @@ pub(super) async fn create_json_attempt(
         Some(installation_id),
     );
     request_context.cookie_header = cookie_header.map(ExposeSecret::expose_secret);
+    request_context.turn_metadata = request.turn_metadata.as_deref();
     request_context.account_selection = account_selection;
     tokio::select! {
         biased;
@@ -382,7 +447,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 tracing::warn!(
                     account_id = %active_account.id(),
                     error = %error,
-                    "Failed to persist OpenAI image response cookies"
+                    "Failed to persist OpenAI provider endpoint response cookies"
                 );
             }
         }

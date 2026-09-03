@@ -22,6 +22,8 @@ pub enum OperationKind {
     Generate,
     /// 图像生成。
     GenerateImage,
+    /// Provider 原生 standalone search。
+    Search,
 }
 
 impl OperationKind {
@@ -31,6 +33,7 @@ impl OperationKind {
         match self {
             Self::Generate => "generate",
             Self::GenerateImage => "generate_image",
+            Self::Search => "search",
         }
     }
 }
@@ -501,6 +504,35 @@ impl fmt::Debug for ImageRequest {
     }
 }
 
+/// Provider 原生 standalone search 请求。
+#[derive(Clone, PartialEq, Eq)]
+pub struct StandaloneSearchRequest {
+    payload: RawJsonPayload,
+}
+
+impl StandaloneSearchRequest {
+    /// 创建携带原始协议 JSON 正文的 standalone search 请求。
+    #[must_use]
+    pub const fn from_raw_json(payload: RawJsonPayload) -> Self {
+        Self { payload }
+    }
+
+    /// 返回未经重编码的协议 JSON 正文。
+    #[must_use]
+    pub const fn payload(&self) -> &RawJsonPayload {
+        &self.payload
+    }
+}
+
+impl fmt::Debug for StandaloneSearchRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StandaloneSearchRequest")
+            .field("payload", &"<not included in Debug>")
+            .finish()
+    }
+}
+
 /// 网关内部业务请求；不包含任何客户端 wire 或 Provider SDK 类型。
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
@@ -509,6 +541,8 @@ pub enum Operation {
     Generate(GenerateRequest),
     /// 图像生成。
     GenerateImage(ImageRequest),
+    /// Provider 原生 standalone search。
+    Search(StandaloneSearchRequest),
 }
 
 impl Operation {
@@ -534,6 +568,7 @@ impl Operation {
         match self {
             Self::Generate(_) => OperationKind::Generate,
             Self::GenerateImage(_) => OperationKind::GenerateImage,
+            Self::Search(_) => OperationKind::Search,
         }
     }
 
@@ -543,6 +578,7 @@ impl Operation {
         match self {
             Self::Generate(request) => request.requirements(),
             Self::GenerateImage(_) => CapabilityRequirements::new(OperationKind::GenerateImage),
+            Self::Search(_) => CapabilityRequirements::new(OperationKind::Search),
         }
     }
 
@@ -552,6 +588,7 @@ impl Operation {
         match self {
             Self::Generate(request) => request.image_generation_requested(),
             Self::GenerateImage(_) => true,
+            Self::Search(_) => false,
         }
     }
 
@@ -560,7 +597,7 @@ impl Operation {
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {
             Self::Generate(request) => request.provider_session_state(provider),
-            Self::GenerateImage(_) => None,
+            Self::GenerateImage(_) | Self::Search(_) => None,
         }
     }
 }

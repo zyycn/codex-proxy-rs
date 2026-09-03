@@ -4,6 +4,8 @@ pub const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 pub const CODEX_IMAGE_GENERATIONS_PATH: &str = "/codex/images/generations";
 /// `/codex/images/edits`
 pub const CODEX_IMAGE_EDITS_PATH: &str = "/codex/images/edits";
+/// `/codex/alpha/search`
+pub const CODEX_ALPHA_SEARCH_PATH: &str = "/codex/alpha/search";
 /// `/api/codex/usage`
 pub const CODEX_USAGE_API_PATH: &str = "/api/codex/usage";
 /// `/wham/usage`

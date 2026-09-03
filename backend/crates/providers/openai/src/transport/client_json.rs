@@ -39,6 +39,11 @@ impl CodexBackendClient {
             context.installation_id,
         )?;
         insert_optional_protocol_header(&mut headers, "x-codex-image-turn-id", image_turn_id);
+        insert_optional_protocol_header(
+            &mut headers,
+            "x-codex-turn-metadata",
+            context.turn_metadata,
+        );
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
             HeaderValue::from_str(context.request_id)?,

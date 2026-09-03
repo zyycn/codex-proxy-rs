@@ -61,6 +61,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/images/mod.rs",
         "src/openai/mod.rs",
         "src/openai/models.rs",
+        "src/openai/provider_endpoint.rs",
         "src/openai/responses/error.rs",
         "src/openai/responses/http.rs",
         "src/openai/responses/mod.rs",
@@ -71,6 +72,8 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/responses/websocket/mod.rs",
         "src/openai/responses/websocket/protocol.rs",
         "src/openai/router.rs",
+        "src/openai/search/http.rs",
+        "src/openai/search/mod.rs",
         "src/openai/service.rs",
     ];
     expected.sort_unstable();
@@ -104,12 +107,14 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/images/mod.rs",
         "tests/openai/mod.rs",
         "tests/openai/models.rs",
+        "tests/openai/provider_endpoint.rs",
         "tests/openai/responses/http.rs",
         "tests/openai/responses/mod.rs",
         "tests/openai/responses/websocket/connection.rs",
         "tests/openai/responses/websocket/mod.rs",
         "tests/openai/responses/websocket/protocol.rs",
         "tests/openai/router.rs",
+        "tests/openai/search/mod.rs",
     ];
     expected.sort_unstable();
 

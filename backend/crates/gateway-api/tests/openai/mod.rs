@@ -2,8 +2,10 @@ mod auth;
 mod error;
 mod images;
 mod models;
+mod provider_endpoint;
 mod responses;
 mod router;
+mod search;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
