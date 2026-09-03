@@ -187,6 +187,48 @@ async fn usage_search_should_match_literal_prefix_instead_of_substring() {
 }
 
 #[tokio::test]
+async fn usage_search_should_match_client_api_key_prefix() {
+    let Some(database) = TestDatabase::create("usage_client_api_key_search").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let plaintext_key = format!("sk_{}", "K".repeat(43));
+    sqlx::query(
+        "insert into client_api_keys (id, name, key, enabled, created_at, updated_at)
+         values ('key_observe', 'usage search', $1, true, $2, $2)",
+    )
+    .bind(&plaintext_key)
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .expect("seed searchable client API key");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    for search in [plaintext_key.as_str(), &plaintext_key[..10]] {
+        let page = observability_repository(&database.pool)
+            .list_usage_records(UsageRecordQuery {
+                range,
+                filter: UsageRecordFilter {
+                    search: Some(search.to_owned()),
+                    ..UsageRecordFilter::default()
+                },
+                current_page: 1,
+                page_size: ObservabilityPageSize::new(10).expect("page size"),
+            })
+            .await
+            .expect("search usage by client API key");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, "req_observe_success");
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn ops_search_should_treat_sql_wildcards_as_literals() {
     let Some(database) = TestDatabase::create("ops_literal_wildcard_search").await else {
         return;

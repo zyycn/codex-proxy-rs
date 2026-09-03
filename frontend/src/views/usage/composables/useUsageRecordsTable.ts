@@ -21,6 +21,8 @@ interface UseUsageRecordsTableOptions {
 
 type UsageLoadScope = 'all' | 'table'
 
+const CLIENT_API_KEY_VISIBLE_PREFIX_LENGTH = 10
+
 interface UsageLoadOptions {
   scope?: UsageLoadScope
   background?: boolean
@@ -49,7 +51,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     ...(providerQuery.value ? { provider: providerQuery.value } : {}),
   })
   const filterParams = () => ({
-    search: searchQuery.value || undefined,
+    search: usageSearchParam(searchQuery.value),
   })
   const usagePagination = computed(() => ({
     currentPage: currentPage.value,
@@ -242,6 +244,15 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     handlePageChange,
     handlePageSizeChange,
   }
+}
+
+function usageSearchParam(value: string) {
+  const search = value.trim()
+  if (!search)
+    return undefined
+  if (search.startsWith('sk_'))
+    return search.slice(0, CLIENT_API_KEY_VISIBLE_PREFIX_LENGTH)
+  return search
 }
 
 function emptySummary() {

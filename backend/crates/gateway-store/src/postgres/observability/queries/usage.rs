@@ -88,7 +88,19 @@ pub(crate) fn push_usage_filter(
             query.push(format!(" escape '\\' or {alias}.{column} like "));
             query.push_bind(pattern.clone());
         }
-        query.push(" escape '\\')");
+        if value.starts_with("sk_") {
+            query.push(format!(
+                " escape '\\' or exists (
+                   select 1 from client_api_keys searched_client_key
+                    where searched_client_key.id = {alias}.client_api_key_ref
+                      and searched_client_key.key like "
+            ));
+            query.push_bind(pattern);
+            query.push(" escape '\\')");
+        } else {
+            query.push(" escape '\\'");
+        }
+        query.push(")");
     }
 }
 
