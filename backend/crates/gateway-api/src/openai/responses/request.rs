@@ -13,7 +13,6 @@ use serde_json::{Map, Value};
 use super::error::RequestDecodeError;
 
 const OPENAI_PROTOCOL: &str = "openai";
-const REVIEW_SUBAGENT: &str = "review";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 const CODEX_TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
@@ -75,8 +74,8 @@ impl OpenAiRequestHeaders {
         }
     }
 
-    fn apply_subagent(&self, body: &mut Map<String, Value>, forced_subagent: Option<&str>) {
-        if let Some(subagent) = forced_subagent.or(self.subagent.as_deref()) {
+    fn apply_subagent(&self, body: &mut Map<String, Value>) {
+        if let Some(subagent) = self.subagent.as_deref() {
             inject_subagent_metadata(body, subagent);
         }
     }
@@ -301,20 +300,11 @@ pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, false, &OpenAiRequestHeaders::from_headers(headers))
-}
-
-/// 解码 `POST /v1/responses/review` 请求并冻结 review subagent 语义。
-pub(super) fn decode_review_request_with_headers(
-    body: &[u8],
-    headers: &HeaderMap,
-) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, true, &OpenAiRequestHeaders::from_headers(headers))
+    decode_request_inner(body, &OpenAiRequestHeaders::from_headers(headers))
 }
 
 pub(super) fn decode_request_inner(
     body: &[u8],
-    review: bool,
     request_headers: &OpenAiRequestHeaders,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
     let value =
@@ -322,13 +312,12 @@ pub(super) fn decode_request_inner(
     let Value::Object(object) = value else {
         return Err(RequestDecodeError::ExpectedObject);
     };
-    decode_request_object(object, review, request_headers, RequestDecodeSource::Http)
+    decode_request_object(object, request_headers, RequestDecodeSource::Http)
 }
 
 /// 解码已解析的顶层 object；按下游传输来源恢复连接级协议上下文。
 pub(super) fn decode_request_object(
     mut object: Map<String, Value>,
-    review: bool,
     request_headers: &OpenAiRequestHeaders,
     source: RequestDecodeSource,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
@@ -359,7 +348,7 @@ pub(super) fn decode_request_object(
         .map(|response_id| ContinuationIntent::PreviousResponseId(response_id.to_owned()))
         .unwrap_or(ContinuationIntent::None);
 
-    request_headers.apply_subagent(&mut object, review.then_some(REVIEW_SUBAGENT));
+    request_headers.apply_subagent(&mut object);
     let frame_turn_metadata = match source {
         RequestDecodeSource::Http => None,
         RequestDecodeSource::WebSocketFrame => frame_turn_metadata(&object),

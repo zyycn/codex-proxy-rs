@@ -43,7 +43,6 @@ fn decode_response_create_inner(
     }
     super::super::request::decode_request_object(
         body,
-        false,
         request_headers,
         RequestDecodeSource::WebSocketFrame,
     )

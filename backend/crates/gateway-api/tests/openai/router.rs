@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{Method, Request, StatusCode},
+    http::{Method, Request, StatusCode, header::AUTHORIZATION},
 };
 use tower::ServiceExt;
 
@@ -8,6 +8,54 @@ use super::api_router_with_origins;
 use super::models::ModelsExecution;
 
 const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+
+#[tokio::test]
+async fn removed_responses_review_route_should_not_reach_the_responses_handler() {
+    let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
+        .await
+        .oneshot(
+            Request::post("/v1/responses/review")
+                .header(AUTHORIZATION, "Bearer sk_models_test")
+                .body(Body::empty())
+                .expect("build removed review request"),
+        )
+        .await
+        .expect("route removed review request");
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn removed_models_catalog_extension_should_use_standard_model_lookup() {
+    let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
+        .await
+        .oneshot(
+            Request::get("/v1/models/catalog")
+                .header(AUTHORIZATION, "Bearer sk_models_test")
+                .body(Body::empty())
+                .expect("build removed model catalog request"),
+        )
+        .await
+        .expect("route removed model catalog request");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn removed_model_info_route_should_return_not_found() {
+    let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
+        .await
+        .oneshot(
+            Request::get("/v1/models/model-a/info")
+                .header(AUTHORIZATION, "Bearer sk_models_test")
+                .body(Body::empty())
+                .expect("build removed model info request"),
+        )
+        .await
+        .expect("route removed model info request");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
 
 #[tokio::test]
 async fn responses_body_should_accept_payload_above_the_removed_private_limit() {

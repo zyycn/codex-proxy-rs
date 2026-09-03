@@ -197,6 +197,10 @@ export function usageIsSubagent(record: UsageCommonRecord) {
   return Boolean(record.subagentKind)
 }
 
+export function usageIsReview(record: UsageCommonRecord) {
+  return record.subagentKind === 'review'
+}
+
 export function usageIsCompact(record: UsageCommonRecord) {
   return record.compact === true
 }

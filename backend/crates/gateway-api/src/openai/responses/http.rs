@@ -32,7 +32,7 @@ use crate::openai::{
 
 use super::{
     OpenAiResponsesEncoder, ProtocolErrorBody, ResponseEncodeError,
-    request::{decode_request_with_headers, decode_review_request_with_headers},
+    request::decode_request_with_headers,
 };
 
 /// `POST /v1/responses`。
@@ -42,36 +42,12 @@ pub(crate) async fn responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_responses(state, connect_info, headers, body, false).await
-}
-
-/// `POST /v1/responses/review`。
-pub(crate) async fn review_responses(
-    State(state): State<ApiState>,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    handle_responses(state, connect_info, headers, body, true).await
-}
-
-async fn handle_responses(
-    state: ApiState,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
-    body: Bytes,
-    review: bool,
-) -> Response {
     let service = state.openai();
     let client = match authenticate_client(service, &headers) {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
-    let decoded = match if review {
-        decode_review_request_with_headers(&body, &headers)
-    } else {
-        decode_request_with_headers(&body, &headers)
-    } {
+    let decoded = match decode_request_with_headers(&body, &headers) {
         Ok(decoded) => decoded,
         Err(error) => {
             return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());
@@ -100,11 +76,7 @@ async fn handle_responses(
             } else {
                 ClientTransport::HttpJson
             },
-            if review {
-                "/v1/responses/review"
-            } else {
-                "/v1/responses"
-            },
+            "/v1/responses",
         )
         .await
     {

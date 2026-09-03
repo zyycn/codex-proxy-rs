@@ -384,46 +384,6 @@ async fn model_detail_should_hide_unknown_models() {
 }
 
 #[tokio::test]
-async fn model_catalog_should_keep_the_codex_catalog_contract() {
-    let response = api_router(ModelsExecution::new())
-        .await
-        .oneshot(authorized_request("/v1/models/catalog"))
-        .await
-        .expect("catalog response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read catalog body");
-    let value: serde_json::Value = serde_json::from_slice(&body).expect("catalog JSON");
-    assert_eq!(value[0]["id"], "model-a");
-    assert_eq!(value[0]["displayName"], "model-a");
-    assert_eq!(value[0]["source"], "gateway");
-}
-
-#[tokio::test]
-async fn model_info_should_return_a_single_visible_catalog_entry() {
-    let response = api_router(ModelsExecution::new())
-        .await
-        .oneshot(authorized_request("/v1/models/model-a/info"))
-        .await
-        .expect("model info response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn model_info_should_hide_unknown_models() {
-    let response = api_router(ModelsExecution::new())
-        .await
-        .oneshot(authorized_request("/v1/models/model-private/info"))
-        .await
-        .expect("missing model info response");
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
 async fn models_should_authenticate_before_applying_the_version_gate() {
     let response = api_router(ModelsExecution::with_cli_min())
         .await

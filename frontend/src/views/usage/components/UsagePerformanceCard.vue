@@ -112,8 +112,11 @@ const summaryMetrics = computed(() => {
 const hasData = computed(
   () =>
     !props.loading
-    && selectedPoints.value.some(
-      point => point.first != null || point.second != null || point.third != null,
+    && performancePoints.value.some(
+      point =>
+        seriesValue(point, 'first') != null
+        || seriesValue(point, 'second') != null
+        || seriesValue(point, 'third') != null,
     ),
 )
 
@@ -267,7 +270,7 @@ function formatThroughput(value: number | null) {
               : activeView === 'throughput'
                 ? '当前范围没有吞吐样本'
                 : activeView === 'scheduling'
-                  ? '部署迁移后才会开始积累调度与容量样本'
+                  ? '当前范围没有调度或容量样本'
                   : '当前范围没有总耗时样本'
           "
           class="h-52.5 place-content-center"

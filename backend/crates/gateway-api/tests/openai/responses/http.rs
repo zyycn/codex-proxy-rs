@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 use gateway_api::openai::responses::{collect_execution_response, stream_execution_response};
 use tower::ServiceExt;
 
-use crate::openai::{api_router, authenticated_client, authenticated_client_for_provider};
+use crate::openai::{api_router, authenticated_client_for_provider};
 
 #[derive(Default)]
 struct Trace {
@@ -687,92 +687,6 @@ async fn xai_private_headers_should_not_enter_openai_request_facts() {
 
     assert!(captured.protocol_context.is_none());
     assert!(captured.prompt_cache_key.is_none());
-}
-
-#[tokio::test]
-async fn review_route_should_inject_review_subagent_and_record_its_endpoint() {
-    let observed = Arc::new(Mutex::new(None));
-    let execution = Arc::new(ContextCaptureExecution {
-        observed: Arc::clone(&observed),
-        client: authenticated_client("sk_context_test"),
-    });
-    let request = Request::post("/v1/responses/review")
-        .header(AUTHORIZATION, "Bearer sk_context_test")
-        .header("x-openai-subagent", "compact")
-        .body(Body::from(
-            json!({
-                "model": "smart-code",
-                "input": "review this",
-                "client_metadata": {"existing": "preserved"}
-            })
-            .to_string(),
-        ))
-        .expect("review request");
-
-    let response = api_router(execution)
-        .await
-        .oneshot(request)
-        .await
-        .expect("review response");
-    let captured = observed
-        .lock()
-        .expect("review capture lock")
-        .clone()
-        .expect("captured review request");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(captured.endpoint, "/v1/responses/review");
-    assert_eq!(
-        captured
-            .client_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("x-openai-subagent")),
-        Some(&json!("review"))
-    );
-    assert_eq!(
-        captured
-            .client_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("existing")),
-        Some(&json!("preserved"))
-    );
-}
-
-#[tokio::test]
-async fn review_route_should_not_replace_non_object_client_metadata() {
-    let observed = Arc::new(Mutex::new(None));
-    let execution = Arc::new(ContextCaptureExecution {
-        observed: Arc::clone(&observed),
-        client: authenticated_client("sk_context_test"),
-    });
-    let request = Request::post("/v1/responses/review")
-        .header(AUTHORIZATION, "Bearer sk_context_test")
-        .body(Body::from(
-            json!({
-                "model": "smart-code",
-                "input": "review this",
-                "client_metadata": ["opaque", "client", "value"]
-            })
-            .to_string(),
-        ))
-        .expect("review request");
-
-    let response = api_router(execution)
-        .await
-        .oneshot(request)
-        .await
-        .expect("review response");
-    let captured = observed
-        .lock()
-        .expect("review capture lock")
-        .clone()
-        .expect("captured review request");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        captured.client_metadata,
-        Some(json!(["opaque", "client", "value"]))
-    );
 }
 
 #[tokio::test]

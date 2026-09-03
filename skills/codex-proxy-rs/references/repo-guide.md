@@ -41,12 +41,13 @@
 
 公开路由由 `gateway-api/src/openai/router.rs` 固定：
 
-- Responses：`POST /v1/responses`、WebSocket `GET /v1/responses`、`POST /v1/responses/review`；
+- Responses：`POST /v1/responses`、WebSocket `GET /v1/responses`；
 - Images：`POST /v1/images/generations`、`POST /v1/images/edits`；
-- 模型：`/v1/models`、catalog、info、detail。
+- 模型：`GET /v1/models`、`GET /v1/models/{model_id}`。
 
-Responses adapter 解析参与路由的最少语义，并保留原始请求；Images adapter 不解析模型或重建 JSON，
-直接创建 `GenerateImage` operation。两者都进入同一 Core execution lifecycle。
+Responses adapter 解析参与路由的最少语义，并保留原始请求；review 等子代理仍走 `/v1/responses`，
+类型由 `x-openai-subagent` 携带。Images adapter 不解析模型或重建 JSON，直接创建
+`GenerateImage` operation。两者都进入同一 Core execution lifecycle。
 
 定位请求问题时按以下顺序追踪：
 

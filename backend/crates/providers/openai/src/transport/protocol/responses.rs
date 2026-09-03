@@ -649,10 +649,9 @@ impl CodexResponsesRequest {
 
     /// 返回请求语义与 child transport 隔离所用的子代理区分值。
     ///
-    /// Codex 原生请求在 turn metadata 中声明 `subagent_kind`；网关的
-    /// `/responses/review` 等入口则通过 `client_metadata.x-openai-subagent`
-    /// 传递给上游。它不拆分根会话的账号首选项；`thread_spawn` 仍用它派生独立
-    /// WebSocket/continuation transport identity。
+    /// Codex 原生请求在 turn metadata 中声明 `subagent_kind`；兼容客户端也可通过
+    /// `client_metadata.x-openai-subagent` 声明同一语义。它不拆分根会话的账号首选项；
+    /// `thread_spawn` 仍用它派生独立 WebSocket/continuation transport identity。
     pub fn subagent_kind(&self) -> Option<String> {
         self.semantics()
             .subagent_kind

@@ -23,7 +23,7 @@
 
 | 领域 | 当前能力 |
 | --- | --- |
-| 数据面 | Responses JSON、SSE、WebSocket、review 子代理、Images 生成/编辑与模型目录 |
+| 数据面 | Responses JSON、SSE、WebSocket（含 Codex 子代理语义）、Images 生成/编辑与模型目录 |
 | Provider | 固定 `openai`、`xai` 两个 Provider，各自拥有 OAuth、credential、额度、目录与 transport |
 | 路由 | Client Key 限定账号分组；按模型能力编译 Provider 候选；支持全局精确模型映射、会话亲和和安全 fallback |
 | 透明边界 | OpenAI 保留未知请求字段及字段顺序，并原样转发 SSE、WebSocket 与 Images 业务字节；xAI 在 Provider 内转换协议 |
@@ -136,12 +136,9 @@ curl http://127.0.0.1:8080/v1/responses \
 | --- | --- |
 | `POST /v1/responses` | JSON 响应或 SSE Responses 流 |
 | `GET /v1/responses` | Responses WebSocket 升级 |
-| `POST /v1/responses/review` | review 子代理请求 |
 | `POST /v1/images/generations` | OpenAI Images 生成 JSON 透明转发 |
 | `POST /v1/images/edits` | OpenAI Images 编辑 JSON 透明转发 |
 | `GET /v1/models` | 当前 Client Key 账号范围内的模型列表 |
-| `GET /v1/models/catalog` | Codex 客户端展示用模型目录 |
-| `GET /v1/models/{model_id}/info` | Codex 客户端展示用模型详情 |
 | `GET /v1/models/{model_id}` | OpenAI 兼容模型详情 |
 
 所有 `/v1/*` 路由都需要 Client Key。Images 是 OpenAI Provider 自有端点，不读取模型字段，也不参与

@@ -8,8 +8,8 @@ use axum::{
 
 use super::{
     images::{image_edits, image_generations},
-    models::{model_catalog, model_detail, model_info, models},
-    responses::{responses, responses_websocket, review_responses},
+    models::{model_detail, models},
+    responses::{responses, responses_websocket},
     search::standalone_search,
 };
 
@@ -22,10 +22,7 @@ pub(crate) fn router() -> Router<ApiState> {
         .route("/v1/images/edits", post(image_edits))
         .route("/v1/alpha/search", post(standalone_search))
         .route("/v1/responses", get(responses_websocket).post(responses))
-        .route("/v1/responses/review", post(review_responses))
         .route("/v1/models", get(models))
-        .route("/v1/models/catalog", get(model_catalog))
-        .route("/v1/models/{model_id}/info", get(model_info))
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束。
         .route("/v1/models/{model_id}", get(model_detail))
         // OpenAI 数据面正文属于客户端/上游协议；代理不能用私有大小上限提前拒绝

@@ -44,7 +44,7 @@ README 保持用户导向；不要把上游 URL、重试常量、数据库字段
 
 ## 当前关键合同
 
-- 数据面公开 Responses JSON/SSE/WS、review、Images generation/edit 和模型目录；不提供 Chat Completions。
+- 数据面公开 Responses JSON/SSE/WS（含 Codex 子代理语义）、Images generation/edit 和模型目录；不提供 Chat Completions。
 - OpenAI Responses/Images 保持业务 wire 透明；xAI 在 Provider 内完成 Grok/Responses 转换。
 - Images 固定走 OpenAI Provider 自有端点，不要求模型，也不参与文本模型映射。
 - OpenAI 账号支持 OAuth、AT/RT 和 OAuth JSON；xAI 只接受 OAuth session/账号 JSON，
