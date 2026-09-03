@@ -24,7 +24,7 @@ use gateway_core::engine::{
 use gateway_core::error::{
     ContinuationFailure, ContinuationRecoveryDisposition, PreDeliveryRetry, ProviderErrorKind,
 };
-use gateway_core::event::GatewayEvent;
+use gateway_core::event::{GatewayEvent, WebSocketPoolKind};
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::operation::{
     CapabilityRequirements, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
@@ -321,6 +321,25 @@ fn generate_with_session_context(
     )
 }
 
+fn generate_with_persisted_session_context(
+    account_id: &str,
+    conversation_id: &str,
+    session_id: &str,
+    thread_id: &str,
+) -> GenerateRequest {
+    generate_with_session_context(session_id, Some(thread_id), None).with_provider_session_state(
+        ProviderSessionState::new(
+            "openai",
+            Map::from_iter([
+                ("account_id".to_owned(), json!(account_id)),
+                ("conversation_id".to_owned(), json!(conversation_id)),
+                ("continuation_scope".to_owned(), json!("persisted")),
+            ]),
+        )
+        .expect("provider session state"),
+    )
+}
+
 fn http_generate_operation() -> Operation {
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -439,6 +458,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_truncated_stream",
         "acct_usage_limit_request_path",
         "acct_websocket_close",
+        "acct_websocket_cooldown",
         "acct_websocket_busy_replay",
         "acct_websocket_turn_state",
     ]
@@ -1295,9 +1315,13 @@ async fn selection_infrastructure_errors_have_a_distinct_classification() {
 }
 
 #[tokio::test]
-async fn websocket_close_after_delivery_preserves_details_without_enabling_sticky_http() {
+async fn websocket_close_after_delivery_preserves_details_and_forces_a_fresh_client_retry() {
+    const ACCOUNT_ID: &str = "acct_websocket_close";
+    const CONVERSATION_ID: &str = "conversation-websocket-close-after-delivery";
+    const SESSION_ID: &str = "committed-websocket-session";
+
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_websocket_close").await;
+    create_account(&store, ACCOUNT_ID).await;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind WebSocket listener");
@@ -1316,6 +1340,20 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
             .await
             .expect("WebSocket request")
             .expect("valid WebSocket request");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_before_committed_close",
+                        "model": "gpt-5.4"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("start WebSocket response");
         websocket
             .send(Message::Text(
                 json!({
@@ -1348,6 +1386,20 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
         websocket
             .send(Message::Text(
                 json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_after_committed_close",
+                        "model": "gpt-5.4"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("start next-turn WebSocket response");
+        websocket
+            .send(Message::Text(
+                json!({
                     "type": "response.completed",
                     "response": {
                         "id": "resp_after_committed_close",
@@ -1369,10 +1421,11 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
     });
 
     let provider = provider_with_base_url(&store, base_url);
-    let first_operation = Operation::Generate(generate_with_session_context(
-        "committed-websocket-session",
-        Some("thread-first"),
-        None,
+    let first_operation = Operation::Generate(generate_with_persisted_session_context(
+        ACCOUNT_ID,
+        CONVERSATION_ID,
+        SESSION_ID,
+        "thread-first",
     ));
     let mut stream = provider
         .execute(
@@ -1409,10 +1462,11 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
         Some("websocket_close_1009")
     );
 
-    let second_operation = Operation::Generate(generate_with_session_context(
-        "committed-websocket-session",
-        Some("thread-second"),
-        None,
+    let second_operation = Operation::Generate(generate_with_persisted_session_context(
+        ACCOUNT_ID,
+        CONVERSATION_ID,
+        SESSION_ID,
+        "thread-second",
     ));
     let mut next_stream = provider
         .execute(
@@ -1420,18 +1474,29 @@ async fn websocket_close_after_delivery_preserves_details_without_enabling_stick
             context("req_after_committed_close", CancellationToken::new()),
         )
         .await
-        .expect("post-delivery close must not enable sticky HTTP fallback");
+        .expect("post-delivery close must allow a fresh WebSocket client retry");
     assert_eq!(next_stream.metadata().transport().as_str(), "websocket");
+    let mut retry_pool_observation = None;
     while let Some(event) = next_stream.next().await {
-        event.expect("next turn WebSocket response");
+        let event = event.expect("next turn WebSocket response");
+        if let Some(observation) = event.response_observation()
+            && observation.transport().as_str() == "websocket"
+        {
+            retry_pool_observation = Some(observation.websocket_pool());
+        }
     }
+    assert_eq!(retry_pool_observation, Some(None));
     server.await.expect("WebSocket server");
 }
 
 #[tokio::test]
-async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session() {
+async fn ambiguous_websocket_close_probes_a_fresh_websocket_for_the_next_new_chain() {
+    const ACCOUNT_ID: &str = "acct_websocket_close";
+    const CONVERSATION_ID: &str = "conversation-websocket-ambiguous-close";
+    const SESSION_ID: &str = "sticky-websocket-session";
+
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_websocket_close").await;
+    create_account(&store, ACCOUNT_ID).await;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind WebSocket listener");
@@ -1511,19 +1576,31 @@ async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session
             .await
             .expect("close WebSocket before terminal event");
 
-        let (mut http, _) = listener.accept().await.expect("accept sticky HTTP request");
-        let request = capture_http_request(&mut http).await;
-        let request_head = String::from_utf8_lossy(&request).to_ascii_lowercase();
-        assert!(!request_head.contains("upgrade: websocket"));
-        http.write_all(
-            format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
-                CAPTURE_COMPLETED_SSE.len()
-            )
-            .as_bytes(),
-        )
-        .await
-        .expect("write sticky HTTP response");
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept fresh WebSocket probe");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("fresh WebSocket request")
+            .expect("valid fresh WebSocket request");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.created",
+                    "response": {"id": "resp_fresh_retry", "model": "gpt-5.4"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("start fresh WebSocket response");
+        websocket
+            .send(completed_response("resp_fresh_retry"))
+            .await
+            .expect("complete fresh WebSocket request");
 
         let (stream, _) = listener
             .accept()
@@ -1568,10 +1645,11 @@ async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session
 
     let provider = provider_with_base_url_and_retry_budget(&store, base_url, 2);
     let mut saw_websocket_observation = false;
-    let operation = Operation::Generate(generate_with_session_context(
-        "sticky-websocket-session",
-        Some("thread-first"),
-        None,
+    let operation = Operation::Generate(generate_with_persisted_session_context(
+        ACCOUNT_ID,
+        CONVERSATION_ID,
+        SESSION_ID,
+        "thread-first",
     ));
     let mut stream = provider
         .execute(
@@ -1640,23 +1718,31 @@ async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session
     assert_eq!(connection.exit_reason(), "normal_close");
     assert!(connection.age_ms() >= connection.idle_ms());
 
-    let second_operation = Operation::Generate(generate_with_session_context(
-        "sticky-websocket-session",
-        Some("thread-second"),
-        None,
+    let second_operation = Operation::Generate(generate_with_persisted_session_context(
+        ACCOUNT_ID,
+        CONVERSATION_ID,
+        SESSION_ID,
+        "thread-second",
     ));
-    let mut sticky_stream = provider
+    let mut fresh_stream = provider
         .execute(
             planned_request("openai", second_operation),
-            context("req_websocket_sticky_http", CancellationToken::new()),
+            context("req_websocket_fresh_retry", CancellationToken::new()),
         )
         .await
-        .expect("same session should prepare an HTTP stream");
-    assert_eq!(sticky_stream.metadata().transport().as_str(), "http_sse");
-    while let Some(event) = sticky_stream.next().await {
-        event.expect("sticky HTTP response");
+        .expect("same session should prepare a fresh WebSocket stream");
+    assert_eq!(fresh_stream.metadata().transport().as_str(), "websocket");
+    let mut fresh_pool_observation = None;
+    while let Some(event) = fresh_stream.next().await {
+        let event = event.expect("fresh WebSocket response");
+        if let Some(observation) = event.response_observation()
+            && observation.transport().as_str() == "websocket"
+        {
+            fresh_pool_observation = Some(observation.websocket_pool());
+        }
     }
-    drop(sticky_stream);
+    assert_eq!(fresh_pool_observation, Some(None));
+    drop(fresh_stream);
 
     let continuation_operation = Operation::Generate(generate_with_session_context(
         "sticky-websocket-session",
@@ -1669,7 +1755,7 @@ async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session
             external_continuation_context("req_sticky_external_continuation"),
         )
         .await
-        .expect("sticky state must not force a continuation onto HTTP");
+        .expect("successful fresh probe must restore normal continuation routing");
     assert_eq!(
         continuation_stream.metadata().transport().as_str(),
         "websocket"
@@ -1719,10 +1805,373 @@ async fn ambiguous_websocket_close_only_sticks_new_chains_in_the_current_session
             ),
         )
         .await
-        .expect("required warmup must bypass sticky HTTP fallback");
+        .expect("required warmup must remain on WebSocket");
     assert_eq!(warmup_stream.metadata().transport().as_str(), "websocket");
     drop(warmup_stream);
     server.await.expect("WebSocket and HTTP server");
+}
+
+#[tokio::test]
+async fn repeated_ambiguous_websocket_close_uses_steep_sse_cooldowns_and_one_half_open_probe() {
+    const ACCOUNT_ID: &str = "acct_websocket_cooldown";
+    const CONVERSATION_ID: &str = "conversation-websocket-cooldown";
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT_ID).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let completed_response = |response_id: &str| {
+            Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": response_id,
+                        "model": "gpt-5.4",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 1,
+                            "output_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }
+                })
+                .to_string()
+                .into(),
+            )
+        };
+
+        for response_id in ["resp_first_reset", "resp_fresh_probe_reset"] {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept failing WebSocket connection");
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _request = websocket
+                .next()
+                .await
+                .expect("WebSocket request")
+                .expect("valid WebSocket request");
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.created",
+                        "response": {"id": response_id, "model": "gpt-5.4"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send structural WebSocket event");
+            websocket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: "".into(),
+                }))
+                .await
+                .expect("close WebSocket before terminal event");
+        }
+
+        for response_id in [
+            "resp_third_reset",
+            "resp_fourth_reset",
+            "resp_fifth_reset",
+            "resp_sixth_reset",
+        ] {
+            let (mut http, _) = listener
+                .accept()
+                .await
+                .expect("accept cooldown HTTP request");
+            let request = capture_http_request(&mut http).await;
+            let request_head = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            assert!(!request_head.contains("upgrade: websocket"));
+            http.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
+                    CAPTURE_COMPLETED_SSE.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write cooldown HTTP response");
+
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept failing half-open WebSocket connection");
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _request = websocket
+                .next()
+                .await
+                .expect("half-open WebSocket request")
+                .expect("valid half-open WebSocket request");
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.created",
+                        "response": {"id": response_id, "model": "gpt-5.4"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send half-open structural event");
+            websocket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: "".into(),
+                }))
+                .await
+                .expect("close half-open WebSocket before terminal event");
+        }
+
+        for _ in 0..2 {
+            let (mut http, _) = listener
+                .accept()
+                .await
+                .expect("accept final cooldown HTTP request");
+            let request = capture_http_request(&mut http).await;
+            let request_head = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            assert!(!request_head.contains("upgrade: websocket"));
+            http.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
+                    CAPTURE_COMPLETED_SSE.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("write final cooldown HTTP response");
+        }
+
+        for response_id in ["resp_half_open", "resp_recovered"] {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept recovery WebSocket connection");
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _request = websocket
+                .next()
+                .await
+                .expect("recovery WebSocket request")
+                .expect("valid recovery WebSocket request");
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.created",
+                        "response": {"id": response_id, "model": "gpt-5.4"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("start recovery WebSocket response");
+            websocket
+                .send(completed_response(response_id))
+                .await
+                .expect("complete recovery WebSocket request");
+        }
+    });
+
+    let provider = provider_with_base_url(&store, base_url);
+    let operation = |thread_id: &str| {
+        Operation::Generate(generate_with_persisted_session_context(
+            ACCOUNT_ID,
+            CONVERSATION_ID,
+            "websocket-cooldown-session",
+            thread_id,
+        ))
+    };
+
+    let mut first = provider
+        .execute(
+            planned_request("openai", operation("thread-first-reset")),
+            context("req_first_reset", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare first WebSocket stream");
+    let first_error = loop {
+        match first.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("first WebSocket reset must surface a provider error"),
+        }
+    };
+    assert_eq!(first_error.send_state(), UpstreamSendState::Ambiguous);
+    assert_eq!(first_error.pre_delivery_retry(), None);
+    drop(first);
+
+    let mut fresh = provider
+        .execute(
+            planned_request("openai", operation("thread-fresh-reset")),
+            context("req_fresh_reset", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare fresh WebSocket probe");
+    assert_eq!(fresh.metadata().transport().as_str(), "websocket");
+    let mut fresh_pool_observation = None;
+    let second_error = loop {
+        match fresh.next().await {
+            Some(Ok(event)) => {
+                if let Some(observation) = event.response_observation()
+                    && observation.transport().as_str() == "websocket"
+                {
+                    fresh_pool_observation = Some(observation.websocket_pool());
+                }
+            }
+            Some(Err(error)) => break error,
+            None => panic!("fresh WebSocket reset must surface a provider error"),
+        }
+    };
+    assert_eq!(fresh_pool_observation, Some(None));
+    assert_eq!(second_error.send_state(), UpstreamSendState::Ambiguous);
+    assert_eq!(second_error.pre_delivery_retry(), None);
+    drop(fresh);
+    tokio::time::pause();
+
+    for (index, cooldown) in [
+        Duration::from_secs(5 * 60),
+        Duration::from_secs(30 * 60),
+        Duration::from_secs(60 * 60),
+        Duration::from_secs(4 * 60 * 60),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        tokio::time::advance(cooldown - Duration::from_secs(60)).await;
+        let mut active_cooldown = provider
+            .execute(
+                planned_request(
+                    "openai",
+                    operation(&format!("thread-active-cooldown-{index}")),
+                ),
+                context(
+                    &format!("req_active_cooldown_{index}"),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("prepare active cooldown HTTP stream");
+        assert_eq!(active_cooldown.metadata().transport().as_str(), "http_sse");
+        while let Some(event) = active_cooldown.next().await {
+            event.expect("active cooldown HTTP response");
+        }
+
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::time::resume();
+        let mut failed_probe = provider
+            .execute(
+                planned_request("openai", operation(&format!("thread-failed-probe-{index}"))),
+                context(
+                    &format!("req_failed_probe_{index}"),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("prepare half-open WebSocket probe");
+        assert_eq!(failed_probe.metadata().transport().as_str(), "websocket");
+        let mut failed_probe_pool_observation = None;
+        let probe_error = loop {
+            match failed_probe.next().await {
+                Some(Ok(event)) => {
+                    if let Some(observation) = event.response_observation()
+                        && observation.transport().as_str() == "websocket"
+                    {
+                        failed_probe_pool_observation = Some(observation.websocket_pool());
+                    }
+                }
+                Some(Err(error)) => break error,
+                None => panic!("half-open WebSocket reset must surface a provider error"),
+            }
+        };
+        assert_eq!(failed_probe_pool_observation, Some(None));
+        assert_eq!(probe_error.send_state(), UpstreamSendState::Ambiguous);
+        assert_eq!(probe_error.pre_delivery_retry(), None);
+        drop(failed_probe);
+        tokio::time::pause();
+    }
+
+    tokio::time::advance(Duration::from_secs(4 * 60 * 60 - 60)).await;
+    let mut capped_cooldown = provider
+        .execute(
+            planned_request("openai", operation("thread-capped-cooldown")),
+            context("req_capped_cooldown", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare capped cooldown HTTP stream");
+    assert_eq!(capped_cooldown.metadata().transport().as_str(), "http_sse");
+    while let Some(event) = capped_cooldown.next().await {
+        event.expect("capped cooldown HTTP response");
+    }
+
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    let mut half_open = provider
+        .execute(
+            planned_request("openai", operation("thread-half-open")),
+            context("req_half_open", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare half-open WebSocket probe");
+    assert_eq!(half_open.metadata().transport().as_str(), "websocket");
+
+    let mut concurrent = provider
+        .execute(
+            planned_request("openai", operation("thread-probe-busy")),
+            context("req_probe_busy", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare concurrent HTTP stream");
+    assert_eq!(concurrent.metadata().transport().as_str(), "http_sse");
+    while let Some(event) = concurrent.next().await {
+        event.expect("probe-busy HTTP response");
+    }
+
+    let mut half_open_pool_observation = None;
+    let mut half_open_completed = false;
+    while let Some(event) = half_open.next().await {
+        let event = event.expect("half-open WebSocket response");
+        half_open_completed |= event
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+        if let Some(observation) = event.response_observation()
+            && observation.transport().as_str() == "websocket"
+        {
+            half_open_pool_observation = Some(observation.websocket_pool());
+        }
+    }
+    assert!(half_open_completed);
+    assert_eq!(half_open_pool_observation, Some(None));
+
+    let mut recovered = provider
+        .execute(
+            planned_request("openai", operation("thread-recovered")),
+            context("req_recovered", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare recovered WebSocket stream");
+    assert_eq!(recovered.metadata().transport().as_str(), "websocket");
+    let mut recovered_pool_observation = None;
+    while let Some(event) = recovered.next().await {
+        let event = event.expect("recovered WebSocket response");
+        if let Some(observation) = event.response_observation()
+            && observation.transport().as_str() == "websocket"
+        {
+            recovered_pool_observation = Some(observation.websocket_pool());
+        }
+    }
+    assert_eq!(
+        recovered_pool_observation,
+        Some(Some(WebSocketPoolKind::New))
+    );
+    server.await.expect("WebSocket and HTTP recovery server");
 }
 
 #[tokio::test]

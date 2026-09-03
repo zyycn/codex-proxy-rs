@@ -21,6 +21,7 @@ pub mod tls;
 pub mod usage;
 pub mod websocket;
 
+pub(crate) use self::client_sse::WebSocketConnectionPreference;
 pub use self::{
     canonical::{CodexCanonicalDecoder, CodexCanonicalError},
     catalog::{

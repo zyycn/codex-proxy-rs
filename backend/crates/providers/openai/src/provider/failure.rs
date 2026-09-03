@@ -458,7 +458,8 @@ pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) account_id: &'a str,
     pub(super) session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
     pub(super) session_affinity_key_hash: Option<&'a str>,
-    pub(super) session_transport_fallbacks: &'a CodexSessionTransportFallbacks,
+    pub(super) session_transport_recovery: &'a CodexSessionTransportRecovery,
+    pub(super) session_recovery_probe: &'a mut Option<CodexSessionWebSocketProbe>,
 }
 
 pub(super) fn websocket_client_failure_policy(
@@ -509,10 +510,18 @@ pub(super) fn apply_websocket_recovery_policy(
         UpstreamSendState::Sent | UpstreamSendState::Ambiguous
     ) {
         // payload 已经发送或发送结果不确定时，代理不能用同一业务输入自动重放。
-        // 只为客户端下一次完整请求记住 HTTP 偏好，当前请求保持终态失败。
-        let sticky_state_transition = context
-            .session_affinity_key
-            .map(|key| context.session_transport_fallbacks.disable_websocket(key));
+        // 当前请求保持终态失败；恢复状态只裁决客户端主动发起的下一次请求。
+        let session_recovery_transition = match context.session_recovery_probe.take() {
+            Some(probe) => Some(probe.post_send_failed()),
+            None => context.session_affinity_key.map(|key| {
+                context
+                    .session_transport_recovery
+                    .record_post_send_failure(key)
+            }),
+        };
+        let session_http_cooldown_ms = session_recovery_transition
+            .and_then(CodexSessionRecoveryTransition::cooldown)
+            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
         tracing::warn!(
             request_id = context.request_id,
             attempt_index = context.attempt_index,
@@ -527,8 +536,12 @@ pub(super) fn apply_websocket_recovery_policy(
             continuation_recovery_action = "client_replay_required",
             session_affinity_present = context.session_affinity_key.is_some(),
             session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
-            sticky_http_enabled = sticky_state_transition.is_some(),
-            sticky_state_transition = sticky_state_transition.unwrap_or(false),
+            session_transport_action = session_recovery_transition
+                .map_or("untracked", CodexSessionRecoveryTransition::action),
+            session_websocket_failure_count = session_recovery_transition
+                .map_or(0, CodexSessionRecoveryTransition::failure_count),
+            session_http_cooldown_ms = session_http_cooldown_ms.unwrap_or_default(),
+            session_http_cooldown_present = session_http_cooldown_ms.is_some(),
             "OpenAI upstream WebSocket failed after payload send; proxy replay was suppressed"
         );
         return;
@@ -576,9 +589,21 @@ pub(super) fn apply_websocket_recovery_policy(
     }
 
     failure.error.set_pre_delivery_transport_fallback();
-    let sticky_state_transition = context
-        .session_affinity_key
-        .map(|key| context.session_transport_fallbacks.disable_websocket(key));
+    let session_fallback = match context.policy {
+        WebSocketFailurePolicy::Budgeted => SessionWebSocketFallback::RetryBudgetExhausted,
+        WebSocketFailurePolicy::ImmediateFallback => SessionWebSocketFallback::UpgradeRequired,
+    };
+    let session_recovery_transition = match context.session_recovery_probe.take() {
+        Some(probe) => Some(probe.fallback(session_fallback)),
+        None => context.session_affinity_key.map(|key| {
+            context
+                .session_transport_recovery
+                .record_websocket_fallback(key, session_fallback)
+        }),
+    };
+    let session_http_cooldown_ms = session_recovery_transition
+        .and_then(CodexSessionRecoveryTransition::cooldown)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
     tracing::warn!(
         request_id = context.request_id,
         attempt_index = context.attempt_index,
@@ -598,9 +623,13 @@ pub(super) fn apply_websocket_recovery_policy(
         },
         session_affinity_present = context.session_affinity_key.is_some(),
         session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
-        sticky_http_enabled = sticky_state_transition.is_some(),
-        sticky_state_transition = sticky_state_transition.unwrap_or(false),
-        "OpenAI upstream WebSocket disabled for the current session"
+        session_transport_action =
+            session_recovery_transition.map_or("untracked", CodexSessionRecoveryTransition::action),
+        session_websocket_failure_count =
+            session_recovery_transition.map_or(0, CodexSessionRecoveryTransition::failure_count),
+        session_http_cooldown_ms = session_http_cooldown_ms.unwrap_or_default(),
+        session_http_cooldown_present = session_http_cooldown_ms.is_some(),
+        "OpenAI upstream WebSocket entered session HTTP cooldown"
     );
 }
 

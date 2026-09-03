@@ -61,7 +61,10 @@ use crate::credential::{
     derive_codex_cyber_policy_session_key, derive_codex_session_affinity,
     derive_previous_response_id_hash,
 };
-use crate::session_transport::CodexSessionTransportFallbacks;
+use crate::session_transport::{
+    CodexSessionRecoveryTransition, CodexSessionTransportDecision, CodexSessionTransportRecovery,
+    CodexSessionWebSocketProbe, SessionWebSocketFallback,
+};
 use crate::transport::canonical::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexCanonicalOutcome,
 };
@@ -90,7 +93,8 @@ use crate::transport::{
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
     CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
     CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexTransportMetrics, CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
+    CodexTransportMetrics, CodexUpstreamDiagnostics, CodexWebSocketPool,
+    WebSocketConnectionPreference, endpoint_url,
 };
 
 mod execution;
@@ -145,7 +149,7 @@ pub struct CodexProvider {
     image_edits_url: Url,
     search_url: Url,
     session_identity: Option<CodexSessionIdentity>,
-    session_transport_fallbacks: CodexSessionTransportFallbacks,
+    session_transport_recovery: CodexSessionTransportRecovery,
     stream_max_retries: u32,
 }
 
@@ -185,7 +189,7 @@ impl CodexProvider {
             image_edits_url,
             search_url,
             session_identity: None,
-            session_transport_fallbacks: CodexSessionTransportFallbacks::default(),
+            session_transport_recovery: CodexSessionTransportRecovery::default(),
             stream_max_retries,
         })
     }
@@ -442,26 +446,46 @@ impl Provider for CodexProvider {
         );
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);
-        let sticky_http_fallback = context.transport() == AttemptTransport::Default
-            && requested_transport == CodexProviderTransport::PreferWebSocket
-            && requirement.allows_sticky_http_fallback()
-            && session_affinity.as_ref().is_some_and(|affinity| {
-                self.session_transport_fallbacks
-                    .is_http_only(affinity.key())
-            });
+        let session_transport_decision = if matches!(
+            context.transport(),
+            AttemptTransport::Default | AttemptTransport::Retry(_)
+        ) && requested_transport
+            == CodexProviderTransport::PreferWebSocket
+            && requirement.allows_session_transport_recovery()
+            && let Some(affinity) = session_affinity.as_ref()
+        {
+            self.session_transport_recovery.decide(affinity.key())
+        } else {
+            CodexSessionTransportDecision::Default
+        };
+        let session_transport_action = session_transport_decision.action();
+        let session_websocket_failure_count = session_transport_decision.failure_count();
+        let session_http_cooldown_ms = session_transport_decision
+            .retry_after()
+            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+        let mut websocket_connection_preference = WebSocketConnectionPreference::ReuseOrConnect;
+        let mut session_recovery_probe = None;
         let transport = if requirement.requires_websocket() {
             CodexProviderTransport::PreferWebSocket
         } else {
             match context.transport() {
-                AttemptTransport::Default if sticky_http_fallback => {
-                    CodexProviderTransport::HttpOnly
+                AttemptTransport::Default | AttemptTransport::Retry(_) => {
+                    match session_transport_decision {
+                        CodexSessionTransportDecision::Default => requested_transport,
+                        CodexSessionTransportDecision::FreshWebSocket { probe, .. } => {
+                            websocket_connection_preference = WebSocketConnectionPreference::Fresh;
+                            session_recovery_probe = Some(probe);
+                            CodexProviderTransport::PreferWebSocket
+                        }
+                        CodexSessionTransportDecision::HttpSse { .. } => {
+                            CodexProviderTransport::HttpOnly
+                        }
+                    }
                 }
-                AttemptTransport::Default => requested_transport,
-                AttemptTransport::Retry(_) => requested_transport,
                 AttemptTransport::Fallback => CodexProviderTransport::HttpOnly,
             }
         };
-        if sticky_http_fallback {
+        if let Some(session_transport_action) = session_transport_action {
             tracing::info!(
                 request_id = %context.request_id(),
                 attempt_index = context.attempt_index().get(),
@@ -469,7 +493,11 @@ impl Provider for CodexProvider {
                     .as_ref()
                     .map_or("", CodexSessionAffinity::key_hash),
                 transport_requirement = requirement.as_str(),
-                "Reusing session-sticky OpenAI upstream HTTP fallback"
+                session_transport_action,
+                session_websocket_failure_count = session_websocket_failure_count.unwrap_or_default(),
+                session_http_cooldown_ms = session_http_cooldown_ms.unwrap_or_default(),
+                session_http_cooldown_present = session_http_cooldown_ms.is_some(),
+                "Applied OpenAI session transport recovery decision"
             );
         }
         apply_transport(&mut upstream_request, transport);
@@ -518,7 +546,9 @@ impl Provider for CodexProvider {
             output_started_at,
             session_affinity_key,
             session_affinity_key_hash,
-            session_transport_fallbacks: self.session_transport_fallbacks.clone(),
+            websocket_connection_preference,
+            session_transport_recovery: self.session_transport_recovery.clone(),
+            session_recovery_probe,
             websocket_retry_count,
             stream_max_retries: self.stream_max_retries,
             session_capture,

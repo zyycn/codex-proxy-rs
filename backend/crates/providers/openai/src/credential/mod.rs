@@ -16,8 +16,8 @@ pub mod token_client;
 mod types;
 
 pub(crate) use affinity::{
-    CODEX_ROOT_SESSION_TTL, CodexSessionAffinity, derive_codex_cyber_policy_session_key,
-    derive_codex_session_affinity, derive_previous_response_id_hash,
+    CodexSessionAffinity, derive_codex_cyber_policy_session_key, derive_codex_session_affinity,
+    derive_previous_response_id_hash,
 };
 pub(crate) use oauth::oauth_owner_ref;
 pub(crate) use types::parse_access_token_expiration;

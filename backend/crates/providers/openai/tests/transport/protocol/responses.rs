@@ -295,8 +295,8 @@ fn new_chain_should_allow_pre_delivery_http_fallback() {
 }
 
 #[test]
-fn sticky_http_fallback_should_only_apply_to_new_chains() {
-    assert!(TransportRequirement::NewChain.allows_sticky_http_fallback());
+fn session_transport_recovery_should_only_apply_to_new_chains() {
+    assert!(TransportRequirement::NewChain.allows_session_transport_recovery());
 
     for requirement in [
         TransportRequirement::HttpRequired,
@@ -306,8 +306,8 @@ fn sticky_http_fallback_should_only_apply_to_new_chains() {
         TransportRequirement::ExternalUnknown,
     ] {
         assert!(
-            !requirement.allows_sticky_http_fallback(),
-            "sticky HTTP must not override {}",
+            !requirement.allows_session_transport_recovery(),
+            "session recovery must not override {}",
             requirement.as_str()
         );
     }

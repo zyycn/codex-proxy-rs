@@ -162,8 +162,8 @@ impl TransportRequirement {
         matches!(self, Self::NewChain)
     }
 
-    /// 会话级 sticky 状态是否可以把首选 WebSocket 改为 HTTP。
-    pub fn allows_sticky_http_fallback(self) -> bool {
+    /// 会话级恢复状态是否可以为请求选择 fresh WebSocket 或临时 HTTP。
+    pub fn allows_session_transport_recovery(self) -> bool {
         matches!(self, Self::NewChain)
     }
 

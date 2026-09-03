@@ -47,6 +47,16 @@ use crate::transport::{
 
 use super::client::*;
 
+/// 单次 Responses WebSocket opening 是否可以使用会话连接池。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WebSocketConnectionPreference {
+    /// 优先复用匹配的空闲连接，否则建立并登记一条新连接。
+    #[default]
+    ReuseOrConnect,
+    /// 绕过连接池建立独立连接，用于根会话恢复探针。
+    Fresh,
+}
+
 impl CodexBackendClient {
     /// 构造客户端。
     pub fn new(
@@ -188,9 +198,16 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
+        connection_preference: WebSocketConnectionPreference,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let prepared = self
-            .prepare_response_transport(request, context, pool_account_id, false, true)
+            .prepare_response_transport(
+                request,
+                context,
+                pool_account_id,
+                connection_preference,
+                true,
+            )
             .await?;
         self.create_response_stream_with_prepared(request, context, prepared)
             .await
@@ -204,18 +221,24 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<PreparedResponseTransport> {
-        self.prepare_response_transport(request, context, pool_account_id, false, false)
-            .await
+        self.prepare_response_transport(
+            request,
+            context,
+            pool_account_id,
+            WebSocketConnectionPreference::ReuseOrConnect,
+            false,
+        )
+        .await
     }
 
     /// 与 [`Self::prepare_response_transport_with_pool_account`] 相同；
-    /// `force_fresh` 时绕过连接池，为连接寿命限制重试强制新建连接。
+    /// fresh 偏好会绕过连接池，为受控恢复探针强制新建连接。
     async fn prepare_response_transport(
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
-        force_fresh: bool,
+        connection_preference: WebSocketConnectionPreference,
         defer_websocket_recovery: bool,
     ) -> CodexClientResult<PreparedResponseTransport> {
         let requirement = transport_requirement(request);
@@ -256,10 +279,11 @@ impl CodexBackendClient {
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
-        let pool = if force_fresh {
-            None
-        } else {
-            self.websocket_pool.as_deref().zip(pool_key)
+        let pool = match connection_preference {
+            WebSocketConnectionPreference::ReuseOrConnect => {
+                self.websocket_pool.as_deref().zip(pool_key)
+            }
+            WebSocketConnectionPreference::Fresh => None,
         };
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
@@ -434,7 +458,13 @@ impl CodexBackendClient {
                                 );
                                 drop(exchange);
                                 match self
-                                    .prepare_response_transport(request, context, None, true, false)
+                                    .prepare_response_transport(
+                                        request,
+                                        context,
+                                        None,
+                                        WebSocketConnectionPreference::Fresh,
+                                        false,
+                                    )
                                     .await
                                 {
                                     Ok(PreparedResponseTransport {

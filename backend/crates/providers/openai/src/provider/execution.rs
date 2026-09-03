@@ -147,6 +147,7 @@ pub(super) struct ColdResponse {
     pub(super) request: CodexResponsesRequest,
     pub(super) upstream_model: UpstreamModelId,
     pub(super) transport_policy: CodexProviderTransport,
+    pub(super) websocket_connection_preference: WebSocketConnectionPreference,
     pub(super) context: AttemptContext,
     pub(super) selector: Arc<CodexCredentialSelector>,
     pub(super) quota: Arc<CodexCredentialQuotaService>,
@@ -155,7 +156,8 @@ pub(super) struct ColdResponse {
     pub(super) output_started_at: Instant,
     pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
     pub(super) session_affinity_key_hash: Option<String>,
-    pub(super) session_transport_fallbacks: CodexSessionTransportFallbacks,
+    pub(super) session_transport_recovery: CodexSessionTransportRecovery,
+    pub(super) session_recovery_probe: Option<CodexSessionWebSocketProbe>,
     pub(super) websocket_retry_count: u32,
     pub(super) stream_max_retries: u32,
     pub(super) session_capture: Option<OpenAiSessionCapture>,
@@ -292,6 +294,7 @@ pub(super) async fn create_response_attempt(
     account_id: &str,
     deadline: SystemTime,
     cancellation: &CancellationToken,
+    connection_preference: WebSocketConnectionPreference,
 ) -> Result<CodexBackendStreamingResponse, CodexHandshakeAttemptError> {
     let Some(handshake_deadline) = remaining(deadline) else {
         return Err(CodexHandshakeAttemptError::Timeout);
@@ -304,6 +307,7 @@ pub(super) async fn create_response_attempt(
             request,
             request_context,
             Some(account_id),
+            connection_preference,
         ) => response.map_err(CodexHandshakeAttemptError::Client),
     }
 }
@@ -472,6 +476,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         request,
         upstream_model,
         transport_policy,
+        websocket_connection_preference,
         context,
         selector,
         quota,
@@ -480,7 +485,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         output_started_at,
         session_affinity_key,
         session_affinity_key_hash,
-        session_transport_fallbacks,
+        session_transport_recovery,
+        mut session_recovery_probe,
         websocket_retry_count,
         stream_max_retries,
         mut session_capture,
@@ -530,6 +536,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             active_account.id().as_str(),
             context.deadline(),
             &cancellation,
+            websocket_connection_preference,
         )
         .await;
         let websocket_failure_policy = match &response {
@@ -563,7 +570,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             account_id: active_account.id().as_str(),
                             session_affinity_key: session_affinity_key.as_ref(),
                             session_affinity_key_hash: session_affinity_key_hash.as_deref(),
-                            session_transport_fallbacks: &session_transport_fallbacks,
+                            session_transport_recovery: &session_transport_recovery,
+                            session_recovery_probe: &mut session_recovery_probe,
                         },
                     );
                 }
@@ -701,7 +709,10 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 Err(mut failure) => {
                     if failure.websocket_transport_retryable
                         && response_transport == CodexBackendTransport::WebSocket
-                        && !pre_commit_events.is_committed()
+                        && (matches!(
+                            failure.error.send_state(),
+                            UpstreamSendState::Sent | UpstreamSendState::Ambiguous
+                        ) || !pre_commit_events.is_committed())
                     {
                         apply_websocket_recovery_policy(
                             &mut failure,
@@ -715,7 +726,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                                 account_id: active_account.id().as_str(),
                                 session_affinity_key: session_affinity_key.as_ref(),
                                 session_affinity_key_hash: session_affinity_key_hash.as_deref(),
-                                session_transport_fallbacks: &session_transport_fallbacks,
+                                session_transport_recovery: &session_transport_recovery,
+                                session_recovery_probe: &mut session_recovery_probe,
                             },
                         );
                     }
@@ -808,6 +820,21 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             let terminal_changed = completed
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
+            if response_transport == CodexBackendTransport::WebSocket
+                && completed
+                && terminal_failure.is_none()
+                && let Some(probe) = session_recovery_probe.take()
+            {
+                let session_recovery_cleared = probe.succeed();
+                tracing::info!(
+                    request_id = %context.request_id(),
+                    attempt_index = context.attempt_index().get(),
+                    session_affinity_key_hash = session_affinity_key_hash.as_deref().unwrap_or(""),
+                    session_transport_action = "websocket_recovered",
+                    session_recovery_cleared,
+                    "OpenAI session fresh WebSocket probe reached a terminal response"
+                );
+            }
             if allows_account_state_mutation && (completed || terminal_failure.is_some()) {
                 synchronize_passive_quota(
                     &quota,
@@ -939,6 +966,21 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
         let terminal_changed = completed
             && observation_state.mark_completed(terminal_response_is_incomplete(&events));
+        if response_transport == CodexBackendTransport::WebSocket
+            && completed
+            && terminal_failure.is_none()
+            && let Some(probe) = session_recovery_probe.take()
+        {
+            let session_recovery_cleared = probe.succeed();
+            tracing::info!(
+                request_id = %context.request_id(),
+                attempt_index = context.attempt_index().get(),
+                session_affinity_key_hash = session_affinity_key_hash.as_deref().unwrap_or(""),
+                session_transport_action = "websocket_recovered",
+                session_recovery_cleared,
+                "OpenAI session fresh WebSocket probe reached a terminal response"
+            );
+        }
         if allows_account_state_mutation && completed && terminal_failure.is_none() {
             // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield。
             selector
