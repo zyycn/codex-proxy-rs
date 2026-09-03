@@ -50,7 +50,7 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
           class="flex shrink-0 items-baseline gap-1 text-[9px] font-emphasis text-cp-text-quaternary"
           title="最近使用额度的当前已用比例"
         >
-          <span>消耗比例</span>
+          <span>使用率</span>
           <strong class="font-mono font-heavy tabular-nums" :class="currentUsageTextClass">
             {{ currentUsageDisplay }}
           </strong>

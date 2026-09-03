@@ -8,6 +8,10 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import {
+  buildCodexConfigFiles,
+  CODEX_WEBSOCKET_ENABLED_BY_DEFAULT,
+} from '../utils/codexConfig'
 
 const props = defineProps<{
   apiKey: {
@@ -24,7 +28,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ default: false })
 
 const activePlatform = shallowRef('unix')
-const websocketEnabled = shallowRef(true)
+const websocketEnabled = shallowRef(CODEX_WEBSOCKET_ENABLED_BY_DEFAULT)
 
 const platformOptions = [
   { label: 'macOS / Linux', value: 'unix', icon: Apple },
@@ -40,31 +44,15 @@ const configPath = computed(() =>
 const authPath = computed(() =>
   activePlatform.value === 'windows' ? '%userprofile%\\.codex\\auth.json' : '~/.codex/auth.json',
 )
-const codexAuthJson = computed(() => JSON.stringify({ OPENAI_API_KEY: keyValue.value }, null, 2))
-const defaultModel = 'gpt-5.6-terra'
-
-const codexConfigToml = computed(
-  () => `model_provider = "OpenAI"
-model = "${defaultModel}"
-review_model = "${defaultModel}"
-model_reasoning_effort = "max"
-service_tier = "default"
-disable_response_storage = true
-network_access = "enabled"
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${props.apiBaseUrl}"
-wire_api = "responses"${websocketEnabled.value ? '\nsupports_websockets = true' : ''}
-requires_openai_auth = true
-
-[features]${websocketEnabled.value ? '\nresponses_websockets_v2 = true' : ''}
-goals = true`,
-)
+const codexConfigFiles = computed(() => buildCodexConfigFiles({
+  apiKey: keyValue.value,
+  baseUrl: props.apiBaseUrl,
+  websocketEnabled: websocketEnabled.value,
+}))
 
 const visibleFiles = computed(() => [
-  { path: configPath.value, content: codexConfigToml.value, scrollbarHeight: '360px' },
-  { path: authPath.value, content: codexAuthJson.value, scrollbarHeight: undefined },
+  { path: configPath.value, content: codexConfigFiles.value.configToml, scrollbarHeight: '360px' },
+  { path: authPath.value, content: codexConfigFiles.value.authJson, scrollbarHeight: undefined },
 ])
 </script>
 
