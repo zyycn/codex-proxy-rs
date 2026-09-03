@@ -899,9 +899,6 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         CodexWebSocketExchangeError::ConnectTimeout { timeout } => {
             format!("OpenAI WebSocket connection timed out after {timeout:?}")
         }
-        CodexWebSocketExchangeError::FastPathTimeout { timeout } => {
-            format!("OpenAI WebSocket fast-path budget expired after {timeout:?}")
-        }
         CodexWebSocketExchangeError::OriginCircuitOpen => {
             "OpenAI WebSocket origin circuit is open".to_owned()
         }
@@ -1176,7 +1173,6 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::ConnectTimeout { .. }
-        | CodexWebSocketExchangeError::FastPathTimeout { .. }
         | CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy
         | CodexWebSocketExchangeError::SharedConnectFailed
@@ -1204,7 +1200,6 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         | CodexWebSocketExchangeError::InvalidSse(_)
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => ProviderErrorKind::Protocol,
         CodexWebSocketExchangeError::ConnectTimeout { .. }
-        | CodexWebSocketExchangeError::FastPathTimeout { .. }
         | CodexWebSocketExchangeError::SendTimeout { .. }
         | CodexWebSocketExchangeError::ReceiveIdleTimeout { .. }
         | CodexWebSocketExchangeError::InitialEventTimeout { .. } => ProviderErrorKind::Timeout,

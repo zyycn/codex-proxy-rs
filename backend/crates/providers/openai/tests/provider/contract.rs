@@ -459,6 +459,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_usage_limit_request_path",
         "acct_websocket_close",
         "acct_websocket_cooldown",
+        "acct_websocket_fast_path",
         "acct_websocket_busy_replay",
         "acct_websocket_turn_state",
     ]
@@ -1487,6 +1488,150 @@ async fn websocket_close_after_delivery_preserves_details_and_forces_a_fresh_cli
     }
     assert_eq!(retry_pool_observation, Some(None));
     server.await.expect("WebSocket server");
+}
+
+#[tokio::test]
+async fn websocket_fast_path_miss_uses_http_and_keeps_background_preconnect() {
+    const ACCOUNT_ID: &str = "acct_websocket_fast_path";
+    const CONVERSATION_ID: &str = "conversation-websocket-fast-path";
+    const SESSION_ID: &str = "websocket-fast-path-session";
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT_ID).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let (preconnect_ready_tx, preconnect_ready_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (websocket_stream, _) = listener
+            .accept()
+            .await
+            .expect("accept background WebSocket opening");
+        let websocket = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let mut websocket = accept_codex_test_websocket(websocket_stream).await;
+            assert!(
+                timeout(Duration::from_millis(100), websocket.next())
+                    .await
+                    .is_err(),
+                "background preconnect must not send the HTTP-fallback request payload"
+            );
+            preconnect_ready_tx
+                .send(())
+                .expect("signal background WebSocket readiness");
+            let request = websocket
+                .next()
+                .await
+                .expect("next request should reuse the background WebSocket")
+                .expect("valid reused WebSocket request");
+            let payload: Value =
+                serde_json::from_str(request.to_text().expect("reused WebSocket request text"))
+                    .expect("reused WebSocket request JSON");
+            assert_eq!(payload.get("type"), Some(&json!("response.create")));
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_background_preconnect",
+                            "model": "gpt-5.4",
+                            "status": "completed",
+                            "output": [],
+                            "usage": {
+                                "input_tokens": 1,
+                                "output_tokens": 1,
+                                "total_tokens": 2
+                            }
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("complete reused WebSocket request");
+        });
+
+        let (mut http, _) = listener
+            .accept()
+            .await
+            .expect("accept HTTP fallback request");
+        let request = capture_http_request(&mut http).await;
+        assert!(String::from_utf8_lossy(&request).starts_with("POST /codex/responses"));
+        http.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{CAPTURE_COMPLETED_SSE}",
+                CAPTURE_COMPLETED_SSE.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write HTTP fallback response");
+        websocket.await.expect("background WebSocket server");
+    });
+
+    let provider = provider_with_base_url(&store, base_url);
+    let operation = |thread_id| {
+        Operation::Generate(generate_with_persisted_session_context(
+            ACCOUNT_ID,
+            CONVERSATION_ID,
+            SESSION_ID,
+            thread_id,
+        ))
+    };
+
+    let mut first = provider
+        .execute(
+            planned_request("openai", operation("thread-http-fallback")),
+            context("req_fast_path_http", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare first provider stream");
+    let mut first_transport = None;
+    let mut first_decision = None;
+    while let Some(event) = first.next().await {
+        let event = event.expect("fast-path miss must not surface as a provider error");
+        if let Some(observation) = event.response_observation() {
+            first_transport = Some(observation.transport().as_str().to_owned());
+            if let Some(provider_metadata) = observation.provider_metadata() {
+                let metadata: Value = serde_json::from_str(provider_metadata.as_json())
+                    .expect("OpenAI provider metadata JSON");
+                first_decision = metadata
+                    .get("transportDecision")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+            }
+        }
+    }
+    assert_eq!(first_transport.as_deref(), Some("http_sse"));
+    assert_eq!(first_decision.as_deref(), Some("http2_ws_budget_exhausted"));
+
+    preconnect_ready_rx
+        .await
+        .expect("background WebSocket should become ready");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut second = provider
+        .execute(
+            planned_request("openai", operation("thread-websocket-reuse")),
+            context("req_background_ws_reuse", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare second provider stream");
+    let mut second_transport = None;
+    let mut second_pool = None;
+    while let Some(event) = second.next().await {
+        let event = event.expect("background WebSocket reuse should complete");
+        if let Some(observation) = event.response_observation() {
+            second_transport = Some(observation.transport().as_str().to_owned());
+            second_pool = Some(observation.websocket_pool());
+        }
+    }
+    assert_eq!(second_transport.as_deref(), Some("websocket"));
+    assert_eq!(second_pool, Some(Some(WebSocketPoolKind::Reuse)));
+    server.await.expect("HTTP and WebSocket upstream server");
 }
 
 #[tokio::test]

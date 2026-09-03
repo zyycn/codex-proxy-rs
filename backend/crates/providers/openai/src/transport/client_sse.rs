@@ -38,9 +38,9 @@ use crate::transport::{
     websocket::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
         CodexWebSocketPoolKey, CodexWebSocketStreamingExchange, DEFAULT_INITIAL_EVENT_TIMEOUT,
-        WEBSOCKET_FAST_PATH_BUDGET, WebSocketOriginBreaker, WebSocketPoolDecision,
-        execute_prepared_response_create_request_stream, post_send_ambiguous,
-        prepare_response_create_request_with_pool, websocket_audit_dir,
+        WEBSOCKET_FAST_PATH_BUDGET, WebSocketFastPath, WebSocketOriginBreaker,
+        WebSocketPoolDecision, execute_prepared_response_create_request_stream,
+        post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env,
     },
 };
@@ -306,7 +306,31 @@ impl CodexBackendClient {
         )
         .await;
         let prepared = match prepared {
-            Ok(prepared) => prepared,
+            Ok(WebSocketFastPath::Ready(prepared)) => prepared,
+            Ok(WebSocketFastPath::Missed) => {
+                let decision = CodexTransportDecision::Http2WebSocketBudgetExhausted;
+                let wait_ms = elapsed_duration_millis(prepare_started_at.elapsed());
+                tracing::info!(
+                    request_id = %context.request_id,
+                    account_id = pool_account_id.or(context.account_id).unwrap_or_default(),
+                    transport_requirement = requirement.as_str(),
+                    transport_decision = decision.as_str(),
+                    transport_decision_wait_ms = wait_ms,
+                    websocket_preconnect_continues = pool_log_context.is_some(),
+                    "WebSocket fast path missed; using same-account HTTP"
+                );
+                return Ok(PreparedResponseTransport {
+                    requirement,
+                    route: PreparedResponseRoute::Http,
+                    metrics: CodexTransportMetrics {
+                        decision: Some(decision),
+                        ws_connect_ms: None,
+                        transport_decision_wait_ms: Some(wait_ms),
+                        ..CodexTransportMetrics::default()
+                    },
+                    defer_websocket_recovery,
+                });
+            }
             Err(error)
                 if (!defer_websocket_recovery || error.requires_immediate_pool_fallback())
                     && requirement.allows_pre_send_http_fallback()

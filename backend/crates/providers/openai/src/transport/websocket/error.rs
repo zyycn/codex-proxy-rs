@@ -31,12 +31,6 @@ pub enum CodexWebSocketExchangeError {
         /// 建连超时时长。
         timeout: Duration,
     },
-    /// 普通请求的 WebSocket 快路径预算耗尽，payload 尚未发送。
-    #[error("websocket fast-path connect budget exhausted after {timeout:?}")]
-    FastPathTimeout {
-        /// 快路径等待时长。
-        timeout: Duration,
-    },
     /// origin WebSocket 冷建连熔断中。
     #[error("websocket origin circuit is open")]
     OriginCircuitOpen,
@@ -341,7 +335,6 @@ impl CodexWebSocketExchangeError {
             self,
             Self::Connect(_)
                 | Self::ConnectTimeout { .. }
-                | Self::FastPathTimeout { .. }
                 | Self::OriginCircuitOpen
                 | Self::OriginHalfOpenBusy
                 | Self::SharedConnectFailed

@@ -854,9 +854,6 @@ pub(super) fn http_fallback_decision(
     error: &CodexWebSocketExchangeError,
 ) -> CodexTransportDecision {
     match error.classified() {
-        CodexWebSocketExchangeError::FastPathTimeout { .. } => {
-            CodexTransportDecision::Http2WebSocketBudgetExhausted
-        }
         CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy => {
             CodexTransportDecision::Http2BreakerOpen

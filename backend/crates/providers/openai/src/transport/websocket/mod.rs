@@ -37,7 +37,7 @@ pub use self::{
 };
 pub(crate) use self::{
     coordinator::{
-        PreparedWebSocket, WEBSOCKET_FAST_PATH_BUDGET,
+        PreparedWebSocket, WEBSOCKET_FAST_PATH_BUDGET, WebSocketFastPath,
         execute_prepared_response_create_request_stream, post_send_ambiguous,
         prepare_response_create_request_with_pool,
     },
