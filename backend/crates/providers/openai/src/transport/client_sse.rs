@@ -682,10 +682,12 @@ impl CodexBackendClient {
             .local_conversation_id
             .as_deref()
             .or(request.previous_response_id())?;
-        Some(
-            CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
-                .with_connection_profile(connection_profile),
-        )
+        let mut key = CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
+            .with_connection_profile(connection_profile);
+        if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
+            key = key.with_downstream_connection_id(connection_id);
+        }
+        Some(key)
     }
 
     /// 获取后端模型目录条目。

@@ -143,6 +143,8 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
     );
     let _connection_guard = connection_guard;
     let cancellation = lifecycle.cancellation();
+    let request_headers =
+        request_headers.with_downstream_websocket_connection_id(connection_id.clone());
     let mut connection = ResponsesWebSocketConnection::new(socket, connection_id, cancellation);
     let mut request_count = 0_u64;
     let mut replay = ConnectionReplaySnapshot::default();

@@ -16,6 +16,7 @@ const OPENAI_PROTOCOL: &str = "openai";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 const CODEX_TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
+const DOWNSTREAM_WEBSOCKET_CONNECTION_ID_CONTEXT_KEY: &str = "downstream_websocket_connection_id";
 
 /// Responses 请求进入共享解码内核时的下游传输来源。
 #[derive(Clone, Copy)]
@@ -35,6 +36,7 @@ pub struct OpenAiRequestHeaders {
     include_timing_metrics: Option<String>,
     codex_window_id: Option<String>,
     parent_thread_id: Option<String>,
+    downstream_websocket_connection_id: Option<String>,
 
     conversation_id: Option<String>,
     session_id: Option<String>,
@@ -60,6 +62,7 @@ impl OpenAiRequestHeaders {
             include_timing_metrics: header_string(headers, "x-responsesapi-include-timing-metrics"),
             codex_window_id: header_string(headers, "x-codex-window-id"),
             parent_thread_id: header_string(headers, "x-codex-parent-thread-id"),
+            downstream_websocket_connection_id: None,
             conversation_id: header_string(headers, "conversation-id")
                 .or_else(|| header_string(headers, "conversation_id")),
             session_id: header_string(headers, "session-id")
@@ -72,6 +75,16 @@ impl OpenAiRequestHeaders {
             subagent: header_string(headers, OPENAI_SUBAGENT_KEY),
             passthrough_headers: passthrough_headers(headers),
         }
+    }
+
+    /// 绑定代理为当前下游 WebSocket 分配的连接身份。
+    #[must_use]
+    pub(super) fn with_downstream_websocket_connection_id(
+        mut self,
+        connection_id: impl Into<String>,
+    ) -> Self {
+        self.downstream_websocket_connection_id = Some(connection_id.into());
+        self
     }
 
     fn apply_subagent(&self, body: &mut Map<String, Value>) {
@@ -108,6 +121,11 @@ impl OpenAiRequestHeaders {
             &mut context,
             "parent_thread_id",
             self.parent_thread_id.as_ref(),
+        );
+        insert_protocol_context(
+            &mut context,
+            DOWNSTREAM_WEBSOCKET_CONNECTION_ID_CONTEXT_KEY,
+            self.downstream_websocket_connection_id.as_ref(),
         );
         insert_protocol_context(
             &mut context,

@@ -23,6 +23,7 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     conversation_id: String,
     connection_profile: String,
+    downstream_connection_id: String,
 }
 
 impl CodexWebSocketPoolKey {
@@ -37,12 +38,22 @@ impl CodexWebSocketPoolKey {
             account_id: account_id.into(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            downstream_connection_id: String::new(),
         }
     }
 
     /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接。
     pub(crate) fn with_connection_profile(mut self, connection_profile: impl Into<String>) -> Self {
         self.connection_profile = connection_profile.into();
+        self
+    }
+
+    /// 隔离同一逻辑会话中由不同下游 WebSocket 驱动的并发响应链。
+    pub(crate) fn with_downstream_connection_id(
+        mut self,
+        connection_id: impl Into<String>,
+    ) -> Self {
+        self.downstream_connection_id = connection_id.into();
         self
     }
 
@@ -60,6 +71,7 @@ impl CodexWebSocketPoolKey {
             self.account_id.as_str(),
             self.conversation_id.as_str(),
             self.connection_profile.as_str(),
+            self.downstream_connection_id.as_str(),
         ])
     }
 

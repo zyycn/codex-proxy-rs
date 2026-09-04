@@ -261,6 +261,35 @@ fn header_context_should_win_over_body_topline_aliases() {
 }
 
 #[test]
+fn encoder_should_preserve_downstream_websocket_connection_identity_outside_wire_body() {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("prompt")),
+        ]),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "downstream_websocket_connection_id".to_owned(),
+        Value::String("ws_downstream_a".to_owned()),
+    )]));
+    let request = GenerateRequest::from_protocol_payload(payload);
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(
+        encoded.downstream_websocket_connection_id.as_deref(),
+        Some("ws_downstream_a")
+    );
+    assert!(
+        !encoded
+            .body()
+            .contains_key("downstream_websocket_connection_id")
+    );
+}
+
+#[test]
 fn body_topline_alias_should_only_fill_an_absent_header_context() {
     let payload = ProtocolPayload::json_object(
         "openai",

@@ -72,6 +72,138 @@ async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and
 }
 
 #[tokio::test]
+async fn websocket_pool_should_isolate_concurrent_downstream_lanes_for_one_conversation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let (first_accepted_tx, first_accepted_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (first_stream, _) = listener.accept().await.unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut first = accept_codex_test_websocket(first_stream).await;
+        first_accepted_tx.send(()).unwrap();
+
+        let (second_stream, _) = timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("the second downstream lane should open its own upstream websocket")
+            .unwrap();
+        accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+        let mut second = accept_codex_test_websocket(second_stream).await;
+
+        let (first_warmup, second_warmup) = tokio::join!(first.next(), second.next());
+        first_warmup.unwrap().unwrap();
+        second_warmup.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_lane_a", 1, 0).into(),
+            ))
+            .await
+            .unwrap();
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_lane_b", 1, 0).into(),
+            ))
+            .await
+            .unwrap();
+
+        let _first_continuation = first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_lane_a_next", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        let _second_continuation = second.next().await.unwrap().unwrap();
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_lane_b_next", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        first.close(None).await.unwrap();
+        second.close(None).await.unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let warmup = |connection_id: &str| {
+        let mut body = Map::new();
+        body.insert("model".to_owned(), json!("gpt-5.5"));
+        body.insert("input".to_owned(), json!([]));
+        body.insert("generate".to_owned(), json!(false));
+        body.insert("store".to_owned(), json!(false));
+        let mut request = CodexResponsesRequest::from_body(body);
+        request.use_websocket = true;
+        request.local_conversation_id = Some("conversation-lanes".to_owned());
+        request.downstream_websocket_connection_id = Some(connection_id.to_owned());
+        request
+    };
+
+    let first_backend = backend.clone();
+    let first_request = warmup("ws_downstream_a");
+    let first = tokio::spawn(async move {
+        first_backend
+            .create_response(
+                &first_request,
+                request_context("req_lane_a_warmup", Some("chatgpt-account")),
+            )
+            .await
+    });
+    first_accepted_rx.await.unwrap();
+    let second = backend
+        .create_response(
+            &warmup("ws_downstream_b"),
+            request_context("req_lane_b_warmup", Some("chatgpt-account")),
+        )
+        .await
+        .expect("the second downstream lane should not contend with the first warmup");
+    let first = first.await.unwrap().unwrap();
+
+    let mut first_continuation = pooled_websocket_request("conversation-lanes");
+    first_continuation.downstream_websocket_connection_id = Some("ws_downstream_a".to_owned());
+    first_continuation.set_previous_response_id(Some("resp_lane_a".to_owned()));
+    first_continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    let first_continuation = backend
+        .create_response(
+            &first_continuation,
+            request_context("req_lane_a_next", Some("chatgpt-account")),
+        )
+        .await
+        .expect("the first lane should retain its connection-local response owner");
+
+    let mut second_continuation = pooled_websocket_request("conversation-lanes");
+    second_continuation.downstream_websocket_connection_id = Some("ws_downstream_b".to_owned());
+    second_continuation.set_previous_response_id(Some("resp_lane_b".to_owned()));
+    second_continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    let second_continuation = backend
+        .create_response(
+            &second_continuation,
+            request_context("req_lane_b_next", Some("chatgpt-account")),
+        )
+        .await
+        .expect("the second lane should retain its connection-local response owner");
+    server.await.unwrap();
+
+    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(
+        first_continuation.websocket_pool_decision.unwrap().kind(),
+        "reuse"
+    );
+    assert_eq!(
+        second_continuation.websocket_pool_decision.unwrap().kind(),
+        "reuse"
+    );
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn exact_continuation_reuses_owning_socket_after_connection_profile_updates() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

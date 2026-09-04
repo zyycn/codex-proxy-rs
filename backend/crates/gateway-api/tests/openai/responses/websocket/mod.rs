@@ -2,7 +2,7 @@ mod connection;
 mod protocol;
 
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::{Duration, SystemTime};
@@ -280,6 +280,7 @@ struct AtomicFailureTrace {
     next_calls: AtomicUsize,
     committed: AtomicBool,
     finalized: AtomicBool,
+    downstream_websocket_connection_ids: Mutex<Vec<String>>,
 }
 
 struct AtomicFailureSession {
@@ -365,6 +366,19 @@ impl ExecutionService for AtomicFailureExecution {
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         self.trace.starts.fetch_add(1, Ordering::AcqRel);
+        if let Operation::Generate(generate) = &request.operation
+            && let Some(connection_id) = generate
+                .protocol_payload()
+                .context()
+                .get("downstream_websocket_connection_id")
+                .and_then(Value::as_str)
+        {
+            self.trace
+                .downstream_websocket_connection_ids
+                .lock()
+                .expect("downstream connection trace lock")
+                .push(connection_id.to_owned());
+        }
         Box::pin(async move {
             Ok(StartedExecution {
                 request_id: gateway_core::engine::ModelRequestId::new("req_ws_atomic")
@@ -510,6 +524,14 @@ async fn websocket_atomic_upstream_failure_batch_should_be_forwarded_once() {
     assert!(trace.committed.load(Ordering::Acquire));
     assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
     assert!(trace.finalized.load(Ordering::Acquire));
+    {
+        let downstream_connection_ids = trace
+            .downstream_websocket_connection_ids
+            .lock()
+            .expect("downstream connection trace lock");
+        assert_eq!(downstream_connection_ids.len(), 1);
+        assert!(downstream_connection_ids[0].starts_with("ws_"));
+    }
 
     socket.close(None).await.expect("close WebSocket");
     server.abort();

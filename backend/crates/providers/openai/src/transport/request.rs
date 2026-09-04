@@ -511,6 +511,9 @@ fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<Str
         .or_else(|| request.include_timing_metrics.take());
     request.codex_window_id =
         context_string(context, "codex_window_id").or_else(|| request.codex_window_id.take());
+    request.downstream_websocket_connection_id =
+        context_string(context, "downstream_websocket_connection_id")
+            .or_else(|| request.downstream_websocket_connection_id.take());
     request.parent_thread_id =
         context_string(context, "parent_thread_id").or_else(|| request.parent_thread_id.take());
     let prompt_cache_key = request.prompt_cache_key().map(ToOwned::to_owned);

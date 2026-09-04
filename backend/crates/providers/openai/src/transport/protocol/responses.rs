@@ -82,6 +82,8 @@ pub struct CodexResponsesRequest {
     pub memgen_request: Option<String>,
     /// Codex window ID。
     pub codex_window_id: Option<String>,
+    /// 代理分配的下游 WebSocket 连接 ID，仅用于隔离本地连接池通道。
+    pub downstream_websocket_connection_id: Option<String>,
     /// 父线程 ID。
     pub parent_thread_id: Option<String>,
     /// 已知 previous response 的持久化范围，仅用于本地 transport 校验。
@@ -519,6 +521,7 @@ impl CodexResponsesRequest {
             responses_lite: None,
             memgen_request: None,
             codex_window_id: None,
+            downstream_websocket_connection_id: None,
             parent_thread_id: None,
             previous_response_scope: None,
         }
