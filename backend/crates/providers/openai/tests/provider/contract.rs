@@ -665,6 +665,7 @@ async fn capture_turn_state_request(
     previous_turn_id: Option<&str>,
     current_turn_id: Option<&str>,
     client_turn_state: Option<&str>,
+    retry_checkpoint: bool,
 ) -> wiremock::Request {
     let account_id = "acct_session_affinity";
     let store = Arc::new(MemoryAccountStore::default());
@@ -688,6 +689,9 @@ async fn capture_turn_state_request(
     ]);
     if let Some(previous_turn_id) = previous_turn_id {
         session_state.insert("client_turn_id".to_owned(), json!(previous_turn_id));
+    }
+    if retry_checkpoint {
+        session_state.insert("retry_checkpoint".to_owned(), json!(true));
     }
     let mut protocol_context = Map::from_iter([("use_websocket".to_owned(), json!(false))]);
     if let Some(current_turn_id) = current_turn_id {
@@ -2521,7 +2525,7 @@ async fn websocket_turn_state_metadata_is_exposed_through_response_observation()
 }
 
 #[tokio::test]
-async fn websocket_turn_state_metadata_survives_close_1000_without_changing_failure_semantics() {
+async fn websocket_turn_state_metadata_close_requests_checkpointed_retry() {
     const ACCOUNT_ID: &str = "acct_websocket_metadata_close";
     const TURN_STATE: &str = "turn-state-before-close";
 
@@ -2579,6 +2583,7 @@ async fn websocket_turn_state_metadata_survives_close_1000_without_changing_fail
         .await
         .expect("prepare WebSocket provider stream");
     let mut observed_turn_state = false;
+    let mut replay_checkpoint = None;
     let error = loop {
         match stream.next().await {
             Some(Ok(event)) => {
@@ -2588,6 +2593,9 @@ async fn websocket_turn_state_metadata_survives_close_1000_without_changing_fail
                             && header.value().as_ref() == TURN_STATE.as_bytes()
                     });
                 }
+                if let Some(update) = event.session_update() {
+                    replay_checkpoint = Some(update.clone());
+                }
             }
             Some(Err(error)) => break error,
             None => panic!("metadata close must surface a provider error"),
@@ -2596,8 +2604,22 @@ async fn websocket_turn_state_metadata_survives_close_1000_without_changing_fail
     server.await.expect("WebSocket server");
 
     assert!(observed_turn_state);
+    let replay_checkpoint = replay_checkpoint.expect("metadata close checkpoint");
+    assert_eq!(
+        replay_checkpoint.payload().get("turn_state"),
+        Some(&json!(TURN_STATE))
+    );
+    assert_eq!(
+        replay_checkpoint.payload().get("retry_checkpoint"),
+        Some(&json!(true))
+    );
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
-    assert_eq!(error.pre_delivery_retry(), None);
+    assert!(error.replay_is_safe());
+    assert!(matches!(
+        error.pre_delivery_retry(),
+        Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. })
+            if retry_index.get() == 1
+    ));
     assert_eq!(
         error.upstream_code().map(|code| code.as_str()),
         Some("websocket_close_1000")
@@ -3036,8 +3058,20 @@ async fn matching_turn_id_should_restore_previous_turn_state() {
         Some("turn-same"),
         Some("turn-same"),
         None,
+        false,
     )
     .await;
+
+    assert_eq!(
+        captured_header_values(&request, "x-codex-turn-state"),
+        vec![b"previous-turn-state".to_vec()]
+    );
+}
+
+#[tokio::test]
+async fn retry_checkpoint_should_restore_turn_state_without_client_turn_id() {
+    let request =
+        capture_turn_state_request("req_restore_retry_checkpoint", None, None, None, true).await;
 
     assert_eq!(
         captured_header_values(&request, "x-codex-turn-state"),
@@ -3052,6 +3086,7 @@ async fn matching_turn_id_should_prefer_an_explicit_client_echo_over_saved_provi
         Some("turn-same"),
         Some("turn-same"),
         Some("client-turn-state"),
+        false,
     )
     .await;
 
@@ -3083,6 +3118,7 @@ async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
             previous_turn_id,
             current_turn_id,
             client_turn_state,
+            false,
         )
         .await;
         assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());

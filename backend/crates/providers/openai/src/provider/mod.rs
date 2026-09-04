@@ -321,12 +321,14 @@ impl Provider for CodexProvider {
             identity.prepare_local_conversation(&mut upstream_request);
         }
         if let Some(previous_session) = previous_session.as_ref() {
-            upstream_request.turn_state = if same_client_turn(
-                previous_session.client_turn_id.as_deref(),
-                upstream_request.client_turn_id.as_deref(),
-            ) {
+            upstream_request.turn_state = if previous_session.retry_checkpoint
+                || same_client_turn(
+                    previous_session.client_turn_id.as_deref(),
+                    upstream_request.client_turn_id.as_deref(),
+                ) {
                 // 客户端可能携带 metadata-close 失败后才拿到的新状态；同一
-                // turn 内显式回传值比最后一次成功响应保存的状态更新。
+                // turn 内显式回传值比最后一次成功响应保存的状态更新。同请求
+                // 内部恢复由一次性 retry checkpoint 明确证明，不依赖客户端 turn ID。
                 upstream_request
                     .turn_state
                     .take()

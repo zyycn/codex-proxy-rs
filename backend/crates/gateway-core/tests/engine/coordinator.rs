@@ -270,6 +270,7 @@ enum Script {
 struct ScriptedProvider {
     scripts: Mutex<VecDeque<Script>>,
     contexts: Mutex<Vec<AttemptContext>>,
+    operations: Mutex<Vec<Operation>>,
 }
 
 impl ScriptedProvider {
@@ -277,6 +278,7 @@ impl ScriptedProvider {
         Self {
             scripts: Mutex::new(scripts.into()),
             contexts: Mutex::new(Vec::new()),
+            operations: Mutex::new(Vec::new()),
         }
     }
 }
@@ -302,6 +304,10 @@ impl Provider for ScriptedProvider {
         request: ProviderRequest,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
+        self.operations
+            .lock()
+            .expect("operations lock")
+            .push(request.operation().clone());
         self.contexts.lock().expect("contexts lock").push(context);
         let script = self
             .scripts
@@ -2838,14 +2844,25 @@ fn ambiguous_send_state_stops_retry() {
 fn ambiguous_pre_delivery_retry_marker_does_not_rotate_account() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
+    let checkpoint = ProviderSessionState::new(
+        "openai",
+        Map::from_iter([("checkpoint".to_owned(), json!("opaque-state"))]),
+    )
+    .expect("provider checkpoint");
+    let mut checkpoint_event = ProviderEvent::observation(ProviderResponseObservation::new(
+        UpstreamTransport::new("websocket").expect("transport"),
+    ));
+    checkpoint_event.attach_session_update(checkpoint);
     let (coordinator, store, provider) = coordinator(vec![
-        Script::Stream {
+        Script::ObservedStream {
             account_id: "acct_first",
-            items: vec![Err(ProviderError::new(
-                ProviderErrorKind::Transport,
-                UpstreamSendState::Ambiguous,
-            )
-            .with_pre_delivery_retry())],
+            items: vec![
+                Ok(checkpoint_event),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+                        .with_pre_delivery_retry(),
+                ),
+            ],
         },
         Script::Stream {
             account_id: "acct_second",
@@ -2872,6 +2889,70 @@ fn ambiguous_pre_delivery_retry_marker_does_not_rotate_account() {
     assert_eq!(state.intermediate_failures, 0);
     assert_eq!(state.finalizations[0].attempt_count, 1);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+}
+
+#[test]
+fn ambiguous_transport_retry_uses_provider_session_checkpoint_on_same_account() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let checkpoint = ProviderSessionState::new(
+        "openai",
+        Map::from_iter([("checkpoint".to_owned(), json!("opaque-state"))]),
+    )
+    .expect("provider checkpoint");
+    let mut checkpoint_event = ProviderEvent::observation(ProviderResponseObservation::new(
+        UpstreamTransport::new("websocket").expect("transport"),
+    ));
+    checkpoint_event.attach_session_update(checkpoint.clone());
+    let retry_index = NonZeroU32::new(1).expect("retry index");
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::ObservedStream {
+            account_id: "acct_first",
+            items: vec![
+                Ok(checkpoint_event),
+                Err(
+                    ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+                        .with_replay_safe()
+                        .with_pre_delivery_transport_retry(retry_index, Duration::ZERO),
+                ),
+            ],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start execution");
+    block_on(session.collect_uncommitted()).expect("checkpointed retry succeeds");
+    block_on(session.commit_downstream(Some(200))).expect("commit winning response");
+
+    let original = ProviderAccountId::new("acct_first").expect("account id");
+    let contexts = provider.contexts.lock().expect("contexts lock");
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(
+        contexts[1].transport(),
+        AttemptTransport::Retry(retry_index)
+    );
+    assert_eq!(contexts[1].required_account(), Some(&original));
+    drop(contexts);
+    let operations = provider.operations.lock().expect("operations lock");
+    assert_eq!(
+        operations[1].provider_session_state("openai"),
+        Some(&checkpoint)
+    );
+    let state = store.state.lock().expect("store lock");
+    assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(state.finalizations[0].attempt_count, 2);
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
 }
 
 #[test]

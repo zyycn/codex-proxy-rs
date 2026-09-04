@@ -39,6 +39,8 @@ pub fn openai_failure_affects_account_score(error: &ProviderError) -> bool {
 pub(super) struct MappedProviderFailure {
     pub(super) error: ProviderError,
     pub(super) websocket_transport_retryable: bool,
+    /// 兼容少数链路在 metadata 后、终态前关闭；仅在捕获 turn-state 时允许安全恢复。
+    pub(super) websocket_checkpoint_retryable: bool,
     pub(super) account_failure: Option<CodexAccountFailure>,
     /// 原始上游错误描述，仅在凭据错误状态下持久化。
     pub(super) error_message: Option<String>,
@@ -54,6 +56,7 @@ impl MappedProviderFailure {
         Self {
             error,
             websocket_transport_retryable: false,
+            websocket_checkpoint_retryable: false,
             account_failure: None,
             error_message: None,
             cyber_policy_failure: false,
@@ -451,6 +454,8 @@ pub(super) enum WebSocketFailurePolicy {
 pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) policy: WebSocketFailurePolicy,
     pub(super) requirement: TransportRequirement,
+    /// 本 attempt 已从 metadata 捕获可恢复同一请求的 turn-state 检查点。
+    pub(super) replay_checkpoint_available: bool,
     pub(super) retry_count: u32,
     pub(super) max_retries: u32,
     pub(super) request_id: &'a str,
@@ -505,10 +510,11 @@ pub(super) fn apply_websocket_recovery_policy(
     context: WebSocketRecoveryContext<'_>,
 ) {
     let send_state = failure.error.send_state();
-    if matches!(
+    let post_send = matches!(
         send_state,
         UpstreamSendState::Sent | UpstreamSendState::Ambiguous
-    ) {
+    );
+    if post_send && !context.replay_checkpoint_available {
         // payload 已经发送或发送结果不确定时，代理不能用同一业务输入自动重放。
         // 当前请求保持终态失败；恢复状态只裁决客户端主动发起的下一次请求。
         let session_recovery_transition = match context.session_recovery_probe.take() {
@@ -555,6 +561,11 @@ pub(super) fn apply_websocket_recovery_policy(
     // 传输恢复必须保持原账号可调度；最终 HTTP attempt 若仍失败，再按真实 HTTP
     // 结果更新账号健康度，避免中间 WS 错误把同账号钉选提前冷却掉。
     failure.account_failure = None;
+    if post_send {
+        // Core 对 Ambiguous 默认仍然 fail-closed；只有同一 attempt 的 session
+        // checkpoint 与这个 Provider proof 同时存在时，才允许同账号传输恢复。
+        failure.error.set_replay_safe();
+    }
     let fallback_now = context.policy == WebSocketFailurePolicy::ImmediateFallback
         || context.retry_count >= context.max_retries;
     if !fallback_now {
@@ -583,6 +594,7 @@ pub(super) fn apply_websocket_recovery_policy(
             websocket_max_retries = context.max_retries,
             websocket_retry_delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
             transport_requirement = context.requirement.as_str(),
+            replay_checkpoint_available = context.replay_checkpoint_available,
             "OpenAI upstream WebSocket failed; retrying the same account"
         );
         return;
@@ -621,6 +633,7 @@ pub(super) fn apply_websocket_recovery_policy(
             WebSocketFailurePolicy::Budgeted => "retry_budget_exhausted",
             WebSocketFailurePolicy::ImmediateFallback => "upgrade_required",
         },
+        replay_checkpoint_available = context.replay_checkpoint_available,
         session_affinity_present = context.session_affinity_key.is_some(),
         session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
         session_transport_action =
@@ -673,12 +686,29 @@ pub(super) fn continuation_replay_required_error(reason: &'static str) -> Provid
 pub(super) fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {
     let allows_pre_delivery_retry = stream_transport_allows_pre_delivery_retry(&error);
     let websocket_failure = error.transport() == Some(CodexBackendTransport::WebSocket);
+    let websocket_checkpoint_retryable = websocket_metadata_close_can_resume(&error);
     let mut failure = map_client_error(error, UpstreamSendState::Sent, false);
     failure.websocket_transport_retryable = allows_pre_delivery_retry && websocket_failure;
+    failure.websocket_checkpoint_retryable =
+        allows_pre_delivery_retry && websocket_checkpoint_retryable;
     if allows_pre_delivery_retry && !websocket_failure {
         failure.error = failure.error.with_pre_delivery_retry();
     }
     failure
+}
+
+fn websocket_metadata_close_can_resume(error: &CodexClientError) -> bool {
+    let CodexClientError::WebSocket(error) = error else {
+        return false;
+    };
+    let Some(close) = error.close_before_terminal() else {
+        return false;
+    };
+    close.code() == Some(1000)
+        && matches!(
+            close.last_event_type(),
+            Some("codex.response.metadata" | "response.metadata")
+        )
 }
 
 pub(super) fn stream_transport_allows_pre_delivery_retry(error: &CodexClientError) -> bool {
@@ -1068,6 +1098,7 @@ pub(super) fn map_upstream_failure(
     MappedProviderFailure {
         error,
         websocket_transport_retryable: false,
+        websocket_checkpoint_retryable: false,
         account_failure: account_failure(
             category,
             failure.retry_after_seconds,

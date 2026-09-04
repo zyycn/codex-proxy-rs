@@ -763,7 +763,8 @@ impl ProviderEvent {
         }
     }
 
-    /// 把本事件标记为 Provider 连接内状态的提交边界。
+    /// 附加 Provider 私有状态检查点；Core 可将其用于同请求恢复，协议连接可在
+    /// terminal 事件上持有它供下一轮使用。
     pub fn attach_session_update(&mut self, state: ProviderSessionState) {
         self.session_update = Some(Box::new(state));
     }

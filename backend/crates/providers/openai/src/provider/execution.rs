@@ -186,6 +186,13 @@ pub(super) struct OpenAiSessionState {
     #[serde(default)]
     pub(super) client_turn_id: Option<String>,
     pub(super) continuation_scope: OpenAiContinuationScope,
+    /// 该状态来自同一业务请求的 metadata 检查点，只允许被紧随其后的恢复 attempt 消费。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) retry_checkpoint: bool,
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +239,26 @@ pub(super) fn encode_openai_session_state(
         .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))
 }
 
+fn encode_openai_session_capture(
+    capture: &OpenAiSessionCapture,
+    retry_checkpoint: bool,
+) -> Result<ProviderSessionState, ProviderError> {
+    let Some(continuation_scope) = capture.continuation_scope else {
+        return Err(provider_error(
+            ProviderErrorKind::Protocol,
+            UpstreamSendState::Sent,
+        ));
+    };
+    encode_openai_session_state(OpenAiSessionState {
+        account_id: capture.account_id.clone(),
+        conversation_id: capture.conversation_id.clone(),
+        turn_state: capture.turn_state.clone(),
+        client_turn_id: capture.client_turn_id.clone(),
+        continuation_scope,
+        retry_checkpoint,
+    })
+}
+
 pub(super) fn attach_openai_session_update(
     events: &mut [ProviderEvent],
     capture: &mut Option<OpenAiSessionCapture>,
@@ -245,16 +272,7 @@ pub(super) fn attach_openai_session_update(
     let Some(capture) = capture.take() else {
         return;
     };
-    let Some(continuation_scope) = capture.continuation_scope else {
-        return;
-    };
-    let Ok(update) = encode_openai_session_state(OpenAiSessionState {
-        account_id: capture.account_id,
-        conversation_id: capture.conversation_id,
-        turn_state: capture.turn_state,
-        client_turn_id: capture.client_turn_id,
-        continuation_scope,
-    }) else {
+    let Ok(update) = encode_openai_session_capture(&capture, false) else {
         return;
     };
     events[terminal_index].attach_session_update(update);
@@ -563,6 +581,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         WebSocketRecoveryContext {
                             policy,
                             requirement: request_transport_requirement,
+                            replay_checkpoint_available: false,
                             retry_count: websocket_retry_count,
                             max_retries: stream_max_retries,
                             request_id: context.request_id().as_str(),
@@ -594,6 +613,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             Err(failure.error)?;
             return;
         }
+        let mut turn_state_checkpoint_observed = response.transport
+            == CodexBackendTransport::WebSocket
+            && response.turn_state.is_some();
         if let Some(capture) = session_capture.as_mut() {
             capture.continuation_scope = Some(if capture.response_store {
                 OpenAiContinuationScope::Persisted
@@ -707,6 +729,49 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     continue;
                 }
                 Err(mut failure) => {
+                    let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
+                    let rate_limits_changed = if updates.is_empty() {
+                        false
+                    } else {
+                        passive_quota_observation.observe(&updates);
+                        let update_headers = rate_limit_update_headers(&updates);
+                        observation_state.merge_rate_limit_headers(&update_headers)
+                    };
+                    let turn_state_merge = merge_turn_state_update(
+                        turn_state_updates.as_ref(),
+                        &mut session_capture,
+                        &mut observation_state,
+                    )
+                    .await;
+                    turn_state_checkpoint_observed |= turn_state_merge.is_some();
+                    let retry_checkpoint_update = if turn_state_checkpoint_observed
+                        && failure.websocket_checkpoint_retryable
+                    {
+                        session_capture
+                            .as_ref()
+                            .and_then(|capture| encode_openai_session_capture(capture, true).ok())
+                    } else {
+                        None
+                    };
+                    let mut observation_event = if rate_limits_changed
+                        || turn_state_merge.is_some()
+                        || retry_checkpoint_update.is_some()
+                    {
+                        observation_state
+                            .observation()
+                            .map(ProviderEvent::observation)
+                    } else {
+                        None
+                    };
+                    if let (Some(event), Some(update)) =
+                        (observation_event.as_mut(), retry_checkpoint_update)
+                    {
+                        event.attach_session_update(update);
+                    }
+                    let replay_checkpoint_available = observation_event
+                        .as_ref()
+                        .and_then(ProviderEvent::session_update)
+                        .is_some();
                     if failure.websocket_transport_retryable
                         && response_transport == CodexBackendTransport::WebSocket
                         && (matches!(
@@ -719,6 +784,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             WebSocketRecoveryContext {
                                 policy: WebSocketFailurePolicy::Budgeted,
                                 requirement: request_transport_requirement,
+                                replay_checkpoint_available,
                                 retry_count: websocket_retry_count,
                                 max_retries: stream_max_retries,
                                 request_id: context.request_id().as_str(),
@@ -731,24 +797,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             },
                         );
                     }
-                    let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
-                    let rate_limits_changed = if updates.is_empty() {
-                        false
-                    } else {
-                        passive_quota_observation.observe(&updates);
-                        let update_headers = rate_limit_update_headers(&updates);
-                        observation_state.merge_rate_limit_headers(&update_headers)
-                    };
-                    let turn_state_changed = merge_turn_state_update(
-                        turn_state_updates.as_ref(),
-                        &mut session_capture,
-                        &mut observation_state,
-                    )
-                    .await;
-                    if (rate_limits_changed || turn_state_changed)
-                        && let Some(observation) = observation_state.observation()
-                    {
-                        yield ProviderEvent::observation(observation);
+                    if let Some(event) = observation_event {
+                        yield event;
                     }
                     if allows_account_state_mutation {
                         synchronize_passive_quota(
@@ -772,12 +822,14 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 passive_quota_observation.observe(&updates);
                 observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
             };
-            let turn_state_changed = merge_turn_state_update(
+            let turn_state_merge = merge_turn_state_update(
                 turn_state_updates.as_ref(),
                 &mut session_capture,
                 &mut observation_state,
             )
             .await;
+            turn_state_checkpoint_observed |= turn_state_merge.is_some();
+            let turn_state_changed = turn_state_merge.unwrap_or(false);
             let first_event_changed =
                 observation_state.observe_stream_chunk(&chunk, output_started_at);
             let chunk_len = chunk.len();
@@ -959,7 +1011,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             &mut session_capture,
             &mut observation_state,
         )
-        .await;
+        .await
+        .unwrap_or(false);
         attach_openai_session_update(&mut events, &mut session_capture);
         let completed = events
             .iter()
@@ -1030,15 +1083,11 @@ async fn merge_turn_state_update(
     updates: Option<&CodexTurnStateUpdate>,
     session_capture: &mut Option<OpenAiSessionCapture>,
     observation_state: &mut OpenAiResponseObservationState,
-) -> bool {
-    let Some(updates) = updates else {
-        return false;
-    };
-    let Some(turn_state) = updates.lock().await.take() else {
-        return false;
-    };
+) -> Option<bool> {
+    let updates = updates?;
+    let turn_state = updates.lock().await.take()?;
     if let Some(capture) = session_capture.as_mut() {
         capture.turn_state = Some(turn_state.clone());
     }
-    observation_state.merge_client_header("x-codex-turn-state", &turn_state)
+    Some(observation_state.merge_client_header("x-codex-turn-state", &turn_state))
 }

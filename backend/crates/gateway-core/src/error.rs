@@ -623,11 +623,19 @@ impl ProviderError {
             .get_or_insert_with(|| Box::new(ProviderErrorFailureObservation::default()))
     }
 
-    /// 标记 Provider 已证明本次拒绝没有执行生成，可在下游提交前重放。
+    /// 标记 Provider 已证明本次失败可在下游提交前安全重放。
+    ///
+    /// 证明可以来自明确的“未执行”拒绝，也可以来自同 attempt 已交付、可恢复
+    /// 同一业务请求的状态检查点；后者仍须由 Core 的同账号恢复门禁单独校验。
     #[must_use]
     pub const fn with_replay_safe(mut self) -> Self {
         self.replay_safe = true;
         self
+    }
+
+    /// 原地标记 Provider 已证明本次失败可从已交付的状态检查点安全恢复。
+    pub const fn set_replay_safe(&mut self) {
+        self.replay_safe = true;
     }
 
     /// 允许 Core 仅在客户端尚未收到任何事件时执行一次受预算约束的换号恢复。
