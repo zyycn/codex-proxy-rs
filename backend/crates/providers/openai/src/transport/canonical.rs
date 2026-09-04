@@ -13,7 +13,7 @@ use gateway_core::event::{
 };
 use gateway_core::metering::Usage;
 use gateway_core::upstream::UpstreamSendState;
-use gateway_protocol::openai::events::{TokenUsage, extract_usage};
+use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder, SseFrame, sse_frame_is_done};
 use serde_json::Value;
 use thiserror::Error;
@@ -1020,33 +1020,6 @@ fn web_search_call_count(response: &Value) -> Option<u64> {
         }
     }
     Some(calls)
-}
-
-fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {
-    let Some(raw) = response.get("usage").filter(|value| value.is_object()) else {
-        return false;
-    };
-    let input = raw
-        .get("input_tokens")
-        .or_else(|| raw.get("prompt_tokens"))
-        .and_then(Value::as_u64);
-    let output = raw
-        .get("output_tokens")
-        .or_else(|| raw.get("completion_tokens"))
-        .and_then(Value::as_u64);
-    let cached = raw
-        .pointer("/input_tokens_details/cached_tokens")
-        .or_else(|| raw.pointer("/prompt_tokens_details/cached_tokens"))
-        .or_else(|| raw.get("cached_tokens"));
-    let cached = match cached {
-        Some(value) => value.as_u64(),
-        None => Some(0),
-    };
-
-    input == Some(usage.input_tokens)
-        && output == Some(usage.output_tokens)
-        && cached == Some(usage.cached_tokens)
-        && usage.cached_tokens <= usage.input_tokens
 }
 
 fn incomplete_finish_reason(response: &Value) -> FinishReason {

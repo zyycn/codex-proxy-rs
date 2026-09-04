@@ -12,7 +12,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::error::{OperationError, validate_text};
+use crate::validation::{OperationError, validate_text};
 
 /// 网关支持的稳定 operation 分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

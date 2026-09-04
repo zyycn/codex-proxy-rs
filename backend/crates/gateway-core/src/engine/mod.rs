@@ -4,6 +4,7 @@ pub mod admission;
 pub mod continuation;
 pub mod coordinator;
 pub mod execution;
+mod observation;
 pub mod probe;
 pub mod provider;
 
@@ -22,17 +23,18 @@ use thiserror::Error;
 use crate::account::{AccountSelectionPolicy, ProviderAccountId};
 use crate::engine::continuation::{ContinuationBinding, NativeContinuationPin};
 use crate::error::{
-    GatewayError, IdentifierError, ProviderConnectionObservation, ProviderError, ProviderErrorKind,
-    StoreError, validate_text,
+    GatewayError, ProviderConnectionObservation, ProviderError, ProviderErrorKind, StoreError,
 };
 use crate::event::ProviderEvent;
+use crate::identity::ProviderKind;
 use crate::lifecycle::CancellationToken;
 use crate::metering::{CostEstimate, Usage};
 use crate::operation::OperationKind;
 use crate::operation::ProviderSessionState;
 use crate::policy::ClientApiKeyId;
-use crate::routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId};
+use crate::routing::{ConfigRevision, PublicModelId, UpstreamModelId};
 use crate::upstream::UpstreamSendState;
+use crate::validation::{IdentifierError, validate_text};
 
 /// `model_requests.id`。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -153,7 +155,7 @@ pub struct AccountAttemptContext {
     state_owner: Option<ProviderAccountStateOwner>,
     credential_recovery_attempted: bool,
     diagnostic_required_account: bool,
-    account_scope: Option<Arc<crate::routing::FrozenAccountScope>>,
+    account_scope: Option<Arc<crate::account::scope::FrozenAccountScope>>,
 }
 
 impl AccountAttemptContext {
@@ -194,7 +196,10 @@ impl AccountAttemptContext {
 
     /// 附着普通请求认证时冻结的账号范围。
     #[must_use]
-    pub fn with_account_scope(mut self, scope: Arc<crate::routing::FrozenAccountScope>) -> Self {
+    pub fn with_account_scope(
+        mut self,
+        scope: Arc<crate::account::scope::FrozenAccountScope>,
+    ) -> Self {
         self.account_scope = Some(scope);
         self
     }
@@ -233,7 +238,7 @@ impl AccountAttemptContext {
     }
 
     #[must_use]
-    pub const fn account_scope(&self) -> Option<&Arc<crate::routing::FrozenAccountScope>> {
+    pub const fn account_scope(&self) -> Option<&Arc<crate::account::scope::FrozenAccountScope>> {
         self.account_scope.as_ref()
     }
 }
@@ -469,7 +474,7 @@ impl AttemptContext {
 
     /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`。
     #[must_use]
-    pub const fn account_scope(&self) -> Option<&Arc<crate::routing::FrozenAccountScope>> {
+    pub const fn account_scope(&self) -> Option<&Arc<crate::account::scope::FrozenAccountScope>> {
         self.account.account_scope()
     }
 

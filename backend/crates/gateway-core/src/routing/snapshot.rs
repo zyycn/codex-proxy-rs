@@ -9,12 +9,12 @@ use futures::future::BoxFuture;
 
 use crate::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use crate::engine::provider::{ProviderCatalogGeneration, ProviderRegistry};
-use crate::error::RoutingError;
 use crate::operation::Operation;
 use crate::policy::{
     ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,
     PlaintextClientApiKey, RateLimits,
 };
+use crate::validation::RoutingError;
 
 use super::{
     AccountGroupId, ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,

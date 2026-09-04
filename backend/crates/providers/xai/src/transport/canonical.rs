@@ -14,7 +14,7 @@ use gateway_core::metering::{
     CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
 };
 use gateway_core::upstream::UpstreamSendState;
-use gateway_protocol::openai::events::{TokenUsage, extract_usage};
+use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
 
@@ -748,33 +748,6 @@ fn calculated_cost(response: &Value, model: &str, usage: TokenUsage) -> Option<C
         usage.cached_tokens,
     )?;
     Some(breakdown.calculated_cost())
-}
-
-fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {
-    let Some(raw) = response.get("usage").filter(|value| value.is_object()) else {
-        return false;
-    };
-    let input = raw
-        .get("input_tokens")
-        .or_else(|| raw.get("prompt_tokens"))
-        .and_then(Value::as_u64);
-    let output = raw
-        .get("output_tokens")
-        .or_else(|| raw.get("completion_tokens"))
-        .and_then(Value::as_u64);
-    let cached = raw
-        .pointer("/input_tokens_details/cached_tokens")
-        .or_else(|| raw.pointer("/prompt_tokens_details/cached_tokens"))
-        .or_else(|| raw.get("cached_tokens"));
-    let cached = match cached {
-        Some(value) => value.as_u64(),
-        None => Some(0),
-    };
-
-    input == Some(usage.input_tokens)
-        && output == Some(usage.output_tokens)
-        && cached == Some(usage.cached_tokens)
-        && usage.cached_tokens <= usage.input_tokens
 }
 
 fn model_pricing(model: &str) -> Option<ModelPricing> {

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::error::MeteringError;
+use crate::validation::MeteringError;
 
 const DECIMAL_SCALE: u128 = 10_000_000_000;
 const MAX_SCALED_DECIMAL: u128 = 99_999_999_999_999_999_999;

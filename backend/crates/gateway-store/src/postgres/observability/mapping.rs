@@ -319,6 +319,7 @@ pub(crate) fn admin_dashboard_account_usage(
             )
             .collect(),
         quota_used_percent: None,
+        quota_window: None,
         models: usage
             .models
             .into_iter()

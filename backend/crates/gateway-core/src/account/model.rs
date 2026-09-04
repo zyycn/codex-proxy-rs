@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::{Map, Value};
 
-use crate::error::{IdentifierError, validate_text};
-use crate::routing::ProviderKind;
+use crate::identity::ProviderKind;
+use crate::validation::{IdentifierError, validate_text};
 
 use super::CredentialError;
 

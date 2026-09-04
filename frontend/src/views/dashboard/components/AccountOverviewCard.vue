@@ -263,7 +263,7 @@ const statusBars = computed(() => {
                 </span>
 
                 <AccountUsageWindow
-                  :window="account.usageWindow"
+                  :window="account.usageWindow ?? undefined"
                   :show-local-value="false"
                   variant="metric"
                 />

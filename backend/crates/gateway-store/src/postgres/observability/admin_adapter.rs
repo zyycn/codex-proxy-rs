@@ -1,5 +1,7 @@
 //! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`。
 
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use gateway_admin::ports::store::UsageCalculatedBillingStream;
 use gateway_core::provider_ports::ProviderCooldownPort;
 use std::sync::Arc;
 
@@ -185,17 +187,15 @@ impl ObservabilityRepository for PgObservabilityRepository {
             .await
     }
 
-    async fn usage_calculated_billing_facts(
+    fn usage_calculated_billing_facts(
         &self,
         range: ObservabilityRange,
         filter: UsageRecordFilter,
-    ) -> StoreResult<Vec<CalculatedUsageBillingFact>> {
-        self.query_budget
-            .run(
-                "load calculated usage billing facts",
-                calculated_usage_billing_facts(&self.pool, range, &filter),
-            )
-            .await
+    ) -> BoxStream<'_, StoreResult<CalculatedUsageBillingFact>> {
+        self.query_budget.run_stream(
+            "load calculated usage billing facts",
+            calculated_usage_billing_facts(&self.pool, range, filter),
+        )
     }
 
     async fn provider_account_usage(
@@ -387,18 +387,20 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             .collect()
     }
 
-    async fn usage_calculated_billing_facts(
+    fn usage_calculated_billing_facts(
         &self,
         range: admin_observability::TimeRange,
         filter: admin_observability::UsageFilter,
-    ) -> AdminStoreResult<Vec<admin_observability::UsageCalculatedBillingFact>> {
+    ) -> UsageCalculatedBillingStream<'_> {
+        let range = match store_range(range) {
+            Ok(range) => range,
+            Err(error) => return Box::pin(futures::stream::once(async { Err(error) })),
+        };
         self.repository
-            .usage_calculated_billing_facts(store_range(range)?, store_usage_filter(filter))
-            .await
-            .map_err(observability_error)?
-            .into_iter()
-            .map(admin_calculated_usage_billing_fact)
-            .collect()
+            .usage_calculated_billing_facts(range, store_usage_filter(filter))
+            .map_err(observability_error)
+            .map(|fact| fact.and_then(admin_calculated_usage_billing_fact))
+            .boxed()
     }
 
     async fn list_usage_records(

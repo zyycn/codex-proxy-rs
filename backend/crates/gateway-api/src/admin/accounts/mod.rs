@@ -70,6 +70,7 @@ mod wire;
 
 pub use credentials::*;
 pub use handlers::{profile_avatar_response, router};
+pub(super) use presenter::quota_window_view;
 pub use wire::*;
 
 use credentials::{

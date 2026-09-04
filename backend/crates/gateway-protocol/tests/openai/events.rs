@@ -1,9 +1,54 @@
 use gateway_protocol::openai::events::{
-    RateLimitKeySource, RateLimitWindow, TokenUsage, extract_sse_usage, extract_usage,
-    is_codex_quota_header_name, is_rate_limit_header_name, parse_rate_limit_headers,
+    RateLimitKeySource, RateLimitWindow, TokenUsage, billable_usage_is_complete, extract_sse_usage,
+    extract_usage, is_codex_quota_header_name, is_rate_limit_header_name, parse_rate_limit_headers,
     parse_rate_limits_event, rate_limits_to_header_pairs, retry_after_seconds_from_body,
 };
 use serde_json::json;
+
+#[test]
+fn billable_usage_should_require_valid_input_output_and_cache_facts() {
+    for (raw, expected) in [
+        (json!({}), false),
+        (json!({"input_tokens": 0}), false),
+        (json!({"input_tokens": 0, "output_tokens": 0}), true),
+        (
+            json!({"prompt_tokens": 8, "completion_tokens": 4, "cached_tokens": 2}),
+            true,
+        ),
+        (json!({"input_tokens": -1, "output_tokens": 1}), false),
+        (
+            json!({"input_tokens": "8", "prompt_tokens": 8, "output_tokens": 1}),
+            false,
+        ),
+        (json!({"input_tokens": 8, "output_tokens": 1.5}), false),
+        (
+            json!({"input_tokens": 8, "output_tokens": 1, "cached_tokens": 9}),
+            false,
+        ),
+        (
+            json!({"input_tokens": 8, "output_tokens": 1, "cached_tokens": null}),
+            false,
+        ),
+        (
+            json!({"input_tokens": 8, "output_tokens": 1, "input_tokens_details": {"cached_tokens": "2"}, "cached_tokens": 2}),
+            false,
+        ),
+        (
+            json!({"input_tokens": 8, "prompt_tokens": 9, "output_tokens": 1}),
+            true,
+        ),
+    ] {
+        let body = json!({"usage": raw});
+        let usage = extract_usage(&body).unwrap_or_default();
+        assert_eq!(billable_usage_is_complete(&body, usage), expected, "{body}");
+    }
+    let body = json!({"usage": {"input_tokens": 8, "output_tokens": 4}});
+    assert!(!billable_usage_is_complete(&body, TokenUsage::default()));
+    assert!(!billable_usage_is_complete(
+        &json!({}),
+        TokenUsage::default()
+    ));
+}
 
 #[test]
 fn extract_usage_should_read_codex_usage_shape() {

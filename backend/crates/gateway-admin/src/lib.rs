@@ -304,6 +304,7 @@ pub async fn initialize(
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
         observability: Arc::new(DefaultObservabilityService::new(
             store.observability(),
+            store.accounts(),
             store.settings(),
             registry,
         )),

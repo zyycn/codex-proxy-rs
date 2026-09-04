@@ -31,12 +31,12 @@ use crate::engine::{
 };
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
+use crate::identity::ProviderKind;
 use crate::lifecycle::CancellationToken;
 use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::{
-    ProviderKind, PublicModelId, PublicModelProfile, RoutingContext, RuntimeSnapshot,
-    UpstreamModelId,
+    PublicModelId, PublicModelProfile, RoutingContext, RuntimeSnapshot, UpstreamModelId,
 };
 use crate::runtime::RuntimeSnapshotHandle;
 
@@ -1202,11 +1202,11 @@ fn new_request_id() -> Result<ModelRequestId, GatewayError> {
         .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "failed to allocate request ID"))
 }
 
-fn map_routing_error(error: crate::error::RoutingError) -> GatewayError {
+fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
     match error {
-        crate::error::RoutingError::NoCapableProvider { .. }
-        | crate::error::RoutingError::NoCapableProviderEndpoint { .. }
-        | crate::error::RoutingError::EmptyAccountScope => GatewayError::new(
+        crate::validation::RoutingError::NoCapableProvider { .. }
+        | crate::validation::RoutingError::NoCapableProviderEndpoint { .. }
+        | crate::validation::RoutingError::EmptyAccountScope => GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
             "no provider can execute this request",
         ),

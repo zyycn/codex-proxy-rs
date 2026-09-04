@@ -1,7 +1,7 @@
 import { clamp } from 'es-toolkit'
-import { onScopeDispose, shallowRef } from 'vue'
+import { shallowRef } from 'vue'
 
-import { errorMessage } from '@/utils/async'
+import { useRequestState } from './useRequestState'
 
 interface PageResult {
   items: unknown[]
@@ -23,23 +23,18 @@ export function usePagedQuery<Result extends PageResult>(options: {
   const pageSize = shallowRef(options.initialPageSize)
   const total = shallowRef(0)
   const items = shallowRef<Result['items'][number][]>([])
-  const loading = shallowRef(false)
-  const error = shallowRef('')
-  let requestSequence = 0
+  const request = useRequestState(options.onError)
+  const { loading, error, invalidate } = request
 
   async function execute(execution: { silent?: boolean } = {}) {
-    const requestId = ++requestSequence
-    if (!execution.silent) {
-      loading.value = true
-      error.value = ''
-    }
+    const requestId = request.start(execution.silent)
 
     try {
       const result = await options.load({
         page: page.value,
         pageSize: pageSize.value,
       })
-      if (requestId !== requestSequence)
+      if (!request.isCurrent(requestId))
         return false
 
       if (result.items.length === 0 && result.page.total > 0 && result.page.page > 1) {
@@ -55,26 +50,13 @@ export function usePagedQuery<Result extends PageResult>(options: {
       return true
     }
     catch (cause: unknown) {
-      if (requestId !== requestSequence)
-        return false
-      if (!execution.silent) {
-        error.value = errorMessage(cause, '加载失败')
-        options.onError?.(cause)
-      }
+      request.fail(requestId, cause, execution.silent)
       return false
     }
     finally {
-      if (requestId === requestSequence)
-        loading.value = false
+      request.finish(requestId)
     }
   }
-
-  function invalidate() {
-    requestSequence += 1
-    loading.value = false
-  }
-
-  onScopeDispose(invalidate)
 
   return {
     page,

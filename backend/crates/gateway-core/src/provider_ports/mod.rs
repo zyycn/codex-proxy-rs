@@ -12,9 +12,10 @@ use crate::account::{
     AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
 };
-use crate::error::{IdentifierError, validate_text};
+use crate::identity::ProviderKind;
 use crate::policy::ClientApiKeyId;
-use crate::routing::{ProviderKind, UpstreamModelId};
+use crate::routing::UpstreamModelId;
+use crate::validation::{IdentifierError, validate_text};
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 

@@ -8,6 +8,7 @@ pub mod engine;
 pub mod error;
 pub mod event;
 pub mod health;
+pub mod identity;
 pub mod lifecycle;
 pub mod metering;
 pub mod operation;
@@ -17,6 +18,7 @@ pub mod routing;
 pub mod runtime;
 pub mod task;
 pub mod upstream;
+pub mod validation;
 
 use std::sync::Arc;
 use std::time::SystemTime;

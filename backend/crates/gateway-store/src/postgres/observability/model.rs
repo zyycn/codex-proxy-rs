@@ -1,6 +1,7 @@
 //! 查询模型、校验与观测端口契约。
 
 use super::*;
+use futures::stream::BoxStream;
 
 pub(crate) const MAX_PAGE_SIZE: u16 = 100;
 pub(crate) const MAX_FILTER_BYTES: usize = 256;
@@ -762,11 +763,11 @@ pub trait ObservabilityRepository: Send + Sync {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
     ) -> StoreResult<Vec<RequestMetricPoint>>;
-    async fn usage_calculated_billing_facts(
+    fn usage_calculated_billing_facts(
         &self,
         range: ObservabilityRange,
         filter: UsageRecordFilter,
-    ) -> StoreResult<Vec<CalculatedUsageBillingFact>>;
+    ) -> BoxStream<'_, StoreResult<CalculatedUsageBillingFact>>;
     async fn provider_account_usage(
         &self,
         query: ProviderAccountUsageQuery,

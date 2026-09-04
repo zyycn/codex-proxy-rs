@@ -44,7 +44,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
-  let loadRequestId = 0
+  let tableRequestId = 0
+  let analyticsRequestId = 0
   let diagnosticRequestId = 0
   const scopedParams = () => ({
     ...options.timeRangeParams.value,
@@ -66,91 +67,83 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {
     const { scope = 'all', background = false } = loadOptions
-    const requestId = ++loadRequestId
-    try {
-      if (background) {
-        loading.value = false
-        if (scope === 'all') {
-          analyticsLoading.value = false
-        }
-      }
-      else {
-        loading.value = true
-        if (scope === 'all') {
-          analyticsLoading.value = true
-        }
-      }
-      if (scope === 'all') {
-        diagnosticRequestId += 1
-      }
+    const globalParams = scopedParams()
+    if (scope === 'all') {
+      resetPagination()
+      tableTimeRangeParams.value = { ...globalParams }
+    }
 
-      const globalParams = scopedParams()
-      if (scope === 'all') {
-        resetPagination()
-        tableTimeRangeParams.value = { ...globalParams }
-      }
-      const tableParams = {
-        ...tableTimeRangeParams.value,
-        ...filterParams(),
-      }
-      const resultPromise = getUsageRecords({
+    await Promise.all([
+      loadUsagePage(background),
+      ...(scope === 'all' ? [loadUsageAnalytics(globalParams, background)] : []),
+    ])
+  }
+
+  async function loadUsagePage(background: boolean) {
+    const requestId = ++tableRequestId
+    loading.value = !background
+    try {
+      const result = await getUsageRecords({
         currentPage: currentPage.value,
         pageSize: pageSize.value,
-        ...tableParams,
+        ...tableTimeRangeParams.value,
+        ...filterParams(),
       })
-      const analyticsPromise
-        = scope === 'all'
-          ? loadUsageAnalytics(globalParams)
-          : Promise.resolve({
-              summary: summary.value,
-              insights: insights.value,
-            })
-      const [result, nextAnalytics] = await Promise.all([resultPromise, analyticsPromise])
-      if (requestId !== loadRequestId)
+      if (requestId !== tableRequestId)
         return
 
       records.value = result.items
-      summary.value = nextAnalytics.summary
-      insights.value = {
-        ...nextAnalytics.insights,
-        diagnostics:
-          nextAnalytics.insights.diagnostics.dimension === diagnosticDimension.value
-            ? nextAnalytics.insights.diagnostics
-            : insights.value.diagnostics,
-      }
       pageSize.value = result.pageSize
       totalRecords.value = result.total
       currentPage.value = result.currentPage
     }
     catch (error: unknown) {
-      if (requestId !== loadRequestId)
+      if (requestId !== tableRequestId)
         return
       toast.error(errorMessage(error, '加载失败'))
     }
     finally {
-      if (requestId === loadRequestId && !background) {
+      if (requestId === tableRequestId) {
         loading.value = false
-        if (scope === 'all') {
-          analyticsLoading.value = false
-        }
       }
     }
   }
 
-  async function loadUsageAnalytics(globalParams = scopedParams()) {
+  async function loadUsageAnalytics(globalParams: ReturnType<typeof scopedParams>, background: boolean) {
+    const requestId = ++analyticsRequestId
+    const diagnosticsId = ++diagnosticRequestId
     const dimension = diagnosticDimension.value
-    const [nextSummary, overview, diagnostics] = await Promise.all([
-      getUsageRecordSummary(globalParams),
-      getUsageRecordInsightsOverview(globalParams),
-      getUsageRecordInsightsDiagnostics({
-        ...globalParams,
-        dimension,
-      }),
-    ])
+    analyticsLoading.value = !background
+    try {
+      const [nextSummary, overview, diagnostics] = await Promise.all([
+        getUsageRecordSummary(globalParams),
+        getUsageRecordInsightsOverview(globalParams),
+        getUsageRecordInsightsDiagnostics({
+          ...globalParams,
+          dimension,
+        }),
+      ])
+      if (requestId !== analyticsRequestId)
+        return
 
-    return {
-      summary: nextSummary,
-      insights: { overview, diagnostics },
+      summary.value = nextSummary
+      insights.value = {
+        overview,
+        diagnostics:
+          diagnosticsId === diagnosticRequestId && dimension === diagnosticDimension.value
+            ? diagnostics
+            : insights.value.diagnostics,
+      }
+    }
+    catch (error: unknown) {
+      if (requestId !== analyticsRequestId)
+        return
+      toast.error(errorMessage(error, '加载失败'))
+    }
+    finally {
+      if (requestId === analyticsRequestId) {
+        analyticsLoading.value = false
+      }
     }
   }
 
@@ -171,6 +164,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       }
     }
     catch (error: unknown) {
+      if (requestId !== diagnosticRequestId || dimension !== diagnosticDimension.value)
+        return
       toast.error(errorMessage(error, '加载失败'))
     }
   }
@@ -222,7 +217,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   )
 
   onScopeDispose(() => {
-    loadRequestId += 1
+    tableRequestId += 1
+    analyticsRequestId += 1
     diagnosticRequestId += 1
   })
 

@@ -11,10 +11,15 @@ import { useRequestTrendChart } from '../composables/useRequestTrendChart'
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
 type TrendView = ReturnType<typeof dashboardTrendView>
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   points: TrendView['points']
   summary: TrendView['summary']
-}>()
+  loading?: boolean
+  error?: string
+}>(), {
+  loading: false,
+  error: '',
+})
 
 const emit = defineEmits<{
   trendChange: [kind: TrendKind]
@@ -92,7 +97,12 @@ const {
 
         <div class="relative h-55 w-full overflow-hidden">
           <BaseChart v-if="hasSamples" :option="chartOption" :height="220" />
-          <BaseEmpty v-if="!hasSamples" surface="none" title="暂无趋势数据" class="h-full place-content-center" />
+          <BaseEmpty
+            v-else-if="!loading"
+            surface="none"
+            :title="error || '暂无趋势数据'"
+            class="h-full place-content-center"
+          />
         </div>
       </div>
     </template>

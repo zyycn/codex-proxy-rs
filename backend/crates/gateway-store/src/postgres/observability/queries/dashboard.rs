@@ -283,42 +283,44 @@ async fn request_metric_series_inner(
     fill_metric_gaps(range, granularity, points)
 }
 
-pub(crate) async fn calculated_usage_billing_facts(
+pub(crate) fn calculated_usage_billing_facts(
     pool: &PgPool,
     range: ObservabilityRange,
-    filter: &UsageRecordFilter,
-) -> StoreResult<Vec<CalculatedUsageBillingFact>> {
-    filter.validate()?;
-    let granularity = granularity_for(range);
-    let mut query = QueryBuilder::<Postgres>::new("select date_bin(");
-    query.push_bind(granularity.sql_interval());
-    query.push(
-        "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
-                mr.provider_kind, mr.upstream_model_id, mr.service_tier,
-                mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
-                mr.cost_currency, mr.cost_amount::text as amount
-         from model_requests mr where mr.started_at >= ",
-    );
-    query.push_bind(range.start);
-    query.push(" and mr.started_at < ");
-    query.push_bind(range.end);
-    query.push(
-        " and mr.cost_source = 'calculated'
-           and mr.cost_amount is not null and mr.cost_currency is not null
-           and nullif(mr.provider_kind, '') is not null
-           and nullif(mr.upstream_model_id, '') is not null",
-    );
-    push_completed_usage_fact_filter(&mut query, "mr");
-    push_usage_filter(&mut query, filter, "mr");
-    query.push(" order by bucket_start, mr.id");
-    query
-        .build()
-        .fetch_all(pool)
-        .await
-        .map_err(|_| postgres_unavailable("load calculated usage billing facts"))?
-        .iter()
-        .map(calculated_usage_billing_fact_from_row)
-        .collect()
+    filter: UsageRecordFilter,
+) -> futures::stream::BoxStream<'_, StoreResult<CalculatedUsageBillingFact>> {
+    use futures::TryStreamExt;
+
+    Box::pin(async_stream::try_stream! {
+        filter.validate()?;
+        let granularity = granularity_for(range);
+        let mut query = QueryBuilder::<Postgres>::new("select date_bin(");
+        query.push_bind(granularity.sql_interval());
+        query.push(
+            "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
+                    mr.provider_kind, mr.upstream_model_id, mr.service_tier,
+                    mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
+                    mr.cost_currency, mr.cost_amount::text as amount
+             from model_requests mr where mr.started_at >= ",
+        );
+        query.push_bind(range.start);
+        query.push(" and mr.started_at < ");
+        query.push_bind(range.end);
+        query.push(
+            " and mr.cost_source = 'calculated'
+               and mr.cost_amount is not null and mr.cost_currency is not null
+               and nullif(mr.provider_kind, '') is not null
+               and nullif(mr.upstream_model_id, '') is not null",
+        );
+        push_completed_usage_fact_filter(&mut query, "mr");
+        push_usage_filter(&mut query, &filter, "mr");
+        // 费用逐条累加与行顺序无关，避免全量物化和不必要的数据库排序。
+        let mut rows = query.build().fetch(pool);
+        while let Some(row) = rows.try_next().await
+            .map_err(|_| postgres_unavailable("load calculated usage billing facts"))?
+        {
+            yield calculated_usage_billing_fact_from_row(&row)?;
+        }
+    })
 }
 
 pub(crate) async fn request_costs_by_bucket(

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 
 use crate::error::StoreError;
-use crate::routing::ProviderKind;
+use crate::identity::ProviderKind;
 
 use super::{
     AccountStateChange, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,

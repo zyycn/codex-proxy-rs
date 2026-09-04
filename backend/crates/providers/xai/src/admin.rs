@@ -23,7 +23,7 @@ use gateway_admin::model::provider_credentials::{
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderQuota,
     ProviderQuotaRequest, ProviderQuotaWindow, QuotaLocalUsageAttribution,
 };
-use gateway_admin::model::{AdminError, MutationActor, MutationContext, Revision};
+use gateway_admin::model::{AdminError, MutationContext, Revision};
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::account::{
     CredentialCasUpdateParts, CredentialRevision, LoadedCredential, NewProviderAccount,
@@ -1170,31 +1170,7 @@ struct PendingDocument {
     owner_ref: String,
     expires_at: DateTime<Utc>,
     server_state: String,
-    mutation: PendingMutationDocument,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PendingMutationDocument {
-    provider_kind: String,
-    target: PendingTargetDocument,
-    owner: PendingOwnerDocument,
-    started_request_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum PendingTargetDocument {
-    Create { name: String },
-    Reauthorize { account_id: String },
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum PendingOwnerDocument {
-    AdminSession { admin_user_id: String },
-    AdminApiKey,
-    System,
+    mutation: Map<String, Value>,
 }
 
 fn encode_pending(pending: &StoredXaiAuthorization) -> Map<String, Value> {
@@ -1218,67 +1194,8 @@ fn encode_pending(pending: &StoredXaiAuthorization) -> Map<String, Value> {
     );
     document.insert(
         "mutation".to_owned(),
-        Value::Object(encode_mutation(&pending.mutation)),
+        Value::Object(pending.mutation.to_storage_v1()),
     );
-    document
-}
-
-fn encode_mutation(mutation: &PendingAuthorizationMutation) -> Map<String, Value> {
-    let mut document = Map::new();
-    document.insert(
-        "provider_kind".to_owned(),
-        Value::String(mutation.provider_kind().as_str().to_owned()),
-    );
-    document.insert(
-        "target".to_owned(),
-        Value::Object(encode_target(mutation.target())),
-    );
-    document.insert(
-        "owner".to_owned(),
-        Value::Object(encode_owner(mutation.owner_binding().owner())),
-    );
-    document.insert(
-        "started_request_id".to_owned(),
-        Value::String(mutation.owner_binding().started_request_id().to_owned()),
-    );
-    document
-}
-
-fn encode_target(target: &AuthorizationMutationTarget) -> Map<String, Value> {
-    let mut document = Map::new();
-    match target {
-        AuthorizationMutationTarget::Create { name } => {
-            document.insert("kind".to_owned(), Value::String("create".to_owned()));
-            document.insert("name".to_owned(), Value::String(name.clone()));
-        }
-        AuthorizationMutationTarget::Reauthorize { account_id } => {
-            document.insert("kind".to_owned(), Value::String("reauthorize".to_owned()));
-            document.insert(
-                "account_id".to_owned(),
-                Value::String(account_id.to_string()),
-            );
-        }
-    }
-    document
-}
-
-fn encode_owner(owner: &AuthorizationOwner) -> Map<String, Value> {
-    let mut document = Map::new();
-    match owner {
-        AuthorizationOwner::AdminSession { admin_user_id } => {
-            document.insert("kind".to_owned(), Value::String("admin_session".to_owned()));
-            document.insert(
-                "admin_user_id".to_owned(),
-                Value::String(admin_user_id.clone()),
-            );
-        }
-        AuthorizationOwner::AdminApiKey => {
-            document.insert("kind".to_owned(), Value::String("admin_api_key".to_owned()));
-        }
-        AuthorizationOwner::System => {
-            document.insert("kind".to_owned(), Value::String("system".to_owned()));
-        }
-    }
     document
 }
 
@@ -1295,7 +1212,8 @@ fn decode_pending(
     {
         return Err(provider_error(ProviderAdminErrorKind::Invalid));
     }
-    let mutation = decode_mutation(document.mutation)?;
+    let mutation = PendingAuthorizationMutation::from_storage_v1(Value::Object(document.mutation))
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
     if mutation.provider_kind().as_str() != XAI_PROVIDER_NAME
         || owner_ref(mutation.owner_binding().owner()) != document.owner_ref
     {
@@ -1313,38 +1231,6 @@ fn decode_pending(
         server_state: document.server_state,
         mutation,
     })
-}
-
-fn decode_mutation(
-    document: PendingMutationDocument,
-) -> Result<PendingAuthorizationMutation, ProviderAdminError> {
-    let provider_kind = ProviderKind::new(document.provider_kind)
-        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
-    let target = match document.target {
-        PendingTargetDocument::Create { name } => AuthorizationMutationTarget::Create { name },
-        PendingTargetDocument::Reauthorize { account_id } => {
-            AuthorizationMutationTarget::Reauthorize {
-                account_id: ProviderAccountId::new(account_id)
-                    .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?,
-            }
-        }
-    };
-    let actor = match document.owner {
-        PendingOwnerDocument::AdminSession { admin_user_id } => {
-            MutationActor::AdminSession { admin_user_id }
-        }
-        PendingOwnerDocument::AdminApiKey => MutationActor::AdminApiKey,
-        PendingOwnerDocument::System => MutationActor::System,
-    };
-    let context = MutationContext {
-        actor,
-        request_id: document.started_request_id,
-    };
-    Ok(PendingAuthorizationMutation::new(
-        provider_kind,
-        target,
-        AuthorizationOwnerBinding::from_context(&context),
-    ))
 }
 
 fn random_flow_id() -> Result<String, ProviderAdminError> {

@@ -12,6 +12,7 @@ name = "main"
 path = "tests/main.rs"
 
 [dependencies]
+async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-credential-types = "1.2"
 aws-sdk-s3 = { version = "1.140", default-features = false, features = ["rt-tokio", "default-https-client"] }

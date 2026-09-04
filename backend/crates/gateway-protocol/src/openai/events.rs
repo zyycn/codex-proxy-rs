@@ -98,6 +98,37 @@ pub fn extract_usage(body: &Value) -> Option<TokenUsage> {
     })
 }
 
+/// 校验计价所需的输入、输出和缓存读取字段，拒绝缺失、非法或不一致的数值。
+///
+/// 用量提取允许缺失字段补零；计价必须额外确认这些零值有明确的上游事实。
+#[must_use]
+pub fn billable_usage_is_complete(response: &Value, usage: TokenUsage) -> bool {
+    let Some(raw) = response.get("usage").filter(|value| value.is_object()) else {
+        return false;
+    };
+    let input = raw
+        .get("input_tokens")
+        .or_else(|| raw.get("prompt_tokens"))
+        .and_then(Value::as_u64);
+    let output = raw
+        .get("output_tokens")
+        .or_else(|| raw.get("completion_tokens"))
+        .and_then(Value::as_u64);
+    let cached = raw
+        .pointer("/input_tokens_details/cached_tokens")
+        .or_else(|| raw.pointer("/prompt_tokens_details/cached_tokens"))
+        .or_else(|| raw.get("cached_tokens"));
+    let cached = match cached {
+        Some(value) => value.as_u64(),
+        None => Some(0),
+    };
+
+    input == Some(usage.input_tokens)
+        && output == Some(usage.output_tokens)
+        && cached == Some(usage.cached_tokens)
+        && usage.cached_tokens <= usage.input_tokens
+}
+
 /// 从完整 SSE 文本中提取最终可见用量。
 ///
 /// 如果存在 `response.completed` 的 usage，则优先返回它；否则回退到最后一条

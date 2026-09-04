@@ -1533,6 +1533,7 @@ dependencies = [
 name = "gateway-store"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "aws-credential-types",
  "aws-sdk-s3",

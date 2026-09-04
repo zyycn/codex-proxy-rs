@@ -864,6 +864,28 @@ pub(crate) fn dashboard_view(
     } = observation;
     let mut account_usage_views = Vec::with_capacity(account_usage.len());
     for credential in account_usage {
+        let local_requests = credential
+            .quota_window
+            .as_ref()
+            .filter(|window| window.used_percent.is_none())
+            .and_then(|window| window.local_usage.as_ref())
+            .map(|usage| usage.request_count);
+        let (metric_label, metric_value) = match local_requests {
+            Some(count) => (
+                "次数".to_owned(),
+                if count > 0 {
+                    format_compact_number(count)
+                } else {
+                    "—".to_owned()
+                },
+            ),
+            None => (
+                "今日 Token".to_owned(),
+                credential
+                    .total_tokens
+                    .map_or_else(|| "—".to_owned(), format_compact_number),
+            ),
+        };
         account_usage_views.push(DashboardAccountUsageView {
             id: credential.account_id.clone(),
             provider: credential.provider_kind.clone(),
@@ -886,6 +908,11 @@ pub(crate) fn dashboard_view(
                 })
                 .collect(),
             quota_used_percent: credential.quota_used_percent,
+            usage_window: credential
+                .quota_window
+                .map(crate::admin::accounts::quota_window_view),
+            metric_label,
+            metric_value,
             last_used: relative_time(credential.last_used_at, range.end),
         });
     }

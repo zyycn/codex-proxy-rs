@@ -875,13 +875,14 @@ impl ObservabilityStore for UnusedStore {
         Err(unavailable("usage trend"))
     }
 
-    async fn usage_calculated_billing_facts(
+    fn usage_calculated_billing_facts(
         &self,
         _: TimeRange,
         _: UsageFilter,
-    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::UsageCalculatedBillingFact>>
-    {
-        Err(unavailable("usage billing facts"))
+    ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
+        Box::pin(futures::stream::once(async {
+            Err(unavailable("usage billing facts"))
+        }))
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {

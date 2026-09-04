@@ -1,11 +1,50 @@
 use std::time::Duration;
 
+use futures::{StreamExt, TryStreamExt, stream};
 use gateway_store::{StoreError, postgres::ObservabilityQueryBudget};
 use tokio::sync::{mpsc, oneshot};
 
 #[test]
 fn query_budget_rejects_an_empty_budget() {
     assert!(ObservabilityQueryBudget::try_new(0, Duration::from_secs(1)).is_err());
+}
+
+#[tokio::test]
+async fn query_stream_holds_budget_until_completion_error_or_drop() {
+    let budget =
+        ObservabilityQueryBudget::try_new(1, Duration::from_millis(10)).expect("query budget");
+    for terminal in [
+        None,
+        Some(Ok(2)),
+        Some(Err(StoreError::InvalidData {
+            entity: "test stream",
+            message: "decode failed".to_owned(),
+        })),
+    ] {
+        let pending = terminal.is_none();
+        let query = stream::iter([Ok(1)]).chain(stream::iter(terminal));
+        let mut facts = budget.run_stream("stream test", query);
+        assert_eq!(facts.try_next().await.expect("first row"), Some(1));
+        assert!(budget.run("blocked query", async { Ok(()) }).await.is_err());
+        if pending {
+            drop(facts);
+        } else {
+            match facts.try_next().await {
+                Ok(Some(2)) => assert!(facts.try_next().await.expect("end of stream").is_none()),
+                Err(StoreError::InvalidData { .. }) => {}
+                other => panic!("unexpected stream result: {other:?}"),
+            }
+            // The finished stream may remain alive; its connection slot must already be free.
+            budget
+                .run("after terminal", async { Ok(()) })
+                .await
+                .expect("released slot");
+        }
+        budget
+            .run("after stream", async { Ok(()) })
+            .await
+            .expect("released slot");
+    }
 }
 
 #[tokio::test]

@@ -1,3 +1,4 @@
+import type { AccountQuotaWindow } from './accounts'
 import type { UsageListRecord } from './usage'
 import request from '../request'
 
@@ -145,6 +146,9 @@ export interface DashboardAccountUsage {
   requestCount: number
   requestBuckets: DashboardAccountRequestBucket[]
   quotaUsedPercent: number | null
+  usageWindow: AccountQuotaWindow | null
+  metricLabel: string
+  metricValue: string
   lastUsed: string
 }
 

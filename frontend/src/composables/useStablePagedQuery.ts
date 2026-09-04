@@ -1,6 +1,6 @@
-import { onScopeDispose, shallowRef } from 'vue'
+import { shallowRef } from 'vue'
 
-import { errorMessage } from '@/utils/async'
+import { useRequestState } from './useRequestState'
 
 interface PageResult {
   items: unknown[]
@@ -14,7 +14,6 @@ interface PageRequest {
   pageSize: number
 }
 
-/** Element Plus 风格的服务端页码分页；一次 execute 只发起一次列表请求。 */
 export function useStablePagedQuery<Result extends PageResult>(options: {
   initialPageSize: number
   load: (pagination: PageRequest) => Promise<Result>
@@ -25,23 +24,18 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
   const pageSize = shallowRef(options.initialPageSize)
   const total = shallowRef(0)
   const items = shallowRef<Result['items'][number][]>([])
-  const loading = shallowRef(false)
-  const error = shallowRef('')
-  let requestSequence = 0
+  const request = useRequestState(options.onError)
+  const { loading, error, invalidate } = request
 
   async function execute(targetPage = currentPage.value, execution: { silent?: boolean } = {}) {
-    const requestId = ++requestSequence
-    if (!execution.silent) {
-      loading.value = true
-      error.value = ''
-    }
+    const requestId = request.start(execution.silent)
 
     try {
       const result = await options.load({
         currentPage: Math.max(1, targetPage),
         pageSize: pageSize.value,
       })
-      if (requestId !== requestSequence)
+      if (!request.isCurrent(requestId))
         return false
 
       items.value = result.items
@@ -52,17 +46,11 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
       return true
     }
     catch (cause: unknown) {
-      if (requestId !== requestSequence)
-        return false
-      if (!execution.silent) {
-        error.value = errorMessage(cause, '加载失败')
-        options.onError?.(cause)
-      }
+      request.fail(requestId, cause, execution.silent)
       return false
     }
     finally {
-      if (requestId === requestSequence)
-        loading.value = false
+      request.finish(requestId)
     }
   }
 
@@ -71,13 +59,6 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
     total.value = 0
     return execute(1, execution)
   }
-
-  function invalidate() {
-    requestSequence += 1
-    loading.value = false
-  }
-
-  onScopeDispose(invalidate)
 
   return {
     currentPage,

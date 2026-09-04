@@ -2,6 +2,7 @@
 
 mod error;
 mod model;
+pub mod scope;
 mod selection;
 mod store;
 

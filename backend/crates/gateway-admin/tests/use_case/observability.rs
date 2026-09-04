@@ -2,7 +2,7 @@ use std::{
     str::FromStr as _,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration as StdDuration,
 };
@@ -537,10 +537,41 @@ async fn usage_records_should_enrich_provider_reported_totals_when_pricing_match
     ));
 }
 
+#[tokio::test]
+async fn usage_insights_should_reject_partial_costs_when_billing_stream_fails() {
+    let now = Utc::now();
+    let range = observation_range(now);
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
+        bucket_start: quarter_hour_start(now),
+        provider_kind: "openai".to_owned(),
+        upstream_model_id: "gpt-5.5".to_owned(),
+        service_tier: None,
+        input_tokens: Some(800),
+        output_tokens: Some(200),
+        cached_tokens: Some(0),
+        cache_write_tokens: Some(0),
+        total: CurrencyCost {
+            currency: "USD".to_owned(),
+            amount: "1.25".parse().expect("cost"),
+        },
+    }]);
+    store.billing_stream_fails.store(true, Ordering::SeqCst);
+    let services = observability_services_with_calculated_billing(store).await;
+    assert!(
+        services
+            .observability()
+            .usage_insights(range, UsageFilter::default())
+            .await
+            .is_err()
+    );
+}
+
 struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
     calculated_billing_facts: Mutex<Vec<UsageCalculatedBillingFact>>,
+    billing_stream_fails: AtomicBool,
     diagnostics: Mutex<Vec<DiagnosticObservation>>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
     summary_observed_at: Mutex<Option<DateTime<Utc>>>,
@@ -561,6 +592,7 @@ impl FixtureObservabilityStore {
                 providers: Vec::new(),
             }),
             calculated_billing_facts: Mutex::new(Vec::new()),
+            billing_stream_fails: AtomicBool::new(false),
             diagnostics: Mutex::new(Vec::new()),
             runtime_slots: Mutex::new(None),
             summary_observed_at: Mutex::new(None),
@@ -663,16 +695,23 @@ impl ObservabilityStore for FixtureObservabilityStore {
         Ok(self.trend.lock().expect("trend").clone())
     }
 
-    async fn usage_calculated_billing_facts(
+    fn usage_calculated_billing_facts(
         &self,
         _: TimeRange,
         _: UsageFilter,
-    ) -> AdminStoreResult<Vec<UsageCalculatedBillingFact>> {
-        Ok(self
+    ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
+        let facts = self
             .calculated_billing_facts
             .lock()
             .expect("calculated billing facts")
-            .clone())
+            .clone();
+        let error = self
+            .billing_stream_fails
+            .load(Ordering::SeqCst)
+            .then(|| Err(super::unavailable("billing stream failed")));
+        Box::pin(futures::stream::iter(
+            facts.into_iter().map(Ok).chain(error),
+        ))
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {

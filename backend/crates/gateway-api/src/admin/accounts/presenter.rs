@@ -140,7 +140,7 @@ pub(super) fn account_quota_view(
     )
 }
 
-pub(super) fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
+pub(crate) fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
     let ProviderQuotaWindow {
         key,
         group,

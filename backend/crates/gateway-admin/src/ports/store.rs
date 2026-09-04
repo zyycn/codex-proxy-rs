@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::stream::BoxStream;
 
 use super::backup::BackupStorePorts;
 use crate::model::{
@@ -289,6 +290,10 @@ pub trait AccountGroupStore: Send + Sync {
     ) -> AdminStoreResult<AccountGroupMutation>;
 }
 
+/// 逐条读取的已计算费用事实；消费结束或丢弃时释放查询资源。
+pub type UsageCalculatedBillingStream<'a> =
+    BoxStream<'a, AdminStoreResult<UsageCalculatedBillingFact>>;
+
 /// 用量、趋势、诊断与运维错误的只读能力。
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
@@ -318,12 +323,13 @@ pub trait ObservabilityStore: Send + Sync {
         filter: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>>;
 
-    /// 返回可由 Provider 重新校验的已计算费用事实，用于恢复标准费用趋势。
-    async fn usage_calculated_billing_facts(
+    /// 流式返回可由 Provider 重新校验的已计算费用事实，不保证顺序。
+    /// 查询及解码错误由流返回；调用方应逐条聚合，避免收集整个区间。
+    fn usage_calculated_billing_facts(
         &self,
         range: TimeRange,
         filter: UsageFilter,
-    ) -> AdminStoreResult<Vec<UsageCalculatedBillingFact>>;
+    ) -> UsageCalculatedBillingStream<'_>;
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage>;
 

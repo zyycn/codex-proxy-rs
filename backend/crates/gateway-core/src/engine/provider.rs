@@ -15,13 +15,13 @@ use crate::account::{
     AccountAttemptFeedback, AccountCapacitySnapshot, AccountFeedbackStats, ProviderAccountId,
 };
 use crate::engine::AttemptContext;
-use crate::error::{OpaqueUpstreamValue, PreDeliveryRetry, ProviderError, ProviderErrorKind};
+use crate::error::{PreDeliveryRetry, ProviderError, ProviderErrorKind};
 use crate::event::{EventSequenceValidator, ProviderEvent};
+use crate::identity::ProviderKind;
 use crate::operation::Operation;
 use crate::policy::ClientApiKeyId;
-use crate::routing::{
-    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, UpstreamModelId,
-};
+use crate::routing::{ModelCapabilities, ModelPresentation, ProviderCandidate, UpstreamModelId};
+use crate::upstream::OpaqueUpstreamValue;
 use crate::upstream::{UpstreamSendState, UpstreamTransport};
 
 /// Box 只出现在 Provider Registry 的统一 event envelope 边界。

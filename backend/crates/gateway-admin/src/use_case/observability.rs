@@ -9,6 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Timelike as _, Utc};
+use futures::TryStreamExt;
 use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
 
 use crate::{
@@ -29,7 +30,7 @@ use crate::{
     },
     ports::{
         provider::{ProviderAdminErrorKind, ProviderAdminRegistry},
-        store::{ObservabilityStore, SettingsStore},
+        store::{AccountStore, ObservabilityStore, SettingsStore, UsageCalculatedBillingStream},
     },
 };
 
@@ -126,6 +127,7 @@ pub trait ObservabilityService: Send + Sync {
 
 pub(crate) struct DefaultObservabilityService {
     store: Arc<dyn ObservabilityStore>,
+    accounts: Arc<dyn AccountStore>,
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
     dashboard_queries: DashboardQueryCache,
@@ -135,11 +137,13 @@ impl DefaultObservabilityService {
     #[must_use]
     pub(crate) fn new(
         store: Arc<dyn ObservabilityStore>,
+        accounts: Arc<dyn AccountStore>,
         settings: Arc<dyn SettingsStore>,
         providers: ProviderAdminRegistry,
     ) -> Self {
         Self {
             store,
+            accounts,
             settings,
             providers,
             dashboard_queries: DashboardQueryCache::default(),
@@ -301,13 +305,21 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         filter: UsageFilter,
     ) -> Result<UsageInsights, AdminError> {
-        let (overview, trend, billing_facts) = futures::try_join!(
-            self.store.usage_summary(range, filter.clone()),
-            self.store.usage_trend(range, filter.clone()),
-            self.store.usage_calculated_billing_facts(range, filter),
-        )
-        .map_err(|error| map_store_error(error, "usage insights"))?;
-        let standard_costs = recover_standard_costs(&self.providers, billing_facts)?;
+        let aggregates = async {
+            futures::try_join!(
+                self.store.usage_summary(range, filter.clone()),
+                self.store.usage_trend(range, filter.clone()),
+            )
+            .map_err(|error| map_store_error(error, "usage insights"))
+        };
+        let ((overview, trend), standard_costs) = futures::try_join!(
+            aggregates,
+            recover_standard_costs(
+                &self.providers,
+                self.store
+                    .usage_calculated_billing_facts(range, filter.clone()),
+            ),
+        )?;
         build_usage_insights(overview, trend, standard_costs)
     }
 
@@ -590,12 +602,16 @@ struct UsageCostScenarios {
     no_cache: ScenarioCosts,
 }
 
-fn recover_standard_costs(
+async fn recover_standard_costs(
     providers: &ProviderAdminRegistry,
-    facts: Vec<UsageCalculatedBillingFact>,
+    mut facts: UsageCalculatedBillingStream<'_>,
 ) -> Result<UsageCostScenarios, AdminError> {
     let mut scenarios = UsageCostScenarios::default();
-    for fact in facts {
+    while let Some(fact) = facts
+        .try_next()
+        .await
+        .map_err(|error| map_store_error(error, "usage billing facts"))?
+    {
         let Ok(provider_kind) = ProviderKind::new(fact.provider_kind.clone()) else {
             continue;
         };
@@ -708,8 +724,31 @@ fn usd_cost(costs: &[CurrencyCost]) -> Option<DecimalAmount> {
 
 impl DefaultObservabilityService {
     async fn enrich_dashboard_quotas(&self, accounts: &mut [DashboardAccountUsage]) {
+        if accounts.is_empty() {
+            return;
+        }
+        let now = Utc::now();
+        let ids = accounts
+            .iter()
+            .map(|account| account.account_id.clone())
+            .collect::<Vec<_>>();
+        let mut rolling_usage = self
+            .accounts
+            .load_account_usage(
+                TimeRange {
+                    start: now - Duration::hours(24),
+                    end: now,
+                },
+                &ids,
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|usage| (usage.account_id.clone(), usage))
+            .collect::<HashMap<_, _>>();
         let providers = self.providers.clone();
         let quota_reads = accounts.iter().map(|account| {
+            let rolling_usage = rolling_usage.remove(&account.account_id);
             let account_id = ProviderAccountId::new(account.account_id.clone()).ok();
             let provider = ProviderKind::new(account.provider_kind.clone())
                 .ok()
@@ -722,16 +761,19 @@ impl DefaultObservabilityService {
                     .quota(ProviderQuotaRequest {
                         account_id,
                         refresh: false,
-                        rolling_usage: None,
+                        rolling_usage,
                     })
                     .await
                     .ok()
-                    .and_then(|quota| quota.representative_used_percent())
             }
         });
-        let quota_used = futures::future::join_all(quota_reads).await;
-        for (account, used_percent) in accounts.iter_mut().zip(quota_used) {
-            account.quota_used_percent = used_percent;
+        let quotas = futures::future::join_all(quota_reads).await;
+        for (account, quota) in accounts.iter_mut().zip(quotas) {
+            if let Some(mut quota) = quota {
+                quota.apply_limit_reached_display();
+                account.quota_used_percent = quota.representative_used_percent();
+                account.quota_window = quota.representative_window().cloned();
+            }
         }
     }
 

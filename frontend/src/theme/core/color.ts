@@ -120,17 +120,6 @@ function mixHue(first: number, second: number, secondWeight: number): number {
   return (first + difference * secondWeight + 360) % 360
 }
 
-/** 浅色 Surface 限制色度，并随层级加深继续收敛。 */
-export function mixSurfaceTone(
-  background: string,
-  foreground: string,
-  foregroundWeight: number,
-): string {
-  return mixColorTone(background, foreground, foregroundWeight, {
-    saturationLimit: Math.max(0, 0.42 - foregroundWeight),
-  })
-}
-
 export function withAlpha(color: string, alpha: number): string {
   const normalized = normalizeHexColor(color) ?? DEFAULT_CUSTOM_THEME_COLOR
   const alphaHex = Math.round(Math.min(1, Math.max(0, alpha)) * 255)

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use syn::Item;
+use syn::{Item, visit::Visit};
 
 /// workspace 成员冻结清单;新增 crate 必须同步扩展本文件的依赖规则。
 pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
@@ -59,6 +59,82 @@ fn gateway_core_depends_on_no_http_db_redis_or_provider_crate() {
             "provider-xai",
         ],
     );
+}
+
+#[test]
+fn core_value_owners_do_not_depend_on_execution_or_routing() {
+    let root = backend_root().join("crates/gateway-core/src");
+    for relative in super::rust_files(&root) {
+        let allowed: Option<&[&str]> = match relative.to_str().expect("source path") {
+            "validation.rs" => Some(&[]),
+            "identity.rs" => Some(&["validation"]),
+            "upstream.rs" => Some(&["validation"]),
+            "event.rs" => Some(&["metering", "operation", "upstream", "validation"]),
+            "account/store.rs" => Some(&["account", "error", "identity", "validation"]),
+            path if path.starts_with("policy/") => Some(&["account", "policy", "validation"]),
+            path if path.starts_with("account/") => Some(&["account", "identity", "validation"]),
+            _ => None,
+        };
+        let Some(allowed) = allowed else { continue };
+        let source = fs::read_to_string(root.join(&relative)).expect("read core source");
+        let syntax = syn::parse_file(&source).expect("parse core source");
+        let mut references = CrateReferences::default();
+        references.visit_file(&syntax);
+        for dependency in references.0 {
+            assert!(
+                allowed.contains(&dependency.as_str()),
+                "{} must not depend on crate::{dependency}",
+                relative.display()
+            );
+        }
+    }
+}
+
+#[derive(Default)]
+struct CrateReferences(BTreeSet<String>);
+
+impl<'ast> Visit<'ast> for CrateReferences {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let mut segments = path.segments.iter();
+        if segments
+            .next()
+            .is_some_and(|segment| segment.ident == "crate")
+            && let Some(owner) = segments.next()
+        {
+            self.0.insert(owner.ident.to_string());
+        }
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.use_tree(&item.tree, false);
+    }
+}
+
+impl CrateReferences {
+    fn use_tree(&mut self, tree: &syn::UseTree, crate_root: bool) {
+        match tree {
+            syn::UseTree::Path(path) if crate_root => {
+                self.0.insert(path.ident.to_string());
+            }
+            syn::UseTree::Name(name) if crate_root => {
+                self.0.insert(name.ident.to_string());
+            }
+            syn::UseTree::Rename(rename) if crate_root => {
+                self.0.insert(rename.ident.to_string());
+            }
+            syn::UseTree::Path(path) => self.use_tree(&path.tree, path.ident == "crate"),
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.use_tree(item, crate_root);
+                }
+            }
+            syn::UseTree::Glob(_) if crate_root => {
+                self.0.insert("*".to_owned());
+            }
+            _ => {}
+        }
+    }
 }
 
 #[test]
@@ -156,6 +232,46 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
 #[test]
 fn workspace_internal_dependency_edges_match_frozen_dag() {
     let metadata = cargo_metadata_json();
+    let actual = workspace_runtime_dependency_edges(&metadata);
+    let mut expected: Vec<(String, String)> = ALLOWED_INTERNAL_EDGES
+        .iter()
+        .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
+        .collect();
+    expected.sort();
+
+    assert_eq!(
+        actual, expected,
+        "workspace internal dependency edges diverged from the frozen DAG"
+    );
+}
+
+#[test]
+fn runtime_dependency_edges_exclude_dev_build_and_external_dependencies() {
+    let metadata = serde_json::json!({
+        "packages": [
+            {
+                "name": "gateway-api",
+                "dependencies": [
+                    { "name": "gateway-core", "kind": null },
+                    { "name": "gateway-store", "kind": "dev" },
+                    { "name": "gateway-host", "kind": "build" },
+                    { "name": "serde", "kind": null }
+                ]
+            },
+            {
+                "name": "external-package",
+                "dependencies": [{ "name": "gateway-core", "kind": null }]
+            }
+        ]
+    });
+
+    assert_eq!(
+        workspace_runtime_dependency_edges(&metadata),
+        vec![("gateway-api".to_owned(), "gateway-core".to_owned())]
+    );
+}
+
+fn workspace_runtime_dependency_edges(metadata: &serde_json::Value) -> Vec<(String, String)> {
     let packages = metadata["packages"]
         .as_array()
         .expect("cargo metadata packages");
@@ -173,31 +289,14 @@ fn workspace_internal_dependency_edges_match_frozen_dag() {
             if !internal_names.contains(dep_name) {
                 continue;
             }
-            let is_runtime_edge = dependency["dep_kinds"]
-                .as_array()
-                .map(|kinds| {
-                    kinds
-                        .iter()
-                        .any(|kind| kind["kind"].as_str() == Some("normal"))
-                })
-                .unwrap_or(true);
-            if is_runtime_edge {
+            if dependency.get("kind").expect("dependency kind").is_null() {
                 actual.push((name.to_owned(), dep_name.to_owned()));
             }
         }
     }
 
-    let mut expected: Vec<(String, String)> = ALLOWED_INTERNAL_EDGES
-        .iter()
-        .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
-        .collect();
     actual.sort();
-    expected.sort();
-
-    assert_eq!(
-        actual, expected,
-        "workspace internal dependency edges diverged from the frozen DAG"
-    );
+    actual
 }
 
 #[test]

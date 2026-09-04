@@ -10,6 +10,8 @@ use gateway_core::{
     account::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
     routing::{ProviderKind, UpstreamModelId},
 };
+use serde::Deserialize;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::{
@@ -277,6 +279,101 @@ impl PendingAuthorizationMutation {
     pub const fn owner_binding(&self) -> &AuthorizationOwnerBinding {
         &self.owner_binding
     }
+}
+
+impl PendingAuthorizationMutation {
+    /// 编码 v1 中立事务字段；版本号的位置和 Provider 私有外层文档由 adapter 保持。
+    #[must_use]
+    pub fn to_storage_v1(&self) -> Map<String, Value> {
+        let target = match &self.target {
+            AuthorizationMutationTarget::Create { name } => {
+                serde_json::json!({"kind": "create", "name": name})
+            }
+            AuthorizationMutationTarget::Reauthorize { account_id } => {
+                serde_json::json!({"kind": "reauthorize", "account_id": account_id.to_string()})
+            }
+        };
+        let owner = match self.owner_binding.owner() {
+            AuthorizationOwner::AdminSession { admin_user_id } => {
+                serde_json::json!({"kind": "admin_session", "admin_user_id": admin_user_id})
+            }
+            AuthorizationOwner::AdminApiKey => serde_json::json!({"kind": "admin_api_key"}),
+            AuthorizationOwner::System => serde_json::json!({"kind": "system"}),
+        };
+        Map::from_iter([
+            (
+                "provider_kind".to_owned(),
+                Value::String(self.provider_kind.as_str().to_owned()),
+            ),
+            ("target".to_owned(), target),
+            ("owner".to_owned(), owner),
+            (
+                "started_request_id".to_owned(),
+                Value::String(self.owner_binding.started_request_id().to_owned()),
+            ),
+        ])
+    }
+
+    /// 恢复 adapter 已确认版本为 v1 的中立事务字段。
+    ///
+    /// # Errors
+    ///
+    /// 文档字段、Provider kind 或账号身份非法时返回错误，不携带原始 pending 内容。
+    pub fn from_storage_v1(value: Value) -> Result<Self, AdminError> {
+        let invalid = || AdminError::invalid("invalid pending authorization mutation");
+        let document: StoredAuthorizationMutationV1 =
+            serde_json::from_value(value).map_err(|_| invalid())?;
+        let provider_kind = ProviderKind::new(document.provider_kind).map_err(|_| invalid())?;
+        let target = match document.target {
+            StoredAuthorizationTargetV1::Create { name } => {
+                AuthorizationMutationTarget::Create { name }
+            }
+            StoredAuthorizationTargetV1::Reauthorize { account_id } => {
+                AuthorizationMutationTarget::Reauthorize {
+                    account_id: ProviderAccountId::new(account_id).map_err(|_| invalid())?,
+                }
+            }
+        };
+        let owner = match document.owner {
+            StoredAuthorizationOwnerV1::AdminSession { admin_user_id } => {
+                AuthorizationOwner::AdminSession { admin_user_id }
+            }
+            StoredAuthorizationOwnerV1::AdminApiKey => AuthorizationOwner::AdminApiKey,
+            StoredAuthorizationOwnerV1::System => AuthorizationOwner::System,
+        };
+        Ok(Self::new(
+            provider_kind,
+            target,
+            AuthorizationOwnerBinding {
+                owner,
+                started_request_id: document.started_request_id,
+            },
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAuthorizationMutationV1 {
+    provider_kind: String,
+    target: StoredAuthorizationTargetV1,
+    owner: StoredAuthorizationOwnerV1,
+    started_request_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum StoredAuthorizationTargetV1 {
+    Create { name: String },
+    Reauthorize { account_id: String },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum StoredAuthorizationOwnerV1 {
+    AdminSession { admin_user_id: String },
+    AdminApiKey,
+    System,
 }
 
 /// 启动 Provider OAuth Authorization Code 流程。
@@ -774,6 +871,20 @@ impl ProviderQuota {
         }
         self.representative_used_window()
             .map(|(_, used_percent)| used_percent)
+    }
+
+    /// 选择 Dashboard 展示的真实窗口；没有百分比时仍保留 Provider 的滚动窗口语义。
+    #[must_use]
+    pub fn representative_window(&self) -> Option<&ProviderQuotaWindow> {
+        self.representative_used_window()
+            .map(|(index, _)| &self.windows[index])
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(index, window)| (quota_usage_priority(window), *index))
+                    .map(|(_, window)| window)
+            })
     }
 
     /// 将已确认的账号级额度耗尽事实投影到展示窗口。

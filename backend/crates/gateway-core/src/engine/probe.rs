@@ -6,7 +6,8 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 
 use crate::error::{ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind};
-use crate::routing::{ProviderKind, UpstreamModelId};
+use crate::identity::ProviderKind;
+use crate::routing::UpstreamModelId;
 use crate::{account::ProviderAccountId, operation::Operation, upstream::UpstreamSendState};
 
 #[derive(Debug, Clone, PartialEq)]

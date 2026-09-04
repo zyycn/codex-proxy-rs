@@ -11,8 +11,8 @@ pub use client_version::{
 use std::fmt;
 use std::sync::Arc;
 
-use crate::error::{IdentifierError, PolicyError, validate_text};
-use crate::routing::FrozenAccountScope;
+use crate::account::scope::FrozenAccountScope;
+use crate::validation::{IdentifierError, PolicyError, validate_text};
 
 /// `client_api_keys.id` 的核心值对象。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

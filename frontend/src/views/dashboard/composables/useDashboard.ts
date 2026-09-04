@@ -1,22 +1,24 @@
 import type { Component } from 'vue'
 import { Activity, FileText, Timer, Users } from '@lucide/vue'
 import { useIntervalFn } from '@vueuse/core'
-import { clamp } from 'es-toolkit'
-import { computed, onMounted, shallowRef } from 'vue'
+import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
 
 import { getDashboardSummary, getDashboardTrend } from '@/api'
-import { withMinimumDuration } from '@/utils/async'
+import { errorMessage, withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { formatCompactNumber, formatInteger } from '@/utils/number'
 
 export function useDashboard() {
   const activeTrendKind = shallowRef(normalizeDashboardTrendKind('usage'))
   const snapshot = shallowRef(dashboardSnapshotView(null))
-  const trend = shallowRef(dashboardTrendView(null))
+  const trend = shallowRef<DashboardTrend | null>(null)
+  const trendLoading = shallowRef(false)
+  const trendError = shallowRef('')
   const loading = shallowRef(false)
   const refreshing = shallowRef(false)
   const lastRefreshedAt = shallowRef('')
   let trendRequestId = 0
+  let disposed = false
 
   const metrics = computed(() => snapshot.value.metrics)
   const healthTimeline = computed(() => snapshot.value.healthTimeline)
@@ -26,8 +28,11 @@ export function useDashboard() {
   const poolSummary = computed(() => snapshot.value.poolSummary)
   const capacityInfo = computed(() => snapshot.value.capacityInfo)
   const rotationStrategy = computed(() => snapshot.value.rotationStrategy)
-  const trendPoints = computed(() => trend.value.points)
-  const trendSummary = computed(() => trend.value.summary)
+  const trendView = computed(() => dashboardTrendView(
+    trend.value?.kind === activeTrendKind.value ? trend.value : null,
+  ))
+  const trendPoints = computed(() => trendView.value.points)
+  const trendSummary = computed(() => trendView.value.summary)
 
   const { resume: startAutoRefresh } = useIntervalFn(
     () => {
@@ -71,24 +76,46 @@ export function useDashboard() {
     const trendKind = normalizeDashboardTrendKind(kind)
     activeTrendKind.value = trendKind
     const requestId = ++trendRequestId
+    trendLoading.value = true
+    trendError.value = ''
     try {
       const result = await getDashboardTrend({ kind: trendKind })
       if (isCurrentTrendRequest(requestId, trendKind))
-        trend.value = dashboardTrendView(result)
+        trend.value = result
     }
-    catch {
-      // 趋势请求失败时保留当前趋势，下一次刷新继续尝试。
+    catch (error: unknown) {
+      if (isCurrentTrendRequest(requestId, trendKind))
+        trendError.value = errorMessage(error, '趋势加载失败')
+    }
+    finally {
+      if (isCurrentTrendRequest(requestId, trendKind))
+        trendLoading.value = false
     }
   }
 
   async function loadDashboardSnapshot() {
     const trendKind = activeTrendKind.value
     const requestId = ++trendRequestId
-    const summary = await getDashboardSummary({ kind: trendKind })
-    snapshot.value = dashboardSnapshotView(summary)
-    lastRefreshedAt.value = formatDateTime()
-    if (isCurrentTrendRequest(requestId, trendKind)) {
-      trend.value = dashboardTrendView(summary.trend)
+    trendLoading.value = true
+    trendError.value = ''
+    try {
+      const summary = await getDashboardSummary({ kind: trendKind })
+      if (disposed)
+        return
+      snapshot.value = dashboardSnapshotView(summary)
+      lastRefreshedAt.value = formatDateTime()
+      if (isCurrentTrendRequest(requestId, trendKind)) {
+        trend.value = summary.trend
+      }
+    }
+    catch (error: unknown) {
+      if (isCurrentTrendRequest(requestId, trendKind))
+        trendError.value = errorMessage(error, '趋势加载失败')
+      throw error
+    }
+    finally {
+      if (isCurrentTrendRequest(requestId, trendKind))
+        trendLoading.value = false
     }
   }
 
@@ -96,12 +123,17 @@ export function useDashboard() {
     requestId: number,
     kind: ReturnType<typeof normalizeDashboardTrendKind>,
   ) {
-    return requestId === trendRequestId && activeTrendKind.value === kind
+    return !disposed && requestId === trendRequestId && activeTrendKind.value === kind
   }
 
   onMounted(() => {
     void loadDashboardData()
     startAutoRefresh()
+  })
+
+  onScopeDispose(() => {
+    disposed = true
+    trendRequestId += 1
   })
 
   return {
@@ -112,6 +144,8 @@ export function useDashboard() {
     metrics,
     trendPoints,
     trendSummary,
+    trendLoading,
+    trendError,
     healthTimeline,
     accountUsage,
     wireProfiles,
@@ -212,7 +246,7 @@ export function dashboardSnapshotView(summary: DashboardSummary | null) {
   return {
     metrics: metricCards(summary?.cards ?? emptyCards, trendPoints),
     healthTimeline: summary?.healthTimeline ?? emptyHealthTimeline,
-    accountUsage: (summary?.accountUsage ?? []).map(accountUsageItem),
+    accountUsage: (summary?.accountUsage ?? []),
     wireProfiles: summary?.wireProfiles ?? [],
     usageRecords: summary?.usageRecords ?? [],
     poolSummary: summary?.poolSummary ?? null,
@@ -435,84 +469,6 @@ function usageTrendSummary(points: ReturnType<typeof aggregateUsageTrend>) {
       colorVar: '--cp-color-text-tertiary',
     },
   ]
-}
-
-function accountUsageItem(item: DashboardSummary['accountUsage'][number]) {
-  const usageWindow = dashboardUsageWindow(item)
-  const requestCount = usageWindow.localUsage?.requestCount
-  const usesDailyRequests = typeof requestCount === 'number'
-  return {
-    id: item.id,
-    provider: item.provider,
-    authenticationKind: item.authenticationKind,
-    email: item.email,
-    planType: item.planType,
-    tokens: item.tokens,
-    lastUsed: item.lastUsed,
-    metricLabel: usesDailyRequests ? '次数' : '今日 Token',
-    metricValue: usesDailyRequests
-      ? requestCount > 0 ? usageWindow.localUsage?.requestCountDisplay : '—'
-      : item.tokens,
-    usageWindow,
-  }
-}
-
-function dashboardUsageWindow(item: DashboardSummary['accountUsage'][number]) {
-  const provider = item.provider.trim().toLowerCase()
-  const planType = item.planType?.trim().toLowerCase() || 'free'
-  if (provider !== 'xai' || planType !== 'free') {
-    const usedPercent = quotaUsedPercent(item.quotaUsedPercent)
-    return {
-      key: 'quota',
-      group: 'other',
-      limitId: null,
-      limitName: null,
-      role: null,
-      labelDisplay: '额度',
-      windowLabelDisplay: '额度',
-      usedPercent,
-      usedPercentDisplay: usedPercent === null ? '—' : `${usedPercent}%`,
-      limitReached: (usedPercent ?? 0) >= 100,
-      windowSeconds: null,
-      resetAtDisplay: '—',
-    }
-  }
-
-  const requestCount = typeof item.requestCount === 'number' && Number.isFinite(item.requestCount)
-    ? Math.max(0, item.requestCount)
-    : 0
-  const requestBuckets = Array.isArray(item.requestBuckets)
-    ? item.requestBuckets.map((bucket: { bucketStart: string, requestCount: number }) => ({
-        bucketStart: bucket.bucketStart,
-        requestCount: bucket.requestCount,
-      }))
-    : []
-
-  return {
-    key: 'dailyRequests',
-    group: 'other',
-    limitId: null,
-    limitName: null,
-    role: null,
-    labelDisplay: '日请求',
-    windowLabelDisplay: '日请求',
-    usedPercent: null,
-    usedPercentDisplay: '—',
-    limitReached: false,
-    windowSeconds: 86_400,
-    resetAtDisplay: '—',
-    localUsage: {
-      requestCount,
-      requestCountDisplay: formatCompactNumber(requestCount),
-      requestBuckets,
-    },
-  }
-}
-
-function quotaUsedPercent(value: number | null) {
-  if (typeof value !== 'number' || !Number.isFinite(value))
-    return null
-  return clamp(Math.round(value), 0, 100)
 }
 
 function formatDashboardUsd(value: string) {

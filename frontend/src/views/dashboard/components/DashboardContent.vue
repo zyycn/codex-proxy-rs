@@ -25,6 +25,8 @@ withDefaults(
     metrics: DashboardSnapshotView['metrics']
     trendPoints: DashboardTrendView['points']
     trendSummary: DashboardTrendView['summary']
+    trendLoading?: boolean
+    trendError?: string
     healthTimeline: DashboardSnapshotView['healthTimeline']
     accountUsage: DashboardSnapshotView['accountUsage']
     wireProfiles: DashboardSnapshotView['wireProfiles']
@@ -37,6 +39,8 @@ withDefaults(
     loading: false,
     refreshing: false,
     lastRefreshedAt: '',
+    trendLoading: false,
+    trendError: '',
   },
 )
 
@@ -86,6 +90,8 @@ const trendKind = defineModel<DashboardTrendKind>('trendKind', { required: true 
         v-model:kind="trendKind"
         :points="trendPoints"
         :summary="trendSummary"
+        :loading="trendLoading"
+        :error="trendError"
         @trend-change="emit('trendChange', $event)"
       />
       <WireProfileCard :profiles="wireProfiles" />

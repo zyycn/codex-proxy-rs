@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::routing::ProviderKind;
+use crate::identity::ProviderKind;
 
 use super::{AccountStatus, ProviderAccount, ProviderAccountId};
 
@@ -388,7 +388,7 @@ pub struct AccountSelectionContext {
     pub preferred_account: Option<ProviderAccountId>,
     pub round_robin_cursor: u64,
     pub eligibility: AccountEligibilityPolicy,
-    pub account_scope: Option<std::sync::Arc<crate::routing::FrozenAccountScope>>,
+    pub account_scope: Option<std::sync::Arc<crate::account::scope::FrozenAccountScope>>,
 }
 
 /// 选择账号时是否执行本地调度资格投影。

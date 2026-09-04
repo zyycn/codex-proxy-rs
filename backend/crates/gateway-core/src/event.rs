@@ -7,10 +7,11 @@ use bytes::Bytes;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::error::{IdentifierError, OpaqueUpstreamValue, validate_text};
 use crate::metering::{CalculatedCost, ProviderReportedCost, Usage};
 use crate::operation::ProviderSessionState;
+use crate::upstream::OpaqueUpstreamValue;
 use crate::upstream::UpstreamTransport;
+use crate::validation::{IdentifierError, validate_text};
 
 /// 一次响应的稳定元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]

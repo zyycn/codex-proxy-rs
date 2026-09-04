@@ -11,11 +11,12 @@ use futures_timer::Delay;
 
 use crate::engine::provider::ProviderCatalogGeneration;
 use crate::health::{HealthProbe, HealthState};
+use crate::identity::ProviderKind;
 use crate::lifecycle::CancellationToken;
+use crate::routing::ConfigRevision;
 use crate::routing::snapshot::{
     RuntimeSnapshot, RuntimeSnapshotCompileError, RuntimeSnapshotCompiler, SnapshotStorePort,
 };
-use crate::routing::{ConfigRevision, ProviderKind};
 use crate::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerRegistration, WorkerRunnable,

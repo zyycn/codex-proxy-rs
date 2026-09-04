@@ -71,6 +71,9 @@ fn dashboard_account_usage_should_keep_daily_request_timeline() {
             request_count: 3,
         }],
         quota_used_percent: None,
+        usage_window: None,
+        metric_label: "次数".to_owned(),
+        metric_value: "3".to_owned(),
         last_used: "刚刚".to_owned(),
     })
     .expect("dashboard account usage");

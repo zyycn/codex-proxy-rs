@@ -8,9 +8,9 @@ use std::fmt;
 use futures::future::BoxFuture;
 
 use crate::account::ProviderAccountId;
+use crate::identity::ProviderKind;
 use crate::operation::ProviderSessionState;
 use crate::policy::ClientApiKeyId;
-use crate::routing::ProviderKind;
 
 /// 客户端或 Provider 传递的 opaque response handle。
 ///

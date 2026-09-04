@@ -103,13 +103,22 @@ flowchart LR
 
 | 模块 | 唯一责任 |
 | --- | --- |
-| `account` | Provider 账号/credential/quota 值对象、持久化端口与请求级账号选择；门面下分 `model`、`store`、`selection`、`error` |
+| `validation` | 纯值对象校验错误和文本约束，不依赖事件、执行错误或路由 |
+| `identity` | Provider 身份值 `ProviderKind`，只依赖纯校验 |
+| `account` | Provider 账号/credential/quota 值对象、持久化端口与请求级账号选择；`scope` 持有分组、账号目录和冻结账号范围 |
 | `metering` | 标准化 Usage、金额、费用估算与费用明细；不表示账号或开票系统 |
-| `upstream` | 跨 Engine、Event、Error 与 Provider 共用的 transport 名称和发送状态 |
+| `upstream` | 跨 Engine、Event、Error 与 Provider 共用的 transport 名称、发送状态和不透明上游值 |
 | `lifecycle` | 取消信号、连接注册与 drain 合同 |
 | `engine` | attempt、发送/提交屏障、执行编排和持久化调用时序 |
 | `routing` | 冻结路由事实、请求计划以及运行时快照的表示与编译 |
 | `runtime` | 当前快照的发布、读取、revision 订阅与周期对账任务 |
+
+`event` 通过 `validation` / `upstream` 使用基础值，不再依赖承载原始事件的执行错误；账号值对象和
+选择策略通过 `identity` / `account::scope` 使用身份与范围，不依赖路由计划。`routing` 和 `error` 的
+既有公开类型路径保留 re-export，定义与 Core 内部使用均归属上述 owner。架构测试约束这些叶子依赖。
+
+`engine::observation` 统一维护单次响应的用量、费用、时间和响应 ID，并负责重试前清理；协调器继续
+独占发送、提交、重试和终结顺序。Provider 上报费用优先于本地估算，丢弃的 attempt 不得污染最终计量。
 
 ## 4. 数据面请求生命周期
 

@@ -9,6 +9,8 @@ const {
   metrics,
   trendPoints,
   trendSummary,
+  trendLoading,
+  trendError,
   healthTimeline,
   accountUsage,
   wireProfiles,
@@ -31,6 +33,8 @@ const {
     :metrics="metrics"
     :trend-points="trendPoints"
     :trend-summary="trendSummary"
+    :trend-loading="trendLoading"
+    :trend-error="trendError"
     :health-timeline="healthTimeline"
     :account-usage="accountUsage"
     :wire-profiles="wireProfiles"

@@ -6,16 +6,18 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use super::observation::ResponseObservation;
 use crate::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, NativeContinuationScope, PreviousResponseId,
 };
+
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
     AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTransport, AttemptTrigger,
     CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
     ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFailureObservation,
-    ModelRequestFinalization, ModelRequestId, ModelRequestTimings, NewModelRequest,
-    ProviderAccountStateOwner, ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
+    ModelRequestFinalization, ModelRequestId, NewModelRequest, ProviderAccountStateOwner,
+    ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{
     ContinuationRecoveryDisposition, GatewayError, GatewayErrorKind, ProviderError,
@@ -25,7 +27,6 @@ use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
 use crate::lifecycle::CancellationToken;
-use crate::metering::{CostEstimate, CostSource, Usage};
 use crate::operation::{Operation, ProviderSessionState};
 use crate::routing::RoutingPlan;
 use futures::future::Fuse;
@@ -148,7 +149,7 @@ where
             engine: Arc::clone(&self.engine),
             request_id,
             client_api_key_ref,
-            timing_started_at,
+            observation: ResponseObservation::new(timing_started_at),
             deadline,
             deadline_timer: Delay::new(
                 deadline
@@ -179,12 +180,7 @@ where
             delivery_pending: false,
             upstream_complete: false,
             finalized: false,
-            usage: Usage::new(),
             image_generation_requested,
-            cost: CostEstimate::unavailable(),
-            timings: ModelRequestTimings::default(),
-            client_response_id: None,
-            upstream_response_id: None,
             last_retryable_failure: None,
             last_retryable_failure_events: Vec::new(),
             provider_attempt_outcomes: Vec::new(),
@@ -241,7 +237,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
-    timing_started_at: Instant,
+    observation: ResponseObservation,
     deadline: SystemTime,
     /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建。
     deadline_timer: Fuse<Delay>,
@@ -276,12 +272,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     delivery_pending: bool,
     upstream_complete: bool,
     finalized: bool,
-    usage: Usage,
     image_generation_requested: bool,
-    cost: CostEstimate,
-    timings: ModelRequestTimings,
-    client_response_id: Option<String>,
-    upstream_response_id: Option<String>,
     /// 最近一次为无感恢复而被丢弃的原始上游错误；只在后续空选路时成为终态。
     last_retryable_failure: Option<ProviderError>,
     /// 与 `last_retryable_failure` 同属一个 attempt 的原始失败批次。
@@ -500,7 +491,7 @@ where
             return None;
         }
         let account = current.metadata.provider_account_id().clone();
-        let response_id = self.upstream_response_id.as_deref()?;
+        let response_id = self.observation.upstream_response_id.as_deref()?;
         let previous_response_id = PreviousResponseId::new(response_id.to_owned());
         let upstream_response_id = PreviousResponseId::new(response_id.to_owned());
         Some(
@@ -579,7 +570,7 @@ where
                         self.observe_response(observation);
                     }
                     for fact in event.canonical_facts() {
-                        self.observe_response_identity(fact);
+                        self.observation.observe_identity(fact);
                     }
                     for fact in event.canonical_facts() {
                         self.observe_event(fact).await;
@@ -691,7 +682,7 @@ where
         }));
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
-                .with_timing_started_at(self.timing_started_at),
+                .with_timing_started_at(self.observation.timing_started_at),
             next_attempt,
             self.deadline,
             self.plan.account_selection_policy(),
@@ -954,24 +945,8 @@ where
     }
 
     async fn observe_event(&mut self, event: &GatewayEvent) {
-        self.observe_event_facts(event);
+        self.observation.observe_event(event);
         self.mark_send_observed().await;
-    }
-
-    fn observe_event_facts(&mut self, event: &GatewayEvent) {
-        let elapsed = elapsed_ms(self.timing_started_at);
-        observe_event_timing(&mut self.timings, event, elapsed);
-        if let GatewayEvent::Usage(observed) = event {
-            self.usage.merge(observed);
-        }
-        if let GatewayEvent::CalculatedCost(observed) = event
-            && self.cost.source() != CostSource::ProviderReported
-        {
-            self.cost = observed.into_estimate();
-        }
-        if let GatewayEvent::ProviderCost(observed) = event {
-            self.cost = observed.into_estimate();
-        }
     }
 
     async fn observe_wire_event(&mut self) {
@@ -1020,42 +995,8 @@ where
         {
             return;
         }
-        let observed = observation.timings();
-        if let Some(value) = observed.transport_decision_wait_ms {
-            self.timings.transport_decision_wait_ms = Some(value);
-        }
-        if let Some(value) = observed.connect_ms {
-            self.timings.connect_ms = Some(value);
-        }
-        if let Some(value) = observed.headers_ms {
-            self.timings.headers_ms = Some(value);
-        }
-        if let Some(value) = observed.first_event_ms {
-            self.timings.first_event_ms = Some(value);
-        }
-        if let Some(value) = observed.first_reasoning_ms {
-            self.timings.first_reasoning_ms = Some(value);
-        }
-        if let Some(value) = observed.first_text_ms {
-            self.timings.first_text_ms = Some(value);
-        }
-        if let Some(value) = observed.first_token_ms {
-            self.timings.first_token_ms = Some(value);
-        }
-        if let Some(value) = observed.provider_processing_ms {
-            self.timings.provider_processing_ms = Some(value);
-        }
+        self.observation.observe_response(&observation);
         current.response_observation = Some(observation);
-    }
-
-    fn observe_response_identity(&mut self, event: &GatewayEvent) {
-        let metadata = match event {
-            GatewayEvent::Started(metadata) | GatewayEvent::Completed(metadata) => metadata,
-            _ => return,
-        };
-        let response_id = metadata.response_id().to_owned();
-        self.client_response_id = Some(response_id.clone());
-        self.upstream_response_id = Some(response_id);
     }
 
     /// 失败可重试时要求丢弃本 attempt；预算耗尽时可返回最后一批原始失败事件。
@@ -1227,8 +1168,8 @@ where
                 self.observe_response(observation);
             }
             for fact in event.canonical_facts() {
-                self.observe_response_identity(fact);
-                self.observe_event_facts(fact);
+                self.observation.observe_identity(fact);
+                self.observation.observe_event(fact);
             }
         }
     }
@@ -1327,18 +1268,7 @@ where
     }
 
     fn reset_uncommitted_observations(&mut self) {
-        self.usage = Usage::new();
-        self.cost = CostEstimate::unavailable();
-        self.client_response_id = None;
-        self.upstream_response_id = None;
-        self.timings.transport_decision_wait_ms = None;
-        self.timings.connect_ms = None;
-        self.timings.headers_ms = None;
-        self.timings.first_event_ms = None;
-        self.timings.first_reasoning_ms = None;
-        self.timings.first_text_ms = None;
-        self.timings.first_token_ms = None;
-        self.timings.provider_processing_ms = None;
+        self.observation.reset_for_attempt();
         self.upstream_complete = false;
     }
 
@@ -1347,7 +1277,7 @@ where
             return Ok(());
         }
         let completed_at = SystemTime::now();
-        self.timings.latency_ms = Some(elapsed_ms(self.timing_started_at));
+        self.observation.finish();
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
                 .response_observation
@@ -1387,9 +1317,9 @@ where
                         downstream_committed_at: self.downstream_committed_at,
                         client_status_code: self.client_status_code,
                         upstream_status_code,
-                        client_response_id: self.client_response_id.clone(),
+                        client_response_id: self.observation.client_response_id.clone(),
                         upstream_request_id,
-                        upstream_response_id: self.upstream_response_id.clone(),
+                        upstream_response_id: self.observation.upstream_response_id.clone(),
                         upstream_transport,
                         http_version,
                         websocket_pool,
@@ -1400,10 +1330,10 @@ where
                         raw_upstream_error: None,
                         failure_observation: ModelRequestFailureObservation::default(),
                         retry_after_ms: None,
-                        usage: self.usage.clone(),
+                        usage: self.observation.usage.clone(),
                         image_generation_succeeded: self.image_generation_succeeded(),
-                        cost: self.cost.clone(),
-                        timings: self.timings.clone(),
+                        cost: self.observation.cost.clone(),
+                        timings: self.observation.timings.clone(),
                         completed_at,
                     }),
             )
@@ -1518,7 +1448,7 @@ where
             return Ok(());
         }
         let completed_at = SystemTime::now();
-        self.timings.latency_ms = Some(elapsed_ms(self.timing_started_at));
+        self.observation.finish();
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
                 .response_observation
@@ -1559,9 +1489,9 @@ where
                     upstream_status_code: finalization
                         .upstream_status_code
                         .or(observed_status_code),
-                    client_response_id: self.client_response_id.clone(),
+                    client_response_id: self.observation.client_response_id.clone(),
                     upstream_request_id,
-                    upstream_response_id: self.upstream_response_id.clone(),
+                    upstream_response_id: self.observation.upstream_response_id.clone(),
                     upstream_transport,
                     http_version,
                     websocket_pool,
@@ -1572,10 +1502,10 @@ where
                     raw_upstream_error: finalization.raw_upstream_error,
                     failure_observation: finalization.observation,
                     retry_after_ms: finalization.retry_after_ms,
-                    usage: self.usage.clone(),
+                    usage: self.observation.usage.clone(),
                     image_generation_succeeded: self.image_generation_succeeded(),
-                    cost: self.cost.clone(),
-                    timings: self.timings.clone(),
+                    cost: self.observation.cost.clone(),
+                    timings: self.observation.timings.clone(),
                     completed_at,
                 }),
         )
@@ -1623,7 +1553,11 @@ where
             if matches!(self.operation, Operation::GenerateImage(_)) {
                 self.upstream_complete
             } else {
-                self.usage.image_output_tokens.unwrap_or_default() > 0
+                self.observation
+                    .usage
+                    .image_output_tokens
+                    .unwrap_or_default()
+                    > 0
             }
         })
     }
@@ -1661,7 +1595,7 @@ where
 
     fn record_provider_failure(
         &mut self,
-        provider_kind: crate::routing::ProviderKind,
+        provider_kind: crate::identity::ProviderKind,
         error_kind: ProviderErrorKind,
     ) {
         self.provider_attempt_outcomes
@@ -1848,31 +1782,6 @@ const fn escalate_send_state(a: UpstreamSendState, b: UpstreamSendState) -> Upst
         }
         (UpstreamSendState::NotSent, UpstreamSendState::NotSent) => UpstreamSendState::NotSent,
     }
-}
-
-fn observe_event_timing(timings: &mut ModelRequestTimings, event: &GatewayEvent, elapsed_ms: u64) {
-    timings.first_event_ms.get_or_insert(elapsed_ms);
-    match event {
-        GatewayEvent::ReasoningDelta(_) => {
-            timings.first_reasoning_ms.get_or_insert(elapsed_ms);
-            timings.first_token_ms.get_or_insert(elapsed_ms);
-        }
-        GatewayEvent::TextDelta(_) => {
-            timings.first_text_ms.get_or_insert(elapsed_ms);
-            timings.first_token_ms.get_or_insert(elapsed_ms);
-        }
-        // `response.output_item.added` 会先投影一个空参数的 tool delta；它只是结构帧，
-        // 不能抢在真实工具参数之前成为首个可消费 token。
-        GatewayEvent::ToolCallDelta(delta) if !delta.arguments_delta.is_empty() => {
-            timings.first_token_ms.get_or_insert(elapsed_ms);
-        }
-        GatewayEvent::CalculatedCost(_) | GatewayEvent::ProviderCost(_) => {}
-        _ => {}
-    }
-}
-
-fn elapsed_ms(started_at: Instant) -> u64 {
-    duration_ms(started_at.elapsed())
 }
 
 fn duration_ms(duration: Duration) -> u64 {

@@ -1,3 +1,4 @@
+use futures::TryStreamExt;
 use std::{
     collections::BTreeMap,
     sync::Arc,
@@ -595,6 +596,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
 
     let facts = repository
         .usage_calculated_billing_facts(range, UsageRecordFilter::default())
+        .try_collect::<Vec<_>>()
         .await
         .expect("calculated usage billing facts");
     assert_eq!(facts.len(), 1);
@@ -612,6 +614,7 @@ async fn calculated_usage_billing_facts_keep_only_completed_calculated_costs() {
                 .expect("admin observability range"),
             admin_observability::UsageFilter::default(),
         )
+        .try_collect::<Vec<_>>()
         .await
         .expect("admin calculated usage billing facts");
     assert_eq!(facts.len(), 1);

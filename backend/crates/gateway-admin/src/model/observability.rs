@@ -491,6 +491,8 @@ pub struct DashboardAccountUsage {
     ///
     /// `None` 表示上游未提供可比较的百分比，不应伪造为零。
     pub quota_used_percent: Option<f64>,
+    /// Provider 返回的代表窗口；缺失时保留未知语义。
+    pub quota_window: Option<super::provider_credentials::ProviderQuotaWindow>,
     pub models: Vec<DashboardAccountModelUsage>,
 }
 
