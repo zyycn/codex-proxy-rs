@@ -110,9 +110,9 @@ fn is_internal_websocket_event(event: &str) -> bool {
     event == "codex.rate_limits"
 }
 
-/// 提取 `response.metadata` 帧中的字符串响应头。
+/// 提取 Responses WebSocket metadata 帧中的字符串响应头。
 pub fn websocket_metadata_headers(value: &Value) -> Vec<(String, String)> {
-    if value.get("type").and_then(Value::as_str) != Some("response.metadata") {
+    if !is_websocket_metadata_event(websocket_event_type(value)) {
         return Vec::new();
     }
     value
@@ -124,24 +124,18 @@ pub fn websocket_metadata_headers(value: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 从 `response.metadata` 帧中提取 `x-codex-turn-state`。
+/// 从 Responses WebSocket metadata 帧中提取 `x-codex-turn-state`。
 pub fn websocket_metadata_turn_state(value: &Value) -> Option<String> {
-    if value.get("type").and_then(Value::as_str) != Some("response.metadata") {
-        return None;
-    }
     websocket_metadata_headers(value)
         .into_iter()
         .find_map(|(name, value)| {
             name.eq_ignore_ascii_case("x-codex-turn-state")
                 .then_some(value)
         })
-        .or_else(|| {
-            value
-                .pointer("/metadata/turn_state")
-                .or_else(|| value.get("turn_state"))
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-        })
+}
+
+fn is_websocket_metadata_event(event: Option<&str>) -> bool {
+    matches!(event, Some("response.metadata" | "codex.response.metadata"))
 }
 
 /// 上游 WebSocket 连接寿命限制错误码。

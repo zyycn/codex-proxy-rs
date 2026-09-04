@@ -31,7 +31,7 @@ pub struct CodexWebSocketStreamingExchange {
     pub(crate) websocket_connection_id: Uuid,
     /// 由 WebSocket 事件转换出的 live SSE 字节流。
     pub body: CodexWebSocketSseStream,
-    /// 上游 metadata 帧中的最新 turn state。
+    /// 上游为本次响应返回的首个 turn state。
     pub turn_state: Option<String>,
     /// 上游握手响应里的 `set-cookie` 列表。
     pub set_cookie_headers: Vec<String>,
@@ -39,7 +39,7 @@ pub struct CodexWebSocketStreamingExchange {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 上游内部 `codex.rate_limits` 事件里的结构化动态更新。
     pub rate_limit_updates: CodexWebSocketRateLimitUpdates,
-    /// 上游内部 metadata 事件里的动态 turn state。
+    /// 上游内部 metadata 事件里的首个动态 turn state。
     pub turn_state_update: CodexWebSocketTurnStateUpdate,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
@@ -63,5 +63,10 @@ pub(super) fn reusable_websocket_metadata(
     mut metadata: CodexWebSocketConnectionMetadata,
 ) -> CodexWebSocketConnectionMetadata {
     metadata.rate_limit_headers.clear();
+    metadata.turn_state = None;
+    metadata
+        .response_metadata
+        .client_headers
+        .retain(|(name, _)| !name.eq_ignore_ascii_case("x-codex-turn-state"));
     metadata
 }

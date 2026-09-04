@@ -24,7 +24,9 @@ use serde_json::{Value, map::Map};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::transport::protocol::responses::{CodexResponsesRequest, TransportRequirement};
+use crate::transport::protocol::responses::{
+    CodexResponsesRequest, TransportRequirement, X_CODEX_TURN_STATE_CLIENT_METADATA_KEY,
+};
 
 use super::diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamFailure, CodexUpstreamSendPhase};
 use super::response_meta::CodexResponseMetadata;
@@ -546,7 +548,7 @@ pub struct CodexBackendStreamingResponse {
     pub transport: CodexBackendTransport,
     /// WebSocket 响应所绑定的连接；HTTP transport 为 `None`。
     pub websocket_connection_id: Option<Uuid>,
-    /// 响应头里的最新 turn state。
+    /// 响应头或 metadata 事件里最先确认的 turn state。
     pub turn_state: Option<String>,
     /// 上游透传的 `set-cookie` 列表。
     pub set_cookie_headers: Vec<String>,
@@ -760,32 +762,33 @@ pub(super) async fn read_error_response_body(
 
 pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
-    project_responses_lite_to_ws_metadata(&mut request);
-    stamp_ws_stream_request_start_ms(&mut request);
+    project_websocket_client_metadata(&mut request);
     request
 }
 
-fn project_responses_lite_to_ws_metadata(request: &mut CodexResponsesRequest) {
-    let Some(responses_lite) = request.responses_lite.clone() else {
-        return;
-    };
+fn project_websocket_client_metadata(request: &mut CodexResponsesRequest) {
     let mut metadata = match request.client_metadata() {
         Some(Value::Object(metadata)) => metadata.clone(),
         None => Map::new(),
         Some(_) => return,
     };
-    metadata
-        .entry(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string())
-        .or_insert(Value::String(responses_lite));
-    request.set_client_metadata(Some(Value::Object(metadata)));
-}
-
-fn stamp_ws_stream_request_start_ms(request: &mut CodexResponsesRequest) {
-    let mut metadata = match request.client_metadata() {
-        Some(Value::Object(metadata)) => metadata.clone(),
-        None => Map::new(),
-        Some(_) => return,
-    };
+    if let Some(responses_lite) = request.responses_lite.clone() {
+        metadata
+            .entry(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_owned())
+            .or_insert(Value::String(responses_lite));
+    }
+    let turn_state = request.turn_state.clone();
+    match turn_state {
+        Some(turn_state) => {
+            metadata.insert(
+                X_CODEX_TURN_STATE_CLIENT_METADATA_KEY.to_owned(),
+                Value::String(turn_state),
+            );
+        }
+        None => {
+            metadata.remove(X_CODEX_TURN_STATE_CLIENT_METADATA_KEY);
+        }
+    }
     metadata.insert(
         X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
         Value::String(now_unix_timestamp_millis().to_string()),

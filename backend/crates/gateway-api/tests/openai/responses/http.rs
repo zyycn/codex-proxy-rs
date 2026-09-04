@@ -894,6 +894,41 @@ async fn streaming_rate_limit_before_first_frame_should_persist_the_returned_429
 }
 
 #[tokio::test]
+async fn streaming_failure_before_first_frame_should_return_safe_observed_headers() {
+    let trace = Arc::new(Trace::default());
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![NextStep::Error(EngineError::Provider(ProviderError::new(
+            ProviderErrorKind::Unavailable,
+            UpstreamSendState::Ambiguous,
+        )))],
+    )
+    .with_response_headers(vec![
+        ProviderResponseHeader::new(
+            "x-codex-turn-state",
+            Bytes::from_static(b"turn-state-before-close"),
+        ),
+        ProviderResponseHeader::new(
+            "authorization",
+            Bytes::from_static(b"must-not-cross-boundary"),
+        ),
+    ]);
+
+    let response = stream_execution_response(Box::new(session), None).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-state-before-close")
+    );
+    assert!(response.headers().get("authorization").is_none());
+    assert_eq!(trace.client_statuses(), vec![502]);
+}
+
+#[tokio::test]
 async fn streaming_upstream_http_failure_before_first_frame_should_preserve_raw_response() {
     let trace = Arc::new(Trace::default());
     let raw_body = Bytes::from_static(
@@ -979,11 +1014,29 @@ async fn buffered_upstream_http_failure_should_preserve_raw_response() {
             raw_body.clone(),
         ));
     let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()])
-        .with_collect_error(EngineError::Provider(error));
+        .with_collect_error(EngineError::Provider(error))
+        .with_response_headers(vec![
+            ProviderResponseHeader::new(
+                "x-codex-turn-state",
+                Bytes::from_static(b"turn-state-before-close"),
+            ),
+            ProviderResponseHeader::new(
+                "authorization",
+                Bytes::from_static(b"must-not-cross-boundary"),
+            ),
+        ]);
 
     let response = collect_execution_response(Box::new(session)).await;
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-state-before-close")
+    );
+    assert!(response.headers().get("authorization").is_none());
     assert_eq!(
         to_bytes(response.into_body(), usize::MAX)
             .await

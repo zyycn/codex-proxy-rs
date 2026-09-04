@@ -7,9 +7,12 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::transport::protocol::responses::CodexResponsesRequest;
+use crate::transport::protocol::responses::{
+    CodexResponsesRequest, X_CODEX_TURN_STATE_CLIENT_METADATA_KEY,
+};
 
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
+const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] = &["max_output_tokens", "temperature"];
@@ -144,8 +147,16 @@ struct ExtractedRequestContext {
 
 impl ExtractedRequestContext {
     fn from_body(body: &Map<String, Value>) -> Self {
+        let client_metadata = body.get("client_metadata").and_then(Value::as_object);
         Self {
-            turn_state: body_string(body, "turnState"),
+            // 官方 downstream WebSocket 无法逐帧更新 HTTP header，因此把
+            // response.metadata 返回的 turn state 放回下一帧 client_metadata。
+            // Provider 仍会在账号/turn 归属确定后决定是否允许复用该状态。
+            turn_state: body_string(body, "turnState").or_else(|| {
+                client_metadata.and_then(|metadata| {
+                    string_value(metadata.get(X_CODEX_TURN_STATE_CLIENT_METADATA_KEY))
+                })
+            }),
             turn_metadata: body_string(body, "turnMetadata"),
             beta_features: body_string(body, "betaFeatures"),
             version: body_string(body, "version"),
@@ -156,15 +167,15 @@ impl ExtractedRequestContext {
             session_id: body_string(body, "session_id"),
             thread_id: body_string(body, "thread_id"),
             client_request_id: body_string(body, "x-client-request-id"),
-            turn_id: body_string(body, "turn_id"),
+            turn_id: body_string(body, "turn_id").or_else(|| {
+                client_metadata
+                    .and_then(|metadata| string_value(metadata.get(TURN_ID_CLIENT_METADATA_KEY)))
+            }),
             // Responses Lite 在 WebSocket body 中的这个键是官方 header 投影，
             // 不是普通上下文字段的 metadata 回退。
-            responses_lite: body
-                .get("client_metadata")
-                .and_then(Value::as_object)
-                .and_then(|metadata| {
-                    string_value(metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY))
-                }),
+            responses_lite: client_metadata.and_then(|metadata| {
+                string_value(metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY))
+            }),
             // Memory consolidation 只由官方请求头提供；body 中同名字段不参与
             // transport 事实提取。
             memgen_request: None,

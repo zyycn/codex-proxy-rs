@@ -21,7 +21,6 @@ pub(in crate::transport::websocket) enum WebSocketTerminalKind {
 
 pub(super) enum ExchangeAction {
     RateLimits(events::ParsedRateLimits),
-    TurnState(String),
     Forward {
         frame: String,
         terminal: Option<WebSocketTerminalKind>,
@@ -32,6 +31,7 @@ pub(super) enum ExchangeAction {
 pub(super) struct ReducedWebSocketEvent {
     pub(super) action: ExchangeAction,
     pub(super) diagnostic_event_type: Option<String>,
+    pub(super) turn_state_update: Option<String>,
 }
 
 pub(super) fn reduce_websocket_event(
@@ -45,6 +45,7 @@ pub(super) fn reduce_websocket_event(
         return Ok(ReducedWebSocketEvent {
             action: ExchangeAction::Ignore,
             diagnostic_event_type: None,
+            turn_state_update: None,
         });
     };
     let diagnostic_event_type = diagnostic_event_type(websocket_event_type(&value));
@@ -54,6 +55,7 @@ pub(super) fn reduce_websocket_event(
         return Ok(ReducedWebSocketEvent {
             action: ExchangeAction::RateLimits(parsed),
             diagnostic_event_type,
+            turn_state_update: None,
         });
     }
 
@@ -61,13 +63,13 @@ pub(super) fn reduce_websocket_event(
         &mut metadata.response_metadata,
         websocket_metadata_headers(&value),
     );
-    if let Some(turn_state) = websocket_metadata_turn_state(&value) {
+    let turn_state_update = websocket_metadata_turn_state(&value).and_then(|turn_state| {
+        if metadata.turn_state.is_some() {
+            return None;
+        }
         metadata.turn_state = Some(turn_state.clone());
-        return Ok(ReducedWebSocketEvent {
-            action: ExchangeAction::TurnState(turn_state),
-            diagnostic_event_type,
-        });
-    }
+        Some(turn_state)
+    });
 
     let event = websocket_event_type(&value);
     if event == Some("response.completed")
@@ -89,6 +91,7 @@ pub(super) fn reduce_websocket_event(
     Ok(ReducedWebSocketEvent {
         action,
         diagnostic_event_type,
+        turn_state_update,
     })
 }
 

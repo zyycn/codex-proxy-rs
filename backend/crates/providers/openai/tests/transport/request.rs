@@ -228,6 +228,26 @@ fn encoder_should_ignore_legacy_context_aliases_and_metadata_fallbacks() {
 }
 
 #[test]
+fn encoder_should_extract_official_websocket_context_projection() {
+    let request = request(Map::from_iter([
+        ("model".to_owned(), json!("client-model")),
+        ("input".to_owned(), json!("prompt")),
+        (
+            "client_metadata".to_owned(),
+            json!({
+                "x-codex-turn-state": "metadata-turn-state",
+                "turn_id": "metadata-turn-id"
+            }),
+        ),
+    ]));
+
+    let encoded = encode_generate_request(&request, "gpt-test").expect("encode");
+
+    assert_eq!(encoded.turn_state.as_deref(), Some("metadata-turn-state"));
+    assert_eq!(encoded.client_turn_id.as_deref(), Some("metadata-turn-id"));
+}
+
+#[test]
 fn header_context_should_win_over_body_topline_aliases() {
     let payload = ProtocolPayload::json_object(
         "openai",
@@ -236,6 +256,13 @@ fn header_context_should_win_over_body_topline_aliases() {
             ("input".to_owned(), json!("prompt")),
             ("turnState".to_owned(), json!("body-turn-state")),
             ("turnMetadata".to_owned(), json!("body-turn-metadata")),
+            (
+                "client_metadata".to_owned(),
+                json!({
+                    "x-codex-turn-state": "metadata-turn-state",
+                    "turn_id": "metadata-turn-id"
+                }),
+            ),
         ]),
     )
     .expect("OpenAI payload")
@@ -248,6 +275,10 @@ fn header_context_should_win_over_body_topline_aliases() {
             "turn_metadata".to_owned(),
             Value::String("header-turn-metadata".to_owned()),
         ),
+        (
+            "turn_id".to_owned(),
+            Value::String("header-turn-id".to_owned()),
+        ),
     ]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
@@ -258,6 +289,7 @@ fn header_context_should_win_over_body_topline_aliases() {
         encoded.turn_metadata.as_deref(),
         Some("header-turn-metadata")
     );
+    assert_eq!(encoded.client_turn_id.as_deref(), Some("header-turn-id"));
 }
 
 #[test]

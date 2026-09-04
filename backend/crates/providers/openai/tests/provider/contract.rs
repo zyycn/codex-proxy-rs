@@ -461,6 +461,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_websocket_cooldown",
         "acct_websocket_fast_path",
         "acct_websocket_busy_replay",
+        "acct_websocket_metadata_close",
         "acct_websocket_turn_state",
     ]
     .into_iter()
@@ -2520,6 +2521,96 @@ async fn websocket_turn_state_metadata_is_exposed_through_response_observation()
 }
 
 #[tokio::test]
+async fn websocket_turn_state_metadata_survives_close_1000_without_changing_failure_semantics() {
+    const ACCOUNT_ID: &str = "acct_websocket_metadata_close";
+    const TURN_STATE: &str = "turn-state-before-close";
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT_ID).await;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket listener");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("listener address")
+    );
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept WebSocket connection");
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _request = websocket
+            .next()
+            .await
+            .expect("WebSocket request")
+            .expect("valid WebSocket request");
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "codex.response.metadata",
+                    "headers": {"x-codex-turn-state": TURN_STATE}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send response metadata");
+        websocket
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            }))
+            .await
+            .expect("close before terminal response");
+    });
+
+    let operation = Operation::Generate(generate_with_persisted_session_context(
+        ACCOUNT_ID,
+        "conversation-metadata-close",
+        "session-metadata-close",
+        "turn-metadata-close",
+    ));
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", operation),
+            context("req_websocket_metadata_close", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket provider stream");
+    let mut observed_turn_state = false;
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(event)) => {
+                if let Some(observation) = event.response_observation() {
+                    observed_turn_state |= observation.client_headers().iter().any(|header| {
+                        header.name().eq_ignore_ascii_case("x-codex-turn-state")
+                            && header.value().as_ref() == TURN_STATE.as_bytes()
+                    });
+                }
+            }
+            Some(Err(error)) => break error,
+            None => panic!("metadata close must surface a provider error"),
+        }
+    };
+    server.await.expect("WebSocket server");
+
+    assert!(observed_turn_state);
+    assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+    assert_eq!(error.pre_delivery_retry(), None);
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("websocket_close_1000")
+    );
+    assert_eq!(
+        error.diagnostic().map(|diagnostic| diagnostic.as_str()),
+        Some(
+            "OpenAI WebSocket closed before a terminal response (close code 1000); last event type: codex.response.metadata"
+        )
+    );
+}
+
+#[tokio::test]
 async fn disabled_account_is_excluded_from_normal_scheduling() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account_with_enabled(&store, "acct_disabled_scheduling", false).await;
@@ -2955,30 +3046,45 @@ async fn matching_turn_id_should_restore_previous_turn_state() {
 }
 
 #[tokio::test]
-async fn matching_turn_id_should_prefer_the_latest_provider_state_over_a_stale_client_echo() {
+async fn matching_turn_id_should_prefer_an_explicit_client_echo_over_saved_provider_state() {
     let request = capture_turn_state_request(
-        "req_replace_stale_client_turn_state",
+        "req_use_client_turn_state",
         Some("turn-same"),
         Some("turn-same"),
-        Some("stale-client-turn-state"),
+        Some("client-turn-state"),
     )
     .await;
 
     assert_eq!(
         captured_header_values(&request, "x-codex-turn-state"),
-        vec![b"previous-turn-state".to_vec()]
+        vec![b"client-turn-state".to_vec()]
     );
 }
 
 #[tokio::test]
 async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
-    for (request_id, previous_turn_id, current_turn_id) in [
-        ("req_new_turn_state", Some("turn-old"), Some("turn-new")),
-        ("req_unidentified_turn_state", None, Some("turn-new")),
-        ("req_missing_current_turn_state", Some("turn-old"), None),
+    for (request_id, previous_turn_id, current_turn_id, client_turn_state) in [
+        (
+            "req_new_turn_state",
+            Some("turn-old"),
+            Some("turn-new"),
+            Some("stale-client-turn-state"),
+        ),
+        ("req_unidentified_turn_state", None, Some("turn-new"), None),
+        (
+            "req_missing_current_turn_state",
+            Some("turn-old"),
+            None,
+            None,
+        ),
     ] {
-        let request =
-            capture_turn_state_request(request_id, previous_turn_id, current_turn_id, None).await;
+        let request = capture_turn_state_request(
+            request_id,
+            previous_turn_id,
+            current_turn_id,
+            client_turn_state,
+        )
+        .await;
         assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());
     }
 }

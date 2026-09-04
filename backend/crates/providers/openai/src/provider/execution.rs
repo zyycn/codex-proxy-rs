@@ -732,14 +732,23 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         );
                     }
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
-                    if !updates.is_empty() {
+                    let rate_limits_changed = if updates.is_empty() {
+                        false
+                    } else {
                         passive_quota_observation.observe(&updates);
                         let update_headers = rate_limit_update_headers(&updates);
-                        if observation_state.merge_rate_limit_headers(&update_headers)
-                            && let Some(observation) = observation_state.observation()
-                        {
-                            yield ProviderEvent::observation(observation);
-                        }
+                        observation_state.merge_rate_limit_headers(&update_headers)
+                    };
+                    let turn_state_changed = merge_turn_state_update(
+                        turn_state_updates.as_ref(),
+                        &mut session_capture,
+                        &mut observation_state,
+                    )
+                    .await;
+                    if (rate_limits_changed || turn_state_changed)
+                        && let Some(observation) = observation_state.observation()
+                    {
+                        yield ProviderEvent::observation(observation);
                     }
                     if allows_account_state_mutation {
                         synchronize_passive_quota(
@@ -763,16 +772,12 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 passive_quota_observation.observe(&updates);
                 observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
             };
-            let turn_state_changed = if let Some(updates) = turn_state_updates.as_ref()
-                && let Some(turn_state) = updates.lock().await.take()
-            {
-                if let Some(capture) = session_capture.as_mut() {
-                    capture.turn_state = Some(turn_state.clone());
-                }
-                observation_state.merge_client_header("x-codex-turn-state", &turn_state)
-            } else {
-                false
-            };
+            let turn_state_changed = merge_turn_state_update(
+                turn_state_updates.as_ref(),
+                &mut session_capture,
+                &mut observation_state,
+            )
+            .await;
             let first_event_changed =
                 observation_state.observe_stream_chunk(&chunk, output_started_at);
             let chunk_len = chunk.len();
@@ -949,16 +954,12 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             apply_failure(&failure_context, &active_account, failure)
             .await;
         }
-        let turn_state_changed = if let Some(updates) = turn_state_updates.as_ref()
-            && let Some(turn_state) = updates.lock().await.take()
-        {
-            if let Some(capture) = session_capture.as_mut() {
-                capture.turn_state = Some(turn_state.clone());
-            }
-            observation_state.merge_client_header("x-codex-turn-state", &turn_state)
-        } else {
-            false
-        };
+        let turn_state_changed = merge_turn_state_update(
+            turn_state_updates.as_ref(),
+            &mut session_capture,
+            &mut observation_state,
+        )
+        .await;
         attach_openai_session_update(&mut events, &mut session_capture);
         let completed = events
             .iter()
@@ -1023,4 +1024,21 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             yield event;
         }
     })
+}
+
+async fn merge_turn_state_update(
+    updates: Option<&CodexTurnStateUpdate>,
+    session_capture: &mut Option<OpenAiSessionCapture>,
+    observation_state: &mut OpenAiResponseObservationState,
+) -> bool {
+    let Some(updates) = updates else {
+        return false;
+    };
+    let Some(turn_state) = updates.lock().await.take() else {
+        return false;
+    };
+    if let Some(capture) = session_capture.as_mut() {
+        capture.turn_state = Some(turn_state.clone());
+    }
+    observation_state.merge_client_header("x-codex-turn-state", &turn_state)
 }

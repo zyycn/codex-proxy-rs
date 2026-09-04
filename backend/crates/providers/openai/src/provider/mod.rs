@@ -93,7 +93,7 @@ use crate::transport::{
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
     CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
     CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexTransportMetrics, CodexUpstreamDiagnostics, CodexWebSocketPool,
+    CodexTransportMetrics, CodexTurnStateUpdate, CodexUpstreamDiagnostics, CodexWebSocketPool,
     WebSocketConnectionPreference, endpoint_url,
 };
 
@@ -320,15 +320,20 @@ impl Provider for CodexProvider {
         if let Some(identity) = &self.session_identity {
             identity.prepare_local_conversation(&mut upstream_request);
         }
-        if previous_session.as_ref().is_some_and(|state| {
-            same_client_turn(
-                state.client_turn_id.as_deref(),
+        if let Some(previous_session) = previous_session.as_ref() {
+            upstream_request.turn_state = if same_client_turn(
+                previous_session.client_turn_id.as_deref(),
                 upstream_request.client_turn_id.as_deref(),
-            )
-        }) {
-            upstream_request.turn_state = previous_session
-                .as_ref()
-                .and_then(|state| state.turn_state.clone());
+            ) {
+                // 客户端可能携带 metadata-close 失败后才拿到的新状态；同一
+                // turn 内显式回传值比最后一次成功响应保存的状态更新。
+                upstream_request
+                    .turn_state
+                    .take()
+                    .or_else(|| previous_session.turn_state.clone())
+            } else {
+                None
+            };
         }
         let session_affinity =
             derive_codex_session_affinity(&upstream_request, context.client_api_key_ref());

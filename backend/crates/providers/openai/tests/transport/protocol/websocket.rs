@@ -155,6 +155,7 @@ fn websocket_event_to_sse_should_forward_public_events_and_strip_internal_events
     );
     assert!(websocket_event_to_sse_frame(r#"{"type":"codex.rate_limits"}"#).is_none());
     assert!(websocket_event_to_sse_frame(r#"{"type":"response.metadata"}"#).is_none());
+    assert!(websocket_event_to_sse_frame(r#"{"type":"codex.response.metadata"}"#).is_some());
     assert!(websocket_event_to_sse_frame(r#"{"response":{}}"#).is_none());
     assert!(websocket_event_to_sse_frame("not-json").is_none());
 }
@@ -178,15 +179,48 @@ fn websocket_event_to_sse_should_add_missing_previous_response_recovery_code() {
 
 #[test]
 fn websocket_metadata_turn_state_should_accept_case_insensitive_header() {
-    let event = json!({
-        "type": "response.metadata",
-        "headers": {"X-Codex-Turn-State": ["turn-from-metadata"]}
-    });
+    for (event, expected) in [
+        (
+            json!({
+                "type": "response.metadata",
+                "headers": {"X-Codex-Turn-State": ["turn-from-legacy-metadata"]}
+            }),
+            "turn-from-legacy-metadata",
+        ),
+        (
+            json!({
+                "type": "codex.response.metadata",
+                "headers": {"X-Codex-Turn-State": "turn-from-codex-metadata"}
+            }),
+            "turn-from-codex-metadata",
+        ),
+    ] {
+        assert_eq!(
+            websocket_metadata_turn_state(&event).as_deref(),
+            Some(expected)
+        );
+    }
+}
 
-    assert_eq!(
-        websocket_metadata_turn_state(&event).as_deref(),
-        Some("turn-from-metadata")
-    );
+#[test]
+fn websocket_metadata_turn_state_should_ignore_unverified_shapes() {
+    for event in [
+        json!({
+            "type": "codex.response.metadata",
+            "headers": {"x-codex-turn-state": {"future": "shape"}}
+        }),
+        json!({
+            "type": "codex.response.metadata",
+            "metadata": {"turn_state": "nested-value"},
+            "turn_state": "top-level-value"
+        }),
+        json!({
+            "type": "future.response.metadata",
+            "headers": {"x-codex-turn-state": "unverified-event"}
+        }),
+    ] {
+        assert_eq!(websocket_metadata_turn_state(&event), None);
+    }
 }
 
 #[test]

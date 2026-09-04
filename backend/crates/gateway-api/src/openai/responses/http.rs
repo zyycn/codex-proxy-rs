@@ -14,8 +14,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::stream;
-use gateway_core::engine::CommitRequirement;
 use gateway_core::engine::execution::{ClientTransport, ExecutionSession, StartedExecution};
+use gateway_core::engine::{CommitRequirement, EngineError};
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::ConnectionGuard;
@@ -152,7 +152,8 @@ pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> R
     let events = match session.collect_uncommitted().await {
         Ok(events) => events,
         Err(error) => {
-            let response = engine_error_response(&error);
+            let response_headers = session.response_headers().to_vec();
+            let response = engine_error_response_with_headers(&error, &response_headers);
             return execution.record_response_status(response).await;
         }
     };
@@ -178,7 +179,7 @@ pub async fn collect_execution_response(session: Box<dyn ExecutionSession>) -> R
         .await
     {
         execution.cancel_and_finalize().await;
-        let response = engine_error_response(&error);
+        let response = engine_error_response_with_headers(&error, &response_headers);
         return execution.record_response_status(response).await;
     }
     if !session.is_finalized() {
@@ -246,6 +247,13 @@ fn apply_response_headers(
     response
 }
 
+fn engine_error_response_with_headers(
+    error: &EngineError,
+    response_headers: &[ProviderResponseHeader],
+) -> Response {
+    apply_response_headers(engine_error_response(error), response_headers)
+}
+
 /// 编码首个 SSE frame 后提交下游，再持续驱动同一执行会话。
 pub async fn stream_execution_response(
     session: Box<dyn ExecutionSession>,
@@ -267,7 +275,8 @@ pub async fn stream_execution_response(
             return response;
         }
         Err(error) => {
-            let response = engine_error_response(&error);
+            let response_headers = session.response_headers().to_vec();
+            let response = engine_error_response_with_headers(&error, &response_headers);
             return execution.record_response_status(response).await;
         }
     };
@@ -299,7 +308,7 @@ pub async fn stream_execution_response(
         .await
     {
         execution.cancel_and_finalize().await;
-        let response = engine_error_response(&error);
+        let response = engine_error_response_with_headers(&error, &response_headers);
         return execution.record_response_status(response).await;
     }
     let Some(session) = execution.into_session() else {

@@ -77,8 +77,8 @@ pub(super) async fn forward_execution(
                 return send_gateway_error(connection, &error, &request_id).await;
             }
             ActiveInput::Event(Err(error)) => {
-                let error = gateway_error_from_engine(&error);
-                return send_gateway_error(connection, &error, &request_id).await;
+                return send_initial_engine_error(connection, &mut execution, &error, &request_id)
+                    .await;
             }
             ActiveInput::Control => continue,
             ActiveInput::Disconnect => return ForwardOutcome::Disconnect,
@@ -269,6 +269,30 @@ pub(super) async fn forward_execution(
             }
         }
     }
+}
+
+async fn send_initial_engine_error(
+    connection: &mut ResponsesWebSocketConnection,
+    execution: &mut PendingExecution,
+    error: &EngineError,
+    request_id: &Arc<str>,
+) -> ForwardOutcome {
+    let response_headers = execution
+        .session_mut()
+        .map(|session| session.response_headers().to_vec())
+        .unwrap_or_default();
+    if !response_headers.is_empty()
+        && !send_metadata(
+            connection,
+            request_id,
+            response_metadata_event(request_id, &response_headers),
+        )
+        .await
+    {
+        return ForwardOutcome::Disconnect;
+    }
+    let error = gateway_error_from_engine(error);
+    send_gateway_error(connection, &error, request_id).await
 }
 
 fn commit_connection_replay(

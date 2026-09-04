@@ -271,13 +271,15 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         if let Some(event_type) = reduced.diagnostic_event_type {
             last_event_type = Some(event_type);
         }
+        if let Some(turn_state) = reduced.turn_state_update {
+            let mut pending = turn_state_update.lock().await;
+            if pending.is_none() {
+                *pending = Some(turn_state);
+            }
+        }
         let (frame, terminal) = match reduced.action {
             ExchangeAction::RateLimits(rate_limits) => {
                 rate_limit_updates.lock().await.push(rate_limits);
-                continue;
-            }
-            ExchangeAction::TurnState(turn_state) => {
-                *turn_state_update.lock().await = Some(turn_state);
                 continue;
             }
             ExchangeAction::Forward { frame, terminal } => (frame, terminal),

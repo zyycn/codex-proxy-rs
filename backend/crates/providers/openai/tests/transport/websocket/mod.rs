@@ -915,6 +915,191 @@ async fn websocket_execute_response_create_request_should_capture_internal_metad
 }
 
 #[tokio::test]
+async fn websocket_codex_metadata_should_capture_first_turn_state_without_changing_forwarding() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _message = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "codex.response.metadata",
+                    "headers": {"x-codex-turn-state": "turn-first"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.metadata",
+                    "headers": {"x-codex-turn-state": ["turn-second"]}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_metadata_alias", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+    });
+    let prepared = prepared_websocket_request(&format!("http://{addr}"));
+
+    let response = execute_response_create_request(&prepared)
+        .await
+        .expect("metadata aliases should preserve a completed response");
+    server.await.unwrap();
+
+    assert_eq!(response.turn_state.as_deref(), Some("turn-first"));
+    assert!(response.body.contains("event: codex.response.metadata"));
+    assert!(!response.body.contains("event: response.metadata\n"));
+    assert!(response.body.contains("event: response.completed"));
+}
+
+#[tokio::test]
+async fn reused_websocket_should_not_leak_turn_state_into_the_next_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let _first = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "codex.response.metadata",
+                    "headers": {"x-codex-turn-state": "turn-from-first-response"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_turn_state_first", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+
+        let _second = websocket.next().await.unwrap().unwrap();
+        websocket
+            .send(Message::Text(
+                completed_websocket_response("resp_turn_state_second", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(pool);
+    let request = pooled_websocket_request("conversation-turn-state-reset");
+
+    let first = backend
+        .create_response(
+            &request,
+            request_context("req_turn_state_first", Some("chatgpt-account")),
+        )
+        .await
+        .expect("first response should complete");
+    let second = backend
+        .create_response(
+            &request,
+            request_context("req_turn_state_second", Some("chatgpt-account")),
+        )
+        .await
+        .expect("second response should reuse the WebSocket");
+    server.await.unwrap();
+
+    assert_eq!(
+        first.turn_state.as_deref(),
+        Some("turn-from-first-response")
+    );
+    assert!(
+        second
+            .websocket_pool_decision
+            .is_some_and(WebSocketPoolDecision::is_reuse)
+    );
+    assert_eq!(second.turn_state, None);
+    assert!(
+        second
+            .response_metadata
+            .client_headers
+            .iter()
+            .all(|(name, _)| { !name.eq_ignore_ascii_case("x-codex-turn-state") })
+    );
+}
+
+#[tokio::test]
+async fn websocket_request_should_project_trusted_turn_state_and_remove_stale_metadata() {
+    for (case, turn_state) in [("trusted", Some("trusted-turn-state")), ("cleared", None)] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let message = websocket.next().await.unwrap().unwrap();
+            let payload = serde_json::from_str::<Value>(&message.into_text().unwrap())
+                .expect("response.create payload");
+            websocket
+                .send(Message::Text(
+                    completed_websocket_response("resp_turn_state_projection", 1, 1).into(),
+                ))
+                .await
+                .unwrap();
+            payload
+        });
+        let mut body = codex_request_body("gpt-5.5", "be brief", Vec::new());
+        body.insert("generate".to_owned(), json!(false));
+        body.insert("store".to_owned(), json!(false));
+        let mut request = CodexResponsesRequest::from_body(body);
+        request.turn_state = turn_state.map(str::to_owned);
+        request.local_conversation_id = Some(format!("turn-state-projection-{case}"));
+        request.set_client_metadata(Some(json!({
+            "x-codex-turn-state": "stale-client-value",
+            "keep": "preserved"
+        })));
+        let backend = CodexBackendClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            format!("http://{addr}"),
+            test_wire_profile(),
+        )
+        .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
+        let mut context = request_context(case, Some("chatgpt-account"));
+        context.turn_state = turn_state;
+
+        let response = backend
+            .create_response(&request, context)
+            .await
+            .unwrap_or_else(|error| panic!("required WebSocket request should complete: {error}"));
+        let payload = server.await.unwrap();
+
+        assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+        assert_eq!(
+            payload.pointer("/client_metadata/keep"),
+            Some(&json!("preserved"))
+        );
+        assert_eq!(
+            payload.pointer("/client_metadata/x-codex-turn-state"),
+            turn_state.map(|turn_state| json!(turn_state)).as_ref(),
+            "case {case}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn codex_backend_client_should_not_reuse_websocket_rate_limit_headers() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

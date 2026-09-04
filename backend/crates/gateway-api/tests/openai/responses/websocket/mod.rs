@@ -286,12 +286,20 @@ struct AtomicFailureTrace {
 struct AtomicFailureSession {
     trace: Arc<AtomicFailureTrace>,
     response_headers: Vec<ProviderResponseHeader>,
+    fail_before_first_event: bool,
 }
 
 impl ExecutionSession for AtomicFailureSession {
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
-            match self.trace.next_calls.fetch_add(1, Ordering::AcqRel) {
+            let next_call = self.trace.next_calls.fetch_add(1, Ordering::AcqRel);
+            if self.fail_before_first_event && next_call == 0 {
+                return Err(EngineError::Provider(ProviderError::new(
+                    ProviderErrorKind::Unavailable,
+                    UpstreamSendState::Ambiguous,
+                )));
+            }
+            match next_call {
                 0 => Ok(Some(atomic_failure_batch())),
                 1 => {
                     self.trace.finalized.store(true, Ordering::Release);
@@ -341,6 +349,7 @@ struct AtomicFailureExecution {
     client: AuthenticatedClient,
     trace: Arc<AtomicFailureTrace>,
     response_headers: Vec<ProviderResponseHeader>,
+    fail_before_first_event: bool,
 }
 
 impl ExecutionService for AtomicFailureExecution {
@@ -388,6 +397,7 @@ impl ExecutionService for AtomicFailureExecution {
                 session: Box::new(AtomicFailureSession {
                     trace: Arc::clone(&self.trace),
                     response_headers: self.response_headers.clone(),
+                    fail_before_first_event: self.fail_before_first_event,
                 }),
             })
         })
@@ -453,6 +463,7 @@ async fn websocket_atomic_upstream_failure_batch_should_be_forwarded_once() {
         client: authenticated_client("sk_ws_atomic"),
         trace: Arc::clone(&trace),
         response_headers: Vec::new(),
+        fail_before_first_event: false,
     });
     let app = api_router(execution).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -562,6 +573,7 @@ async fn websocket_response_metadata_should_preserve_ordinary_headers_without_bl
             ProviderResponseHeader::new("content-type", Bytes::from_static(b"application/private")),
             ProviderResponseHeader::new("x-request-id", Bytes::from_static(b"req_upstream")),
         ],
+        fail_before_first_event: false,
     });
     let app = api_router(execution).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -647,12 +659,98 @@ async fn websocket_response_metadata_should_preserve_ordinary_headers_without_bl
 }
 
 #[tokio::test]
+async fn websocket_failure_before_first_event_should_return_observed_metadata_then_error() {
+    let trace = Arc::new(AtomicFailureTrace::default());
+    let execution = Arc::new(AtomicFailureExecution {
+        client: authenticated_client("sk_ws_atomic"),
+        trace: Arc::clone(&trace),
+        response_headers: vec![
+            ProviderResponseHeader::new(
+                "x-codex-turn-state",
+                Bytes::from_static(b"turn-state-before-close"),
+            ),
+            ProviderResponseHeader::new(
+                "authorization",
+                Bytes::from_static(b"must-not-cross-boundary"),
+            ),
+        ],
+        fail_before_first_event: true,
+    });
+    let app = api_router(execution).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket test server");
+    let address = listener.local_addr().expect("test server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve WebSocket test router");
+    });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .expect("WebSocket request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        "Bearer sk_ws_atomic".parse().expect("authorization"),
+    );
+    let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create",
+                "model": "model-a",
+                "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send response.create");
+
+    let mut messages = Vec::<Value>::new();
+    while messages.len() < 2 {
+        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("WebSocket response timeout")
+            .expect("WebSocket remains open")
+            .expect("valid WebSocket frame");
+        let ClientMessage::Text(text) = message else {
+            continue;
+        };
+        messages.push(serde_json::from_str(&text).expect("JSON WebSocket event"));
+    }
+
+    assert_eq!(
+        messages
+            .iter()
+            .filter_map(|message| message.get("type").and_then(Value::as_str))
+            .collect::<Vec<_>>(),
+        vec!["response.metadata", "error"]
+    );
+    let headers = messages[0]
+        .get("headers")
+        .and_then(Value::as_object)
+        .expect("response metadata headers");
+    assert_eq!(
+        headers.get("x-codex-turn-state"),
+        Some(&json!("turn-state-before-close"))
+    );
+    assert!(!headers.contains_key("authorization"));
+    assert!(!trace.committed.load(Ordering::Acquire));
+
+    socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
 async fn websocket_response_create_should_not_have_a_private_16_mib_frame_limit() {
     let trace = Arc::new(AtomicFailureTrace::default());
     let execution = Arc::new(AtomicFailureExecution {
         client: authenticated_client("sk_ws_atomic"),
         trace,
         response_headers: Vec::new(),
+        fail_before_first_event: false,
     });
     let app = api_router(execution).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

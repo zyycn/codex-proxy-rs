@@ -428,6 +428,7 @@ async fn idle_connection_reaches_the_official_limit_without_starting_an_executio
         client: authenticated_client("sk_ws_atomic"),
         trace: Arc::clone(&trace),
         response_headers: Vec::new(),
+        fail_before_first_event: false,
     });
     let app = api_router(execution).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
