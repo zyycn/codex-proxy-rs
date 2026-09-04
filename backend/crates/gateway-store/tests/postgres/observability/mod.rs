@@ -258,7 +258,8 @@ async fn ops_search_should_treat_sql_wildcards_as_literals() {
 }
 
 #[tokio::test]
-async fn recovered_continuation_failure_should_be_hidden_from_default_business_metrics() {
+async fn recovered_continuation_failure_should_be_visible_in_ops_but_hidden_from_business_metrics()
+{
     let Some(database) = TestDatabase::create("observability_recovered_continuation").await else {
         return;
     };
@@ -318,8 +319,13 @@ async fn recovered_continuation_failure_should_be_hidden_from_default_business_m
             page_size: ObservabilityPageSize::new(10).expect("page size"),
         })
         .await
-        .expect("ops errors without recovered intermediates");
-    assert_eq!(errors.total, 0);
+        .expect("ops errors retain recovered failures");
+    assert_eq!(errors.total, 2);
+    assert!(errors.items.iter().all(|error| {
+        error.recovery_request_id.as_deref() == Some("req_observe_success")
+            && error.recovered_at.is_some()
+            && error.recovery_attempt_count == 1
+    }));
 
     let retained: (String, Option<String>) = sqlx::query_as(
         "select outcome, recovery_request_id

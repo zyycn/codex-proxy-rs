@@ -728,7 +728,8 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_connection_idle_ms = $47
              where id = $1 and outcome = 'running'
              returning id, client_api_key_ref, continuation_affinity_hash,
-                       continuation_requested, outcome, started_at, completed_at
+                       continuation_requested, provider_kind, upstream_transport,
+                       outcome, started_at, completed_at
            ), recovery_target as (
              select prior.id
              from model_requests prior
@@ -775,9 +776,47 @@ impl ModelRequestRepository for PgExecutionStore {
              where prior.id = target.id
                and prior.recovered_at is null
              returning prior.id
+           ), session_transport_recovery_target as (
+             select prior.id
+             from model_requests prior
+             cross join finalized current
+             where current.outcome = 'succeeded'
+               and current.provider_kind = 'openai'
+               and current.upstream_transport = 'http_sse'
+               and current.continuation_affinity_hash is not null
+               and prior.client_api_key_ref = current.client_api_key_ref
+               and prior.continuation_affinity_hash = current.continuation_affinity_hash
+               and prior.provider_kind = current.provider_kind
+               and prior.outcome = 'failed'
+               and prior.error_kind = 'upstream_unavailable'
+               and prior.upstream_transport = 'websocket'
+               and prior.upstream_send_state = 'ambiguous'
+               and prior.downstream_committed_at is null
+               and prior.recovered_at is null
+               and current.started_at >= prior.completed_at
+               and current.started_at <= prior.completed_at + interval '30 seconds'
+           ), session_transport_recovery_update as (
+             update model_requests prior
+             set recovery_attempt_count = prior.recovery_attempt_count + 1,
+                 recovery_request_id = current.id,
+                 recovered_at = current.completed_at,
+                 recovery_retry_delay_ms = greatest(
+                   0,
+                   floor(extract(epoch from (current.started_at - prior.completed_at)) * 1000)
+                 )::bigint,
+                 recovery_total_latency_ms = greatest(
+                   0,
+                   floor(extract(epoch from (current.completed_at - prior.completed_at)) * 1000)
+                 )::bigint
+             from finalized current
+             join session_transport_recovery_target target on true
+             where prior.id = target.id
+               and prior.recovered_at is null
+             returning prior.id
            )
            select (select count(*) from finalized)::bigint
-                + (select count(*) * 0 from recovery_update)::bigint",
+                + (select count(*) * 0 from recovery_update)::bigint
+                + (select count(*) * 0 from session_transport_recovery_update)::bigint",
         )
         .bind(&finalization.model_request_id)
         .bind(finalization.outcome.as_str())

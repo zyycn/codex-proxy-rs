@@ -128,7 +128,6 @@ fn push_request_error_predicates(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) {
-    statement.push(" and mr.recovered_at is null");
     push_range(statement, "mr.completed_at", range);
     for (column, value) in [
         ("mr.client_api_key_ref", &filter.client_api_key_ref),
@@ -171,7 +170,6 @@ fn push_ops_event_predicates(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) {
-    statement.push(" and (mr.id is null or mr.recovered_at is null)");
     push_range(statement, "oe.created_at", range);
     for (column, value) in [
         ("mr.client_api_key_ref", &filter.client_api_key_ref),

@@ -720,6 +720,165 @@ async fn successful_new_chain_should_mark_recent_continuation_failure_recovered(
 }
 
 #[tokio::test]
+async fn successful_http_downgrade_should_mark_pending_websocket_failures_recovered() {
+    let Some(database) = TestDatabase::create("execution_transport_downgrade_recovered").await
+    else {
+        return;
+    };
+    let affinity_hash = "d".repeat(64);
+    let first_failure_at = Utc::now() - Duration::seconds(8);
+    let second_failure_at = first_failure_at + Duration::seconds(1);
+    seed_websocket_transport_failure(
+        &database.pool,
+        "req_websocket_failed_first",
+        &affinity_hash,
+        first_failure_at,
+    )
+    .await;
+    seed_websocket_transport_failure(
+        &database.pool,
+        "req_websocket_failed_second",
+        &affinity_hash,
+        second_failure_at,
+    )
+    .await;
+    seed_websocket_transport_failure(
+        &database.pool,
+        "req_websocket_failed_after_delivery",
+        &affinity_hash,
+        second_failure_at,
+    )
+    .await;
+    sqlx::query(
+        "update model_requests
+            set downstream_committed_at = completed_at
+          where id = 'req_websocket_failed_after_delivery'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("mark control failure delivered downstream");
+
+    let recovery_started_at = first_failure_at + Duration::seconds(4);
+    seed_transport_recovery_request(
+        &database.pool,
+        "req_http_fallback_succeeded",
+        &affinity_hash,
+        recovery_started_at,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut recovery = successful_core_finalization("req_http_fallback_succeeded");
+    recovery.upstream_transport = Some("http_sse".to_owned());
+    recovery.downstream_committed_at = Some(std::time::SystemTime::now());
+    ExecutionStore::finalize_model_request(&store, recovery)
+        .await
+        .expect("finalize successful HTTP fallback");
+
+    type PersistedRecovery = (
+        String,
+        Option<String>,
+        Option<chrono::DateTime<Utc>>,
+        i32,
+        Option<i64>,
+        Option<i64>,
+    );
+    let recovered: Vec<PersistedRecovery> = sqlx::query_as(
+        "select id, recovery_request_id, recovered_at, recovery_attempt_count,
+                recovery_retry_delay_ms, recovery_total_latency_ms
+           from model_requests
+          where id like 'req_websocket_failed_%'
+          order by id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .expect("load WebSocket recovery observations");
+
+    assert_eq!(recovered.len(), 3);
+    let delivered = &recovered[0];
+    assert_eq!(delivered.0, "req_websocket_failed_after_delivery");
+    assert_eq!((&delivered.1, delivered.2, delivered.3), (&None, None, 0));
+    for (row, expected_delay_ms) in recovered[1..].iter().zip([4_000, 3_000]) {
+        assert_eq!(row.1.as_deref(), Some("req_http_fallback_succeeded"));
+        assert!(row.2.is_some());
+        assert_eq!(row.3, 1);
+        assert_eq!(row.4, Some(expected_delay_ms));
+        assert!(row.5.is_some_and(|latency| latency >= expected_delay_ms));
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn websocket_success_or_late_http_success_should_not_hide_transport_failure() {
+    let Some(database) = TestDatabase::create("execution_transport_downgrade_unresolved").await
+    else {
+        return;
+    };
+    let failure_at = Utc::now() - Duration::seconds(60);
+    let store = PgExecutionStore::new(database.pool.clone());
+
+    let websocket_affinity = "e".repeat(64);
+    seed_websocket_transport_failure(
+        &database.pool,
+        "req_websocket_control_failure",
+        &websocket_affinity,
+        failure_at,
+    )
+    .await;
+    seed_transport_recovery_request(
+        &database.pool,
+        "req_websocket_control_success",
+        &websocket_affinity,
+        failure_at + Duration::seconds(4),
+    )
+    .await;
+    ExecutionStore::finalize_model_request(
+        &store,
+        successful_core_finalization("req_websocket_control_success"),
+    )
+    .await
+    .expect("finalize successful WebSocket control request");
+
+    let late_affinity = "f".repeat(64);
+    seed_websocket_transport_failure(
+        &database.pool,
+        "req_websocket_late_failure",
+        &late_affinity,
+        failure_at,
+    )
+    .await;
+    seed_transport_recovery_request(
+        &database.pool,
+        "req_http_late_success",
+        &late_affinity,
+        failure_at + Duration::seconds(31),
+    )
+    .await;
+    let mut late_recovery = successful_core_finalization("req_http_late_success");
+    late_recovery.upstream_transport = Some("http_sse".to_owned());
+    ExecutionStore::finalize_model_request(&store, late_recovery)
+        .await
+        .expect("finalize late HTTP request");
+
+    type UnresolvedTransportFailure = (String, Option<String>, Option<chrono::DateTime<Utc>>, i32);
+    let unresolved: Vec<UnresolvedTransportFailure> = sqlx::query_as(
+        "select id, recovery_request_id, recovered_at, recovery_attempt_count
+               from model_requests
+              where id in ('req_websocket_control_failure', 'req_websocket_late_failure')
+              order by id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .expect("load unresolved transport failures");
+    assert_eq!(unresolved.len(), 2);
+    assert!(
+        unresolved
+            .iter()
+            .all(|row| row.1.is_none() && row.2.is_none() && row.3 == 0)
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn failed_or_late_new_chain_should_leave_continuation_failure_unresolved() {
     let Some(database) = TestDatabase::create("execution_continuation_unresolved").await else {
         return;
@@ -840,6 +999,61 @@ async fn seed_recovery_request(
     .execute(pool)
     .await
     .expect("prepare seeded recovery request");
+}
+
+async fn seed_websocket_transport_failure(
+    pool: &sqlx::PgPool,
+    id: &str,
+    affinity_hash: &str,
+    completed_at: chrono::DateTime<Utc>,
+) {
+    seed_running_request(pool, id)
+        .await
+        .expect("seed WebSocket transport failure request");
+    sqlx::query(
+        "update model_requests
+            set client_api_key_ref = 'key_transport_recovery',
+                client_transport = 'http_sse',
+                continuation_affinity_hash = $2,
+                attempt_count = 1, upstream_send_state = 'ambiguous',
+                upstream_transport = 'websocket', outcome = 'failed',
+                error_kind = 'upstream_unavailable',
+                provider_error_code = 'websocket_close_1000',
+                started_at = $3 - interval '1 second', deadline_at = $3,
+                completed_at = $3
+          where id = $1",
+    )
+    .bind(id)
+    .bind(affinity_hash)
+    .bind(completed_at)
+    .execute(pool)
+    .await
+    .expect("finalize seeded WebSocket transport failure");
+}
+
+async fn seed_transport_recovery_request(
+    pool: &sqlx::PgPool,
+    id: &str,
+    affinity_hash: &str,
+    started_at: chrono::DateTime<Utc>,
+) {
+    seed_running_request(pool, id)
+        .await
+        .expect("seed transport recovery request");
+    sqlx::query(
+        "update model_requests
+            set client_api_key_ref = 'key_transport_recovery',
+                client_transport = 'http_sse',
+                continuation_affinity_hash = $2,
+                started_at = $3, deadline_at = $3 + interval '1 minute'
+          where id = $1",
+    )
+    .bind(id)
+    .bind(affinity_hash)
+    .bind(started_at)
+    .execute(pool)
+    .await
+    .expect("prepare seeded transport recovery request");
 }
 
 async fn seed_running_request(pool: &sqlx::PgPool, id: &str) -> Result<(), sqlx::Error> {

@@ -124,9 +124,17 @@ function upstreamSendStateText(value: string | null | undefined) {
         </template>
         <template #message="{ row }">
           <div class="min-w-0 py-0.5" :title="row.message || opsErrorSummary(row)">
-            <code class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-error-text">
-              {{ opsErrorSummary(row) }}
-            </code>
+            <div class="flex min-w-0 items-center gap-2">
+              <code class="block min-w-0 flex-1 truncate font-mono text-cp-sm font-bold text-cp-error-text">
+                {{ opsErrorSummary(row) }}
+              </code>
+              <span
+                v-if="row.metadata.recoveredAt"
+                class="inline-flex h-5 shrink-0 items-center rounded-full bg-cp-success-bg px-2 text-cp-xs leading-none font-heavy text-cp-success-text"
+              >
+                已自动恢复
+              </span>
+            </div>
             <p
               v-if="row.message"
               class="mt-1 mb-0 line-clamp-1 text-cp-xs leading-[1.45] font-emphasis text-cp-text-secondary"
