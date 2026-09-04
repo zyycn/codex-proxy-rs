@@ -37,10 +37,11 @@ use crate::transport::{
     response_meta,
     websocket::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
-        CodexWebSocketPoolKey, CodexWebSocketStreamingExchange, DEFAULT_INITIAL_EVENT_TIMEOUT,
-        WEBSOCKET_FAST_PATH_BUDGET, WebSocketFastPath, WebSocketOriginBreaker,
-        WebSocketPoolDecision, execute_prepared_response_create_request_stream,
-        post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
+        CodexWebSocketPoolKey, CodexWebSocketRequest, CodexWebSocketStreamingExchange,
+        DEFAULT_INITIAL_EVENT_TIMEOUT, WEBSOCKET_FAST_PATH_BUDGET, WebSocketFastPath,
+        WebSocketOriginBreaker, WebSocketPoolDecision,
+        execute_prepared_response_create_request_stream, post_send_ambiguous,
+        prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env,
     },
 };
@@ -104,11 +105,26 @@ impl CodexBackendClient {
         upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         let body =
             serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
+        let endpoint = endpoint_url(&self.base_url, CODEX_RESPONSES_PATH);
+        tracing::info!(
+            target: "request_dump",
+            provider = "openai",
+            request_id = %context.request_id,
+            account_id = context.account_id.unwrap_or_default(),
+            request_direction = "upstream",
+            request_transport = "http_sse",
+            request_method = "POST",
+            request_url = %endpoint,
+            request_headers = ?headers,
+            request_body = %String::from_utf8_lossy(&body),
+            contains_sensitive_data = true,
+            "request dump (unredacted)"
+        );
         let body = zstd::stream::encode_all(std::io::Cursor::new(body), 3)
             .map_err(CodexClientError::RequestCompression)?;
         let response = self
             .client
-            .post(endpoint_url(&self.base_url, CODEX_RESPONSES_PATH))
+            .post(endpoint)
             .headers(headers)
             .header(CONTENT_ENCODING, HeaderValue::from_static("zstd"))
             .body(body)
@@ -425,6 +441,7 @@ impl CodexBackendClient {
                     prepared,
                 } = *route;
                 let delivery_wait_started_at = Instant::now();
+                log_unredacted_websocket_request(&websocket_request, context);
                 let mut exchange = match execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
@@ -495,6 +512,7 @@ impl CodexBackendClient {
                                         route: PreparedResponseRoute::WebSocket(route),
                                         ..
                                     }) => {
+                                        log_unredacted_websocket_request(&route.request, context);
                                         match execute_prepared_response_create_request_stream(
                                             &route.request,
                                             route.prepared,
@@ -889,6 +907,26 @@ impl CodexBackendClient {
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         Ok(headers)
     }
+}
+
+fn log_unredacted_websocket_request(
+    request: &CodexWebSocketRequest,
+    context: CodexRequestContext<'_>,
+) {
+    tracing::info!(
+        target: "request_dump",
+        provider = "openai",
+        request_id = %context.request_id,
+        account_id = context.account_id.unwrap_or_default(),
+        request_direction = "upstream",
+        request_transport = "websocket",
+        request_method = "GET + response.create",
+        request_url = request.connection().endpoint(),
+        request_headers = ?request.connection().headers(),
+        request_payload = request.payload_text(),
+        contains_sensitive_data = true,
+        "request dump (unredacted)"
+    );
 }
 
 /// 首个可投递帧前的交付边界结果。

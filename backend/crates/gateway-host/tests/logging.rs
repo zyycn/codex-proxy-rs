@@ -8,13 +8,18 @@ use gateway_host::system_update::SystemUpdateConfig;
 
 const LOG_DIRECTORY_ENV: &str = "CPR_LOGGING_TEST_DIRECTORY";
 const CHILD_PROCESS_ENV: &str = "CPR_LOGGING_TEST_CHILD";
+const REQUEST_DUMP_ENABLED_ENV: &str = "CPR_LOGGING_TEST_REQUEST_DUMP_ENABLED";
 const APPLICATION_LOG_FILE_PREFIX: &str = "codex-proxy-rs.";
 const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-oath.";
+const REQUEST_DUMP_LOG_FILE_PREFIX: &str = "codex-proxy-rs-request-dump.";
 const APPLICATION_LOG_TARGET: &str = "logging_test_application";
 const APPLICATION_LOG_MARKER: &str = "application-file-filter-test";
 const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
 const OAUTH_RECOVERY_LOG_MARKER: &str = "oauth-recovery-file-filter-test";
 const OAUTH_RECOVERY_PROVIDER: &str = "openai";
+const REQUEST_DUMP_LOG_TARGET: &str = "request_dump";
+const REQUEST_DUMP_LOG_MARKER: &str = "request-dump-file-filter-test";
+const REQUEST_DUMP_SECRET: &str = "unredacted-authorization-value";
 
 #[test]
 fn logging_requires_at_least_one_sink() {
@@ -34,6 +39,7 @@ fn logging_requires_at_least_one_sink() {
                 max_file_size_mb: 100,
                 max_files: 30,
             },
+            request_dump: false,
         },
         system_update: SystemUpdateConfig::default(),
         drain_timeout_seconds: 30,
@@ -48,11 +54,12 @@ fn logging_requires_at_least_one_sink() {
 }
 
 #[test]
-fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
+fn sensitive_file_logging_is_separate_and_overrides_global_log_level() {
     if env::var_os(CHILD_PROCESS_ENV).is_some() {
-        write_oauth_recovery_log(PathBuf::from(
-            env::var_os(LOG_DIRECTORY_ENV).expect("child log directory"),
-        ));
+        write_sensitive_logs(
+            PathBuf::from(env::var_os(LOG_DIRECTORY_ENV).expect("child log directory")),
+            env::var(REQUEST_DUMP_ENABLED_ENV).is_ok_and(|value| value == "true"),
+        );
         return;
     }
 
@@ -60,14 +67,15 @@ fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
     let output = Command::new(env::current_exe().expect("current test executable"))
         .args([
             "--exact",
-            "logging::oauth_recovery_file_logging_is_separate_and_overrides_global_log_level",
+            "logging::sensitive_file_logging_is_separate_and_overrides_global_log_level",
             "--nocapture",
         ])
         .env(CHILD_PROCESS_ENV, "1")
         .env(LOG_DIRECTORY_ENV, directory.path())
+        .env(REQUEST_DUMP_ENABLED_ENV, "true")
         .env(
             "RUST_LOG",
-            "off,logging_test_application=info,oauth_recovery=off",
+            "off,logging_test_application=info,oauth_recovery=off,request_dump=trace",
         )
         .output()
         .expect("run logging child process");
@@ -84,6 +92,8 @@ fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
     assert!(application_log.contains(APPLICATION_LOG_MARKER));
     assert!(!application_log.contains(&json_target_field(OAUTH_RECOVERY_LOG_TARGET)));
     assert!(!application_log.contains(OAUTH_RECOVERY_LOG_MARKER));
+    assert!(!application_log.contains(&json_target_field(REQUEST_DUMP_LOG_TARGET)));
+    assert!(!application_log.contains(REQUEST_DUMP_SECRET));
 
     let recovery_log = read_log_file_set(directory.path(), OAUTH_RECOVERY_LOG_FILE_PREFIX);
     assert!(recovery_log.contains(&json_target_field(OAUTH_RECOVERY_LOG_TARGET)));
@@ -91,9 +101,49 @@ fn oauth_recovery_file_logging_is_separate_and_overrides_global_log_level() {
     assert!(!recovery_log.contains(&json_target_field(APPLICATION_LOG_TARGET)));
     assert!(!recovery_log.contains(APPLICATION_LOG_MARKER));
     assert!(recovery_log.contains(&format!(r#""provider":"{OAUTH_RECOVERY_PROVIDER}""#)));
+    assert!(!recovery_log.contains(&json_target_field(REQUEST_DUMP_LOG_TARGET)));
+    assert!(!recovery_log.contains(REQUEST_DUMP_SECRET));
+
+    let request_dump_log = read_log_file_set(directory.path(), REQUEST_DUMP_LOG_FILE_PREFIX);
+    assert!(request_dump_log.contains(&json_target_field(REQUEST_DUMP_LOG_TARGET)));
+    assert!(request_dump_log.contains(REQUEST_DUMP_LOG_MARKER));
+    assert!(request_dump_log.contains(REQUEST_DUMP_SECRET));
+    assert!(!request_dump_log.contains(&json_target_field(APPLICATION_LOG_TARGET)));
+    assert!(!request_dump_log.contains(APPLICATION_LOG_MARKER));
+    assert!(!request_dump_log.contains(&json_target_field(OAUTH_RECOVERY_LOG_TARGET)));
+    assert!(!request_dump_log.contains(OAUTH_RECOVERY_LOG_MARKER));
+
+    let disabled_directory = tempfile::tempdir().expect("create disabled log directory");
+    let output = Command::new(env::current_exe().expect("current test executable"))
+        .args([
+            "--exact",
+            "logging::sensitive_file_logging_is_separate_and_overrides_global_log_level",
+            "--nocapture",
+        ])
+        .env(CHILD_PROCESS_ENV, "1")
+        .env(LOG_DIRECTORY_ENV, disabled_directory.path())
+        .env(REQUEST_DUMP_ENABLED_ENV, "false")
+        .env(
+            "RUST_LOG",
+            "off,logging_test_application=info,oauth_recovery=off,request_dump=trace",
+        )
+        .output()
+        .expect("run logging child process with request dump disabled");
+    assert!(
+        output.status.success(),
+        "logging child process failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(!log_file_set_exists(
+        disabled_directory.path(),
+        REQUEST_DUMP_LOG_FILE_PREFIX
+    ));
+    let application_log = read_log_file_set(disabled_directory.path(), APPLICATION_LOG_FILE_PREFIX);
+    assert!(!application_log.contains(REQUEST_DUMP_SECRET));
 }
 
-fn write_oauth_recovery_log(directory: PathBuf) {
+fn write_sensitive_logs(directory: PathBuf, request_dump: bool) {
     let config = HostConfig {
         listen: ListenConfig {
             host: "127.0.0.1".to_owned(),
@@ -110,6 +160,7 @@ fn write_oauth_recovery_log(directory: PathBuf) {
                 max_file_size_mb: 1,
                 max_files: 1,
             },
+            request_dump,
         },
         system_update: SystemUpdateConfig::default(),
         drain_timeout_seconds: 30,
@@ -134,6 +185,12 @@ fn write_oauth_recovery_log(directory: PathBuf) {
         marker = OAUTH_RECOVERY_LOG_MARKER,
         "OAuth recovery test record"
     );
+    tracing::info!(
+        target: REQUEST_DUMP_LOG_TARGET,
+        marker = REQUEST_DUMP_LOG_MARKER,
+        authorization = REQUEST_DUMP_SECRET,
+        "request dump test record"
+    );
     drop(bundle);
 }
 
@@ -154,6 +211,18 @@ fn read_log_file_set(directory: &Path, file_prefix: &str) -> String {
         .into_iter()
         .map(|path| fs::read_to_string(path).expect("read log file"))
         .collect()
+}
+
+fn log_file_set_exists(directory: &Path, file_prefix: &str) -> bool {
+    fs::read_dir(directory)
+        .expect("read log directory")
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(file_prefix))
+        })
 }
 
 fn json_target_field(target: &str) -> String {

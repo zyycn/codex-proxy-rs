@@ -6,16 +6,19 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
+use tracing_appender::non_blocking::{NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-use crate::config::LoggingConfig;
+use crate::config::{FileLoggingConfig, LoggingConfig};
 
 const LOG_FILE_PREFIX: &str = "codex-proxy-rs";
 const OAUTH_RECOVERY_LOG_FILE_PREFIX: &str = "codex-proxy-rs-oath";
 /// OAuth 恢复记录含原始 AT/RT，文件日志开启时必须落到独立文件。
 const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
+const REQUEST_DUMP_LOG_FILE_PREFIX: &str = "codex-proxy-rs-request-dump";
+/// 请求转储含完整凭据与正文，只允许在显式开启时写入独立文件。
+const REQUEST_DUMP_LOG_TARGET: &str = "request_dump";
 
 /// non-blocking 日志 writer 的进程级守卫。
 pub struct LogGuard {
@@ -39,6 +42,7 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
     let directive = env::var("RUST_LOG").unwrap_or_else(|_| config.level.clone());
     let file_filter = application_file_filter(&directive)?;
     let recovery_file_filter = oauth_recovery_file_filter();
+    let request_dump_file_filter = request_dump_file_filter();
     let stdout_filter =
         EnvFilter::try_new(stdout_filter_directive(&directive, config.file.enabled))
             .map_err(|_| LogError::InvalidFilter)?;
@@ -52,36 +56,29 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
         writer
     });
     let (file_writer, recovery_file_writer) = if config.file.enabled {
-        let maximum_bytes = config
-            .file
-            .max_file_size_mb
-            .checked_mul(1024 * 1024)
-            .ok_or(LogError::SizeOverflow)?;
-        let file_writer = RotatingLogWriter::open(
-            config.file.directory.clone(),
-            LOG_FILE_PREFIX,
-            maximum_bytes,
-            config.file.retention_days,
-            config.file.max_files,
-        )?;
-        let recovery_file_writer = RotatingLogWriter::open(
-            config.file.directory.clone(),
+        let (file_writer, file_guard) =
+            rotating_file_writer(&config.file, LOG_FILE_PREFIX, "gateway-log-file")?;
+        let (recovery_file_writer, recovery_file_guard) = rotating_file_writer(
+            &config.file,
             OAUTH_RECOVERY_LOG_FILE_PREFIX,
-            maximum_bytes,
-            config.file.retention_days,
-            config.file.max_files,
+            "gateway-log-oauth-recovery-file",
         )?;
-        let (file_writer, file_guard) = NonBlockingBuilder::default()
-            .thread_name("gateway-log-file")
-            .finish(file_writer);
-        let (recovery_file_writer, recovery_file_guard) = NonBlockingBuilder::default()
-            .thread_name("gateway-log-oauth-recovery-file")
-            .finish(recovery_file_writer);
         guards.push(file_guard);
         guards.push(recovery_file_guard);
         (Some(file_writer), Some(recovery_file_writer))
     } else {
         (None, None)
+    };
+    let request_dump_file_writer = if config.request_dump {
+        let (writer, guard) = rotating_file_writer(
+            &config.file,
+            REQUEST_DUMP_LOG_FILE_PREFIX,
+            "gateway-log-request-dump-file",
+        )?;
+        guards.push(guard);
+        Some(writer)
+    } else {
+        None
     };
 
     let stdout_layer = stdout_writer.map(|writer| {
@@ -118,10 +115,24 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
             .with_span_list(true)
             .with_filter(recovery_file_filter)
     });
+    let request_dump_file_layer = request_dump_file_writer.map(|writer| {
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(writer)
+            .with_target(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_filter(request_dump_file_filter)
+    });
     tracing_subscriber::registry()
         .with(stdout_layer)
         .with(file_layer)
         .with(recovery_file_layer)
+        .with(request_dump_file_layer)
         .try_init()
         .map_err(|_| LogError::AlreadyInitialized)?;
     Ok(LogGuard { _writers: guards })
@@ -131,8 +142,12 @@ fn application_file_filter(directive: &str) -> Result<EnvFilter, LogError> {
     let recovery_directive = format!("{OAUTH_RECOVERY_LOG_TARGET}=off")
         .parse()
         .expect("static OAuth recovery log directive is valid");
+    let request_dump_directive = format!("{REQUEST_DUMP_LOG_TARGET}=off")
+        .parse()
+        .expect("static request dump log directive is valid");
     EnvFilter::try_new(directive)
         .map(|filter| filter.add_directive(recovery_directive))
+        .map(|filter| filter.add_directive(request_dump_directive))
         .map_err(|_| LogError::InvalidFilter)
 }
 
@@ -142,12 +157,39 @@ fn oauth_recovery_file_filter() -> EnvFilter {
         .expect("static OAuth recovery log filter is valid")
 }
 
+fn request_dump_file_filter() -> EnvFilter {
+    format!("off,{REQUEST_DUMP_LOG_TARGET}=info")
+        .parse()
+        .expect("static request dump log filter is valid")
+}
+
 fn stdout_filter_directive(directive: &str, persistent_log_enabled: bool) -> String {
     if !persistent_log_enabled {
-        directive.to_owned()
+        format!("{directive},{REQUEST_DUMP_LOG_TARGET}=off")
     } else {
         "off,gateway_startup=info".to_owned()
     }
+}
+
+fn rotating_file_writer(
+    config: &FileLoggingConfig,
+    file_prefix: &'static str,
+    thread_name: &'static str,
+) -> Result<(NonBlocking, WorkerGuard), LogError> {
+    let maximum_bytes = config
+        .max_file_size_mb
+        .checked_mul(1024 * 1024)
+        .ok_or(LogError::SizeOverflow)?;
+    let writer = RotatingLogWriter::open(
+        config.directory.clone(),
+        file_prefix,
+        maximum_bytes,
+        config.retention_days,
+        config.max_files,
+    )?;
+    Ok(NonBlockingBuilder::default()
+        .thread_name(thread_name)
+        .finish(writer))
 }
 
 struct RotatingLogWriter {

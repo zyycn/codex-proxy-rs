@@ -20,6 +20,8 @@ host:
   logging:
     level: 'info'
     stdout: true
+    # 将完整请求头和正文写入独立文件；包含凭据，仅排障时开启。
+    request_dump: false
     file:
       enabled: true
       # 相对路径以 deploy/config.yaml 所在目录为基准。

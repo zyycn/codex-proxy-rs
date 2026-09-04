@@ -60,12 +60,14 @@ pub(crate) async fn responses_websocket(
         &headers,
         connect_info.map(|Extension(ConnectInfo(address))| address),
     );
+    let request_headers = OpenAiRequestHeaders::from_headers(&headers);
     ResponsesWebSocketAdapter::new(service).upgrade_with_client_context(
         websocket,
         client,
         client_ip,
         user_agent,
-        OpenAiRequestHeaders::from_headers(&headers),
+        request_headers,
+        headers,
     )
 }
 
@@ -89,15 +91,29 @@ impl ResponsesWebSocketAdapter {
         client_ip: Option<IpAddr>,
         user_agent: Option<String>,
         request_headers: OpenAiRequestHeaders,
+        raw_headers: HeaderMap,
     ) -> Response {
         let connection_guard = match self.service.try_register_connection() {
             Ok(guard) => guard,
             Err(_) => return runtime_unavailable_response().into_response(),
         };
+        let connection_id = self.service.next_request_id().replacen("req_", "ws_", 1);
+        tracing::info!(
+            target: "request_dump",
+            provider = "openai",
+            websocket_connection_id = %connection_id,
+            request_direction = "downstream",
+            request_transport = "websocket_handshake",
+            request_method = "GET",
+            request_path = "/v1/responses",
+            request_headers = ?raw_headers,
+            contains_sensitive_data = true,
+            "request dump (unredacted)"
+        );
         let session = ResponsesWebSocketSession {
             service: self.service.clone(),
             client,
-            connection_id: self.service.next_request_id().replacen("req_", "ws_", 1),
+            connection_id,
             client_ip,
             user_agent,
             request_headers,
@@ -171,6 +187,18 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         }
         request_count = request_count.saturating_add(1);
         let correlation_id = Arc::<str>::from(service.next_request_id());
+        tracing::info!(
+            target: "request_dump",
+            provider = "openai",
+            websocket_connection_id = connection.id(),
+            correlation_id = %correlation_id,
+            request_index = request_count,
+            request_direction = "downstream",
+            request_transport = "websocket",
+            request_payload = %payload,
+            contains_sensitive_data = true,
+            "request dump (unredacted)"
+        );
         let decoded = match decode_response_create_with_context(&payload, &request_headers) {
             Ok(decoded) => decoded.with_client_context(client_ip, user_agent.clone()),
             Err(error) => {
@@ -219,6 +247,14 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
                 continue;
             }
         };
+        tracing::info!(
+            target: "request_dump",
+            provider = "openai",
+            websocket_connection_id = connection.id(),
+            correlation_id = %correlation_id,
+            request_id = %started.request_id,
+            "request dump correlation"
+        );
 
         if forward_execution(&mut connection, started, &mut replay).await
             == ForwardOutcome::Disconnect

@@ -118,6 +118,9 @@ pub struct LoggingConfig {
     pub level: String,
     pub stdout: bool,
     pub file: FileLoggingConfig,
+    /// 将完整请求原文写入独立诊断日志；默认关闭，因为内容包含凭据。
+    #[serde(default)]
+    pub request_dump: bool,
 }
 
 impl LoggingConfig {

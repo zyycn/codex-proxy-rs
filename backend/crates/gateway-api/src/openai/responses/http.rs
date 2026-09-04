@@ -83,6 +83,19 @@ pub(crate) async fn responses(
         Ok(started) => started,
         Err(error) => return gateway_error_response(&error),
     };
+    tracing::info!(
+        target: "request_dump",
+        provider = "openai",
+        request_id = %started.request_id,
+        request_direction = "downstream",
+        request_transport = if streaming { "http_sse" } else { "http_json" },
+        request_method = "POST",
+        request_path = "/v1/responses",
+        request_headers = ?headers,
+        request_body = %String::from_utf8_lossy(&body),
+        contains_sensitive_data = true,
+        "request dump (unredacted)"
+    );
     let StartedExecution {
         stream, session, ..
     } = started;

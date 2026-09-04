@@ -103,6 +103,7 @@ fn valid_config() -> HostConfig {
                 max_file_size_mb: 100,
                 max_files: 30,
             },
+            request_dump: false,
         },
         system_update,
         drain_timeout_seconds: 30,
