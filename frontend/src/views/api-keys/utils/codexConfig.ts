@@ -1,5 +1,5 @@
 export const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra'
-export const CODEX_WEBSOCKET_ENABLED_BY_DEFAULT = true
+export const CODEX_WEBSOCKET_ENABLED_BY_DEFAULT = false
 
 export interface CodexConfigInput {
   apiKey: string

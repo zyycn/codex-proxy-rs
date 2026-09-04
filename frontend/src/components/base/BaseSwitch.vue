@@ -45,7 +45,8 @@ const thumbClasses = computed(() => [
   model.value ? 'left-[calc(100%-1.375rem)]' : 'left-0.5',
 ])
 const inlineTextClasses = computed(() => [
-  'pointer-events-none absolute inset-0 flex min-w-0 select-none items-center justify-center overflow-hidden text-[10px] leading-none font-heavy text-cp-white transition-[padding] duration-180 motion-reduce:transition-none',
+  'pointer-events-none absolute inset-0 flex min-w-0 select-none items-center justify-center overflow-hidden text-[10px] leading-none font-heavy transition-[padding,color] duration-180 motion-reduce:transition-none',
+  model.value ? 'text-cp-white' : 'text-cp-text-secondary',
   model.value ? 'pr-6 pl-1' : 'pr-1 pl-6',
 ])
 const inactiveTextClasses = computed(() => [
