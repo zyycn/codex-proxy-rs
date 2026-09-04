@@ -138,14 +138,6 @@ export const DARK_COMPONENT_ANCHORS = {
 /** 浅色阴影保持中性，不随主题文字色染色。 */
 export const LIGHT_SHADOW_BASE = LIGHT_TEXT_BASE
 
-/** 小字号语义文字的暗色可读性锚点。 */
-export const DARK_SEMANTIC_TEXT_ANCHORS = {
-  info: '#93C5FD',
-  success: '#86EFAC',
-  warning: '#FCD34D',
-  error: '#FDA4AF',
-} as const
-
 export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-menu-item-selected-bg',
   '--cp-input-bg',

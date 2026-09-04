@@ -28,7 +28,6 @@ import {
 import {
   BLACK,
   DARK_CONTAINER_BASE,
-  DARK_SEMANTIC_TEXT_ANCHORS,
   DARK_SURFACE_ANCHORS,
   DARK_TEXT_BASE,
   DEFAULT_CUSTOM_THEME_COLOR,
@@ -48,14 +47,6 @@ const ACTIVITY_LEVEL_MIX = {
   high: 0.7,
 } as const
 
-const SEMANTIC_MAP_DERIVERS = {
-  light: (_containerBg: string, semantics: ThemeSemanticMap): ThemeSemanticMap => semantics,
-  dark: deriveDarkSemanticMap,
-} satisfies Record<
-  ThemeName,
-  (containerBg: string, semantics: ThemeSemanticMap) => ThemeSemanticMap
->
-
 const SURFACE_MAP_DERIVERS = {
   light: deriveNeutralLightSurfaceMap,
   dark: deriveNeutralDarkSurfaceMap,
@@ -65,7 +56,27 @@ export function deriveThemeSurfaceMap(
   theme: ThemeName,
   seedTokens: ResolvedThemeSeedTokens,
 ): ThemeSurfaceMap {
-  return SURFACE_MAP_DERIVERS[theme](seedTokens)
+  const surfaces = SURFACE_MAP_DERIVERS[theme](seedTokens)
+  const backgrounds = [
+    surfaces.colorBgLayout,
+    surfaces.colorBgContainer,
+    surfaces.colorBgElevated,
+    surfaces.colorBgTextHover,
+    surfaces.colorBgTextActive,
+    surfaces.colorFillSecondary,
+    surfaces.colorFillTertiary,
+    surfaces.colorFillQuaternary,
+  ]
+
+  // 辅助文字仍用于正常信息；按最深/最亮填充面保留可读的三级梯度。
+  return {
+    ...surfaces,
+    colorText: ensureContrast(surfaces.colorText, backgrounds, 7),
+    colorTextHeading: ensureContrast(surfaces.colorTextHeading, backgrounds, 7),
+    colorTextSecondary: ensureContrast(surfaces.colorTextSecondary, backgrounds, 7),
+    colorTextTertiary: ensureContrast(surfaces.colorTextTertiary, backgrounds, 5.5),
+    colorTextQuaternary: ensureContrast(surfaces.colorTextQuaternary, backgrounds, 4.5),
+  }
 }
 
 export function deriveThemeAliasMap(surfaces: ThemeSurfaceMap): ThemeAliasMap {
@@ -127,14 +138,12 @@ export function deriveThemeSemanticMap(
 ): ThemeSemanticMap {
   const recipe = THEME_COLOR_ROLE_RECIPES[theme].semantic
 
-  const semantics = {
+  return {
     info: deriveColorRoleMap(seedTokens.colorInfo, theme, containerBg, recipe),
     success: deriveColorRoleMap(seedTokens.colorSuccess, theme, containerBg, recipe),
     warning: deriveColorRoleMap(seedTokens.colorWarning, theme, containerBg, recipe),
     error: deriveColorRoleMap(seedTokens.colorError, theme, containerBg, recipe),
   }
-
-  return SEMANTIC_MAP_DERIVERS[theme](containerBg, semantics)
 }
 
 export function deriveThemePresetColorMap(
@@ -395,59 +404,6 @@ function deriveSurfaceAppearanceInfluence(
   return normalized * normalized * (3 - 2 * normalized)
 }
 
-function deriveDarkSemanticMap(
-  containerBg: string,
-  semantics: ThemeSemanticMap,
-): ThemeSemanticMap {
-  const appearanceInfluence = deriveSingleColorAppearanceInfluence(
-    containerBg,
-    DARK_CONTAINER_BASE,
-  )
-
-  return {
-    info: withSemanticTextAnchor(
-      semantics.info,
-      DARK_SEMANTIC_TEXT_ANCHORS.info,
-      appearanceInfluence,
-    ),
-    success: withSemanticTextAnchor(
-      semantics.success,
-      DARK_SEMANTIC_TEXT_ANCHORS.success,
-      appearanceInfluence,
-    ),
-    warning: withSemanticTextAnchor(
-      semantics.warning,
-      DARK_SEMANTIC_TEXT_ANCHORS.warning,
-      appearanceInfluence,
-    ),
-    error: withSemanticTextAnchor(
-      semantics.error,
-      DARK_SEMANTIC_TEXT_ANCHORS.error,
-      appearanceInfluence,
-    ),
-  }
-}
-
-function withSemanticTextAnchor(
-  colorMap: FunctionalColorMap,
-  anchor: string,
-  appearanceInfluence: number,
-): FunctionalColorMap {
-  return {
-    ...colorMap,
-    text: mix(anchor, colorMap.text, appearanceInfluence),
-  }
-}
-
-function deriveSingleColorAppearanceInfluence(
-  color: string,
-  baseline: string,
-): number {
-  const distance = relativeColorDistance(color, baseline)
-  const normalized = Math.min(1, distance / FULL_SURFACE_APPEARANCE_DISTANCE)
-  return normalized * normalized * (3 - 2 * normalized)
-}
-
 function deriveColorRoleMap(
   seed: string,
   theme: ThemeName,
@@ -462,18 +418,22 @@ function deriveColorRoleMap(
   const color = resolve(recipe.color)
   const hover = resolve(recipe.hover)
   const active = resolve(recipe.active)
+  const background = mix(containerBg, color, recipe.backgroundMix)
+  const backgroundHover = mix(containerBg, hover, recipe.backgroundHoverMix)
+  const backgroundActive = mix(containerBg, active, recipe.backgroundActiveMix)
+  const textBackgrounds = [containerBg, background, backgroundHover, backgroundActive]
   const resolveText = (source: ThemePaletteSource): string => {
     const value = resolve(source)
     const toned = recipe.minimumTextLightness === undefined
       ? value
       : ensureLightness(value, recipe.minimumTextLightness)
-    return ensureContrast(toned, containerBg, 4.5)
+    return ensureContrast(toned, textBackgrounds, 4.5)
   }
 
   return {
-    background: mix(containerBg, color, recipe.backgroundMix),
-    backgroundHover: mix(containerBg, hover, recipe.backgroundHoverMix),
-    backgroundActive: mix(containerBg, active, recipe.backgroundActiveMix),
+    background,
+    backgroundHover,
+    backgroundActive,
     border: ensureContrast(mix(containerBg, color, recipe.borderMix), containerBg, 3),
     borderHover: ensureContrast(mix(containerBg, hover, recipe.borderHoverMix), containerBg, 3),
     hover: recipe.hoverContrast === undefined
@@ -512,6 +472,6 @@ function derivePresetColorRoleMap(
     border: ensureContrast(mix(containerBg, solid, recipe.borderMix), containerBg, 3),
     solid,
     text: ensureContrast(toneText(text), containerBg, 4.5),
-    textOnBackground: ensureContrast(toneText(textOnBackground), backgroundStrong, 4.5),
+    textOnBackground: ensureContrast(toneText(textOnBackground), [background, backgroundStrong], 4.5),
   }
 }

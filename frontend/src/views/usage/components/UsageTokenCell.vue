@@ -29,11 +29,11 @@ const tokenItems = computed(() => [
         <ArrowDown class="size-3" />
         {{ tokenDetails.inputTokensDisplay }}
       </span>
-      <span class="inline-flex items-center gap-1 text-cp-info">
+      <span class="inline-flex items-center gap-1 text-cp-info-text">
         <ArrowUp class="size-3" />
         {{ tokenDetails.outputTokensDisplay }}
       </span>
-      <span class="col-span-2 inline-flex items-center justify-end gap-1 text-cp-info">
+      <span class="col-span-2 inline-flex items-center justify-end gap-1 text-cp-info-text">
         <Archive class="size-3" />
         {{ tokenDetails.cachedTokensDisplay }}
       </span>

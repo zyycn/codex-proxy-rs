@@ -12,25 +12,25 @@
 </div>
 
 主题系统为 Codex Proxy RS 管理端提供浅色、深色、预置配色与自定义配色能力。颜色 Map 复用 Ant Design 的
-Token 分层、十阶色板与明暗角色映射，中性 Surface 由背景和文字 Seed 统一派生；不引入 `antd`、React、`ConfigProvider`
+Token 分层与十阶色板，再按项目的明暗角色规则派生；中性 Surface 由背景和文字 Seed 统一派生。不引入 `antd`、React、`ConfigProvider`
 或 CSS-in-JS，Vue 组件继续通过 CSS Variables 与 Tailwind CSS 4 utilities 消费主题。
 
 > [!IMPORTANT]
-> 主题的目标是调整颜色、密度、圆角与层级，不改变现有页面结构和产品语义。默认主题必须保持既有视觉基线，
+> 主题的目标是调整颜色、密度、圆角与层级，不改变现有页面结构和产品语义。默认主题保留既有表面层级，并满足正常文字的可读性约束；
 > 成功、警告、错误和业务数据色不会因为品牌色变化而失去原有含义。
 
 ## 设计原则
 
 - **Seed 与 Map 可追踪**：主色和功能色均按 Ant Design 从 Seed 派生 P1-P10；浅色 P6 等于 Seed，深色 P6
-  经过暗色色板适配。编辑器同时展示 Seed 与最终 Map，不在中途隐式改色。
+  经过暗色色板适配。全局 `colorPrimary` 保留原始 Seed；功能色 Base 保留 P6。文字和按钮组件可在派生层做对比度校正，Seed 不随之改写。
 - **主色与表面分离**：品牌色负责交互和强调，页面、容器、浮层与文字由独立的背景和文本 Seed 派生。
-- **语义独立**：`success`、`warning`、`error`、`info` 与 `link` 不随品牌色隐式改变；未显式配置 `link`
-  时按 Ant Design 回退到 `info`。
+- **语义独立**：`success`、`warning`、`error`、`info` 不随品牌色隐式改变；未显式配置 `link`
+  时跟随 `primary`，显式配置后独立派生。
 - **无边设计**：默认依靠表面色差、间距和轻阴影表达层级；边框只用于焦点、错误和必要分隔。
 - **运行时可定制**：用户输入在浏览器中实时派生，因此使用 CSS Variables，不使用构建时 SCSS 变量。
 - **单一事实源**：Store 只保存最小配置，所有 Map、Alias 与未覆盖的 Component Token 均由纯函数生成。
-- **行为透明**：任意自定义 Seed 都直接进入公开算法，不追加页面或组件级修色；彩色文字 Alias 统一依据当前
-  Container Surface 做对比度保护，交互仍尊重 `prefers-reduced-motion`。
+- **行为透明**：任意自定义 Seed 都进入统一算法，页面只选择角色。功能色文字同时依据 Container 和自身背景三态做
+  对比度保护，不使用固定色相的文字锚点覆盖自定义 Seed；交互仍尊重 `prefers-reduced-motion`。
 
 ## 架构概览
 
@@ -111,24 +111,29 @@ interface ThemeCustomization {
 
 ### Map Token
 
-品牌色和功能色使用 `@ant-design/colors` 从一个 Seed 生成十阶色板，再复刻 Ant Design 的 Map 角色映射：
+品牌色和功能色使用 `@ant-design/colors` 从一个 Seed 生成十阶色板。本文 P1-P10 指生成器返回数组的第 1-10 项，
+不是 Ant Design 组件库再次重映射后的角色编号。项目的映射集中在 `theme/derive/roles.ts`：
 
-| 角色 | 规则 |
-| --- | --- |
-| 弱背景 | P1 / P2 |
-| 描边 | P3 / P4 |
-| Hover / Base / Active | P5 / P6 / P7 |
-| Text Hover / Text / Text Active | P8 / P9 / P10 |
+| 角色 | 浅色 | 深色 |
+| --- | --- | --- |
+| 全局 Primary Base | Seed | Seed |
+| 功能色 Base | P6 | P6 |
+| Primary / 功能色 Hover、Active | P5、P7 | P8、P6 |
+| Primary Text Hover、Text、Text Active | P5、P6、P7 | P8、P7、P6 |
+| 功能色 Text Hover、Text、Text Active | P5、P6、P7 | P8、P9、P10 |
 
-功能色的 Background、Border、Hover、Base、Active 与 Text 统一消费 Ant Design 明暗算法已经映射好的
-P1-P10 角色：Base 固定 P6，Active 使用 P7，Success、Warning、Info 的 Hover 使用 P4，Error Hover 使用 P5，
-Text 使用 P8 / P9 / P10。彩色文字只额外保证相对 Container Surface 至少 4.5:1 的对比度，不再二次改写暗色色阶。
+弱背景由 Container 与对应 Base/Hover/Active 按 recipe 权重混合；描边同样混色，再相对 Container 保证 3:1。
+功能色 Hover/Active 相对 Container 保证 3:1，Base 不做该校正。每种文字状态都同时检查 Container、Background、
+Background Hover、Background Active，取最弱配对并校正到至少 4.5:1，兼容消费者在背景切换时保留同一文字角色。
+`ensureContrast` 以每步 1% 的黑/白混合寻找满足所有配对的颜色；不能满足全部约束时返回最弱配对表现最好的候选，
+因此不承诺任意互相矛盾的自定义前景/背景组合都能达标。
 
 分类、图表与数据强调继续使用 Ant Design Preset Color 的角色结构。Blue、Green、Orange、Red 分别复用
 `colorInfo`、`colorSuccess`、`colorWarning`、`colorError`，保证通用彩色与可编辑语义 Seed 同源；没有语义对应的
 Cyan、Purple 从 `@ant-design/colors` 的 `presetPrimaryColors` 取得 Seed。
-P1 / P2 / P3 / P6 / P7 分别映射弱背景、较强背景、边界、实心色和文字；文字只按实际 Surface 做统一的
-4.5:1 对比度校正，不再针对暗色模式升阶或插值。
+Preset 的实心色使用 P6，弱背景、较强背景与边界按 recipe 权重混合；浅色文字取 P7，深色取 P8 并保留 HSL
+最低明度 0.7。`text` 相对 Container 校正，`text-on-bg` 同时相对弱背景和较强背景校正到 4.5:1；彩色底上的文字
+应使用 `text-on-bg`，普通数值与标签不直接使用 `solid`。
 
 背景与文本 Seed 进入独立的 Surface Map，生成：
 
@@ -138,11 +143,15 @@ P1 / P2 / P3 / P6 / P7 分别映射弱背景、较强背景、边界、实心色
 - `colorBorder / BorderSecondary / Split / Shadow`
 
 中继蓝使用稳定的浅色 / 深色中性基线；深海青、古风色与石墨预置额外提供各自的 `colorBgBase`、`colorTextBase`
-画像，自定义主色则只向通用中性基线注入少量色温。Surface 使用 `@ant-design/fast-color` 从背景明度向文字 Seed
-插值，并保留受限的文本色相：浅色层级随深度降低色度，避免白色背景经 RGB 混合退化为无色灰；深色层级按 Fill、
-Border、Muted Text 的职责收敛色度。稳定锚点位于 Map、Component 与 Shadow 派生层，并按外观距离连续过渡；
+画像，自定义主色则只向通用中性基线注入少量色温。默认浅色采用中性锚点，默认深色使用 HSL 色调派生；带色温
+主题按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。稳定锚点用于 Surface、Component 与 Shadow，
 所有预置、自定义 Seed 和用户覆盖仍进入同一条算法，不在页面或组件中追加 HEX 特判。
 Input、阴影与其他 Component Token 继续从 Surface、Primary 和 Semantic Map 派生，不在常量文件维护整套颜色表。
+
+正常文字同时检查 Layout、Container、Elevated、文字交互背景与三级 Fill。正文、标题和 Secondary 至少 7:1，
+Tertiary 至少 5.5:1，Quaternary 至少 4.5:1；这些是相对全部上述表面的最低目标，对 Container 的实测比值通常更高。
+Disabled 保留独立的弱化颜色，不承担正常信息。输入背景主要从这些 Surface 混色派生，placeholder 继续消费
+Quaternary；主按钮白字与功能色文字遵循各自的背景配对规则。
 
 ### Alias Token
 
@@ -160,7 +169,7 @@ Alias 按视觉角色命名，使用 `--cp-` 命名空间，并优先对齐 Ant 
 | 功能色 | `--cp-color-info / success / warning / error-*` | 系统反馈与状态 |
 | 预设彩色 | `--cp-color-{blue,cyan,green,orange,purple,red}-{bg,bg-strong,border,solid,text,text-on-bg}` | 分类标签与数据强调 |
 
-Alias 不对单个页面或组件追加修色；只有彩色文字统一执行 4.5:1 对比度保护。和 Ant Design 一样，Component
+Alias 不在页面中追加修色；中性与彩色文字在派生层执行各自的背景配对约束。Component
 Token 直接覆盖时不会自动重算同组件的其他状态；需要保持梯度关系时应修改 Seed，而不是逐个覆盖 Map Token。
 
 ### Component Token
@@ -177,6 +186,11 @@ Token 直接覆盖时不会自动重算同组件的其他状态；需要保持�
 | Layout | `--cp-layout-sider-bg / shadow` |
 | Scrollbar | `--cp-scrollbar-thumb-bg / hover-bg` |
 | BrandMark | `--cp-brand-mark-bg` |
+
+主按钮的颜色在 Component 派生入口统一生成：文字保留 `colorTextLightSolid`，默认背景从 Primary Seed 校正到
+4.5:1，Hover/Active 在该背景上分别混入 8% / 16% 黑色，使白字对比度逐级增强；明暗模式共用此规则。
+这组组件状态与全局 `colorPrimaryHover/Active` 分工明确，调整按钮不会反向改写主色 Seed。输入框 Hover 保留柔和
+外圈，Focus 使用已有 `control-outline`，错误外圈使用 Error Border，普通状态继续保持无边设计。
 
 Theme Editor 只开放真正由对应组件消费的 Component Token。全局 Alias 不放进组件目录，避免一次覆盖同时改变
 多个无关组件。

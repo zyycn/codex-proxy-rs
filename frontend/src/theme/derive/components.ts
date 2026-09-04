@@ -11,6 +11,7 @@ import type {
   ThemeSurfaceMap,
 } from '../types'
 import {
+  ensureContrast,
   mix,
   relativeColorDistance,
   scaleShadowAlpha,
@@ -26,10 +27,11 @@ import {
   LIGHT_CONTAINER_BASE,
   LIGHT_SHADOW_BASE,
   LIGHT_TEXT_BASE,
-  WHITE,
 } from '../core/constants'
 
 const FULL_COMPONENT_APPEARANCE_DISTANCE = 0.02
+
+type SurfaceComponentMap = Omit<ThemeComponentMap, 'buttonPrimaryColor' | 'buttonPrimaryBg' | 'buttonPrimaryHoverBg' | 'buttonPrimaryActiveBg'>
 
 type ComponentMapDeriver = (
   surfaces: ThemeSurfaceMap,
@@ -37,7 +39,7 @@ type ComponentMapDeriver = (
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
-) => ThemeComponentMap
+) => SurfaceComponentMap
 
 const SHADOW_MAP_DERIVERS = {
   light: deriveLightShadowMap,
@@ -122,13 +124,23 @@ export function deriveThemeComponentMap(
   error: FunctionalColorMap,
   shadowStrength: number,
 ): ThemeComponentMap {
-  return COMPONENT_MAP_DERIVERS[theme](
+  const components = COMPONENT_MAP_DERIVERS[theme](
     surfaces,
     aliases,
     primary,
     error,
     shadowStrength,
   )
+
+  // 实心按钮单独承担小字号白字的可读性，不改写品牌 Seed 或全局主色。
+  const buttonPrimaryBg = ensureContrast(primary.colorPrimary, primary.colorTextLightSolid, 4.5)
+  return {
+    ...components,
+    buttonPrimaryColor: primary.colorTextLightSolid,
+    buttonPrimaryBg,
+    buttonPrimaryHoverBg: mix(buttonPrimaryBg, BLACK, 0.08),
+    buttonPrimaryActiveBg: mix(buttonPrimaryBg, BLACK, 0.16),
+  }
 }
 
 function deriveDarkComponentMap(
@@ -137,7 +149,7 @@ function deriveDarkComponentMap(
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
-): ThemeComponentMap {
+): SurfaceComponentMap {
   const inputOutlineColor = 'var(--cp-color-primary-bg-hover)'
   const appearanceInfluence = deriveComponentAppearanceInfluence(
     surfaces.colorBgContainer,
@@ -156,10 +168,6 @@ function deriveDarkComponentMap(
       appearanceInfluence,
     ),
     inputErrorActiveBg: error.background,
-    buttonPrimaryColor: primary.colorTextLightSolid,
-    buttonPrimaryBg: primary.colorPrimary,
-    buttonPrimaryHoverBg: mix(primary.colorPrimary, WHITE, 0.06),
-    buttonPrimaryActiveBg: mix(primary.colorPrimary, BLACK, 0.08),
     brandMarkBg: surfaces.colorBgElevated,
     cardBg: surfaces.colorBgContainer,
     modalBg: surfaces.colorBgContainer,
@@ -176,8 +184,8 @@ function deriveDarkComponentMap(
       `0 0 0 3px ${inputOutlineColor}, 0 14px 28px -22px ${withAlpha(BLACK, 0.72)}`,
       shadowStrength,
     ),
-    inputActiveShadow: `0 0 0 3px ${inputOutlineColor}`,
-    inputErrorActiveShadow: `0 0 0 3px ${withAlpha(error.color, 0.28)}`,
+    inputActiveShadow: '0 0 0 3px var(--cp-control-outline)',
+    inputErrorActiveShadow: `0 0 0 3px ${error.border}`,
     layoutSiderShadow: scaleShadowAlpha(`2px 0 18px -14px ${withAlpha(BLACK, 0.72)}`, shadowStrength),
     scrollbarThumbBg: mix(surfaces.colorBorderSecondary, surfaces.colorTextSecondary, 0.16),
     scrollbarThumbHoverBg: mix(surfaces.colorBorderSecondary, surfaces.colorTextSecondary, 0.3),
@@ -190,7 +198,7 @@ function deriveLightComponentMap(
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
-): ThemeComponentMap {
+): SurfaceComponentMap {
   const inputOutlineColor = 'var(--cp-color-primary-bg-hover)'
   const appearanceInfluence = deriveComponentAppearanceInfluence(
     surfaces.colorBgContainer,
@@ -213,10 +221,6 @@ function deriveLightComponentMap(
       appearanceInfluence,
     ),
     inputErrorActiveBg: error.background,
-    buttonPrimaryColor: primary.colorTextLightSolid,
-    buttonPrimaryBg: primary.colorPrimary,
-    buttonPrimaryHoverBg: mix(primary.colorPrimary, WHITE, 0.06),
-    buttonPrimaryActiveBg: mix(primary.colorPrimary, BLACK, 0.08),
     brandMarkBg: surfaces.colorBgSpotlight,
     cardBg: surfaces.colorBgContainer,
     modalBg: surfaces.colorBgContainer,
@@ -233,8 +237,8 @@ function deriveLightComponentMap(
       `0 0 0 3px ${inputOutlineColor}, 0 12px 24px -16px ${withAlpha(LIGHT_SHADOW_BASE, 0.12)}`,
       shadowStrength,
     ),
-    inputActiveShadow: `0 0 0 3px ${inputOutlineColor}`,
-    inputErrorActiveShadow: `0 0 0 3px ${withAlpha(error.color, 0.18)}`,
+    inputActiveShadow: '0 0 0 3px var(--cp-control-outline)',
+    inputErrorActiveShadow: `0 0 0 3px ${error.border}`,
     layoutSiderShadow: scaleShadowAlpha(`2px 0 12px -12px ${withAlpha(LIGHT_SHADOW_BASE, 0.027)}`, shadowStrength),
     scrollbarThumbBg: mix(surfaces.colorBgLayout, surfaces.colorTextSecondary, 0.2),
     scrollbarThumbHoverBg: mix(surfaces.colorBgLayout, surfaces.colorTextSecondary, 0.34),

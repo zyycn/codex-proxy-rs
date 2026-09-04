@@ -26,18 +26,22 @@ export function generateColorPalette(
     .map(color => normalizeHexColor(color) ?? seed)
 }
 
-export function ensureContrast(color: string, background: string, target: number): string {
-  if (contrastRatio(color, background) >= target)
+/** 同一个文字角色可能出现在多个表面或交互状态，按最弱的一组对比度校正。 */
+export function ensureContrast(color: string, background: string | readonly string[], target: number): string {
+  const backgrounds = typeof background === 'string' ? [background] : background
+  const minimumContrast = (candidate: string): number =>
+    Math.min(...backgrounds.map(value => contrastRatio(candidate, value)))
+  if (minimumContrast(color) >= target)
     return normalizeHexColor(color) ?? color
 
   let bestColor = color
-  let bestRatio = contrastRatio(color, background)
+  let bestRatio = minimumContrast(color)
 
   for (let step = 1; step <= 100; step += 1) {
     const amount = step / 100
     for (const direction of [BLACK, WHITE]) {
       const candidate = mix(color, direction, amount)
-      const ratio = contrastRatio(candidate, background)
+      const ratio = minimumContrast(candidate)
       if (ratio > bestRatio) {
         bestColor = candidate
         bestRatio = ratio
