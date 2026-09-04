@@ -202,6 +202,18 @@ struct PricingRule {
 
 // Source: https://developers.openai.com/api/docs/pricing (verified 2026-08-14).
 const PRICING_RULES: &[PricingRule] = &[
+    // Astra: https://developers.openai.com/api/docs/models/gpt-6-astra
+    // Rates verified against the pricing table on 2026-09-05.
+    PricingRule {
+        model: "gpt-6-astra",
+        pricing: ModelPricing::new(100_000, 500_000, 10_000)
+            .with_cache_write(125)
+            .with_flex(50_000, 250_000, 5_000)
+            .with_fast(200_000, 1_000_000, 20_000)
+            .with_long(200_000, 750_000, 20_000)
+            .with_long_flex(100_000, 375_000, 10_000)
+            .with_long_fast(400_000, 1_500_000, 40_000),
+    },
     PricingRule {
         model: "gpt-5.6-sol",
         pricing: ModelPricing::new(50_000, 300_000, 5_000)
@@ -532,6 +544,7 @@ fn fixed_block_web_search_model(model: &str) -> bool {
 fn reasoning_model(model: &str) -> bool {
     let normalized = normalize_model_name(model);
     normalized.starts_with("gpt-5")
+        || model_matches_rule(&normalized, "gpt-6-astra")
         || normalized.starts_with("o1")
         || normalized.starts_with("o3")
         || normalized.starts_with("o4")

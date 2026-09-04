@@ -31,6 +31,52 @@ fn billing_usage(
 }
 
 #[test]
+fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() {
+    // USD per million tokens, in order: input, cache read, cache write, output.
+    for (tier, input, expected, multiplier) in [
+        (None, 272_000, ["10", "1", "12.5", "50"], 100),
+        (None, 272_001, ["20", "2", "25", "75"], 100),
+        (Some("flex"), 272_000, ["5", "0.5", "6.25", "25"], 50),
+        (Some("flex"), 272_001, ["10", "1", "12.5", "37.5"], 50),
+        (Some("fast"), 272_000, ["20", "2", "25", "100"], 200),
+        (Some("fast"), 272_001, ["40", "4", "50", "150"], 200),
+        (Some("priority"), 272_001, ["40", "4", "50", "150"], 200),
+    ] {
+        let breakdown =
+            openai_billing_breakdown("gpt-6-astra", billing_usage(input, 5, 20, 10), tier)
+                .expect("published Astra pricing");
+        let prices = [
+            breakdown.input_price_per_million(),
+            breakdown.cache_read_price_per_million(),
+            breakdown.cache_write_price_per_million(),
+            breakdown.output_price_per_million(),
+        ]
+        .map(|price| {
+            price
+                .amount()
+                .to_string()
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_owned()
+        });
+        assert_eq!(prices, expected, "tier={tier:?}, input={input}");
+        assert_eq!(breakdown.multiplier_percent(), multiplier);
+    }
+    let breakdown = openai_billing_breakdown("gpt-6-astra", billing_usage(100, 5, 20, 10), None)
+        .expect("Astra component pricing");
+    assert_eq!(
+        (
+            breakdown.input_amount().amount().scaled(),
+            breakdown.output_amount().amount().scaled(),
+            breakdown.cache_read_amount().amount().scaled(),
+            breakdown.cache_write_amount().amount().scaled(),
+            breakdown.total_amount().amount().scaled(),
+        ),
+        (7_000_000, 2_500_000, 200_000, 1_250_000, 10_950_000),
+    );
+}
+
+#[test]
 fn billing_breakdown_should_preserve_input_output_and_cache_components() {
     let breakdown = openai_billing_breakdown("gpt-5.6-sol", billing_usage(100, 5, 20, 10), None)
         .expect("known model pricing");
