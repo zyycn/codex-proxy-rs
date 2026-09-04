@@ -83,6 +83,8 @@ export interface AccountUsage {
   outputTokensDisplay: string
   cachedTokens: number | null
   cachedTokensDisplay: string
+  reasoningTokens: number | null
+  reasoningTokensDisplay: string
   imageInputTokens: number | null
   imageInputTokensDisplay: string
   imageOutputTokens: number | null

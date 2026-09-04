@@ -348,6 +348,8 @@ mod response {
             output_tokens_display: "-".to_owned(),
             cached_tokens: None,
             cached_tokens_display: "-".to_owned(),
+            reasoning_tokens: None,
+            reasoning_tokens_display: "-".to_owned(),
             image_input_tokens: None,
             image_input_tokens_display: "-".to_owned(),
             image_output_tokens: None,
@@ -374,6 +376,8 @@ mod response {
         let value = serde_json::to_value(view).expect("serialize account usage");
         assert!(value["inputTokens"].is_null());
         assert!(value["totalTokens"].is_null());
+        assert!(value["reasoningTokens"].is_null());
+        assert_eq!(value["reasoningTokensDisplay"], "-");
         assert_eq!(value["createdTokensDisplay"], "-");
     }
 

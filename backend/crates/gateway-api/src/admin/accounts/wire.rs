@@ -276,6 +276,8 @@ pub struct AccountUsageView {
     pub output_tokens_display: String,
     pub cached_tokens: Option<u64>,
     pub cached_tokens_display: String,
+    pub reasoning_tokens: Option<u64>,
+    pub reasoning_tokens_display: String,
     pub image_input_tokens: Option<u64>,
     pub image_input_tokens_display: String,
     pub image_output_tokens: Option<u64>,
