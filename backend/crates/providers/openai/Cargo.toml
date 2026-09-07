@@ -23,8 +23,8 @@ getrandom = "0.4.3"
 hex = "0.4.3"
 # TLS 依赖按官方 Core 锁文件固定，包含用于约束传递依赖的直接声明。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。
-aws-lc-rs = "=1.16.2"
-hyper = { version = "=1.8.1", default-features = false }
+aws-lc-rs = "=1.18.1"
+hyper = { version = "=1.11.1", default-features = false }
 hyper-rustls = "=0.27.7"
 # 与官方 Codex Desktop 一致：reqwest 不启用压缩特性，上游请求不带 accept-encoding。
 reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "http2"] }
@@ -33,15 +33,15 @@ semver = "1.0.27"
 # 与官方 rustls 路径一致：aws-lc 支持 P-521，优先提供 X25519MLKEM768。
 # reqwest 的 roots feature 仍会编译 ring；实际 provider 由 TLS 初始化显式选择。
 rustls = { version = "=0.23.36", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std", "tls12"] }
-rustls-native-certs = "=0.8.3"
-rustls-pki-types = "=1.14.0"
+rustls-native-certs = "=0.8.4"
+rustls-pki-types = "=1.15.1"
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"
 subtle = "2.6.1"
 thiserror = "2.0.18"
-tokio = { version = "=1.52.3", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
 tokio-rustls = { version = "=0.26.4", default-features = false }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 # 官方 Codex WebSocket 需要上游尚未发布的 proxy 与 permessage-deflate 实现，固定到已审计提交。
