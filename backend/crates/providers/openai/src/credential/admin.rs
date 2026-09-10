@@ -121,6 +121,7 @@ impl fmt::Debug for PreparedCodexAccountImport {
 struct ParsedCodexImportAccount {
     name: Option<String>,
     email: Option<String>,
+    metadata: CodexOAuthMetadata,
     authentication: ParsedCodexAuthentication,
 }
 
@@ -822,25 +823,32 @@ impl CodexCredentialAdminService {
                 )
                 .await?;
             // 与官方 `parse_chatgpt_jwt_claims` 一致：先读 ID token，缺失字段
-            // 再由 access token 补齐。解析失败不阻塞 token 入库。
+            // 再由 access token 补齐。任一 token 能解析出 JWT claims 时，账号
+            // 资料只来自 token，导入文档声明的字段不参与投影；两个 token 都
+            // 不是 JWT（如团队静态访问令牌）时，回退到文档声明的资料，避免
+            // 静态令牌账号因无身份信息而无法入库调度。
             let id_metadata = secret
                 .id_token
                 .as_ref()
-                .and_then(|token| parse_chatgpt_jwt_claims(token.expose_secret()).ok())
-                .unwrap_or_default();
+                .and_then(|token| parse_chatgpt_jwt_claims(token.expose_secret()).ok());
             let access_metadata =
-                parse_chatgpt_jwt_claims(secret.access_token.expose_secret()).unwrap_or_default();
-            let metadata = CodexOAuthMetadata {
-                email: id_metadata.email.or(access_metadata.email),
-                chatgpt_plan_type: id_metadata
-                    .chatgpt_plan_type
-                    .or(access_metadata.chatgpt_plan_type),
-                chatgpt_user_id: id_metadata
-                    .chatgpt_user_id
-                    .or(access_metadata.chatgpt_user_id),
-                chatgpt_account_id: id_metadata
-                    .chatgpt_account_id
-                    .or(access_metadata.chatgpt_account_id),
+                parse_chatgpt_jwt_claims(secret.access_token.expose_secret()).ok();
+            let metadata = if id_metadata.is_some() || access_metadata.is_some() {
+                let id = id_metadata.unwrap_or_default();
+                let access = access_metadata.unwrap_or_default();
+                CodexOAuthMetadata {
+                    email: id.email.or(access.email),
+                    chatgpt_plan_type: id.chatgpt_plan_type.or(access.chatgpt_plan_type),
+                    chatgpt_user_id: id.chatgpt_user_id.or(access.chatgpt_user_id),
+                    chatgpt_account_id: id.chatgpt_account_id.or(access.chatgpt_account_id),
+                }
+            } else {
+                CodexOAuthMetadata {
+                    email: candidate.email.clone(),
+                    chatgpt_plan_type: candidate.metadata.chatgpt_plan_type,
+                    chatgpt_user_id: candidate.metadata.chatgpt_user_id,
+                    chatgpt_account_id: candidate.metadata.chatgpt_account_id,
+                }
             };
             let prepared =
                 CodexCredentialAdmin.prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
@@ -1003,8 +1011,32 @@ fn parse_oauth_import_account(
     Ok(ParsedCodexImportAccount {
         name: first_string(value, &["name", "label"]),
         email: first_string(value, &["email"]).or_else(|| first_string(credentials, &["email"])),
+        metadata: parse_oauth_import_metadata(value, credentials),
         authentication: parse_oauth_import_tokens(value)?,
     })
+}
+
+/// 读取导入文档声明的账号资料，供非 JWT 形态的 access token（如团队静态
+/// 令牌）补全身份。仅在两个 token 都解析不出 JWT claims 时参与投影。
+fn parse_oauth_import_metadata(value: &Value, credentials: &Value) -> CodexOAuthMetadata {
+    let pick =
+        |keys: &[&str]| first_string(value, keys).or_else(|| first_string(credentials, keys));
+    CodexOAuthMetadata {
+        chatgpt_account_id: pick(&[
+            "chatgptAccountId",
+            "chatgpt_account_id",
+            "accountId",
+            "account_id",
+        ]),
+        chatgpt_user_id: pick(&["chatgptUserId", "chatgpt_user_id", "userId", "user_id"]),
+        chatgpt_plan_type: pick(&[
+            "chatgptPlanType",
+            "chatgpt_plan_type",
+            "planType",
+            "plan_type",
+        ]),
+        email: None,
+    }
 }
 
 fn import_account_values(payload: &Value) -> Result<Vec<&Value>, CodexCredentialAdminError> {

@@ -237,7 +237,7 @@ async fn oauth_import_uses_id_token_then_access_token_for_missing_claims() {
 }
 
 #[tokio::test]
-async fn oauth_import_does_not_use_top_level_identity_fields() {
+async fn oauth_import_does_not_use_top_level_identity_fields_for_parseable_tokens() {
     let access_token = test_jwt(serde_json::json!({"exp": 2_000_000_000_i64}));
     let service = CodexCredentialAdminService::new(
         Arc::new(UnusedRefresher),
@@ -256,10 +256,87 @@ async fn oauth_import_does_not_use_top_level_identity_fields() {
         .expect("token without identity claims remains importable");
 
     let account = &prepared.accounts().first().expect("one account").account;
+    // token 可解析为 JWT 时，账号资料只来自 token claims，文档字段不参与
+    // 投影（文档 email 仍可用于命名回退）。
     assert!(account.upstream_user_id().is_none());
     assert!(account.upstream_account_id().is_none());
     assert!(account.email().is_none());
     assert!(account.plan_type().is_none());
+}
+
+#[tokio::test]
+async fn static_token_import_projects_document_metadata() {
+    // 团队静态访问令牌等非 JWT 形态的 opaque token 没有可解析的 claims，
+    // 账号资料回退到导入文档声明的元数据，导入后即可参与调度。
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let prepared = service
+        .prepare_import_document(serde_json::json!({
+            "platform": "openai",
+            "type": "oauth",
+            "name": "team-static-account",
+            "accessToken": "at-static-team-token",
+            "accountId": "28b90dfd-9abe-4875-94f5-5ed6bbf7b71e",
+            "userId": "user-static",
+            "planType": "team",
+            "email": "team@example.com"
+        }))
+        .await
+        .expect("opaque token with document metadata is accepted");
+
+    let prepared = prepared.accounts().first().expect("one account");
+    let account = &prepared.account;
+    assert_eq!(account.upstream_user_id(), Some("user-static"));
+    assert_eq!(
+        account.upstream_account_id(),
+        Some("28b90dfd-9abe-4875-94f5-5ed6bbf7b71e")
+    );
+    assert_eq!(account.plan_type(), Some("team"));
+    assert_eq!(account.email(), Some("team@example.com"));
+    assert_eq!(account.name(), "team-static-account");
+    assert_eq!(
+        account.credential_state(),
+        gateway_core::account::CredentialState::Ready
+    );
+    assert!(account.access_token_expires_at().is_none());
+    assert!(account.next_refresh_at().is_none());
+
+    let runtime = CodexCredentialCodec::decode(&prepared.credential).expect("stored credential");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(oauth.access_token.expose_secret(), "at-static-team-token");
+    assert!(oauth.refresh_token.is_none());
+}
+
+#[tokio::test]
+async fn static_token_import_reads_metadata_from_credentials_object() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let prepared = service
+        .prepare_import_document(serde_json::json!({
+            "platform": "openai",
+            "type": "oauth",
+            "credentials": {
+                "access_token": "at-another-static-token",
+                "account_id": "doc-account-from-credentials",
+                "plan_type": "team"
+            }
+        }))
+        .await
+        .expect("credentials-scoped metadata is accepted");
+
+    let account = &prepared.accounts().first().expect("one account").account;
+    assert_eq!(
+        account.upstream_account_id(),
+        Some("doc-account-from-credentials")
+    );
+    assert_eq!(account.plan_type(), Some("team"));
+    assert!(account.upstream_user_id().is_none());
 }
 
 #[tokio::test]
