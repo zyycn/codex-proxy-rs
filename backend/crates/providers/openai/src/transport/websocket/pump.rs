@@ -19,20 +19,35 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use futures::{SinkExt, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::{
-    net::TcpStream,
     sync::{mpsc, oneshot},
     task::JoinHandle,
     time::{Instant, MissedTickBehavior},
 };
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use super::CodexWebSocketCloseError;
 
 /// 底层 tungstenite WebSocket 流。
-pub(crate) type RawWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) trait WebSocketIo:
+    Stream<Item = Result<Message, tungstenite::Error>>
+    + Sink<Message, Error = tungstenite::Error>
+    + Send
+    + Unpin
+{
+}
+
+impl<T> WebSocketIo for T where
+    T: Stream<Item = Result<Message, tungstenite::Error>>
+        + Sink<Message, Error = tungstenite::Error>
+        + Send
+        + Unpin
+{
+}
+
+pub(crate) type RawWsStream = Box<dyn WebSocketIo>;
 
 const PUMP_COMMAND_BUFFER: usize = 32;
 

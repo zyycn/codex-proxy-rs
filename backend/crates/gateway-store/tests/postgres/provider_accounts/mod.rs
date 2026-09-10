@@ -1124,6 +1124,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                outbound_proxy: None,
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
                 concurrency_limit: None,
@@ -1181,6 +1182,78 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         ]
     );
 
+    database.close().await;
+}
+
+#[tokio::test]
+async fn account_proxy_edits_preserve_clear_and_fence_credential_caches_without_audit_secrets() {
+    let Some(database) = TestDatabase::create("account_proxy").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut seed = account("acct_proxy", "proxy-user");
+    seed.outbound_proxy = Some(
+        gateway_core::account::OutboundProxy::parse("http://initial:secret@127.0.0.1:18080")
+            .unwrap(),
+    );
+    repository.insert_provider_account(seed).await.unwrap();
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "proxy-edit".to_owned(),
+    };
+    let command = UpdateAccount {
+        account_id: "acct_proxy".to_owned(),
+        enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        group_ids: vec![],
+        outbound_proxy: None,
+    };
+    store
+        .update_account(command.clone(), &context)
+        .await
+        .unwrap();
+    let read = || async {
+        sqlx::query_as::<_, (Option<String>, i64)>("select outbound_proxy_url, credential_revision from provider_accounts where id = 'acct_proxy'").fetch_one(&database.pool).await.unwrap()
+    };
+    assert_eq!(
+        read().await,
+        (Some("http://initial:secret@127.0.0.1:18080/".to_owned()), 1)
+    );
+    store
+        .update_account(
+            UpdateAccount {
+                outbound_proxy: Some(Some(
+                    gateway_core::account::OutboundProxy::parse(
+                        "socks5h://next:new-secret@127.0.0.1:1080",
+                    )
+                    .unwrap(),
+                )),
+                ..command.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(read().await.1, 2);
+    store
+        .update_account(
+            UpdateAccount {
+                outbound_proxy: Some(None),
+                ..command
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(read().await, (None, 3));
+    let audits: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(a) from admin_audit_events a")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    assert!(!serde_json::to_string(&audits).unwrap().contains("secret"));
     database.close().await;
 }
 
@@ -1342,6 +1415,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: false,
                 concurrency_limit: gateway_core::account::AccountConcurrencyLimit::new(7),
@@ -1377,6 +1451,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: true,
                 concurrency_limit: None,
@@ -1571,6 +1646,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     AuthorizationOwnerBinding::from_context(&context),
                 ),
                 credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
+                    outbound_proxy: None,
                     account_id: ProviderAccountId::new("acct_authorization_candidate")
                         .expect("candidate account ID"),
                     provider_kind,
@@ -1614,6 +1690,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(NewProviderAccount {
+            outbound_proxy: None,
             id: "acct_core_refresh".to_owned(),
             provider_kind: "xai".to_owned(),
             name: "before refresh".to_owned(),
@@ -1947,6 +2024,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            outbound_proxy: None,
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: false,
             concurrency_limit: None,
@@ -2305,6 +2383,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
 
 fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
     NewProviderAccount {
+        outbound_proxy: None,
         id: id.to_owned(),
         provider_kind: "openai".to_owned(),
         name: id.to_owned(),

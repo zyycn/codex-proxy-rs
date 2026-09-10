@@ -2158,6 +2158,80 @@ fn discarded_attempt_cost_never_leaks_into_retry_result() {
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.finalizations[0].cost_source, CostSource::Unavailable);
     assert_eq!(state.finalizations[0].cost_ticks, None);
+    assert_eq!(
+        session.budget_charge().amount_usd,
+        None,
+        "unknown final usage cannot erase a charged retry"
+    );
+}
+
+#[test]
+fn key_budget_accumulates_retries_and_preserves_unknown_attempts() {
+    for (first_cost, first_send, expected) in [
+        (Some(999), UpstreamSendState::Sent, Some(1122)),
+        (None, UpstreamSendState::Sent, None),
+        (None, UpstreamSendState::NotSent, Some(123)),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let mut first = Vec::new();
+        if first_send != UpstreamSendState::NotSent {
+            first.push(Ok(GatewayEvent::Started(ResponseMeta::new(
+                "resp_first",
+                "gpt-5",
+            ))));
+        }
+        if let Some(cost) = first_cost {
+            first.push(Ok(GatewayEvent::ProviderCost(
+                ProviderReportedCost::from_usd_ticks(cost).unwrap(),
+            )));
+        }
+        first.push(Err(ProviderError::new(
+            ProviderErrorKind::Unavailable,
+            first_send,
+        )
+        .with_replay_safe()));
+        let (coordinator, _, _) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: first,
+            },
+            Script::Stream {
+                account_id: "acct_second",
+                items: vec![
+                    Ok(GatewayEvent::Started(ResponseMeta::new(
+                        "resp_done",
+                        "gpt-5",
+                    ))),
+                    Ok(GatewayEvent::ProviderCost(
+                        ProviderReportedCost::from_usd_ticks(123).unwrap(),
+                    )),
+                    Ok(GatewayEvent::Completed(ResponseMeta::new(
+                        "resp_done",
+                        "gpt-5",
+                    ))),
+                ],
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        block_on(session.commit_downstream(Some(200))).unwrap();
+        let charge = session.budget_charge();
+        assert_eq!(charge.amount_usd.map(|amount| amount.scaled()), expected);
+        assert_eq!(
+            session.budget_charge().completed_at,
+            charge.completed_at,
+            "final settlement time stays stable"
+        );
+    }
 }
 
 #[test]
@@ -2688,10 +2762,16 @@ fn exhausted_atomic_response_failed_should_deliver_only_the_last_failure_once() 
 fn empty_selection_after_atomic_failure_should_deliver_the_last_upstream_wire() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
+    let mut failure = bare_atomic_response_failed("response-only-failed");
+    let mut events = failure.take_atomic_client_events();
+    events.push(ProviderEvent::canonical(GatewayEvent::ProviderCost(
+        ProviderReportedCost::from_usd_ticks(500).unwrap(),
+    )));
+    let failure = failure.with_atomic_client_events(events);
     let (coordinator, store, provider) = coordinator(vec![
         Script::ObservedStream {
             account_id: "acct_only",
-            items: vec![Err(bare_atomic_response_failed("response-only-failed"))],
+            items: vec![Err(failure)],
         },
         Script::Error(ProviderError::new(
             ProviderErrorKind::NoEligibleAccount,
@@ -2731,6 +2811,14 @@ fn empty_selection_after_atomic_failure_should_deliver_the_last_upstream_wire() 
     ));
 
     assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
+    assert_eq!(
+        session
+            .budget_charge()
+            .amount_usd
+            .map(|amount| amount.scaled()),
+        Some(500),
+        "restoring a discarded failure must not charge its usage twice"
+    );
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 1);

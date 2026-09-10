@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionPort, ClientAdmissionRejection, ClientAdmissionRequest,
 };
+use crate::engine::budget::{ClientBudgetAdmission, ClientBudgetCharge, ClientBudgetPort};
 use crate::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, NativeContinuationPort,
     NativeContinuationStoreErrorKind, PreviousResponseId,
@@ -256,6 +257,7 @@ pub struct DefaultExecutionService {
     circuits: Arc<dyn ProviderCircuitPort>,
     continuation: Arc<dyn NativeContinuationPort>,
     client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
+    budget: Option<Arc<dyn ClientBudgetPort>>,
 }
 
 impl DefaultExecutionService {
@@ -283,7 +285,14 @@ impl DefaultExecutionService {
             circuits,
             continuation,
             client_api_key_usage,
+            budget: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_budget(mut self, budget: Arc<dyn ClientBudgetPort>) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     async fn start_inner(&self, request: StartExecution) -> Result<StartedExecution, GatewayError> {
@@ -504,6 +513,18 @@ impl DefaultExecutionService {
             client_api_key_id: client.policy.key_id().clone(),
             model_request_id: request_id.clone(),
         };
+        if let Some(budget) = &self.budget
+            && let Err(error) = budget
+                .admit(ClientBudgetAdmission {
+                    key_id: client.policy.key_id().clone(),
+                    request_id: request_id.clone(),
+                    deadline_at,
+                })
+                .await
+        {
+            admission.release().await;
+            return Err(error);
+        }
         let observation = plan
             .candidates()
             .first()
@@ -552,6 +573,17 @@ impl DefaultExecutionService {
         {
             Ok(core) => core,
             Err(error) => {
+                if let Some(budget) = &self.budget {
+                    settle_budget(
+                        budget.as_ref(),
+                        ClientBudgetCharge {
+                            request_id: request_id.clone(),
+                            amount_usd: Some(crate::metering::Decimal::ZERO),
+                            completed_at: SystemTime::now(),
+                        },
+                    )
+                    .await;
+                }
                 admission.release().await;
                 return Err(gateway_error_from_engine(&error));
             }
@@ -565,6 +597,7 @@ impl DefaultExecutionService {
                 admission,
                 Arc::clone(&self.circuits),
                 Arc::clone(&self.continuation),
+                self.budget.clone(),
             )),
         })
     }
@@ -922,6 +955,12 @@ struct AdmissionLease {
     model_request_id: ModelRequestId,
 }
 
+async fn settle_budget(port: &dyn ClientBudgetPort, charge: ClientBudgetCharge) {
+    if let Err(error) = port.settle(charge).await {
+        tracing::error!(%error, "Client budget settlement pending; durable admission requires reconciliation");
+    }
+}
+
 impl AdmissionLease {
     async fn release(self) {
         if let Err(error) = self
@@ -941,6 +980,7 @@ struct DefaultExecutionSession {
     continuation: Arc<dyn NativeContinuationPort>,
     observed_provider_outcomes: usize,
     continuation_recorded: bool,
+    budget: Option<Arc<dyn ClientBudgetPort>>,
 }
 
 impl DefaultExecutionSession {
@@ -949,6 +989,7 @@ impl DefaultExecutionSession {
         admission: AdmissionLease,
         circuits: Arc<dyn ProviderCircuitPort>,
         continuation: Arc<dyn NativeContinuationPort>,
+        budget: Option<Arc<dyn ClientBudgetPort>>,
     ) -> Self {
         Self {
             core: Some(core),
@@ -957,6 +998,7 @@ impl DefaultExecutionSession {
             continuation,
             observed_provider_outcomes: 0,
             continuation_recorded: false,
+            budget,
         }
     }
 
@@ -973,6 +1015,11 @@ impl DefaultExecutionSession {
             .is_some_and(ResponseExecutionSession::is_finalized)
             && let Some(admission) = self.admission.take()
         {
+            if let Some(budget) = self.budget.take()
+                && let Some(core) = &self.core
+            {
+                settle_budget(budget.as_ref(), core.budget_charge()).await;
+            }
             admission.release().await;
         }
     }
@@ -1023,6 +1070,9 @@ impl DefaultExecutionSession {
             .get(self.observed_provider_outcomes..)
             .unwrap_or_default();
         publish_provider_attempt_outcomes(self.circuits.as_ref(), pending).await;
+        if let Some(budget) = self.budget.take() {
+            settle_budget(budget.as_ref(), core.budget_charge()).await;
+        }
         if let Some(admission) = self.admission.take() {
             admission.release().await;
         }

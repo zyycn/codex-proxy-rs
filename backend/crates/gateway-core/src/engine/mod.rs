@@ -1,6 +1,7 @@
 //! 模型请求生命周期、单行持久化 port 与 commit/send/cancellation 边界。
 
 pub mod admission;
+pub mod budget;
 pub mod continuation;
 pub mod coordinator;
 pub mod execution;

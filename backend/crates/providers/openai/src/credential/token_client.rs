@@ -178,6 +178,22 @@ impl fmt::Debug for RefreshUpstreamFailure {
 #[async_trait]
 pub trait TokenRefresher: Send + Sync + 'static {
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure>;
+    async fn refresh_with_proxy(
+        &self,
+        refresh_token: &str,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<TokenPair, RefreshFailure> {
+        if proxy.is_some() {
+            return Err(proxy_refresh_failure());
+        }
+        self.refresh(refresh_token).await
+    }
+}
+
+fn proxy_refresh_failure() -> RefreshFailure {
+    RefreshFailure::RetryableTransport {
+        message: "account OAuth egress unavailable".to_owned(),
+    }
 }
 
 /// Authorization Code + PKCE 的一次性 grant。
@@ -232,6 +248,16 @@ pub trait AuthorizationCodeExchanger: Send + Sync + 'static {
         &self,
         grant: AuthorizationCodeGrant,
     ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError>;
+    async fn exchange_with_proxy(
+        &self,
+        grant: AuthorizationCodeGrant,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError> {
+        if proxy.is_some() {
+            return Err(AuthorizationCodeExchangeError::Unavailable);
+        }
+        self.exchange_authorization_code(grant).await
+    }
 }
 
 /// OpenAI token 续期客户端配置。
@@ -257,6 +283,24 @@ pub struct OpenAiTokenClient {
 pub struct TokenClientBuildError;
 
 impl OpenAiTokenClient {
+    fn with_proxy(
+        &self,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<Self, TokenClientBuildError> {
+        let Some(proxy) = proxy else {
+            return Ok(self.clone());
+        };
+        let builder = Client::builder()
+            .use_rustls_tls()
+            .no_proxy()
+            .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| TokenClientBuildError)?)
+            .redirect(Policy::none())
+            .connect_timeout(TOKEN_CONNECT_TIMEOUT)
+            .timeout(TOKEN_REQUEST_TIMEOUT);
+        let client =
+            build_reqwest_client_with_custom_ca(builder).map_err(|_| TokenClientBuildError)?;
+        Ok(Self::new(client, self.config.clone(), self.profile.clone()))
+    }
     /// 共享运行时画像；刷新时取快照，授权码交换仍使用 raw auth 请求。
     pub fn new(client: Client, config: TokenClientConfig, profile: CodexWireProfileState) -> Self {
         Self {
@@ -357,6 +401,16 @@ struct AuthorizationCodeResponse {
 
 #[async_trait]
 impl TokenRefresher for OpenAiTokenClient {
+    async fn refresh_with_proxy(
+        &self,
+        refresh_token: &str,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<TokenPair, RefreshFailure> {
+        self.with_proxy(proxy)
+            .map_err(|_| proxy_refresh_failure())?
+            .refresh(refresh_token)
+            .await
+    }
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
         let headers = build_codex_profile_headers(&self.profile.snapshot()).map_err(|_| {
             RefreshFailure::Transport {
@@ -389,6 +443,16 @@ impl TokenRefresher for OpenAiTokenClient {
 
 #[async_trait]
 impl AuthorizationCodeExchanger for OpenAiTokenClient {
+    async fn exchange_with_proxy(
+        &self,
+        grant: AuthorizationCodeGrant,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError> {
+        self.with_proxy(proxy)
+            .map_err(|_| AuthorizationCodeExchangeError::Unavailable)?
+            .exchange_authorization_code(grant)
+            .await
+    }
     async fn exchange_authorization_code(
         &self,
         grant: AuthorizationCodeGrant,

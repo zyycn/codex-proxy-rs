@@ -11,6 +11,21 @@ use gateway_api::openai::error::{
     openai_error_response,
 };
 
+#[tokio::test]
+async fn key_budget_errors_preserve_limit_code_and_retry_after() {
+    for code in ["key_daily_budget_exceeded", "key_weekly_budget_exceeded"] {
+        let error = GatewayError::new(GatewayErrorKind::RateLimited, "key budget exhausted")
+            .with_client_code(code)
+            .with_retry_after(std::time::Duration::from_millis(1501));
+        let response = gateway_error_response(&error);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()["retry-after"], "2");
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], code);
+    }
+}
+
 #[test]
 fn invalid_request_error_should_map_to_openai_bad_request() {
     assert_eq!(

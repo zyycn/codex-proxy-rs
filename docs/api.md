@@ -175,8 +175,8 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）与所属分组 |
-| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds }` | 一次事务统一更新所选账号的全部调度字段与完整分组集合 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, outboundProxyUrl? }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
+| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyUrl? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
@@ -186,7 +186,7 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
-| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
+| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl }` | 消费 OAuth callback；新账号保持未分组，重新授权保留所属分组 |
 
 账号列表支持以下稳定值：
@@ -196,6 +196,13 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 - `status`: `normal`、`quota_exhausted`、`rate_limited`、`disabled`、`error`；
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
+
+`outboundProxyUrl` 接受 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码。
+编辑时省略或 `null` 表示保持原配置，空字符串表示清除代理并直连。列表和详情只返回
+不含认证信息的 `outboundProxyEndpoint`（直连时为 `null`）；只有显式敏感导出包含完整 URL。
+指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
+浏览器打开的第三方 OAuth 授权页仍使用浏览器自身网络。
+账号与 Key 的关系及迁移步骤见 [账号代理与 Key 限额](account-egress-key-limits.md)。
 
 ### 账号连接测试 SSE
 
@@ -227,12 +234,14 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 导入的 `data` 必须是 JSON object，Admin API 请求上限为 64 MiB；Provider 可以收紧限制，
 当前 xAI 导入上限为 16 MiB。内部 schema 由目标 Provider 独占解释：
 
-- OpenAI 接受单账号 OAuth 文档、`accounts` 数组（最多 200 项）和 CPR 账号 bundle；
+- OpenAI 接受单账号 OAuth 文档、`accounts` 数组（最多 200 项）、CPR 账号 bundle 和含代理引用的 sub2api 导出；
 - OpenAI OAuth token 字段接受 `accessToken`、`refreshToken`、`idToken`，以及官方
   `auth.json` 中的 `access_token`、`refresh_token`、`id_token`，可以嵌套在 `tokens` 等账号 object 内；
   每项至少包含 AT 或 RT。仅含 `OPENAI_API_KEY` 的客户端代理配置不是 OAuth 账号导入材料；
   RT-only 会在导入时换取 AT，AT-only 不具备自动续期能力；
-- xAI 从单账号 object 或 `accounts` 数组中提取 OAuth token；包装中的代理、并发、优先级等字段不参与认证；
+- OpenAI 与 xAI 的账号条目接受 `outboundProxyUrl`；OpenAI 还会解析 sub2api 的 `proxy_key` 和顶层 `proxies`。
+  代理在 token 刷新前绑定。缺失、重复、停用、带到期时间或配置回退策略的 sub2api 代理会拒绝导入；
+- xAI 从单账号 object 或 `accounts` 数组中提取 OAuth token；并发、优先级等字段不参与认证；
 - xAI 批量导入逐条独立校验：失败条目跳过并记录日志，不中断其余条目，仅当没有任何条目成功时整个导入才报错；
 - xAI API Key 不是受支持的账号 credential；
 - 导入不会只凭文件外形写入账号；目标 Provider 使用认证材料完成必要的 token exchange 或已认证账号资料补全。
@@ -409,12 +418,35 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
+| `GET` | `/api/admin/client-keys/unresolved-charges` | `id` | 按时间读取最早的 200 笔待核账请求 |
+| `POST` | `/api/admin/client-keys/reconcile-charge` | `{ id, requestId, amountUsd, reason }` | 管理员确认未知费用并记录审计 |
 
-创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`，更新请求再增加
+创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
+`dailyLimitUsd` 和 `weeklyLimitUsd`，更新请求再增加
 `id`。`groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
 `routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
 `providerKinds`；Client Key 不再保存 `providerKind`。创建和 reveal 响应会返回完整明文 Key，调用方
 必须立即安全保存。
+
+金额字段为非负十进制字符串，最多 10 位整数与 10 位小数，`"0"` 表示不限额。
+创建时省略金额字段默认为零；更新时省略或 `null` 保留当前值，修改限额不会清空已用金额。
+`maxConcurrency` 和 `requestsPerMinute` 是非负整数，零表示不限。
+
+列表增加 `dailyLimitUsd`、`weeklyLimitUsd`、`dailyUsedUsd`、`weeklyUsedUsd`（均为字符串）、
+`dailyResetsAt`、`weeklyResetsAt`（RFC3339 或 `null`）与 `unresolvedRequests`。
+日窗口按北京时间零点重置；周窗口从首次准入当天零点起持续七天，到期后在下一次使用时重新开启。
+费用按请求完成时间归属窗口。并发按同一 Key 的执行中请求累计，包含 SSE 与每个 WebSocket
+`response.create`；空闲连接不占名额，内部重试不重复占用。
+
+任一已结算金额达到限额后拒绝新请求，已准入请求可完成并使金额超过阈值。
+HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly_budget_exceeded`，
+并附 `Retry-After`；WebSocket 每次 `response.create` 执行相同检查并返回协议错误事件。
+已发送但费用不明、或超过请求期限仍未结算的请求使受限 Key 返回 `key_budget_unresolved`。
+预算存储不可用时返回 `503`、`key_budget_unavailable`。
+
+核账的 `amountUsd` 使用相同金额格式，`reason` 为 1–1024 字节的非空原因。只能处理该 Key 下未知或
+已超过期限的请求；相同金额重复提交不重复计费，修改已结算金额返回 `409`。账本独立于使用统计日志，
+记录保留至删除 Key，不受 `usageRetentionDays` 影响。
 
 ## 8. 运行设置
 

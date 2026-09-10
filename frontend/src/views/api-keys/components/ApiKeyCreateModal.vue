@@ -34,7 +34,6 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
   <BaseModal
     v-model="open"
     :title="title"
-    description="设置调用方可用的账号分组、并发和每分钟请求上限"
     tone="info"
     size="lg"
     :dismissible="!saving"
@@ -68,11 +67,22 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
       </BaseFormItem>
 
       <div class="grid gap-4 sm:grid-cols-2">
+        <BaseFormItem label="日限额（USD）">
+          <BaseInput v-model="form.dailyLimitUsd" type="number" min="0" step="any" aria-label="日限额（USD）" :disabled="saving" />
+        </BaseFormItem>
+        <BaseFormItem label="周限额（USD）">
+          <BaseInput v-model="form.weeklyLimitUsd" type="number" min="0" step="any" aria-label="周限额（USD）" :disabled="saving" />
+        </BaseFormItem>
+      </div>
+
+      <div class="grid gap-4 sm:grid-cols-2">
         <BaseFormItem label="最大并发" description="0 表示不限制">
           <BaseInput
             v-model="form.maxConcurrency"
             type="number"
             aria-label="最大并发"
+            min="0"
+            step="1"
             :disabled="saving"
           />
         </BaseFormItem>
@@ -81,6 +91,8 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
             v-model="form.requestsPerMinute"
             type="number"
             aria-label="每分钟请求数"
+            min="0"
+            step="1"
             :disabled="saving"
           />
         </BaseFormItem>

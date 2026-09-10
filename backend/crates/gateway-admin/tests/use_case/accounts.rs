@@ -1213,6 +1213,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 concurrency_limit: None,
@@ -1249,6 +1250,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 concurrency_limit: None,
@@ -1290,6 +1292,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                outbound_proxy: None,
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
                 enabled: false,
                 concurrency_limit: None,
@@ -1931,6 +1934,7 @@ fn quota_local_usage(account_id: &str, total_tokens: u64) -> AccountUsage {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        outbound_proxy: None,
         id: "acct_test".to_owned(),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),
         groups: Vec::new(),
@@ -1972,6 +1976,7 @@ fn prepared_create_with_id(
 ) -> PreparedCredentialCreate {
     let now = Utc::now();
     PreparedCredentialCreate {
+        outbound_proxy: None,
         account_id: ProviderAccountId::new(account_id).expect("prepared account ID"),
         provider_kind,
         name: name.to_owned(),

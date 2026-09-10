@@ -122,6 +122,7 @@ struct ParsedCodexImportAccount {
     name: Option<String>,
     email: Option<String>,
     authentication: ParsedCodexAuthentication,
+    outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 struct ParsedCodexAuthentication {
@@ -226,6 +227,8 @@ struct CodexCprExportCommon {
     status: &'static str,
     added_at: String,
     updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outbound_proxy_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -502,6 +505,9 @@ impl CodexCredentialAdmin {
                 status: cpr_status(&account),
                 added_at: china_rfc3339(item.added_at),
                 updated_at: china_rfc3339(item.updated_at),
+                outbound_proxy_url: account
+                    .outbound_proxy()
+                    .map(|proxy| proxy.expose_url().to_owned()),
             };
             let exported = match data {
                 CodexCredentialData::OAuth(data) => {
@@ -743,7 +749,10 @@ impl CodexCredentialAdminService {
         };
         let tokens = self
             .refresher
-            .refresh(refresh_token.expose_secret())
+            .refresh_with_proxy(
+                refresh_token.expose_secret(),
+                current.account.outbound_proxy(),
+            )
             .await
             .inspect_err(|error| log_manual_refresh_failure(&account_id, error))
             .map_err(map_refresh_failure)?;
@@ -819,6 +828,7 @@ impl CodexCredentialAdminService {
                     candidate.authentication.access_token.clone(),
                     candidate.authentication.refresh_token.clone(),
                     candidate.authentication.id_token.clone(),
+                    candidate.outbound_proxy.as_ref(),
                 )
                 .await?;
             // 与官方 `parse_chatgpt_jwt_claims` 一致：先读 ID token，缺失字段
@@ -859,7 +869,12 @@ impl CodexCredentialAdminService {
                     next_refresh_at: None,
                     enabled: true,
                 })?;
-            accounts.push(prepared);
+            accounts.push(NewProviderAccount {
+                account: prepared
+                    .account
+                    .with_outbound_proxy(candidate.outbound_proxy),
+                credential: prepared.credential,
+            });
         }
         Ok(PreparedCodexAccountImport { accounts })
     }
@@ -870,6 +885,7 @@ impl CodexCredentialAdminService {
         access_token: Option<String>,
         refresh_token: Option<String>,
         id_token: Option<String>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<(CodexOAuthSecret, Option<DateTime<Utc>>), CodexCredentialAdminError> {
         let id_token = id_token.map(SecretString::from);
         if let Some(access_token) = access_token {
@@ -889,7 +905,7 @@ impl CodexCredentialAdminService {
         let refresh_token = refresh_token.ok_or(CodexCredentialAdminError::InvalidCredential)?;
         let tokens = self
             .refresher
-            .refresh(&refresh_token)
+            .refresh_with_proxy(&refresh_token, proxy)
             .await
             .map_err(map_refresh_failure)?;
         let access_token = tokens
@@ -986,12 +1002,18 @@ fn log_manual_refresh_failure(account_id: &ProviderAccountId, error: &RefreshFai
 fn parse_import_document(
     payload: &Value,
 ) -> Result<Vec<ParsedCodexImportAccount>, CodexCredentialAdminError> {
+    let payload = payload
+        .get("data")
+        .filter(|data| data.get("accounts").is_some())
+        .unwrap_or(payload);
     let mut accounts = Vec::new();
     for value in import_account_values(payload)? {
         if !is_openai_oauth_candidate(value) {
             continue;
         }
-        accounts.push(parse_oauth_import_account(value)?);
+        let mut account = parse_oauth_import_account(value)?;
+        account.outbound_proxy = import_proxy(payload, value)?;
+        accounts.push(account);
     }
     Ok(accounts)
 }
@@ -1004,7 +1026,87 @@ fn parse_oauth_import_account(
         name: first_string(value, &["name", "label"]),
         email: first_string(value, &["email"]).or_else(|| first_string(credentials, &["email"])),
         authentication: parse_oauth_import_tokens(value)?,
+        outbound_proxy: None,
     })
+}
+
+fn import_proxy(
+    payload: &Value,
+    account: &Value,
+) -> Result<Option<gateway_core::account::OutboundProxy>, CodexCredentialAdminError> {
+    let invalid = || CodexCredentialAdminError::InvalidInput;
+    if let Some(value) = account
+        .get("outbound_proxy_url")
+        .or_else(|| account.get("outboundProxyUrl"))
+        .filter(|value| !value.is_null())
+    {
+        let text = value.as_str().ok_or_else(invalid)?;
+        if text.is_empty() {
+            return Ok(None);
+        }
+        return gateway_core::account::OutboundProxy::parse(text)
+            .map(Some)
+            .map_err(|_| invalid());
+    }
+    let Some(key) = account.get("proxy_key").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let key = key
+        .as_str()
+        .filter(|key| !key.is_empty())
+        .ok_or_else(invalid)?;
+    let proxies = payload
+        .get("proxies")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    let mut matches = proxies
+        .iter()
+        .filter(|proxy| proxy.get("proxy_key").and_then(Value::as_str) == Some(key));
+    let proxy = matches.next().ok_or_else(invalid)?;
+    if matches.next().is_some()
+        || proxy
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value != "active")
+        || proxy
+            .get("expires_at")
+            .is_some_and(|value| !value.is_null())
+        || proxy
+            .get("fallback_mode")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value != "none")
+    {
+        return Err(invalid());
+    }
+    let text = |field| proxy.get(field).and_then(Value::as_str).ok_or_else(invalid);
+    let scheme = text("protocol")?;
+    // sub2api resolves SOCKS targets at the proxy.
+    let scheme = if scheme == "socks5" {
+        "socks5h"
+    } else {
+        scheme
+    };
+    let mut url = url::Url::parse(&format!("{scheme}://localhost")).map_err(|_| invalid())?;
+    let host = text("host")?;
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        url.set_ip_host(address).map_err(|_| invalid())?;
+    } else {
+        url.set_host(Some(host)).map_err(|_| invalid())?;
+    }
+    let port = proxy
+        .get("port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0)
+        .ok_or_else(invalid)?;
+    url.set_port(Some(port)).map_err(|_| invalid())?;
+    url.set_username(proxy.get("username").and_then(Value::as_str).unwrap_or(""))
+        .map_err(|_| invalid())?;
+    url.set_password(proxy.get("password").and_then(Value::as_str))
+        .map_err(|_| invalid())?;
+    gateway_core::account::OutboundProxy::parse(url.as_str())
+        .map(Some)
+        .map_err(|_| invalid())
 }
 
 fn import_account_values(payload: &Value) -> Result<Vec<&Value>, CodexCredentialAdminError> {

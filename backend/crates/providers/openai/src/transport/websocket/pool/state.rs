@@ -24,6 +24,7 @@ pub struct CodexWebSocketPoolKey {
     conversation_id: String,
     connection_profile: String,
     downstream_connection_id: String,
+    egress_key: String,
 }
 
 impl CodexWebSocketPoolKey {
@@ -39,6 +40,7 @@ impl CodexWebSocketPoolKey {
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
             downstream_connection_id: String::new(),
+            egress_key: String::new(),
         }
     }
 
@@ -61,6 +63,11 @@ impl CodexWebSocketPoolKey {
         &self.account_id
     }
 
+    pub(crate) fn with_egress_key(mut self, key: &str) -> Self {
+        self.egress_key = key.to_owned();
+        self
+    }
+
     pub(crate) fn conversation_id_hash(&self) -> String {
         short_sha256([self.conversation_id.as_str()])
     }
@@ -72,6 +79,7 @@ impl CodexWebSocketPoolKey {
             self.conversation_id.as_str(),
             self.connection_profile.as_str(),
             self.downstream_connection_id.as_str(),
+            self.egress_key.as_str(),
         ])
     }
 
@@ -79,6 +87,7 @@ impl CodexWebSocketPoolKey {
         self.base_url == other.base_url
             && self.account_id == other.account_id
             && self.conversation_id == other.conversation_id
+            && self.egress_key == other.egress_key
     }
 }
 

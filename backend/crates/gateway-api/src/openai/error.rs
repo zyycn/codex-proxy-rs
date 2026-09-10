@@ -143,13 +143,27 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
 /// Gateway 错误的 OpenAI HTTP 表达。
 pub fn gateway_error_response(error: &GatewayError) -> Response {
     let (status, default_type, default_code) = gateway_error_contract(error.kind());
-    openai_error_response(
+    let mut response = openai_error_response(
         status,
         error.client_message(),
         error.client_error_type().unwrap_or(default_type),
         error.client_error_code().unwrap_or(default_code),
     )
-    .into_response()
+    .into_response();
+    if let Some(delay) = error.retry_after()
+        && let Ok(value) = HeaderValue::from_str(
+            &delay
+                .as_secs()
+                .saturating_add(u64::from(delay.subsec_nanos() > 0))
+                .max(1)
+                .to_string(),
+        )
+    {
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, value);
+    }
+    response
 }
 
 /// 在下游尚未提交时优先交付 Provider 的原始 HTTP 失败响应。

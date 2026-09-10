@@ -288,7 +288,10 @@ impl CodexCredentialRefreshService {
             .refresh_token
             .as_ref()
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
-        let refresh_result = self.refresher.refresh(refresh_token.expose_secret()).await;
+        let refresh_result = self
+            .refresher
+            .refresh_with_proxy(refresh_token.expose_secret(), due.account.outbound_proxy())
+            .await;
         if recovery_window_exhausted && let Err(failure) = &refresh_result {
             let message = failure.message().map(str::to_owned);
             let upstream = failure.upstream();

@@ -7,6 +7,46 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
+async fn refresh_and_code_exchange_use_the_selected_account_proxy() {
+    let direct = MockServer::start().await;
+    let proxy_a = MockServer::start().await;
+    let proxy_b = MockServer::start().await;
+    for (proxy, access) in [(&proxy_a, "exit-a-access"), (&proxy_b, "exit-b-access")] {
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": access,
+                "refresh_token": "rotated-refresh",
+                "id_token": "header.e30.signature"
+            })))
+            .expect(2)
+            .mount(proxy)
+            .await;
+    }
+    let client = client(&direct);
+    for (proxy, expected) in [(&proxy_a, "exit-a-access"), (&proxy_b, "exit-b-access")] {
+        let proxy = gateway_core::account::OutboundProxy::parse(&proxy.uri()).unwrap();
+        let refreshed = client
+            .refresh_with_proxy("initial-refresh", Some(&proxy))
+            .await
+            .unwrap();
+        assert_eq!(refreshed.access_token.as_deref(), Some(expected));
+        let exchanged = client
+            .exchange_with_proxy(
+                AuthorizationCodeGrant {
+                    code: SecretString::from("test-code"),
+                    code_verifier: SecretString::from("test-verifier"),
+                },
+                Some(&proxy),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exchanged.secret.access_token.expose_secret(), expected);
+    }
+    assert!(direct.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

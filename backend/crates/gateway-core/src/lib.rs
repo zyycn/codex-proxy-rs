@@ -52,6 +52,7 @@ pub struct CoreStorePorts {
     snapshots: Arc<dyn SnapshotStorePort>,
     snapshot_subscriptions: Arc<dyn SnapshotSubscriptionPort>,
     client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
+    budget: Option<Arc<dyn engine::budget::ClientBudgetPort>>,
 }
 
 impl CoreStorePorts {
@@ -79,7 +80,14 @@ impl CoreStorePorts {
             snapshots,
             snapshot_subscriptions,
             client_api_key_usage,
+            budget: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_budget(mut self, budget: Arc<dyn engine::budget::ClientBudgetPort>) -> Self {
+        self.budget = Some(budget);
+        self
     }
 }
 
@@ -145,7 +153,7 @@ pub async fn initialize(
         Arc::clone(&ports.snapshot_subscriptions),
     ));
     let worker_contributions = publisher.worker_contributions()?;
-    let service = Arc::new(DefaultExecutionService::new(
+    let mut service = DefaultExecutionService::new(
         snapshots.clone(),
         ports.execution,
         providers,
@@ -153,7 +161,11 @@ pub async fn initialize(
         ports.circuits,
         ports.continuation,
         ports.client_api_key_usage,
-    ));
+    );
+    if let Some(budget) = ports.budget {
+        service = service.with_budget(budget);
+    }
+    let service = Arc::new(service);
     let execution: Arc<dyn ExecutionService> = service.clone();
     let account_probe: Arc<dyn AccountProbe> = service;
     let snapshot_control: Arc<dyn SnapshotControl> = publisher;

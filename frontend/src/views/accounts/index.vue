@@ -128,6 +128,8 @@ const {
   schedulingEnabled: batchSchedulingEnabled,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
+  proxyMode: batchProxyMode,
+  proxyUrl: batchProxyUrl,
   selectedGroupIds: batchGroupIds,
   saving: savingBatchEdit,
   open: openBatchEdit,
@@ -145,6 +147,8 @@ const {
   schedulingEnabled,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
+  proxyMode: editingProxyMode,
+  proxyUrl: editingProxyUrl,
   selectedGroupIds: editingGroupIds,
   saving: savingAccountEdit,
   open: openAccountEdit,
@@ -343,6 +347,8 @@ const {
       v-model:enabled="schedulingEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
+      v-model:proxy-mode="editingProxyMode"
+      v-model:proxy-url="editingProxyUrl"
       v-model:selected-group-ids="editingGroupIds"
       :account="editingAccount"
       :groups="groups"
@@ -356,6 +362,8 @@ const {
       v-model:enabled="batchSchedulingEnabled"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
+      v-model:proxy-mode="batchProxyMode"
+      v-model:proxy-url="batchProxyUrl"
       v-model:selected-group-ids="batchGroupIds"
       :selected-count="selectedIds.size"
       :groups="groups"

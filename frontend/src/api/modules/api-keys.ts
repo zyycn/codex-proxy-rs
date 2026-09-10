@@ -11,6 +11,13 @@ export interface ApiKey {
   enabled: boolean
   maxConcurrency: number
   requestsPerMinute: number
+  dailyLimitUsd: string
+  weeklyLimitUsd: string
+  dailyUsedUsd: string
+  weeklyUsedUsd: string
+  dailyResetsAt: string | null
+  weeklyResetsAt: string | null
+  unresolvedRequests: number
   createdAt: string
   updatedAt: string
   lastUsedAt: string | null
@@ -40,6 +47,21 @@ export interface ApiKeyMutationResponse {
   id: string
 }
 
+export interface UnresolvedClientCharge {
+  requestId: string
+  startedAt: string
+  completedAt: string | null
+  state: string
+}
+
+export function getUnresolvedClientCharges(id: string) {
+  return request<{ items: UnresolvedClientCharge[] }>({ url: '/api/admin/client-keys/unresolved-charges', method: 'GET', params: { id } })
+}
+
+export function reconcileClientCharge(data: { id: string, requestId: string, amountUsd: string, reason: string }) {
+  return request<{ reconciled: boolean }>({ url: '/api/admin/client-keys/reconcile-charge', method: 'POST', data })
+}
+
 // 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
 interface ApiKeyListParams {
   cursor?: string
@@ -55,6 +77,8 @@ export interface ApiKeyWriteParam {
   groupIds: string[]
   maxConcurrency: number
   requestsPerMinute: number
+  dailyLimitUsd: string
+  weeklyLimitUsd: string
 }
 
 interface ApiKeyUpdateParam extends ApiKeyWriteParam {

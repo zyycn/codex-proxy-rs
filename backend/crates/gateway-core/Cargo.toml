@@ -24,6 +24,7 @@ semver = "1.0.27"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 uuid = { version = "1.23.3", features = ["v7"] }
+url = "2.5.8"
 
 [lints]
 workspace = true

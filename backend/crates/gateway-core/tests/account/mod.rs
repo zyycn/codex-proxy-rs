@@ -1,3 +1,4 @@
+mod proxy;
 mod selection;
 mod selection_diagnostics;
 

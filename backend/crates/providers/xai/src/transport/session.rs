@@ -17,7 +17,7 @@ use crate::SecretValue;
 
 /// 注入的推理 transport 可识别的不透明假名化 egress/session 键。
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct GrokSessionBinding(String);
+pub struct GrokSessionBinding(String, Option<gateway_core::account::OutboundProxy>);
 
 impl GrokSessionBinding {
     /// 创建有界的非敏感绑定引用。
@@ -34,13 +34,26 @@ impl GrokSessionBinding {
         {
             return Err(GrokSessionDataError::InvalidBinding);
         }
-        Ok(Self(value))
+        Ok(Self(value, None))
     }
 
     /// 返回假名化的 transport 查找键。
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    #[must_use]
+    pub fn with_outbound_proxy(
+        mut self,
+        proxy: Option<gateway_core::account::OutboundProxy>,
+    ) -> Self {
+        self.1 = proxy;
+        self
+    }
+
+    pub(crate) fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
+        self.1.as_ref()
     }
 }
 

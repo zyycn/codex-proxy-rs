@@ -124,7 +124,9 @@ impl CodexProvider {
             crate::transport::request::scope_turn_metadata(metadata, lease.installation_id(), true)
         });
         let events = cold_json_response_stream(ColdJsonResponse {
-            client: self.client.clone(),
+            client: self.client.for_account(lease.account()).map_err(|_| {
+                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            })?,
             response_origin: request.response_origin,
             endpoint_path: request.endpoint_path,
             body: request.body,

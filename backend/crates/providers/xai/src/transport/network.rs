@@ -1,4 +1,4 @@
-//! 关闭 redirect、proxy 与业务重试的生产 reqwest transport。
+//! Explicit account egress with redirects and business retries disabled.
 
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext};
 use std::collections::{HashMap, VecDeque};
@@ -268,6 +268,12 @@ impl OAuthHttpTransport for ReqwestOAuthTransport {
             if !endpoint_policy.validate_oauth(request.url()) {
                 return Err(TransportFailure::new(TransportFailureKind::NotSent));
             }
+            let client = account_proxy_client(
+                &client,
+                request.outbound_proxy.as_ref(),
+                Some(OAUTH_REQUEST_TIMEOUT),
+            )
+            .map_err(|_| TransportFailure::new(TransportFailureKind::NotSent))?;
             let mut builder = match request.method() {
                 HttpMethod::Get => client.get(request.url().clone()),
                 HttpMethod::Post => client.post(request.url().clone()),
@@ -334,7 +340,11 @@ impl ReqwestGrokInferenceTransport {
             if let Some(client) = clients.get(binding) {
                 return Ok((client, GrokInferenceClientCacheStatus::Hit));
             }
-            clients.take_unbound()
+            if binding.outbound_proxy().is_none() {
+                clients.take_unbound()
+            } else {
+                None
+            }
         };
 
         let client = match unbound_client {
@@ -344,6 +354,8 @@ impl ReqwestGrokInferenceTransport {
                 .build_inference_client(None)
                 .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?,
         };
+        let client = account_proxy_client(&client, binding.outbound_proxy(), None)
+            .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?;
         let client = self
             .clients
             .lock()
@@ -592,6 +604,14 @@ impl GrokModelCatalogTransport for ReqwestGrokModelCatalogTransport {
                     GrokModelCatalogTransportErrorKind::Protocol,
                 ));
             }
+            let client = account_proxy_client(
+                &client,
+                request.outbound_proxy.as_ref(),
+                Some(OAUTH_REQUEST_TIMEOUT),
+            )
+            .map_err(|_| {
+                GrokModelCatalogTransportError::new(GrokModelCatalogTransportErrorKind::Protocol)
+            })?;
             let mut builder = client.get(request.endpoint().clone());
             for header in request.headers() {
                 builder = builder.header(header.name(), header.value().expose());
@@ -643,6 +663,12 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
                 .ok_or_else(|| {
                     GrokBillingTransportError::new(GrokBillingTransportErrorKind::Protocol)
                 })?;
+            let client = account_proxy_client(
+                &client,
+                request.outbound_proxy.as_ref(),
+                Some(OAUTH_REQUEST_TIMEOUT),
+            )
+            .map_err(|_| GrokBillingTransportError::new(GrokBillingTransportErrorKind::Protocol))?;
             let mut builder = client.get(endpoint);
             for header in request.headers() {
                 builder = builder.header(header.name(), header.value().expose());
@@ -696,6 +722,34 @@ fn build_official_client(
     builder
         .build()
         .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)
+}
+
+pub(crate) fn account_proxy_client(
+    base: &Client,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+    timeout: Option<Duration>,
+) -> Result<Client, GrokReqwestTransportBuildError> {
+    let Some(proxy) = proxy else {
+        return Ok(base.clone());
+    };
+    let invalid = || GrokReqwestTransportBuildError::ClientInitialization;
+    let mut builder = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| invalid())?)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+        .http2_adaptive_window(true)
+        .http2_keep_alive_interval(HTTP2_KEEP_ALIVE_INTERVAL)
+        .http2_keep_alive_timeout(HTTP2_KEEP_ALIVE_TIMEOUT)
+        .http2_keep_alive_while_idle(true)
+        .tcp_nodelay(true)
+        .https_only(true);
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder.build().map_err(|_| invalid())
 }
 
 fn valid_official_url(url: &Url, host: &str, path: Option<&str>) -> bool {

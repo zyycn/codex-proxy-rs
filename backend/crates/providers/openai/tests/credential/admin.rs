@@ -11,6 +11,73 @@ use crate::support::{TestLeaseCoordinator, runtime_policy};
 
 struct UnusedRefresher;
 
+#[tokio::test]
+async fn sub2api_import_resolves_distinct_proxy_bindings_and_encodes_credentials() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let prepared = service.prepare_import_document(serde_json::json!({"data": {
+        "accounts": [
+            {"name": "a", "platform": "openai", "type": "oauth", "proxy_key": "a", "credentials": {"access_token": "at-a"}},
+            {"name": "b", "platform": "openai", "type": "oauth", "proxy_key": "b", "credentials": {"access_token": "at-b"}},
+            {"name": "direct", "platform": "openai", "type": "oauth", "credentials": {"access_token": "at-c"}}
+        ],
+        "proxies": [
+            {"proxy_key": "a", "protocol": "http", "host": "127.0.0.1", "port": 18080, "username": "user@a", "password": "p:a/ss", "status": "active"},
+            {"proxy_key": "b", "protocol": "socks5", "host": "::1", "port": 1080, "status": "active", "fallback_mode": "none"}
+        ]
+    }})).await.unwrap();
+    assert_eq!(prepared.accounts().len(), 3);
+    let first = prepared.accounts()[0].account.outbound_proxy().unwrap();
+    assert_eq!(first.endpoint(), "http://127.0.0.1:18080/");
+    assert!(first.expose_url().contains("user%40a:p%3Aa%2Fss@"));
+    assert_eq!(
+        prepared.accounts()[1]
+            .account
+            .outbound_proxy()
+            .unwrap()
+            .endpoint(),
+        "socks5h://[::1]:1080"
+    );
+    assert!(prepared.accounts()[2].account.outbound_proxy().is_none());
+    assert!(!format!("{prepared:?}").contains("p:a/ss"));
+}
+
+#[tokio::test]
+async fn sub2api_invalid_proxy_bindings_are_rejected_before_any_token_refresh() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let proxy = serde_json::json!({"proxy_key": "bound", "protocol": "http", "host": "127.0.0.1", "port": 18080, "status": "active"});
+    let mut cases = vec![
+        serde_json::json!([]),
+        serde_json::json!([proxy.clone(), proxy.clone()]),
+    ];
+    for (field, value) in [
+        ("status", serde_json::json!("inactive")),
+        ("expires_at", serde_json::json!(2000000000)),
+        ("fallback_mode", serde_json::json!("direct")),
+        ("port", serde_json::json!(0)),
+    ] {
+        let mut invalid = proxy.clone();
+        invalid[field] = value;
+        cases.push(serde_json::json!([invalid]));
+    }
+    for proxies in cases {
+        let result = service.prepare_import_document(serde_json::json!({
+            "accounts": [
+                {"platform": "openai", "type": "oauth", "credentials": {"refresh_token": "must-not-refresh"}},
+                {"platform": "openai", "type": "oauth", "proxy_key": "bound", "credentials": {"access_token": "at"}}
+            ], "proxies": proxies
+        })).await;
+        assert!(result.is_err());
+    }
+}
+
 #[async_trait]
 impl TokenRefresher for UnusedRefresher {
     async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {

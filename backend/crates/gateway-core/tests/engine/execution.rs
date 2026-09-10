@@ -7,6 +7,165 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use gateway_core::engine::budget::{
+    ClientBudgetAdmission, ClientBudgetCharge, ClientBudgetError, ClientBudgetPort,
+};
+use gateway_core::error::GatewayError;
+
+#[derive(Default)]
+struct Admissions {
+    active: Arc<AtomicBool>,
+}
+
+impl ClientAdmissionPort for Admissions {
+    fn admit(
+        &self,
+        _: ClientAdmissionRequest,
+    ) -> BoxFuture<'_, Result<ClientAdmissionDecision, ClientAdmissionError>> {
+        Box::pin(async {
+            assert!(!self.active.swap(true, Ordering::SeqCst));
+            Ok(ClientAdmissionDecision::Granted)
+        })
+    }
+    fn release<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        _: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        Box::pin(async { Ok(self.active.swap(false, Ordering::SeqCst)) })
+    }
+    fn restore(
+        &self,
+        _: ClientAdmissionRecovery,
+    ) -> BoxFuture<'_, Result<ClientAdmissionRestoreResult, ClientAdmissionError>> {
+        Box::pin(async { Ok(ClientAdmissionRestoreResult::default()) })
+    }
+}
+
+struct Budget {
+    reject: bool,
+    active: Arc<AtomicBool>,
+    charges: Mutex<Vec<ClientBudgetCharge>>,
+}
+
+impl ClientBudgetPort for Budget {
+    fn admit(&self, _: ClientBudgetAdmission) -> BoxFuture<'_, Result<(), GatewayError>> {
+        Box::pin(async {
+            assert!(self.active.load(Ordering::SeqCst));
+            if self.reject {
+                Err(
+                    GatewayError::new(GatewayErrorKind::RateLimited, "budget exhausted")
+                        .with_client_code("key_daily_budget_exceeded"),
+                )
+            } else {
+                Ok(())
+            }
+        })
+    }
+    fn settle(&self, charge: ClientBudgetCharge) -> BoxFuture<'_, Result<(), ClientBudgetError>> {
+        Box::pin(async move {
+            assert!(
+                self.active.load(Ordering::SeqCst),
+                "settle before releasing the concurrent request slot"
+            );
+            self.charges.lock().unwrap().push(charge);
+            Ok(())
+        })
+    }
+}
+
+fn service(admissions: Arc<Admissions>, budget: Arc<Budget>) -> DefaultExecutionService {
+    DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        admissions,
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    )
+    .with_budget(budget)
+}
+
+fn request(service: &DefaultExecutionService, transport: ClientTransport) -> StartExecution {
+    StartExecution {
+        client: service.authenticate("sk_start_test").unwrap(),
+        public_model: PublicModelId::new("gpt-start").unwrap(),
+        operation: start_operation(),
+        metadata: ExecutionRequestMetadata {
+            protocol: "openai".to_owned(),
+            endpoint: "/v1/responses".to_owned(),
+            transport,
+            stream: transport != ClientTransport::HttpJson,
+            client_ip: None,
+            user_agent: None,
+            previous_response_id: None,
+        },
+    }
+}
+
+#[test]
+fn budget_rejection_releases_client_concurrency_without_creating_a_charge() {
+    let admissions = Arc::new(Admissions::default());
+    let budget = Arc::new(Budget {
+        reject: true,
+        active: admissions.active.clone(),
+        charges: Mutex::default(),
+    });
+    let service = service(admissions.clone(), budget.clone());
+    for transport in [
+        ClientTransport::HttpJson,
+        ClientTransport::HttpSse,
+        ClientTransport::WebSocket,
+    ] {
+        let result = block_on(service.start(request(&service, transport)));
+        assert!(
+            matches!(result, Err(error) if error.client_error_code() == Some("key_daily_budget_exceeded"))
+        );
+        assert!(!admissions.active.load(Ordering::SeqCst));
+        assert!(budget.charges.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn cancellation_and_pre_send_failure_settle_zero_and_release_concurrency_for_all_transports() {
+    let admissions = Arc::new(Admissions::default());
+    let budget = Arc::new(Budget {
+        reject: false,
+        active: admissions.active.clone(),
+        charges: Mutex::default(),
+    });
+    let service = service(admissions.clone(), budget.clone());
+    for transport in [
+        ClientTransport::HttpJson,
+        ClientTransport::HttpSse,
+        ClientTransport::WebSocket,
+    ] {
+        for detach in [true, false] {
+            let mut started = block_on(service.start(request(&service, transport))).unwrap();
+            assert!(admissions.active.load(Ordering::SeqCst));
+            if detach {
+                block_on(started.session.detach_finalize());
+            } else {
+                assert!(block_on(started.session.next_event()).is_err());
+                block_on(started.session.detach_finalize());
+            }
+            assert!(!admissions.active.load(Ordering::SeqCst));
+        }
+    }
+    let charges = budget.charges.lock().unwrap();
+    assert_eq!(
+        charges.len(),
+        6,
+        "one settlement per request, including detached finalized sessions"
+    );
+    assert!(
+        charges
+            .iter()
+            .all(|charge| charge.amount_usd == Some(gateway_core::metering::Decimal::ZERO))
+    );
+}
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{executor::block_on, future::BoxFuture};

@@ -110,6 +110,7 @@ export interface AccountUsage {
 }
 
 export interface Account {
+  outboundProxyEndpoint: string | null
   id: string
   name: string
   provider: string
@@ -288,6 +289,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  outboundProxyUrl?: string
   accountId: string
   enabled: boolean
   concurrencyLimit: number | null
@@ -296,6 +298,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
+  outboundProxyUrl?: string
   accountIds: string[]
   enabled: boolean
   concurrencyLimit: number | null
@@ -314,6 +317,7 @@ interface AccountImportParam {
 }
 
 interface AccountOAuthStartParam {
+  outboundProxyUrl?: string
   provider: string
   name: string
   accountId?: string

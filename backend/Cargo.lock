@@ -1488,6 +1488,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -2610,6 +2611,7 @@ dependencies = [
  "hex",
  "hyper",
  "hyper-rustls",
+ "hyper-util",
  "reqwest",
  "roxmltree",
  "rustls",
@@ -2627,6 +2629,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite 0.28.0",
  "tokio-util",
+ "tower-service",
  "tracing",
  "tracing-subscriber",
  "tungstenite 0.27.0",

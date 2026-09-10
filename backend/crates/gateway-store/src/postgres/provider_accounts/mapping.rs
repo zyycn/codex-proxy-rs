@@ -6,6 +6,7 @@ pub(crate) fn admin_account_record(
     summary: ProviderAccountSummary,
 ) -> AdminStoreResult<AccountRecord> {
     Ok(AccountRecord {
+        outbound_proxy: summary.outbound_proxy,
         id: summary.id,
         provider_kind: ProviderKind::new(summary.provider_kind).map_err(|_| {
             AdminStoreError::new(
@@ -42,6 +43,7 @@ pub(crate) fn prepared_account(
     credential: PreparedCredentialCreate,
 ) -> StoreResult<NewProviderAccount> {
     Ok(NewProviderAccount {
+        outbound_proxy: credential.outbound_proxy,
         id: credential.account_id.as_str().to_owned(),
         provider_kind: credential.provider_kind.as_str().to_owned(),
         name: credential.name,

@@ -303,7 +303,25 @@ impl TokenVerifier for ReqwestOidcTokenVerifier {
         context: TokenVerificationContext<'a>,
         candidate: TokenCandidate<'a>,
     ) -> VerificationFuture<'a> {
-        Box::pin(async move { self.verify_inner(context, candidate).await })
+        Box::pin(async move {
+            if let Some(proxy) = context.outbound_proxy() {
+                let client = crate::transport::network::account_proxy_client(
+                    &self.client,
+                    Some(proxy),
+                    Some(REQUEST_TIMEOUT),
+                )
+                .map_err(|_| VerificationFailure::Unavailable)?;
+                let scoped = Self {
+                    client,
+                    endpoint_policy: Arc::clone(&self.endpoint_policy),
+                    jwks_cache: Mutex::new(JwksCache::default()),
+                    cache_ttl: self.cache_ttl,
+                };
+                scoped.verify_inner(context, candidate).await
+            } else {
+                self.verify_inner(context, candidate).await
+            }
+        })
     }
 }
 

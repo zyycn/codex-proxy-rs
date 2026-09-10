@@ -99,6 +99,10 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         enabled: account.enabled,
         concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),
         weight: account.weight.get(),
+        outbound_proxy_endpoint: account
+            .outbound_proxy
+            .as_ref()
+            .map(|proxy| proxy.endpoint()),
         access_token_expires_at: expires_at,
         access_token_expires_at_display: account
             .access_token_expires_at

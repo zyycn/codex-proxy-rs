@@ -5,6 +5,7 @@ use std::{fmt, num::NonZeroU16};
 use chrono::{DateTime, Utc};
 
 use gateway_core::{
+    engine::budget::{ClientBudgetLimits, ClientBudgetStatus},
     policy::{ClientApiKeyId, RateLimits},
     routing::{AccountGroupId, ProviderKind},
 };
@@ -93,6 +94,7 @@ pub struct ClientKeyRecord {
     pub prefix: String,
     pub enabled: bool,
     pub limits: RateLimits,
+    pub budget: ClientBudgetStatus,
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -146,6 +148,7 @@ pub struct CreateClientKey {
     pub label: Option<String>,
     pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
+    pub budget: ClientBudgetLimits,
 }
 
 /// 管理用例生成 ID 与明文后的持久化命令。
@@ -156,6 +159,7 @@ pub struct NewClientKey {
     pub label: Option<String>,
     pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
+    pub budget: ClientBudgetLimits,
     pub plaintext: String,
 }
 
@@ -179,6 +183,8 @@ pub struct UpdateClientKey {
     pub label: Option<String>,
     pub group_ids: Vec<AccountGroupId>,
     pub limits: RateLimits,
+    pub daily_limit_usd: Option<gateway_core::metering::Decimal>,
+    pub weekly_limit_usd: Option<gateway_core::metering::Decimal>,
 }
 
 /// 修改 Client Key 启用状态。
@@ -216,4 +222,20 @@ pub struct ClientKeyMutation {
     pub config_revision: Revision,
     pub record: Option<ClientKeyRecord>,
     pub id: ClientApiKeyId,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnresolvedClientCharge {
+    pub request_id: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub state: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReconcileClientCharge {
+    pub key_id: ClientApiKeyId,
+    pub request_id: String,
+    pub amount_usd: gateway_core::metering::Decimal,
+    pub reason: String,
 }

@@ -2,6 +2,21 @@
 
 use super::*;
 
+#[derive(Debug, Clone)]
+pub struct AccountProxyUpdate(pub Option<gateway_core::account::OutboundProxy>);
+
+impl<'de> Deserialize<'de> for AccountProxyUpdate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() {
+            return Ok(Self(None));
+        }
+        gateway_core::account::OutboundProxy::parse(&value)
+            .map(|proxy| Self(Some(proxy)))
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -19,6 +34,7 @@ pub struct ListQuery {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
     pub enabled: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -68,6 +84,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            outbound_proxy: self.outbound_proxy_url.map(|value| value.0),
             account_ids: self.account_ids,
             enabled: self.enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
@@ -192,6 +209,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub outbound_proxy_endpoint: Option<String>,
     pub id: String,
     pub name: String,
     pub provider: String,

@@ -16,6 +16,7 @@ pub struct GrokOAuthClient {
     wire_profile: crate::XaiWireProfileState,
     transport: Arc<dyn OAuthHttpTransport>,
     verifier: Arc<dyn TokenVerifier>,
+    outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 impl GrokOAuthClient {
@@ -32,6 +33,7 @@ impl GrokOAuthClient {
             wire_profile,
             transport,
             verifier,
+            outbound_proxy: None,
         }
     }
 
@@ -39,6 +41,13 @@ impl GrokOAuthClient {
     #[must_use]
     pub const fn config(&self) -> &GrokOAuthConfig {
         &self.config
+    }
+
+    #[must_use]
+    pub fn with_outbound_proxy(&self, proxy: Option<gateway_core::account::OutboundProxy>) -> Self {
+        let mut client = self.clone();
+        client.outbound_proxy = proxy;
+        client
     }
 
     /// 拉取并校验官方同源 OIDC 发现文档。
@@ -129,7 +138,13 @@ impl GrokOAuthClient {
             tokens.id_token.as_ref(),
             tokens.expires_in,
         );
-        let evidence = self.verifier.verify(context, candidate).await?;
+        let evidence = self
+            .verifier
+            .verify(
+                context.with_outbound_proxy(self.outbound_proxy.as_ref()),
+                candidate,
+            )
+            .await?;
         if evidence.method() != VerificationMethod::IdToken {
             return Err(VerificationFailure::WrongEvidence.into());
         }
@@ -194,7 +209,10 @@ impl GrokOAuthClient {
         );
         let evidence = self
             .verifier
-            .verify(context, verification_candidate)
+            .verify(
+                context.with_outbound_proxy(self.outbound_proxy.as_ref()),
+                verification_candidate,
+            )
             .await
             .map_err(OAuthError::from)?;
         let expected_method = match flow {
@@ -251,8 +269,9 @@ impl GrokOAuthClient {
     async fn execute(
         &self,
         operation: OAuthOperation,
-        request: OAuthHttpRequest,
+        mut request: OAuthHttpRequest,
     ) -> Result<OAuthHttpResponse, OAuthError> {
+        request.outbound_proxy = self.outbound_proxy.clone();
         self.transport
             .execute(request)
             .await

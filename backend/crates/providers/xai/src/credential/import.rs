@@ -114,10 +114,16 @@ impl GrokOAuthImportMetadata {
 pub struct GrokOAuthImportEntry {
     name: String,
     email: Option<String>,
+    outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     candidate: GrokOAuthImportCandidate,
 }
 
 impl GrokOAuthImportEntry {
+    #[must_use]
+    pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
+        self.outbound_proxy.as_ref()
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
@@ -153,7 +159,7 @@ pub struct GrokOAuthImportDocument {
 impl GrokOAuthImportDocument {
     /// 从外部 JSON 提取 xAI OAuth 认证字段。
     ///
-    /// 来源包装格式、代理、并发和其他展示 metadata 不参与认证，也不会影响导入。
+    /// 独立代理 URL 随账号导入；其他展示 metadata 不参与认证。
     /// 实际 token 仍须通过官方 refresh/user-info 验证；API Key 不能混入 OAuth 条目。
     pub fn parse_json(document: &[u8]) -> Result<Self, GrokOAuthImportError> {
         if document.is_empty() || document.len() > MAX_IMPORT_DOCUMENT_BYTES {
@@ -290,9 +296,30 @@ fn parse_account_entry(
         expires_at,
     );
 
+    let outbound_proxy = match account
+        .get("outboundProxyUrl")
+        .or_else(|| account.get("outbound_proxy_url"))
+    {
+        Some(Value::String(value)) if value.is_empty() => None,
+        Some(Value::String(value)) => Some(
+            gateway_core::account::OutboundProxy::parse(value)
+                .map_err(|_| GrokOAuthImportError::InvalidField("outboundProxyUrl"))?,
+        ),
+        Some(Value::Null) | None => {
+            if account
+                .get("proxy_key")
+                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+            {
+                return Err(GrokOAuthImportError::InvalidField("proxy_key"));
+            }
+            None
+        }
+        Some(_) => return Err(GrokOAuthImportError::InvalidField("outboundProxyUrl")),
+    };
     Ok(Some(GrokOAuthImportEntry {
         name,
         email,
+        outbound_proxy,
         candidate: GrokOAuthImportCandidate::new(tokens, metadata),
     }))
 }

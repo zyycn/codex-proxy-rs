@@ -20,6 +20,8 @@ export function useAccountBatchEditor(options: {
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
+  const proxyMode = shallowRef('preserve')
+  const proxyUrl = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -30,6 +32,8 @@ export function useAccountBatchEditor(options: {
       return
 
     schedulingEnabled.value = accounts.every(account => account.enabled)
+    proxyMode.value = 'preserve'
+    proxyUrl.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
     weight.value = sharedWeight(accounts)
     selectedGroupIds.value = sharedGroupIds(accounts)
@@ -40,6 +44,10 @@ export function useAccountBatchEditor(options: {
     if (saving.value || options.selectedIds.value.size === 0)
       return
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
+    if (proxyMode.value === 'proxy' && !proxyUrl.value.trim()) {
+      toast.warning('请输入代理 URL')
+      return
+    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -49,6 +57,7 @@ export function useAccountBatchEditor(options: {
       const accountIds = selectedAccounts().map(account => account.id)
       await batchUpdateAccounts({
         accountIds,
+        outboundProxyUrl: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyUrl.value.trim(),
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
@@ -89,6 +98,8 @@ export function useAccountBatchEditor(options: {
     if (open || isSaving)
       return
     schedulingEnabled.value = true
+    proxyMode.value = 'preserve'
+    proxyUrl.value = ''
     concurrencyLimit.value = ''
     weight.value = '1'
     selectedGroupIds.value = []
@@ -99,6 +110,8 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled,
     concurrencyLimit,
     weight,
+    proxyMode,
+    proxyUrl,
     selectedGroupIds,
     saving,
     open,

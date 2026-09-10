@@ -108,7 +108,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
-            "select id, provider_kind, name, email, upstream_user_id,
+            "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
@@ -135,13 +135,13 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         };
         sqlx::query(
             "insert into provider_accounts (
-               id, provider_kind, name, email, upstream_user_id,
+               outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
                upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
                concurrency_limit, weight, credential_state, provider_quota_json,
                credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
              ) values (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
+               $18, $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
                $14, $15, $16, null, $17, null, null, now(), greatest(now(), $17)
              )",
         )
@@ -162,6 +162,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(i16::try_from(account.weight.get()).map_err(|_| invalid("invalid weight"))?)
         .bind(credential_state.as_str())
         .bind(account.credential_observed_at)
+        .bind(account.outbound_proxy.as_ref().map(|proxy| proxy.expose_url()))
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert provider account"))?;
@@ -524,6 +525,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 command.enabled,
                 command.concurrency_limit,
                 command.weight,
+                command.outbound_proxy.as_ref(),
             )
             .await?;
             replace_account_group_assignments_in_transaction(
@@ -678,13 +680,13 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     };
     let imported_id = sqlx::query_scalar::<_, String>(
         "insert into provider_accounts (
-           id, provider_kind, name, email, upstream_user_id,
+           outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
            concurrency_limit, weight, credential_state, provider_quota_json,
            credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
          ) values (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
+           $18, $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
            $14, $15, $16, null, $17, null, null, now(), greatest(now(), $17)
          )
          on conflict (
@@ -697,6 +699,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            plan_type = excluded.plan_type,
            authentication_kind = excluded.authentication_kind,
            provider_credentials_json = excluded.provider_credentials_json,
+           outbound_proxy_url = coalesce(excluded.outbound_proxy_url, provider_accounts.outbound_proxy_url),
            credential_revision = provider_accounts.credential_revision + 1,
            has_refresh_token = excluded.has_refresh_token,
            access_token_expires_at = excluded.access_token_expires_at,
@@ -732,6 +735,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     .bind(i16::try_from(account.weight.get()).map_err(|_| invalid("invalid weight"))?)
     .bind(credential_state.as_str())
     .bind(account.credential_observed_at)
+    .bind(account.outbound_proxy.as_ref().map(|proxy| proxy.expose_url()))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {
@@ -838,10 +842,13 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
+    outbound_proxy: Option<&Option<gateway_core::account::OutboundProxy>>,
 ) -> StoreResult<()> {
     let updated = sqlx::query_scalar::<_, String>(
         "update provider_accounts
-         set enabled = $2, concurrency_limit = $3, weight = $4, updated_at = now()
+         set enabled = $2, concurrency_limit = $3, weight = $4, updated_at = now(),
+             outbound_proxy_url = case when $5 then $6 else outbound_proxy_url end,
+             credential_revision = credential_revision + case when $5 and outbound_proxy_url is distinct from $6 then 1 else 0 end
          where id = any($1::text[])
          returning id",
     )
@@ -849,6 +856,8 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     .bind(enabled)
     .bind(concurrency_limit.map(|limit| i64::from(limit.get())))
     .bind(i16::try_from(weight.get()).map_err(|_| invalid("invalid weight"))?)
+    .bind(outbound_proxy.is_some())
+    .bind(outbound_proxy.and_then(Option::as_ref).map(|proxy| proxy.expose_url()))
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?
