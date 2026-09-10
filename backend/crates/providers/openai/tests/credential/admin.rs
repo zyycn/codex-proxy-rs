@@ -1,11 +1,22 @@
-use std::sync::Arc;
+use std::{
+    num::NonZeroU32,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone as _, Utc};
-use provider_openai::credential::token_client::{RefreshFailure, TokenPair, TokenRefresher};
+use provider_openai::credential::token_client::{
+    OpenAiTokenClient, PersonalAccessTokenError, RefreshFailure, TokenClientConfig, TokenPair,
+    TokenRefresher, openai_token_client,
+};
 use provider_openai::credential::{CodexCredentialAdminService, CodexCredentialCodec};
 use secrecy::ExposeSecret as _;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{header, method, path},
+};
 
 use crate::support::{TestLeaseCoordinator, runtime_policy};
 
@@ -143,6 +154,390 @@ fn test_jwt(payload: serde_json::Value) -> String {
         "unverified-header.{}.unverified-signature",
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("test JWT payload"))
     )
+}
+
+fn pat_service(server: &MockServer) -> CodexCredentialAdminService {
+    let client = openai_token_client(
+        TokenClientConfig {
+            client_id: "test-public-client".to_owned(),
+            token_endpoint: format!("{}/oauth/token", server.uri()),
+        },
+        provider_openai::OpenAiConfig::default().wire_profile_state(),
+    )
+    .expect("auth client");
+    CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    )
+    .with_personal_access_token_client(Arc::new(client))
+}
+
+fn pat_identity() -> serde_json::Value {
+    serde_json::json!({
+        "email": "pat@example.com",
+        "chatgpt_user_id": "pat-user",
+        "chatgpt_account_id": "pat-workspace",
+        "chatgpt_plan_type": "team",
+        "chatgpt_account_is_fedramp": false
+    })
+}
+
+#[tokio::test]
+async fn pat_import_verifies_identity_and_becomes_schedulable_without_oauth_refresh_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/accounts/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-test-token"))
+        .and(header("accept", "application/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pat_identity()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = pat_service(&server);
+    let prepared = service
+        .prepare_import_document(serde_json::json!({
+            "accounts": [{
+                "platform": "openai", "type": "codex", "name": "team PAT",
+                "access_token": "  at-test-token  ",
+                "refresh_token": "unrelated-refresh-token",
+                "id_token": test_jwt(serde_json::json!({
+                    "https://api.openai.com/auth": {"chatgpt_user_id": "untrusted-jwt-user"}
+                })),
+                "account_id": "untrusted-document-account",
+                "email": "untrusted-document@example.com",
+                "planType": "untrusted-plan", "expires_at": "2000-01-01T00:00:00Z"
+            }]
+        }))
+        .await
+        .expect("PAT import without a document user ID");
+    let prepared = &prepared.accounts()[0];
+    let account = &prepared.account;
+    assert_eq!(account.upstream_user_id(), Some("pat-user"));
+    assert_eq!(account.upstream_account_id(), Some("pat-workspace"));
+    assert_eq!(account.email(), Some("pat@example.com"));
+    assert_eq!(account.plan_type(), Some("team"));
+    assert_eq!(account.name(), "team PAT");
+    assert_eq!(
+        account.credential_state(),
+        gateway_core::account::CredentialState::Ready
+    );
+    assert_eq!(
+        account.status_projection(SystemTime::now(), None).status,
+        gateway_core::account::AccountStatus::Normal
+    );
+    assert!(!account.has_refresh_token());
+    assert!(account.access_token_expires_at().is_none());
+    assert!(account.next_refresh_at().is_none());
+    let runtime = CodexCredentialCodec::decode(&prepared.credential).expect("stored PAT");
+    let secret = runtime
+        .authentication
+        .oauth()
+        .expect("shared Bearer transport");
+    assert_eq!(secret.access_token.expose_secret(), "at-test-token");
+    assert!(secret.refresh_token.is_none());
+    assert!(secret.id_token.is_none());
+    let now = SystemTime::now();
+    let refresh_query = gateway_core::account::ProviderRefreshQuery::new(
+        account.provider().clone(),
+        now + Duration::from_secs(86_400),
+        now + Duration::from_secs(86_400),
+        now,
+        Vec::new(),
+        NonZeroU32::new(1).expect("nonzero limit"),
+    );
+    assert!(!refresh_query.contains(account));
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests[0].headers["originator"], "Codex Desktop");
+    assert!(!requests[0].headers.contains_key("chatgpt-account-id"));
+}
+
+#[tokio::test]
+async fn pat_import_times_out_without_falling_back_to_document_identity() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(pat_identity())
+                .set_delay(Duration::from_secs(2)),
+        )
+        .mount(&server)
+        .await;
+    let client = OpenAiTokenClient::new(
+        reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_millis(100))
+            .build()
+            .expect("short-lived test client"),
+        TokenClientConfig {
+            client_id: "test-public-client".to_owned(),
+            token_endpoint: format!("{}/oauth/token", server.uri()),
+        },
+        provider_openai::OpenAiConfig::default().wire_profile_state(),
+    );
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    )
+    .with_personal_access_token_client(Arc::new(client));
+    let error = service
+        .prepare_import_document(serde_json::json!({
+            "accessToken": "at-timeout-token", "userId": "untrusted-user"
+        }))
+        .await
+        .expect_err("timeout must abort PAT import");
+    assert_eq!(
+        error,
+        provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(
+            PersonalAccessTokenError::Unavailable
+        )
+    );
+}
+
+#[tokio::test]
+async fn pat_import_requires_a_validation_client() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let error = service
+        .prepare_import_document(serde_json::json!({
+            "accessToken": "at-test-token", "userId": "untrusted-user"
+        }))
+        .await
+        .expect_err("PAT cannot be imported without validation");
+    assert_eq!(
+        error,
+        provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(
+            PersonalAccessTokenError::Unavailable
+        )
+    );
+}
+
+#[tokio::test]
+async fn pat_auth_json_import_and_cpr_round_trip_preserve_a_token_without_email() {
+    use gateway_core::account::LoadedCredential;
+    use provider_openai::credential::{CodexCredentialAdmin, ExportManagedCodexCredential};
+
+    let server = MockServer::start().await;
+    let mut identity = pat_identity();
+    identity.as_object_mut().expect("object").remove("email");
+    Mock::given(method("GET"))
+        .and(path("/api/accounts/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(identity))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = pat_service(&server);
+    let imported = service
+        .prepare_import_document(serde_json::json!({
+            "auth_mode": "personalAccessToken", "personal_access_token": "at-test-token"
+        }))
+        .await
+        .expect("official PAT auth.json");
+    let prepared = imported.into_accounts().remove(0);
+    assert!(prepared.account.email().is_none());
+    let exported = CodexCredentialAdmin
+        .format_cpr_export(vec![ExportManagedCodexCredential {
+            current: LoadedCredential {
+                account: prepared.account,
+                credential: prepared.credential,
+            },
+            added_at: Utc::now(),
+            updated_at: Utc::now(),
+        }])
+        .expect("export PAT using the existing credential schema");
+    let imported = service
+        .prepare_import_document(serde_json::to_value(exported).expect("export JSON"))
+        .await
+        .expect("re-import verifies PAT again");
+    assert_eq!(
+        imported.accounts()[0].account.upstream_user_id(),
+        Some("pat-user")
+    );
+    assert!(!imported.accounts()[0].account.has_refresh_token());
+}
+
+#[tokio::test]
+async fn pat_import_fails_closed_for_rejection_and_unavailable_upstream_without_leaking_secrets() {
+    for (status, expected) in [
+        (401, PersonalAccessTokenError::Rejected),
+        (403, PersonalAccessTokenError::Rejected),
+        (429, PersonalAccessTokenError::Unavailable),
+        (500, PersonalAccessTokenError::Unavailable),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_string("pat-response-secret-marker"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = pat_service(&server)
+            .prepare_import_document(serde_json::json!({
+                "accessToken": "at-request-secret-marker", "userId": "document-user"
+            }))
+            .await
+            .expect_err("no account may be prepared after failed validation");
+        assert_eq!(
+            error,
+            provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(expected)
+        );
+        let message = format!("{error} {error:?}");
+        assert!(!message.contains("pat-response-secret-marker"));
+        assert!(!message.contains("at-request-secret-marker"));
+    }
+}
+
+#[tokio::test]
+async fn pat_import_rejects_missing_or_invalid_whoami_identity_fields() {
+    for field in [
+        "chatgpt_user_id",
+        "chatgpt_account_id",
+        "chatgpt_plan_type",
+        "chatgpt_account_is_fedramp",
+    ] {
+        for value in [
+            None,
+            Some(serde_json::json!("")),
+            Some(serde_json::json!(null)),
+        ] {
+            let server = MockServer::start().await;
+            let mut identity = pat_identity();
+            if let Some(value) = value {
+                identity[field] = value;
+            } else {
+                identity.as_object_mut().expect("object").remove(field);
+            }
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(identity))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = pat_service(&server)
+                .prepare_import_document(serde_json::json!({
+                    "access_token": "at-test-token", "user_id": "not-a-fallback"
+                }))
+                .await
+                .expect_err("malformed whoami must not fall back to document identity");
+            assert_eq!(
+                error,
+                provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(
+                    PersonalAccessTokenError::InvalidResponse
+                )
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn pat_import_rejects_invalid_json_and_oversized_chunked_success_bodies() {
+    for body in ["not-json-secret-marker".to_owned(), "x".repeat(70 * 1024)] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("transfer-encoding", "chunked")
+                    .set_body_string(body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = pat_service(&server)
+            .prepare_import_document(serde_json::json!({"accessToken": "at-test-token"}))
+            .await
+            .expect_err("invalid body");
+        assert_eq!(
+            error,
+            provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(
+                PersonalAccessTokenError::InvalidResponse
+            )
+        );
+        assert!(!format!("{error:?}").contains("secret-marker"));
+    }
+}
+
+#[tokio::test]
+async fn pat_import_does_not_follow_redirects_or_forward_bearer_to_another_endpoint() {
+    let server = MockServer::start().await;
+    let destination = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", destination.uri()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = pat_service(&server)
+        .prepare_import_document(serde_json::json!({"accessToken": "at-test-token"}))
+        .await
+        .expect_err("redirects are not accepted");
+    assert_eq!(
+        error,
+        provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(
+            PersonalAccessTokenError::Unavailable
+        )
+    );
+    assert!(
+        destination
+            .received_requests()
+            .await
+            .expect("redirect target")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn pat_import_rejects_malformed_tokens_before_sending_a_request() {
+    let server = MockServer::start().await;
+    let service = pat_service(&server);
+    for token in ["at-", "at-has space", "at-has\nnewline", "at-has\0control"] {
+        let error = service
+            .prepare_import_document(serde_json::json!({"accessToken": token}))
+            .await
+            .expect_err("invalid PAT");
+        assert_eq!(
+            error,
+            provider_openai::credential::CodexCredentialAdminError::PersonalAccessToken(
+                PersonalAccessTokenError::InvalidToken
+            )
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn ordinary_jwt_import_does_not_call_pat_whoami_even_when_client_is_configured() {
+    let server = MockServer::start().await;
+    let jwt = test_jwt(
+        serde_json::json!({"https://api.openai.com/auth": {"chatgpt_user_id": "jwt-user"}}),
+    );
+    let imported = pat_service(&server)
+        .prepare_import_document(serde_json::json!({
+            "accessToken": jwt, "refreshToken": "jwt-refresh", "userId": "untrusted"
+        }))
+        .await
+        .expect("existing JWT behavior");
+    assert_eq!(
+        imported.accounts()[0].account.upstream_user_id(),
+        Some("jwt-user")
+    );
+    assert!(imported.accounts()[0].account.has_refresh_token());
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
 }
 
 #[tokio::test]

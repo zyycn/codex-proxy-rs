@@ -153,12 +153,15 @@ pub async fn initialize(
         .map_err(|_| OpenAiInitializeError::TokenClient)?,
     );
     let refresher: Arc<dyn TokenRefresher> = token_client.clone();
-    let exchanger: Arc<dyn AuthorizationCodeExchanger> = token_client;
-    let credential_admin = Arc::new(CodexCredentialAdminService::new(
-        Arc::clone(&refresher),
-        Arc::clone(&leases),
-        Arc::clone(&runtime_policy),
-    ));
+    let exchanger: Arc<dyn AuthorizationCodeExchanger> = token_client.clone();
+    let credential_admin = Arc::new(
+        CodexCredentialAdminService::new(
+            Arc::clone(&refresher),
+            Arc::clone(&leases),
+            Arc::clone(&runtime_policy),
+        )
+        .with_personal_access_token_client(token_client),
+    );
     let refresh = Arc::new(CodexCredentialRefreshService::new(
         repository,
         refresher,

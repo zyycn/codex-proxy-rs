@@ -40,11 +40,13 @@ pub enum ProviderAdminErrorKind {
 ///
 /// `message` 是 Provider 局部诊断，可能包含原始上游正文；通用管理用例不得自动把它作为公开文案。
 /// 只有明确拥有原始诊断合同的调用方才能读取，`Debug` 始终只记录是否存在。
+/// `public_message` 则是明确标记为可公开的静态提示，不允许携带动态上游材料。
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 #[error("provider admin operation failed: {kind:?}")]
 pub struct ProviderAdminError {
     kind: ProviderAdminErrorKind,
     message: Option<String>,
+    public_message: Option<&'static str>,
 }
 
 impl std::fmt::Debug for ProviderAdminError {
@@ -53,6 +55,7 @@ impl std::fmt::Debug for ProviderAdminError {
             .debug_struct("ProviderAdminError")
             .field("kind", &self.kind)
             .field("message", &self.message.as_ref().map(|_| "<redacted>"))
+            .field("public_message", &self.public_message)
             .finish()
     }
 }
@@ -63,6 +66,7 @@ impl ProviderAdminError {
         Self {
             kind,
             message: None,
+            public_message: None,
         }
     }
 
@@ -70,6 +74,18 @@ impl ProviderAdminError {
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
         self
+    }
+
+    /// Provider 明确允许公开的静态提示；不得承载上游响应或凭据材料。
+    #[must_use]
+    pub const fn with_public_message(mut self, message: &'static str) -> Self {
+        self.public_message = Some(message);
+        self
+    }
+
+    #[must_use]
+    pub const fn public_message(&self) -> Option<&'static str> {
+        self.public_message
     }
 
     #[must_use]

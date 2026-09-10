@@ -1,4 +1,6 @@
-//! OpenAI token 续期 Reqwest 适配器。
+//! OpenAI OAuth token exchange 与 Codex PAT 验证的 Reqwest 适配器。
+
+use super::types::CodexOAuthMetadata;
 
 use crate::transport::{
     headers::build_codex_profile_headers,
@@ -22,6 +24,33 @@ pub const OFFICIAL_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OFFICIAL_CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 /// Codex Desktop loopback callback；管理员复制完整回调 URL 交回固定 complete API。
 pub const OFFICIAL_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+const PERSONAL_ACCESS_TOKEN_WHOAMI_PATH: &str = "/api/accounts/v1/user-auth-credential/whoami";
+
+/// PAT 验证失败；不保留令牌、响应体或可能包含秘密的底层 HTTP 错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PersonalAccessTokenError {
+    #[error("Codex PAT must be a non-empty at- token without whitespace or control characters")]
+    InvalidToken,
+    #[error(
+        "Codex PAT was rejected by OpenAI; it may be invalid, expired, revoked, or lack permission"
+    )]
+    Rejected,
+    #[error("Codex PAT validation is unavailable; retry later")]
+    Unavailable,
+    #[error("OpenAI returned an invalid Codex PAT identity response")]
+    InvalidResponse,
+}
+
+// 与 Codex personal_access_token.rs 一致：email 可缺失，其余身份字段必填。
+#[derive(Deserialize)]
+struct PersonalAccessTokenResponse {
+    email: Option<String>,
+    chatgpt_user_id: String,
+    chatgpt_account_id: String,
+    chatgpt_plan_type: String,
+    #[serde(rename = "chatgpt_account_is_fedramp")]
+    _chatgpt_account_is_fedramp: bool,
+}
 
 /// Token 刷新成功后得到的认证材料。
 #[derive(Clone)]
@@ -264,6 +293,69 @@ impl OpenAiTokenClient {
             config,
             profile,
         }
+    }
+
+    pub(crate) async fn personal_access_token_metadata(
+        &self,
+        access_token: &str,
+    ) -> Result<CodexOAuthMetadata, PersonalAccessTokenError> {
+        if !access_token.starts_with("at-")
+            || access_token.len() <= 3
+            || access_token.len() > MAX_OAUTH_RESPONSE_BYTES
+            || access_token
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control())
+        {
+            return Err(PersonalAccessTokenError::InvalidToken);
+        }
+        // 复用固定 auth origin 及其 TLS/超时/禁止重定向策略；导入文档不能指定验证地址。
+        let mut endpoint = reqwest::Url::parse(&self.config.token_endpoint)
+            .map_err(|_| PersonalAccessTokenError::Unavailable)?;
+        endpoint.set_path(PERSONAL_ACCESS_TOKEN_WHOAMI_PATH);
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
+        let headers = build_codex_profile_headers(&self.profile.snapshot())
+            .map_err(|_| PersonalAccessTokenError::Unavailable)?;
+        let response = self
+            .client
+            .get(endpoint)
+            .headers(headers)
+            .bearer_auth(access_token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| PersonalAccessTokenError::Unavailable)?;
+        match response.status() {
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                return Err(PersonalAccessTokenError::Rejected);
+            }
+            status if !status.is_success() => return Err(PersonalAccessTokenError::Unavailable),
+            _ => {}
+        }
+        let (_, body) = read_bounded_response(response)
+            .await
+            .map_err(|_| PersonalAccessTokenError::InvalidResponse)?;
+        let identity: PersonalAccessTokenResponse =
+            serde_json::from_slice(&body).map_err(|_| PersonalAccessTokenError::InvalidResponse)?;
+        if [
+            &identity.chatgpt_user_id,
+            &identity.chatgpt_account_id,
+            &identity.chatgpt_plan_type,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty() || value.chars().any(char::is_control))
+        {
+            return Err(PersonalAccessTokenError::InvalidResponse);
+        }
+        Ok(CodexOAuthMetadata {
+            email: identity
+                .email
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            chatgpt_user_id: Some(identity.chatgpt_user_id.trim().to_owned()),
+            chatgpt_account_id: Some(identity.chatgpt_account_id.trim().to_owned()),
+            chatgpt_plan_type: Some(identity.chatgpt_plan_type.trim().to_owned()),
+        })
     }
 }
 

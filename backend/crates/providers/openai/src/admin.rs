@@ -1306,10 +1306,29 @@ fn map_store_error(error: gateway_core::error::StoreError) -> ProviderAdminError
 }
 
 fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdminError {
+    use crate::credential::token_client::PersonalAccessTokenError;
     use CodexCredentialAdminError as Error;
     let upstream_message = error.upstream_message().map(ToOwned::to_owned);
+    let public_message = match &error {
+        Error::PersonalAccessToken(error) => Some(match error {
+            PersonalAccessTokenError::InvalidToken => {
+                "Codex PAT 格式无效：应为 at- 开头的完整令牌，不能包含空白或控制字符"
+            }
+            PersonalAccessTokenError::Rejected => {
+                "OpenAI 拒绝了 Codex PAT：令牌可能无效、已过期、已撤销或没有访问权限"
+            }
+            PersonalAccessTokenError::Unavailable => "暂时无法向 OpenAI 验证 Codex PAT，请稍后重试",
+            PersonalAccessTokenError::InvalidResponse => {
+                "OpenAI 返回的 Codex PAT 身份资料不完整或格式无效，请稍后重试"
+            }
+        }),
+        _ => None,
+    };
     let kind = match error {
-        Error::InvalidInput
+        Error::PersonalAccessToken(
+            PersonalAccessTokenError::InvalidToken | PersonalAccessTokenError::Rejected,
+        )
+        | Error::InvalidInput
         | Error::InvalidCredential
         | Error::MissingRefreshToken
         | Error::RefreshRejected { .. }
@@ -1318,9 +1337,17 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
         Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous { .. } => {
             ProviderAdminErrorKind::Conflict
         }
-        Error::RefreshUnavailable => ProviderAdminErrorKind::Unavailable,
+        Error::PersonalAccessToken(PersonalAccessTokenError::InvalidResponse) => {
+            ProviderAdminErrorKind::BadGateway
+        }
+        Error::PersonalAccessToken(PersonalAccessTokenError::Unavailable)
+        | Error::RefreshUnavailable => ProviderAdminErrorKind::Unavailable,
     };
     let error = provider_admin_error(kind);
+    let error = match public_message {
+        Some(message) => error.with_public_message(message),
+        None => error,
+    };
     match upstream_message {
         Some(message) => error.with_message(message),
         None => error,
@@ -1329,6 +1356,9 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
 
 const fn credential_admin_error_code(error: &CodexCredentialAdminError) -> &'static str {
     match error {
+        CodexCredentialAdminError::PersonalAccessToken(_) => {
+            "personal_access_token_validation_failed"
+        }
         CodexCredentialAdminError::InvalidInput => "invalid_input",
         CodexCredentialAdminError::InvalidCredential => "invalid_credential",
         CodexCredentialAdminError::NotFound => "not_found",

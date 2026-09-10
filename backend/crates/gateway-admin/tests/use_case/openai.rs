@@ -79,6 +79,43 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
 }
 
 #[tokio::test]
+async fn openai_import_should_expose_only_explicit_public_errors_without_committing() {
+    use gateway_admin::model::AdminErrorKind;
+
+    for (provider_kind, admin_kind) in [
+        (ProviderAdminErrorKind::Invalid, AdminErrorKind::Invalid),
+        (
+            ProviderAdminErrorKind::Unavailable,
+            AdminErrorKind::Unavailable,
+        ),
+        (
+            ProviderAdminErrorKind::BadGateway,
+            AdminErrorKind::BadGateway,
+        ),
+    ] {
+        let events = events();
+        let provider = FakeProviderAdmin::new("openai", events.clone());
+        provider
+            .fail_next_with_public_message(provider_kind, "Codex PAT 验证失败，请检查令牌后重试");
+        let store = FakeAccountStore::new("openai", events.clone());
+        let services = service(provider, store.clone()).await;
+        let error = services
+            .openai()
+            .import_document(ImportCredentials {
+                context: context("import-openai-pat-failure"),
+                document: document(),
+            })
+            .await
+            .expect_err("validation must fail before committing accounts");
+        assert_eq!(error.kind(), admin_kind);
+        assert_eq!(error.to_string(), "Codex PAT 验证失败，请检查令牌后重试");
+        assert!(!format!("{error:?}").contains("secret token"));
+        assert_eq!(recorded(&events), ["provider.prepare_import"]);
+        assert!(store.audit_requests().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn openai_import_should_refresh_quota_for_every_imported_account() {
     let events = events();
     let provider = FakeProviderAdmin::new("openai", events.clone());

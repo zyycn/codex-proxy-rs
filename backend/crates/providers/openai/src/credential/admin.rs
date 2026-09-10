@@ -26,7 +26,9 @@ use thiserror::Error;
 
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
-use super::token_client::{RefreshFailure, TokenRefresher};
+use super::token_client::{
+    OpenAiTokenClient, PersonalAccessTokenError, RefreshFailure, TokenRefresher,
+};
 use super::types::{
     CODEX_AUTHENTICATION_KIND_OAUTH, CodexAccountProfile, CodexCredentialData,
     CodexCredentialPrincipal, CodexOAuthMetadata, CodexOAuthSecret, parse_access_token_expiration,
@@ -48,8 +50,8 @@ pub struct ImportCodexOAuthCredential {
 
 /// OAuth credential 的最小创建输入。
 ///
-/// metadata 来自 ID token/access token 的官方本地 payload 解析；不包含签名、
-/// issuer、audience、nonce 或 token 验证。
+/// OAuth metadata 来自 ID token/access token 的本地 payload 解析；PAT metadata
+/// 来自 auth whoami 验证。两者均不从导入文档信任身份字段。
 pub(crate) struct UnresolvedCodexOAuthCredential {
     pub(crate) account_id: String,
     pub(crate) name: String,
@@ -321,6 +323,8 @@ impl fmt::Debug for PreparedCodexCredentialRotationGuard {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CodexCredentialAdminError {
+    #[error(transparent)]
+    PersonalAccessToken(#[from] PersonalAccessTokenError),
     #[error("Codex account input is invalid")]
     InvalidInput,
     #[error("Codex credential JSON is invalid")]
@@ -348,7 +352,8 @@ impl CodexCredentialAdminError {
             Self::RefreshRejected { message }
             | Self::AccountBanned { message }
             | Self::RefreshAmbiguous { message } => message.as_deref(),
-            Self::InvalidInput
+            Self::PersonalAccessToken(_)
+            | Self::InvalidInput
             | Self::InvalidCredential
             | Self::NotFound
             | Self::MissingRefreshToken
@@ -414,7 +419,7 @@ impl CodexCredentialAdmin {
 
     /// 为已取得 OAuth access token、但资料尚未补全的账号创建最小记录。
     ///
-    /// ID token payload 只用于本地字段投影；创建路径绝不发起 usage/profile 请求。
+    /// 接受调用方已取得的身份投影；本方法不发起 usage/profile 请求。
     pub(crate) fn prepare_unresolved_oauth(
         &self,
         input: UnresolvedCodexOAuthCredential,
@@ -662,6 +667,7 @@ impl CodexCredentialAdmin {
 /// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS。
 pub struct CodexCredentialAdminService {
     refresher: Arc<dyn TokenRefresher>,
+    personal_access_token_client: Option<Arc<OpenAiTokenClient>>,
     leases: Arc<dyn ProviderLeasePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
 }
@@ -671,6 +677,10 @@ impl fmt::Debug for CodexCredentialAdminService {
         formatter
             .debug_struct("CodexCredentialAdminService")
             .field("refresher", &"TokenRefresher")
+            .field(
+                "personal_access_token_client",
+                &self.personal_access_token_client.is_some(),
+            )
             .field("leases", &"ProviderLeasePort")
             .field("runtime_policy", &"ProviderRuntimePolicyPort")
             .finish()
@@ -685,9 +695,17 @@ impl CodexCredentialAdminService {
     ) -> Self {
         Self {
             refresher,
+            personal_access_token_client: None,
             leases,
             runtime_policy,
         }
+    }
+
+    /// 在生产组装时复用 OAuth auth client，为 at- 导入启用上游身份验证。
+    #[must_use]
+    pub fn with_personal_access_token_client(mut self, client: Arc<OpenAiTokenClient>) -> Self {
+        self.personal_access_token_client = Some(client);
+        self
     }
 
     /// 官方 RT exchange；结果由 App 在同一 revision/audit 事务中提交。
@@ -793,6 +811,7 @@ impl CodexCredentialAdminService {
     ///
     /// OAuth 导入先取得 access token（直接提供或 RT exchange），再按官方
     /// `parse_chatgpt_jwt_claims` 从 ID token/access token 本地投影账号资料。
+    /// at- PAT 使用 whoami 取得身份，并丢弃不适用的 RT、ID token 和刷新计划。
     pub async fn prepare_import_document(
         &self,
         payload: Value,
@@ -813,7 +832,7 @@ impl CodexCredentialAdminService {
             let account_id = format!("acct_{}", uuid::Uuid::now_v7().simple());
             let typed_account_id = ProviderAccountId::new(account_id.clone())
                 .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
-            let (secret, access_token_expires_at) = self
+            let (mut secret, mut access_token_expires_at) = self
                 .resolve_import_tokens(
                     &typed_account_id,
                     candidate.authentication.access_token.clone(),
@@ -821,26 +840,47 @@ impl CodexCredentialAdminService {
                     candidate.authentication.id_token.clone(),
                 )
                 .await?;
-            // 与官方 `parse_chatgpt_jwt_claims` 一致：先读 ID token，缺失字段
-            // 再由 access token 补齐。解析失败不阻塞 token 入库。
-            let id_metadata = secret
-                .id_token
-                .as_ref()
-                .and_then(|token| parse_chatgpt_jwt_claims(token.expose_secret()).ok())
-                .unwrap_or_default();
-            let access_metadata =
-                parse_chatgpt_jwt_claims(secret.access_token.expose_secret()).unwrap_or_default();
-            let metadata = CodexOAuthMetadata {
-                email: id_metadata.email.or(access_metadata.email),
-                chatgpt_plan_type: id_metadata
-                    .chatgpt_plan_type
-                    .or(access_metadata.chatgpt_plan_type),
-                chatgpt_user_id: id_metadata
-                    .chatgpt_user_id
-                    .or(access_metadata.chatgpt_user_id),
-                chatgpt_account_id: id_metadata
-                    .chatgpt_account_id
-                    .or(access_metadata.chatgpt_account_id),
+            let metadata = if secret
+                .access_token
+                .expose_secret()
+                .trim()
+                .starts_with("at-")
+            {
+                let token = secret.access_token.expose_secret().trim();
+                let metadata = self
+                    .personal_access_token_client
+                    .as_ref()
+                    .ok_or(PersonalAccessTokenError::Unavailable)?
+                    .personal_access_token_metadata(token)
+                    .await?;
+                secret = CodexOAuthSecret {
+                    access_token: SecretString::from(token),
+                    refresh_token: None,
+                    id_token: None,
+                };
+                access_token_expires_at = None;
+                metadata
+            } else {
+                // 普通 OAuth 仍按 ID token、access token 的顺序投影，不调用 whoami。
+                let id_metadata = secret
+                    .id_token
+                    .as_ref()
+                    .and_then(|token| parse_chatgpt_jwt_claims(token.expose_secret()).ok())
+                    .unwrap_or_default();
+                let access_metadata = parse_chatgpt_jwt_claims(secret.access_token.expose_secret())
+                    .unwrap_or_default();
+                CodexOAuthMetadata {
+                    email: id_metadata.email.or(access_metadata.email),
+                    chatgpt_plan_type: id_metadata
+                        .chatgpt_plan_type
+                        .or(access_metadata.chatgpt_plan_type),
+                    chatgpt_user_id: id_metadata
+                        .chatgpt_user_id
+                        .or(access_metadata.chatgpt_user_id),
+                    chatgpt_account_id: id_metadata
+                        .chatgpt_account_id
+                        .or(access_metadata.chatgpt_account_id),
+                }
             };
             let prepared =
                 CodexCredentialAdmin.prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
@@ -1032,7 +1072,10 @@ fn parse_oauth_import_tokens(
             Value::Object(object) => {
                 for (key, value) in object {
                     let token = match key.as_str() {
-                        "accessToken" | "access_token" => &mut access_token,
+                        "accessToken"
+                        | "access_token"
+                        | "personal_access_token"
+                        | "personalAccessToken" => &mut access_token,
                         "refreshToken" | "refresh_token" => &mut refresh_token,
                         "idToken" | "id_token" => &mut id_token,
                         _ => {

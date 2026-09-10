@@ -83,7 +83,7 @@ fn map_provider_error(
         AdminErrorKind::Internal => "服务内部错误",
         _ => "Provider 操作失败",
     };
-    AdminError::new(kind, message)
+    AdminError::new(kind, error.public_message().unwrap_or(message))
 }
 
 async fn publish_committed(

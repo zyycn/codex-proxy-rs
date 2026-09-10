@@ -951,6 +951,31 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
 }
 
 #[tokio::test]
+async fn initialized_provider_reports_a_safe_pat_format_error_before_network_access() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .expect("OpenAI bundle");
+    let error = bundle
+        .admin_provider()
+        .prepare_import(PrepareCredentialImport {
+            document: ProviderDocument::new(OpaqueProviderData::new(Map::from_iter([(
+                "accessToken".to_owned(),
+                json!("at-sensitive-token with whitespace"),
+            )]))),
+        })
+        .await
+        .expect_err("PAT format must be checked by the initialized provider");
+    assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+    assert_eq!(
+        error.public_message(),
+        Some("Codex PAT 格式无效：应为 at- 开头的完整令牌，不能包含空白或控制字符")
+    );
+    assert!(error.message().is_none());
+    assert!(!format!("{error:?}").contains("sensitive-token"));
+}
+
+#[tokio::test]
 async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
     let store = Arc::new(MemoryAccountStore::default());
     store

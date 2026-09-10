@@ -105,6 +105,18 @@ impl FakeProviderAdmin {
             Some(ProviderAdminError::new(kind).with_message(message));
     }
 
+    pub(super) fn fail_next_with_public_message(
+        &self,
+        kind: ProviderAdminErrorKind,
+        message: &'static str,
+    ) {
+        *self.failure.lock().expect("provider failure") = Some(
+            ProviderAdminError::new(kind)
+                .with_message("upstream body containing a secret token")
+                .with_public_message(message),
+        );
+    }
+
     pub(super) fn fail_next_quota(&self, kind: ProviderAdminErrorKind) {
         *self.quota_failure.lock().expect("provider quota failure") = Some(kind);
     }
