@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionPort, ClientAdmissionRejection, ClientAdmissionRequest,
 };
-use crate::engine::budget::{ClientBudgetAdmission, ClientBudgetCharge, ClientBudgetPort};
+use crate::engine::budget::{ClientBudgetCharge, ClientBudgetPort};
 use crate::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, NativeContinuationPort,
     NativeContinuationStoreErrorKind, PreviousResponseId,
@@ -523,13 +523,7 @@ impl DefaultExecutionService {
             model_request_id: request_id.clone(),
         };
         if let Some(budget) = &self.budget
-            && let Err(error) = budget
-                .admit(ClientBudgetAdmission {
-                    key_id: client.policy.key_id().clone(),
-                    request_id: request_id.clone(),
-                    deadline_at,
-                })
-                .await
+            && let Err(error) = budget.admit(client.policy.key_id().clone()).await
         {
             admission.release().await;
             return Err(error);
@@ -586,8 +580,9 @@ impl DefaultExecutionService {
                     settle_budget(
                         budget.as_ref(),
                         ClientBudgetCharge {
+                            key_id: client.policy.key_id().clone(),
                             request_id: request_id.clone(),
-                            amount_usd: Some(crate::metering::Decimal::ZERO),
+                            amount_usd: crate::metering::Decimal::ZERO,
                             completed_at: SystemTime::now(),
                         },
                     )
@@ -966,7 +961,7 @@ struct AdmissionLease {
 
 async fn settle_budget(port: &dyn ClientBudgetPort, charge: ClientBudgetCharge) {
     if let Err(error) = port.settle(charge).await {
-        tracing::error!(%error, "Client budget settlement pending; durable admission requires reconciliation");
+        tracing::error!(%error, "Client budget settlement failed; storage will retry on the next request");
     }
 }
 

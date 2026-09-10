@@ -1,4 +1,4 @@
-//! Durable per-key USD budgets, independent of best-effort request observations.
+//! 按 Key 持久化 USD 限额与已取得费用，不依赖尽力写入的请求观测。
 
 use std::time::SystemTime;
 
@@ -28,21 +28,14 @@ pub struct ClientBudgetStatus {
     pub weekly_used_usd: Decimal,
     pub daily_resets_at: Option<SystemTime>,
     pub weekly_resets_at: Option<SystemTime>,
-    pub unresolved_requests: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ClientBudgetAdmission {
-    pub key_id: ClientApiKeyId,
-    pub request_id: ModelRequestId,
-    pub deadline_at: SystemTime,
 }
 
 #[derive(Debug, Clone)]
 pub struct ClientBudgetCharge {
+    pub key_id: ClientApiKeyId,
     pub request_id: ModelRequestId,
-    /// None means the request may have incurred an unknown charge, never zero.
-    pub amount_usd: Option<Decimal>,
+    /// 已取得的 USD 费用，包含重试；缺少费用的尝试按零累计。
+    pub amount_usd: Decimal,
     pub completed_at: SystemTime,
 }
 
@@ -51,9 +44,9 @@ pub struct ClientBudgetCharge {
 pub struct ClientBudgetError;
 
 pub trait ClientBudgetPort: Send + Sync {
-    /// Persist a pending charge before any upstream work; read the current policy atomically.
-    fn admit(&self, request: ClientBudgetAdmission) -> BoxFuture<'_, Result<(), GatewayError>>;
+    /// 原子检查当前限额与已用金额，不创建预扣费或待结算记录。
+    fn admit(&self, key_id: ClientApiKeyId) -> BoxFuture<'_, Result<(), GatewayError>>;
 
-    /// Idempotent by gateway request ID. Failed writes leave the durable pending charge intact.
+    /// 按网关请求 ID 幂等累计已取得费用；写入失败由 Store 重试。
     fn settle(&self, charge: ClientBudgetCharge) -> BoxFuture<'_, Result<(), ClientBudgetError>>;
 }

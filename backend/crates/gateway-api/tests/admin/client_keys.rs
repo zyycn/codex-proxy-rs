@@ -50,44 +50,6 @@ fn budget_inputs_preserve_decimal_precision_and_omitted_updates() {
     );
 }
 
-#[tokio::test]
-async fn budget_reconciliation_routes_require_an_admin_session() {
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use tower::ServiceExt as _;
-    let fixture = AdminTestFixture::new().await;
-    let router = client_keys::router::<AdminTestState>().with_state(fixture.state());
-    for (method, path, body) in [
-        (
-            "GET",
-            "/api/admin/client-keys/unresolved-charges?id=key_1",
-            "",
-        ),
-        (
-            "POST",
-            "/api/admin/client-keys/reconcile-charge",
-            r#"{"id":"key_1","requestId":"req_charge","amountUsd":"0","reason":"verified"}"#,
-        ),
-    ] {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri(path)
-                    .header("content-type", "application/json")
-                    .header("x-request-id", "req_auth_budget")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-}
-
 #[test]
 fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
     let unknown = serde_json::from_value::<ListClientKeysQuery>(json!({ "other": true }));
@@ -320,7 +282,7 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     assert_eq!(list["items"][0]["dailyLimitUsd"], "0");
     assert_eq!(list["items"][0]["weeklyLimitUsd"], "0");
     assert_eq!(list["items"][0]["dailyUsedUsd"], "0");
-    assert_eq!(list["items"][0]["unresolvedRequests"], 0);
+    assert!(list["items"][0].get("unresolvedRequests").is_none());
     assert_eq!(
         DateTime::parse_from_rfc3339(
             list["items"][0]["lastUsedAt"]

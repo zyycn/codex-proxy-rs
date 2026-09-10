@@ -14,6 +14,8 @@ pub struct Decimal(u128);
 
 impl Decimal {
     pub const ZERO: Self = Self(0);
+    /// 数据库可表示的最大非负金额。
+    pub const MAX: Self = Self(MAX_SCALED_DECIMAL);
 
     /// 从按十位小数缩放的整数创建。
     ///

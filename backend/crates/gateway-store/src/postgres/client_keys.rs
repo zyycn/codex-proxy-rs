@@ -678,22 +678,6 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
-    async fn unresolved_charges(
-        &self,
-        id: &ClientApiKeyId,
-    ) -> AdminStoreResult<Vec<gateway_admin::model::client_keys::UnresolvedClientCharge>> {
-        self.required_record(id).await?;
-        super::client_budgets::unresolved_charges(&self.keys.pool, id).await
-    }
-
-    async fn reconcile_charge(
-        &self,
-        command: gateway_admin::model::client_keys::ReconcileClientCharge,
-        context: &MutationContext,
-    ) -> AdminStoreResult<()> {
-        let revision = self.revision().await?;
-        super::client_budgets::reconcile_charge(&self.keys.pool, command, context, revision).await
-    }
     async fn list_client_keys(
         &self,
         query: AdminClientKeyListQuery,

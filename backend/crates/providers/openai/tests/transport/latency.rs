@@ -1000,7 +1000,7 @@ async fn connection_local_continuation_should_fail_after_its_live_socket_disappe
     let observation = error
         .connection_observation()
         .expect("disappeared connection should retain its lifecycle observation");
-    assert_eq!(observation.exit_reason(), "tcp_reset");
+    assert_eq!(observation.exit_reason(), "reset_without_closing_handshake");
     assert!(observation.age_ms() >= observation.idle_ms());
 }
 

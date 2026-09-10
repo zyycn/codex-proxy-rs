@@ -135,7 +135,7 @@ sequenceDiagram
   A->>E: Operation + client context
   E->>E: freeze snapshot and compile routing plan
   E->>S: enqueue request / attempt observations
-  E->>S: check Key budget and persist pending charge
+  E->>S: check Key budget against recorded usage
   E->>P: one candidate, one credential, one attempt
   P-->>E: cold canonical stream + raw wire
   E->>E: enforce send and downstream commit barriers
@@ -250,23 +250,23 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 ### Client Key 限额与结算
 
 日金额、七天金额、并发和 RPM 按 Client Key 跨账号、跨 Provider 合计，零表示不限；修改限额不重置已用金额。
-Core 负责准入与结算时序，Store 持久化费用账本，Admin 负责限额配置及带审计的费用核账。
+Core 负责准入与结算时序，Store 持久化费用账本，Admin 负责限额配置。
 
 - 日窗口按北京时间零点划分；七天窗口从首次准入当天零点开始，到期后由下一次使用重新开启，不固定为周一。
 - 金额优先使用 Provider 上报的 USD，否则按现有模型价格估算；订阅账号的估算费用不代表上游订阅账单。
-  费用归属请求完成时间，跨日请求计入完成日，延迟写入或核账仍保留原完成时间。
+  费用归属请求完成时间，跨日请求计入完成日，延迟写入仍保留原完成时间。
 - 准入检查已结算金额，不预占未来费用。达到任一金额阈值后拒绝新请求，已准入请求仍可完成并使总额超过阈值。
 - SSE 持有并发名额直到终态；WebSocket 每个 `response.create` 独立准入，空闲连接不占名额。
   Core 在每次请求开始时重新鉴权并冻结当前策略，既有连接也应用已发布的限额与授权范围变更。
   换号和内部重试复用同一名额，Key 与账号并发上限同时生效；预算拒绝或启动失败释放名额。
 
-每次计费请求在发送上游前持久化待结算记录。完成、失败、取消和断连使用同一结算路径，以网关请求 ID
-保证幂等；明确未发送的失败按零结算，已发送或可能已发送但没有可信费用的请求保留未知状态。
-未知费用或超过请求期限仍未结算的记录阻止受限 Key 接受新的计费请求，需管理员确认金额并填写核账原因；
-零金额也必须显式确认。限额或核账阻断不会修改 Key 的管理员启停状态。
+完成、失败、取消和断连使用同一结算路径，在结束时以网关请求 ID 幂等累计已取得费用。
+缺少用量或价格、无法取得 USD 费用的尝试按零累计，不创建待核账记录，也不会阻断 Key；
+内部重试中已经取得的费用仍须累计。发送状态只决定重放是否安全，不能据此推断费用。
+请求日志继续保留真实错误、用量与费用来源，账本按零累计不表示上游实际免费。
 
-结算写入失败时，进程内保留精确费用，在同一 Key 下次请求前重试；进程崩溃后依靠持久化待结算记录要求核账，
-不能把遗失费用按零放行。PostgreSQL 不可用时拒绝所有新的计费请求，Redis 继续管理并发/RPM 租约。
+结算写入失败时，进程内保留精确费用，在同一 Key 下次请求前重试；进程退出后无法恢复的费用不会形成欠账。
+PostgreSQL 不可用时拒绝所有新的计费请求，Redis 继续管理并发/RPM 租约。
 账本独立于可丢弃的请求观测日志，日志清理不重置金额；费用事件保留至删除 Key，已有日志不会回填为账本费用。
 字段与错误合同见 [Client Key API](api.md#7-client-key)。
 

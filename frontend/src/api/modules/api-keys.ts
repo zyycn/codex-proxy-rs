@@ -17,7 +17,6 @@ export interface ApiKey {
   weeklyUsedUsd: string
   dailyResetsAt: string | null
   weeklyResetsAt: string | null
-  unresolvedRequests: number
   createdAt: string
   updatedAt: string
   lastUsedAt: string | null
@@ -45,21 +44,6 @@ export interface ApiKeyRevealResponse {
 
 export interface ApiKeyMutationResponse {
   id: string
-}
-
-export interface UnresolvedClientCharge {
-  requestId: string
-  startedAt: string
-  completedAt: string | null
-  state: string
-}
-
-export function getUnresolvedClientCharges(id: string) {
-  return request<{ items: UnresolvedClientCharge[] }>({ url: '/api/admin/client-keys/unresolved-charges', method: 'GET', params: { id } })
-}
-
-export function reconcileClientCharge(data: { id: string, requestId: string, amountUsd: string, reason: string }) {
-  return request<{ reconciled: boolean }>({ url: '/api/admin/client-keys/reconcile-charge', method: 'POST', data })
 }
 
 // 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。

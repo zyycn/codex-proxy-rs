@@ -437,8 +437,6 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
-| `GET` | `/api/admin/client-keys/unresolved-charges` | `id` | 按时间读取最早的 200 笔待核账请求 |
-| `POST` | `/api/admin/client-keys/reconcile-charge` | `{ id, requestId, amountUsd, reason }` | 管理员确认未知费用并记录审计 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
 `dailyLimitUsd` 和 `weeklyLimitUsd`，更新请求再增加
@@ -452,7 +450,8 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 `maxConcurrency` 和 `requestsPerMinute` 是非负整数，零表示不限。
 
 列表增加 `dailyLimitUsd`、`weeklyLimitUsd`、`dailyUsedUsd`、`weeklyUsedUsd`（均为字符串）、
-`dailyResetsAt`、`weeklyResetsAt`（RFC3339 或 `null`）与 `unresolvedRequests`。
+`dailyResetsAt`、`weeklyResetsAt`（RFC3339 或 `null`）。
+管理端日／周金额显示两位小数，悬停可查看原始值；记账和限额比较保留完整精度。
 日窗口按北京时间零点重置；周窗口从首次准入当天零点起持续七天，到期后在下一次使用时重新开启。
 费用按请求完成时间归属窗口。并发按同一 Key 的执行中请求累计，包含 SSE 与每个 WebSocket
 `response.create`；空闲连接不占名额，内部重试不重复占用。
@@ -461,12 +460,12 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 任一已结算金额达到限额后拒绝新请求，已准入请求可完成并使金额超过阈值。
 HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly_budget_exceeded`，
 并附 `Retry-After`；WebSocket 每次 `response.create` 执行相同检查并返回协议错误事件。
-已发送但费用不明、或超过请求期限仍未结算的请求使受限 Key 返回 `key_budget_unresolved`。
+只累计上游上报或按用量与模型价格计算出的 USD 费用；无法取得费用的尝试按零累计，
+保留错误和用量诊断，不产生待核账记录或阻断。内部重试中已经取得的费用仍会累计。
 预算存储不可用时返回 `503`、`key_budget_unavailable`。
 
-核账的 `amountUsd` 使用相同金额格式，`reason` 为 1–1024 字节的非空原因。只能处理该 Key 下未知或
-已超过期限的请求；相同金额重复提交不重复计费，修改已结算金额返回 `409`。账本独立于使用统计日志，
-记录保留至删除 Key，不受 `usageRetentionDays` 影响。
+自动结算按网关请求 ID 幂等执行。账本独立于使用统计日志，记录保留至删除 Key，
+不受 `usageRetentionDays` 影响。
 
 ## 8. 运行设置
 

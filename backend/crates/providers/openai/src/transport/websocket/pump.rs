@@ -670,9 +670,10 @@ pub(crate) fn transport_metric_reason(error: &tungstenite::Error) -> &'static st
             std::io::ErrorKind::TimedOut => "transport_timeout",
             _ => "transport_error",
         },
+        // 未收到关闭握手只能证明连接异常结束，不能据此认定收到 TCP RST。
         tungstenite::Error::Protocol(
             tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
-        ) => "tcp_reset",
+        ) => "reset_without_closing_handshake",
         _ => "transport_error",
     }
 }

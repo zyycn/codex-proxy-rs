@@ -167,8 +167,7 @@ where
             request_id,
             client_api_key_ref,
             observation: ResponseObservation::new(timing_started_at),
-            budget_prior_attempts_usd: Some(Decimal::ZERO),
-            budget_attempt_send_state: UpstreamSendState::NotSent,
+            budget_prior_attempts_usd: Decimal::ZERO,
             budget_attempt_already_counted: false,
             trace,
             deadline,
@@ -258,8 +257,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
     observation: ResponseObservation,
-    budget_prior_attempts_usd: Option<Decimal>,
-    budget_attempt_send_state: UpstreamSendState,
+    budget_prior_attempts_usd: Decimal,
     budget_attempt_already_counted: bool,
     trace: TraceContext,
     deadline: SystemTime,
@@ -486,30 +484,31 @@ where
 
     #[must_use]
     pub fn budget_charge(&self) -> super::budget::ClientBudgetCharge {
+        // 超出数据库可表示范围时保留最大金额，避免溢出后误记为零。
         let amount_usd = self
             .budget_prior_attempts_usd
-            .zip(self.budget_attempt_usd())
-            .and_then(|(prior, current)| prior.checked_add(current));
+            .checked_add(self.budget_attempt_usd())
+            .unwrap_or(Decimal::MAX);
         super::budget::ClientBudgetCharge {
+            key_id: self.client_api_key_ref.clone(),
             request_id: self.request_id.clone(),
             amount_usd,
             completed_at: self.finalized_at.unwrap_or_else(SystemTime::now),
         }
     }
 
-    fn budget_attempt_usd(&self) -> Option<Decimal> {
+    fn budget_attempt_usd(&self) -> Decimal {
         if self.budget_attempt_already_counted {
-            return Some(Decimal::ZERO);
+            return Decimal::ZERO;
         }
+        // Key 只累计已取得的 USD 费用；缺少费用的请求按零结算。
+        // 发送状态仍用于判断重放是否安全并保留在诊断中，不能据此推断存在欠费。
         self.observation
             .cost
             .total()
             .filter(|money| money.currency().as_str() == "USD")
             .map(crate::metering::Money::amount)
-            .or_else(|| {
-                (self.budget_attempt_send_state == UpstreamSendState::NotSent)
-                    .then_some(Decimal::ZERO)
-            })
+            .unwrap_or(Decimal::ZERO)
     }
 
     /// 返回截至当前已完成的实际上游调用结果。
@@ -786,8 +785,6 @@ where
             }),
         );
         let provider_request = ProviderRequest::new(self.operation.clone(), candidate.clone());
-        // Cancellation while a provider is opening cannot prove the request was never sent.
-        self.budget_attempt_send_state = UpstreamSendState::Ambiguous;
         let stream = match poll_provider(
             provider,
             provider_request,
@@ -811,7 +808,6 @@ where
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
                 Err(error) => {
-                    self.budget_attempt_send_state = error.send_state();
                     record_trace_error(&attempt_trace, &error);
                     if self.prepare_unavailable_native_continuation_replay(&error) {
                         return Ok(Some(PullOutcome::AttemptDiscarded));
@@ -1068,7 +1064,6 @@ where
                 .await;
             }
             current.send_observed = true;
-            self.budget_attempt_send_state = UpstreamSendState::Sent;
             self.send_state_watermark = UpstreamSendState::Sent;
         }
     }
@@ -1108,7 +1103,6 @@ where
             error.send_state()
         };
         let send_state = self.raise_send_watermark(attempt_send_state);
-        self.budget_attempt_send_state = attempt_send_state;
         if self.request_persisted {
             best_effort_store_write(
                 "mark_send_state",
@@ -1365,12 +1359,11 @@ where
     }
 
     fn reset_uncommitted_observations(&mut self) {
-        // Response facts are attempt-local; the key must also pay for discarded attempts.
+        // 响应观测按尝试隔离；被丢弃尝试中已取得的费用仍计入 Key。
         self.budget_prior_attempts_usd = self
             .budget_prior_attempts_usd
-            .zip(self.budget_attempt_usd())
-            .and_then(|(prior, current)| prior.checked_add(current));
-        self.budget_attempt_send_state = UpstreamSendState::NotSent;
+            .checked_add(self.budget_attempt_usd())
+            .unwrap_or(Decimal::MAX);
         self.budget_attempt_already_counted = false;
         self.observation.reset_for_attempt();
         self.upstream_complete = false;

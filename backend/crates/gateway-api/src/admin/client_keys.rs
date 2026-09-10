@@ -275,7 +275,6 @@ pub struct ClientKeyView {
     weekly_used_usd: String,
     daily_resets_at: Option<DateTime<Utc>>,
     weekly_resets_at: Option<DateTime<Utc>>,
-    unresolved_requests: u64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     last_used_at: Option<DateTime<Utc>>,
@@ -327,7 +326,6 @@ impl From<ClientKeyRecord> for ClientKeyView {
             weekly_used_usd: record.budget.weekly_used_usd.canonical(),
             daily_resets_at: record.budget.daily_resets_at.map(DateTime::from),
             weekly_resets_at: record.budget.weekly_resets_at.map(DateTime::from),
-            unresolved_requests: record.budget.unresolved_requests,
             created_at: record.created_at,
             updated_at: record.updated_at,
             last_used_at: record.last_used_at,
@@ -680,14 +678,6 @@ where
     Router::new()
         .route("/api/admin/client-keys", get(list_client_keys::<S>))
         .route(
-            "/api/admin/client-keys/unresolved-charges",
-            get(unresolved_client_charges::<S>),
-        )
-        .route(
-            "/api/admin/client-keys/reconcile-charge",
-            post(reconcile_client_charge::<S>),
-        )
-        .route(
             "/api/admin/client-keys/create",
             post(create_client_key::<S>),
         )
@@ -708,66 +698,6 @@ where
             "/api/admin/client-keys/delete",
             post(delete_client_key::<S>),
         )
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReconcileClientChargeRequest {
-    id: String,
-    request_id: String,
-    amount_usd: String,
-    reason: String,
-}
-
-async fn unresolved_client_charges<S>(
-    _auth: AdminAuth,
-    State(state): State<S>,
-    AdminQuery(query): AdminQuery<ClientKeyIdQuery>,
-) -> Result<impl IntoResponse, AdminError>
-where
-    S: AdminSessionState + Send + Sync,
-{
-    let id = query.into_domain_id().map_err(map_wire_error)?;
-    let items = state.admin_services().client_keys().unresolved_charges(&id).await.map_err(map_service_error)?
-        .into_iter().map(|event| serde_json::json!({
-            "requestId": event.request_id, "startedAt": event.started_at.to_rfc3339(),
-            "completedAt": event.completed_at.map(|time| time.to_rfc3339()), "state": event.state,
-        })).collect::<Vec<_>>();
-    Ok(AdminResponse::new(
-        StatusCode::OK,
-        AdminEnvelope::ok(serde_json::json!({"items": items})),
-    ))
-}
-
-async fn reconcile_client_charge<S>(
-    auth: AdminAuth,
-    State(state): State<S>,
-    AdminJson(payload): AdminJson<ReconcileClientChargeRequest>,
-) -> Result<impl IntoResponse, AdminError>
-where
-    S: AdminSessionState + Send + Sync,
-{
-    let key_id = client_key_id(payload.id, "id").map_err(map_wire_error)?;
-    let amount_usd = payload
-        .amount_usd
-        .parse::<Decimal>()
-        .map_err(|_| map_wire_error(WireValidationError::new("amountUsd")))?;
-    let command = gateway_admin::model::client_keys::ReconcileClientCharge {
-        key_id,
-        request_id: payload.request_id,
-        amount_usd,
-        reason: payload.reason,
-    };
-    state
-        .admin_services()
-        .client_keys()
-        .reconcile_charge(&auth.context().mutation_context(), command)
-        .await
-        .map_err(map_service_error)?;
-    Ok(AdminResponse::new(
-        StatusCode::OK,
-        AdminEnvelope::ok(serde_json::json!({"reconciled": true})),
-    ))
 }
 
 async fn list_client_keys<S>(

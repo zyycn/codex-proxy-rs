@@ -2159,18 +2159,23 @@ fn discarded_attempt_cost_never_leaks_into_retry_result() {
     assert_eq!(state.finalizations[0].cost_source, CostSource::Unavailable);
     assert_eq!(state.finalizations[0].cost_ticks, None);
     assert_eq!(
-        session.budget_charge().amount_usd,
-        None,
-        "unknown final usage cannot erase a charged retry"
+        session.budget_charge().amount_usd.scaled(),
+        999,
+        "missing final usage cannot erase a charged retry"
     );
 }
 
 #[test]
-fn key_budget_accumulates_retries_and_preserves_unknown_attempts() {
+fn key_budget_accumulates_only_observed_retry_costs() {
     for (first_cost, first_send, expected) in [
-        (Some(999), UpstreamSendState::Sent, Some(1122)),
-        (None, UpstreamSendState::Sent, None),
-        (None, UpstreamSendState::NotSent, Some(123)),
+        (Some(999), UpstreamSendState::Sent, 1122),
+        (
+            Some(gateway_core::metering::Decimal::MAX.scaled()),
+            UpstreamSendState::Sent,
+            gateway_core::metering::Decimal::MAX.scaled(),
+        ),
+        (None, UpstreamSendState::Sent, 123),
+        (None, UpstreamSendState::NotSent, 123),
     ] {
         let operation = generate_operation();
         let route_plan = plan(&operation);
@@ -2225,12 +2230,73 @@ fn key_budget_accumulates_retries_and_preserves_unknown_attempts() {
         block_on(session.collect_uncommitted()).unwrap();
         block_on(session.commit_downstream(Some(200))).unwrap();
         let charge = session.budget_charge();
-        assert_eq!(charge.amount_usd.map(|amount| amount.scaled()), expected);
+        assert_eq!(charge.amount_usd.scaled(), expected);
         assert_eq!(
             session.budget_charge().completed_at,
             charge.completed_at,
             "final settlement time stays stable"
         );
+    }
+}
+
+#[test]
+fn key_budget_settles_post_send_failures_from_observed_cost_without_replaying() {
+    for send_state in [UpstreamSendState::Sent, UpstreamSendState::Ambiguous] {
+        for cost in [None, Some(123)] {
+            for committed in [false, true] {
+                let operation = generate_operation();
+                let route_plan = plan(&operation);
+                let mut items = vec![Ok(GatewayEvent::Started(ResponseMeta::new(
+                    "response-interrupted",
+                    "gpt-5",
+                )))];
+                if let Some(cost) = cost {
+                    items.push(Ok(GatewayEvent::ProviderCost(
+                        ProviderReportedCost::from_usd_ticks(cost).unwrap(),
+                    )));
+                }
+                items.push(Err(ProviderError::new(
+                    ProviderErrorKind::Transport,
+                    send_state,
+                )));
+                let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+                    account_id: "acct_first",
+                    items,
+                }]);
+                let mut session = block_on(coordinator.start(
+                    model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                    operation,
+                    route_plan,
+                    None,
+                    None,
+                    CancellationToken::new(),
+                ))
+                .unwrap();
+                if committed {
+                    block_on(session.next_event()).unwrap().unwrap();
+                    block_on(session.commit_downstream(Some(200))).unwrap();
+                    loop {
+                        match block_on(session.next_event()) {
+                            Ok(Some(_)) => {}
+                            Err(EngineError::Provider(_)) => break,
+                            other => panic!("expected terminal transport error, got {other:?}"),
+                        }
+                    }
+                } else {
+                    assert!(matches!(
+                        block_on(session.collect_uncommitted()),
+                        Err(EngineError::Provider(_))
+                    ));
+                }
+                assert!(session.is_finalized());
+                assert_eq!(
+                    session.budget_charge().amount_usd.scaled(),
+                    cost.unwrap_or(0),
+                    "send={send_state:?}, committed={committed}, cost={cost:?}"
+                );
+                assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+            }
+        }
     }
 }
 
@@ -2812,11 +2878,8 @@ fn empty_selection_after_atomic_failure_should_deliver_the_last_upstream_wire() 
 
     assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 2);
     assert_eq!(
-        session
-            .budget_charge()
-            .amount_usd
-            .map(|amount| amount.scaled()),
-        Some(500),
+        session.budget_charge().amount_usd.scaled(),
+        500,
         "restoring a discarded failure must not charge its usage twice"
     );
     let state = store.state.lock().expect("store lock");
@@ -2956,6 +3019,7 @@ fn ambiguous_send_state_stops_retry() {
     let finalization = &state.finalizations[0];
     assert_eq!(finalization.outcome, ExecutionOutcome::Failed);
     assert_eq!(finalization.send_state, UpstreamSendState::Ambiguous);
+    assert_eq!(session.budget_charge().amount_usd.scaled(), 0);
     assert_eq!(finalization.attempt_count, 1);
     assert!(!finalization.committed);
     assert!(finalization.latency_ms.is_some());
@@ -3430,6 +3494,7 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
     assert_eq!(state.commits, 0);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Cancelled);
     assert!(!state.finalizations[0].committed);
+    assert_eq!(session.budget_charge().amount_usd.scaled(), 0);
 }
 
 #[test]

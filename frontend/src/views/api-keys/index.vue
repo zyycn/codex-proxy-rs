@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { ApiKey } from '@/api'
 import { ref, watch } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -17,7 +16,6 @@ import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
-import ApiKeyReconcileModal from './components/ApiKeyReconcileModal.vue'
 import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
@@ -27,14 +25,6 @@ import { useApiKeyUse } from './composables/useApiKeyUse'
 import { apiKeyColumns } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
-const reconcileKey = ref<ApiKey | null>(null)
-const showReconcile = ref(false)
-
-function openReconcile(key: ApiKey) {
-  reconcileKey.value = key
-  showReconcile.value = true
-}
-
 const {
   loading,
   apiKeys,
@@ -168,7 +158,7 @@ watch(
               <ApiKeyScopeCell :api-key="row" />
             </template>
             <template #budget="{ row }">
-              <ApiKeyBudgetCell :api-key="row" @reconcile="openReconcile" />
+              <ApiKeyBudgetCell :api-key="row" />
             </template>
             <template #limits="{ row }">
               <dl class="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs tabular-nums">
@@ -229,7 +219,6 @@ watch(
       @save="requestSave"
       @import-ccs="importCreatedKeyToCcs"
     />
-    <ApiKeyReconcileModal v-model="showReconcile" :api-key="reconcileKey" @reconciled="loadApiKeys" />
 
     <ApiKeyUseModal
       v-model="showUseKeyModal"

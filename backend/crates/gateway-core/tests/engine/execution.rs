@@ -7,9 +7,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use gateway_core::engine::budget::{
-    ClientBudgetAdmission, ClientBudgetCharge, ClientBudgetError, ClientBudgetPort,
-};
+use gateway_core::engine::budget::{ClientBudgetCharge, ClientBudgetError, ClientBudgetPort};
 use gateway_core::error::GatewayError;
 
 #[derive(Default)]
@@ -51,7 +49,7 @@ struct Budget {
 }
 
 impl ClientBudgetPort for Budget {
-    fn admit(&self, _: ClientBudgetAdmission) -> BoxFuture<'_, Result<(), GatewayError>> {
+    fn admit(&self, _: ClientApiKeyId) -> BoxFuture<'_, Result<(), GatewayError>> {
         Box::pin(async {
             assert!(self.active.load(Ordering::SeqCst));
             if self.reject {
@@ -230,7 +228,7 @@ fn cancellation_and_pre_send_failure_settle_zero_and_release_concurrency_for_all
     assert!(
         charges
             .iter()
-            .all(|charge| charge.amount_usd == Some(gateway_core::metering::Decimal::ZERO))
+            .all(|charge| charge.amount_usd == gateway_core::metering::Decimal::ZERO)
     );
 }
 

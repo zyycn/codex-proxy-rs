@@ -220,29 +220,6 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
-    async fn unresolved_charges(
-        &self,
-        _id: &gateway_core::policy::ClientApiKeyId,
-    ) -> AdminStoreResult<Vec<crate::model::client_keys::UnresolvedClientCharge>> {
-        Err(AdminStoreError::new(
-            AdminStoreErrorKind::Unavailable,
-            "client budget",
-            "unsupported",
-        ))
-    }
-
-    async fn reconcile_charge(
-        &self,
-        _command: crate::model::client_keys::ReconcileClientCharge,
-        _context: &MutationContext,
-    ) -> AdminStoreResult<()> {
-        Err(AdminStoreError::new(
-            AdminStoreErrorKind::Unavailable,
-            "client budget",
-            "unsupported",
-        ))
-    }
-
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage>;
 
     async fn reveal_client_key(

@@ -223,19 +223,3 @@ pub struct ClientKeyMutation {
     pub record: Option<ClientKeyRecord>,
     pub id: ClientApiKeyId,
 }
-
-#[derive(Debug, Clone)]
-pub struct UnresolvedClientCharge {
-    pub request_id: String,
-    pub started_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub state: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ReconcileClientCharge {
-    pub key_id: ClientApiKeyId,
-    pub request_id: String,
-    pub amount_usd: gateway_core::metering::Decimal,
-    pub reason: String,
-}
