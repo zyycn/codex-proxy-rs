@@ -1,21 +1,17 @@
-# v3.3.31
-
-## What's new
-
-- Add daily and weekly API key spending limits, persistent usage accounting, and audited reconciliation. Set a limit to `0` to leave it unrestricted.
-- Support per-account outbound proxies for authentication, imports, and model requests.
-- Support importing Codex personal access tokens.
-
-## Improvements
-
-- Configure scheduling, concurrency, weight, and groups before importing account credentials.
-- Share account settings across import, individual editing, and batch editing, with consistent modal actions and spacing.
-- Improve account plan labels and fill missing plan information from provider quota snapshots.
+# v3.3.32
 
 ## Fixes
 
-- Apply updated API key limits and enabled state to new requests on existing WebSocket connections.
-- Prevent a flash at the end of light/dark theme transitions.
-- Return explicit errors when a requested model is unavailable.
+- Remove manual charge reconciliation. Requests without available usage or pricing no longer block API keys; known costs from internal retries still count toward spending limits.
+- Correct xAI subscription plan labels using current subscription information, without treating failed subscription lookups as Free accounts.
+- Fix Codex custom tool calls, tool output pairing, and conversation continuations through xAI.
+- Distinguish missing OpenAI WebSocket closing handshakes from TCP resets in connection diagnostics.
 
-Spending limits use the existing dollar-based accounting rules. Requests already admitted can finish and cause settled usage to exceed a limit; usage-log cleanup does not reset budget accounting.
+## Improvements
+
+- Display daily and weekly API key amounts with two decimal places. Hover to see the full amount; accounting and limit checks retain their original precision.
+- Include version-specific update notes on release pages.
+
+## Upgrade
+
+The database migration automatically settles legacy pending and unknown charges at zero and removes reconciliation state. Previously recorded costs and daily/weekly totals are preserved. Request errors and usage diagnostics remain available.
