@@ -1391,7 +1391,7 @@ async fn accounts_list_should_return_complete_directory_semantics() {
         ),
         (
             Some("  self_serve_business_prolite  "),
-            Some("openai display: self_serve_business_prolite"),
+            Some("OpenaiDisplaySelfServeBusinessProlite"),
         )
     );
 
@@ -1409,16 +1409,27 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 
 #[tokio::test]
 async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_subtypes() {
-    for (stored_plan, quota_plan, expected) in [
-        (None, Some("free"), Some("free")),
-        (Some("  "), Some("free"), Some("free")),
-        (Some("unknown"), Some("free"), Some("free")),
+    for (stored_plan, quota_plan, expected, expected_display) in [
+        (None, Some("free"), Some("free"), Some("OpenaiDisplayFree")),
+        (
+            Some("  "),
+            Some("free"),
+            Some("free"),
+            Some("OpenaiDisplayFree"),
+        ),
+        (
+            Some("unknown"),
+            Some("free"),
+            Some("free"),
+            Some("OpenaiDisplayFree"),
+        ),
         (
             Some("self_serve_business_prolite"),
             Some("team"),
             Some("self_serve_business_prolite"),
+            Some("OpenaiDisplaySelfServeBusinessProlite"),
         ),
-        (None, None, None),
+        (None, None, None, None),
     ] {
         let provider = FakeProviderAdmin::new("openai", events());
         provider.set_quota(ProviderQuota {
@@ -1444,10 +1455,7 @@ async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_s
             .expect("account list");
         let account = page.items.first().expect("account item");
         assert_eq!(account.account.plan_type.as_deref(), expected);
-        assert_eq!(
-            account.plan_type_display,
-            expected.map(|plan| format!("openai display: {plan}"))
-        );
+        assert_eq!(account.plan_type_display.as_deref(), expected_display);
         for refresh in [false, true] {
             let detail = services
                 .accounts()

@@ -1433,6 +1433,7 @@ dependencies = [
  "cron",
  "futures",
  "gateway-core",
+ "heck",
  "hex",
  "rand_core 0.6.4",
  "secrecy",

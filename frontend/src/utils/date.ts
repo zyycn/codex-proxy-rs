@@ -1,12 +1,20 @@
 import type { ConfigType } from 'dayjs'
 import dayjs from 'dayjs'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
 const TIME_FORMAT = 'HH:mm:ss'
 
-export function formatDateTime(value: ConfigType = new Date(), fallback = '—'): string {
+export function formatDateTime(value: ConfigType = new Date(), fallback = '—', timeZone?: string): string {
   const timestamp = normalizedDate(value)
-  return timestamp.isValid() ? timestamp.format(DATE_TIME_FORMAT) : fallback
+  if (!timestamp.isValid())
+    return fallback
+  // 显式指定时区只影响展示，现有调用继续使用浏览器本地时区。
+  return (timeZone ? timestamp.tz(timeZone) : timestamp).format(DATE_TIME_FORMAT)
 }
 
 export function formatTime(value: ConfigType = new Date(), fallback = '—'): string {

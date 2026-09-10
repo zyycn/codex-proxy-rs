@@ -197,9 +197,10 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
 
-账号视图和 Dashboard 账号概览中的 `planType` 保留原始套餐值；`planTypeDisplay` 是后端按 Provider 生成的展示名称，
-前端直接展示该字段。OpenAI 的 `self_serve_business_prolite` 等 Team 套餐按官方客户端显示为
-`Business`；新套餐保留原始名称。账号套餐为空或 `unknown` 时，后端优先用已保存的上游额度响应
+账号视图和 Dashboard 账号概览中的 `planType` 保留原始套餐值；`planTypeDisplay` 由后端先按 Provider 解析名称，
+再统一为大驼峰格式，前端直接展示该字段，例如 `Free`、`SuperGrokPro`、`EduPlus`。
+OpenAI 的 `self_serve_business_prolite` 等 Team 套餐显示为 `Business`；新套餐也使用相同格式。
+账号套餐为空或 `unknown` 时，后端优先用已保存的上游额度响应
 中的明确套餐值补全 `planType` 和 `planTypeDisplay`；两处均无套餐信息时才显示“未知套餐”。
 
 `outboundProxyUrl` 接受 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码。

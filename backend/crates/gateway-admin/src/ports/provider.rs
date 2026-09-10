@@ -8,6 +8,7 @@ use gateway_core::{
     operation::Operation,
     routing::{ProviderKind, UpstreamModelId},
 };
+use heck::ToUpperCamelCase;
 
 use crate::model::observability::{
     CalculatedBillingBreakdown, DashboardWireProfile, ProviderBillingInput,
@@ -251,7 +252,7 @@ impl ProviderAdminRegistry {
             .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 账号页和 Dashboard 共用的套餐展示投影，不修改持久化的原始套餐值。
+    /// 账号页和 Dashboard 共用的大驼峰套餐展示名称，不修改原始套餐值。
     pub(crate) fn plan_type_display(
         &self,
         provider_kind: &str,
@@ -261,10 +262,12 @@ impl ProviderAdminRegistry {
         let provider = ProviderKind::new(provider_kind.to_owned())
             .ok()
             .and_then(|kind| self.providers.get(&kind));
-        Some(provider.map_or_else(
+        let display = provider.map_or_else(
             || plan_type.to_owned(),
             |provider| provider.plan_type_display(plan_type),
-        ))
+        );
+        // 所有 Provider 及未知套餐统一排版，保留 Plus 后缀的含义。
+        Some(display.replace('+', " Plus ").to_upper_camel_case())
     }
 
     /// 返回所有已注册 Provider 的 Dashboard 上游身份画像。
