@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 #[test]
 fn dashboard_quota_should_preserve_unknown_and_actual_window_facts() {
     let mut quota = ProviderQuota {
+        plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),

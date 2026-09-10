@@ -18,7 +18,7 @@ use crate::model::provider_credentials::{
     PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
     PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput, ProviderModels,
     ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
-    ProviderResetCreditResult, ProviderResetCredits,
+    ProviderResetCreditResult, ProviderResetCredits, explicit_plan_type,
 };
 
 /// Provider 管理失败的稳定分类。
@@ -257,9 +257,7 @@ impl ProviderAdminRegistry {
         provider_kind: &str,
         plan_type: Option<&str>,
     ) -> Option<String> {
-        let plan_type = plan_type
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))?;
+        let plan_type = explicit_plan_type(plan_type)?.trim();
         let provider = ProviderKind::new(provider_kind.to_owned())
             .ok()
             .and_then(|kind| self.providers.get(&kind));

@@ -113,6 +113,7 @@ pub struct CodexAccountQuotaSnapshot {
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
     observed_at: SystemTime,
+    plan_type: Option<String>,
     fact: CodexQuotaFact,
     quota: QuotaState,
     windows: Vec<CodexQuotaWindow>,
@@ -133,6 +134,12 @@ impl CodexAccountQuotaSnapshot {
     #[must_use]
     pub const fn observed_at(&self) -> SystemTime {
         self.observed_at
+    }
+
+    /// 上游额度响应明确返回的套餐；缺失时不推断账号级别。
+    #[must_use]
+    pub fn plan_type(&self) -> Option<&str> {
+        self.plan_type.as_deref()
     }
 
     #[must_use]
@@ -339,6 +346,10 @@ pub(crate) fn parse_account_quota_snapshot(
         account_id,
         credential_revision,
         observed_at,
+        plan_type: object
+            .get("plan_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         fact,
         quota,
         windows,

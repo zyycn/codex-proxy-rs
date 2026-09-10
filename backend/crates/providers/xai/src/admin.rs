@@ -1068,6 +1068,7 @@ fn project_quota(
 ) -> ProviderQuota {
     let Some(snapshot) = snapshot else {
         return ProviderQuota {
+            plan_type: None,
             observed_at: None,
             refresh_token_expires_at,
             windows: Vec::new(),
@@ -1139,6 +1140,7 @@ fn project_quota(
         }
     };
     ProviderQuota {
+        plan_type: None,
         observed_at: Some(snapshot.observed_at()),
         refresh_token_expires_at,
         windows: vec![window],

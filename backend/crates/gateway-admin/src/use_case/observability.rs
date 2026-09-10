@@ -162,13 +162,13 @@ impl DefaultObservabilityService {
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
         self.enrich_list_billing(&mut observation.recent_requests);
+        self.enrich_dashboard_quotas(&mut observation.account_usage)
+            .await;
         for account in &mut observation.account_usage {
             account.plan_type_display = self
                 .providers
                 .plan_type_display(&account.provider_kind, account.plan_type.as_deref());
         }
-        self.enrich_dashboard_quotas(&mut observation.account_usage)
-            .await;
         let today_start = china_day_start(observation.range.end);
         let yesterday_start = today_start - Duration::days(1);
         let today =
@@ -775,6 +775,7 @@ impl DefaultObservabilityService {
         let quotas = futures::future::join_all(quota_reads).await;
         for (account, quota) in accounts.iter_mut().zip(quotas) {
             if let Some(mut quota) = quota {
+                quota.fill_missing_plan_type(&mut account.plan_type);
                 quota.apply_limit_reached_display();
                 account.quota_used_percent = quota.representative_used_percent();
                 account.quota_window = quota.representative_window().cloned();

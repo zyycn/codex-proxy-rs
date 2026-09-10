@@ -1389,10 +1389,67 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 }
 
 #[tokio::test]
+async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_subtypes() {
+    for (stored_plan, quota_plan, expected) in [
+        (None, Some("free"), Some("free")),
+        (Some("  "), Some("free"), Some("free")),
+        (Some("unknown"), Some("free"), Some("free")),
+        (
+            Some("self_serve_business_prolite"),
+            Some("team"),
+            Some("self_serve_business_prolite"),
+        ),
+        (None, None, None),
+    ] {
+        let provider = FakeProviderAdmin::new("openai", events());
+        provider.set_quota(ProviderQuota {
+            plan_type: quota_plan.map(str::to_owned),
+            ..empty_quota()
+        });
+        let mut stored = account_record("openai");
+        stored.plan_type = stored_plan.map(str::to_owned);
+        let store = FakeAccountStore::with_account(stored, events());
+        let services = accounts_service(provider, store).await;
+        let page = services
+            .accounts()
+            .list(AccountListQuery {
+                page: 1,
+                page_size: gateway_admin::model::PageSize::new(20).expect("page size"),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: None,
+                sort: None,
+            })
+            .await
+            .expect("account list");
+        let account = page.items.first().expect("account item");
+        assert_eq!(account.account.plan_type.as_deref(), expected);
+        assert_eq!(
+            account.plan_type_display,
+            expected.map(|plan| format!("openai display: {plan}"))
+        );
+        for refresh in [false, true] {
+            let detail = services
+                .accounts()
+                .quota(
+                    &ProviderAccountId::new("acct_test").expect("account ID"),
+                    refresh,
+                )
+                .await
+                .expect("account quota detail");
+            assert_eq!(detail.account.plan_type.as_deref(), expected);
+            assert_eq!(detail.plan_type_display, account.plan_type_display);
+        }
+    }
+}
+
+#[tokio::test]
 async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_dropping_page() {
     let events = events();
     let openai = FakeProviderAdmin::new("openai", events.clone());
     openai.set_quota(ProviderQuota {
+        plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -1524,6 +1581,7 @@ async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
 async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -1571,6 +1629,7 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
 async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -1619,6 +1678,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     provider.set_quota(ProviderQuota {
+        plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -1685,6 +1745,7 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::days(7);
     provider.set_quota(ProviderQuota {
+        plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![
@@ -1939,6 +2000,7 @@ pub(super) fn document() -> ProviderDocument {
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),

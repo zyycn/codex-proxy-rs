@@ -269,7 +269,7 @@ impl DefaultAccountsService {
             })
             .await
             .map_err(|error| map_provider_error(error, "provider quota"))?;
-        let stored = if refresh_quota {
+        let mut stored = if refresh_quota {
             self.load_account(account_id).await?
         } else {
             stored
@@ -280,6 +280,7 @@ impl DefaultAccountsService {
         )
         .await?;
         let usage = quota.representative_window_usage().cloned();
+        quota.fill_missing_plan_type(&mut stored.account.plan_type);
         Ok(AccountDirectoryItem {
             plan_type_display: self.providers.plan_type_display(
                 stored.account.provider_kind.as_str(),
@@ -370,8 +371,9 @@ impl AccountsService for DefaultAccountsService {
             .items
             .into_iter()
             .zip(quotas)
-            .map(|(item, quota)| {
+            .map(|(mut item, quota)| {
                 let usage = quota.representative_window_usage().cloned();
+                quota.fill_missing_plan_type(&mut item.account.plan_type);
                 AccountDirectoryItem {
                     plan_type_display: self.providers.plan_type_display(
                         item.account.provider_kind.as_str(),
@@ -743,6 +745,7 @@ fn map_reset_credits_error_after_refresh(
 /// 账号目录中单个账号 quota 读取失败时使用的空额度投影。
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),

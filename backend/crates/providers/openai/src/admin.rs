@@ -791,6 +791,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),
@@ -851,6 +852,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     // 在窗口全部过期后继续维持限流。
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
+        plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,
         windows,

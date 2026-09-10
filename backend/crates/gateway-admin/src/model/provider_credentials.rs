@@ -751,12 +751,22 @@ pub struct ProviderQuotaRequest {
 /// Provider 已解析的 quota 结果及其不透明差异字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuota {
+    /// 上游额度响应明确提供的套餐，可用于补全账号展示。
+    pub plan_type: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
     /// 展示用快照级触顶事实（顶层或任一窗口触顶）；不参与账号五态派生。
     pub limit_reached: bool,
     pub provider_data: Option<ProviderDocument>,
+}
+
+/// 空值和 `unknown` 代表未提供套餐；新的套餐标识仍按明确值保留。
+pub(crate) fn explicit_plan_type(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| {
+        let value = value.trim();
+        !value.is_empty() && !value.eq_ignore_ascii_case("unknown")
+    })
 }
 
 /// Provider 官方个人资料中的累计摘要。
@@ -873,6 +883,13 @@ pub struct ProviderResetCreditResult {
 }
 
 impl ProviderQuota {
+    /// 保留账号已有的套餐子类型，仅在缺失时使用上游额度快照补全。
+    pub(crate) fn fill_missing_plan_type(&self, account_plan_type: &mut Option<String>) {
+        if explicit_plan_type(account_plan_type.as_deref()).is_none() {
+            *account_plan_type = explicit_plan_type(self.plan_type.as_deref()).map(str::to_owned);
+        }
+    }
+
     /// 返回账号展开面板使用的当前额度窗口用量。
     ///
     /// Provider 已提供账号级本地用量时，固定窗口和无固定重置点的滚动窗口

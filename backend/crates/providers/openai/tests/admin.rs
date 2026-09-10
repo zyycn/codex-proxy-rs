@@ -648,6 +648,71 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
 }
 
 #[tokio::test]
+async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_omit_it() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut verified_account = profile("chatgpt-free-plan");
+    verified_account.plan_type = None;
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_free_plan".to_owned(),
+            name: "free plan".to_owned(),
+            secret: secret("free-plan-test-token"),
+            verified_account,
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let account = store.account("acct_free_plan").expect("stored account");
+    let observed_at = SystemTime::now();
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: OpaqueProviderData::new(
+                json!({
+                    "plan_type": "free",
+                    "rate_limit": {
+                        "allowed": true,
+                        "primary_window": {
+                            "used_percent": 0,
+                            "limit_window_seconds": 2_592_000,
+                            "reset_at": 1_900_000_000
+                        }
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            ),
+            observed_at,
+            state: QuotaState::allowed(observed_at),
+        })
+        .await
+        .expect("persist existing quota");
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let admin = bundle.admin_provider();
+    let quota = admin
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("read cached free quota");
+    assert_eq!(quota.plan_type.as_deref(), Some("free"));
+    assert_eq!(
+        admin.plan_type_display(quota.plan_type.as_deref().expect("plan")),
+        "Free"
+    );
+}
+
+#[tokio::test]
 async fn openai_admin_provider_projects_official_codex_quota_and_independent_buckets_with_chinese_labels()
  {
     let store = Arc::new(MemoryAccountStore::default());
