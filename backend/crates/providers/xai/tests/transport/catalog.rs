@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use provider_xai::{
-    GROK_BILLING_URL, GROK_MODEL_CATALOG_URL, GrokBillingClient, GrokBillingError,
-    GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
+    GROK_BILLING_URL, GROK_MODEL_CATALOG_URL, GROK_SUBSCRIPTION_URL, GrokBillingClient,
+    GrokBillingError, GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportFuture, GrokBillingTransportResponse, GrokCatalogCapabilityEvidence,
     GrokHeaderValue, GrokModelCatalogClient, GrokModelCatalogError, GrokModelCatalogRequest,
     GrokModelCatalogSession, GrokModelCatalogTransport, GrokModelCatalogTransportError,
@@ -192,6 +192,71 @@ fn billing_parser_should_preserve_unknown_provider_fields() {
 
     assert!(snapshot.document()["config"].get("futureWindow").is_some());
     assert!(snapshot.document().get("futureTopLevel").is_some());
+}
+
+#[tokio::test]
+async fn subscription_query_distinguishes_confirmed_free_paid_and_unknown() {
+    for (body, expected) in [
+        (
+            r#"{"userId":"u1","principalType":"User","teamId":null,"organizationId":null,"subscriptionTier":null}"#,
+            Some("Free"),
+        ),
+        (
+            r#"{"userId":"u1","subscriptionTier":" SuperGrokPro "}"#,
+            Some("SuperGrokPro"),
+        ),
+        (
+            r#"{"userId":"u1","subscriptionTier":"FutureTier"}"#,
+            Some("FutureTier"),
+        ),
+        (
+            r#"{"userId":"u1","principalType":"Team","subscriptionTier":null}"#,
+            None,
+        ),
+        (
+            r#"{"userId":"u1","principalType":"User","teamId":"team1","organizationId":null,"subscriptionTier":null}"#,
+            None,
+        ),
+        (r#"{"userId":"u1","subscriptionTier":null}"#, None),
+        (r#"{"userId":"u1"}"#, None),
+        (r#"{"userId":"u1","subscriptionTier":" "}"#, None),
+    ] {
+        let transport = Arc::new(CapturingBillingTransport::success(body));
+        let actual = GrokBillingClient::new(transport.clone())
+            .fetch_subscription(&session(None))
+            .await
+            .expect("subscription response");
+        assert_eq!(actual.as_deref(), expected, "{body}");
+        let request = transport.request.lock().expect("captured request");
+        assert_eq!(
+            request
+                .as_ref()
+                .expect("subscription request")
+                .endpoint()
+                .as_str(),
+            GROK_SUBSCRIPTION_URL
+        );
+    }
+}
+
+#[tokio::test]
+async fn subscription_query_rejects_malformed_or_oversized_user_responses() {
+    for body in [
+        r#"{}"#.to_owned(),
+        r#"{"userId":"","subscriptionTier":"Free"}"#.to_owned(),
+        r#"{"userId":"u1","subscriptionTier":1}"#.to_owned(),
+        r#"{"userId":"u1","subscriptionTier":"Free\n"}"#.to_owned(),
+        serde_json::json!({"userId":"u1","subscriptionTier":"a".repeat(513)}).to_string(),
+        " ".repeat(MAX_GROK_BILLING_BYTES + 1),
+    ] {
+        let transport = Arc::new(CapturingBillingTransport::success(body));
+        assert!(
+            GrokBillingClient::new(transport)
+                .fetch_subscription(&session(None))
+                .await
+                .is_err()
+        );
+    }
 }
 
 #[test]

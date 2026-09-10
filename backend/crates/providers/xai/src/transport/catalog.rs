@@ -19,6 +19,9 @@ use crate::{GrokHeader, SecretValue, XaiWireProfileState};
 pub const GROK_MODEL_CATALOG_URL: &str = "https://cli-chat-proxy.grok.com/v1/models";
 /// 官方 Grok Build credits/billing URL。
 pub const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+/// 官方实时订阅查询 URL；额度响应本身不提供套餐事实。
+pub const GROK_SUBSCRIPTION_URL: &str =
+    "https://cli-chat-proxy.grok.com/v1/user?include=subscription";
 /// 单次 Grok 模型目录响应允许的最大字节数。
 pub const MAX_GROK_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
 /// 单次 Grok billing 响应允许的最大字节数。
@@ -28,6 +31,7 @@ pub(crate) const MAX_CATALOG_MODELS: usize = 2_048;
 const MAX_DISPLAY_NAME_BYTES: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 const MAX_ETAG_BYTES: usize = 256;
+const SUBSCRIPTION_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 构造模型目录 OAuth session 失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -255,7 +259,7 @@ pub trait GrokModelCatalogTransport: Send + Sync {
     fn execute(&self, request: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_>;
 }
 
-/// 交给单次官方 billing GET transport 的完整请求。
+/// 交给单次官方计费或订阅 GET transport 的完整请求。
 #[derive(Debug)]
 pub struct GrokBillingRequest {
     endpoint: Url,
@@ -265,8 +269,14 @@ pub struct GrokBillingRequest {
 
 impl GrokBillingRequest {
     fn from_session(session: &GrokModelCatalogSession) -> Result<Self, GrokBillingError> {
-        let endpoint =
-            Url::parse(GROK_BILLING_URL).map_err(|_| GrokBillingError::InvalidRequest)?;
+        Self::for_endpoint(session, GROK_BILLING_URL)
+    }
+
+    fn for_endpoint(
+        session: &GrokModelCatalogSession,
+        endpoint: &str,
+    ) -> Result<Self, GrokBillingError> {
+        let endpoint = Url::parse(endpoint).map_err(|_| GrokBillingError::InvalidRequest)?;
         let mut headers = vec![
             GrokHeader::sensitive(
                 "authorization",
@@ -291,7 +301,7 @@ impl GrokBillingRequest {
         })
     }
 
-    /// 返回固定官方 `/v1/billing?format=credits` URL。
+    /// 返回固定官方计费或订阅 URL。
     #[must_use]
     pub const fn endpoint(&self) -> &Url {
         &self.endpoint
@@ -455,6 +465,54 @@ impl GrokBillingClient {
             .await
             .map_err(|_| GrokBillingError::Transport)?;
         parse_grok_billing(response.body())
+    }
+
+    /// 查询实时订阅，只返回套餐事实，不保存用户资料。
+    pub async fn fetch_subscription(
+        &self,
+        session: &GrokModelCatalogSession,
+    ) -> Result<Option<String>, GrokBillingError> {
+        let request = GrokBillingRequest::for_endpoint(session, GROK_SUBSCRIPTION_URL)?;
+        let response = tokio::time::timeout(
+            SUBSCRIPTION_REQUEST_TIMEOUT,
+            self.transport.execute(request),
+        )
+        .await
+        .map_err(|_| GrokBillingError::Transport)?
+        .map_err(|_| GrokBillingError::Transport)?;
+        parse_subscription_tier(response.body())
+    }
+}
+
+fn parse_subscription_tier(body: &[u8]) -> Result<Option<String>, GrokBillingError> {
+    if body.len() > MAX_GROK_BILLING_BYTES {
+        return Err(GrokBillingError::ResponseTooLarge);
+    }
+    let document: Map<String, Value> =
+        serde_json::from_slice(body).map_err(|_| GrokBillingError::InvalidWire)?;
+    let user_id = document
+        .get("userId")
+        .ok_or(GrokBillingError::InvalidWire)?;
+    validate_dynamic_text(user_id, 1_024)?;
+    if user_id.as_str().is_none_or(|value| value.trim().is_empty()) {
+        return Err(GrokBillingError::InvalidWire);
+    }
+    match document.get("subscriptionTier") {
+        Some(value @ Value::String(tier)) => {
+            validate_dynamic_text(value, 512)?;
+            let tier = tier.trim();
+            Ok((!tier.is_empty()).then(|| tier.to_owned()))
+        }
+        // 官方仅在存在有效付费订阅时返回套餐名；缺字段或团队身份不能推断为 Free。
+        Some(Value::Null)
+            if document.get("principalType").and_then(Value::as_str) == Some("User")
+                && document.get("teamId") == Some(&Value::Null)
+                && document.get("organizationId") == Some(&Value::Null) =>
+        {
+            Ok(Some("Free".to_owned()))
+        }
+        None | Some(Value::Null) => Ok(None),
+        _ => Err(GrokBillingError::InvalidWire),
     }
 }
 

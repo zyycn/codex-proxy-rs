@@ -230,6 +230,7 @@ impl GrokBuildProvider {
         )
         .map_err(|_| protocol_not_sent())?;
         let request_input = upstream_request.input_items();
+        let instructions = upstream_request.instructions().cloned();
         if let Some(previous) = previous_session.as_ref() {
             upstream_request.inherit_session(previous.session_id.as_deref());
         }
@@ -293,6 +294,12 @@ impl GrokBuildProvider {
         .then(|| GrokSessionCapture {
             previous: previous_session,
             request_input,
+            instructions,
+            response_stored: upstream_request
+                .body()
+                .get("store")
+                .and_then(Value::as_bool)
+                == Some(true),
             account_id: selected.account_id().as_str().to_owned(),
             session_id: upstream_request.session_id().map(str::to_owned),
             output_items: BTreeMap::new(),

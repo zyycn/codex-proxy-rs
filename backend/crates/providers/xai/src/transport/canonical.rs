@@ -294,10 +294,10 @@ impl GrokCanonicalDecoder {
                 continue;
             }
             let Some(event_type) = body_type.or(event.event.as_deref()) else {
-                let Ok(transformed) = self.response_transform.rewrite_stream_event("", value)
-                else {
-                    continue;
-                };
+                let transformed = self
+                    .response_transform
+                    .rewrite_stream_event("", value)
+                    .map_err(|_| protocol_error_marker())?;
                 for (index, transformed) in transformed.into_iter().enumerate() {
                     let mut value = transformed.into_value();
                     self.response_transform.resequence_stream_value(&mut value);
@@ -324,13 +324,11 @@ impl GrokCanonicalDecoder {
             if let Some(item) = value.get("item") {
                 self.requires_provider_cost |= !token_only_output(item);
             }
-            // 无法转换的上游帧（多为畸形帧）直接丢弃，保持已开始的客户端流不中断。
-            let Ok(transformed) = self
+            // 转换失败必须终止，不能丢弃工具参数后仍向客户端报告成功。
+            let transformed = self
                 .response_transform
                 .rewrite_stream_event(&event_type, value)
-            else {
-                continue;
-            };
+                .map_err(|_| protocol_error_marker())?;
             for (index, transformed) in transformed.into_iter().enumerate() {
                 let transformed_type = transformed.event_type().to_owned();
                 if !client_visible_event(&transformed_type) {

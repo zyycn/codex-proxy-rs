@@ -338,6 +338,31 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
         .await
         .expect("cached quota");
     assert!(quota.windows.is_empty());
+    store
+        .compare_and_swap_quota(gateway_core::account::QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: OpaqueProviderData::new(
+                serde_json::from_value(serde_json::json!({
+                    "subscriptionTier": "Free",
+                    "config": {}
+                }))
+                .expect("quota document"),
+            ),
+            observed_at: SystemTime::now(),
+            state: account.quota(),
+        })
+        .await
+        .expect("store subscription snapshot");
+    let quota = admin
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("cached subscription");
+    assert_eq!(quota.plan_type.as_deref(), Some("Free"));
     let models = admin
         .models(account.id(), false)
         .await

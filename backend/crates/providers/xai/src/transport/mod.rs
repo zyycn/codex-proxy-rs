@@ -15,16 +15,17 @@ pub use canonical::{
     GrokCanonicalDecoder, grok_billing_breakdown, grok_billing_breakdown_with_tier,
 };
 pub use catalog::{
-    GROK_BILLING_URL, GROK_MODEL_CATALOG_URL, GrokBillingClient, GrokBillingError,
-    GrokBillingRequest, GrokBillingSnapshot, GrokBillingTransport, GrokBillingTransportError,
-    GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
-    GrokCatalogApiBackend, GrokCatalogCapabilities, GrokCatalogCapabilityEvidence,
-    GrokCatalogLimits, GrokCatalogMetadata, GrokCatalogModel, GrokCatalogReasoningEffort,
-    GrokModelCatalogClient, GrokModelCatalogError, GrokModelCatalogRequest,
-    GrokModelCatalogSession, GrokModelCatalogSessionError, GrokModelCatalogSnapshot,
-    GrokModelCatalogTransport, GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
-    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, MAX_GROK_BILLING_BYTES,
-    MAX_GROK_MODEL_CATALOG_BYTES, parse_grok_billing, parse_grok_model_catalog,
+    GROK_BILLING_URL, GROK_MODEL_CATALOG_URL, GROK_SUBSCRIPTION_URL, GrokBillingClient,
+    GrokBillingError, GrokBillingRequest, GrokBillingSnapshot, GrokBillingTransport,
+    GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
+    GrokBillingTransportResponse, GrokCatalogApiBackend, GrokCatalogCapabilities,
+    GrokCatalogCapabilityEvidence, GrokCatalogLimits, GrokCatalogMetadata, GrokCatalogModel,
+    GrokCatalogReasoningEffort, GrokModelCatalogClient, GrokModelCatalogError,
+    GrokModelCatalogRequest, GrokModelCatalogSession, GrokModelCatalogSessionError,
+    GrokModelCatalogSnapshot, GrokModelCatalogTransport, GrokModelCatalogTransportError,
+    GrokModelCatalogTransportErrorKind, GrokModelCatalogTransportFuture,
+    GrokModelCatalogTransportResponse, MAX_GROK_BILLING_BYTES, MAX_GROK_MODEL_CATALOG_BYTES,
+    parse_grok_billing, parse_grok_model_catalog,
 };
 pub use compaction::{
     GrokCompactionDecodeError, GrokCompactionRequest, GrokCompactionSummaryDecoder,

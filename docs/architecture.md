@@ -318,7 +318,13 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - OpenAI 支持 OAuth、AT/RT 与 OAuth JSON，导入识别 camelCase 和官方 `auth.json` 的 snake_case token 字段；
   RT-only 导入先换取 AT，AT-only 导入没有
   自动续期能力。OAuth 身份只从官方 JWT claims 投影，不信任导入文档顶层身份字段。
-- xAI 使用 OAuth session；API Key 不是受支持的账号 credential。
+- xAI 使用 OAuth session；API Key 不是受支持的账号 credential。刷新额度时同步查询官方实时订阅，
+  只把套餐事实写入现有 quota JSON。明确无付费订阅的个人账号显示 Free；查询失败、缺失字段或
+  团队身份不推断为 Free，订阅查询失败不影响额度观测。
+  Codex custom 工具统一以 function 的 `input` 字符串包装，保留说明与 grammar；响应恢复
+  原工具类型及对应 item ID，`call_id` 始终保持配对。转换仅处理协议字段，超限或转换失败终止流。
+  默认 `store: false` 的续接使用现有会话 owner 重放完整历史；上一轮要求上游存储且指令未变时，
+  原生续接移除本轮 `instructions`，避免 Grok 拒绝与 `previous_response_id` 同传。
 - 新账号导入和首次 OAuth 在 credential 提交后尽力读取一次额度；失败只留下观测，不回滚账号事务。
 - quota refresh、正常推理返回的 rate-limit headers 和后台健康任务汇入同一额度事实；套餐只用于展示与
   目录 cache 隔离，不创建套餐专属状态机。

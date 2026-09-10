@@ -40,27 +40,7 @@ pub(super) fn normalize_compaction_input(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let has_structured_compaction_shape = item.contains_key("summary")
-        || item.contains_key("id")
-        || item.contains_key("status")
-        || string_field(item, "type").trim() == "compaction_summary";
-
-    // 旧版 adapter 曾将明文摘要直接写入 encrypted_content，且不带
-    // id/status/summary。仅对这一可识别的历史形态保留明文恢复；新形态严格回放为
-    // xAI reasoning 密文 + 可见 conversation summary。
-    if !has_structured_compaction_shape {
-        let Some(summary) = encrypted else {
-            return Ok(Vec::new());
-        };
-        let continuation = format!(
-            "This session is being continued from a previous conversation that ran out of context. \
-             The summary below covers the earlier portion of the conversation.\n\n{summary}"
-        );
-        return Ok(vec![Value::Object(compaction_summary_message(
-            &continuation,
-        ))]);
-    }
-
+    // 密文只作为 reasoning 回放；可见摘要只读取 summary。
     let mut converted = Vec::with_capacity(2);
     if let Some(encrypted) = encrypted {
         converted.push(json!({
@@ -339,139 +319,6 @@ pub(super) fn normalize_apply_patch_output_input(
     ]))
 }
 
-pub(super) fn normalize_legacy_local_shell_call_input(
-    item: &Map<String, Value>,
-) -> Result<Map<String, Value>, GrokRequestEncodeError> {
-    let call_id = required_trimmed_string(item, "call_id")?;
-    let action = legacy_shell_action(item.get("action"))?;
-    let mut converted = Map::from_iter([
-        ("type".to_owned(), Value::String("shell_call".to_owned())),
-        ("call_id".to_owned(), Value::String(call_id.to_owned())),
-        ("action".to_owned(), Value::Object(action)),
-    ]);
-    for key in ["id", "status", "timeout_ms", "max_output_length"] {
-        if let Some(value) = item.get(key) {
-            converted.insert(key.to_owned(), value.clone());
-        }
-    }
-    Ok(converted)
-}
-
-pub(super) fn legacy_shell_action(
-    value: Option<&Value>,
-) -> Result<Map<String, Value>, GrokRequestEncodeError> {
-    let action = value
-        .and_then(Value::as_object)
-        .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-    if !matches!(string_field(action, "type").trim(), "" | "exec") {
-        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
-    }
-    let command = legacy_shell_command(action)?;
-    Ok(Map::from_iter([
-        ("type".to_owned(), Value::String("exec".to_owned())),
-        (
-            "commands".to_owned(),
-            Value::Array(vec![Value::String(command)]),
-        ),
-    ]))
-}
-
-pub(super) fn legacy_shell_command(
-    action: &Map<String, Value>,
-) -> Result<String, GrokRequestEncodeError> {
-    let mut command = match action.get("command") {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .map(|part| {
-                part.as_str()
-                    .map(quote_shell_argument)
-                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .join(" "),
-        _ => action
-            .get("commands")
-            .and_then(Value::as_array)
-            .map(|commands| {
-                commands
-                    .iter()
-                    .map(|command| {
-                        command
-                            .as_str()
-                            .map(ToOwned::to_owned)
-                            .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(|commands| commands.join("\n"))
-            })
-            .transpose()?
-            .unwrap_or_default(),
-    };
-    if command.is_empty() {
-        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
-    }
-    if let Some(environment) = action.get("env").and_then(Value::as_object)
-        && !environment.is_empty()
-    {
-        let assignments = environment
-            .iter()
-            .map(|(name, value)| {
-                if !valid_environment_name(name) {
-                    return Err(GrokRequestEncodeError::InvalidRequestNormalization);
-                }
-                let value = value
-                    .as_str()
-                    .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
-                Ok(format!("{name}={}", quote_shell_argument(value)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        command = format!("env {} {command}", assignments.join(" "));
-    }
-    if let Some(directory) = action
-        .get("working_directory")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|directory| !directory.is_empty())
-    {
-        command = format!("cd {} && {command}", quote_shell_argument(directory));
-    }
-    Ok(command)
-}
-
-pub(super) fn normalize_legacy_local_shell_output_input(
-    item: &Map<String, Value>,
-) -> Result<Map<String, Value>, GrokRequestEncodeError> {
-    let call_id = required_trimmed_string(item, "call_id")?;
-    let output = match item.get("output") {
-        Some(Value::Array(output)) => output.clone(),
-        Some(Value::String(output)) => {
-            let exit_code = item
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .unwrap_or_else(|| {
-                    i64::from(string_field(item, "status").eq_ignore_ascii_case("failed"))
-                });
-            vec![shell_output_block(output, "", "exit", Some(exit_code))]
-        }
-        _ => return Err(GrokRequestEncodeError::InvalidRequestNormalization),
-    };
-    let mut converted = Map::from_iter([
-        (
-            "type".to_owned(),
-            Value::String("shell_call_output".to_owned()),
-        ),
-        ("call_id".to_owned(), Value::String(call_id.to_owned())),
-        ("output".to_owned(), Value::Array(output)),
-    ]);
-    if let Some(value) = item.get("max_output_length")
-        && !value.is_null()
-    {
-        converted.insert("max_output_length".to_owned(), value.clone());
-    }
-    Ok(converted)
-}
-
 pub(super) fn normalize_shell_call_output_input(
     item: &Map<String, Value>,
 ) -> Result<Map<String, Value>, GrokRequestEncodeError> {
@@ -554,25 +401,4 @@ pub(super) fn shell_output_block(
         ("stderr", Value::String(stderr.to_owned())),
         ("outcome", Value::Object(outcome)),
     ])
-}
-
-pub(super) fn quote_shell_argument(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_owned();
-    }
-    if value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || "_@%+=:,./-".contains(character))
-    {
-        return value.to_owned();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-pub(super) fn valid_environment_name(value: &str) -> bool {
-    value.chars().enumerate().all(|(index, character)| {
-        character.is_ascii_alphabetic()
-            || character == '_'
-            || (index > 0 && character.is_ascii_digit())
-    }) && !value.is_empty()
 }

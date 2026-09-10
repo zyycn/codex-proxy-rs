@@ -13,7 +13,7 @@ use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderStoreError,
 };
 use provider_xai::{
-    GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
+    GROK_SUBSCRIPTION_URL, GrokBillingRequest, GrokBillingTransport, GrokBillingTransportError,
     GrokBillingTransportErrorKind, GrokBillingTransportFuture, GrokBillingTransportResponse,
     GrokCatalogCache, GrokCatalogScope, GrokCredentialCatalogCache, GrokCredentialCatalogError,
     GrokCredentialCatalogSeed, GrokCredentialRepository, GrokModelCatalogRequest,
@@ -88,6 +88,7 @@ impl GrokModelCatalogTransport for QueueCatalogTransport {
 
 struct QueueBillingTransport {
     calls: AtomicUsize,
+    subscription: Option<Vec<u8>>,
     responses: Mutex<VecDeque<Result<GrokBillingTransportResponse, GrokBillingTransportError>>>,
 }
 
@@ -95,6 +96,7 @@ impl QueueBillingTransport {
     fn success(body: &[u8]) -> Arc<Self> {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
+            subscription: None,
             responses: Mutex::new(VecDeque::from([Ok(GrokBillingTransportResponse::new(
                 body,
             ))])),
@@ -104,6 +106,7 @@ impl QueueBillingTransport {
     fn failure() -> Arc<Self> {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
+            subscription: None,
             responses: Mutex::new(VecDeque::from([Err(GrokBillingTransportError::new(
                 GrokBillingTransportErrorKind::Unavailable,
             ))])),
@@ -112,7 +115,17 @@ impl QueueBillingTransport {
 }
 
 impl GrokBillingTransport for QueueBillingTransport {
-    fn execute(&self, _: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+    fn execute(&self, request: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+        if request.endpoint().as_str() == GROK_SUBSCRIPTION_URL {
+            let response = self
+                .subscription
+                .clone()
+                .map(GrokBillingTransportResponse::new)
+                .ok_or_else(|| {
+                    GrokBillingTransportError::new(GrokBillingTransportErrorKind::Unavailable)
+                });
+            return Box::pin(async move { response });
+        }
         self.calls.fetch_add(1, Ordering::SeqCst);
         let response = self
             .responses
@@ -161,7 +174,14 @@ struct MutatingBillingTransport {
 }
 
 impl GrokBillingTransport for MutatingBillingTransport {
-    fn execute(&self, _: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+    fn execute(&self, request: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+        if request.endpoint().as_str() == GROK_SUBSCRIPTION_URL {
+            return Box::pin(async {
+                Err(GrokBillingTransportError::new(
+                    GrokBillingTransportErrorKind::Unavailable,
+                ))
+            });
+        }
         let store = Arc::clone(&self.store);
         let mutation = self.mutation.lock().expect("mutation").take();
         let body = self.body.clone();
@@ -665,6 +685,7 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
 
     assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
     assert_eq!(snapshot.billing().used_percent(), Some(37.5));
+    assert_eq!(snapshot.billing().plan_type(), None);
     assert_eq!(
         snapshot.billing().period_kind(),
         provider_xai::GrokQuotaPeriodKind::Weekly
@@ -679,6 +700,37 @@ async fn quota_refresh_persists_dynamic_provider_document_and_projects_known_fie
             .get("futureWindow")
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn quota_refresh_persists_subscription_without_user_profile_and_reads_it_from_cache() {
+    let (store, repository) =
+        repository_with_accounts(&[("subscription", "subject-subscription")]).await;
+    let mut transport = QueueBillingTransport::success(br#"{"config":{"creditUsagePercent":25}}"#);
+    Arc::get_mut(&mut transport).expect("unique transport").subscription = Some(
+        br#"{"userId":"verified-user","email":"private@example.com","subscriptionTier":"SuperGrokPro"}"#.to_vec(),
+    );
+    let service = crate::support::grok_quota_service(repository, transport.clone());
+    let snapshot = service
+        .refresh_account(&account_id("subscription"))
+        .await
+        .expect("refresh quota");
+    assert_eq!(snapshot.billing().plan_type(), Some("SuperGrokPro"));
+    let cached = service
+        .read_account(&account_id("subscription"))
+        .await
+        .expect("read quota")
+        .expect("cached quota");
+    assert_eq!(cached.billing().plan_type(), Some("SuperGrokPro"));
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    let stored = store
+        .get_quotas(&[account_id("subscription")])
+        .await
+        .expect("persisted quota");
+    let document = stored[0].quota.expose_to_provider();
+    assert_eq!(document["subscriptionTier"], "SuperGrokPro");
+    assert!(document.get("email").is_none());
+    assert!(document.get("userId").is_none());
 }
 
 #[tokio::test]

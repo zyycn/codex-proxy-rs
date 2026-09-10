@@ -599,20 +599,20 @@ fn decoder_should_restore_custom_apply_patch_arguments_as_raw_input() {
         "tools": [{"type": "custom", "name": "apply_patch"}]
     }));
     let arguments =
-        serde_json::to_string(&serde_json::json!({"patch": patch})).expect("apply_patch arguments");
+        serde_json::to_string(&serde_json::json!({"input": patch})).expect("apply_patch arguments");
     let arguments_json = serde_json::to_string(&arguments).expect("arguments JSON string");
     let body = format!(
         concat!(
             "event: response.created\n",
             "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_custom_patch\"}}}}\n\n",
             "event: response.output_item.added\n",
-            "data: {{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{{\"id\":\"item_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\"}}}}\n\n",
+            "data: {{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{{\"id\":\"fc_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\"}}}}\n\n",
             "event: response.function_call_arguments.delta\n",
-            "data: {{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"delta\":{arguments_json}}}\n\n",
+            "data: {{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"delta\":{arguments_json}}}\n\n",
             "event: response.function_call_arguments.done\n",
-            "data: {{\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"arguments\":{arguments_json}}}\n\n",
+            "data: {{\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"arguments\":{arguments_json}}}\n\n",
             "event: response.output_item.done\n",
-            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"item_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\",\"arguments\":{arguments_json}}}}}\n\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"fc_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\",\"arguments\":{arguments_json}}}}}\n\n",
             "event: response.completed\n",
             "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_custom_patch\",\"status\":\"completed\"}}}}\n\n",
         ),
@@ -623,6 +623,15 @@ fn decoder_should_restore_custom_apply_patch_arguments_as_raw_input() {
         .push(body.as_bytes())
         .expect("custom apply_patch stream");
     let wire = wire_events(&events);
+    for event in &wire {
+        if let Some(item_id) = event.data().get("item_id") {
+            assert_eq!(item_id, "ctc_custom_patch");
+        }
+        if let Some(item) = event.data().get("item") {
+            assert_eq!(item["id"], "ctc_custom_patch");
+            assert_eq!(item["call_id"], "call_custom_patch");
+        }
+    }
 
     assert!(wire.iter().any(|event| {
         event.event_type() == Some("response.custom_tool_call_input.delta")
@@ -703,6 +712,86 @@ fn decoder_should_buffer_only_custom_arguments_until_the_done_event() {
         event.event_type() == Some("response.custom_tool_call_input.done")
             && event.data().get("input") == Some(&serde_json::json!("hello"))
     }));
+}
+
+#[test]
+fn decoder_should_restore_only_protocol_items_and_preserve_business_objects() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "render",
+        "tools": [{"type": "custom", "name": "render"}]
+    }));
+    let business = serde_json::json!({
+        "id": "fc_business", "type": "function_call", "name": "render",
+        "arguments": "{\"input\":\"keep me\"}"
+    });
+    let mut decoder = GrokCanonicalDecoder::for_request("grok-4.6", &request);
+    let frame = encode_sse_event(
+        "response.output_item.added",
+        &serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "metadata": business,
+            "item": {
+                "id": "fc_render", "type": "function_call", "call_id": "call_render",
+                "name": "render", "arguments": "{\"input\":\"hello\"}",
+                "metadata": business
+            }
+        })
+        .to_string(),
+    );
+    let events = decoder.push(frame.as_bytes()).expect("custom item");
+    let wire = wire_events(&events);
+    let event = wire[0].data();
+    assert_eq!(
+        event.pointer("/item/id"),
+        Some(&serde_json::json!("ctc_render"))
+    );
+    assert_eq!(
+        event.pointer("/item/input"),
+        Some(&serde_json::json!("hello"))
+    );
+    assert_eq!(event.get("metadata"), Some(&business));
+    assert_eq!(event.pointer("/item/metadata"), Some(&business));
+}
+
+#[test]
+fn decoder_should_reject_custom_arguments_beyond_the_buffer_limit() {
+    let request = tool_request(serde_json::json!({
+        "model": "client",
+        "input": "render",
+        "tools": [{"type": "custom", "name": "render"}]
+    }));
+    let mut decoder = GrokCanonicalDecoder::for_request("grok-4.6", &request);
+    let added = encode_sse_event(
+        "response.output_item.added",
+        &serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"id": "fc_render", "type": "function_call", "call_id": "call_render", "name": "render"}
+        }).to_string(),
+    );
+    decoder.push(added.as_bytes()).expect("custom item added");
+    // 分帧累计也必须受限，不能只限制单个 SSE frame。
+    for size in [1 << 20, 1] {
+        let delta = encode_sse_event(
+            "response.function_call_arguments.delta",
+            &serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_render",
+                "call_id": "call_render",
+                "output_index": 0,
+                "delta": "x".repeat(size)
+            })
+            .to_string(),
+        );
+        let result = decoder.push(delta.as_bytes());
+        if size == 1 {
+            assert!(result.is_err(), "custom arguments must not grow past 1 MiB");
+        } else {
+            assert!(result.expect("arguments at the limit").is_empty());
+        }
+    }
 }
 
 #[test]

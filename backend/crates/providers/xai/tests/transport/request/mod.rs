@@ -91,10 +91,7 @@ fn encoder_should_strip_all_client_metadata_before_grok_build() {
     let body = Value::Object(encoded.body().clone());
 
     assert_eq!(body.pointer("/client_metadata"), None);
-    assert_eq!(
-        body.pointer("/metadata/application_tag"),
-        Some(&json!("keep-this"))
-    );
+    assert_eq!(body.pointer("/metadata/application_tag"), None);
 
     let request = raw_request(json!({
         "model": "client-model",
@@ -133,16 +130,14 @@ fn encoder_should_apply_build_defaults_and_normalize_reasoning_effort() {
     let request = raw_request(json!({
         "model": "client-model",
         "input": "hello",
-        "reasoning": {"effort": "max"},
-        "reasoning_effort": "extra_high",
-        "reasoningEffort": "minimal"
+        "reasoning": {"effort": "xhigh"}
     }));
     let encoded = GrokResponsesRequest::encode(&request, "xai/grok-4.6-latest", &client_key())
         .expect("aliased request");
     let body = Value::Object(encoded.body().clone());
     assert_eq!(body.pointer("/model"), Some(&json!("grok-4.6")));
-    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("high")));
-    assert_eq!(body.pointer("/reasoning_effort"), Some(&json!("high")));
+    assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("xhigh")));
+    assert_eq!(body.pointer("/reasoning_effort"), None);
     assert_eq!(body.pointer("/reasoningEffort"), None);
 
     let request = raw_request(json!({
@@ -236,7 +231,6 @@ fn encoder_should_strip_grok_unsupported_fields() {
         "/external_web_access",
         "/metadata/external_web_access",
         "/tools/0/external_web_access",
-        "/tools/0/parameters/properties/q/external_web_access",
     ] {
         assert_eq!(body.pointer(pointer), None, "field survived at {pointer}");
     }
@@ -364,10 +358,7 @@ fn account_identity_should_be_removed_without_touching_prompt_content() {
         body.pointer("/input/0/content/0/text"),
         Some(&json!("account_id and x-userid are ordinary prompt text"))
     );
-    assert_eq!(
-        body.pointer("/metadata/application_tag"),
-        Some(&json!("preserve-me"))
-    );
+    assert_eq!(body.pointer("/metadata/application_tag"), None);
 }
 
 #[test]
@@ -647,7 +638,7 @@ fn explicit_session_should_add_x_search_after_codex_additional_tools_normalizati
     assert_eq!(body.pointer("/tools/0/name"), Some(&json!("apply_patch")));
     assert_eq!(
         body.pointer("/tools/0/parameters/required"),
-        Some(&json!(["patch"]))
+        Some(&json!(["input"]))
     );
     assert_eq!(body.pointer("/tools/1/name"), Some(&json!("read_file")));
     assert_eq!(body.pointer("/tools/2"), Some(&json!({"type": "x_search"})));
@@ -796,21 +787,19 @@ fn soft_session_should_follow_the_first_user_anchor() {
 }
 
 #[test]
-fn response_format_and_reasoning_parts_should_match_build_wire_shape() {
+fn current_text_format_and_reasoning_parts_should_match_build_wire_shape() {
     let request = raw_request(json!({
         "model": "client",
         "input": [{
             "type": "reasoning",
             "content": [{"text": "summary"}]
         }],
-        "response_format": {
+        "text": {"format": {
             "type": "json_schema",
-            "json_schema": {
-                "name": "answer",
-                "strict": true,
-                "schema": {"type": "object"}
-            }
-        }
+            "name": "answer",
+            "strict": true,
+            "schema": {"type": "object"}
+        }}
     }));
 
     let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
@@ -847,7 +836,7 @@ fn tool_declarations_should_flatten_and_emulate_codex_tool_shapes() {
             },
             {"type": "custom", "name": "render", "format": {"type": "text"}},
             {"type": "apply_patch"},
-            {"type": "local_shell"},
+            {"type": "shell", "environment": {"type": "local"}},
             {
                 "type": "function",
                 "name": "deferred_lookup",
@@ -891,7 +880,7 @@ fn tool_declarations_should_flatten_and_emulate_codex_tool_shapes() {
 }
 
 #[test]
-fn custom_apply_patch_declaration_should_use_patch_parameter() {
+fn custom_apply_patch_declaration_should_use_the_shared_input_parameter() {
     let request = raw_request(json!({
         "model": "client",
         "input": "edit",
@@ -920,18 +909,18 @@ fn custom_apply_patch_declaration_should_use_patch_parameter() {
 
     assert_eq!(
         body.pointer("/tools/0/parameters/properties"),
-        Some(&json!({"patch": {"type": "string"}}))
+        Some(&json!({"input": {"type": "string"}}))
     );
     assert_eq!(
         body.pointer("/tools/0/parameters/required"),
-        Some(&json!(["patch"]))
+        Some(&json!(["input"]))
     );
-    assert_eq!(
-        body.pointer("/tools/0/description"),
-        Some(&json!(
-            "The apply_patch tool edits files using Codex patch format. Provide the complete raw patch text in the patch string field."
-        ))
-    );
+    let description = body
+        .pointer("/tools/0/description")
+        .and_then(Value::as_str)
+        .expect("description");
+    assert!(description.contains("This is a FREEFORM tool"));
+    assert!(description.contains("input string field"));
     assert_eq!(
         body.pointer("/tools/1/parameters/properties"),
         Some(&json!({"input": {"type": "string"}}))
@@ -981,7 +970,7 @@ fn history_should_rebuild_codex_calls_outputs_shell_and_private_fields() {
         "tools": [
             {"type": "custom", "name": "render"},
             {"type": "apply_patch"},
-            {"type": "local_shell"}
+            {"type": "shell", "environment": {"type": "local"}}
         ],
         "input": [
             {"type": "message", "role": "assistant", "id": "msg_1", "content": [
@@ -992,8 +981,8 @@ fn history_should_rebuild_codex_calls_outputs_shell_and_private_fields() {
             {"type": "custom_tool_call_output", "call_id": "custom_1", "output": {"ok": true}, "status": "completed"},
             {"type": "apply_patch_call", "call_id": "patch_1", "operation": {"type": "delete_file", "path": "old.txt"}},
             {"type": "apply_patch_call_output", "call_id": "patch_1", "status": "completed", "output": "deleted"},
-            {"type": "local_shell_call", "call_id": "shell_1", "action": {"type": "exec", "command": ["printf", "%s", "a b"], "working_directory": "/tmp"}},
-            {"type": "local_shell_call_output", "call_id": "shell_1", "status": "failed", "output": "failure"},
+            {"type": "shell_call", "call_id": "shell_1", "action": {"commands": ["cd /tmp && printf %s 'a b'"]}},
+            {"type": "shell_call_output", "call_id": "shell_1", "output": [{"stdout":"failure","stderr":"","outcome":{"type":"exit","exit_code":1}}]},
             {"type": "reasoning", "id": "reason_1", "status": "completed", "summary": [{"type": "summary_text", "text": "brief", "phase": "drop"}]},
             {"type": "future_codex_item", "id": "future_1", "status": "completed"}
         ]
@@ -1161,7 +1150,7 @@ fn history_sanitizer_should_only_strip_known_grok_injection_sites() {
 }
 
 #[test]
-fn custom_apply_patch_history_should_wrap_raw_input_in_patch_field() {
+fn custom_apply_patch_history_should_use_the_shared_input_wrapper() {
     let patch = concat!(
         "*** Begin Patch\n",
         "*** Update File: src/lib.rs\n",
@@ -1197,7 +1186,7 @@ fn custom_apply_patch_history_should_wrap_raw_input_in_patch_field() {
         .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
         .expect("function arguments");
 
-    assert_eq!(arguments, json!({"patch": patch}));
+    assert_eq!(arguments, json!({"input": patch}));
     assert_eq!(
         body.pointer("/input/1/type"),
         Some(&json!("function_call_output"))
@@ -1205,41 +1194,18 @@ fn custom_apply_patch_history_should_wrap_raw_input_in_patch_field() {
 }
 
 #[test]
-fn compaction_history_should_become_plaintext_user_continuation_in_place() {
+fn compact_history_without_summary_should_preserve_ciphertext_as_reasoning() {
     let request = raw_request(json!({
         "model": "client",
-        "input": [
-            {"type": "message", "role": "user", "content": "before compaction"},
-            {
-                "type": "compaction",
-                "encrypted_content": "Repository state and pending work."
-            },
-            {"type": "message", "role": "user", "content": "continue"}
-        ]
+        "input": [{"type": "compaction", "encrypted_content": "grok-encrypted-state"}]
     }));
-
-    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key())
-        .expect("compaction continuation");
-    let body = Value::Object(encoded.body().clone());
-
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.6", &client_key())
+        .expect("compaction ciphertext");
     assert_eq!(
-        body.pointer("/input"),
-        Some(&json!([
-            {"type": "message", "role": "user", "content": "before compaction"},
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": concat!(
-                        "This session is being continued from a previous conversation that ran out of context. ",
-                        "The summary below covers the earlier portion of the conversation.\n\n",
-                        "Repository state and pending work."
-                    )
-                }]
-            },
-            {"type": "message", "role": "user", "content": "continue"}
-        ]))
+        encoded.body().get("input"),
+        Some(&json!([{
+            "type": "reasoning", "summary": [], "encrypted_content": "grok-encrypted-state"
+        }]))
     );
 }
 
@@ -1320,7 +1286,7 @@ fn tool_search_history_should_load_returned_tools_at_the_original_turn() {
         "model": "client",
         "tools": [{"type": "tool_search", "execution": "client"}],
         "input": [
-            {"type": "tool_search_call", "execution": "client", "call_id": "search_1", "arguments": {"goal": "shipping"}},
+            {"type": "tool_search_call", "id": "tsc_search", "execution": "client", "call_id": "search_1", "arguments": {"goal": "shipping"}},
             {"type": "tool_search_output", "execution": "client", "call_id": "search_1", "tools": [{
                 "type": "namespace",
                 "name": "shipping",
@@ -1341,6 +1307,7 @@ fn tool_search_history_should_load_returned_tools_at_the_original_turn() {
         body.pointer("/input/1/type"),
         Some(&json!("function_call_output"))
     );
+    assert_eq!(body.pointer("/input/0/id"), Some(&json!("fc_search")));
     assert_eq!(
         body.pointer("/tools/0/name"),
         Some(&json!("shipping__track"))
@@ -1413,4 +1380,76 @@ fn ambiguous_tool_contracts_should_fail_before_upstream_io() {
             GrokRequestEncodeError::InvalidRequestField { field }
         );
     }
+}
+
+#[test]
+fn retired_wire_formats_are_rejected_without_fallback() {
+    for field in ["response_format", "reasoning_effort", "reasoningEffort"] {
+        let mut body = json!({"input":"hello"});
+        body[field] = json!("high");
+        assert!(
+            GrokResponsesRequest::encode(&raw_request(body), "grok-4.6", &client_key()).is_err()
+        );
+    }
+    for kind in ["local_shell_call", "local_shell_call_output"] {
+        assert!(
+            GrokResponsesRequest::encode(
+                &raw_request(json!({"input":[{"type":kind,"call_id":"old"}]})),
+                "grok-4.6",
+                &client_key()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn tool_schema_properties_survive_protocol_field_sanitization() {
+    let schema = json!({"type":"object","properties":{"external_web_access":{"type":"boolean"},"q":{"type":"string","external_web_access":true}}});
+    let encoded = GrokResponsesRequest::encode(
+        &raw_request(json!({
+            "input":"hello", "tools":[{"type":"function","name":"lookup","parameters":schema}]
+        })),
+        "grok-4.6",
+        &client_key(),
+    )
+    .unwrap();
+    assert_eq!(encoded.body()["tools"][0]["parameters"], schema);
+}
+
+#[test]
+fn custom_tool_history_retypes_item_ids_without_changing_call_ids() {
+    let encoded = GrokResponsesRequest::encode(&raw_request(json!({
+        "tools":[{"type":"custom","name":"render"}],
+        "input":[{"type":"custom_tool_call","id":"ctc_roundtrip","call_id":"call_roundtrip","name":"render","input":"data"}]
+    })), "grok-4.6", &client_key()).unwrap();
+    assert_eq!(encoded.body()["input"][0]["id"], "fc_roundtrip");
+    assert_eq!(encoded.body()["input"][0]["call_id"], "call_roundtrip");
+}
+
+#[test]
+fn custom_patch_lowering_should_preserve_description_and_input_grammar() {
+    let description = "Use this tool to edit files; preserve existing unrelated changes.";
+    let grammar =
+        "start: begin body end\nbegin: \"*** Begin Patch\" NEWLINE\nend: \"*** End Patch\"";
+    let request = raw_request(json!({
+        "model": "client", "input": "edit",
+        "tools": [{"type": "custom", "name": "apply_patch", "description": description,
+            "format": {"type": "grammar", "syntax": "lark", "definition": grammar}}]
+    }));
+    let encoded =
+        GrokResponsesRequest::encode(&request, "grok-4.6", &client_key()).expect("custom tool");
+    let lowered = encoded
+        .body()
+        .get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| tools.first())
+        .expect("tool");
+    let text = lowered
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("description");
+    assert!(text.contains(description));
+    assert!(text.contains(grammar));
+    assert!(lowered.get("format").is_none());
 }

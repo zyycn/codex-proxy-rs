@@ -38,6 +38,7 @@ pub const GROK_FREE_ROLLING_WINDOW_SECONDS: u64 = 86_400;
 /// xAI Provider 从动态 billing JSON 解析出的旧账号页安全投影。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrokBillingPresentation {
+    plan_type: Option<String>,
     used_percent: Option<f64>,
     period_type: Option<String>,
     period_start: Option<String>,
@@ -58,6 +59,11 @@ pub enum GrokQuotaPeriodKind {
 }
 
 impl GrokBillingPresentation {
+    #[must_use]
+    pub fn plan_type(&self) -> Option<&str> {
+        self.plan_type.as_deref()
+    }
+
     #[must_use]
     pub const fn used_percent(&self) -> Option<f64> {
         self.used_percent
@@ -455,8 +461,19 @@ impl GrokCredentialQuotaService {
             .fetch(&session)
             .await
             .map_err(|_| GrokQuotaError::Upstream)?;
+        let mut document = billing.into_document();
+        // 订阅查询失败不影响已取得的额度，也不能据此写入免费套餐。
+        match self.client.fetch_subscription(&session).await {
+            Ok(Some(plan_type)) => {
+                document.insert(
+                    "subscriptionTier".to_owned(),
+                    serde_json::Value::String(plan_type),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "xAI subscription query failed"),
+        }
         let observed_at = Utc::now();
-        let document = billing.into_document();
         let presentation = billing_presentation(&document)?;
         let quota = loaded
             .account
@@ -1243,6 +1260,7 @@ fn billing_presentation(
             _ => None,
         });
     Ok(GrokBillingPresentation {
+        plan_type: dynamic_string(Some(snapshot.document()), "subscriptionTier"),
         used_percent,
         period_type: dynamic_string(current_period, "type"),
         period_start: dynamic_string(current_period, "start")

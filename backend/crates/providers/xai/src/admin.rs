@@ -1140,7 +1140,7 @@ fn project_quota(
         }
     };
     ProviderQuota {
-        plan_type: None,
+        plan_type: billing.plan_type().map(str::to_owned),
         observed_at: Some(snapshot.observed_at()),
         refresh_token_expires_at,
         windows: vec![window],

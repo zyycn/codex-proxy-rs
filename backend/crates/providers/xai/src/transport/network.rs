@@ -767,7 +767,6 @@ fn valid_billing_url(url: &Url, host: &str) -> bool {
     url.scheme() == "https"
         && url.host_str() == Some(host)
         && url.port_or_known_default() == Some(443)
-        && url.path() == OFFICIAL_BILLING_PATH
         && url.username().is_empty()
         && url.password().is_none()
         && url.fragment().is_none()
@@ -775,7 +774,11 @@ fn valid_billing_url(url: &Url, host: &str) -> bool {
         && url
             .query_pairs()
             .next()
-            .is_some_and(|(key, value)| key == "format" && value == "credits")
+            .is_some_and(|(key, value)| match url.path() {
+                OFFICIAL_BILLING_PATH => key == "format" && value == "credits",
+                "/v1/user" => key == "include" && value == "subscription",
+                _ => false,
+            })
 }
 
 #[derive(Debug)]

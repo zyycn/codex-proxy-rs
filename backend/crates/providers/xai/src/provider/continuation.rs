@@ -7,6 +7,8 @@ pub(super) struct XaiSessionState {
     pub(super) account_id: String,
     pub(super) session_id: Option<String>,
     pub(super) transcript: Vec<XaiReplayItem>,
+    pub(super) instructions: Option<Value>,
+    pub(super) response_stored: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -20,6 +22,8 @@ pub(super) enum XaiReplayItem {
 pub(super) struct GrokSessionCapture {
     pub(super) previous: Option<XaiSessionState>,
     pub(super) request_input: Vec<Value>,
+    pub(super) instructions: Option<Value>,
+    pub(super) response_stored: bool,
     pub(super) account_id: String,
     pub(super) session_id: Option<String>,
     pub(super) output_items: BTreeMap<u32, Value>,
@@ -110,6 +114,15 @@ pub(super) fn apply_continuation(
             if !pin.matches(&provider, account) {
                 return Err(invalid_continuation());
             }
+            if previous_session.is_some_and(|state| !state.response_stored)
+                || request.instructions()
+                    != previous_session.and_then(|state| state.instructions.as_ref())
+            {
+                let previous = previous_session.ok_or_else(invalid_continuation)?;
+                return apply_replay(request, previous, account, current_input);
+            }
+            // Grok 原生续接继承首轮指令，不允许同时提交 instructions。
+            request.clear_instructions();
             request.set_previous_response_id(Some(pin.upstream_response_id().as_str().to_owned()));
             Ok(())
         }
@@ -120,16 +133,25 @@ pub(super) fn apply_continuation(
             {
                 return Err(invalid_continuation());
             }
-            let mut input = replay_input_for_account(previous, account.as_str(), true);
-            input.reserve(current_input.len());
-            input.extend(current_input.iter().cloned());
-            request.set_replay_input(input).map_err(map_request_error)?;
-            request.set_previous_response_id(None);
-            request.inherit_session(None);
-            Ok(())
+            apply_replay(request, previous, account, current_input)
         }
         ContinuationAttempt::None => Err(invalid_continuation()),
     }
+}
+
+fn apply_replay(
+    request: &mut GrokResponsesRequest,
+    previous: &XaiSessionState,
+    account: &gateway_core::account::ProviderAccountId,
+    current_input: &[Value],
+) -> Result<(), ProviderError> {
+    let mut input = replay_input_for_account(previous, account.as_str(), true);
+    input.reserve(current_input.len());
+    input.extend(current_input.iter().cloned());
+    request.set_replay_input(input).map_err(map_request_error)?;
+    request.set_previous_response_id(None);
+    request.inherit_session(None);
+    Ok(())
 }
 
 pub(super) fn replay_input_for_account(
@@ -261,6 +283,8 @@ pub(super) fn attach_xai_session_update(
         account_id: capture.account_id,
         session_id: capture.session_id,
         transcript,
+        instructions: capture.instructions,
+        response_stored: capture.response_stored,
     };
     if let Some(update) = encode_xai_session_state(state)? {
         events[terminal_index].attach_session_update(update);

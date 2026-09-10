@@ -29,14 +29,6 @@ impl ToolIdentity {
     pub(super) fn is_root_custom_apply_patch(&self) -> bool {
         self.kind == ToolKind::Custom && self.namespace.is_empty() && self.name == "apply_patch"
     }
-
-    pub(super) fn custom_argument_field(&self) -> &'static str {
-        if self.is_root_custom_apply_patch() {
-            "patch"
-        } else {
-            "input"
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +46,6 @@ pub(crate) struct GrokResponseTransform {
     pub(super) aliases: BTreeMap<String, ToolIdentity>,
     pub(super) function_schemas: BTreeMap<String, Value>,
     pub(super) visible_tools: Vec<Value>,
-    pub(super) legacy_local_shell: bool,
     pub(super) filter_x_search: bool,
     pub(super) injected_tool_types: BTreeSet<String>,
     pub(super) client_declared_tools: BTreeSet<String>,
@@ -89,7 +80,6 @@ impl GrokResponseTransform {
         self.aliases.is_empty()
             && self.function_schemas.is_empty()
             && self.visible_tools.is_empty()
-            && !self.legacy_local_shell
             && !self.filter_x_search
             && self.injected_tool_types.is_empty()
     }
@@ -194,7 +184,16 @@ impl GrokResponseTransform {
                 .ok_or(GrokRequestEncodeError::InvalidRequestNormalization)?;
             match state.identity.kind {
                 ToolKind::Custom => {
+                    if state.arguments.len().saturating_add(delta.len())
+                        > MAX_BUFFERED_FUNCTION_ARGUMENTS_BYTES
+                        || self.stream_argument_bytes.saturating_add(delta.len())
+                            > MAX_TOTAL_BUFFERED_FUNCTION_ARGUMENTS_BYTES
+                    {
+                        return Err(GrokRequestEncodeError::InvalidRequestNormalization);
+                    }
                     state.arguments.push_str(delta);
+                    self.stream_argument_bytes =
+                        self.stream_argument_bytes.saturating_add(delta.len());
                     state.last_delta = value.as_object().cloned().map(|mut payload| {
                         payload.remove("delta");
                         payload
@@ -262,7 +261,7 @@ impl GrokResponseTransform {
                         .and_then(Value::as_str)
                         .filter(|arguments| !arguments.is_empty())
                         .unwrap_or(&state.arguments);
-                    let input = decode_custom_tool_input(&state.identity, arguments);
+                    let input = decode_custom_tool_input(arguments);
                     let mut output = Vec::with_capacity(2);
                     if let Some(delta) = state.last_delta.as_ref() {
                         output.push(GrokTransformedWireEvent {
@@ -287,6 +286,9 @@ impl GrokResponseTransform {
                         ),
                     });
                     if let Some(state) = self.stream_calls.get_mut(&primary) {
+                        self.stream_argument_bytes = self
+                            .stream_argument_bytes
+                            .saturating_sub(state.arguments.len());
                         state.arguments.clear();
                         state.last_delta = None;
                     }
@@ -452,25 +454,20 @@ impl GrokResponseTransform {
     }
 
     fn rewrite_response_value(&self, value: &mut Value) -> Result<(), GrokRequestEncodeError> {
-        match value {
-            Value::Array(values) => {
-                for value in values {
-                    self.rewrite_response_value(value)?;
-                }
-            }
-            Value::Object(object) => {
-                for value in object.values_mut() {
-                    self.rewrite_response_value(value)?;
-                }
-                match string_field(object, "type") {
-                    "function_call" => self.rewrite_function_call(object)?,
-                    "shell_call" if self.legacy_local_shell => {
-                        rewrite_legacy_local_shell_call(object)
+        // 只转换协议中的输出条目，避免把 metadata、schema 或工具业务结果当成调用。
+        if let Some(item) = value.get_mut("item").and_then(Value::as_object_mut)
+            && string_field(item, "type") == "function_call"
+        {
+            self.rewrite_function_call(item)?;
+        }
+        for pointer in ["/output", "/response/output"] {
+            if let Some(items) = value.pointer_mut(pointer).and_then(Value::as_array_mut) {
+                for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                    if string_field(item, "type") == "function_call" {
+                        self.rewrite_function_call(item)?;
                     }
-                    _ => {}
                 }
             }
-            _ => {}
         }
         Ok(())
     }
@@ -515,7 +512,7 @@ impl GrokResponseTransform {
                         Value::String(identity.namespace.clone()),
                     );
                 }
-                let input = decode_custom_tool_input(identity, string_field(call, "arguments"));
+                let input = decode_custom_tool_input(string_field(call, "arguments"));
                 call.insert("input".to_owned(), Value::String(input));
                 call.remove("arguments");
             }
@@ -542,6 +539,8 @@ impl GrokResponseTransform {
                 call.remove("arguments");
             }
         }
+        let kind = string_field(call, "type").to_owned();
+        retype_tool_item_id(call, "id", &kind);
         Ok(())
     }
 
@@ -759,15 +758,38 @@ pub(super) fn custom_tool_stream_payload(
             result.insert(key.to_owned(), value.clone());
         }
     }
+    retype_tool_item_id(&mut result, "item_id", "custom_tool_call");
     Value::Object(result)
 }
 
-pub(super) fn decode_custom_tool_input(identity: &ToolIdentity, arguments: &str) -> String {
+/// item ID 随工具类型转换，call_id 始终保留原始配对语义。
+pub(super) fn retype_tool_item_id(item: &mut Map<String, Value>, field: &str, kind: &str) {
+    let prefix = match kind {
+        "function_call" => "fc_",
+        "custom_tool_call" => "ctc_",
+        "tool_search_call" => "tsc_",
+        _ => return,
+    };
+    let Some(id) = item.get(field).and_then(Value::as_str) else {
+        return;
+    };
+    if id.starts_with(prefix) {
+        return;
+    }
+    if let Some(suffix) = ["fc_", "ctc_", "tsc_"]
+        .into_iter()
+        .find_map(|known| id.strip_prefix(known))
+    {
+        item.insert(field.to_owned(), Value::String(format!("{prefix}{suffix}")));
+    }
+}
+
+pub(super) fn decode_custom_tool_input(arguments: &str) -> String {
     serde_json::from_str::<Value>(arguments)
         .ok()
         .and_then(|value| {
             value
-                .get(identity.custom_argument_field())
+                .get("input")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
@@ -796,34 +818,6 @@ pub(super) fn decode_apply_patch_arguments(
     validate_apply_patch_operation(wrapper.get("operation"))
 }
 
-pub(super) fn rewrite_legacy_local_shell_call(call: &mut Map<String, Value>) {
-    let commands = call
-        .get("action")
-        .and_then(Value::as_object)
-        .and_then(|action| action.get("commands"))
-        .and_then(Value::as_array)
-        .map(|commands| {
-            commands
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
-    call.insert(
-        "type".to_owned(),
-        Value::String("local_shell_call".to_owned()),
-    );
-    call.insert(
-        "action".to_owned(),
-        json_object([
-            ("type", Value::String("exec".to_owned())),
-            ("command", Value::String(commands)),
-        ]),
-    );
-    call.remove("max_output_length");
-}
-
 impl fmt::Debug for GrokResponseTransform {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -831,7 +825,6 @@ impl fmt::Debug for GrokResponseTransform {
             .field("alias_count", &self.aliases.len())
             .field("function_schema_count", &self.function_schemas.len())
             .field("visible_tool_count", &self.visible_tools.len())
-            .field("legacy_local_shell", &self.legacy_local_shell)
             .field("filter_x_search", &self.filter_x_search)
             .field("injected_tool_types", &self.injected_tool_types)
             .finish()

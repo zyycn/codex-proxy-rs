@@ -158,10 +158,14 @@ impl GrokEndpointPolicy for LoopbackGrokEndpointPolicy {
     }
 
     fn route_billing(&self, url: &Url) -> Option<Url> {
-        (url.as_str() == GROK_BILLING_URL).then(|| {
+        matches!(
+            url.as_str(),
+            GROK_BILLING_URL | provider_xai::GROK_SUBSCRIPTION_URL
+        )
+        .then(|| {
             let mut endpoint = self.origin();
-            endpoint.set_path("/v1/billing");
-            endpoint.set_query(Some("format=credits"));
+            endpoint.set_path(url.path());
+            endpoint.set_query(url.query());
             endpoint
         })
     }

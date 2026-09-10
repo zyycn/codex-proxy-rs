@@ -172,7 +172,7 @@ fn stateful_sse_with_custom_tool_call(encrypted_content: &str, input: &str) -> V
 }
 
 fn custom_apply_patch_sse(patch: &str) -> Vec<u8> {
-    let arguments = serde_json::to_string(&json!({"patch": patch})).expect("patch arguments");
+    let arguments = serde_json::to_string(&json!({"input": patch})).expect("patch arguments");
     let arguments_json = serde_json::to_string(&arguments).expect("arguments JSON string");
     format!(
         concat!(
@@ -1481,6 +1481,7 @@ async fn compaction_should_pin_recorded_account_and_forward_session_headers() {
         Map::from_iter([
             ("account_id".to_owned(), json!("acct_provider")),
             ("session_id".to_owned(), json!("cache-session")),
+            ("response_stored".to_owned(), json!(true)),
             (
                 "transcript".to_owned(),
                 json!([{"client_input":{"type":"message","role":"user","content":"must-not-be-replayed"}}]),
@@ -2429,6 +2430,96 @@ async fn native_previous_response_pins_account_and_sends_upstream_handle() {
 }
 
 #[tokio::test]
+async fn continuation_should_inherit_unchanged_instructions_and_replay_changed_instructions() {
+    for (stored, instructions) in [
+        (true, Some("original")),
+        (true, Some("replacement")),
+        (true, None),
+        (false, Some("original")),
+    ] {
+        let transport =
+            StubInferenceTransport::sequence([InferenceMode::Success, InferenceMode::Success]);
+        let provider = provider(StubSelector::success(), transport.clone()).await;
+        let first_body = json!({
+            "model": "client-model", "instructions": "original", "store": stored,
+            "input": [{"type": "message", "role": "user", "content": "first"}]
+        });
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", first_body.as_object().expect("body").clone())
+                .expect("payload"),
+        ));
+        let mut first = provider
+            .execute(
+                provider_request_with_operation("xai", operation),
+                context(CancellationToken::new(), None),
+            )
+            .await
+            .expect("first stream");
+        let state = collect_provider_state(&mut first)
+            .await
+            .expect("session state");
+        let pin = NativeContinuationPin::new(
+            PreviousResponseId::new("resp_previous"),
+            PreviousResponseId::new("resp_upstream_previous"),
+            gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key"),
+            ProviderKind::new("xai").expect("provider"),
+            account_id("provider"),
+        );
+        let mut continued = provider
+            .execute(
+                provider_request_with_operation(
+                    "xai",
+                    operation_with_state(
+                        json!({
+                            "model": "client-model", "instructions": instructions,
+                            "previous_response_id": "resp_previous",
+                            "input": [{"type": "message", "role": "user", "content": "second"}]
+                        }),
+                        state,
+                    ),
+                ),
+                context(
+                    CancellationToken::new(),
+                    Some(ContinuationBinding::Pinned(pin)),
+                ),
+            )
+            .await
+            .expect("continued stream");
+        let next_state = collect_provider_state(&mut continued)
+            .await
+            .expect("next state");
+        assert_eq!(
+            next_state.payload().get("instructions"),
+            Some(&json!(instructions))
+        );
+        let requests = transport.requests.lock().expect("requests");
+        let body: Value = serde_json::from_slice(requests[1].body()).expect("upstream body");
+        if stored && instructions == Some("original") {
+            assert_eq!(
+                body.get("previous_response_id"),
+                Some(&json!("resp_upstream_previous"))
+            );
+            assert!(body.get("instructions").is_none());
+            assert_eq!(
+                body.get("input").and_then(Value::as_array).map(Vec::len),
+                Some(1)
+            );
+        } else {
+            assert!(body.get("previous_response_id").is_none());
+            assert_eq!(body.get("instructions"), Some(&json!(instructions)));
+            assert_eq!(body.pointer("/input/0/content"), Some(&json!("first")));
+            assert_eq!(
+                body.get("input")
+                    .and_then(Value::as_array)
+                    .and_then(|items| items.last())
+                    .and_then(|item| item.get("content")),
+                Some(&json!("second"))
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rotation() {
     let transport = StubInferenceTransport::error(
         GrokInferenceTransportError::new(
@@ -2740,6 +2831,7 @@ async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_acco
             "openai",
             Map::from_iter([
                 ("model".to_owned(), json!("client-model")),
+                ("store".to_owned(), json!(true)),
                 ("prompt_cache_key".to_owned(), json!("conversation-42")),
                 (
                     "input".to_owned(),
@@ -2935,7 +3027,7 @@ async fn replay_owner_should_reencode_custom_apply_patch_call_for_grok() {
     assert_eq!(replayed_call.get("type"), Some(&json!("function_call")));
     assert_eq!(replayed_call.get("name"), Some(&json!("apply_patch")));
     assert_eq!(replayed_call.get("input"), None);
-    assert_eq!(arguments, json!({"patch": patch}));
+    assert_eq!(arguments, json!({"input": patch}));
     assert!(!replay_input.iter().any(|item| {
         item.get("type").and_then(serde_json::Value::as_str) == Some("custom_tool_call")
     }));
@@ -2957,6 +3049,7 @@ async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
         Map::from_iter([
             ("account_id".to_owned(), json!("acct_provider")),
             ("session_id".to_owned(), json!("cache-session")),
+            ("response_stored".to_owned(), json!(true)),
             ("transcript".to_owned(), json!([])),
         ]),
     )

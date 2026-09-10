@@ -865,6 +865,72 @@ fn endpoint_policy_should_reject_private_and_documentation_addresses() {
     }
 }
 
+#[tokio::test]
+async fn subscription_transport_uses_the_official_query_and_rejects_redirects() {
+    for (status, expected) in [(200, Some("Free")), (302, None)] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/user"))
+            .and(query_param("include", "subscription"))
+            .and(wiremock::matchers::header("authorization", "Bearer access-token"))
+            .and(wiremock::matchers::header("X-XAI-Token-Auth", "xai-grok-cli"))
+            .respond_with(ResponseTemplate::new(status)
+                .insert_header("location", format!("{}/redirected", server.uri()))
+                .set_body_json(json!({"userId":"user-id","principalType":"User","teamId":null,"organizationId":null,"subscriptionTier":null})))
+            .expect(1).mount(&server).await;
+        Mock::given(path("/redirected"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let origin = Url::parse(&server.uri()).unwrap();
+        let transport = Arc::new(
+            ReqwestGrokModelCatalogTransport::new(loopback_endpoint_policy(&origin)).unwrap(),
+        );
+        let session = GrokModelCatalogSession::new(
+            SecretValue::new("access-token"),
+            SecretValue::new("user-id"),
+            None,
+            crate::support::xai_wire_profile(),
+        )
+        .unwrap();
+        let result = GrokBillingClient::new(transport)
+            .fetch_subscription(&session)
+            .await;
+        if let Some(expected) = expected {
+            assert_eq!(result.unwrap().as_deref(), Some(expected));
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn subscription_endpoint_policy_accepts_only_the_fixed_official_resource() {
+    let policy = OfficialGrokEndpointPolicy;
+    assert!(
+        policy
+            .route_billing(&Url::parse(provider_xai::GROK_SUBSCRIPTION_URL).unwrap())
+            .is_some()
+    );
+    for endpoint in [
+        "http://cli-chat-proxy.grok.com/v1/user?include=subscription",
+        "https://other.example/v1/user?include=subscription",
+        "https://cli-chat-proxy.grok.com/v1/user",
+        "https://cli-chat-proxy.grok.com/v1/user?include=profile",
+        "https://cli-chat-proxy.grok.com/v1/user?include=subscription&extra=1",
+        "https://cli-chat-proxy.grok.com/v1/user?include=subscription#include",
+        "https://user:pass@cli-chat-proxy.grok.com/v1/user?include=subscription",
+    ] {
+        assert!(
+            policy
+                .route_billing(&Url::parse(endpoint).unwrap())
+                .is_none(),
+            "{endpoint}"
+        );
+    }
+}
+
 #[test]
 fn fake_ip_system_result_should_use_public_trusted_fallback() {
     let calls = Cell::new(0_u8);
