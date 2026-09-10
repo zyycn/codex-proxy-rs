@@ -88,4 +88,5 @@ docker compose -f deploy/compose.yaml config --quiet
 - 提交前检查 status、cached/unstaged diff 和 `git diff --check`。
 - 使用简短 Conventional Commit subject；按用户要求添加 `Co-authored-by: Codex <noreply@openai.com>`。
 - 发布权威是 `release/version.yaml` 与带注释的 `vX.Y.Z` tag。
-- 正式发布使用 `release/publish <version>`；提交、Release 和实例升级是三个独立状态。
+- 发版前替换并提交 `release/notes.md`，首行必须为目标版本的 `# vX.Y.Z`，正文只记录本次更新。
+- 正式发布使用 `release/publish <version>`；工作流读取 tag 中的发版说明。提交、Release 和实例升级是三个独立状态。

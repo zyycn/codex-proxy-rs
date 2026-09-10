@@ -313,16 +313,6 @@ docker compose -f deploy/compose.yaml build codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d --no-build --wait
 ```
 
-仓库维护者发布新版本时必须从干净且已同步上游的分支运行：
-
-```bash
-release/publish X.Y.Z
-```
-
-将 `X.Y.Z` 替换为待发布版本。脚本需要 Git、Ruby 和已登录的 GitHub CLI，
-负责更新 `release/version.yaml`、创建版本提交和带注释 tag，并原子推送分支与 tag。
-它不会登录任何服务器，也不会拉取镜像或调用管理端在线更新。
-
 源码提交、仓库发版和运行实例升级是三种独立状态：本地 commit 不等于 Release，Release/tag 和镜像
 已生成也不等于实例已升级。判断某项修复是否在线前，应先通过管理端版本接口或容器 image digest
 确认运行实例的实际 revision；实例只有在执行上面的 Compose pull/up，或成功完成管理端在线更新后

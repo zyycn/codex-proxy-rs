@@ -88,6 +88,13 @@ jobs:
           fail("Release tag #{release_tag} does not match #{version_path} tag #{expected_tag}") unless release_tag == expected_tag
           fail("#{version_path}: version #{version} is not a valid semver") unless version.match?(SEMVER)
 
+          notes_path = "release/notes.md"
+          fail("#{notes_path}: release notes are required") unless File.file?(notes_path)
+          notes = File.readlines(notes_path)
+          unless notes.first&.strip == "# #{release_tag}" && !notes.drop(1).join.strip.empty?
+            fail("#{notes_path}: expected non-empty notes starting with '# #{release_tag}'")
+          end
+
           platforms = platforms_data["platforms"]
           fail("#{platforms_path}: platforms must be a non-empty array") unless platforms.is_a?(Array) && !platforms.empty?
 
@@ -643,15 +650,10 @@ jobs:
 
           cosign sign --yes "${images[@]}"
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          tag_name: ${{ needs.release-info.outputs.tag }}
-          generate_release_notes: true
-          previous_tag: ${{ needs.release-info.outputs.previous_tag }}
-          prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
-          body: |
+      - name: Prepare release notes
+        shell: bash
+        env:
+          INSTALLATION_NOTES: |
             > [!WARNING]
             > **Upgrading across major versions?** Online upgrades across major versions are not supported. Deploy the new major fresh with a new `.runtime/` data directory, then re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
 
@@ -672,6 +674,26 @@ jobs:
 
             - [GitHub Repository](https://github.com/${{ github.repository }})
             - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
+        run: |
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          notes = "\n".join(Path("release/notes.md").read_text().splitlines()[1:]).strip()
+          installation = os.environ["INSTALLATION_NOTES"].strip()
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
+          output.write_text(f"{notes}\n\n{installation}\n")
+          PY
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.release-info.outputs.tag }}
+          generate_release_notes: true
+          previous_tag: ${{ needs.release-info.outputs.previous_tag }}
+          prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
+          body_path: ${{ runner.temp }}/release-notes.md
           fail_on_unmatched_files: true
           files: |
             dist/release/*

@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_NAME="codex-proxy-rs"
 VERSION_FILE="release/version.yaml"
+NOTES_FILE="release/notes.md"
 TAG_PREFIX="v"
 SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 SIGNATURE="Co-authored-by: Codex <noreply@openai.com>"
@@ -14,6 +15,9 @@ Usage:
 
 Example:
   release/publish 0.1.4
+
+Before publishing, replace release/notes.md with the new version's notes and
+commit it. Its first line must be "# v<version>".
 USAGE
 }
 
@@ -102,6 +106,16 @@ current_version="${current_version#v}"
 [[ "$version" != "$current_version" ]] || die "$VERSION_FILE is already $version"
 
 tag="${TAG_PREFIX}${version}"
+
+git ls-files --error-unmatch "$NOTES_FILE" >/dev/null 2>&1 || die "$NOTES_FILE is not tracked"
+ruby - "$NOTES_FILE" "$tag" <<'RUBY'
+path, tag = ARGV
+lines = File.readlines(path)
+unless lines.first&.strip == "# #{tag}" && !lines.drop(1).join.strip.empty?
+  warn "#{path}: replace the contents with notes for #{tag}, starting with '# #{tag}'"
+  exit 1
+end
+RUBY
 
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   die "local tag already exists: $tag"
