@@ -171,7 +171,7 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`groupId`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
-| `POST` | `/api/admin/accounts/import` | `{ provider, data }` | 导入或按上游身份更新账号；新账号保持未分组，已有账号保留所属分组 |
+| `POST` | `/api/admin/accounts/import` | `{ provider, data, settings? }` | 导入或按上游身份更新账号，可同时应用调度与分组设置 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
@@ -187,7 +187,7 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
-| `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl }` | 消费 OAuth callback；新账号保持未分组，重新授权保留所属分组 |
+| `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 
 账号列表支持以下稳定值：
 
@@ -268,8 +268,14 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 
 RT-only 使用同一形状，只提交 `refreshToken`。不得把真实 token 写入日志、issue、fixture 或文档。
 
-账号导入与 OAuth complete 不接收 `groupIds`。首次创建的账号保持未分组；按既有上游身份重新导入、
-重新授权以及普通 credential refresh/rotation 均保留已有分组。分组关系只通过账号编辑维护。
+账号导入与首次 OAuth complete 可附带 `settings: { enabled, concurrencyLimit, weight, groupIds }`。
+提供 `settings` 时四项均必填，`concurrencyLimit: null` 继承运行参数，否则为 1–4294967295 的整数；
+`weight` 为 1–100，`groupIds` 为完整分组集合。设置应用于本次导入的全部账号，包括匹配到的已有账号，
+与凭据在同一事务内提交；分组不存在时整次回滚。省略 `settings` 时新账号使用默认设置并保持未分组，
+已有账号保留原有分组、权重与并发设置。重新授权不接受 `settings`，普通 credential refresh/rotation 也保留账号设置。
+
+管理端先配置账号设置，再选择 OAuth、AT/RT 或账号文件完成导入。返回设置保留输入；更改出站配置会使
+旧 OAuth 链接失效。文件中显式的出站配置优先于表单代理，未指定时使用表单代理。
 账号列表的每个 item 返回轻量 `groups: [{ id, name, enabled }]`。
 
 OpenAI 的 CPR 导出保持 OAuth 账号的既有 token 与过期时间字段。
@@ -450,6 +456,7 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 日窗口按北京时间零点重置；周窗口从首次准入当天零点起持续七天，到期后在下一次使用时重新开启。
 费用按请求完成时间归属窗口。并发按同一 Key 的执行中请求累计，包含 SSE 与每个 WebSocket
 `response.create`；空闲连接不占名额，内部重试不重复占用。
+修改 Key 策略对既有 WebSocket 连接的下一次请求同样生效，已开始的请求保持原有快照。
 
 任一已结算金额达到限额后拒绝新请求，已准入请求可完成并使金额超过阈值。
 HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly_budget_exceeded`，

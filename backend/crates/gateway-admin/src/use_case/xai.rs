@@ -95,7 +95,13 @@ impl XaiService for DefaultXaiService {
         )?;
         let result = self
             .accounts
-            .commit_credential_import(CredentialImportCommit { prepared }, &context)
+            .commit_credential_import(
+                CredentialImportCommit {
+                    prepared,
+                    settings: command.settings,
+                },
+                &context,
+            )
             .await
             .map_err(|error| map_store_error(error, "xAI credential import"))?;
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
@@ -132,9 +138,10 @@ impl XaiService for DefaultXaiService {
 
     async fn complete_authorization(
         &self,
-        command: CompleteAuthorization,
+        mut command: CompleteAuthorization,
     ) -> Result<CredentialMutationResult, AdminError> {
         let context = command.context.clone();
+        let settings = command.settings.take();
         let prepared = self
             .provider
             .complete_authorization(command)
@@ -150,6 +157,7 @@ impl XaiService for DefaultXaiService {
         let result = commit_authorization(
             self.accounts.as_ref(),
             prepared,
+            settings,
             &context,
             "xAI authorization",
         )

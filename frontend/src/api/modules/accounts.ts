@@ -312,7 +312,15 @@ interface AccountDeleteParams {
   accountIds: string[]
 }
 
+interface AccountImportSettings {
+  enabled: boolean
+  concurrencyLimit: number | null
+  weight: number
+  groupIds: string[]
+}
+
 interface AccountImportParam {
+  settings?: AccountImportSettings
   provider: string
   data: unknown
 }
@@ -325,6 +333,7 @@ interface AccountOAuthStartParam {
 }
 
 interface AccountOAuthCompleteParam {
+  settings?: AccountImportSettings
   provider: string
   flowId: string
   callbackUrl: string

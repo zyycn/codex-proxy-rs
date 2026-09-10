@@ -18,16 +18,51 @@ impl AccountProvider {
     }
 }
 
+/// 导入统一设置，复用编辑账号的调度和分组约束。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountImportSettingsRequest {
+    pub enabled: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub concurrency_limit: Option<u64>,
+    pub weight: u64,
+    pub group_ids: Vec<String>,
+}
+
+impl AccountImportSettingsRequest {
+    fn validate(&self) -> Result<(), WireValidationError> {
+        parse_concurrency_limit(self.concurrency_limit)?;
+        parse_account_weight(self.weight)?;
+        validate_wire_group_ids(&self.group_ids)?;
+        Ok(())
+    }
+
+    fn into_settings(
+        self,
+    ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
+        Ok(gateway_admin::model::accounts::AccountImportSettings {
+            enabled: self.enabled,
+            concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
+            weight: parse_account_weight(self.weight)?,
+            group_ids: validate_wire_group_ids(&self.group_ids)?,
+        })
+    }
+}
+
 /// Provider-owned 账号导入请求；公共 API 不解释 `data` 内部字段。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
+    pub settings: Option<AccountImportSettingsRequest>,
     pub provider: String,
     pub data: Value,
 }
 
 impl AccountImportRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(settings) = &self.settings {
+            settings.validate()?;
+        }
         AccountProvider::parse(&self.provider)?;
         if !self.data.is_object()
             || serde_json::to_vec(&self.data)
@@ -47,6 +82,10 @@ impl AccountImportRequest {
         Ok((
             provider,
             ImportCredentials {
+                settings: self
+                    .settings
+                    .map(AccountImportSettingsRequest::into_settings)
+                    .transpose()?,
                 context,
                 document: provider_document(self.data, "data")?,
             },
@@ -99,6 +138,7 @@ impl StartAccountAuthorizationRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompleteAccountAuthorizationRequest {
+    pub settings: Option<AccountImportSettingsRequest>,
     pub provider: String,
     pub flow_id: String,
     pub callback_url: String,
@@ -106,6 +146,9 @@ pub struct CompleteAccountAuthorizationRequest {
 
 impl CompleteAccountAuthorizationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(settings) = &self.settings {
+            settings.validate()?;
+        }
         let provider = AccountProvider::parse(&self.provider)?;
         match provider {
             AccountProvider::OpenAi => {
@@ -130,6 +173,10 @@ impl CompleteAccountAuthorizationRequest {
         Ok((
             provider,
             CompleteAuthorization {
+                settings: self
+                    .settings
+                    .map(AccountImportSettingsRequest::into_settings)
+                    .transpose()?,
                 context,
                 flow_id: self.flow_id,
                 callback_url: self.callback_url,

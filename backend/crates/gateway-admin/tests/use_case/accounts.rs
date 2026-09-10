@@ -441,6 +441,7 @@ pub(super) struct FakeAccountStore {
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     audit_requests: Mutex<Vec<String>>,
+    import_settings: Mutex<Vec<Option<gateway_admin::model::accounts::AccountImportSettings>>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
     quota_window_queries: Mutex<Vec<AccountUsageWindowQuery>>,
 }
@@ -457,6 +458,7 @@ impl FakeAccountStore {
             account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
             audit_requests: Mutex::new(Vec::new()),
+            import_settings: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
             quota_window_queries: Mutex::new(Vec::new()),
         })
@@ -464,6 +466,15 @@ impl FakeAccountStore {
 
     pub(super) fn fail_next_commit(&self) {
         *self.fail_commit.lock().expect("store failure") = true;
+    }
+
+    pub(super) fn import_settings(
+        &self,
+    ) -> Vec<Option<gateway_admin::model::accounts::AccountImportSettings>> {
+        self.import_settings
+            .lock()
+            .expect("import settings")
+            .clone()
     }
 
     pub(super) fn audit_requests(&self) -> Vec<String> {
@@ -672,6 +683,10 @@ impl AccountStore for FakeAccountStore {
         command: CredentialImportCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialImportResult> {
+        self.import_settings
+            .lock()
+            .expect("import settings")
+            .push(command.settings);
         self.record("store.commit_import");
         self.record_context(context);
         self.require_commit()?;
@@ -691,6 +706,10 @@ impl AccountStore for FakeAccountStore {
         command: AuthorizationCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult> {
+        self.import_settings
+            .lock()
+            .expect("import settings")
+            .push(command.settings);
         self.record("store.commit_authorization");
         self.record_context(context);
         self.require_commit()?;
@@ -2203,4 +2222,18 @@ fn store_unavailable() -> AdminStoreError {
 
 fn unsupported() -> ProviderAdminError {
     ProviderAdminError::new(ProviderAdminErrorKind::Unsupported)
+}
+
+pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
+    gateway_admin::model::accounts::AccountImportSettings {
+        enabled: false,
+        concurrency_limit: Some(
+            gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),
+        ),
+        weight: gateway_core::account::AccountWeight::new(7).expect("weight"),
+        group_ids: vec![
+            gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000091")
+                .expect("group ID"),
+        ],
+    }
 }

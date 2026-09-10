@@ -222,14 +222,24 @@ async fn validate_authorization_commit(
 async fn commit_authorization(
     accounts: &dyn AccountStore,
     prepared: PreparedAuthorizationCommit,
+    settings: Option<crate::model::accounts::AccountImportSettings>,
     context: &MutationContext,
     resource: &'static str,
 ) -> Result<CredentialMutationResult, AdminError> {
+    if settings.is_some()
+        && matches!(
+            &prepared.credential,
+            PreparedAuthorizationCredential::Reauthorize(_)
+        )
+    {
+        prepared.abort().await?;
+        return Err(AdminError::invalid("重新授权不能修改账号设置"));
+    }
     let crate::model::provider_credentials::AuthorizationCommitSettlement {
         command,
         credential_guard,
         authorization_guard,
-    } = prepared.into_commit();
+    } = prepared.into_commit(settings);
     match accounts.commit_authorization(command, context).await {
         Ok(result) => {
             if let Some(guard) = credential_guard {

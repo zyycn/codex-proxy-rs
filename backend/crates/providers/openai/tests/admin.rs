@@ -443,6 +443,7 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
     let error = bundle
         .admin_provider()
         .complete_authorization(CompleteAuthorization {
+            settings: None,
             context: MutationContext {
                 actor: MutationActor::AdminSession {
                     admin_user_id: "different-owner".to_owned(),

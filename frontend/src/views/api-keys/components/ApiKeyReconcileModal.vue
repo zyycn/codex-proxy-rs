@@ -113,7 +113,7 @@ watch(requestId, () => {
       暂无待核账请求
     </p>
     <template #footer>
-      <BaseButton variant="ghost" :disabled="saving" @click="open = false">
+      <BaseButton variant="secondary" :disabled="saving" @click="open = false">
         取消
       </BaseButton>
       <BaseButton variant="primary" :loading="saving" :disabled="!valid || !requestId || loading || Boolean(error)" @click="save">

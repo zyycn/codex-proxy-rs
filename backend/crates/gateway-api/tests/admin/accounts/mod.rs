@@ -756,3 +756,60 @@ mod actions {
         );
     }
 }
+
+mod import_settings {
+    use gateway_api::admin::accounts::{AccountImportRequest, CompleteAccountAuthorizationRequest};
+    use serde_json::json;
+
+    #[test]
+    fn import_and_oauth_apply_the_same_settings_validation() {
+        for (field, value) in [
+            ("concurrencyLimit", json!(0)),
+            ("concurrencyLimit", json!(4_294_967_296_u64)),
+            ("weight", json!(0)),
+            ("weight", json!(101)),
+            ("groupIds", json!(["invalid-group"])),
+        ] {
+            let mut settings =
+                json!({"enabled": false, "concurrencyLimit": null, "weight": 1, "groupIds": []});
+            settings[field] = value;
+            let import: AccountImportRequest = serde_json::from_value(
+                json!({"provider": "openai", "data": {}, "settings": settings}),
+            )
+            .expect("import request");
+            let oauth: CompleteAccountAuthorizationRequest = serde_json::from_value(json!({"provider": "xai", "flowId": "flow-test", "callbackUrl": "code", "settings": settings})).expect("OAuth request");
+            assert_eq!(
+                import.validate().expect_err("invalid settings").field(),
+                field
+            );
+            assert_eq!(
+                oauth.validate().expect_err("invalid settings").field(),
+                field
+            );
+        }
+    }
+
+    #[test]
+    fn import_settings_require_a_complete_explicit_configuration() {
+        let settings =
+            json!({"enabled": false, "concurrencyLimit": null, "weight": 100, "groupIds": []});
+        let request: AccountImportRequest =
+            serde_json::from_value(json!({"provider": "openai", "data": {}, "settings": settings}))
+                .expect("settings");
+        assert!(request.validate().is_ok());
+        for field in ["enabled", "concurrencyLimit", "weight", "groupIds"] {
+            let mut incomplete = settings.clone();
+            incomplete
+                .as_object_mut()
+                .expect("settings object")
+                .remove(field);
+            assert!(
+                serde_json::from_value::<AccountImportRequest>(
+                    json!({"provider": "openai", "data": {}, "settings": incomplete})
+                )
+                .is_err(),
+                "missing {field}"
+            );
+        }
+    }
+}

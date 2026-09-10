@@ -218,7 +218,7 @@ function connectionLogClass(tone: string) {
     </div>
 
     <template #footer>
-      <BaseButton variant="ghost" @click="open = false">
+      <BaseButton variant="secondary" @click="open = false">
         关闭
       </BaseButton>
       <BaseButton

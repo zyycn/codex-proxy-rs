@@ -87,7 +87,7 @@ const {
 } = useAccountMutations({
   accounts,
   selectedIds,
-  reload: loadAccounts,
+  reload: () => Promise.all([loadAccounts(), loadGroups()]),
   replaceAccount,
 })
 
@@ -335,6 +335,8 @@ const {
       v-model="showCreateModal"
       v-model:form="createForm"
       :account="reauthorizingAccount"
+      :groups="groups"
+      :groups-loading="groupsLoading"
       :oauth-loading="authorizingOAuth"
       :reauthorizing="Boolean(reauthorizingAccount)"
       :saving="creatingAccount"

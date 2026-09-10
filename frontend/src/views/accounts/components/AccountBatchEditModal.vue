@@ -1,13 +1,9 @@
 <script setup lang="ts">
 import type { AccountGroup } from '@/api'
 
-import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
-import BaseSwitch from '@/components/base/BaseSwitch.vue'
-import AccountProxyField from './AccountProxyField.vue'
+import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
   selectedCount: number
@@ -37,54 +33,20 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
     size="md"
     :dismissible="!saving"
   >
-    <div class="grid gap-5">
-      <div class="flex min-h-6 items-center justify-between gap-3">
-        <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>
-        <BaseSwitch
-          v-model="enabled"
-          label="切换所选账号调度"
-          :disabled="saving"
-        />
-      </div>
-
-      <div class="grid gap-4 sm:grid-cols-2">
-        <BaseFormItem label="并发限制">
-          <BaseInput
-            v-model="concurrencyLimit"
-            aria-label="所选账号并发限制"
-            type="number"
-            min="1"
-            max="4294967295"
-            placeholder="留空使用默认值"
-            :disabled="saving"
-          />
-        </BaseFormItem>
-        <BaseFormItem label="权重">
-          <BaseInput
-            v-model="weight"
-            aria-label="所选账号调度权重"
-            type="number"
-            min="1"
-            max="100"
-            placeholder="越高越优先，最大 100"
-            :disabled="saving"
-          />
-        </BaseFormItem>
-      </div>
-
-      <AccountProxyField v-model:mode="proxyMode" v-model:url="proxyUrl" :disabled="saving" />
-      <BaseFormItem label="所属分组">
-        <AccountGroupCheckboxGrid
-          v-model="selectedGroupIds"
-          :groups="groups"
-          :loading="groupsLoading"
-          :disabled="saving"
-        />
-      </BaseFormItem>
-    </div>
+    <AccountSettingsFields
+      v-model:enabled="enabled"
+      v-model:concurrency-limit="concurrencyLimit"
+      v-model:weight="weight"
+      v-model:selected-group-ids="selectedGroupIds"
+      v-model:proxy-mode="proxyMode"
+      v-model:proxy-url="proxyUrl"
+      :groups="groups"
+      :groups-loading="groupsLoading"
+      :disabled="saving"
+    />
 
     <template #footer>
-      <BaseButton variant="ghost" :disabled="saving" @click="open = false">
+      <BaseButton variant="secondary" :disabled="saving" @click="open = false">
         取消
       </BaseButton>
       <BaseButton

@@ -15,14 +15,16 @@ use gateway_core::error::GatewayError;
 #[derive(Default)]
 struct Admissions {
     active: Arc<AtomicBool>,
+    limits: Mutex<Vec<RateLimits>>,
 }
 
 impl ClientAdmissionPort for Admissions {
     fn admit(
         &self,
-        _: ClientAdmissionRequest,
+        request: ClientAdmissionRequest,
     ) -> BoxFuture<'_, Result<ClientAdmissionDecision, ClientAdmissionError>> {
-        Box::pin(async {
+        Box::pin(async move {
+            self.limits.lock().unwrap().push(request.limits);
             assert!(!self.active.swap(true, Ordering::SeqCst));
             Ok(ClientAdmissionDecision::Granted)
         })
@@ -124,6 +126,72 @@ fn budget_rejection_releases_client_concurrency_without_creating_a_charge() {
         );
         assert!(!admissions.active.load(Ordering::SeqCst));
         assert!(budget.charges.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn reused_client_uses_updated_limits_for_each_execution() {
+    let snapshots = RuntimeSnapshotHandle::new(start_snapshot());
+    let admissions = Arc::new(Admissions::default());
+    let service = DefaultExecutionService::new(
+        snapshots.clone(),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        admissions.clone(),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service.authenticate("sk_start_test").unwrap();
+    let limited = RateLimits {
+        max_concurrency: 1,
+        requests_per_minute: 1,
+    };
+    for (revision, limits) in [(2, limited), (3, RateLimits::unlimited())] {
+        snapshots.publish(start_snapshot_with_policy(revision, true, limits));
+        let mut next = request(&service, ClientTransport::WebSocket);
+        next.client = client.clone();
+        let started = block_on(service.start(next)).expect("new execution");
+        block_on(started.session.detach_finalize());
+    }
+    assert_eq!(
+        *admissions.limits.lock().unwrap(),
+        vec![limited, RateLimits::unlimited()]
+    );
+}
+
+#[test]
+fn reused_client_cannot_start_after_key_disable_or_snapshot_suspension() {
+    for suspend in [false, true] {
+        let snapshots = RuntimeSnapshotHandle::new(start_snapshot());
+        let admissions = Arc::new(Admissions::default());
+        let service = DefaultExecutionService::new(
+            snapshots.clone(),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::default(),
+            admissions.clone(),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let next = request(&service, ClientTransport::WebSocket);
+        if suspend {
+            snapshots.suspend();
+        } else {
+            snapshots.publish(start_snapshot_with_policy(
+                2,
+                false,
+                RateLimits::unlimited(),
+            ));
+        }
+        let result = block_on(service.start(next));
+        let expected = if suspend {
+            GatewayErrorKind::Internal
+        } else {
+            GatewayErrorKind::Unauthorized
+        };
+        assert!(matches!(result, Err(error) if error.kind() == expected));
+        assert!(admissions.limits.lock().unwrap().is_empty());
     }
 }
 
@@ -1082,11 +1150,15 @@ fn client_snapshot() -> RuntimeSnapshot {
 }
 
 fn start_snapshot() -> RuntimeSnapshot {
+    start_snapshot_with_policy(1, true, RateLimits::unlimited())
+}
+
+fn start_snapshot_with_policy(revision: u64, enabled: bool, limits: RateLimits) -> RuntimeSnapshot {
     let provider = ProviderKind::new("openai").expect("provider kind");
     let capabilities =
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
     RuntimeSnapshot::new(
-        ConfigRevision::new(1).expect("config revision"),
+        ConfigRevision::new(revision).expect("config revision"),
         AccountSelectionPolicy::new(
             RotationStrategy::Smart,
             std::num::NonZeroU32::new(1).expect("concurrency"),
@@ -1102,8 +1174,8 @@ fn start_snapshot() -> RuntimeSnapshot {
             ClientApiKeyId::new("key_start_test").expect("client API key ID"),
             PlaintextClientApiKey::new("sk_start_test").expect("plaintext client API key"),
             account_scope(&provider, "acct_start"),
-            true,
-            RateLimits::unlimited(),
+            enabled,
+            limits,
         )],
     )
     .expect("start snapshot")

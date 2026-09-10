@@ -239,7 +239,7 @@ function handleRequestConsume(creditId: string) {
     </div>
 
     <template v-if="showConfirm" #footer>
-      <BaseButton variant="ghost" :disabled="consuming" @click="cancelConsume">
+      <BaseButton variant="secondary" :disabled="consuming" @click="cancelConsume">
         返回
       </BaseButton>
       <BaseButton variant="primary" :loading="consuming" @click="confirmConsume">

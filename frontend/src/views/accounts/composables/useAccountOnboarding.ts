@@ -11,7 +11,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { errorMessage } from '@/utils/async'
 import { isRecord } from '@/utils/object'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
-import { emptyAccountCreateForm } from '../components/AccountCreateModal/model'
+import { accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type ImportProvider = 'openai' | 'xai'
@@ -57,6 +57,9 @@ export function useAccountOnboarding(options: {
 
     await creatingAccountAction.run(
       async () => {
+        const proxyError = accountProxyError(createForm.value)
+        if (proxyError)
+          throw new Error(proxyError)
         const message = createForm.value.provider === 'batch'
           ? await importMixedAccountDocument()
           : await importAccountDocument()
@@ -72,10 +75,11 @@ export function useAccountOnboarding(options: {
 
     await authorizingOAuthAction.run(
       async () => {
-        const input = await newAccountInput()
+        const input = newAccountInput()
         const account = reauthorizingAccount.value
-        if (!account && createForm.value.proxyMode === 'proxy' && !createForm.value.proxyUrl.trim())
-          throw new Error('请输入代理 URL')
+        const proxyError = accountProxyError(createForm.value)
+        if (!account && proxyError)
+          throw new Error(proxyError)
         const result = await startAccountOAuth({
           ...input,
           outboundProxyUrl: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyUrl.trim() : undefined,
@@ -117,6 +121,7 @@ export function useAccountOnboarding(options: {
           provider: createForm.value.provider,
           flowId: createForm.value.oauthFlowId,
           callbackUrl,
+          settings: reauthorizingAccount.value ? undefined : accountImportSettings(createForm.value),
         })
         await finishCreate(
           reauthorizingAccount.value
@@ -145,14 +150,14 @@ export function useAccountOnboarding(options: {
     createForm.value = {
       ...emptyAccountCreateForm(),
       provider: account.provider,
-      name: account.name,
+      step: 'import',
       mode: 'oauth',
     }
     showCreateModal.value = true
     void handleAuthorizeOAuth()
   }
 
-  async function newAccountInput() {
+  function newAccountInput() {
     const account = reauthorizingAccount.value
     return {
       provider: createForm.value.provider,
@@ -162,16 +167,22 @@ export function useAccountOnboarding(options: {
 
   async function importAccountDocument() {
     const provider = requireImportProvider(createForm.value.provider)
+    const mode = createForm.value.mode
+    if (mode === 'oauth')
+      throw new Error('请选择凭据导入方式')
     const documents = accountImportDocuments(
       provider,
-      createForm.value.mode,
-      createForm.value.importText,
+      mode,
+      createForm.value.importTexts[mode],
     )
     let importedCount = 0
     for (const entry of documents) {
       const result = await importAccounts({
         provider,
-        data: entry.document,
+        settings: accountImportSettings(createForm.value),
+        data: createForm.value.proxyMode === 'proxy'
+          ? withDefaultImportProxy(entry.document, createForm.value.proxyUrl.trim())
+          : entry.document,
       })
       importedCount += result.importedCount
     }
@@ -179,7 +190,7 @@ export function useAccountOnboarding(options: {
   }
 
   async function importMixedAccountDocument() {
-    const documents = parseMixedImportDocuments(parseImportJson(createForm.value.importText))
+    const documents = parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
     let importedCount = 0
     const failures: string[] = []
 
@@ -187,7 +198,10 @@ export function useAccountOnboarding(options: {
       try {
         const result = await importAccounts({
           provider: entry.provider,
-          data: entry.document,
+          settings: accountImportSettings(createForm.value),
+          data: createForm.value.proxyMode === 'proxy'
+            ? withDefaultImportProxy(entry.document, createForm.value.proxyUrl.trim())
+            : entry.document,
         })
         importedCount += result.importedCount
       }
@@ -219,11 +233,26 @@ export function useAccountOnboarding(options: {
       createForm.value = {
         ...createForm.value,
         mode: createForm.value.provider === 'batch' ? 'json' : 'oauth',
+        importTexts: { access_token: '', refresh_token: '', json: '' },
         oauthFlowId: '',
         oauthAuthUrl: '',
         oauthCallback: '',
       }
     },
+    { flush: 'sync' },
+  )
+
+  watch(
+    [
+      () => createForm.value.proxyMode,
+      () => createForm.value.proxyMode === 'proxy' ? createForm.value.proxyUrl.trim() : '',
+    ],
+    () => {
+      createForm.value.oauthFlowId = ''
+      createForm.value.oauthAuthUrl = ''
+      createForm.value.oauthCallback = ''
+    },
+    { flush: 'sync' },
   )
 
   return {
@@ -237,6 +266,20 @@ export function useAccountOnboarding(options: {
     openCreateAccount,
     openReauthorizeAccount,
   }
+}
+
+function withDefaultImportProxy(document: Record<string, unknown>, proxyUrl: string): Record<string, unknown> {
+  if (isRecord(document.data) && Array.isArray(document.data.accounts))
+    return { ...document, data: withDefaultImportProxy(document.data, proxyUrl) }
+  if (Array.isArray(document.accounts)) {
+    return {
+      ...document,
+      accounts: document.accounts.map(account => isRecord(account) ? withDefaultImportProxy(account, proxyUrl) : account),
+    }
+  }
+  if (['outboundProxyUrl', 'outbound_proxy_url', 'proxy_key'].some(key => Object.hasOwn(document, key)))
+    return document
+  return { ...document, outboundProxyUrl: proxyUrl }
 }
 
 function parseImportJson(value: string) {

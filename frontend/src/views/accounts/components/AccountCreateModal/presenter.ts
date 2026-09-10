@@ -1,7 +1,5 @@
 import type { AccountRow } from '../../constants'
-import type { AccountCreateForm } from './model'
-
-export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
+import type { AccountCreateForm, AccountCreateProvider } from './model'
 
 interface AccountCreatePresentationInput {
   form: AccountCreateForm
@@ -27,19 +25,17 @@ const modeOptions = {
 export function resolveAccountCreatePresentation(input: AccountCreatePresentationInput) {
   const { form } = input
   const provider = isAccountCreateProvider(form.provider) ? form.provider : undefined
-  const providerSelected = provider !== undefined
-  const choosingProvider = !input.reauthorizing && !providerSelected
+  const configuring = !input.reauthorizing && form.step === 'settings'
   const oauthAuthUrl = form.oauthAuthUrl || ''
 
   return {
-    choosingProvider,
+    configuring,
     isXai: provider === 'xai',
     isBatch: provider === 'batch',
     modeOptions: resolveModeOptions(provider),
-    modal: resolveModal(input, provider, choosingProvider),
-    oauth: resolveOAuth(input, provider, oauthAuthUrl),
+    modal: resolveModal(input, provider, configuring),
+    oauth: resolveOAuth(provider, oauthAuthUrl),
     importInput: resolveImportInput(form, provider),
-    canGenerateOauth: providerSelected && !input.saving && !input.oauthLoading,
     canSubmit: canSubmit(input, provider, oauthAuthUrl),
     submitLabel: resolveSubmitLabel(input, provider),
   }
@@ -54,14 +50,14 @@ function resolveModeOptions(provider: AccountCreateProvider | undefined) {
 function resolveModal(
   input: AccountCreatePresentationInput,
   provider: AccountCreateProvider | undefined,
-  choosingProvider: boolean,
+  configuring: boolean,
 ) {
-  if (choosingProvider) {
+  if (configuring) {
     return {
-      title: '选择账号平台',
-      description: undefined,
+      title: '账号设置',
+      description: '设置将应用于本次导入的账号',
       tone: 'neutral' as const,
-      size: 'sm' as const,
+      size: 'md' as const,
     }
   }
 
@@ -69,7 +65,7 @@ function resolveModal(
     const providerName = provider === 'xai' ? 'xAI' : 'OpenAI'
     return {
       title: '重新授权账号',
-      description: `完成新的 ${providerName} 授权并替换此账号凭据`,
+      description: `${input.account?.email || input.account?.name || providerName} · 完成授权后更新账号凭据`,
       tone: 'info' as const,
       size: 'md' as const,
     }
@@ -97,24 +93,10 @@ function resolveModal(
   }
 }
 
-function resolveOAuth(
-  input: AccountCreatePresentationInput,
-  provider: AccountCreateProvider | undefined,
-  authUrl: string,
-) {
-  let panelTitle = provider === 'xai' ? 'xAI OAuth 授权' : 'OpenAI OAuth 授权'
-  if (input.reauthorizing) {
-    panelTitle = input.account?.email
-      || input.account?.accountId
-      || input.account?.id
-      || '该账号'
-  }
-
+function resolveOAuth(provider: AccountCreateProvider | undefined, authUrl: string) {
   if (provider === 'xai') {
     return {
       authUrl,
-      panelTitle,
-      panelDescription: '生成并打开授权链接 、 完成浏览器授权 、 粘贴回调地址，查询字符串或授权码',
       callbackLabel: '回调地址或授权码',
       callbackPlaceholder: '回调地址、?code=...&state=... 或授权码',
     }
@@ -122,8 +104,6 @@ function resolveOAuth(
 
   return {
     authUrl,
-    panelTitle,
-    panelDescription: '生成并打开授权链接 、 完成浏览器授权 、 粘贴回调地址',
     callbackLabel: '回调地址',
     callbackPlaceholder: 'http://localhost:1455/auth/callback?code=...&state=...',
   }
@@ -175,10 +155,10 @@ function resolveSubmitLabel(
   if (input.reauthorizing)
     return '完成重新授权'
   if (input.form.mode === 'oauth')
-    return '完成授权导入'
+    return '完成导入'
   if (provider === 'batch')
     return '批量导入'
-  return '导入'
+  return '导入账号'
 }
 
 function canSubmit(
@@ -189,7 +169,7 @@ function canSubmit(
   if (!provider || input.saving || input.oauthLoading)
     return false
   if (input.form.mode !== 'oauth')
-    return input.form.importText.trim().length > 0
+    return input.form.importTexts[input.form.mode].trim().length > 0
   return Boolean(
     input.form.oauthFlowId
     && oauthAuthUrl

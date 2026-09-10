@@ -50,6 +50,7 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
     services
         .openai()
         .import_document(ImportCredentials {
+            settings: Some(super::accounts::import_settings()),
             context: context("import-openai"),
             document: document(),
         })
@@ -74,6 +75,10 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
             refresh: true,
             rolling_usage: None,
         }]
+    );
+    assert_eq!(
+        store.import_settings(),
+        [Some(super::accounts::import_settings())]
     );
     assert_eq!(store.audit_requests(), ["import-openai"]);
 }
@@ -102,6 +107,7 @@ async fn openai_import_should_expose_only_explicit_public_errors_without_committ
         let error = services
             .openai()
             .import_document(ImportCredentials {
+                settings: None,
                 context: context("import-openai-pat-failure"),
                 document: document(),
             })
@@ -126,6 +132,7 @@ async fn openai_import_should_refresh_quota_for_every_imported_account() {
     let result = services
         .openai()
         .import_document(ImportCredentials {
+            settings: None,
             context: context("import-openai-batch"),
             document: document(),
         })
@@ -169,6 +176,7 @@ async fn openai_import_should_remain_successful_when_quota_refresh_fails() {
     let result = services
         .openai()
         .import_document(ImportCredentials {
+            settings: None,
             context: context("import-openai-quota-failure"),
             document: document(),
         })
@@ -204,6 +212,7 @@ async fn openai_authorization_create_should_observe_initial_quota() {
     services
         .openai()
         .complete_authorization(CompleteAuthorization {
+            settings: Some(super::accounts::import_settings()),
             context: context("oauth-start-openai-create"),
             flow_id: "flow-test".to_owned(),
             callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
@@ -231,6 +240,10 @@ async fn openai_authorization_create_should_observe_initial_quota() {
             rolling_usage: None,
         }]
     );
+    assert_eq!(
+        store.import_settings(),
+        [Some(super::accounts::import_settings())]
+    );
     assert_eq!(store.audit_requests(), ["oauth-start-openai-create"]);
 }
 
@@ -255,6 +268,7 @@ async fn openai_authorization_create_should_remain_successful_when_initial_quota
     let result = services
         .openai()
         .complete_authorization(CompleteAuthorization {
+            settings: None,
             context: context("oauth-start-openai-quota-failure"),
             flow_id: "flow-test".to_owned(),
             callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
@@ -277,6 +291,7 @@ async fn openai_authorization_store_failure_should_release_claim_for_retry() {
     store.fail_next_commit();
     let services = service(provider.clone(), store).await;
     let command = || CompleteAuthorization {
+        settings: None,
         context: context("oauth-store-retry"),
         flow_id: "flow-test".to_owned(),
         callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
@@ -333,6 +348,7 @@ async fn openai_import_provider_error_should_not_touch_store_transaction() {
     services
         .openai()
         .import_document(ImportCredentials {
+            settings: None,
             context: context("import-openai-error"),
             document: document(),
         })
@@ -377,6 +393,7 @@ async fn openai_reauthorization_should_commit_after_credential_revision_advances
     let result = services
         .openai()
         .complete_authorization(CompleteAuthorization {
+            settings: None,
             context: context("oauth-complete-openai"),
             flow_id: "flow-test".to_owned(),
             callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
@@ -427,4 +444,35 @@ fn deletion(account_id: &str) -> CredentialDeletion {
         context: context("request-openai"),
         account_ids: vec![ProviderAccountId::new(account_id).expect("account ID")],
     }
+}
+
+#[tokio::test]
+async fn reauthorization_with_import_settings_releases_claim_without_committing() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = service(provider, store.clone()).await;
+    services
+        .openai()
+        .start_authorization(StartAuthorization {
+            outbound_proxy: None,
+            context: context("reauthorization-settings"),
+            name: "existing account".to_owned(),
+            reauthorization: Some(ProviderAccountId::new("acct_test").expect("account ID")),
+        })
+        .await
+        .expect("start reauthorization");
+    let error = services
+        .openai()
+        .complete_authorization(CompleteAuthorization {
+            settings: Some(super::accounts::import_settings()),
+            context: context("reauthorization-settings"),
+            flow_id: "flow-test".to_owned(),
+            callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
+        })
+        .await
+        .expect_err("reauthorization must preserve settings");
+    assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Invalid);
+    assert!(!recorded(&events).contains(&"store.commit_authorization"));
+    assert!(store.import_settings().is_empty());
 }

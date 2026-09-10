@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 use super::{
     AdminError, MutationActor, MutationContext, PageSize, Revision,
-    accounts::{AccountRecord, AccountSummary, AccountUsage, CredentialState},
+    accounts::{
+        AccountImportSettings, AccountRecord, AccountSummary, AccountUsage, CredentialState,
+    },
 };
 
 /// Provider-owned JSON；公共层只搬运且 Debug 不输出值。
@@ -106,6 +108,7 @@ pub struct CredentialDetails {
 
 /// Provider 正式文档批量导入命令。
 pub struct ImportCredentials {
+    pub settings: Option<AccountImportSettings>,
     pub context: MutationContext,
     pub document: ProviderDocument,
 }
@@ -172,6 +175,7 @@ pub struct PreparedCredentialImport {
 /// Admin 交给 Store 的导入事务命令。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialImportCommit {
+    pub settings: Option<AccountImportSettings>,
     pub prepared: PreparedCredentialImport,
 }
 
@@ -480,6 +484,7 @@ pub enum AuthorizationCredentialCommit {
 /// Admin 交给 Store 的 OAuth 原子事务命令。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthorizationCommit {
+    pub settings: Option<AccountImportSettings>,
     pub pending: PendingAuthorizationMutation,
     pub credential: AuthorizationCredentialCommit,
 }
@@ -514,7 +519,10 @@ impl PreparedAuthorizationCommit {
         self
     }
 
-    pub(crate) fn into_commit(self) -> AuthorizationCommitSettlement {
+    pub(crate) fn into_commit(
+        self,
+        settings: Option<AccountImportSettings>,
+    ) -> AuthorizationCommitSettlement {
         let (credential, guard) = match self.credential {
             PreparedAuthorizationCredential::Create(credential) => {
                 (AuthorizationCredentialCommit::Create(credential), None)
@@ -529,6 +537,7 @@ impl PreparedAuthorizationCommit {
         };
         AuthorizationCommitSettlement {
             command: AuthorizationCommit {
+                settings,
                 pending: self.pending,
                 credential,
             },
@@ -542,7 +551,7 @@ impl PreparedAuthorizationCommit {
             credential_guard,
             authorization_guard,
             ..
-        } = self.into_commit();
+        } = self.into_commit(None);
         drop(credential_guard);
         if let Some(guard) = authorization_guard {
             guard.abort().await?;
@@ -554,6 +563,7 @@ impl PreparedAuthorizationCommit {
 /// 完成 Provider OAuth 流程。
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompleteAuthorization {
+    pub settings: Option<AccountImportSettings>,
     pub context: MutationContext,
     pub flow_id: String,
     pub callback_url: String,

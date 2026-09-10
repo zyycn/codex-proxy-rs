@@ -232,6 +232,7 @@ impl NewProviderAccount {
 
 #[derive(Clone)]
 pub struct ImportProviderAccounts {
+    pub settings: Option<AccountImportSettings>,
     pub scope: ProviderAccountAdminScope,
     pub accounts: Vec<NewProviderAccount>,
     pub audit: AdminAuditEvent,
@@ -263,6 +264,9 @@ impl fmt::Debug for ImportProviderAccounts {
 
 impl ImportProviderAccounts {
     pub fn validate(&self) -> StoreResult<()> {
+        if let Some(settings) = &self.settings {
+            repository::validate_batch_update_group_ids(&settings.group_ids)?;
+        }
         self.scope.validate()?;
         if self.accounts.is_empty() || self.accounts.len() > MAX_ADMIN_IMPORT_BATCH {
             return Err(invalid(

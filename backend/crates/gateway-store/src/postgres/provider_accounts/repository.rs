@@ -448,6 +448,29 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 account_ids
                     .push(upsert_provider_account_in_transaction(&mut transaction, account).await?);
             }
+            if let Some(settings) = &command.settings {
+                let unique_ids = account_ids
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                update_provider_accounts_scheduling_in_transaction(
+                    &mut transaction,
+                    &unique_ids,
+                    settings.enabled,
+                    settings.concurrency_limit,
+                    settings.weight,
+                    None,
+                )
+                .await?;
+                replace_account_group_assignments_in_transaction(
+                    &mut transaction,
+                    &unique_ids,
+                    &settings.group_ids,
+                )
+                .await?;
+            }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
             Ok(ProviderAccountAdminImport {
@@ -846,7 +869,7 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
 ) -> StoreResult<()> {
     let updated = sqlx::query_scalar::<_, String>(
         "update provider_accounts
-         set enabled = $2, concurrency_limit = $3, weight = $4, updated_at = now(),
+         set enabled = $2, concurrency_limit = $3, weight = $4, updated_at = greatest(now(), updated_at),
              outbound_proxy_url = case when $5 then $6 else outbound_proxy_url end
          where id = any($1::text[])
          returning id",
@@ -949,7 +972,7 @@ fn validate_batch_update_account_ids(account_ids: &[String]) -> StoreResult<()> 
     Ok(())
 }
 
-fn validate_batch_update_group_ids(group_ids: &[AccountGroupId]) -> StoreResult<()> {
+pub(super) fn validate_batch_update_group_ids(group_ids: &[AccountGroupId]) -> StoreResult<()> {
     const MAX_BATCH_UPDATE_GROUPS: usize = 1000;
     if group_ids.len() > MAX_BATCH_UPDATE_GROUPS {
         return Err(invalid("account batch update contains too many group IDs"));

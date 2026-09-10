@@ -18,6 +18,15 @@ pub use gateway_core::account::{
     QuotaState, resolve_account_status,
 };
 
+/// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountImportSettings {
+    pub enabled: bool,
+    pub concurrency_limit: Option<AccountConcurrencyLimit>,
+    pub weight: AccountWeight,
+    pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
+}
+
 /// 账号列表排序字段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountSortField {

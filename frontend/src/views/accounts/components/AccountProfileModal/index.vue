@@ -64,7 +64,7 @@ const { profile, loading, error, load } = useAccountProfileStatistics(accountId,
       <span v-if="error && profile" class="mr-auto self-center text-cp-xs font-semibold text-cp-error-text">
         {{ error }}
       </span>
-      <BaseButton variant="ghost" @click="open = false">
+      <BaseButton variant="secondary" @click="open = false">
         关闭
       </BaseButton>
       <BaseButton :loading="loading" @click="load(true)">

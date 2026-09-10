@@ -213,6 +213,7 @@ impl PgAdminAccountStore {
     async fn commit_prepared_import(
         &self,
         prepared: PreparedCredentialImport,
+        settings: Option<AccountImportSettings>,
         context: &MutationContext,
         action: &str,
     ) -> AdminStoreResult<CredentialImportResult> {
@@ -223,9 +224,15 @@ impl PgAdminAccountStore {
             .map(prepared_account)
             .collect::<StoreResult<Vec<_>>>()
             .map_err(|error| admin_store_error(ENTITY, error))?;
+        let mut changed_fields = vec!["credentials".to_owned()];
+        if settings.is_some() {
+            changed_fields
+                .extend(["enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
+        }
         let imported = self
             .accounts
             .import_provider_accounts(ImportProviderAccounts {
+                settings,
                 scope: ProviderAccountAdminScope {
                     provider_kind: provider_kind.clone(),
                 },
@@ -235,7 +242,7 @@ impl PgAdminAccountStore {
                     action,
                     "provider_account",
                     &provider_kind,
-                    vec!["credentials".to_owned()],
+                    changed_fields,
                 ),
             })
             .await
@@ -615,8 +622,13 @@ impl AccountStore for PgAdminAccountStore {
         command: CredentialImportCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialImportResult> {
-        self.commit_prepared_import(command.prepared, context, "import_document")
-            .await
+        self.commit_prepared_import(
+            command.prepared,
+            command.settings,
+            context,
+            "import_document",
+        )
+        .await
     }
 
     async fn commit_authorization(
@@ -635,6 +647,7 @@ impl AccountStore for PgAdminAccountStore {
                             provider_kind: credential.provider_kind.clone(),
                             credentials: vec![credential],
                         },
+                        command.settings,
                         context,
                         "authorize",
                     )
@@ -666,6 +679,13 @@ impl AccountStore for PgAdminAccountStore {
                 })
             }
             AuthorizationCredentialCommit::Reauthorize(prepared) => {
+                if command.settings.is_some() {
+                    return Err(AdminStoreError::new(
+                        AdminStoreErrorKind::Invalid,
+                        ENTITY,
+                        "reauthorization cannot change account settings",
+                    ));
+                }
                 self.commit_prepared_rotation(prepared, context, "reauthorize")
                     .await
             }

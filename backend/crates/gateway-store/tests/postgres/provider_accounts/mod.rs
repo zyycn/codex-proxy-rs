@@ -1545,6 +1545,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     };
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![account("acct_admin_upsert", "user-admin-upsert")],
             audit: audit("audit_admin_upsert_create", "import", "acct_admin_upsert"),
@@ -1567,6 +1568,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     updated.credential_state = CredentialState::Banned;
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![updated],
             audit: audit("audit_admin_upsert_update", "import", "acct_admin_upsert"),
@@ -1601,6 +1603,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
 
     repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope,
             accounts: vec![account("acct_admin_upsert", "another-user")],
             audit: audit("audit_admin_upsert_rebind", "import", "acct_admin_upsert"),
@@ -1638,6 +1641,12 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
     let result = admin_account_store(&database.pool)
         .commit_authorization(
             AuthorizationCommit {
+                settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    enabled: false,
+                    concurrency_limit: None,
+                    weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
+                    group_ids: Vec::new(),
+                }),
                 pending: PendingAuthorizationMutation::new(
                     provider_kind.clone(),
                     AuthorizationMutationTarget::Create {
@@ -1679,6 +1688,8 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         ),
         ("acct_authorization_existing", Some(2)),
     );
+    let settings: (bool, Option<i64>, i16) = sqlx::query_as("select enabled, concurrency_limit, weight from provider_accounts where id = 'acct_authorization_existing'").fetch_one(&database.pool).await.expect("OAuth settings");
+    assert_eq!(settings, (false, None, 9));
     database.close().await;
 }
 
@@ -1872,6 +1883,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![
                 account("acct_admin_a", "user-admin-a"),
@@ -1899,6 +1911,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![
                 account("acct_admin_transient", "user-admin-transient"),
@@ -2087,6 +2100,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
     };
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![account("acct_grouped_import", "user-grouped-import")],
             audit: audit("audit_grouped_import", "import", "acct_grouped_import"),
@@ -2120,6 +2134,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
         .expect("set account scheduling before reimport");
     repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![account("acct_reimport_candidate", "user-grouped-import")],
             audit: audit("audit_grouped_reimport", "import", "acct_grouped_import"),
@@ -2187,6 +2202,7 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
     };
     repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![account("acct_rotation_quota", "user-rotation-quota")],
             audit: audit(
@@ -2328,6 +2344,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     disabled.credential_state = CredentialState::Expired;
     repository
         .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
             scope: scope.clone(),
             accounts: vec![disabled],
             audit: audit(
@@ -2615,4 +2632,104 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
         saved.account.outbound_proxy().unwrap().expose_url(),
         "http://127.0.0.1:18080/"
     );
+}
+
+#[tokio::test]
+async fn account_import_settings_apply_atomically_to_new_and_existing_identities() {
+    use gateway_admin::model::accounts::AccountImportSettings;
+    use gateway_core::account::{AccountConcurrencyLimit, AccountWeight};
+    const GROUP_ID: &str = "grp_00000000000000000000000000000091";
+    let Some(database) = TestDatabase::create("import_settings").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_existing_settings", "existing-settings-user"))
+        .await
+        .expect("seed account");
+    sqlx::query(
+        "insert into account_groups (id, name, color, created_at, updated_at) values ($1, 'Import settings', '#2563EBFF', now(), now())",
+    )
+    .bind(GROUP_ID)
+    .execute(&database.pool)
+    .await
+    .expect("seed group");
+    let settings = AccountImportSettings {
+        enabled: false,
+        concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
+        weight: AccountWeight::new(7).expect("weight"),
+        group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
+    };
+    let result = repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: Some(settings.clone()),
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            accounts: vec![
+                account("acct_new_settings", "new-settings-user"),
+                account("acct_existing_candidate", "existing-settings-user"),
+                account("acct_duplicate_candidate", "existing-settings-user"),
+            ],
+            audit: audit("audit_import_settings", "import", "provider_accounts"),
+        })
+        .await
+        .expect("import with settings");
+    assert_eq!(result.config_revision.get(), 2);
+    for id in ["acct_new_settings", "acct_existing_settings"] {
+        let row: (bool, Option<i64>, i16) = sqlx::query_as(
+            "select enabled, concurrency_limit, weight from provider_accounts where id = $1",
+        )
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+        .expect("saved settings");
+        assert_eq!(row, (false, Some(3), 7));
+        assert_eq!(account_group_ids(&database.pool, id).await, [GROUP_ID]);
+    }
+    let before = repository
+        .load_provider_account("acct_existing_settings")
+        .await
+        .expect("existing account");
+    let failed = repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: Some(AccountImportSettings {
+                group_ids: vec![
+                    AccountGroupId::new("grp_00000000000000000000000000000092")
+                        .expect("missing group"),
+                ],
+                ..settings
+            }),
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            accounts: vec![
+                account("acct_rollback_settings", "rollback-settings-user"),
+                account("acct_rollback_candidate", "existing-settings-user"),
+            ],
+            audit: audit(
+                "audit_import_settings_failed",
+                "import",
+                "provider_accounts",
+            ),
+        })
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(current_revision(&database.pool).await, 2);
+    assert_eq!(
+        account_count(&database.pool, "acct_rollback_settings").await,
+        0
+    );
+    assert_eq!(
+        repository
+            .load_provider_account("acct_existing_settings")
+            .await
+            .expect("unchanged account"),
+        before
+    );
+    assert_eq!(
+        account_group_ids(&database.pool, "acct_existing_settings").await,
+        [GROUP_ID]
+    );
+    database.close().await;
 }

@@ -9,6 +9,7 @@ const props = withDefaults(
     endpoint?: string | null
     disabled?: boolean
     preserve?: boolean
+    error?: string
   }>(),
   { preserve: true },
 )
@@ -35,7 +36,7 @@ const options = computed(() => [
         {{ endpoint }}
       </p>
     </BaseFormItem>
-    <BaseFormItem v-if="mode === 'proxy'" label="代理 URL" required>
+    <BaseFormItem v-if="mode === 'proxy'" label="代理 URL" required :error="error">
       <BaseInput
         v-model="url"
         type="password"

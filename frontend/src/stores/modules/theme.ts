@@ -156,22 +156,18 @@ export const useThemeStore = defineStore(
         return
       }
 
-      let cleaned = false
-      const cleanupTransition = (): void => {
-        if (cleaned)
-          return
-        cleaned = true
-        requestAnimationFrame(() => {
+      let activeAnimation: Animation | undefined
+      void transition.finished
+        .catch(() => undefined)
+        .finally(() => {
+          // 旧快照移除后再取消裁剪，避免深色图层在最后一帧重新铺满页面。
+          activeAnimation?.cancel()
           document.documentElement.classList.remove('theme-view-transition-shrink')
           themeTransitioning.value = false
         })
-      }
-      const cleanupTimer = window.setTimeout(cleanupTransition, 1200)
-      void transition.finished.catch(() => undefined)
-      let activeAnimation: Animation | undefined
       void transition.ready
         .then(() => {
-          const animation = document.documentElement.animate(
+          activeAnimation = document.documentElement.animate(
             {
               clipPath: shrinkingDarkLayer
                 ? [
@@ -192,15 +188,8 @@ export const useThemeStore = defineStore(
                 : '::view-transition-new(root)',
             },
           )
-          activeAnimation = animation
-          return animation.finished.catch(() => undefined)
         })
         .catch(() => undefined)
-        .finally(() => {
-          activeAnimation?.cancel()
-          window.clearTimeout(cleanupTimer)
-          cleanupTransition()
-        })
     }
 
     function runFallbackThemeTransition(theme: ResolvedTheme): void {

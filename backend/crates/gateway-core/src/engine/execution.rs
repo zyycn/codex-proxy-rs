@@ -334,9 +334,18 @@ impl DefaultExecutionService {
         &self,
         mut request: PendingStartExecution,
     ) -> Result<StartedExecution, GatewayError> {
-        request.client.policy.authorize().map_err(|_| {
-            GatewayError::new(GatewayErrorKind::PolicyDenied, "client API key is disabled")
-        })?;
+        // 长连接每次执行都重新鉴权并冻结当前策略，确保限额和授权变更对新请求生效。
+        request.client = self
+            .authenticate(request.client.policy.plaintext_key().expose_for_auth())
+            .map_err(|error| match error {
+                ClientAuthenticationError::InvalidKey => {
+                    GatewayError::new(GatewayErrorKind::Unauthorized, "client API key is invalid")
+                }
+                ClientAuthenticationError::SnapshotUnavailable => GatewayError::new(
+                    GatewayErrorKind::Internal,
+                    "runtime snapshot is unavailable",
+                ),
+            })?;
         let started_at = SystemTime::now();
         let deadline_at = started_at
             .checked_add(MODEL_REQUEST_DEADLINE)

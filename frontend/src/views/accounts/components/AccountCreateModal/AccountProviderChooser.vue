@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AccountCreateProvider } from './model'
 import { Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
 import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
@@ -6,6 +7,7 @@ import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
 withDefaults(
   defineProps<{
     disabled?: boolean
+    selected?: AccountCreateProvider | ''
   }>(),
   {
     disabled: false,
@@ -36,22 +38,19 @@ const providers = [
 </script>
 
 <template>
-  <div class="flex items-center justify-center gap-4 sm:gap-8" role="group" aria-label="选择账号平台">
+  <div class="grid grid-cols-3 gap-3" role="group" aria-label="选择账号平台">
     <button
       v-for="provider in providers"
       :key="provider.value"
       type="button"
-      class="group inline-flex size-[88px] cursor-pointer items-center justify-center rounded-cp-lg border-0 bg-transparent text-cp-text outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-border disabled:cursor-not-allowed disabled:opacity-55"
+      class="flex min-w-0 cursor-pointer flex-col items-center gap-3 rounded-cp border-0 px-2 py-4 text-cp font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:opacity-55 motion-reduce:transition-none"
+      :class="selected === provider.value ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
       :disabled="disabled"
-      :aria-label="`导入 ${provider.label} 账号`"
-      :title="provider.label"
+      :aria-pressed="selected === provider.value"
       @click="emit('select', provider.value)"
     >
-      <span
-        class="inline-flex size-16 items-center justify-center rounded-cp-lg bg-cp-fill-quaternary transition-colors duration-150 group-hover:bg-cp-fill-tertiary"
-      >
-        <component :is="provider.icon" :width="36" :height="36" />
-      </span>
+      <component :is="provider.icon" :width="24" :height="24" aria-hidden="true" />
+      <span>{{ provider.label }}</span>
     </button>
   </div>
 </template>
