@@ -326,10 +326,121 @@ fn known_provider_catalog_missing_mapped_model_should_be_filtered() {
         )
         .expect_err("known xAI catalog does not contain the mapped OpenAI model");
 
+    assert_eq!(
+        error,
+        gateway_core::error::RoutingError::ModelNotFound {
+            model: "gpt-5.4".to_owned(),
+            mapped_model: "gpt-5.5".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn missing_model_should_be_reported_when_all_scoped_catalogs_are_known() {
+    let snapshot = snapshot();
+    let error = snapshot
+        .plan(
+            &PublicModelId::new("missing-model").expect("model"),
+            &operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext::default(),
+        )
+        .expect_err("neither provider publishes the requested model");
+
+    assert_eq!(
+        error,
+        gateway_core::error::RoutingError::ModelNotFound {
+            model: "missing-model".to_owned(),
+            mapped_model: "missing-model".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn missing_model_in_one_provider_should_still_route_to_another() {
+    let snapshot = snapshot();
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new("grok-4.5").expect("model"),
+            &operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext::default(),
+        )
+        .expect("xAI publishes the model missing from OpenAI");
+
+    assert_eq!(plan.candidates()[0].provider().as_str(), "xai");
+}
+
+#[test]
+fn blocked_model_provider_should_not_be_misreported_as_model_not_found() {
+    let snapshot = snapshot();
+    let error = snapshot
+        .plan(
+            &PublicModelId::new("gpt-5.5").expect("model"),
+            &operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext {
+                blocked_providers: BTreeSet::from([ProviderKind::new("openai").expect("provider")]),
+                ..RoutingContext::default()
+            },
+        )
+        .expect_err("OpenAI is blocked and xAI does not publish this model");
+
     assert!(matches!(
         error,
         gateway_core::error::RoutingError::NoCapableProvider { .. }
     ));
+}
+
+#[test]
+fn blocked_unknown_catalog_should_not_prove_model_absence() {
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("revision"),
+        scheduling(),
+        vec![
+            ProviderKind::new("openai").expect("provider"),
+            ProviderKind::new("xai").expect("provider"),
+        ],
+        vec![model("xai", "grok-4.5", capabilities())],
+        Vec::new(),
+    )
+    .expect("snapshot")
+    .with_account_directory(account_directory());
+    let error = snapshot
+        .plan(
+            &PublicModelId::new("missing-model").expect("model"),
+            &operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext {
+                blocked_providers: BTreeSet::from([ProviderKind::new("openai").expect("provider")]),
+                ..RoutingContext::default()
+            },
+        )
+        .expect_err("the blocked provider's catalog cannot establish model absence");
+
+    assert!(matches!(
+        error,
+        gateway_core::error::RoutingError::NoCapableProvider { .. }
+    ));
+}
+
+#[test]
+fn empty_account_scope_should_not_be_misreported_as_model_not_found() {
+    let snapshot = snapshot();
+    let empty_scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::default()),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let error = snapshot
+        .plan(
+            &PublicModelId::new("missing-model").expect("model"),
+            &operation(),
+            empty_scope,
+            &RoutingContext::default(),
+        )
+        .expect_err("the API key has no accounts");
+
+    assert_eq!(error, gateway_core::error::RoutingError::EmptyAccountScope);
 }
 
 #[test]
@@ -463,19 +574,22 @@ fn known_unsupported_operation_should_not_be_bypassed() {
     )
     .expect("snapshot");
 
-    assert!(
-        snapshot
-            .plan(
-                &PublicModelId::new("gpt-known-unsupported").expect("model"),
-                &operation(),
-                snapshot.all_account_scope(),
-                &RoutingContext {
-                    required_provider: Some(ProviderKind::new("openai").expect("provider")),
-                    ..RoutingContext::default()
-                },
-            )
-            .is_err()
-    );
+    let error = snapshot
+        .plan(
+            &PublicModelId::new("gpt-known-unsupported").expect("model"),
+            &operation(),
+            snapshot.all_account_scope(),
+            &RoutingContext {
+                required_provider: Some(ProviderKind::new("openai").expect("provider")),
+                ..RoutingContext::default()
+            },
+        )
+        .expect_err("the model exists but cannot perform this operation");
+
+    assert!(matches!(
+        error,
+        gateway_core::error::RoutingError::NoCapableProvider { .. }
+    ));
 }
 
 #[test]

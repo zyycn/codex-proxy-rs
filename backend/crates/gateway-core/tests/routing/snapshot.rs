@@ -56,10 +56,13 @@ struct PublishingCatalogProvider {
     queries: AtomicUsize,
 }
 
-struct UnavailableCatalogProvider;
+enum TestCatalogProvider {
+    Unavailable,
+    Empty,
+}
 
 #[async_trait]
-impl Provider for UnavailableCatalogProvider {
+impl Provider for TestCatalogProvider {
     fn name(&self) -> &'static str {
         "alpha"
     }
@@ -71,10 +74,13 @@ impl Provider for UnavailableCatalogProvider {
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        Err(ProviderError::new(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        ))
+        match self {
+            Self::Unavailable => Err(ProviderError::new(
+                ProviderErrorKind::Unavailable,
+                UpstreamSendState::NotSent,
+            )),
+            Self::Empty => Ok(Vec::new()),
+        }
     }
 
     async fn execute(
@@ -145,7 +151,7 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 #[test]
 fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
     let providers =
-        ProviderRegistry::new([Arc::new(UnavailableCatalogProvider) as Arc<dyn Provider>])
+        ProviderRegistry::new([Arc::new(TestCatalogProvider::Unavailable) as Arc<dyn Provider>])
             .expect("provider registry");
     let compiler =
         RuntimeSnapshotCompiler::new(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))), providers);
@@ -160,6 +166,35 @@ fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
     ));
     assert_eq!(snapshot.mapped_model("public-model"), "upstream-model");
     assert_eq!(snapshot.client_policies().count(), 1);
+}
+
+#[test]
+fn known_empty_catalog_should_report_model_not_found() {
+    let providers =
+        ProviderRegistry::new([Arc::new(TestCatalogProvider::Empty) as Arc<dyn Provider>])
+            .expect("provider registry");
+    let compiler =
+        RuntimeSnapshotCompiler::new(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))), providers);
+    let snapshot = block_on(compiler.compile()).expect("compile empty catalog");
+    let error = snapshot
+        .plan(
+            &PublicModelId::new("public-model").expect("model"),
+            &super::operation(),
+            snapshot.all_account_scope(),
+            &gateway_core::routing::RoutingContext {
+                required_provider: Some(ProviderKind::new("alpha").expect("provider")),
+                ..gateway_core::routing::RoutingContext::default()
+            },
+        )
+        .expect_err("a successfully published empty catalog proves model absence");
+
+    assert_eq!(
+        error,
+        gateway_core::error::RoutingError::ModelNotFound {
+            model: "public-model".to_owned(),
+            mapped_model: "upstream-model".to_owned(),
+        },
+    );
 }
 
 #[test]

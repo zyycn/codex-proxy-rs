@@ -495,7 +495,13 @@ fn known_catalog_should_reject_a_model_that_the_provider_did_not_publish() {
         panic!("a known provider catalog must be authoritative for model availability");
     };
 
-    assert_eq!(error.kind(), GatewayErrorKind::NoAvailableProvider);
+    assert_eq!(
+        (error.kind(), error.client_message()),
+        (
+            GatewayErrorKind::ModelNotFound,
+            "the requested model was not found in the provider catalogs available to this API key; check the model name",
+        )
+    );
 }
 
 #[test]

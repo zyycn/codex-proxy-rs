@@ -85,6 +85,16 @@ pub enum RoutingError {
         /// 实体 ID。
         id: String,
     },
+    /// 账号范围内的 Provider 目录均已知，且均没有请求或映射后的模型。
+    #[error(
+        "model `{model}` (mapped to `{mapped_model}`) was not found in the scoped provider catalogs"
+    )]
+    ModelNotFound {
+        /// 客户端提交的模型名称。
+        model: String,
+        /// 应用模型映射后的名称。
+        mapped_model: String,
+    },
     /// 固定平台内没有可执行本次请求的 Provider。
     #[error("no provider can execute model `{model}`")]
     NoCapableProvider {

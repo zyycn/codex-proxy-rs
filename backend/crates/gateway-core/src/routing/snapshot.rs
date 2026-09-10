@@ -778,6 +778,19 @@ impl RuntimeSnapshot {
         }
 
         if candidates.is_empty() {
+            // 模型存在性必须包含被熔断的 Provider；目录未知时不能断言模型不存在。
+            let mut scoped_providers = providers.intersection(&self.providers).peekable();
+            if scoped_providers.peek().is_some()
+                && scoped_providers.all(|provider| {
+                    self.known_provider_catalogs.contains(provider)
+                        && !self.contains_public_model_for_provider(public_model, provider)
+                })
+            {
+                return Err(RoutingError::ModelNotFound {
+                    model: public_model.as_str().to_owned(),
+                    mapped_model: self.mapped_model(public_model.as_str()),
+                });
+            }
             return Err(RoutingError::NoCapableProvider {
                 model: public_model.as_str().to_owned(),
             });

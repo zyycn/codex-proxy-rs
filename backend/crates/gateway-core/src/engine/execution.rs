@@ -1213,6 +1213,17 @@ fn new_request_id() -> Result<ModelRequestId, GatewayError> {
 
 fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
     match error {
+        crate::validation::RoutingError::ModelNotFound {
+            model,
+            mapped_model,
+        } => GatewayError::new(
+            GatewayErrorKind::ModelNotFound,
+            if model == mapped_model {
+                "the requested model was not found in the provider catalogs available to this API key; check the model name"
+            } else {
+                "the requested model maps to an upstream model that was not found in the provider catalogs available to this API key; check the configured model mapping"
+            },
+        ),
         crate::validation::RoutingError::NoCapableProvider { .. }
         | crate::validation::RoutingError::NoCapableProviderEndpoint { .. }
         | crate::validation::RoutingError::EmptyAccountScope => GatewayError::new(

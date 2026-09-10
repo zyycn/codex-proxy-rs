@@ -433,3 +433,151 @@ async fn continuation_recovery_should_preserve_the_official_retry_signal() {
         })
     );
 }
+
+mod model_routing {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use futures::future::BoxFuture;
+    use gateway_core::engine::execution::{
+        DefaultExecutionService, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
+    };
+    use gateway_core::engine::provider::ProviderRegistry;
+    use gateway_core::routing::{ProviderKind, RuntimeSnapshot};
+    use gateway_core::runtime::RuntimeSnapshotHandle;
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    use crate::openai::{
+        IgnoredClientApiKeyUsage, UnusedAdmissions, UnusedContinuation, UnusedExecutionStore,
+    };
+
+    struct TestCircuits {
+        blocked: bool,
+    }
+
+    impl ProviderCircuitPort for TestCircuits {
+        fn decision<'a>(
+            &'a self,
+            _: &'a ProviderKind,
+        ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
+            Box::pin(async move {
+                Ok(if self.blocked {
+                    ProviderCircuitDecision::BlockedUntil(
+                        SystemTime::now() + Duration::from_secs(30),
+                    )
+                } else {
+                    ProviderCircuitDecision::Allow
+                })
+            })
+        }
+
+        fn observe_failure<'a>(
+            &'a self,
+            _: &'a ProviderKind,
+        ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+            Box::pin(async { unreachable!("routing rejection must not execute a provider") })
+        }
+
+        fn observe_success<'a>(
+            &'a self,
+            _: &'a ProviderKind,
+        ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+            Box::pin(async { unreachable!("routing rejection must not execute a provider") })
+        }
+    }
+
+    async fn request_model(
+        snapshot: RuntimeSnapshot,
+        model: &str,
+        stream: bool,
+        blocked: bool,
+    ) -> (StatusCode, Value) {
+        let execution = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(snapshot),
+            Arc::new(UnusedExecutionStore),
+            ProviderRegistry::default(),
+            Arc::new(UnusedAdmissions),
+            Arc::new(TestCircuits { blocked }),
+            Arc::new(UnusedContinuation),
+            Arc::new(IgnoredClientApiKeyUsage),
+        );
+        let response = crate::openai::api_router(Arc::new(execution))
+            .await
+            .oneshot(
+                Request::post("/v1/responses")
+                    .header("authorization", "Bearer sk_model_routing")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"model": model, "input": "hello", "stream": stream}).to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("error body");
+        (status, serde_json::from_slice(&body).expect("error JSON"))
+    }
+
+    #[tokio::test]
+    async fn missing_models_should_return_404_with_a_specific_explanation() {
+        for (model, mappings, message) in [
+            (
+                "missing-model",
+                BTreeMap::new(),
+                "the requested model was not found in the provider catalogs available to this API key; check the model name",
+            ),
+            (
+                "model-a",
+                BTreeMap::from([("model-a".to_owned(), "missing-target".to_owned())]),
+                "the requested model maps to an upstream model that was not found in the provider catalogs available to this API key; check the configured model mapping",
+            ),
+        ] {
+            for stream in [false, true] {
+                let snapshot = crate::openai::snapshot("sk_model_routing", "openai")
+                    .with_model_mappings(mappings.clone());
+                let response = request_model(snapshot, model, stream, false).await;
+
+                assert_eq!(
+                    response,
+                    (
+                        StatusCode::NOT_FOUND,
+                        json!({"error": {
+                            "type": "invalid_request_error",
+                            "code": "model_not_found",
+                            "message": message,
+                        }}),
+                    ),
+                    "model={model}, stream={stream}",
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_existing_model_with_a_blocked_provider_should_remain_service_unavailable() {
+        let response = request_model(
+            crate::openai::snapshot("sk_model_routing", "openai"),
+            "model-a",
+            true,
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            (response.0, response.1["error"]["code"].as_str()),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some("no_available_provider")
+            ),
+        );
+    }
+}
