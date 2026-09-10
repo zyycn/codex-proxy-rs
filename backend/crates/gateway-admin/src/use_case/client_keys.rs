@@ -26,6 +26,19 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Client Key 管理服务。
 #[async_trait]
 pub trait ClientKeyService: Send + Sync {
+    async fn unresolved_charges(
+        &self,
+        _id: &ClientApiKeyId,
+    ) -> Result<Vec<crate::model::client_keys::UnresolvedClientCharge>, AdminError> {
+        Err(AdminError::unavailable("client budget unavailable"))
+    }
+    async fn reconcile_charge(
+        &self,
+        _context: &MutationContext,
+        _command: crate::model::client_keys::ReconcileClientCharge,
+    ) -> Result<(), AdminError> {
+        Err(AdminError::unavailable("client budget unavailable"))
+    }
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError>;
     async fn reveal(&self, id: &ClientApiKeyId) -> Result<ClientKeySecret, AdminError>;
     async fn create(
@@ -64,6 +77,34 @@ impl DefaultClientKeyService {
 
 #[async_trait]
 impl ClientKeyService for DefaultClientKeyService {
+    async fn unresolved_charges(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> Result<Vec<crate::model::client_keys::UnresolvedClientCharge>, AdminError> {
+        self.store
+            .unresolved_charges(id)
+            .await
+            .map_err(|error| map_store_error(error, "client budget"))
+    }
+
+    async fn reconcile_charge(
+        &self,
+        context: &MutationContext,
+        command: crate::model::client_keys::ReconcileClientCharge,
+    ) -> Result<(), AdminError> {
+        if command.request_id.is_empty()
+            || command.request_id.len() > 128
+            || command.reason.trim().is_empty()
+            || command.reason.len() > 1024
+            || command.reason.chars().any(char::is_control)
+        {
+            return Err(AdminError::invalid("invalid charge reconciliation"));
+        }
+        self.store
+            .reconcile_charge(command, context)
+            .await
+            .map_err(|error| map_store_error(error, "client budget"))
+    }
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError> {
         validate_cursor(&query)?;
         self.store
@@ -99,6 +140,7 @@ impl ClientKeyService for DefaultClientKeyService {
                     label: command.label,
                     group_ids: command.group_ids,
                     limits: command.limits,
+                    budget: command.budget,
                     plaintext: plaintext.clone(),
                 },
                 context,

@@ -33,6 +33,8 @@ pub const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
 /// 自定义 CA 错误。
 #[derive(Debug, Error)]
 pub enum CustomCaError {
+    #[error("invalid account proxy configuration")]
+    ProxyConfiguration,
     /// 读取 CA 证书文件失败。
     #[error(
         "Failed to read CA certificate file {} selected by {}: {source}. {hint}",
@@ -119,6 +121,17 @@ pub fn custom_ca_env_cache_key() -> Option<String> {
 pub fn maybe_build_rustls_client_config_with_custom_ca() -> CustomCaResult<Option<Arc<ClientConfig>>>
 {
     maybe_build_rustls_client_config_with_env(&ProcessEnv)
+}
+
+pub(crate) fn account_proxy_tls_config() -> CustomCaResult<Arc<ClientConfig>> {
+    if let Some(config) = maybe_build_rustls_client_config_with_custom_ca()? {
+        return Ok(config);
+    }
+    Ok(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(native_root_store().map_err(CustomCaError::LoadNativeRoots)?)
+            .with_no_client_auth(),
+    ))
 }
 
 fn build_reqwest_client_with_env(

@@ -5,7 +5,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use gateway_protocol::openai::events;
 use tokio::time::timeout;
-use tokio_tungstenite::{Connector, connect_async_tls_with_config};
+use tokio_tungstenite::{
+    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
+};
 use tungstenite::{
     self, Message,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
@@ -60,7 +62,11 @@ impl CodexWebSocketConnection {
             "sec-websocket-extensions".to_string(),
             WEBSOCKET_EXTENSIONS.to_string(),
         ));
-        Self { endpoint, headers }
+        Self {
+            endpoint,
+            headers,
+            outbound_proxy: None,
+        }
     }
 
     /// 构造 Responses WebSocket opening 与首个 `response.create` 文本帧。
@@ -140,10 +146,39 @@ async fn connect_websocket(
             )))
         })?
         .map(Connector::Rustls);
-    let result = timeout(
-        WEBSOCKET_CONNECT_TIMEOUT,
-        connect_async_tls_with_config(request, Some(websocket_config()), false, connector),
-    )
+    let result = timeout(WEBSOCKET_CONNECT_TIMEOUT, async {
+        // Preserve the native direct handshake; explicit egress never inherits a global proxy.
+        if connection.outbound_proxy.is_none()
+            && matches!(
+                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
+                Ok(None)
+            )
+        {
+            let (websocket, response) =
+                connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
+                    .await?;
+            return Ok((Box::new(websocket) as RawWsStream, response));
+        }
+        let stream = dial_account(connection).await?;
+        match stream {
+            MaybeTlsStream::Plain(tcp) => {
+                let (websocket, response) =
+                    client_async_tls_with_config(request, tcp, Some(websocket_config()), connector)
+                        .await?;
+                Ok((Box::new(websocket) as RawWsStream, response))
+            }
+            stream => {
+                let (websocket, response) = client_async_tls_with_config(
+                    request,
+                    stream,
+                    Some(websocket_config()),
+                    connector,
+                )
+                .await?;
+                Ok((Box::new(websocket) as RawWsStream, response))
+            }
+        }
+    })
     .await
     .map_err(|_| CodexWebSocketExchangeError::ConnectTimeout {
         timeout: WEBSOCKET_CONNECT_TIMEOUT,
@@ -153,6 +188,89 @@ async fn connect_websocket(
         Err(tungstenite::Error::Http(response)) => Err(websocket_opening_error(response.as_ref())),
         Err(error) => Err(CodexWebSocketExchangeError::Connect(error)),
     }
+}
+
+async fn dial_account(
+    connection: &CodexWebSocketConnection,
+) -> Result<MaybeTlsStream<tokio::net::TcpStream>, tungstenite::Error> {
+    use tokio::net::lookup_host;
+    use tungstenite::proxy::ProxyConfig;
+    let invalid =
+        || tungstenite::Error::Io(std::io::Error::other("account WebSocket egress failed"));
+    let endpoint = url::Url::parse(connection.endpoint()).map_err(|_| invalid())?;
+    let host = endpoint.host_str().ok_or_else(invalid)?;
+    let dns_host = match endpoint.host() {
+        Some(url::Host::Ipv6(ip)) => ip.to_string(),
+        _ => host.to_owned(),
+    };
+    let port = endpoint.port_or_known_default().ok_or_else(invalid)?;
+    let Some(proxy) = connection.outbound_proxy.as_ref() else {
+        return Ok(MaybeTlsStream::Plain(connect_tcp(host, port).await?));
+    };
+    let mut proxy_url = url::Url::parse(proxy.expose_url()).map_err(|_| invalid())?;
+    let tls_proxy = proxy_url.scheme() == "https";
+    let proxy_port = proxy_url.port_or_known_default().ok_or_else(invalid)?;
+    if tls_proxy {
+        proxy_url.set_scheme("http").map_err(|_| invalid())?;
+        proxy_url
+            .set_port(Some(proxy_port))
+            .map_err(|_| invalid())?;
+    }
+    let config = ProxyConfig::parse(proxy_url.as_str()).map_err(|_| invalid())?;
+    let proxy_host = match proxy_url.host() {
+        Some(url::Host::Ipv6(ip)) => ip.to_string(),
+        _ => config.host.clone(),
+    };
+    let tcp = connect_tcp(&proxy_host, config.port).await?;
+    let stream = if tls_proxy {
+        let tls = tls::account_proxy_tls_config().map_err(|_| invalid())?;
+        let name = rustls_pki_types::ServerName::try_from(proxy_host).map_err(|_| invalid())?;
+        MaybeTlsStream::Rustls(
+            tokio_rustls::TlsConnector::from(tls)
+                .connect(name, tcp)
+                .await?,
+        )
+    } else {
+        MaybeTlsStream::Plain(tcp)
+    };
+    // The pinned tungstenite fork sends domains remotely for both SOCKS schemes.
+    let target = if proxy_url.scheme() == "socks5" {
+        lookup_host((dns_host.as_str(), port))
+            .await?
+            .next()
+            .ok_or_else(invalid)?
+            .ip()
+            .to_string()
+    } else if proxy_url.scheme() == "socks5h" {
+        dns_host
+    } else {
+        host.to_owned()
+    };
+    tokio_tungstenite::proxy::connect_via_proxy(stream, &config, &target, port)
+        .await
+        .map_err(|_| invalid())
+}
+
+async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {
+    use hyper_util::client::legacy::connect::HttpConnector;
+    use tower_service::Service;
+
+    // Reuse Hyper's DNS and Happy Eyeballs connector for explicit direct/proxy endpoints.
+    let authority = host.parse::<std::net::IpAddr>().map_or_else(
+        |_| format!("{host}:{port}"),
+        |ip| std::net::SocketAddr::new(ip, port).to_string(),
+    );
+    let uri = format!("http://{authority}")
+        .parse::<hyper::Uri>()
+        .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
+    let mut connector = HttpConnector::new();
+    connector
+        .call(uri)
+        .await
+        .map(|stream| stream.into_inner())
+        .map_err(|_| {
+            tungstenite::Error::Io(std::io::Error::other("account WebSocket connection failed"))
+        })
 }
 
 fn websocket_handshake_request(

@@ -92,6 +92,7 @@ pub struct DueGrokCredential {
     upstream_account_id: Option<String>,
     plan_type: Option<String>,
     refresh_token_expires_at: Option<DateTime<Utc>>,
+    outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 struct DueGrokRefreshBatch {
@@ -171,6 +172,16 @@ pub trait GrokCredentialRefresher: Send + Sync {
         &self,
         refresh_token: &SecretValue,
     ) -> Result<GrokRefreshTokens, GrokRefreshFailure>;
+    async fn refresh_with_proxy(
+        &self,
+        token: &SecretValue,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
+        if proxy.is_some() {
+            return Err(GrokRefreshFailure::Transient);
+        }
+        self.refresh(token).await
+    }
 }
 
 pub struct GrokOAuthRefreshClient {
@@ -199,6 +210,25 @@ impl GrokOAuthRefreshClient {
 
 #[async_trait]
 impl GrokCredentialRefresher for GrokOAuthRefreshClient {
+    async fn refresh_with_proxy(
+        &self,
+        token: &SecretValue,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
+        if proxy.is_none() {
+            return self.refresh(token).await;
+        }
+        let client = self.client.with_outbound_proxy(proxy.cloned());
+        let discovery = client
+            .discover()
+            .await
+            .map_err(classify_oauth_refresh_error)?;
+        let tokens = client
+            .refresh(&discovery, &RefreshTokenGrant::new(token.clone()))
+            .await
+            .map_err(classify_oauth_refresh_error)?;
+        refreshed_tokens(tokens)
+    }
     async fn prepare_cycle(&self) -> Result<(), GrokRefreshFailure> {
         let mut cached = self.discovery.lock().await;
         match &*cached {
@@ -361,10 +391,12 @@ impl GrokCredentialRefreshService {
             }
             Err(error) => return Err(error.into()),
         };
-        self.refresher
-            .prepare_cycle()
-            .await
-            .map_err(|_| GrokCredentialRefreshError::Preparation)?;
+        if loaded.account.outbound_proxy().is_none() {
+            self.refresher
+                .prepare_cycle()
+                .await
+                .map_err(|_| GrokCredentialRefreshError::Preparation)?;
+        }
         let policy = self.runtime_policy.load_refresh_policy().await?;
         let subject = loaded
             .account
@@ -383,6 +415,7 @@ impl GrokCredentialRefreshService {
             upstream_account_id: loaded.account.upstream_account_id().map(str::to_owned),
             plan_type: loaded.account.plan_type().map(str::to_owned),
             refresh_token_expires_at: loaded.refresh_token_expires_at,
+            outbound_proxy: loaded.account.outbound_proxy().cloned(),
         };
         self.refresh_one_with_policy(credential, policy).await
     }
@@ -404,10 +437,12 @@ impl GrokCredentialRefreshService {
                 GrokRefreshFailure::InvalidGrant,
             ));
         }
-        self.refresher
-            .prepare_cycle()
-            .await
-            .map_err(GrokCredentialRefreshError::ManualFailure)?;
+        if loaded.account.outbound_proxy().is_none() {
+            self.refresher
+                .prepare_cycle()
+                .await
+                .map_err(GrokCredentialRefreshError::ManualFailure)?;
+        }
         let capacity_guard = match self
             .leases
             .try_acquire(ProviderLeaseRequest::RefreshCapacity(
@@ -434,7 +469,7 @@ impl GrokCredentialRefreshService {
         };
         let tokens = self
             .refresher
-            .refresh(&loaded.refresh_token)
+            .refresh_with_proxy(&loaded.refresh_token, loaded.account.outbound_proxy())
             .await
             .map_err(GrokCredentialRefreshError::ManualFailure)?;
         if tokens.access_token.is_empty() || tokens.access_token.len() > MAX_SECRET_BYTES {
@@ -494,14 +529,32 @@ impl GrokCredentialRefreshService {
             .into_iter()
             .map(|account_id| GrokCredentialRefreshOutcome::Failed { account_id })
             .collect::<Vec<_>>();
-        let credentials = batch.credentials;
+        let mut credentials = batch.credentials;
         if credentials.is_empty() {
             return Ok(outcomes);
         }
-        self.refresher
-            .prepare_cycle()
-            .await
-            .map_err(|_| GrokCredentialRefreshError::Preparation)?;
+        if credentials
+            .iter()
+            .any(|credential| credential.outbound_proxy.is_none())
+            && self.refresher.prepare_cycle().await.is_err()
+        {
+            if credentials
+                .iter()
+                .all(|credential| credential.outbound_proxy.is_none())
+            {
+                return Err(GrokCredentialRefreshError::Preparation);
+            }
+            // A failed direct discovery must not prevent accounts on other exits from refreshing.
+            credentials.retain(|credential| {
+                if credential.outbound_proxy.is_some() {
+                    return true;
+                }
+                outcomes.push(GrokCredentialRefreshOutcome::Failed {
+                    account_id: credential.account_id.clone(),
+                });
+                false
+            });
+        }
         outcomes.reserve(credentials.len());
         let refreshed = stream::iter(credentials.into_iter().map(|credential| async move {
             let account_id = credential.account_id.clone();
@@ -587,7 +640,14 @@ impl GrokCredentialRefreshService {
             }
         };
 
-        match self.refresher.refresh(&credential.refresh_token).await {
+        match self
+            .refresher
+            .refresh_with_proxy(
+                &credential.refresh_token,
+                credential.outbound_proxy.as_ref(),
+            )
+            .await
+        {
             Ok(tokens) => self.persist_success(credential, tokens).await,
             Err(GrokRefreshFailure::InvalidGrant) => {
                 self.persist_terminal_failure(
@@ -912,6 +972,7 @@ impl GrokCredentialRepository {
                 upstream_account_id: account.upstream_account_id().map(str::to_owned),
                 plan_type: account.plan_type().map(str::to_owned),
                 refresh_token_expires_at: loaded.refresh_token_expires_at,
+                outbound_proxy: account.outbound_proxy().cloned(),
             });
         }
         Ok(DueGrokRefreshBatch {

@@ -436,6 +436,10 @@ impl CodexCredentialCatalogService {
             .authorization_header()
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
         let result = client
+            .for_account(account)
+            .map_err(|error| CodexCredentialCatalogError::Upstream {
+                detail: error.to_string(),
+            })?
             .fetch_models_with_context(CodexRequestContext::auxiliary(
                 authorization.expose_secret(),
                 account.upstream_account_id(),

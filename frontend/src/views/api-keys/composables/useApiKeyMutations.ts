@@ -23,6 +23,8 @@ export interface ApiKeyFormValue {
   groupIds: string[]
   maxConcurrency: string
   requestsPerMinute: string
+  dailyLimitUsd: string
+  weeklyLimitUsd: string
 }
 
 export function useApiKeyMutations(options: {
@@ -63,8 +65,10 @@ export function useApiKeyMutations(options: {
       name: key.name,
       label: key.label ?? '',
       groupIds: key.groups.map(group => group.id),
-      maxConcurrency: String(key.maxConcurrency),
-      requestsPerMinute: String(key.requestsPerMinute),
+      maxConcurrency: limitInputValue(key.maxConcurrency),
+      requestsPerMinute: limitInputValue(key.requestsPerMinute),
+      dailyLimitUsd: limitInputValue(key.dailyLimitUsd),
+      weeklyLimitUsd: limitInputValue(key.weeklyLimitUsd),
     }
     showFormModal.value = true
   }
@@ -96,6 +100,8 @@ export function useApiKeyMutations(options: {
           groupIds: [...new Set(form.value.groupIds)],
           maxConcurrency: parseLimit(form.value.maxConcurrency),
           requestsPerMinute: parseLimit(form.value.requestsPerMinute),
+          dailyLimitUsd: form.value.dailyLimitUsd.trim() || '0',
+          weeklyLimitUsd: form.value.weeklyLimitUsd.trim() || '0',
         }
         const current = editingKey.value
         if (current) {
@@ -124,6 +130,12 @@ export function useApiKeyMutations(options: {
   }
 
   function validateForm() {
+    for (const [label, value] of [['日限额', form.value.dailyLimitUsd], ['周限额', form.value.weeklyLimitUsd]]) {
+      if (value.trim() && !/^\d{1,10}(?:\.\d{1,10})?$/.test(value.trim())) {
+        toast.warning(`${label}必须是非负金额，最多 10 位小数`)
+        return false
+      }
+    }
     if (!form.value.name.trim()) {
       toast.warning('请输入 API Key 名称')
       return false
@@ -272,9 +284,15 @@ function emptyForm(): ApiKeyFormValue {
     name: '',
     label: '',
     groupIds: [],
-    maxConcurrency: '0',
-    requestsPerMinute: '0',
+    maxConcurrency: '',
+    requestsPerMinute: '',
+    dailyLimitUsd: '',
+    weeklyLimitUsd: '',
   }
+}
+
+function limitInputValue(limit: string | number) {
+  return Number(limit) === 0 ? '' : String(limit)
 }
 
 function parseLimit(value: string) {

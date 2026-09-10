@@ -11,6 +11,8 @@ use gateway_admin::model::client_keys::{
     CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection, UpdateClientKey,
 };
 use gateway_core::{
+    engine::budget::ClientBudgetLimits,
+    metering::Decimal,
     policy::{ClientApiKeyId, RateLimits},
     routing::AccountGroupId,
 };
@@ -32,6 +34,15 @@ use super::{
 const MAX_CURSOR_BYTES: usize = 512;
 const MAX_SEARCH_BYTES: usize = 256;
 const DEFAULT_PAGE_SIZE: u16 = 50;
+
+fn parse_budget(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<Option<Decimal>, WireValidationError> {
+    value
+        .map(|value| value.parse().map_err(|_| WireValidationError::new(field)))
+        .transpose()
+}
 
 /// Client Key 列表查询。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -140,6 +151,8 @@ pub struct CreateClientKeyRequest {
     group_ids: Vec<String>,
     max_concurrency: u64,
     requests_per_minute: u64,
+    daily_limit_usd: Option<String>,
+    weekly_limit_usd: Option<String>,
 }
 
 impl CreateClientKeyRequest {
@@ -154,6 +167,11 @@ impl CreateClientKeyRequest {
             name: self.name,
             label: self.label,
             group_ids,
+            budget: ClientBudgetLimits {
+                daily_usd: parse_budget(self.daily_limit_usd, "dailyLimitUsd")?.unwrap_or_default(),
+                weekly_usd: parse_budget(self.weekly_limit_usd, "weeklyLimitUsd")?
+                    .unwrap_or_default(),
+            },
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
@@ -172,6 +190,8 @@ pub struct UpdateClientKeyRequest {
     group_ids: Vec<String>,
     max_concurrency: u64,
     requests_per_minute: u64,
+    daily_limit_usd: Option<String>,
+    weekly_limit_usd: Option<String>,
 }
 
 impl UpdateClientKeyRequest {
@@ -188,6 +208,8 @@ impl UpdateClientKeyRequest {
             name: self.name,
             label: self.label,
             group_ids,
+            daily_limit_usd: parse_budget(self.daily_limit_usd, "dailyLimitUsd")?,
+            weekly_limit_usd: parse_budget(self.weekly_limit_usd, "weeklyLimitUsd")?,
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
@@ -247,6 +269,13 @@ pub struct ClientKeyView {
     enabled: bool,
     max_concurrency: u64,
     requests_per_minute: u64,
+    daily_limit_usd: String,
+    weekly_limit_usd: String,
+    daily_used_usd: String,
+    weekly_used_usd: String,
+    daily_resets_at: Option<DateTime<Utc>>,
+    weekly_resets_at: Option<DateTime<Utc>>,
+    unresolved_requests: u64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     last_used_at: Option<DateTime<Utc>>,
@@ -292,6 +321,13 @@ impl From<ClientKeyRecord> for ClientKeyView {
             enabled: record.enabled,
             max_concurrency: record.limits.max_concurrency,
             requests_per_minute: record.limits.requests_per_minute,
+            daily_limit_usd: record.budget.limits.daily_usd.canonical(),
+            weekly_limit_usd: record.budget.limits.weekly_usd.canonical(),
+            daily_used_usd: record.budget.daily_used_usd.canonical(),
+            weekly_used_usd: record.budget.weekly_used_usd.canonical(),
+            daily_resets_at: record.budget.daily_resets_at.map(DateTime::from),
+            weekly_resets_at: record.budget.weekly_resets_at.map(DateTime::from),
+            unresolved_requests: record.budget.unresolved_requests,
             created_at: record.created_at,
             updated_at: record.updated_at,
             last_used_at: record.last_used_at,
@@ -644,6 +680,14 @@ where
     Router::new()
         .route("/api/admin/client-keys", get(list_client_keys::<S>))
         .route(
+            "/api/admin/client-keys/unresolved-charges",
+            get(unresolved_client_charges::<S>),
+        )
+        .route(
+            "/api/admin/client-keys/reconcile-charge",
+            post(reconcile_client_charge::<S>),
+        )
+        .route(
             "/api/admin/client-keys/create",
             post(create_client_key::<S>),
         )
@@ -664,6 +708,66 @@ where
             "/api/admin/client-keys/delete",
             post(delete_client_key::<S>),
         )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReconcileClientChargeRequest {
+    id: String,
+    request_id: String,
+    amount_usd: String,
+    reason: String,
+}
+
+async fn unresolved_client_charges<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<ClientKeyIdQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let id = query.into_domain_id().map_err(map_wire_error)?;
+    let items = state.admin_services().client_keys().unresolved_charges(&id).await.map_err(map_service_error)?
+        .into_iter().map(|event| serde_json::json!({
+            "requestId": event.request_id, "startedAt": event.started_at.to_rfc3339(),
+            "completedAt": event.completed_at.map(|time| time.to_rfc3339()), "state": event.state,
+        })).collect::<Vec<_>>();
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({"items": items})),
+    ))
+}
+
+async fn reconcile_client_charge<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(payload): AdminJson<ReconcileClientChargeRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let key_id = client_key_id(payload.id, "id").map_err(map_wire_error)?;
+    let amount_usd = payload
+        .amount_usd
+        .parse::<Decimal>()
+        .map_err(|_| map_wire_error(WireValidationError::new("amountUsd")))?;
+    let command = gateway_admin::model::client_keys::ReconcileClientCharge {
+        key_id,
+        request_id: payload.request_id,
+        amount_usd,
+        reason: payload.reason,
+    };
+    state
+        .admin_services()
+        .client_keys()
+        .reconcile_charge(&auth.context().mutation_context(), command)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({"reconciled": true})),
+    ))
 }
 
 async fn list_client_keys<S>(

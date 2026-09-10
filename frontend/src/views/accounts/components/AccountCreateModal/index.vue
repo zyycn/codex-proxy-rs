@@ -16,6 +16,7 @@ import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { useCopyText } from '@/composables/useCopyText'
+import AccountProxyField from '../AccountProxyField.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
 import { resolveAccountCreatePresentation } from './presenter'
 
@@ -148,6 +149,7 @@ async function copyText(value: string, successText: string) {
       />
 
       <div v-if="mode === 'oauth'" class="flex flex-col gap-4">
+        <AccountProxyField v-if="!reauthorizing" v-model:mode="form.proxyMode" v-model:url="form.proxyUrl" :preserve="false" :disabled="saving || oauthLoading || Boolean(form.oauthFlowId)" />
         <div class="rounded-cp bg-cp-fill-quaternary px-4 py-3">
           <div class="flex items-start gap-3">
             <div

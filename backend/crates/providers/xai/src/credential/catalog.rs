@@ -1162,7 +1162,8 @@ async fn fetch_candidate_catalog(
             .map(|value| SecretValue::new(value.to_owned())),
         wire_profile,
     )
-    .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
+    .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?
+    .with_outbound_proxy(candidate.account.outbound_proxy().cloned());
     let snapshot = client
         .fetch(&session)
         .await
@@ -1214,6 +1215,7 @@ fn billing_session(
             .map(|value| SecretValue::new(value.to_owned())),
         wire_profile.clone(),
     )
+    .map(|session| session.with_outbound_proxy(loaded.account.outbound_proxy().cloned()))
     .map_err(|_| GrokQuotaError::InvalidData)
 }
 

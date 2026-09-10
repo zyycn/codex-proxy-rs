@@ -9,6 +9,7 @@ use crate::transport::protocol::responses::{
 /// WebSocket opening 描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketConnection {
+    pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub(super) endpoint: String,
     pub(super) headers: Vec<(String, String)>,
 }
@@ -16,7 +17,7 @@ pub struct CodexWebSocketConnection {
 /// 已构造完成的 Responses WebSocket 请求描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketRequest {
-    pub(super) connection: CodexWebSocketConnection,
+    pub(crate) connection: CodexWebSocketConnection,
     pub(super) payload_text: String,
     pub(super) continuation: WebSocketContinuationRequirement,
 }
@@ -113,6 +114,7 @@ impl CodexWebSocketConnection {
         Self {
             endpoint: endpoint.into(),
             headers,
+            outbound_proxy: None,
         }
     }
 

@@ -171,7 +171,8 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             )?),
         ),
         Arc::new(client_key_usage),
-    );
+    )
+    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())));
 
     let provider_ports = ProviderStorePorts::new(
         account_store,

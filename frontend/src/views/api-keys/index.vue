@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ApiKey } from '@/api'
 import { ref, watch } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -11,10 +12,12 @@ import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
+import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
+import ApiKeyReconcileModal from './components/ApiKeyReconcileModal.vue'
 import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
@@ -24,6 +27,13 @@ import { useApiKeyUse } from './composables/useApiKeyUse'
 import { apiKeyColumns } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
+const reconcileKey = ref<ApiKey | null>(null)
+const showReconcile = ref(false)
+
+function openReconcile(key: ApiKey) {
+  reconcileKey.value = key
+  showReconcile.value = true
+}
 
 const {
   loading,
@@ -157,6 +167,25 @@ watch(
             <template #scope="{ row }">
               <ApiKeyScopeCell :api-key="row" />
             </template>
+            <template #budget="{ row }">
+              <ApiKeyBudgetCell :api-key="row" @reconcile="openReconcile" />
+            </template>
+            <template #limits="{ row }">
+              <dl class="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs tabular-nums">
+                <dt class="text-cp-text-tertiary">
+                  并发
+                </dt>
+                <dd class="m-0 truncate text-cp-text" :title="String(row.maxConcurrency || '∞')">
+                  {{ row.maxConcurrency || '∞' }}
+                </dd>
+                <dt class="text-cp-text-tertiary">
+                  RPM
+                </dt>
+                <dd class="m-0 truncate text-cp-text" :title="String(row.requestsPerMinute || '∞')">
+                  {{ row.requestsPerMinute || '∞' }}
+                </dd>
+              </dl>
+            </template>
             <template #enabled="{ row }">
               <ApiKeyStatusBadge :api-key="row" />
             </template>
@@ -200,6 +229,7 @@ watch(
       @save="requestSave"
       @import-ccs="importCreatedKeyToCcs"
     />
+    <ApiKeyReconcileModal v-model="showReconcile" :api-key="reconcileKey" @reconciled="loadApiKeys" />
 
     <ApiKeyUseModal
       v-model="showUseKeyModal"

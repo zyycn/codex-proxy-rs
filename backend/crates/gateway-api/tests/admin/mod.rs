@@ -640,6 +640,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
         let now = Utc::now();
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
+                budget: Default::default(),
                 id: id.clone(),
                 name: "revealed".to_owned(),
                 label: None,

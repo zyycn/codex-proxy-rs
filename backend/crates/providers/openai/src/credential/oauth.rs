@@ -524,7 +524,16 @@ impl CodexOAuthAdminService {
             .transpose()?
             .flatten();
         let (mut secret, id_token) = self
-            .exchange_pending(&pending, callback_url, fallback_refresh_token)
+            .exchange_pending(
+                &pending,
+                callback_url,
+                fallback_refresh_token,
+                current
+                    .as_ref()
+                    .map_or(pending.mutation.outbound_proxy(), |current| {
+                        current.account.outbound_proxy()
+                    }),
+            )
             .await?;
         let mutation = pending.mutation.clone();
         let access_token_expires_at =
@@ -545,20 +554,25 @@ impl CodexOAuthAdminService {
             )
         } else {
             let account_id = format!("acct_{}", Uuid::now_v7().simple());
-            CompletedCodexOAuthCredential::Create(
-                self.credentials
-                    .prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
-                        account_id,
-                        name: pending.name,
-                        installation_id: pending.installation_id,
-                        secret,
-                        metadata,
-                        access_token_expires_at,
-                        next_refresh_at: None,
-                        enabled: true,
-                    })
-                    .map_err(map_admin_error)?,
-            )
+            let prepared = self
+                .credentials
+                .prepare_unresolved_oauth(UnresolvedCodexOAuthCredential {
+                    account_id,
+                    name: pending.name,
+                    installation_id: pending.installation_id,
+                    secret,
+                    metadata,
+                    access_token_expires_at,
+                    next_refresh_at: None,
+                    enabled: true,
+                })
+                .map_err(map_admin_error)?;
+            CompletedCodexOAuthCredential::Create(gateway_core::account::NewProviderAccount {
+                account: prepared
+                    .account
+                    .with_outbound_proxy(mutation.outbound_proxy().cloned()),
+                credential: prepared.credential,
+            })
         };
         Ok((mutation, credential))
     }
@@ -666,6 +680,7 @@ impl CodexOAuthAdminService {
         pending: &CodexPendingAuthorization,
         callback_url: &str,
         fallback_refresh_token: Option<SecretString>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<(super::types::CodexOAuthSecret, SecretString), CodexOAuthAdminError> {
         let (code, callback_state) = callback_parts(callback_url)?;
         if !constant_time_equal(
@@ -676,10 +691,13 @@ impl CodexOAuthAdminService {
         }
         let tokens = self
             .exchanger
-            .exchange_authorization_code(AuthorizationCodeGrant {
-                code,
-                code_verifier: pending.code_verifier.clone(),
-            })
+            .exchange_with_proxy(
+                AuthorizationCodeGrant {
+                    code,
+                    code_verifier: pending.code_verifier.clone(),
+                },
+                proxy,
+            )
             .await
             .map_err(map_exchange_error)?;
         let mut secret = tokens.secret;

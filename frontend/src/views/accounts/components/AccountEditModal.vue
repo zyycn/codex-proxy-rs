@@ -11,6 +11,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
+import AccountProxyField from './AccountProxyField.vue'
 
 defineProps<{
   account: AccountRow | null
@@ -27,6 +28,8 @@ const open = defineModel<boolean>({ required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
+const proxyMode = defineModel<string>('proxyMode', { required: true })
+const proxyUrl = defineModel<string>('proxyUrl', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -98,6 +101,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
           :disabled="saving"
         />
       </BaseFormItem>
+      <AccountProxyField v-model:mode="proxyMode" v-model:url="proxyUrl" :endpoint="account.outboundProxyEndpoint" :disabled="saving" />
     </div>
 
     <template #footer>

@@ -2,6 +2,8 @@
 
 mod error;
 mod model;
+mod proxy;
+pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;
 mod selection;
 mod store;

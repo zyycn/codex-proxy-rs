@@ -52,8 +52,11 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            direct_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
+            outbound_proxy: None,
+            egress_key: String::new(),
             base_url,
             profile,
             websocket_pool: None,
@@ -234,13 +237,14 @@ impl CodexBackendClient {
 
         let websocket_request = websocket_upstream_request(request);
         let headers = self.request_headers_for_websocket_response(&websocket_request, context)?;
-        let websocket_create = CodexWebSocketConnection::responses_create_request(
+        let mut websocket_create = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
             &generate_key(),
             websocket_header_pairs(&headers),
             &websocket_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
+        websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         context.trace.cloned().unwrap_or_default().headers(
             "upstream.request.headers",
             serde_json::json!({"transport": "websocket", "phase": "prepared_opening"}),
@@ -469,6 +473,7 @@ impl CodexBackendClient {
             .as_deref()
             .or(request.previous_response_id())?;
         let mut key = CodexWebSocketPoolKey::new(&self.base_url, account_id, conversation_id)
+            .with_egress_key(&self.egress_key)
             .with_connection_profile(connection_profile);
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);

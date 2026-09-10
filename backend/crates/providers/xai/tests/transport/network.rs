@@ -26,6 +26,86 @@ use provider_xai::{
 
 use crate::support::loopback_endpoint_policy;
 
+async fn rejecting_account_proxy() -> (
+    gateway_core::account::OutboundProxy,
+    tokio::task::JoinHandle<String>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://user:pass@{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(stream.read_u8().await.unwrap());
+            assert!(header.len() < 8192);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        String::from_utf8(header).unwrap()
+    });
+    (proxy, task)
+}
+
+#[tokio::test]
+async fn inference_and_oauth_connect_through_each_accounts_authenticated_proxy() {
+    let inference =
+        ReqwestGrokInferenceTransport::new(Arc::new(OfficialGrokEndpointPolicy)).unwrap();
+    for _ in 0..2 {
+        let (proxy, captured) = rejecting_account_proxy().await;
+        let request = GrokInferenceRequest::new(
+            Url::parse("https://cli-chat-proxy.grok.com/v1/responses").unwrap(),
+            Vec::new(),
+            br#"{"model":"grok-code-test","stream":true}"#.to_vec(),
+            GrokSessionBinding::new("same-account")
+                .unwrap()
+                .with_outbound_proxy(Some(proxy)),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), inference.execute(request))
+                .await
+                .unwrap()
+                .is_err()
+        );
+        let connect = tokio::time::timeout(Duration::from_secs(5), captured)
+            .await
+            .unwrap()
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(connect.starts_with("connect cli-chat-proxy.grok.com:443 http/1.1"));
+        assert!(connect.contains("proxy-authorization: basic dxnlcjpwyxnz"));
+    }
+    let (proxy, captured) = rejecting_account_proxy().await;
+    let client = GrokOAuthClient::new(
+        GrokOAuthConfig::official().unwrap(),
+        crate::support::xai_wire_profile(),
+        Arc::new(ReqwestOAuthTransport::new(Arc::new(OfficialGrokEndpointPolicy)).unwrap()),
+        Arc::new(FailClosedTokenVerifier),
+    )
+    .with_outbound_proxy(Some(proxy));
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), client.discover())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    let connect = tokio::time::timeout(Duration::from_secs(5), captured)
+        .await
+        .unwrap()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(connect.starts_with("connect auth.x.ai:443 http/1.1"));
+    assert!(connect.contains("proxy-authorization: basic dxnlcjpwyxnz"));
+}
+
 #[tokio::test]
 async fn oauth_transport_should_post_form_once_without_redirect() {
     let server = MockServer::start().await;

@@ -19,6 +19,8 @@ export function useAccountEditor(options: {
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
+  const proxyMode = shallowRef('preserve')
+  const proxyUrl = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -31,6 +33,8 @@ export function useAccountEditor(options: {
 
   function open(account: AccountRow) {
     editingAccountId.value = account.id
+    proxyMode.value = 'preserve'
+    proxyUrl.value = ''
     schedulingEnabled.value = account.enabled
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
@@ -43,6 +47,10 @@ export function useAccountEditor(options: {
     if (!accountId || saving.value)
       return
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
+    if (proxyMode.value === 'proxy' && !proxyUrl.value.trim()) {
+      toast.warning('请输入代理 URL')
+      return
+    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -51,6 +59,7 @@ export function useAccountEditor(options: {
     await saveAction.run(async () => {
       await updateAccount({
         accountId,
+        outboundProxyUrl: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyUrl.value.trim(),
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
@@ -66,6 +75,8 @@ export function useAccountEditor(options: {
     if (open || isSaving)
       return
     editingAccountId.value = null
+    proxyMode.value = 'preserve'
+    proxyUrl.value = ''
     schedulingEnabled.value = true
     concurrencyLimit.value = ''
     weight.value = '1'
@@ -78,6 +89,8 @@ export function useAccountEditor(options: {
     schedulingEnabled,
     concurrencyLimit,
     weight,
+    proxyMode,
+    proxyUrl,
     selectedGroupIds,
     saving,
     open,

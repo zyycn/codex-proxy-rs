@@ -6,6 +6,8 @@ export interface AccountCreateForm {
   oauthFlowId: string
   oauthAuthUrl: string
   oauthCallback: string
+  proxyMode: string
+  proxyUrl: string
 }
 
 export function emptyAccountCreateForm(): AccountCreateForm {
@@ -17,5 +19,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     oauthFlowId: '',
     oauthAuthUrl: '',
     oauthCallback: '',
+    proxyMode: 'direct',
+    proxyUrl: '',
   }
 }

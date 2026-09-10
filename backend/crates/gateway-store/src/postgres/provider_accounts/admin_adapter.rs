@@ -702,6 +702,15 @@ impl AccountStore for PgAdminAccountStore {
                 "invalid provider account ID",
             )
         })?;
+        let mut changed_fields = vec![
+            "enabled".to_owned(),
+            "concurrency_limit".to_owned(),
+            "weight".to_owned(),
+            "groups".to_owned(),
+        ];
+        if command.outbound_proxy.is_some() {
+            changed_fields.push("outbound_proxy".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
@@ -710,17 +719,13 @@ impl AccountStore for PgAdminAccountStore {
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
                 group_ids: command.group_ids,
+                outbound_proxy: command.outbound_proxy,
                 audit: mutation_audit(
                     context,
                     "update",
                     "provider_account",
                     &command.account_id,
-                    vec![
-                        "enabled".to_owned(),
-                        "concurrency_limit".to_owned(),
-                        "weight".to_owned(),
-                        "groups".to_owned(),
-                    ],
+                    changed_fields,
                 ),
             })
             .await
@@ -790,6 +795,15 @@ impl AccountStore for PgAdminAccountStore {
         } else {
             "provider_accounts".to_owned()
         };
+        let mut changed_fields = vec![
+            "enabled".to_owned(),
+            "concurrency_limit".to_owned(),
+            "weight".to_owned(),
+            "groups".to_owned(),
+        ];
+        if command.outbound_proxy.is_some() {
+            changed_fields.push("outbound_proxy".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
@@ -798,17 +812,13 @@ impl AccountStore for PgAdminAccountStore {
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
                 group_ids: command.group_ids,
+                outbound_proxy: command.outbound_proxy,
                 audit: mutation_audit(
                     context,
                     "batch_update",
                     "provider_account",
                     &audit_target,
-                    vec![
-                        "enabled".to_owned(),
-                        "concurrency_limit".to_owned(),
-                        "weight".to_owned(),
-                        "groups".to_owned(),
-                    ],
+                    changed_fields,
                 ),
             })
             .await

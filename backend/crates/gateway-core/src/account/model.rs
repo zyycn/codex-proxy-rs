@@ -654,7 +654,7 @@ const fn status_projection(status: AccountStatus) -> AccountStatusProjection {
     }
 }
 
-/// 不含 secret 的账号持久事实。
+/// 账号持久事实；代理认证信息只通过显式 secret accessor 读取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccount {
     id: ProviderAccountId,
@@ -676,6 +676,7 @@ pub struct ProviderAccount {
     access_token_expires_at: Option<SystemTime>,
     next_refresh_at: Option<SystemTime>,
     has_refresh_token: bool,
+    outbound_proxy: Option<super::OutboundProxy>,
 }
 
 impl ProviderAccount {
@@ -710,6 +711,7 @@ impl ProviderAccount {
             access_token_expires_at,
             next_refresh_at: None,
             has_refresh_token: false,
+            outbound_proxy: None,
         }
     }
 
@@ -724,6 +726,17 @@ impl ProviderAccount {
         self.upstream_account_id = upstream_account_id;
         self.plan_type = plan_type;
         self
+    }
+
+    #[must_use]
+    pub fn with_outbound_proxy(mut self, proxy: Option<super::OutboundProxy>) -> Self {
+        self.outbound_proxy = proxy;
+        self
+    }
+
+    #[must_use]
+    pub const fn outbound_proxy(&self) -> Option<&super::OutboundProxy> {
+        self.outbound_proxy.as_ref()
     }
 
     #[must_use]

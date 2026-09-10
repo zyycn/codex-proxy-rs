@@ -87,6 +87,7 @@ pub struct TokenVerificationContext<'a> {
     userinfo_endpoint: &'a Url,
     signing_algorithms: &'a [String],
     expected_nonce: Option<&'a SecretValue>,
+    outbound_proxy: Option<&'a gateway_core::account::OutboundProxy>,
 }
 
 impl<'a> TokenVerificationContext<'a> {
@@ -107,7 +108,20 @@ impl<'a> TokenVerificationContext<'a> {
             userinfo_endpoint,
             signing_algorithms,
             expected_nonce,
+            outbound_proxy: None,
         }
+    }
+
+    pub(crate) fn with_outbound_proxy(
+        mut self,
+        proxy: Option<&'a gateway_core::account::OutboundProxy>,
+    ) -> Self {
+        self.outbound_proxy = proxy;
+        self
+    }
+
+    pub(crate) fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
+        self.outbound_proxy
     }
 
     /// 返回正在验证的流程。

@@ -119,6 +119,7 @@ flowchart LR
 
 `engine::observation` 统一维护单次响应的用量、费用、时间和响应 ID，并负责重试前清理；协调器继续
 独占发送、提交、重试和终结顺序。Provider 上报费用优先于本地估算，丢弃的 attempt 不得污染最终计量。
+Client Key 费用账本独立累计各次 attempt 的实际费用，不能因请求重试而清空已产生的费用或未知计费状态。
 
 ## 4. 数据面请求生命周期
 
@@ -134,11 +135,13 @@ sequenceDiagram
   A->>E: Operation + client context
   E->>E: freeze snapshot and compile routing plan
   E->>S: enqueue request / attempt observations
+  E->>S: check Key budget and persist pending charge
   E->>P: one candidate, one credential, one attempt
   P-->>E: cold canonical stream + raw wire
   E->>E: enforce send and downstream commit barriers
   E-->>A: committed response stream
   A-->>C: JSON / SSE / WebSocket
+  E->>S: settle charge idempotently
   E->>S: enqueue terminal observation and metering
 ```
 
@@ -176,6 +179,20 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用。
 - 请求画像以配置为启动基线。OpenAI Desktop 与 xAI CLI 的官方版本检查只更新各自负责的运行时画像，
   不回写 `config.yaml`。
+
+### 账号出站代理
+
+出站代理属于账号配置，由各 Provider 在推理、OAuth 服务端交换/刷新、额度、目录和资料等请求中统一使用。
+指定代理不可用时请求失败，不退回直连；未配置时直连，不继承进程的全局代理环境变量，TLS 仍验证证书。
+用户浏览器访问第三方授权页时的出口不受网关设置控制。
+
+连接池按出口隔离。修改代理推进配置 revision，使后续请求使用新出口；已执行请求可沿原连接完成。
+代理变更不推进 `credential_revision`，不会使进行中的令牌刷新因凭据版本冲突而丢失结果。
+
+导入器在认证交换前解析并校验账号出口。sub2api 的代理引用转换为账号上的代理 URL，不创建共享代理资源；
+其 SOCKS5 配置按远端 DNS 语义转换为 SOCKS5H。账号导入只迁移账号及出口，不迁移下游 Key、余额或历史用量。
+代理认证信息仅通过敏感账号导出返回，列表、详情、Debug 和普通审计不得暴露；数据库及备份按凭据保护。
+输入字段、协议支持与导入校验见 [账号 API](api.md#5-账号)。
 
 ### Codex 原生生图与认证
 
@@ -228,6 +245,28 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 
 会话亲和是优先选择提示，不是硬账号绑定；native continuation 才携带不可跨越的 owner 约束。
 
+### Client Key 限额与结算
+
+日金额、七天金额、并发和 RPM 按 Client Key 跨账号、跨 Provider 合计，零表示不限；修改限额不重置已用金额。
+Core 负责准入与结算时序，Store 持久化费用账本，Admin 负责限额配置及带审计的费用核账。
+
+- 日窗口按北京时间零点划分；七天窗口从首次准入当天零点开始，到期后由下一次使用重新开启，不固定为周一。
+- 金额优先使用 Provider 上报的 USD，否则按现有模型价格估算；订阅账号的估算费用不代表上游订阅账单。
+  费用归属请求完成时间，跨日请求计入完成日，延迟写入或核账仍保留原完成时间。
+- 准入检查已结算金额，不预占未来费用。达到任一金额阈值后拒绝新请求，已准入请求仍可完成并使总额超过阈值。
+- SSE 持有并发名额直到终态；WebSocket 每个 `response.create` 独立准入，空闲连接不占名额。
+  换号和内部重试复用同一名额，Key 与账号并发上限同时生效；预算拒绝或启动失败释放名额。
+
+每次计费请求在发送上游前持久化待结算记录。完成、失败、取消和断连使用同一结算路径，以网关请求 ID
+保证幂等；明确未发送的失败按零结算，已发送或可能已发送但没有可信费用的请求保留未知状态。
+未知费用或超过请求期限仍未结算的记录阻止受限 Key 接受新的计费请求，需管理员确认金额并填写核账原因；
+零金额也必须显式确认。限额或核账阻断不会修改 Key 的管理员启停状态。
+
+结算写入失败时，进程内保留精确费用，在同一 Key 下次请求前重试；进程崩溃后依靠持久化待结算记录要求核账，
+不能把遗失费用按零放行。PostgreSQL 不可用时拒绝所有新的计费请求，Redis 继续管理并发/RPM 租约。
+账本独立于可丢弃的请求观测日志，日志清理不重置金额；费用事件保留至删除 Key，已有日志不会回填为账本费用。
+字段与错误合同见 [Client Key API](api.md#7-client-key)。
+
 ## 7. 控制面与 revision
 
 管理写入遵循统一流程：
@@ -254,6 +293,7 @@ PostgreSQL 周期对账才是正确性基础。
 | 状态 | 唯一权威 | 说明 |
 | --- | --- | --- |
 | 账号、credential、分组、Client Key、设置、审计、请求与备份记录 | PostgreSQL | 业务持久化事实 |
+| Client Key 金额窗口与费用事件 | PostgreSQL | 准入与幂等结算的权威账本，独立于请求观测与日志保留策略 |
 | admission、lease、cooldown、circuit、会话亲和、continuation、OAuth pending、目录 cache | Redis | 可重建、可过期的协调状态 |
 | 日志、OAuth 恢复记录、在线更新状态、备份暂存 | `.runtime/` | 部署节点本地运行文件 |
 | 重置卡库存与消费结果 | OpenAI upstream | 后端不建立本地卡库存；前端只保留当前浏览器会话的最近查询 |

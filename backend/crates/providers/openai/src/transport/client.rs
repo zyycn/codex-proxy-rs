@@ -45,13 +45,20 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
-type ReqwestClientCacheKey = Option<String>;
+type ReqwestClientCacheKey = (Option<String>, String);
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
 
 /// 构建带缓存、自动协商 HTTP/2 的 reqwest Client。
 pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
+    build_account_http_client("", None)
+}
+
+pub fn build_account_http_client(
+    account_id: &str,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+) -> Result<Client, CustomCaError> {
     super::tls::ensure_rustls_provider();
-    let cache_key = custom_ca_env_cache_key();
+    let cache_key = (custom_ca_env_cache_key(), egress_key(account_id, proxy));
     static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(client) = cache
@@ -62,7 +69,7 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
         return Ok(client.clone());
     }
 
-    let builder = Client::builder()
+    let mut builder = Client::builder()
         .use_rustls_tls()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -73,11 +80,33 @@ pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
         .http2_keep_alive_interval(Duration::from_secs(30))
         .http2_keep_alive_timeout(Duration::from_secs(5))
         .http2_keep_alive_while_idle(true);
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(
+            reqwest::Proxy::all(proxy.expose_url())
+                .map_err(|_| CustomCaError::ProxyConfiguration)?,
+        );
+    }
     let client = build_reqwest_client_with_custom_ca(builder)?;
     let mut clients = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if clients.len() >= 256 {
+        clients.clear();
+    }
     Ok(clients.entry(cache_key).or_insert(client).clone())
+}
+
+fn egress_key(account_id: &str, proxy: Option<&gateway_core::account::OutboundProxy>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(account_id.as_bytes());
+    hash.update([0]);
+    hash.update(
+        proxy
+            .map_or("direct", |proxy| proxy.expose_url())
+            .as_bytes(),
+    );
+    hex::encode(hash.finalize())
 }
 
 // ---------------------------------------------------------------------------
@@ -599,11 +628,36 @@ pub struct CodexBackendJsonResponse {
 #[derive(Clone)]
 pub struct CodexBackendClient {
     pub(super) client: Client,
+    pub(super) direct_client: Client,
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
     pub(super) websocket_origin_breaker: WebSocketOriginBreaker,
     pub(super) websocket_origin_key: String,
+    pub(super) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+    pub(super) egress_key: String,
+}
+
+impl CodexBackendClient {
+    pub fn for_account(
+        &self,
+        account: &gateway_core::account::ProviderAccount,
+    ) -> Result<Self, CodexClientError> {
+        let mut client = self.clone();
+        client.outbound_proxy = account.outbound_proxy().cloned();
+        client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
+        client.websocket_origin_key = format!(
+            "{}:{}",
+            websocket_origin_key(&self.base_url),
+            client.egress_key
+        );
+        client.client = if account.outbound_proxy().is_some() {
+            build_account_http_client(account.id().as_str(), account.outbound_proxy())?
+        } else {
+            self.direct_client.clone()
+        };
+        Ok(client)
+    }
 }
 
 /// 已完成账号级 opening 准备、但尚未发送 payload 的 transport。

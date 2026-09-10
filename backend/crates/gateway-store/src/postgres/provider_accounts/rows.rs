@@ -120,6 +120,7 @@ pub(crate) fn parse_error_reason(value: Option<String>) -> StoreResult<Option<Ac
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
+    pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub id: String,
     pub provider_kind: String,
     pub name: String,
@@ -167,6 +168,7 @@ impl fmt::Debug for ProviderAccountRecord {
 
 #[derive(Clone)]
 pub struct NewProviderAccount {
+    pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub id: String,
     pub provider_kind: String,
     pub name: String,
@@ -307,6 +309,7 @@ impl fmt::Debug for RotateProviderAccount {
 
 #[derive(Debug, Clone)]
 pub struct BatchUpdateProviderAccountsAdmin {
+    pub outbound_proxy: Option<Option<gateway_core::account::OutboundProxy>>,
     pub account_ids: Vec<String>,
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
@@ -372,7 +375,7 @@ impl ProviderAccountStateUpdate {
     }
 }
 
-pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
+pub(crate) const ACCOUNT_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
@@ -380,7 +383,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select id, provider_kind, name, email, 
             credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
-pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, email, upstream_user_id,
+pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
@@ -390,7 +393,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select id, provider_kind, name, 
      where id = any($1::text[]) and provider_kind = $2
      order by id";
 
-pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select id, provider_kind, name, email, upstream_user_id,
+pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
@@ -465,6 +468,7 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_message,
     )
     .with_scheduling(summary.concurrency_limit, summary.weight)
+    .with_outbound_proxy(summary.outbound_proxy)
     .with_refresh_schedule(
         summary.has_refresh_token,
         summary.next_refresh_at.map(Into::into),
@@ -523,6 +527,12 @@ pub(crate) fn account_summary_from_row(
         .and_then(AccountWeight::new)
         .ok_or_else(|| invalid("invalid weight"))?;
     Ok(ProviderAccountSummary {
+        outbound_proxy: get::<Option<String>>(&row, "outbound_proxy_url")?
+            .map(|url| {
+                gateway_core::account::OutboundProxy::parse(&url)
+                    .map_err(|_| invalid("invalid outbound proxy"))
+            })
+            .transpose()?,
         id: get(&row, "id")?,
         provider_kind: get(&row, "provider_kind")?,
         name: get(&row, "name")?,

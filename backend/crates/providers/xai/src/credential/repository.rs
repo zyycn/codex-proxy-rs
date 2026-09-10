@@ -274,7 +274,7 @@ impl GrokCredentialAdmin {
             if let Some(email) = loaded.account.email() {
                 credentials.insert("email".to_owned(), Value::String(email.to_owned()));
             }
-            exported_accounts.push(serde_json::json!({
+            let mut exported = serde_json::json!({
                 "name": loaded.account.name(),
                 "platform": "grok",
                 "type": "oauth",
@@ -285,7 +285,11 @@ impl GrokCredentialAdmin {
                     .account
                     .email()
                     .map_or_else(|| serde_json::json!({}), |email| serde_json::json!({"email": email})),
-            }));
+            });
+            if let Some(proxy) = loaded.account.outbound_proxy() {
+                exported["outboundProxyUrl"] = Value::String(proxy.expose_url().to_owned());
+            }
+            exported_accounts.push(exported);
         }
         Ok(GrokAccountExport(serde_json::json!({
             "version": 1,

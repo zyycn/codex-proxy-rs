@@ -22,6 +22,73 @@ use crate::support::{TestLeaseCoordinator, runtime_policy};
 
 struct UnusedRefresher;
 
+#[tokio::test]
+async fn sub2api_import_resolves_distinct_proxy_bindings_and_encodes_credentials() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let prepared = service.prepare_import_document(serde_json::json!({"data": {
+        "accounts": [
+            {"name": "a", "platform": "openai", "type": "oauth", "proxy_key": "a", "credentials": {"access_token": test_jwt(serde_json::json!({"https://api.openai.com/auth": {"chatgpt_user_id": "user-a"}}))}},
+            {"name": "b", "platform": "openai", "type": "oauth", "proxy_key": "b", "credentials": {"access_token": test_jwt(serde_json::json!({"https://api.openai.com/auth": {"chatgpt_user_id": "user-b"}}))}},
+            {"name": "direct", "platform": "openai", "type": "oauth", "credentials": {"access_token": test_jwt(serde_json::json!({"https://api.openai.com/auth": {"chatgpt_user_id": "user-c"}}))}}
+        ],
+        "proxies": [
+            {"proxy_key": "a", "protocol": "http", "host": "127.0.0.1", "port": 18080, "username": "user@a", "password": "p:a/ss", "status": "active"},
+            {"proxy_key": "b", "protocol": "socks5", "host": "::1", "port": 1080, "status": "active", "fallback_mode": "none"}
+        ]
+    }})).await.unwrap();
+    assert_eq!(prepared.accounts().len(), 3);
+    let first = prepared.accounts()[0].account.outbound_proxy().unwrap();
+    assert_eq!(first.endpoint(), "http://127.0.0.1:18080/");
+    assert!(first.expose_url().contains("user%40a:p%3Aa%2Fss@"));
+    assert_eq!(
+        prepared.accounts()[1]
+            .account
+            .outbound_proxy()
+            .unwrap()
+            .endpoint(),
+        "socks5h://[::1]:1080"
+    );
+    assert!(prepared.accounts()[2].account.outbound_proxy().is_none());
+    assert!(!format!("{prepared:?}").contains("p:a/ss"));
+}
+
+#[tokio::test]
+async fn sub2api_invalid_proxy_bindings_are_rejected_before_any_token_refresh() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let proxy = serde_json::json!({"proxy_key": "bound", "protocol": "http", "host": "127.0.0.1", "port": 18080, "status": "active"});
+    let mut cases = vec![
+        serde_json::json!([]),
+        serde_json::json!([proxy.clone(), proxy.clone()]),
+    ];
+    for (field, value) in [
+        ("status", serde_json::json!("inactive")),
+        ("expires_at", serde_json::json!(2000000000)),
+        ("fallback_mode", serde_json::json!("direct")),
+        ("port", serde_json::json!(0)),
+    ] {
+        let mut invalid = proxy.clone();
+        invalid[field] = value;
+        cases.push(serde_json::json!([invalid]));
+    }
+    for proxies in cases {
+        let result = service.prepare_import_document(serde_json::json!({
+            "accounts": [
+                {"platform": "openai", "type": "oauth", "credentials": {"refresh_token": "must-not-refresh"}},
+                {"platform": "openai", "type": "oauth", "proxy_key": "bound", "credentials": {"access_token": "at"}}
+            ], "proxies": proxies
+        })).await;
+        assert!(result.is_err());
+    }
+}
+
 #[async_trait]
 impl TokenRefresher for UnusedRefresher {
     async fn refresh(&self, _refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
@@ -675,4 +742,42 @@ async fn oauth_import_rejects_legacy_bare_token_field() {
         error,
         provider_openai::credential::CodexCredentialAdminError::InvalidCredential
     );
+}
+
+#[tokio::test]
+async fn pat_import_uses_account_proxy_without_direct_fallback() {
+    for status in [200, 503] {
+        let origin = MockServer::start().await;
+        let proxy = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/accounts/v1/user-auth-credential/whoami"))
+            .and(header("authorization", "Bearer at-proxy-token"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(pat_identity()))
+            .expect(1)
+            .mount(&proxy)
+            .await;
+        let imported = pat_service(&origin)
+            .prepare_import_document(serde_json::json!({
+                "accessToken": "at-proxy-token",
+                "outboundProxyUrl": proxy.uri(),
+            }))
+            .await;
+        if status == 200 {
+            let prepared = imported.expect("PAT validated through account proxy");
+            assert_eq!(
+                prepared.accounts()[0].account.upstream_user_id(),
+                Some("pat-user")
+            );
+            assert!(prepared.accounts()[0].account.outbound_proxy().is_some());
+        } else {
+            assert!(imported.is_err(), "proxy failure must abort PAT import");
+        }
+        assert!(
+            origin
+                .received_requests()
+                .await
+                .expect("origin requests")
+                .is_empty()
+        );
+    }
 }

@@ -619,6 +619,7 @@ fn prepared_create(
         credential,
     } = prepared;
     Ok(PreparedCredentialCreate {
+        outbound_proxy: account.outbound_proxy().cloned(),
         account_id: account.id().clone(),
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
@@ -722,6 +723,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         revision,
         account.access_token_expires_at.map(SystemTime::from),
     )
+    .with_outbound_proxy(account.outbound_proxy.clone())
     .with_profile(
         account.email.clone(),
         account.upstream_account_id.clone(),

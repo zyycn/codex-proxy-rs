@@ -30,6 +30,7 @@ use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
 use crate::lifecycle::CancellationToken;
+use crate::metering::Decimal;
 use crate::operation::{Operation, ProviderSessionState};
 use crate::routing::RoutingPlan;
 use futures::future::Fuse;
@@ -166,6 +167,9 @@ where
             request_id,
             client_api_key_ref,
             observation: ResponseObservation::new(timing_started_at),
+            budget_prior_attempts_usd: Some(Decimal::ZERO),
+            budget_attempt_send_state: UpstreamSendState::NotSent,
+            budget_attempt_already_counted: false,
             trace,
             deadline,
             deadline_timer: Delay::new(
@@ -197,6 +201,7 @@ where
             delivery_pending: false,
             upstream_complete: false,
             finalized: false,
+            finalized_at: None,
             image_generation_requested,
             last_retryable_failure: None,
             last_retryable_failure_events: Vec::new(),
@@ -253,6 +258,9 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
     observation: ResponseObservation,
+    budget_prior_attempts_usd: Option<Decimal>,
+    budget_attempt_send_state: UpstreamSendState,
+    budget_attempt_already_counted: bool,
     trace: TraceContext,
     deadline: SystemTime,
     /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建。
@@ -288,6 +296,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     delivery_pending: bool,
     upstream_complete: bool,
     finalized: bool,
+    finalized_at: Option<SystemTime>,
     image_generation_requested: bool,
     /// 最近一次为无感恢复而被丢弃的原始上游错误；只在后续空选路时成为终态。
     last_retryable_failure: Option<ProviderError>,
@@ -473,6 +482,34 @@ where
     #[must_use]
     pub const fn is_finalized(&self) -> bool {
         self.finalized
+    }
+
+    #[must_use]
+    pub fn budget_charge(&self) -> super::budget::ClientBudgetCharge {
+        let amount_usd = self
+            .budget_prior_attempts_usd
+            .zip(self.budget_attempt_usd())
+            .and_then(|(prior, current)| prior.checked_add(current));
+        super::budget::ClientBudgetCharge {
+            request_id: self.request_id.clone(),
+            amount_usd,
+            completed_at: self.finalized_at.unwrap_or_else(SystemTime::now),
+        }
+    }
+
+    fn budget_attempt_usd(&self) -> Option<Decimal> {
+        if self.budget_attempt_already_counted {
+            return Some(Decimal::ZERO);
+        }
+        self.observation
+            .cost
+            .total()
+            .filter(|money| money.currency().as_str() == "USD")
+            .map(crate::metering::Money::amount)
+            .or_else(|| {
+                (self.budget_attempt_send_state == UpstreamSendState::NotSent)
+                    .then_some(Decimal::ZERO)
+            })
     }
 
     /// 返回截至当前已完成的实际上游调用结果。
@@ -749,6 +786,8 @@ where
             }),
         );
         let provider_request = ProviderRequest::new(self.operation.clone(), candidate.clone());
+        // Cancellation while a provider is opening cannot prove the request was never sent.
+        self.budget_attempt_send_state = UpstreamSendState::Ambiguous;
         let stream = match poll_provider(
             provider,
             provider_request,
@@ -772,6 +811,7 @@ where
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
                 Err(error) => {
+                    self.budget_attempt_send_state = error.send_state();
                     record_trace_error(&attempt_trace, &error);
                     if self.prepare_unavailable_native_continuation_replay(&error) {
                         return Ok(Some(PullOutcome::AttemptDiscarded));
@@ -800,6 +840,7 @@ where
                         let mut events = std::mem::take(&mut self.last_retryable_failure_events);
                         if !events.is_empty() {
                             self.observe_atomic_terminal_events(&mut events);
+                            self.budget_attempt_already_counted = true;
                             return Ok(Some(PullOutcome::TerminalFailure {
                                 events,
                                 error: last_failure,
@@ -1027,6 +1068,7 @@ where
                 .await;
             }
             current.send_observed = true;
+            self.budget_attempt_send_state = UpstreamSendState::Sent;
             self.send_state_watermark = UpstreamSendState::Sent;
         }
     }
@@ -1066,6 +1108,7 @@ where
             error.send_state()
         };
         let send_state = self.raise_send_watermark(attempt_send_state);
+        self.budget_attempt_send_state = attempt_send_state;
         if self.request_persisted {
             best_effort_store_write(
                 "mark_send_state",
@@ -1143,6 +1186,11 @@ where
             "sendState": format!("{attempt_send_state:?}"),
         }));
         if retryable {
+            for event in &atomic_client_events {
+                for fact in event.canonical_facts() {
+                    self.observation.observe_event(fact);
+                }
+            }
             // 普通 clone 只保留稳定事实；原始 wire/HTTP response 由 request-local
             // 所有权保留到下一次 attempt 成功，或最终空选路时返回客户端。
             let persistence_error = self.request_persisted.then(|| error.clone());
@@ -1317,6 +1365,13 @@ where
     }
 
     fn reset_uncommitted_observations(&mut self) {
+        // Response facts are attempt-local; the key must also pay for discarded attempts.
+        self.budget_prior_attempts_usd = self
+            .budget_prior_attempts_usd
+            .zip(self.budget_attempt_usd())
+            .and_then(|(prior, current)| prior.checked_add(current));
+        self.budget_attempt_send_state = UpstreamSendState::NotSent;
+        self.budget_attempt_already_counted = false;
         self.observation.reset_for_attempt();
         self.upstream_complete = false;
     }
@@ -1326,6 +1381,7 @@ where
             return Ok(());
         }
         let completed_at = SystemTime::now();
+        self.finalized_at = Some(completed_at);
         self.observation.finish();
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current
@@ -1505,11 +1561,12 @@ where
                 "sendState": format!("{:?}", finalization.send_state), "attempts": self.attempts,
             }),
         );
+        let completed_at = SystemTime::now();
+        self.finalized_at = Some(completed_at);
         if !self.request_persisted {
             self.finalized = true;
             return Ok(());
         }
-        let completed_at = SystemTime::now();
         self.observation.finish();
         let upstream_request_id = self.current.as_ref().and_then(|current| {
             current

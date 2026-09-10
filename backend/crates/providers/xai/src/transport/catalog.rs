@@ -44,6 +44,7 @@ pub struct GrokModelCatalogSession {
     user_id: SecretValue,
     email: Option<SecretValue>,
     wire_profile: XaiWireProfileState,
+    outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 impl GrokModelCatalogSession {
@@ -71,7 +72,17 @@ impl GrokModelCatalogSession {
             user_id,
             email,
             wire_profile,
+            outbound_proxy: None,
         })
+    }
+
+    #[must_use]
+    pub fn with_outbound_proxy(
+        mut self,
+        proxy: Option<gateway_core::account::OutboundProxy>,
+    ) -> Self {
+        self.outbound_proxy = proxy;
+        self
     }
 }
 
@@ -92,6 +103,7 @@ impl fmt::Debug for GrokModelCatalogSession {
 pub struct GrokModelCatalogRequest {
     endpoint: Url,
     headers: Vec<GrokHeader>,
+    pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 impl GrokModelCatalogRequest {
@@ -115,7 +127,11 @@ impl GrokModelCatalogRequest {
         if let Some(email) = &session.email {
             headers.push(GrokHeader::sensitive("x-email", email.clone()));
         }
-        Ok(Self { endpoint, headers })
+        Ok(Self {
+            endpoint,
+            headers,
+            outbound_proxy: session.outbound_proxy.clone(),
+        })
     }
 
     /// 返回固定官方 `/v1/models` URL。
@@ -244,6 +260,7 @@ pub trait GrokModelCatalogTransport: Send + Sync {
 pub struct GrokBillingRequest {
     endpoint: Url,
     headers: Vec<GrokHeader>,
+    pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 impl GrokBillingRequest {
@@ -267,7 +284,11 @@ impl GrokBillingRequest {
         if let Some(email) = &session.email {
             headers.push(GrokHeader::sensitive("x-email", email.clone()));
         }
-        Ok(Self { endpoint, headers })
+        Ok(Self {
+            endpoint,
+            headers,
+            outbound_proxy: session.outbound_proxy.clone(),
+        })
     }
 
     /// 返回固定官方 `/v1/billing?format=credits` URL。

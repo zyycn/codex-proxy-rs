@@ -27,8 +27,10 @@ use gateway_admin::{
     ports::store::{AdminStoreResult, ClientKeyStore},
 };
 use gateway_core::{
+    engine::budget::{ClientBudgetLimits, ClientBudgetStatus},
     engine::execution::ClientApiKeyUsageSink,
     lifecycle::CancellationToken,
+    metering::Decimal,
     policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
     routing::{AccountGroupId, ProviderKind},
     task::{DaemonTask, WorkerTaskError},
@@ -114,6 +116,7 @@ pub struct ClientApiKeyRecord {
     pub enabled: bool,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
+    pub budget: ClientBudgetStatus,
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -271,6 +274,7 @@ pub struct NewClientApiKey {
     pub key: String,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
+    pub budget: ClientBudgetLimits,
 }
 
 impl fmt::Debug for NewClientApiKey {
@@ -301,6 +305,8 @@ pub struct UpdateClientApiKeyDetails {
     pub group_ids: Vec<String>,
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
+    pub daily_limit_usd: Option<Decimal>,
+    pub weekly_limit_usd: Option<Decimal>,
 }
 
 impl UpdateClientApiKeyDetails {
@@ -383,6 +389,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
             None
         };
         load_client_key_memberships(&self.pool, &mut items).await?;
+        super::client_budgets::load_client_key_budgets(&self.pool, &mut items).await?;
         Ok(ClientApiKeyPage {
             items,
             total,
@@ -406,7 +413,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
 
     async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>> {
         require_nonempty(ENTITY, "id", id)?;
-        sqlx::query(
+        let record = sqlx::query(
             "select k.id, k.name, k.label, left(k.key, 10) as prefix, k.enabled,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, coalesce(groups.groups, '[]'::jsonb) as groups,
@@ -445,7 +452,16 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .map_err(|_| postgres_unavailable("get client API key"))?
         .as_ref()
         .map(client_record_from_row)
-        .transpose()
+        .transpose()?;
+        let Some(mut record) = record else {
+            return Ok(None);
+        };
+        super::client_budgets::load_client_key_budgets(
+            &self.pool,
+            std::slice::from_mut(&mut record),
+        )
+        .await?;
+        Ok(Some(record))
     }
 
     async fn touch_client_api_keys(
@@ -662,6 +678,22 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn unresolved_charges(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::client_keys::UnresolvedClientCharge>> {
+        self.required_record(id).await?;
+        super::client_budgets::unresolved_charges(&self.keys.pool, id).await
+    }
+
+    async fn reconcile_charge(
+        &self,
+        command: gateway_admin::model::client_keys::ReconcileClientCharge,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        let revision = self.revision().await?;
+        super::client_budgets::reconcile_charge(&self.keys.pool, command, context, revision).await
+    }
     async fn list_client_keys(
         &self,
         query: AdminClientKeyListQuery,
@@ -719,6 +751,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         .map(|id| id.as_str().to_owned())
                         .collect(),
                     key: command.plaintext,
+                    budget: command.budget,
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
                 },
@@ -735,6 +768,8 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         "enabled",
                         "max_concurrency",
                         "requests_per_minute",
+                        "daily_limit_usd",
+                        "weekly_limit_usd",
                     ]
                     .into_iter()
                     .map(str::to_owned)
@@ -766,6 +801,8 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         .collect(),
                     max_concurrency: command.limits.max_concurrency,
                     requests_per_minute: command.limits.requests_per_minute,
+                    daily_limit_usd: command.daily_limit_usd,
+                    weekly_limit_usd: command.weekly_limit_usd,
                 },
                 mutation_audit(
                     context,
@@ -778,6 +815,8 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         "group_ids",
                         "max_concurrency",
                         "requests_per_minute",
+                        "daily_limit_usd",
+                        "weekly_limit_usd",
                     ]
                     .into_iter()
                     .map(str::to_owned)
@@ -942,6 +981,7 @@ fn admin_client_key_record(record: ClientApiKeyRecord) -> AdminStoreResult<Admin
             max_concurrency: record.max_concurrency,
             requests_per_minute: record.requests_per_minute,
         },
+        budget: record.budget,
         last_used_at: record.last_used_at,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -956,8 +996,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     sqlx::query(
         "insert into client_api_keys (
            id, name, label, key, enabled, max_concurrency, requests_per_minute,
-           last_used_at, created_at, updated_at
-         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now())",
+           last_used_at, created_at, updated_at, daily_limit_usd, weekly_limit_usd
+         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric)",
     )
     .bind(&key.id)
     .bind(&key.name)
@@ -965,6 +1005,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(&key.key)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
+    .bind(key.budget.daily_usd.canonical())
+    .bind(key.budget.weekly_usd.canonical())
     .execute(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("insert client API key in transaction"))?;
@@ -980,7 +1022,9 @@ pub(crate) async fn update_client_api_key_in_transaction(
     let result = sqlx::query(
         "update client_api_keys
          set name = $2, label = $3, max_concurrency = $4,
-             requests_per_minute = $5, updated_at = now()
+             requests_per_minute = $5, updated_at = now(),
+             daily_limit_usd = coalesce($6::text::numeric, daily_limit_usd),
+             weekly_limit_usd = coalesce($7::text::numeric, weekly_limit_usd)
          where id = $1",
     )
     .bind(&key.id)
@@ -988,6 +1032,8 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .bind(&key.label)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
+    .bind(key.daily_limit_usd.map(|amount| amount.canonical()))
+    .bind(key.weekly_limit_usd.map(|amount| amount.canonical()))
     .execute(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update client API key in transaction"))?;
@@ -1142,6 +1188,7 @@ fn client_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClientApiK
             row.try_get("requests_per_minute")
                 .map_err(|_| invalid("invalid requests per minute"))?,
         )?,
+        budget: ClientBudgetStatus::default(),
         last_used_at: row
             .try_get("last_used_at")
             .map_err(|_| invalid("invalid last used at"))?,

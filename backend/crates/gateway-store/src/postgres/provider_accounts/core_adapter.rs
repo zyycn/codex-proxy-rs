@@ -24,6 +24,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         )
         .map_err(core_store_error)?;
         self.insert_provider_account(NewProviderAccount {
+            outbound_proxy: account.account.outbound_proxy().cloned(),
             id: account.account.id().as_str().to_owned(),
             provider_kind: account.account.provider().as_str().to_owned(),
             name: account.account.name().to_owned(),

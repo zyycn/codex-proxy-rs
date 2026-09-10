@@ -38,3 +38,7 @@ strip = "symbols"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+[patch.crates-io]
+# Upstream SOCKS IPv6 fix; remove once a release includes hyperium/hyper-util#302.
+hyper-util = { git = "https://github.com/hyperium/hyper-util", rev = "191b1acf0a6b18e807e4abf5a6d4a7c47979ecd6" }

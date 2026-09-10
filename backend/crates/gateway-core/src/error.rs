@@ -975,6 +975,13 @@ pub struct GatewayError {
     message: &'static str,
     diagnostic: Option<Box<ProviderDiagnostic>>,
     client_visible_upstream_error: Option<ClientVisibleUpstreamError>,
+    client_details: Option<Box<GatewayClientErrorDetails>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct GatewayClientErrorDetails {
+    code: Option<&'static str>,
+    retry_after: Option<Duration>,
 }
 
 impl GatewayError {
@@ -986,7 +993,31 @@ impl GatewayError {
             message,
             diagnostic: None,
             client_visible_upstream_error: None,
+            client_details: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_client_code(mut self, code: &'static str) -> Self {
+        self.client_details
+            .get_or_insert_with(Default::default)
+            .code = Some(code);
+        self
+    }
+
+    #[must_use]
+    pub fn with_retry_after(mut self, delay: Duration) -> Self {
+        self.client_details
+            .get_or_insert_with(Default::default)
+            .retry_after = Some(delay);
+        self
+    }
+
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.client_details
+            .as_ref()
+            .and_then(|details| details.retry_after)
     }
 
     /// 将 Provider 错误归一为客户端无关错误。
@@ -1103,6 +1134,11 @@ impl GatewayError {
         self.client_visible_upstream_error
             .as_ref()
             .and_then(ClientVisibleUpstreamError::code)
+            .or_else(|| {
+                self.client_details
+                    .as_ref()
+                    .and_then(|details| details.code)
+            })
     }
 }
 

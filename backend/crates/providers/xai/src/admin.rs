@@ -431,7 +431,6 @@ impl ProviderAdmin for XaiAdminProvider {
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
         let document = GrokOAuthImportDocument::parse_json(&document)
             .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
-        let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
         let mut subjects = BTreeSet::new();
         let mut credentials = Vec::new();
         // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得
@@ -444,11 +443,16 @@ impl ProviderAdmin for XaiAdminProvider {
         for entry in document.into_entries() {
             let name = entry.name().to_owned();
             let email = entry.email().map(str::to_owned);
-            let tokens = match self
-                .oauth
-                .verify_imported_credential(&discovery, entry.into_candidate())
-                .await
-            {
+            let outbound_proxy = entry.outbound_proxy().cloned();
+            let oauth = self.oauth.with_outbound_proxy(outbound_proxy.clone());
+            let verified = async {
+                let discovery = oauth.discover().await?;
+                oauth
+                    .verify_imported_credential(&discovery, entry.into_candidate())
+                    .await
+            }
+            .await;
+            let tokens = match verified {
                 Ok(tokens) => tokens,
                 Err(error) => {
                     tracing::warn!(
@@ -493,6 +497,10 @@ impl ProviderAdmin for XaiAdminProvider {
                     continue;
                 }
             };
+            let prepared = NewProviderAccount {
+                account: prepared.account.with_outbound_proxy(outbound_proxy),
+                credential: prepared.credential,
+            };
             match prepared_create(prepared, Utc::now()) {
                 Ok(credential) => credentials.push(credential),
                 Err(error) => {
@@ -533,7 +541,12 @@ impl ProviderAdmin for XaiAdminProvider {
                 return Err(provider_error(ProviderAdminErrorKind::NotFound));
             }
         }
-        let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
+        let discovery = self
+            .oauth
+            .with_outbound_proxy(pending.outbound_proxy().cloned())
+            .discover()
+            .await
+            .map_err(map_oauth_error)?;
         let redirect = RedirectUriAllowlist::new([crate::OFFICIAL_REDIRECT_URI])
             .and_then(|allowlist| allowlist.authorize(crate::OFFICIAL_REDIRECT_URI))
             .map_err(|_| provider_error(ProviderAdminErrorKind::Internal))?;
@@ -623,9 +636,11 @@ impl ProviderAdmin for XaiAdminProvider {
                 rotation.expires_at,
             ),
         );
-        let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
-        let tokens = self
+        let oauth = self
             .oauth
+            .with_outbound_proxy(current.account.outbound_proxy().cloned());
+        let discovery = oauth.discover().await.map_err(map_oauth_error)?;
+        let tokens = oauth
             .verify_imported_credential(&discovery, candidate)
             .await
             .map_err(|error| map_failure_class(error.class()))?;
@@ -775,9 +790,28 @@ impl XaiAdminProvider {
         let grant = authorization
             .accept_authorization_input(callback_url)
             .map_err(map_oauth_error)?;
-        let discovery = self.oauth.discover().await.map_err(map_oauth_error)?;
-        let tokens = self
-            .oauth
+        let current = match stored.mutation.target() {
+            AuthorizationMutationTarget::Create { .. } => None,
+            AuthorizationMutationTarget::Reauthorize { account_id } => {
+                let current = self
+                    .accounts
+                    .load_current_credential(account_id)
+                    .await
+                    .map_err(map_store_error)?;
+                if current.account.provider() != &self.provider_kind {
+                    return Err(provider_error(ProviderAdminErrorKind::NotFound));
+                }
+                Some(current)
+            }
+        };
+        let proxy = current
+            .as_ref()
+            .map_or(stored.mutation.outbound_proxy(), |current| {
+                current.account.outbound_proxy()
+            });
+        let oauth = self.oauth.with_outbound_proxy(proxy.cloned());
+        let discovery = oauth.discover().await.map_err(map_oauth_error)?;
+        let tokens = oauth
             .exchange_authorization_code(&discovery, grant)
             .await
             .map_err(map_oauth_error)?;
@@ -798,17 +832,17 @@ impl XaiAdminProvider {
                         enabled: true,
                     })
                     .map_err(map_repository_error)?;
+                let prepared = NewProviderAccount {
+                    account: prepared
+                        .account
+                        .with_outbound_proxy(stored.mutation.outbound_proxy().cloned()),
+                    credential: prepared.credential,
+                };
                 PreparedAuthorizationCredential::Create(prepared_create(prepared, Utc::now())?)
             }
-            AuthorizationMutationTarget::Reauthorize { account_id } => {
-                let current = self
-                    .accounts
-                    .load_current_credential(account_id)
-                    .await
-                    .map_err(map_store_error)?;
-                if current.account.provider() != &self.provider_kind {
-                    return Err(provider_error(ProviderAdminErrorKind::NotFound));
-                }
+            AuthorizationMutationTarget::Reauthorize { .. } => {
+                let current =
+                    current.ok_or_else(|| provider_error(ProviderAdminErrorKind::Internal))?;
                 let prepared = verified_rotation(current, tokens)?;
                 PreparedAuthorizationCredential::Reauthorize(prepared_rotation(
                     prepared,
@@ -898,6 +932,7 @@ fn prepared_create(
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(Into::into),
         enabled: account.enabled(),
+        outbound_proxy: account.outbound_proxy().cloned(),
         credential_state: account.credential_state(),
         credential_observed_at: observed_at,
     })
@@ -998,6 +1033,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         revision,
         account.access_token_expires_at.map(SystemTime::from),
     )
+    .with_outbound_proxy(account.outbound_proxy.clone())
     .with_profile(
         account.email.clone(),
         account.upstream_account_id.clone(),

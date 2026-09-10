@@ -115,9 +115,13 @@ async fn pending_authorization(
     command: &StartAuthorization,
     resource: &'static str,
 ) -> Result<PendingAuthorizationMutation, AdminError> {
+    let mut proxy = command.outbound_proxy.clone();
     let target = match &command.reauthorization {
         Some(account_id) => {
-            required_credential(accounts, provider_kind, account_id, resource).await?;
+            proxy = required_credential(accounts, provider_kind, account_id, resource)
+                .await?
+                .credential
+                .outbound_proxy;
             AuthorizationMutationTarget::Reauthorize {
                 account_id: account_id.clone(),
             }
@@ -132,7 +136,8 @@ async fn pending_authorization(
         crate::model::provider_credentials::AuthorizationOwnerBinding::from_context(
             &command.context,
         ),
-    ))
+    )
+    .with_outbound_proxy(proxy))
 }
 
 fn validate_prepared_import(

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 import type { AccountGroup } from '@/api'
-import { Copy, Upload } from '@lucide/vue'
+import { Copy, DollarSign, KeyRound, Upload } from '@lucide/vue'
 import { computed } from 'vue'
 
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
@@ -34,12 +34,15 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
   <BaseModal
     v-model="open"
     :title="title"
-    description="设置调用方可用的账号分组、并发和每分钟请求上限"
     tone="info"
-    size="lg"
+    size="md"
     :dismissible="!saving"
   >
-    <BaseForm class="grid gap-5">
+    <template #icon>
+      <KeyRound class="text-cp-text" :size="20" aria-hidden="true" />
+    </template>
+
+    <BaseForm class="grid gap-6">
       <BaseFormItem label="名称" required>
         <BaseInput
           v-model="form.name"
@@ -67,20 +70,59 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
         />
       </BaseFormItem>
 
-      <div class="grid gap-4 sm:grid-cols-2">
-        <BaseFormItem label="最大并发" description="0 表示不限制">
+      <div class="grid gap-6 sm:grid-cols-2">
+        <BaseFormItem label="日限额">
+          <BaseInput
+            v-model="form.dailyLimitUsd"
+            type="number"
+            min="0"
+            step="any"
+            aria-label="日限额（美元）"
+            placeholder="不限制"
+            :disabled="saving"
+          >
+            <template #prefix>
+              <DollarSign class="size-4" aria-hidden="true" />
+            </template>
+          </BaseInput>
+        </BaseFormItem>
+        <BaseFormItem label="周限额">
+          <BaseInput
+            v-model="form.weeklyLimitUsd"
+            type="number"
+            min="0"
+            step="any"
+            aria-label="周限额（美元）"
+            placeholder="不限制"
+            :disabled="saving"
+          >
+            <template #prefix>
+              <DollarSign class="size-4" aria-hidden="true" />
+            </template>
+          </BaseInput>
+        </BaseFormItem>
+      </div>
+
+      <div class="grid gap-6 sm:grid-cols-2">
+        <BaseFormItem label="最大并发">
           <BaseInput
             v-model="form.maxConcurrency"
             type="number"
             aria-label="最大并发"
+            min="0"
+            step="1"
+            placeholder="不限制"
             :disabled="saving"
           />
         </BaseFormItem>
-        <BaseFormItem label="每分钟请求数" description="0 表示不限制">
+        <BaseFormItem label="每分钟请求数（RPM）">
           <BaseInput
             v-model="form.requestsPerMinute"
             type="number"
-            aria-label="每分钟请求数"
+            aria-label="每分钟请求数（RPM）"
+            min="0"
+            step="1"
+            placeholder="不限制"
             :disabled="saving"
           />
         </BaseFormItem>

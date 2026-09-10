@@ -74,8 +74,11 @@ export function useAccountOnboarding(options: {
       async () => {
         const input = await newAccountInput()
         const account = reauthorizingAccount.value
+        if (!account && createForm.value.proxyMode === 'proxy' && !createForm.value.proxyUrl.trim())
+          throw new Error('请输入代理 URL')
         const result = await startAccountOAuth({
           ...input,
+          outboundProxyUrl: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyUrl.trim() : undefined,
           ...(account
             ? {
                 accountId: account.id,

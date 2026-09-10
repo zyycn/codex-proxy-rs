@@ -253,7 +253,8 @@ impl GrokAccountSessionSelector {
                 return Err(GrokSessionSelectorError::InvalidSession);
             }
             let binding = GrokSessionBinding::new(selected_id.as_str())
-                .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
+                .map_err(|_| GrokSessionSelectorError::InvalidSession)?
+                .with_outbound_proxy(loaded.account.outbound_proxy().cloned());
             let upstream_user_id = loaded
                 .account
                 .upstream_user_id()

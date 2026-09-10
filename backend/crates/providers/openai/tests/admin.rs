@@ -1162,6 +1162,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        outbound_proxy: None,
         id: account.id().to_string(),
         provider_kind: account.provider().clone(),
         groups: Vec::new(),

@@ -283,7 +283,11 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
     let input = create_input("admin_projection", "subject-admin-projection");
     seed_input(&store, &input).await.expect("create account");
     let account = store.account(&input.account_id).expect("stored account");
-    let record = account_record(&account);
+    let mut record = account_record(&account);
+    let proxy =
+        gateway_core::account::OutboundProxy::parse("socks5h://user:pass@proxy.example:1080")
+            .unwrap();
+    record.outbound_proxy = Some(proxy.clone());
     let catalog_cache = Arc::new(TestCatalogCache::default());
     catalog_cache.seed("plan:standard", ["grok-4.5"]);
     let bundle = provider_xai::initialize(
@@ -356,6 +360,12 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
         document.get("type").and_then(Value::as_str),
         Some("oauth-account-bundle")
     );
+    let entries =
+        provider_xai::GrokOAuthImportDocument::parse_json(&serde_json::to_vec(document).unwrap())
+            .unwrap()
+            .into_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].outbound_proxy(), Some(&proxy));
 }
 
 #[tokio::test]
@@ -480,6 +490,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        outbound_proxy: None,
         id: account.id().to_string(),
         provider_kind: account.provider().clone(),
         groups: Vec::new(),

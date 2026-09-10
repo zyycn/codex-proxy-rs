@@ -144,6 +144,7 @@ impl fmt::Debug for PrepareCredentialImport {
 /// Provider 已验证、可由 Store 原子创建的一份 credential。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialCreate {
+    pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub account_id: ProviderAccountId,
     pub provider_kind: ProviderKind,
     pub name: String,
@@ -249,6 +250,7 @@ pub struct PendingAuthorizationMutation {
     provider_kind: ProviderKind,
     target: AuthorizationMutationTarget,
     owner_binding: AuthorizationOwnerBinding,
+    outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 impl PendingAuthorizationMutation {
@@ -262,6 +264,7 @@ impl PendingAuthorizationMutation {
             provider_kind,
             target,
             owner_binding,
+            outbound_proxy: None,
         }
     }
 
@@ -278,6 +281,19 @@ impl PendingAuthorizationMutation {
     #[must_use]
     pub const fn owner_binding(&self) -> &AuthorizationOwnerBinding {
         &self.owner_binding
+    }
+
+    #[must_use]
+    pub fn with_outbound_proxy(
+        mut self,
+        proxy: Option<gateway_core::account::OutboundProxy>,
+    ) -> Self {
+        self.outbound_proxy = proxy;
+        self
+    }
+
+    pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
+        self.outbound_proxy.as_ref()
     }
 }
 
@@ -300,7 +316,7 @@ impl PendingAuthorizationMutation {
             AuthorizationOwner::AdminApiKey => serde_json::json!({"kind": "admin_api_key"}),
             AuthorizationOwner::System => serde_json::json!({"kind": "system"}),
         };
-        Map::from_iter([
+        let mut document = Map::from_iter([
             (
                 "provider_kind".to_owned(),
                 Value::String(self.provider_kind.as_str().to_owned()),
@@ -311,7 +327,14 @@ impl PendingAuthorizationMutation {
                 "started_request_id".to_owned(),
                 Value::String(self.owner_binding.started_request_id().to_owned()),
             ),
-        ])
+        ]);
+        if let Some(proxy) = &self.outbound_proxy {
+            document.insert(
+                "outbound_proxy_url".to_owned(),
+                Value::String(proxy.expose_url().to_owned()),
+            );
+        }
+        document
     }
 
     /// 恢复 adapter 已确认版本为 v1 的中立事务字段。
@@ -341,6 +364,12 @@ impl PendingAuthorizationMutation {
             StoredAuthorizationOwnerV1::AdminApiKey => AuthorizationOwner::AdminApiKey,
             StoredAuthorizationOwnerV1::System => AuthorizationOwner::System,
         };
+        let proxy = document
+            .outbound_proxy_url
+            .as_deref()
+            .map(gateway_core::account::OutboundProxy::parse)
+            .transpose()
+            .map_err(|_| invalid())?;
         Ok(Self::new(
             provider_kind,
             target,
@@ -348,7 +377,8 @@ impl PendingAuthorizationMutation {
                 owner,
                 started_request_id: document.started_request_id,
             },
-        ))
+        )
+        .with_outbound_proxy(proxy))
     }
 }
 
@@ -359,6 +389,8 @@ struct StoredAuthorizationMutationV1 {
     target: StoredAuthorizationTargetV1,
     owner: StoredAuthorizationOwnerV1,
     started_request_id: String,
+    #[serde(default)]
+    outbound_proxy_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -382,6 +414,7 @@ pub struct StartAuthorization {
     pub context: MutationContext,
     pub name: String,
     pub reauthorization: Option<ProviderAccountId>,
+    pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 /// OAuth 流程启动结果。

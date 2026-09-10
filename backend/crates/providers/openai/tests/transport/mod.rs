@@ -45,6 +45,7 @@ use tokio_tungstenite::{
     },
 };
 
+mod account_proxy;
 mod canonical;
 mod catalog;
 mod client;

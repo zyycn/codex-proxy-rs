@@ -133,13 +133,16 @@ impl CodexCredentialProfileService {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
-        let (authorization, upstream_account_id) = self.account_authentication(account_id).await?;
+        let (authorization, upstream_account_id, account) =
+            self.account_authentication(account_id).await?;
         let request_id = format!("profile_statistics_{}", Uuid::now_v7().simple());
         let statistics = CodexBackendClient::new(
             self.http.clone(),
             self.base_url.clone(),
             self.profile.clone(),
         )
+        .for_account(&account)
+        .map_err(map_client_error)?
         .fetch_profile_statistics(CodexRequestContext::auxiliary(
             authorization.expose_secret(),
             upstream_account_id.as_deref(),
@@ -156,7 +159,14 @@ impl CodexCredentialProfileService {
     async fn account_authentication(
         &self,
         account_id: &ProviderAccountId,
-    ) -> Result<(SecretString, Option<String>), CodexProfileStatisticsError> {
+    ) -> Result<
+        (
+            SecretString,
+            Option<String>,
+            gateway_core::account::ProviderAccount,
+        ),
+        CodexProfileStatisticsError,
+    > {
         let account = self
             .repository
             .store()
@@ -187,6 +197,7 @@ impl CodexCredentialProfileService {
         Ok((
             authorization,
             account.upstream_account_id().map(str::to_owned),
+            account,
         ))
     }
 
@@ -202,9 +213,19 @@ impl CodexCredentialProfileService {
                 .image_url
                 .ok_or(CodexProfileAvatarError::Missing)?,
         };
-        let (authorization, upstream_account_id) = self.account_authentication(account_id).await?;
+        let (authorization, upstream_account_id, account) =
+            self.account_authentication(account_id).await?;
+        let http = if account.outbound_proxy().is_some() {
+            crate::transport::client::build_account_http_client(
+                account.id().as_str(),
+                account.outbound_proxy(),
+            )
+            .map_err(|_| CodexProfileAvatarError::TransportUnavailable)?
+        } else {
+            self.http.clone()
+        };
         fetch_profile_avatar(
-            &self.http,
+            &http,
             &self.base_url,
             &self.profile.snapshot(),
             &source,

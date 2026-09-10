@@ -11,6 +11,84 @@ use serde_json::json;
 use super::{AdminTestFixture, AdminTestState};
 
 #[test]
+fn budget_inputs_preserve_decimal_precision_and_omitted_updates() {
+    let payload = json!({"name": "budget", "groupIds": [], "maxConcurrency": 3,
+        "requestsPerMinute": 0, "dailyLimitUsd": "0.1234567891", "weeklyLimitUsd": "15"});
+    let command = serde_json::from_value::<CreateClientKeyRequest>(payload.clone())
+        .unwrap()
+        .into_command()
+        .unwrap();
+    assert_eq!(command.budget.daily_usd.canonical(), "0.1234567891");
+    assert_eq!(command.budget.weekly_usd.canonical(), "15");
+    assert_eq!(command.limits.max_concurrency, 3);
+    for field in ["dailyLimitUsd", "weeklyLimitUsd"] {
+        for invalid in ["-1", "NaN", "1e3", "10000000000", "0.00000000001", ""] {
+            let mut payload = payload.clone();
+            payload[field] = json!(invalid);
+            assert_eq!(
+                serde_json::from_value::<CreateClientKeyRequest>(payload)
+                    .unwrap()
+                    .into_command()
+                    .unwrap_err()
+                    .field(),
+                field
+            );
+        }
+    }
+    let mut update = payload;
+    update["id"] = json!("key_budget");
+    update.as_object_mut().unwrap().remove("dailyLimitUsd");
+    update["weeklyLimitUsd"] = json!("0");
+    let command = serde_json::from_value::<UpdateClientKeyRequest>(update)
+        .unwrap()
+        .into_command()
+        .unwrap();
+    assert_eq!(command.daily_limit_usd, None);
+    assert_eq!(
+        command.weekly_limit_usd,
+        Some(gateway_core::metering::Decimal::ZERO)
+    );
+}
+
+#[tokio::test]
+async fn budget_reconciliation_routes_require_an_admin_session() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    let router = client_keys::router::<AdminTestState>().with_state(fixture.state());
+    for (method, path, body) in [
+        (
+            "GET",
+            "/api/admin/client-keys/unresolved-charges?id=key_1",
+            "",
+        ),
+        (
+            "POST",
+            "/api/admin/client-keys/reconcile-charge",
+            r#"{"id":"key_1","requestId":"req_charge","amountUsd":"0","reason":"verified"}"#,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .header("x-request-id", "req_auth_budget")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[test]
 fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
     let unknown = serde_json::from_value::<ListClientKeysQuery>(json!({ "other": true }));
     let zero = serde_json::from_value::<ListClientKeysQuery>(json!({ "limit": 0 }))
@@ -207,6 +285,7 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         .single()
         .expect("valid time");
     let view = ClientKeyView::from(gateway_admin::model::client_keys::ClientKeyRecord {
+        budget: Default::default(),
         id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
         name: "visible".to_owned(),
         label: None,
@@ -238,6 +317,10 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
     assert_eq!(list["items"][0]["requestsPerMinute"], 60);
     assert!(list["items"][0].get("tokensPerMinute").is_none());
     assert!(list["items"][0].get("policyJson").is_none());
+    assert_eq!(list["items"][0]["dailyLimitUsd"], "0");
+    assert_eq!(list["items"][0]["weeklyLimitUsd"], "0");
+    assert_eq!(list["items"][0]["dailyUsedUsd"], "0");
+    assert_eq!(list["items"][0]["unresolvedRequests"], 0);
     assert_eq!(
         DateTime::parse_from_rfc3339(
             list["items"][0]["lastUsedAt"]

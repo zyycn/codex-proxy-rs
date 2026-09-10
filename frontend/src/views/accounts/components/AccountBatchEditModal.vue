@@ -7,6 +7,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import AccountProxyField from './AccountProxyField.vue'
 
 defineProps<{
   selectedCount: number
@@ -23,6 +24,8 @@ const open = defineModel<boolean>({ required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
+const proxyMode = defineModel<string>('proxyMode', { required: true })
+const proxyUrl = defineModel<string>('proxyUrl', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -69,6 +72,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         </BaseFormItem>
       </div>
 
+      <AccountProxyField v-model:mode="proxyMode" v-model:url="proxyUrl" :disabled="saving" />
       <BaseFormItem label="所属分组">
         <AccountGroupCheckboxGrid
           v-model="selectedGroupIds"

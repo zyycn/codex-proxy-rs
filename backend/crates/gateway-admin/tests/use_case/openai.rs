@@ -194,6 +194,7 @@ async fn openai_authorization_create_should_observe_initial_quota() {
     services
         .openai()
         .start_authorization(StartAuthorization {
+            outbound_proxy: None,
             context: context("oauth-start-openai-create"),
             name: "new OpenAI credential".to_owned(),
             reauthorization: None,
@@ -244,6 +245,7 @@ async fn openai_authorization_create_should_remain_successful_when_initial_quota
     services
         .openai()
         .start_authorization(StartAuthorization {
+            outbound_proxy: None,
             context: context("oauth-start-openai-quota-failure"),
             name: "new OpenAI credential".to_owned(),
             reauthorization: None,
@@ -283,6 +285,7 @@ async fn openai_authorization_store_failure_should_release_claim_for_retry() {
     services
         .openai()
         .start_authorization(StartAuthorization {
+            outbound_proxy: None,
             context: context("oauth-store-retry"),
             name: "new OpenAI credential".to_owned(),
             reauthorization: None,
@@ -348,6 +351,7 @@ async fn openai_reauthorization_should_commit_after_credential_revision_advances
     services
         .openai()
         .start_authorization(StartAuthorization {
+            outbound_proxy: None,
             context: context("oauth-start-openai"),
             name: "reauthorize".to_owned(),
             reauthorization: Some(ProviderAccountId::new("acct_test").expect("account ID")),

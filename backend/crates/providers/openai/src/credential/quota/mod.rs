@@ -1225,6 +1225,8 @@ async fn list_reset_credits_once(
         .authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
+        .for_account(&prepared.account)
+        .map_err(ResetCreditAttemptError::Upstream)?
         .list_rate_limit_reset_credits(CodexRequestContext::auxiliary(
             authorization.expose_secret(),
             prepared.account.upstream_account_id(),
@@ -1248,6 +1250,8 @@ async fn consume_reset_credit_once(
         .authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
+        .for_account(&prepared.account)
+        .map_err(ResetCreditAttemptError::Upstream)?
         .consume_rate_limit_reset_credit(
             CodexRequestContext::auxiliary(
                 authorization.expose_secret(),
@@ -1329,6 +1333,8 @@ async fn fetch_usage_once(
         .map_err(|_| CodexQuotaFetchAttemptError::InvalidCredential)?;
     let request_id = format!("quota_{}", Uuid::now_v7().simple());
     client
+        .for_account(&prepared.account)
+        .map_err(CodexQuotaFetchAttemptError::Upstream)?
         .fetch_usage(CodexRequestContext::auxiliary(
             authorization.expose_secret(),
             prepared.account.upstream_account_id(),
