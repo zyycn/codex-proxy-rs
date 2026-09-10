@@ -253,7 +253,7 @@ const {
             </template>
 
             <template #planType="{ row }">
-              <AccountPlanBadge :plan-type="row.planType" />
+              <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
             </template>
 
             <template #usage="{ row }">

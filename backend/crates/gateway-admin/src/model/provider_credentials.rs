@@ -1019,6 +1019,8 @@ impl fmt::Debug for ProviderExport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
     pub account: AccountRecord,
+    /// Provider 提供的套餐展示名称；未识别到套餐时为空。
+    pub plan_type_display: Option<String>,
     pub projection: gateway_core::account::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
     pub quota: ProviderQuota,

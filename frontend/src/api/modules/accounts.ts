@@ -119,6 +119,7 @@ export interface Account {
   userId: string | null
   label: string | null
   planType: string | null
+  planTypeDisplay: string
   authenticationKind: string
   hasRefreshToken: boolean
   status: AccountStatus

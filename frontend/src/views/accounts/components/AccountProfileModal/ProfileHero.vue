@@ -116,7 +116,7 @@ function formatDuration(value: number | null) {
           <h3 id="profile-display-name" class="m-0 min-w-0 truncate text-cp-lg leading-tight font-heavy text-cp-text">
             {{ displayName }}
           </h3>
-          <AccountPlanBadge v-if="account.planType" :plan-type="account.planType" size="sm" />
+          <AccountPlanBadge v-if="account.planType" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
         </div>
         <div
           v-if="username || accountIdentity"

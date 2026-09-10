@@ -162,6 +162,11 @@ impl DefaultObservabilityService {
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
         self.enrich_list_billing(&mut observation.recent_requests);
+        for account in &mut observation.account_usage {
+            account.plan_type_display = self
+                .providers
+                .plan_type_display(&account.provider_kind, account.plan_type.as_deref());
+        }
         self.enrich_dashboard_quotas(&mut observation.account_usage)
             .await;
         let today_start = china_day_start(observation.range.end);

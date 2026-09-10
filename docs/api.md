@@ -197,6 +197,10 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 - `sortBy`: `email`、`status`、`planType`、`usage`、`lastUsedAt`、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
 
+账号视图和 Dashboard 账号概览中的 `planType` 保留原始套餐值；`planTypeDisplay` 是后端按 Provider 生成的展示名称，
+前端直接展示该字段。OpenAI 的 `self_serve_business_prolite` 等 Team 套餐按官方客户端显示为
+`Business`；新套餐保留原始名称，空套餐或 `unknown` 显示为“未知套餐”。
+
 ### 账号连接测试 SSE
 
 `GET /api/admin/accounts/connection-test` 固定探测请求指定的账号，不参与普通账号轮换。成功流沿用

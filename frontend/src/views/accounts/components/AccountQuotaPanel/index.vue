@@ -39,7 +39,7 @@ const profileOpen = shallowRef(false)
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
           <template v-if="account.provider === 'openai'">
             <span>·</span>
-            <AccountPlanBadge :plan-type="account.planType" size="sm" />
+            <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
           </template>
           <span>·</span>
           <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>

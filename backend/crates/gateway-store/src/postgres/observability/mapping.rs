@@ -293,6 +293,7 @@ pub(crate) fn admin_dashboard_account_usage(
         name: usage.name,
         email: usage.email,
         plan_type: usage.plan_type,
+        plan_type_display: None,
         request_count: usage.request_count,
         success_count: usage.success_count,
         input_tokens: usage.input_tokens,

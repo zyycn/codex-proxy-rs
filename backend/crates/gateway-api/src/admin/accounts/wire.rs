@@ -202,6 +202,8 @@ pub struct AccountView {
     pub user_id: Option<String>,
     pub label: Option<String>,
     pub plan_type: Option<String>,
+    /// 后端生成的套餐展示名称；缺失套餐时为“未知套餐”。
+    pub plan_type_display: String,
     pub authentication_kind: String,
     pub has_refresh_token: bool,
     pub status: String,

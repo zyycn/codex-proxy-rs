@@ -59,6 +59,7 @@ pub(super) fn account_models_data(result: ProviderModels) -> AccountModelsData {
 pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
     let AccountDirectoryItem {
         account,
+        plan_type_display,
         projection,
         usage,
         quota,
@@ -89,6 +90,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         user_id: account.upstream_user_id,
         label: None,
         plan_type: account.plan_type,
+        plan_type_display: plan_type_display.unwrap_or_else(|| "未知套餐".to_owned()),
         authentication_kind: account.authentication_kind,
         has_refresh_token: account.has_refresh_token,
         status,

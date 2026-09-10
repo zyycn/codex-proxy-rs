@@ -6,7 +6,7 @@ import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType'>
+type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
   & Partial<Pick<AccountRow, 'accountId'>>
 
 const props = withDefaults(
@@ -83,7 +83,7 @@ const avatarToneClass = computed(() => {
           :class="metaGapClass"
         >
           <slot name="meta" />
-          <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :size="metaSize" />
+          <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
         </span>
       </div>
       <div
@@ -92,7 +92,7 @@ const avatarToneClass = computed(() => {
         :class="metaGapClass"
       >
         <slot name="meta" />
-        <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :size="metaSize" />
+        <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
       <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
         {{ secondaryText }}

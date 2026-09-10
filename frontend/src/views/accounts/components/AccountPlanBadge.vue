@@ -6,6 +6,7 @@ import { stableVisualIndex } from '../utils/visualTone'
 const props = withDefaults(
   defineProps<{
     planType?: string | null
+    planTypeDisplay: string
     size?: 'xs' | 'sm' | 'md'
   }>(),
   {
@@ -27,7 +28,7 @@ const fallbackPalettes = [
   'bg-cp-orange-container text-cp-orange-on-container',
 ] as const
 
-const label = computed(() => props.planType?.trim() || 'Free')
+const rawPlanType = computed(() => props.planType?.trim() || '')
 
 const sizeClass = computed(() => {
   if (props.size === 'xs')
@@ -38,7 +39,7 @@ const sizeClass = computed(() => {
 })
 
 const paletteClass = computed(() => {
-  const key = label.value.toLowerCase()
+  const key = rawPlanType.value.toLowerCase()
   const planPalette = planPalettes[key]
   if (planPalette)
     return planPalette
@@ -49,9 +50,10 @@ const paletteClass = computed(() => {
 
 <template>
   <span
-    class="inline-flex shrink-0 items-center justify-center whitespace-nowrap leading-none capitalize shadow-cp-tertiary"
+    class="inline-flex shrink-0 items-center justify-center whitespace-nowrap leading-none shadow-cp-tertiary"
     :class="[sizeClass, paletteClass]"
+    :title="rawPlanType || undefined"
   >
-    <span>{{ label }}</span>
+    <span>{{ planTypeDisplay }}</span>
   </span>
 </template>

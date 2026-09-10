@@ -91,6 +91,11 @@ impl ProviderAdminError {
 pub trait ProviderAdmin: Send + Sync {
     fn provider_kind(&self) -> &ProviderKind;
 
+    /// 将原始套餐值投影为展示名称；默认保留未知 Provider 的原始名称。
+    fn plan_type_display(&self, plan_type: &str) -> String {
+        plan_type.to_owned()
+    }
+
     /// 账号已经由控制面提交为不可调度状态，释放 Provider 持有的账号级运行时资源。
     ///
     /// 无账号级运行时资源的 Provider 不需要执行额外操作。该通知发生在 Store 事务
@@ -228,6 +233,24 @@ impl ProviderAdminRegistry {
             .get(provider_kind)
             .cloned()
             .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// 账号页和 Dashboard 共用的套餐展示投影，不修改持久化的原始套餐值。
+    pub(crate) fn plan_type_display(
+        &self,
+        provider_kind: &str,
+        plan_type: Option<&str>,
+    ) -> Option<String> {
+        let plan_type = plan_type
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))?;
+        let provider = ProviderKind::new(provider_kind.to_owned())
+            .ok()
+            .and_then(|kind| self.providers.get(&kind));
+        Some(provider.map_or_else(
+            || plan_type.to_owned(),
+            |provider| provider.plan_type_display(plan_type),
+        ))
     }
 
     /// 返回所有已注册 Provider 的 Dashboard 上游身份画像。

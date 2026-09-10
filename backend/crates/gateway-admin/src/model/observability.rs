@@ -471,6 +471,8 @@ pub struct DashboardAccountUsage {
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
+    /// Admin 按 Provider 补齐的套餐展示名称。
+    pub plan_type_display: Option<String>,
     pub request_count: u64,
     pub success_count: u64,
     pub input_tokens: Option<u64>,

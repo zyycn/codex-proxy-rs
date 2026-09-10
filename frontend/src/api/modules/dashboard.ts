@@ -142,6 +142,7 @@ export interface DashboardAccountUsage {
   authenticationKind: string
   email: string
   planType: string | null
+  planTypeDisplay: string
   tokens: string
   requestCount: number
   requestBuckets: DashboardAccountRequestBucket[]

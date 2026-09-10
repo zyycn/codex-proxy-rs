@@ -373,6 +373,7 @@ pub struct DashboardAccountUsageView {
     pub authentication_kind: String,
     pub email: String,
     pub plan_type: Option<String>,
+    pub plan_type_display: String,
     pub tokens: String,
     pub request_count: u64,
     pub request_buckets: Vec<DashboardAccountRequestBucketView>,

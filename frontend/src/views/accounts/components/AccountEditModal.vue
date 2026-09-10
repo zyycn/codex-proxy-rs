@@ -48,7 +48,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
           size="lg"
         />
         <div class="flex shrink-0 items-center gap-3">
-          <AccountPlanBadge :plan-type="account.planType" size="sm" />
+          <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
           <ProviderIconGroup
             :provider="account.provider"
             :authentication-kind="account.authenticationKind"

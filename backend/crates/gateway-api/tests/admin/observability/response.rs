@@ -64,6 +64,7 @@ fn dashboard_account_usage_should_keep_daily_request_timeline() {
         authentication_kind: "oauth".to_owned(),
         email: "account@example.com".to_owned(),
         plan_type: Some("free".to_owned()),
+        plan_type_display: "Free".to_owned(),
         tokens: "—".to_owned(),
         request_count: 3,
         request_buckets: vec![DashboardAccountRequestBucketView {

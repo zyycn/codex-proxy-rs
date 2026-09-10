@@ -166,6 +166,30 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self.provider_kind
     }
 
+    fn plan_type_display(&self, plan_type: &str) -> String {
+        // 与官方 Desktop 的套餐名称映射一致；原始子类型继续由 plan_type 保留。
+        match plan_type.to_ascii_lowercase().as_str() {
+            "free" | "free_workspace" | "guest" => "Free",
+            "go" => "Go",
+            "plus" => "Plus",
+            "pro" | "prolite" => "Pro",
+            "team" | "self_serve_business_prolite" | "self_serve_business_usage_based" => {
+                "Business"
+            }
+            "business"
+            | "ent26"
+            | "enterprise_cbp_automation"
+            | "enterprise_cbp_usage_based"
+            | "enterprise"
+            | "hc" => "Enterprise",
+            "edu" | "education" => "Edu",
+            "edu_plus" => "Edu Plus",
+            "edu_pro" => "Edu Pro",
+            _ => plan_type,
+        }
+        .to_owned()
+    }
+
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
         self.websocket_pool.evict_account(account_id.as_str()).await;
     }

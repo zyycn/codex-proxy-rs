@@ -297,6 +297,7 @@ export const themeDashboardSummary: DashboardSummaryResponse = {
       authenticationKind: 'oauth',
       email: 'relay@example.com',
       planType: 'team',
+      planTypeDisplay: 'Business',
       tokens: '926K',
       requestCount: 1_284,
       requestBuckets: [],
@@ -325,6 +326,7 @@ export const themeDashboardSummary: DashboardSummaryResponse = {
       authenticationKind: 'oauth',
       email: 'gateway@example.com',
       planType: 'free',
+      planTypeDisplay: 'Free',
       tokens: '684K',
       requestCount: 894,
       requestBuckets: requestSeries.slice(-12).map((requestCount, index) => ({
@@ -364,6 +366,7 @@ export const themeDashboardSummary: DashboardSummaryResponse = {
       authenticationKind: 'oauth',
       email: 'control@example.com',
       planType: 'pro',
+      planTypeDisplay: 'Pro',
       tokens: '512K',
       requestCount: 742,
       requestBuckets: [],

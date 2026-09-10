@@ -900,6 +900,10 @@ pub(crate) fn dashboard_view(
                 .clone()
                 .unwrap_or_else(|| credential.name.clone()),
             plan_type: credential.plan_type.clone(),
+            plan_type_display: credential
+                .plan_type_display
+                .clone()
+                .unwrap_or_else(|| "未知套餐".to_owned()),
             tokens: credential
                 .total_tokens
                 .map_or_else(|| "—".to_owned(), format_compact_number),

@@ -281,6 +281,10 @@ impl DefaultAccountsService {
         .await?;
         let usage = quota.representative_window_usage().cloned();
         Ok(AccountDirectoryItem {
+            plan_type_display: self.providers.plan_type_display(
+                stored.account.provider_kind.as_str(),
+                stored.account.plan_type.as_deref(),
+            ),
             projection: stored.projection,
             usage,
             account: stored.account,
@@ -369,6 +373,10 @@ impl AccountsService for DefaultAccountsService {
             .map(|(item, quota)| {
                 let usage = quota.representative_window_usage().cloned();
                 AccountDirectoryItem {
+                    plan_type_display: self.providers.plan_type_display(
+                        item.account.provider_kind.as_str(),
+                        item.account.plan_type.as_deref(),
+                    ),
                     usage,
                     account: item.account,
                     projection: item.projection,

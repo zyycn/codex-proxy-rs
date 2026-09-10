@@ -201,6 +201,10 @@ impl ProviderAdmin for FakeProviderAdmin {
         &self.kind
     }
 
+    fn plan_type_display(&self, plan_type: &str) -> String {
+        format!("{} display: {plan_type}", self.kind)
+    }
+
     async fn account_unavailable(&self, _: &ProviderAccountId) {
         self.record("provider.account_unavailable");
     }
@@ -1320,9 +1324,11 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
 #[tokio::test]
 async fn accounts_list_should_return_complete_directory_semantics() {
     let provider = FakeProviderAdmin::new("openai", events());
-    let store = FakeAccountStore::new("openai", events());
-    let page = accounts_service(provider, store)
-        .await
+    let mut stored = account_record("openai");
+    stored.plan_type = Some("  self_serve_business_prolite  ".to_owned());
+    let store = FakeAccountStore::with_account(stored, events());
+    let services = accounts_service(provider, store).await;
+    let page = services
         .accounts()
         .list(AccountListQuery {
             page: 1,
@@ -1344,6 +1350,27 @@ async fn accounts_list_should_return_complete_directory_semantics() {
         account.projection.status,
         gateway_admin::model::accounts::AccountStatus::Normal
     );
+    assert_eq!(
+        (
+            account.account.plan_type.as_deref(),
+            account.plan_type_display.as_deref(),
+        ),
+        (
+            Some("  self_serve_business_prolite  "),
+            Some("openai display: self_serve_business_prolite"),
+        )
+    );
+
+    let detail = services
+        .accounts()
+        .quota(
+            &ProviderAccountId::new("acct_test").expect("account ID"),
+            false,
+        )
+        .await
+        .expect("account detail");
+    assert_eq!(detail.plan_type_display, account.plan_type_display);
+    assert_eq!(detail.account.plan_type, account.account.plan_type);
 }
 
 #[tokio::test]
