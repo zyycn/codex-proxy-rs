@@ -3183,6 +3183,7 @@ async fn provider_compiles_realtime_catalog_capabilities() {
         ["low", "medium", "high", "xhigh"]
     );
     assert_eq!(presentation.context_window_tokens(), Some(1_000_000));
+    assert_eq!(presentation.max_context_window_tokens(), Some(1_000_000));
     assert!(presentation.agent_tools());
 }
 
@@ -3209,6 +3210,7 @@ async fn provider_publishes_default_codex_profile_when_catalog_is_unavailable() 
     assert_eq!(presentation.default_reasoning_effort(), None);
     assert!(presentation.supported_reasoning_efforts().is_empty());
     assert_eq!(presentation.context_window_tokens(), Some(500_000));
+    assert_eq!(presentation.max_context_window_tokens(), Some(500_000));
     assert!(presentation.agent_tools());
     assert!(presentation.parallel_tool_calls());
 }

@@ -19,28 +19,55 @@ use super::{api_router, authenticated_client, authenticated_client_with_min_vers
 
 pub(super) struct ModelsExecution {
     client: AuthenticatedClient,
-    profiles: bool,
+    presentation: Option<ModelPresentation>,
 }
 
 impl ModelsExecution {
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
-            profiles: false,
+            presentation: None,
         })
     }
 
     fn with_profiles() -> Arc<Self> {
+        Self::with_presentation(
+            ModelPresentation::new(
+                Some("Grok 4.5".to_owned()),
+                Some("xAI Grok 4.5 frontier model.".to_owned()),
+            )
+            .with_reasoning(
+                Some("medium".to_owned()),
+                ["low", "medium", "high", "xhigh"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            )
+            .with_context_window_tokens(Some(500_000))
+            .with_max_context_window_tokens(Some(900_000))
+            .with_image_input(true)
+            .with_agent_tools(true, true)
+            .with_service_tiers(vec![
+                ModelServiceTier::new(
+                    "priority",
+                    "Fast",
+                    "Route the request through Codex fast mode.",
+                )
+                .with_speed_tier("fast"),
+            ]),
+        )
+    }
+
+    fn with_presentation(presentation: ModelPresentation) -> Arc<Self> {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
-            profiles: true,
+            presentation: Some(presentation),
         })
     }
 
     fn with_cli_min() -> Arc<Self> {
         Arc::new(Self {
             client: authenticated_client_with_min_versions("sk_models_test", None, Some("0.40.0")),
-            profiles: false,
+            presentation: None,
         })
     }
 
@@ -51,7 +78,7 @@ impl ModelsExecution {
                 Some("26.825.51511"),
                 None,
             ),
-            profiles: false,
+            presentation: None,
         })
     }
 }
@@ -76,33 +103,12 @@ impl ExecutionService for ModelsExecution {
     }
 
     fn public_model_profiles(&self, _: &AuthenticatedClient) -> Vec<PublicModelProfile> {
-        if !self.profiles {
+        let Some(presentation) = &self.presentation else {
             return Vec::new();
-        }
+        };
         vec![PublicModelProfile::new(
             PublicModelId::new("grok-4.5").expect("model"),
-            ModelPresentation::new(
-                Some("Grok 4.5".to_owned()),
-                Some("xAI Grok 4.5 frontier model.".to_owned()),
-            )
-            .with_reasoning(
-                Some("medium".to_owned()),
-                ["low", "medium", "high", "xhigh"]
-                    .map(str::to_owned)
-                    .to_vec(),
-            )
-            .with_context_window_tokens(Some(500_000))
-            .with_max_context_window_tokens(Some(900_000))
-            .with_image_input(true)
-            .with_agent_tools(true, true)
-            .with_service_tiers(vec![
-                ModelServiceTier::new(
-                    "priority",
-                    "Fast",
-                    "Route the request through Codex fast mode.",
-                )
-                .with_speed_tier("fast"),
-            ]),
+            presentation.clone(),
         )]
     }
 
@@ -322,6 +328,34 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
             }
         ])
     );
+}
+
+#[tokio::test]
+async fn models_should_preserve_unknown_context_windows() {
+    for (context_window, max_context_window) in
+        [(None, None), (Some(272_000), None), (None, Some(872_000))]
+    {
+        let presentation = ModelPresentation::default()
+            .with_context_window_tokens(context_window)
+            .with_max_context_window_tokens(max_context_window);
+        let response = api_router(ModelsExecution::with_presentation(presentation))
+            .await
+            .oneshot(authorized_request("/v1/models?client_version=0.145.0"))
+            .await
+            .expect("list Codex models response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read Codex models body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("models JSON");
+        let model = &value["models"][0];
+
+        assert_eq!(model["context_window"], serde_json::json!(context_window));
+        assert_eq!(
+            model["max_context_window"],
+            serde_json::json!(max_context_window)
+        );
+    }
 }
 
 #[tokio::test]

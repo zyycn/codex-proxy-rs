@@ -1,6 +1,5 @@
 //! OpenAI Provider 启动配置与 Codex Desktop 请求画像校验。
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,24 +42,8 @@ pub struct OpenAiConfig {
     #[serde(default = "default_stream_max_retries")]
     pub stream_max_retries: u64,
     pub wire_profile: CodexWireProfileConfig,
-    /// 按模型 slug 覆盖客户端目录的上下文窗口元数据。
-    #[serde(default)]
-    pub models: BTreeMap<String, CodexModelMetadataOverride>,
     #[serde(skip)]
     identity_secret_path: PathBuf,
-}
-
-/// 单个模型的客户端目录元数据覆盖。
-///
-/// 官方 Codex 客户端会把本地 `model_context_window` 覆盖钳制在服务端声明的
-/// `max_context_window` 之内；该覆盖用于自托管部署按账号实际能力抬高上限。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CodexModelMetadataOverride {
-    #[serde(default)]
-    pub context_window: Option<u64>,
-    #[serde(default)]
-    pub max_context_window: Option<u64>,
 }
 
 impl OpenAiConfig {
@@ -74,42 +57,8 @@ impl OpenAiConfig {
         self.quota.validate()?;
         self.auth.validate()?;
         self.wire_profile.validate()?;
-        self.validate_models()?;
         self.identity_secret_path = runtime_data_dir.join("identity_hmac_secret");
         Ok(())
-    }
-
-    /// 校验模型元数据覆盖：至少声明一个字段，取值非零，且 context ≤ max。
-    fn validate_models(&self) -> Result<(), OpenAiConfigError> {
-        use crate::OpenAiConfigError;
-        for (slug, metadata) in &self.models {
-            if metadata.context_window.is_none() && metadata.max_context_window.is_none() {
-                return Err(OpenAiConfigError::ModelMetadata(format!(
-                    "openai.models.{slug}: 至少声明 context_window 或 max_context_window"
-                )));
-            }
-            if metadata.context_window.is_some_and(|value| value == 0)
-                || metadata.max_context_window.is_some_and(|value| value == 0)
-            {
-                return Err(OpenAiConfigError::ModelMetadata(format!(
-                    "openai.models.{slug}: 窗口取值必须大于 0"
-                )));
-            }
-            if let (Some(context), Some(max)) =
-                (metadata.context_window, metadata.max_context_window)
-                && context > max
-            {
-                return Err(OpenAiConfigError::ModelMetadata(format!(
-                    "openai.models.{slug}: context_window 不能大于 max_context_window"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn model_metadata_overrides(&self) -> &BTreeMap<String, CodexModelMetadataOverride> {
-        &self.models
     }
 
     #[must_use]
@@ -173,7 +122,6 @@ impl Default for OpenAiConfig {
             auth: CodexAuthSettings::default(),
             stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
             wire_profile: CodexWireProfileConfig::default(),
-            models: BTreeMap::new(),
             identity_secret_path: PathBuf::new(),
         }
     }
@@ -428,8 +376,6 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
 pub enum OpenAiConfigError {
     #[error("OpenAI configuration field is invalid: {0}")]
     InvalidField(&'static str),
-    #[error("OpenAI model metadata override is invalid: {0}")]
-    ModelMetadata(String),
 }
 
 fn numeric_dotted_version(value: &str) -> bool {
@@ -439,62 +385,4 @@ fn numeric_dotted_version(value: &str) -> bool {
         .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
         .count();
     valid_parts >= 2 && valid_parts == value.split('.').count()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn model_metadata_override_rejects_context_above_max() {
-        let mut config = OpenAiConfig {
-            models: BTreeMap::from([(
-                "gpt-5.6-terra".to_owned(),
-                CodexModelMetadataOverride {
-                    context_window: Some(900_000),
-                    max_context_window: Some(872_000),
-                },
-            )]),
-            ..OpenAiConfig::default()
-        };
-        let error = config
-            .resolve_and_validate(Path::new("/tmp"))
-            .expect_err("context above max must be rejected");
-        assert!(matches!(error, OpenAiConfigError::ModelMetadata(_)));
-    }
-
-    #[test]
-    fn model_metadata_override_accepts_valid_pair() {
-        let mut config = OpenAiConfig {
-            models: BTreeMap::from([(
-                "gpt-5.6-terra".to_owned(),
-                CodexModelMetadataOverride {
-                    context_window: Some(272_000),
-                    max_context_window: Some(872_000),
-                },
-            )]),
-            ..OpenAiConfig::default()
-        };
-        config
-            .resolve_and_validate(Path::new("/tmp"))
-            .expect("valid override should pass");
-    }
-
-    #[test]
-    fn model_metadata_override_rejects_empty_entry() {
-        let mut config = OpenAiConfig {
-            models: BTreeMap::from([(
-                "gpt-5.6-terra".to_owned(),
-                CodexModelMetadataOverride {
-                    context_window: None,
-                    max_context_window: None,
-                },
-            )]),
-            ..OpenAiConfig::default()
-        };
-        let error = config
-            .resolve_and_validate(Path::new("/tmp"))
-            .expect_err("empty override must be rejected");
-        assert!(matches!(error, OpenAiConfigError::ModelMetadata(_)));
-    }
 }

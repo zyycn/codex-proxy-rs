@@ -124,10 +124,7 @@ fn codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {
         .iter()
         .any(|effort| effort != "none");
     let context_window = presentation.context_window_tokens();
-    let max_context_window = presentation
-        .max_context_window_tokens()
-        .or(context_window)
-        .unwrap_or(context_window.unwrap_or(0));
+    let max_context_window = presentation.max_context_window_tokens();
     let input_modalities = if presentation.image_input() {
         vec!["text", "image"]
     } else {
