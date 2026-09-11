@@ -1458,6 +1458,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "flate2",
  "futures",
  "gateway-admin",
  "gateway-core",
@@ -1473,6 +1474,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "zstd",
 ]
 
 [[package]]

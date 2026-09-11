@@ -328,7 +328,64 @@ pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_inner(body, &OpenAiRequestHeaders::from_headers(headers))
+    let body = decompress_request_body(body, headers)?;
+    decode_request_inner(&body, &OpenAiRequestHeaders::from_headers(headers))
+}
+
+/// 下游请求体解压后的最大字节数；防御解压炸弹。
+const MAX_DECOMPRESSED_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+
+/// 按 `Content-Encoding` 解压下游请求体。
+///
+/// 官方 Codex 客户端对较大的 `/v1/responses` 请求体默认 zstd 压缩，亦可能使用
+/// gzip；未压缩与 `identity` 原样透传。解压结果超过
+/// [`MAX_DECOMPRESSED_REQUEST_BYTES`] 时拒绝，避免解压炸弹。
+fn decompress_request_body(
+    body: &[u8],
+    headers: &HeaderMap,
+) -> Result<Vec<u8>, RequestDecodeError> {
+    let Some(value) = headers.get(axum::http::header::CONTENT_ENCODING) else {
+        return Ok(body.to_vec());
+    };
+    let encoding = value
+        .to_str()
+        .map_err(|_| RequestDecodeError::MalformedJson)?;
+    match encoding.trim().to_ascii_lowercase().as_str() {
+        "" | "identity" => Ok(body.to_vec()),
+        "gzip" => {
+            let decoder = flate2::read::GzDecoder::new(body);
+            read_bounded(decoder)
+        }
+        "deflate" => {
+            let decoder = flate2::read::ZlibDecoder::new(body);
+            read_bounded(decoder)
+        }
+        "zstd" => {
+            let decoded = zstd::stream::decode_all(std::io::Cursor::new(body))
+                .map_err(|_| RequestDecodeError::MalformedJson)?;
+            if decoded.len() > MAX_DECOMPRESSED_REQUEST_BYTES {
+                return Err(RequestDecodeError::DecompressedBodyTooLarge);
+            }
+            Ok(decoded)
+        }
+        other => Err(RequestDecodeError::UnsupportedContentEncoding {
+            encoding: other.to_owned(),
+        }),
+    }
+}
+
+fn read_bounded<R: std::io::Read>(mut reader: R) -> Result<Vec<u8>, RequestDecodeError> {
+    use std::io::Read;
+    let mut decoded = Vec::new();
+    reader
+        .by_ref()
+        .take((MAX_DECOMPRESSED_REQUEST_BYTES + 1) as u64)
+        .read_to_end(&mut decoded)
+        .map_err(|_| RequestDecodeError::MalformedJson)?;
+    if decoded.len() > MAX_DECOMPRESSED_REQUEST_BYTES {
+        return Err(RequestDecodeError::DecompressedBodyTooLarge);
+    }
+    Ok(decoded)
 }
 
 pub(super) fn decode_request_inner(
