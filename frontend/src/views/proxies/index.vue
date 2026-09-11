@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
-import { Eye, EyeOff, LockKeyhole, Pencil, Plus, RefreshCw, Save, Search, Trash2, Users, Wifi } from '@lucide/vue'
+import { LockKeyhole, Pencil, Plus, RefreshCw, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
-import { RouterLink } from 'vue-router'
 import { createProxy, deleteProxy, getProxies, testProxy, updateProxy } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseModal from '@/components/base/BaseModal/index.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
-import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
@@ -21,6 +18,8 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
+import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
+import ProxyFormModal from './components/ProxyFormModal.vue'
 
 const search = shallowRef('')
 const query = usePagedQuery({
@@ -32,18 +31,15 @@ const { items: proxies, loading } = query
 const pagination = computed(() => ({ currentPage: query.page.value, pageSize: query.pageSize.value, total: query.total.value }))
 const columns = defineTableColumns<OutboundProxyRecord>([
   { key: 'identity', label: '代理', kind: 'identity' },
-  { key: 'status', label: '测试状态', kind: 'custom', size: 'lg' },
   { key: 'exitIp', label: '出口 IP', kind: 'custom' },
   { key: 'latency', label: '耗时', kind: 'custom', size: 'sm' },
   { key: 'accounts', label: '关联账号', kind: 'custom', size: 'sm' },
   { key: 'testedAt', label: '测试时间', kind: 'datetime' },
-  { key: 'actions', label: '操作', kind: 'actions', size: 'lg' },
+  { key: 'actions', label: '操作', kind: 'actions' },
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
 const form = reactive({ name: '', proxyUrl: '' })
-const replaceConnection = ref(true)
-const showSecret = ref(false)
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -58,8 +54,6 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
-  replaceConnection.value = !proxy
-  showSecret.value = false
   showForm.value = true
 }
 
@@ -88,13 +82,14 @@ async function save(testAfter: boolean) {
     return
   const name = form.name.trim()
   const proxyUrl = form.proxyUrl.trim()
-  if (!name || (replaceConnection.value && !proxyUrl)) {
+  if (!name || (!editing.value && !proxyUrl)) {
     toast.warning('请填写代理名称和连接地址')
     return
   }
   await saveAction.run(async () => {
+    // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
     const result = editing.value
-      ? await updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: replaceConnection.value ? proxyUrl : undefined })
+      ? await updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined })
       : await createProxy({ name, proxyUrl })
     showForm.value = false
     form.proxyUrl = ''
@@ -137,7 +132,6 @@ function setPageSize(size: number) {
 watch(showForm, (open) => {
   if (!open) {
     form.proxyUrl = ''
-    showSecret.value = false
   }
 })
 watchDebounced(search, () => setPage(1), { debounce: 300 })
@@ -146,130 +140,96 @@ onMounted(() => void query.execute())
 
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
-    <BasePageHeader title="代理管理" />
-    <section class="mt-5 flex min-h-125 flex-1 flex-col bg-cp-bg-container p-5">
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <BaseInput v-model="search" class="w-full sm:max-w-80" aria-label="搜索代理" placeholder="搜索代理名称">
-          <template #prefix>
-            <Search class="size-4" />
-          </template>
-        </BaseInput>
-        <div class="ml-auto flex items-center gap-2">
-          <BaseIconButton label="刷新代理列表" :disabled="loading" @click="query.execute()">
-            <RefreshCw class="size-4" />
-          </BaseIconButton>
-          <BaseButton variant="primary" @click="openForm()">
-            <Plus class="size-4" />新增代理
-          </BaseButton>
-        </div>
-      </div>
-      <BaseTable class="min-h-0 flex-1" :columns="columns" :rows="proxies" :loading="loading" empty-text="暂无代理">
-        <template #identity="{ row }">
-          <div class="grid min-w-0 gap-1">
-            <strong class="truncate text-cp text-cp-text" :title="row.name">{{ row.name }}</strong>
-            <span class="flex min-w-0 items-center gap-1 text-cp-xs text-cp-text-secondary">
-              <LockKeyhole v-if="row.hasAuthentication" class="size-3 shrink-0" aria-label="已保存代理认证" />
-              <span class="truncate font-mono" :title="row.endpoint">{{ row.endpoint }}</span>
-            </span>
-          </div>
-        </template>
-        <template #status="{ row }">
-          <div class="grid min-w-0 gap-1">
-            <span class="text-cp-sm font-semibold" :class="row.lastTest?.success ? 'text-cp-success' : row.lastTest ? 'text-cp-error' : 'text-cp-text-quaternary'">
-              {{ testingIds.has(row.id) ? '测试中' : row.lastTest?.success ? '通过' : row.lastTest ? '失败' : '未测试' }}
-            </span>
-            <span v-if="row.lastTest && !row.lastTest.success" class="truncate text-cp-xs text-cp-text-secondary" :title="row.lastTest.message">{{ row.lastTest.message }}</span>
-          </div>
-        </template>
-        <template #exitIp="{ row }">
-          <span class="break-all font-mono text-cp-xs">{{ row.lastTest?.exitIp ?? '-' }}</span>
-        </template>
-        <template #latency="{ row }">
-          {{ row.lastTest ? `${row.lastTest.latencyMs} ms` : '-' }}
-        </template>
-        <template #accounts="{ row }">
-          <BaseButton variant="ghost" :aria-label="`查看 ${row.name} 的关联账号`" @click="inspected = row; showAccounts = true">
-            <Users class="size-4" />{{ row.accounts.length }}
-          </BaseButton>
-        </template>
-        <template #testedAt="{ row }">
-          {{ row.lastTestAt ? formatDateTime(row.lastTestAt) : '-' }}
-        </template>
-        <template #actions="{ row }">
-          <div class="flex items-center gap-1">
-            <BaseIconButton label="测试代理" :loading="testingIds.has(row.id)" :disabled="testingIds.has(row.id)" @click="checkProxy(row)">
-              <Wifi class="size-4 text-cp-link" />
-            </BaseIconButton>
-            <BaseIconButton label="编辑代理" :disabled="testingIds.has(row.id)" @click="openForm(row)">
-              <Pencil class="size-4 text-cp-link" />
-            </BaseIconButton>
-            <BaseIconButton :label="row.accounts.length ? '代理正在被账号使用' : '删除代理'" :disabled="row.accounts.length > 0 || testingIds.has(row.id)" @click="requestDelete(row)">
-              <Trash2 class="size-4 text-cp-error" />
-            </BaseIconButton>
-          </div>
-        </template>
-      </BaseTable>
-      <BaseTablePagination :pagination="pagination" :loading="loading" @page-change="setPage" @page-size-change="setPageSize" />
-    </section>
-
-    <BaseModal v-model="showForm" :title="editing ? '编辑代理' : '新增代理'" size="md" :dismissible="!saving">
-      <div class="grid gap-5">
-        <BaseFormItem label="代理名称" required>
-          <BaseInput v-model="form.name" maxlength="100" :disabled="saving" aria-label="代理名称" />
-        </BaseFormItem>
-        <template v-if="editing">
-          <p class="m-0 break-all font-mono text-cp-sm text-cp-text-secondary">
-            {{ editing.endpoint }}
-          </p>
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-cp text-cp-text-secondary">更换连接配置</span>
-            <BaseSwitch v-model="replaceConnection" label="更换连接配置" :disabled="saving" />
-          </div>
-        </template>
-        <BaseFormItem v-if="replaceConnection" label="代理 URL" required>
-          <BaseInput v-model="form.proxyUrl" :type="showSecret ? 'text' : 'password'" autocomplete="new-password" :disabled="saving" aria-label="代理 URL" placeholder="socks5h://user:password@host:1080">
-            <template #suffix>
-              <BaseIconButton :label="showSecret ? '隐藏代理地址' : '显示代理地址'" @click="showSecret = !showSecret">
-                <EyeOff v-if="showSecret" class="size-4" /><Eye v-else class="size-4" />
-              </BaseIconButton>
+    <BasePageHeader
+      class="h-17"
+      title="代理管理"
+      description="管理账号使用的代理，测试连接并查看出口 IP"
+    />
+    <BaseCard class="mt-5 flex h-[calc(100dvh-136px)] min-h-125 flex-col">
+      <template #header>
+        <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
+          <BaseInput v-model="search" class="sm:w-80" aria-label="搜索代理" placeholder="搜索代理名称...">
+            <template #prefix>
+              <Search class="size-4.5 text-cp-text-tertiary" />
             </template>
           </BaseInput>
-        </BaseFormItem>
-        <p v-if="editing?.accounts.length && replaceConnection" class="m-0 text-cp-sm text-cp-warning-text">
-          将更新 {{ editing.accounts.length }} 个关联账号的出口。
-        </p>
-      </div>
-      <template #footer>
-        <BaseButton variant="ghost" :disabled="saving" @click="showForm = false">
-          取消
-        </BaseButton>
-        <BaseButton variant="secondary" :loading="saving" @click="save(false)">
-          <Save class="size-4" />保存代理
-        </BaseButton>
-        <BaseButton variant="primary" :loading="saving" @click="save(true)">
-          <Wifi class="size-4" />保存并测试
-        </BaseButton>
+          <div class="flex shrink-0 items-center justify-end gap-2 sm:ml-auto">
+            <BaseIconButton label="刷新代理列表" :loading="loading" @click="query.execute()">
+              <RefreshCw class="size-4" />
+            </BaseIconButton>
+            <BaseButton variant="primary" @click="openForm()">
+              <template #icon>
+                <Plus class="size-4" />
+              </template>
+              新增代理
+            </BaseButton>
+          </div>
+        </div>
       </template>
-    </BaseModal>
+      <template #body>
+        <div class="flex h-full min-h-0 flex-col">
+          <BaseTable class="min-h-0 flex-1" :columns="columns" :rows="proxies" :loading="loading" :empty-text="search.trim() ? '没有找到匹配的代理，请尝试其他名称' : '暂无代理，请点击新增代理添加'">
+            <template #identity="{ row }">
+              <div class="grid min-w-0 gap-1">
+                <strong class="truncate text-cp text-cp-text" :title="row.name">{{ row.name }}</strong>
+                <span class="flex min-w-0 items-center gap-1 text-cp-xs font-emphasis text-cp-text-quaternary">
+                  <LockKeyhole v-if="row.hasAuthentication" class="size-3 shrink-0" aria-label="已保存代理认证" />
+                  <span class="truncate font-mono" :title="row.endpoint">{{ row.endpoint }}</span>
+                </span>
+              </div>
+            </template>
+            <template #exitIp="{ row }">
+              <span class="break-all font-mono text-cp-xs">{{ row.lastTest?.exitIp ?? '-' }}</span>
+            </template>
+            <template #latency="{ row }">
+              <span v-if="testingIds.has(row.id)" class="text-cp-text-secondary">测试中</span>
+              <span v-else-if="row.lastTest?.success" class="tabular-nums text-cp-success">
+                {{ row.lastTest.latencyMs }} ms
+              </span>
+              <span v-else-if="row.lastTest" class="text-cp-error" :title="`${row.lastTest.message}（耗时 ${row.lastTest.latencyMs} ms）`">失败</span>
+              <span v-else class="text-cp-text-quaternary">未测试</span>
+            </template>
+            <template #accounts="{ row }">
+              <button type="button" class="inline-flex cursor-pointer items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-cp-sm text-cp-text-secondary outline-none transition-colors hover:text-cp-primary-text focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container" :aria-label="`查看 ${row.name} 的 ${row.accountCount} 个关联账号`" @click="inspected = row; showAccounts = true">
+                <Users class="size-3.5" aria-hidden="true" />
+                <span class="font-mono tabular-nums">{{ row.accountCount }}</span>
+              </button>
+            </template>
+            <template #testedAt="{ row }">
+              {{ row.lastTestAt ? formatDateTime(row.lastTestAt) : '-' }}
+            </template>
+            <template #actions="{ row }">
+              <div class="flex items-center gap-1">
+                <BaseIconButton size="sm" label="测试代理" :loading="testingIds.has(row.id)" :disabled="testingIds.has(row.id)" @click="checkProxy(row)">
+                  <Wifi class="size-3.5 text-cp-link" />
+                </BaseIconButton>
+                <BaseIconButton size="sm" label="编辑代理" :disabled="testingIds.has(row.id)" @click="openForm(row)">
+                  <Pencil class="size-3.5 text-cp-link" />
+                </BaseIconButton>
+                <BaseIconButton size="sm" :label="row.accountCount ? '代理正在被账号使用' : '删除代理'" :disabled="row.accountCount > 0 || testingIds.has(row.id)" @click="requestDelete(row)">
+                  <Trash2 class="size-3.5 text-cp-error" />
+                </BaseIconButton>
+              </div>
+            </template>
+          </BaseTable>
+          <BaseTablePagination :pagination="pagination" :loading="loading" @page-change="setPage" @page-size-change="setPageSize" />
+        </div>
+      </template>
+    </BaseCard>
+
+    <ProxyFormModal
+      v-model="showForm"
+      v-model:name="form.name"
+      v-model:proxy-url="form.proxyUrl"
+      :proxy="editing"
+      :saving="saving"
+      @save="save"
+    />
     <BaseConfirmModal v-model="showDelete" title="删除代理" destructive :loading="deleting" @confirm="confirmDelete">
       <p class="m-0">
         确定删除“{{ pendingDelete?.name }}”吗？
       </p>
     </BaseConfirmModal>
-    <BaseModal v-model="showAccounts" title="关联账号" size="md">
-      <ul v-if="inspected?.accounts.length" class="m-0 grid list-none gap-3 p-0">
-        <li v-for="account in inspected.accounts" :key="account.id" class="break-all text-cp">
-          {{ account.name }}
-        </li>
-      </ul>
-      <p v-else class="m-0 text-cp-text-secondary">
-        暂无关联账号
-      </p>
-      <template #footer>
-        <RouterLink to="/accounts" class="text-cp-link">
-          账号管理
-        </RouterLink>
-      </template>
-    </BaseModal>
+    <ProxyAccountsModal v-model="showAccounts" :proxy="inspected" @removed="query.execute({ silent: true })" />
   </div>
 </template>

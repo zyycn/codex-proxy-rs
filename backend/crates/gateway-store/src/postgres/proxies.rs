@@ -1,16 +1,23 @@
 //! 命名代理持有认证信息，账号保留解析后的 URL 供 Provider 传输使用。
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use gateway_admin::{
-    model::{MutationContext, Revision as AdminRevision, proxies::*},
+    model::{
+        MutationContext, Revision as AdminRevision,
+        account_groups::{AccountGroupColor, AccountGroupRef},
+        proxies::*,
+    },
     ports::{
         proxy::{ProxyImportGuard, ProxyImportReservation, ProxyStore},
         store::{AdminStoreError, AdminStoreResult},
     },
 };
-use gateway_core::account::OutboundProxy;
+use gateway_core::{
+    account::{OutboundProxy, ProviderAccountId},
+    routing::AccountGroupId,
+};
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row as _, Transaction, postgres::PgRow};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -22,8 +29,7 @@ use crate::{
 
 const ENTITY: &str = "outbound proxy";
 const SELECT: &str = "select p.*,
-    array(select a.id from provider_accounts a where a.outbound_proxy_id = p.id order by a.id) as account_ids,
-    array(select a.name from provider_accounts a where a.outbound_proxy_id = p.id order by a.id) as account_names
+    (select count(*) from provider_accounts a where a.outbound_proxy_id = p.id) as account_count
     from outbound_proxies p";
 
 #[derive(Clone)]
@@ -91,8 +97,6 @@ fn record(row: PgRow) -> StoreResult<ProxyRecord> {
     let success: Option<bool> = row.try_get("last_test_success").map_err(|_| invalid())?;
     let ip: Option<String> = row.try_get("last_test_ip").map_err(|_| invalid())?;
     let latency: Option<i64> = row.try_get("last_test_latency_ms").map_err(|_| invalid())?;
-    let ids: Vec<String> = row.try_get("account_ids").map_err(|_| invalid())?;
-    let names: Vec<String> = row.try_get("account_names").map_err(|_| invalid())?;
     Ok(ProxyRecord {
         id: row.try_get("id").map_err(|_| invalid())?,
         name: row.try_get("name").map_err(|_| invalid())?,
@@ -106,11 +110,11 @@ fn record(row: PgRow) -> StoreResult<ProxyRecord> {
                 .map_err(|_| invalid())?,
         )
         .map_err(|_| invalid())?,
-        accounts: ids
-            .into_iter()
-            .zip(names)
-            .map(|(id, name)| ProxyAccountRef { id, name })
-            .collect(),
+        account_count: u64::try_from(
+            row.try_get::<i64, _>("account_count")
+                .map_err(|_| invalid())?,
+        )
+        .map_err(|_| invalid())?,
         last_test_at: row.try_get("last_test_at").map_err(|_| invalid())?,
         last_test: success
             .map(|success| -> StoreResult<_> {
@@ -223,6 +227,158 @@ async fn audit(
 
 #[async_trait]
 impl ProxyStore for PgProxyRepository {
+    async fn remove_account(
+        &self,
+        proxy_id: &str,
+        account_id: &ProviderAccountId,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AdminRevision> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| store_error(unavailable()))?;
+        let revision = bump_config_revision_in_transaction(&mut transaction)
+            .await
+            .map_err(store_error)?;
+        // 在同一条更新中校验绑定，避免旧弹窗清除账号后来选择的其他代理。
+        let updated = sqlx::query(
+            "update provider_accounts
+             set outbound_proxy_id = null, outbound_proxy_url = null,
+                 updated_at = greatest(now(), updated_at)
+             where id = $1 and outbound_proxy_id = $2",
+        )
+        .bind(account_id.as_str())
+        .bind(proxy_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| store_error(unavailable()))?;
+        if updated.rows_affected() != 1 {
+            return Err(store_error(conflict(proxy_id)));
+        }
+        append_admin_audit_event_in_transaction(
+            &mut transaction,
+            mutation_audit(
+                context,
+                "update",
+                "provider_account",
+                account_id.as_str(),
+                vec!["outbound_proxy".to_owned()],
+            ),
+            revision,
+        )
+        .await
+        .map_err(store_error)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| store_error(unavailable()))?;
+        admin_revision(revision)
+    }
+
+    async fn list_accounts(
+        &self,
+        query: ProxyAccountListQuery,
+    ) -> AdminStoreResult<ProxyAccountPage> {
+        if query.page == 0 {
+            return Err(store_error(invalid()));
+        }
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| store_error(unavailable()))?;
+        // 数量和当前页共用只读快照，避免绑定变化使同一次响应的分页事实不一致。
+        sqlx::query("set transaction isolation level repeatable read, read only")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| store_error(unavailable()))?;
+        let total: i64 = sqlx::query_scalar(
+            "select count(a.id) from outbound_proxies p
+             left join provider_accounts a on a.outbound_proxy_id = p.id
+                 and (strpos(lower(a.name), lower($2)) > 0
+                      or strpos(lower(coalesce(a.email, '')), lower($2)) > 0)
+             where p.id = $1 group by p.id",
+        )
+        .bind(&query.proxy_id)
+        .bind(&query.search)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| store_error(unavailable()))?
+        .ok_or_else(|| {
+            store_error(StoreError::NotFound {
+                entity: ENTITY,
+                id: query.proxy_id.clone(),
+            })
+        })?;
+        let mut items = sqlx::query(
+            "select id, name, email, provider_kind, authentication_kind, plan_type, enabled from provider_accounts
+             where outbound_proxy_id = $1 and (strpos(lower(name), lower($2)) > 0
+                 or strpos(lower(coalesce(email, '')), lower($2)) > 0)
+             order by name, id limit $3 offset $4",
+        )
+        .bind(&query.proxy_id)
+        .bind(&query.search)
+        .bind(i64::from(query.page_size.get()))
+        .bind(i64::from(query.page - 1) * i64::from(query.page_size.get()))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| store_error(unavailable()))?
+        .into_iter()
+        .map(|row| {
+            Ok(ProxyAccountRef {
+                id: row.try_get("id").map_err(|_| invalid())?,
+                name: row.try_get("name").map_err(|_| invalid())?,
+                email: row.try_get("email").map_err(|_| invalid())?,
+                provider_kind: row.try_get("provider_kind").map_err(|_| invalid())?,
+                authentication_kind: row.try_get("authentication_kind").map_err(|_| invalid())?,
+                plan_type: row.try_get("plan_type").map_err(|_| invalid())?,
+                plan_type_display: None,
+                groups: Vec::new(),
+                enabled: row.try_get("enabled").map_err(|_| invalid())?,
+            })
+        })
+        .collect::<StoreResult<Vec<_>>>()
+        .map_err(store_error)?;
+        if !items.is_empty() {
+            // 仅批量加载当前页的分组，并沿用同一快照，避免逐账号查询。
+            let account_ids: Vec<&str> = items.iter().map(|account| account.id.as_str()).collect();
+            let rows = sqlx::query_as::<_, (String, String, String, String, bool)>(
+                "select m.provider_account_id, g.id, g.name, g.color, g.enabled
+                 from account_group_accounts m join account_groups g on g.id = m.account_group_id
+                 where m.provider_account_id = any($1::text[])
+                 order by m.provider_account_id, g.id",
+            )
+            .bind(&account_ids)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| store_error(unavailable()))?;
+            let mut groups = BTreeMap::<String, Vec<AccountGroupRef>>::new();
+            for (account_id, group_id, name, color, enabled) in rows {
+                groups.entry(account_id).or_default().push(AccountGroupRef {
+                    id: AccountGroupId::new(group_id).map_err(|_| store_error(invalid()))?,
+                    name,
+                    color: AccountGroupColor::parse(&color)
+                        .ok_or_else(|| store_error(invalid()))?,
+                    enabled,
+                });
+            }
+            for account in &mut items {
+                account.groups = groups.remove(&account.id).unwrap_or_default();
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| store_error(unavailable()))?;
+        Ok(ProxyAccountPage {
+            items,
+            total: u64::try_from(total).map_err(|_| store_error(invalid()))?,
+            page: query.page,
+            page_size: query.page_size.get(),
+        })
+    }
+
     async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation> {
         let slot = self
             .import_slots

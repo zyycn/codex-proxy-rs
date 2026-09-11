@@ -280,11 +280,11 @@ impl DefaultAccountsService {
         )
         .await?;
         let usage = quota.representative_window_usage().cloned();
-        quota.fill_missing_plan_type(&mut stored.account.plan_type);
         Ok(AccountDirectoryItem {
-            plan_type_display: self.providers.plan_type_display(
+            plan_type_display: self.providers.resolve_account_plan(
                 stored.account.provider_kind.as_str(),
-                stored.account.plan_type.as_deref(),
+                &mut stored.account.plan_type,
+                Some(&quota),
             ),
             projection: stored.projection,
             usage,
@@ -373,11 +373,11 @@ impl AccountsService for DefaultAccountsService {
             .zip(quotas)
             .map(|(mut item, quota)| {
                 let usage = quota.representative_window_usage().cloned();
-                quota.fill_missing_plan_type(&mut item.account.plan_type);
                 AccountDirectoryItem {
-                    plan_type_display: self.providers.plan_type_display(
+                    plan_type_display: self.providers.resolve_account_plan(
                         item.account.provider_kind.as_str(),
-                        item.account.plan_type.as_deref(),
+                        &mut item.account.plan_type,
+                        Some(&quota),
                     ),
                     usage,
                     account: item.account,

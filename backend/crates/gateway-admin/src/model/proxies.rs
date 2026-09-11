@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use gateway_core::account::OutboundProxy;
 
-use super::{PageSize, Revision};
+use super::{PageSize, Revision, account_groups::AccountGroupRef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountProxySelection {
@@ -29,6 +29,30 @@ pub struct ProxyListQuery {
 pub struct ProxyAccountRef {
     pub id: String,
     pub name: String,
+    pub email: Option<String>,
+    pub provider_kind: String,
+    pub authentication_kind: String,
+    pub plan_type: Option<String>,
+    pub plan_type_display: Option<String>,
+    pub groups: Vec<AccountGroupRef>,
+    pub enabled: bool,
+}
+
+/// 按代理查询关联账号，分页与搜索均在存储层执行。
+#[derive(Debug, Clone)]
+pub struct ProxyAccountListQuery {
+    pub proxy_id: String,
+    pub page: u32,
+    pub page_size: PageSize,
+    pub search: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyAccountPage {
+    pub items: Vec<ProxyAccountRef>,
+    pub total: u64,
+    pub page: u32,
+    pub page_size: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +69,7 @@ pub struct ProxyRecord {
     pub name: String,
     pub proxy: OutboundProxy,
     pub revision: Revision,
-    pub accounts: Vec<ProxyAccountRef>,
+    pub account_count: u64,
     pub last_test_at: Option<DateTime<Utc>>,
     pub last_test: Option<ProxyTestResult>,
     pub created_at: DateTime<Utc>,

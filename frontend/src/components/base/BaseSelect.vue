@@ -12,6 +12,7 @@ type SelectSize = 'sm' | 'md' | 'lg'
 export interface SelectOption {
   label: string
   value: string
+  description?: string
   disabled?: boolean
 }
 
@@ -303,8 +304,16 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       @click="toggleMenu"
       @keydown="handleTriggerKeydown"
     >
-      <span class="min-w-0 flex-1 truncate">
+      <span class="min-w-0 truncate" :class="selectedOption?.description ? 'max-w-1/2 shrink-0' : 'flex-1'">
         {{ selectedOption?.label ?? placeholder }}
+      </span>
+      <span
+        v-if="selectedOption?.description"
+        :title="selectedOption.description"
+        class="min-w-0 flex-1 truncate text-xs font-normal"
+        :class="disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+      >
+        {{ selectedOption.description }}
       </span>
       <ChevronDown
         class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 transition-transform"
@@ -355,7 +364,15 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
               @mousedown.prevent
               @click="chooseOption(option, index)"
             >
-              <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
+              <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
+              <span
+                v-if="option.description"
+                :title="option.description"
+                class="min-w-0 flex-1 truncate text-xs font-normal"
+                :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+              >
+                {{ option.description }}
+              </span>
               <Check
                 v-if="option.value === model"
                 class="shrink-0 text-cp-primary-text"

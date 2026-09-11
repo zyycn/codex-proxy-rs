@@ -1,12 +1,12 @@
 use async_trait::async_trait;
-use gateway_core::account::OutboundProxy;
+use gateway_core::account::{OutboundProxy, ProviderAccountId};
 
 use super::store::AdminStoreResult;
 use crate::model::{
     MutationContext, Revision,
     proxies::{
-        ImportProxyBinding, NewProxy, ProxyListQuery, ProxyMutation, ProxyPage, ProxyRecord,
-        ProxyTestResult, UpdateProxy,
+        ImportProxyBinding, NewProxy, ProxyAccountListQuery, ProxyAccountPage, ProxyListQuery,
+        ProxyMutation, ProxyPage, ProxyRecord, ProxyTestResult, UpdateProxy,
     },
 };
 
@@ -15,7 +15,18 @@ pub trait ProxyStore: Send + Sync {
     /// 在凭据交换到提交期间保护选定代理的连接配置和测试结果。
     async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation>;
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage>;
+    async fn list_accounts(
+        &self,
+        query: ProxyAccountListQuery,
+    ) -> AdminStoreResult<ProxyAccountPage>;
     async fn get(&self, id: &str) -> AdminStoreResult<ProxyRecord>;
+    /// 仅在账号仍绑定指定代理时解除关联，并清除账号保存的连接地址。
+    async fn remove_account(
+        &self,
+        proxy_id: &str,
+        account_id: &ProviderAccountId,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision>;
     async fn create(
         &self,
         command: NewProxy,

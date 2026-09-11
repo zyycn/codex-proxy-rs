@@ -1778,7 +1778,17 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
         .await
         .unwrap();
     assert_eq!(
-        proxies.get(&saved.id).await.unwrap().accounts[0].id,
+        proxies
+            .list_accounts(gateway_admin::model::proxies::ProxyAccountListQuery {
+                proxy_id: saved.id.clone(),
+                page: 1,
+                page_size: gateway_admin::model::PageSize::new(20).unwrap(),
+                search: String::new(),
+            })
+            .await
+            .unwrap()
+            .items[0]
+            .id,
         "acct_oauth_proxy"
     );
     assert_eq!(

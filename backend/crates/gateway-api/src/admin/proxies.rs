@@ -7,13 +7,16 @@ use axum::{
 };
 use gateway_admin::model::{
     PageSize, Revision,
-    proxies::{NewProxy, ProxyListQuery, ProxyMutation, ProxyRecord, UpdateProxy},
+    proxies::{
+        NewProxy, ProxyAccountListQuery, ProxyListQuery, ProxyMutation, ProxyRecord, UpdateProxy,
+    },
 };
 use serde::{Deserialize, Serialize};
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
-    PageMeta, accounts::AccountProxyUpdate,
+    PageMeta,
+    accounts::{AccountGroupRefView, AccountProxyUpdate},
 };
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +25,22 @@ struct ListQuery {
     page: Option<u32>,
     page_size: Option<u16>,
     search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AccountsQuery {
+    proxy_id: String,
+    page: Option<u32>,
+    page_size: Option<u16>,
+    search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RemoveAccountRequest {
+    proxy_id: String,
+    account_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,9 +76,17 @@ struct ProxyTestView {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProxyAccountView {
     id: String,
     name: String,
+    email: Option<String>,
+    provider: String,
+    authentication_kind: String,
+    plan_type: Option<String>,
+    plan_type_display: Option<String>,
+    groups: Vec<AccountGroupRefView>,
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -70,7 +97,7 @@ struct ProxyView {
     endpoint: String,
     has_authentication: bool,
     revision: u64,
-    accounts: Vec<ProxyAccountView>,
+    account_count: u64,
     last_test_at: Option<String>,
     last_test: Option<ProxyTestView>,
     created_at: String,
@@ -86,14 +113,7 @@ impl From<ProxyRecord> for ProxyView {
             has_authentication: record.proxy.expose_url() != endpoint,
             endpoint,
             revision: record.revision.get(),
-            accounts: record
-                .accounts
-                .into_iter()
-                .map(|account| ProxyAccountView {
-                    id: account.id,
-                    name: account.name,
-                })
-                .collect(),
+            account_count: record.account_count,
             last_test_at: record.last_test_at.map(|at| at.to_rfc3339()),
             last_test: record.last_test.map(|result| ProxyTestView {
                 success: result.success,
@@ -110,6 +130,12 @@ impl From<ProxyRecord> for ProxyView {
 #[derive(Serialize)]
 struct ProxyPageView {
     items: Vec<ProxyView>,
+    page: PageMeta,
+}
+
+#[derive(Serialize)]
+struct ProxyAccountPageView {
+    items: Vec<ProxyAccountView>,
     page: PageMeta,
 }
 
@@ -135,6 +161,11 @@ where
 {
     Router::new()
         .route("/api/admin/proxies", get(list::<S>))
+        .route("/api/admin/proxies/accounts", get(list_accounts::<S>))
+        .route(
+            "/api/admin/proxies/accounts/remove",
+            post(remove_account::<S>),
+        )
         .route("/api/admin/proxies/create", post(create::<S>))
         .route("/api/admin/proxies/update", post(update::<S>))
         .route("/api/admin/proxies/delete", post(delete::<S>))
@@ -186,6 +217,64 @@ where
     ))
 }
 
+async fn list_accounts<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountsQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .proxies()
+        .list_accounts(ProxyAccountListQuery {
+            proxy_id: query.proxy_id,
+            page: query.page.unwrap_or(1),
+            page_size: PageSize::new(query.page_size.unwrap_or(20))
+                .map_err(|_| AdminError::bad_request("分页大小不合法"))?,
+            search: query.search.unwrap_or_default().trim().to_owned(),
+        })
+        .await
+        .map_err(map_error)?;
+    let total_pages = result.total.div_ceil(u64::from(result.page_size));
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(ProxyAccountPageView {
+            items: result
+                .items
+                .into_iter()
+                .map(|account| ProxyAccountView {
+                    id: account.id,
+                    name: account.name,
+                    email: account.email,
+                    provider: account.provider_kind,
+                    authentication_kind: account.authentication_kind,
+                    plan_type: account.plan_type,
+                    plan_type_display: account.plan_type_display,
+                    groups: account
+                        .groups
+                        .into_iter()
+                        .map(|group| AccountGroupRefView {
+                            id: group.id.to_string(),
+                            name: group.name,
+                            color: group.color.as_str().to_owned(),
+                            enabled: group.enabled,
+                        })
+                        .collect(),
+                    enabled: account.enabled,
+                })
+                .collect(),
+            page: PageMeta::new(
+                result.page,
+                u32::from(result.page_size),
+                result.total,
+                u32::try_from(total_pages).unwrap_or(u32::MAX),
+            ),
+        }),
+    ))
+}
+
 async fn create<S>(
     auth: AdminAuth,
     State(state): State<S>,
@@ -213,6 +302,30 @@ where
     Ok(AdminResponse::new(
         StatusCode::CREATED,
         AdminEnvelope::ok(MutationView::from(result)),
+    ))
+}
+
+async fn remove_account<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<RemoveAccountRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let revision = state
+        .admin_services()
+        .proxies()
+        .remove_account(
+            &request.proxy_id,
+            &request.account_id,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({"configRevision": revision.get()})),
     ))
 }
 

@@ -301,6 +301,7 @@ pub async fn initialize(
             store.proxies(),
             proxy_probe,
             snapshot.clone(),
+            registry.clone(),
         )),
         auth,
         accounts,

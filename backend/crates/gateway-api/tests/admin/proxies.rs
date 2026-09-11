@@ -13,7 +13,7 @@ use gateway_admin::{
         store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
     },
 };
-use gateway_core::account::OutboundProxy;
+use gateway_core::account::{OutboundProxy, ProviderAccountId};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -28,6 +28,22 @@ fn missing() -> AdminStoreError {
 
 #[async_trait]
 impl ProxyStore for MemoryProxies {
+    async fn remove_account(
+        &self,
+        proxy_id: &str,
+        account_id: &ProviderAccountId,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        if proxy_id != "proxy_test" || account_id.as_str() != "acct_linked" {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Conflict,
+                "proxy account",
+                "changed binding",
+            ));
+        }
+        Ok(Revision::new(4).unwrap())
+    }
+
     async fn reserve_import(
         &self,
         _: &str,
@@ -46,6 +62,36 @@ impl ProxyStore for MemoryProxies {
     async fn get(&self, _: &str) -> AdminStoreResult<ProxyRecord> {
         self.0.lock().unwrap().clone().ok_or_else(missing)
     }
+    async fn list_accounts(
+        &self,
+        query: ProxyAccountListQuery,
+    ) -> AdminStoreResult<ProxyAccountPage> {
+        if !self
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|record| record.id == query.proxy_id)
+        {
+            return Err(missing());
+        }
+        Ok(ProxyAccountPage {
+            items: vec![ProxyAccountRef {
+                id: "acct_linked".to_owned(),
+                name: "工作账号".to_owned(),
+                email: Some("work@example.invalid".to_owned()),
+                provider_kind: "openai".to_owned(),
+                authentication_kind: "oauth".to_owned(),
+                plan_type: Some("plus".to_owned()),
+                plan_type_display: None,
+                groups: vec![],
+                enabled: true,
+            }],
+            total: 21,
+            page: query.page,
+            page_size: query.page_size.get(),
+        })
+    }
     async fn create(
         &self,
         command: NewProxy,
@@ -56,7 +102,7 @@ impl ProxyStore for MemoryProxies {
             name: command.name,
             proxy: command.proxy,
             revision: Revision::new(1).unwrap(),
-            accounts: vec![],
+            account_count: 0,
             last_test: None,
             last_test_at: None,
             created_at: Utc::now(),
@@ -180,6 +226,29 @@ async fn proxy_routes_save_reload_test_rename_and_delete_without_exposing_creden
         "http://proxy.example:8080/"
     );
     assert!(created["data"]["record"].get("proxyUrl").is_none());
+    assert_eq!(created["data"]["record"]["accountCount"], 0);
+    assert!(created["data"]["record"].get("accounts").is_none());
+
+    let (status, linked) = request(
+        &fixture,
+        "/api/admin/proxies/accounts?proxyId=proxy_test&page=2&pageSize=20&search=work",
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        linked["data"]["page"],
+        json!({"page":2,"pageSize":20,"total":21,"totalPages":2})
+    );
+    assert_eq!(
+        linked["data"]["items"],
+        json!([{
+            "id":"acct_linked", "name":"工作账号", "email":"work@example.invalid",
+            "provider":"openai", "enabled":true, "authenticationKind":"oauth",
+            "planType":"plus", "planTypeDisplay":"Plus", "groups":[]
+        }])
+    );
 
     let (status, tested) = request(
         &fixture,
@@ -243,7 +312,50 @@ async fn proxy_routes_require_auth_and_reject_invalid_input() {
         request(&fixture, "/api/admin/proxies", None, false).await.0,
         StatusCode::UNAUTHORIZED
     );
-    for action in ["create", "update", "delete", "test"] {
+    assert_eq!(
+        request(
+            &fixture,
+            "/api/admin/proxies/accounts?proxyId=proxy_test",
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for query in [
+        "",
+        "proxyId=",
+        "proxyId=proxy_test&page=0",
+        "proxyId=proxy_test&pageSize=0",
+        "proxyId=proxy_test&pageSize=201",
+        "proxyId=proxy_test&search=%00",
+        "proxyId=proxy_test&unknown=1",
+    ] {
+        assert_eq!(
+            request(
+                &fixture,
+                &format!("/api/admin/proxies/accounts?{query}"),
+                None,
+                true
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        request(
+            &fixture,
+            "/api/admin/proxies/accounts?proxyId=missing",
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    for action in ["create", "update", "delete", "test", "accounts/remove"] {
         assert_eq!(
             request(
                 &fixture,
@@ -283,4 +395,58 @@ async fn proxy_routes_require_auth_and_reject_invalid_input() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn proxy_account_removal_validates_binding_and_input() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (body, expected) in [
+        (
+            json!({"proxyId":"", "accountId":"acct_linked"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"proxyId":"proxy_test", "accountId":""}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"proxyId":"proxy_test", "accountId":"invalid"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"proxyId":"proxy_test", "accountId":"acct_linked", "enabled":false}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        assert_eq!(
+            request(
+                &fixture,
+                "/api/admin/proxies/accounts/remove",
+                Some(body),
+                true
+            )
+            .await
+            .0,
+            expected
+        );
+    }
+    let (status, result) = request(
+        &fixture,
+        "/api/admin/proxies/accounts/remove",
+        Some(json!({"proxyId":"proxy_test", "accountId":"acct_linked"})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["data"], json!({"configRevision":4}));
+    let (status, result) = request(
+        &fixture,
+        "/api/admin/proxies/accounts/remove",
+        Some(json!({"proxyId":"proxy_previous", "accountId":"acct_linked"})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(result["message"], "账号的代理绑定已变化，请刷新后重试");
 }

@@ -219,15 +219,25 @@ All endpoints require admin authentication and redact proxy credentials from res
 | 方法 / Method | 路径 / Path | 请求 / Request | 结果 / Result |
 | --- | --- | --- | --- |
 | `GET` | `/api/admin/proxies` | `page`、`pageSize`（1-200）、`search`（名称） | `{ items, page }` |
+| `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
+| `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
 | `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl }` | `201 { record, configRevision }` |
 | `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl? }` | `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
-`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accounts: [{ id, name }]`、
+`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、
 `lastTestAt`、`lastTest: { success, latencyMs, exitIp, message }`、`createdAt`、`updatedAt`。
 未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
 记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
+
+代理列表只返回关联账号数量。关联账号按需查询，每项包含 `id`、`name`、`email`、`provider`、`enabled`、
+`authenticationKind`、`planType`、`planTypeDisplay` 和 `groups: [{ id, name, color, enabled }]`，
+不返回账号凭据。默认每页 20 条，按名称、ID 稳定排序；搜索不区分大小写，匹配名称或邮箱的字面子串。
+不存在的代理返回 404，未绑定账号或没有匹配结果时返回空页。数量与当前页来自同一个数据库只读快照。
+
+移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
+若账号已不再绑定请求中的代理，则返回 409；成功后在同一事务中更新配置版本与审计，并发布运行时快照。
 
 更新省略 `proxyUrl` 保留认证；连接配置改变时清除测试结果并更新所有绑定账号。
 Omit `proxyUrl` to preserve credentials. Connection changes invalidate the previous test and update all bound accounts.
