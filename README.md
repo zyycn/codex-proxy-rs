@@ -12,22 +12,9 @@
 [![GHCR](https://img.shields.io/badge/GHCR-codex--proxy--rs-2496ED?logo=docker&logoColor=white&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/pkgs/container/codex-proxy-rs)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 
-[功能](#功能) · [快速开始](#快速开始) · [客户端接入](#客户端接入) · [文档](#文档) · [社区](#社区) · [许可证](#许可证)
+[快速开始](#快速开始) · [客户端接入](#客户端接入) · [文档](#文档) · [社区](#社区) · [许可证](#许可证)
 
 </div>
-
-将 OpenAI、xAI 账号接入同一个服务，通过网页管理账号、分配客户端密钥和查看使用情况。
-客户端使用统一的访问地址与代理密钥，上游账号凭据由服务端管理。
-
-## 功能
-
-- **账号管理**：OAuth 授权、账号导入、凭据刷新与额度查看；代理管理支持独立保存、连接测试和账号绑定，以及 sub2api OpenAI 账号代理导入。
-- **访问控制**：通过账号分组分配密钥权限，设置日/周 USD 限额、并发和请求频率。
-- **客户端接入**：支持 Codex CLI、桌面端与 Responses API 客户端，提供 HTTP 流式响应和 WebSocket。
-- **请求诊断**：查看请求记录、用量、费用、延迟和错误详情。
-- **部署运维**：Docker Compose 部署、S3/R2 数据库备份、同大版本在线更新与回滚。
-
-图片生成、编辑和 Codex 独立搜索由 OpenAI 账号提供；模型与功能的可用性取决于上游账号权限。
 
 > [!NOTE]
 > 本项目提供 Responses API，不支持 `/v1/chat/completions`。接入前请确认客户端支持 Responses 协议。
