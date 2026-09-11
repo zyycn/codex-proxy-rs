@@ -413,6 +413,7 @@ async fn xai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
 
     let import_error = admin
         .prepare_import(PrepareCredentialImport {
+            default_outbound_proxy: None,
             document: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
         .await

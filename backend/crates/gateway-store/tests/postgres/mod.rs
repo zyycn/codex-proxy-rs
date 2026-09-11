@@ -22,6 +22,7 @@ mod health;
 mod observability;
 mod ops_events;
 mod provider_accounts;
+mod proxies;
 mod query_budget;
 mod retention;
 mod runtime_settings;
@@ -235,6 +236,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "client_key_charge_events",
             "model_requests",
             "ops_events",
+            "outbound_proxies",
             "provider_accounts",
             "runtime_settings",
         ]

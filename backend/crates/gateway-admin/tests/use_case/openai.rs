@@ -50,6 +50,7 @@ async fn openai_import_should_prepare_before_atomic_store_commit() {
     services
         .openai()
         .import_document(ImportCredentials {
+            outbound_proxy_id: None,
             settings: Some(super::accounts::import_settings()),
             context: context("import-openai"),
             document: document(),
@@ -107,6 +108,7 @@ async fn openai_import_should_expose_only_explicit_public_errors_without_committ
         let error = services
             .openai()
             .import_document(ImportCredentials {
+                outbound_proxy_id: None,
                 settings: None,
                 context: context("import-openai-pat-failure"),
                 document: document(),
@@ -132,6 +134,7 @@ async fn openai_import_should_refresh_quota_for_every_imported_account() {
     let result = services
         .openai()
         .import_document(ImportCredentials {
+            outbound_proxy_id: None,
             settings: None,
             context: context("import-openai-batch"),
             document: document(),
@@ -176,6 +179,7 @@ async fn openai_import_should_remain_successful_when_quota_refresh_fails() {
     let result = services
         .openai()
         .import_document(ImportCredentials {
+            outbound_proxy_id: None,
             settings: None,
             context: context("import-openai-quota-failure"),
             document: document(),
@@ -348,6 +352,7 @@ async fn openai_import_provider_error_should_not_touch_store_transaction() {
     services
         .openai()
         .import_document(ImportCredentials {
+            outbound_proxy_id: None,
             settings: None,
             context: context("import-openai-error"),
             document: document(),

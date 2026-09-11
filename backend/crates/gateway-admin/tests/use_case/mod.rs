@@ -5,6 +5,7 @@ mod backup;
 mod client_keys;
 mod observability;
 mod openai;
+mod proxies;
 mod settings;
 mod system;
 mod xai;
@@ -196,6 +197,7 @@ impl AdminHarness {
                     self.accounts,
                     self.account_runtime,
                     self.account_groups,
+                    Arc::new(proxies::UnavailableProxies),
                 ),
                 self.auth,
                 self.client_keys,
@@ -205,7 +207,7 @@ impl AdminHarness {
             ),
             self.providers,
             Arc::new(NoopSnapshot),
-            self.probe,
+            (self.probe, Arc::new(proxies::UnavailableProxies)),
             Arc::new(NoopClientDistribution),
             self.system,
         )

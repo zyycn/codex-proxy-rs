@@ -3,6 +3,7 @@
 pub mod client_distribution;
 pub mod config;
 mod logging;
+pub mod proxy_probe;
 pub mod serve;
 pub mod system_update;
 pub mod workers;
@@ -79,6 +80,11 @@ impl HostBundle {
     /// 返回惰性下载解析能力；网络请求只会在管理 API 调用时发生。
     pub fn client_distribution_resolver(&self) -> Arc<dyn ClientDistributionResolver> {
         self.client_distribution.clone()
+    }
+
+    #[must_use]
+    pub fn proxy_probe(&self) -> Arc<dyn gateway_admin::ports::proxy::ProxyProbe> {
+        Arc::new(proxy_probe::HttpProxyProbe::default())
     }
 
     #[must_use]

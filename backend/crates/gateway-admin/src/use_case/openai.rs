@@ -58,6 +58,7 @@ pub trait OpenAiService: Send + Sync {
 pub(crate) struct DefaultOpenAiService {
     provider: Arc<dyn ProviderAdmin>,
     accounts: Arc<dyn AccountStore>,
+    proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
     snapshot: Arc<dyn SnapshotControl>,
 }
 
@@ -66,11 +67,13 @@ impl DefaultOpenAiService {
     pub(crate) fn new(
         provider: Arc<dyn ProviderAdmin>,
         accounts: Arc<dyn AccountStore>,
+        proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
         snapshot: Arc<dyn SnapshotControl>,
     ) -> Self {
         Self {
             provider,
             accounts,
+            proxies,
             snapshot,
         }
     }
@@ -128,9 +131,17 @@ impl OpenAiService for DefaultOpenAiService {
         command: ImportCredentials,
     ) -> Result<CredentialImportResult, AdminError> {
         let context = command.context;
+        let outbound_proxy = super::import_proxy_binding(
+            self.proxies.as_ref(),
+            command.outbound_proxy_id.as_deref(),
+        )
+        .await?;
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
+                default_outbound_proxy: outbound_proxy
+                    .as_ref()
+                    .map(|binding| binding.proxy.clone()),
                 document: command.document,
             })
             .await
@@ -144,6 +155,7 @@ impl OpenAiService for DefaultOpenAiService {
             .accounts
             .commit_credential_import(
                 CredentialImportCommit {
+                    outbound_proxy,
                     prepared,
                     settings: command.settings,
                 },
@@ -166,6 +178,7 @@ impl OpenAiService for DefaultOpenAiService {
     ) -> Result<AuthorizationStarted, AdminError> {
         let pending = pending_authorization(
             self.accounts.as_ref(),
+            self.proxies.as_ref(),
             self.provider.provider_kind(),
             &command,
             "OpenAI credential",

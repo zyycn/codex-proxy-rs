@@ -81,7 +81,7 @@ function continueToImport() {
         :disabled="busy"
         :groups="groups"
         :groups-loading="groupsLoading"
-        :proxy-error="form.proxyUrl.trim() ? proxyError : undefined"
+        :proxy-error="form.proxyId.trim() ? proxyError : undefined"
       />
       <p v-if="view.configuring && !scheduling.valid" class="m-0 text-xs text-cp-error" role="alert">
         {{ scheduling.message }}

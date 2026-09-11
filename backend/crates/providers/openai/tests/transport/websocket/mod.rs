@@ -193,6 +193,74 @@ fn websocket_connection_should_prepare_response_create_payload_text() {
     assert!(payload.get("store").is_none());
 }
 
+#[tokio::test]
+async fn backend_websocket_should_stream_upstream_for_non_streaming_client_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_codex_test_websocket(stream).await;
+        let Some(Ok(Message::Text(payload))) = websocket.next().await else {
+            panic!("client should send response.create");
+        };
+        let payload: Value = serde_json::from_str(payload.as_str()).unwrap();
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_non_streaming",
+                        "object": "response",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4}
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        payload
+    });
+    let request = CodexResponsesRequest::from_body(
+        json!({
+            "model": "gpt-test",
+            "instructions": "collect this response",
+            "input": [],
+            "stream": false,
+            "previous_response_id": "resp_previous"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{address}"),
+        test_wire_profile(),
+    );
+    let response = timeout(
+        Duration::from_secs(5),
+        backend.create_response(
+            &request,
+            request_context("req_non_streaming_ws", Some("acct-non-streaming")),
+        ),
+    )
+    .await
+    .unwrap()
+    .expect("upstream WebSocket response");
+    let payload = server.await.unwrap();
+    assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+    assert!(response.body.contains("resp_non_streaming"));
+    assert_eq!(payload["stream"], true);
+    assert_eq!(payload["previous_response_id"], "resp_previous");
+    assert!(
+        !request.stream(),
+        "downstream delivery remains non-streaming"
+    );
+}
+
 #[test]
 fn websocket_connection_should_prepare_capture_payload_with_canonical_field_order() {
     let mut request = codex_request_with_prompt_cache_key(

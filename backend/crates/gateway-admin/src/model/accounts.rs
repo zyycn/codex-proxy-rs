@@ -221,7 +221,7 @@ pub struct UpdateAccount {
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
-    pub outbound_proxy: Option<Option<gateway_core::account::OutboundProxy>>,
+    pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
 }
 
 /// 账号更新结果。
@@ -239,7 +239,7 @@ pub struct BatchUpdateAccounts {
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
-    pub outbound_proxy: Option<Option<gateway_core::account::OutboundProxy>>,
+    pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
 }
 
 /// 批量账号更新结果。

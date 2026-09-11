@@ -17,7 +17,7 @@ export interface AccountCreateForm {
   oauthAuthUrl: string
   oauthCallback: string
   proxyMode: string
-  proxyUrl: string
+  proxyId: string
 }
 
 export function emptyAccountCreateForm(): AccountCreateForm {
@@ -34,25 +34,15 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     oauthAuthUrl: '',
     oauthCallback: '',
     proxyMode: 'direct',
-    proxyUrl: '',
+    proxyId: '',
   }
 }
 
 export function accountProxyError(form: AccountCreateForm): string | undefined {
   if (form.proxyMode !== 'proxy')
     return undefined
-  if (!form.proxyUrl.trim())
-    return '请输入代理 URL'
-  try {
-    const url = new URL(form.proxyUrl.trim())
-    if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(url.protocol) || !url.hostname)
-      return '请输入 HTTP、HTTPS 或 SOCKS5 代理地址'
-    if (url.protocol.startsWith('socks5') && !url.port)
-      return 'SOCKS5 代理地址需要填写端口'
-  }
-  catch {
-    return '请输入有效的代理 URL'
-  }
+  if (!form.proxyId.trim())
+    return '请选择已通过测试的代理'
   return undefined
 }
 

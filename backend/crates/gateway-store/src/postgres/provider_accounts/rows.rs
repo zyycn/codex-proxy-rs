@@ -233,6 +233,7 @@ impl NewProviderAccount {
 #[derive(Clone)]
 pub struct ImportProviderAccounts {
     pub settings: Option<AccountImportSettings>,
+    pub outbound_proxy: Option<gateway_admin::model::proxies::ImportProxyBinding>,
     pub scope: ProviderAccountAdminScope,
     pub accounts: Vec<NewProviderAccount>,
     pub audit: AdminAuditEvent,
@@ -313,7 +314,7 @@ impl fmt::Debug for RotateProviderAccount {
 
 #[derive(Debug, Clone)]
 pub struct BatchUpdateProviderAccountsAdmin {
-    pub outbound_proxy: Option<Option<gateway_core::account::OutboundProxy>>,
+    pub outbound_proxy: Option<gateway_admin::model::proxies::AccountProxySelection>,
     pub account_ids: Vec<String>,
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,

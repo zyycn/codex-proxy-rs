@@ -382,6 +382,7 @@ pub struct AdminAccountStorePorts {
     accounts: Arc<dyn AccountStore>,
     runtime: Arc<dyn AccountRuntimeStore>,
     groups: Arc<dyn AccountGroupStore>,
+    proxies: Arc<dyn super::proxy::ProxyStore>,
 }
 
 impl AdminAccountStorePorts {
@@ -390,11 +391,13 @@ impl AdminAccountStorePorts {
         accounts: Arc<dyn AccountStore>,
         runtime: Arc<dyn AccountRuntimeStore>,
         groups: Arc<dyn AccountGroupStore>,
+        proxies: Arc<dyn super::proxy::ProxyStore>,
     ) -> Self {
         Self {
             accounts,
             runtime,
             groups,
+            proxies,
         }
     }
 }
@@ -445,6 +448,11 @@ impl AdminStorePorts {
     #[must_use]
     pub fn account_groups(&self) -> Arc<dyn AccountGroupStore> {
         self.accounts.groups.clone()
+    }
+
+    #[must_use]
+    pub fn proxies(&self) -> Arc<dyn super::proxy::ProxyStore> {
+        self.accounts.proxies.clone()
     }
 
     #[must_use]

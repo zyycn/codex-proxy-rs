@@ -10,6 +10,7 @@ pub mod client_distribution;
 pub mod client_keys;
 pub mod observability;
 pub mod provider_credentials;
+pub mod proxies;
 pub mod settings;
 pub mod system;
 

@@ -216,6 +216,7 @@ impl PgAdminAccountStore {
         settings: Option<AccountImportSettings>,
         context: &MutationContext,
         action: &str,
+        outbound_proxy: Option<gateway_admin::model::proxies::ImportProxyBinding>,
     ) -> AdminStoreResult<CredentialImportResult> {
         let provider_kind = prepared.provider_kind.as_str().to_owned();
         let accounts = prepared
@@ -233,6 +234,7 @@ impl PgAdminAccountStore {
             .accounts
             .import_provider_accounts(ImportProviderAccounts {
                 settings,
+                outbound_proxy,
                 scope: ProviderAccountAdminScope {
                     provider_kind: provider_kind.clone(),
                 },
@@ -627,6 +629,7 @@ impl AccountStore for PgAdminAccountStore {
             command.settings,
             context,
             "import_document",
+            command.outbound_proxy,
         )
         .await
     }
@@ -650,6 +653,16 @@ impl AccountStore for PgAdminAccountStore {
                         command.settings,
                         context,
                         "authorize",
+                        command
+                            .pending
+                            .outbound_proxy_id()
+                            .zip(command.pending.outbound_proxy())
+                            .map(
+                                |(id, proxy)| gateway_admin::model::proxies::ImportProxyBinding {
+                                    id: id.to_owned(),
+                                    proxy: proxy.clone(),
+                                },
+                            ),
                     )
                     .await?;
                 let [account_id]: [CoreProviderAccountId; 1] =

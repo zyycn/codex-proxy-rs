@@ -11,6 +11,7 @@ withDefaults(defineProps<{
   groupsLoading: boolean
   disabled: boolean
   endpoint?: string | null
+  accountId?: string
   preserveProxy?: boolean
   proxyError?: string
 }>(), { preserveProxy: true })
@@ -19,7 +20,7 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
-const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -67,6 +68,6 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :disabled="disabled"
       />
     </BaseFormItem>
-    <AccountProxyField v-model:mode="proxyMode" v-model:url="proxyUrl" :preserve="preserveProxy" :error="proxyError" :endpoint="endpoint" :disabled="disabled" />
+    <AccountProxyField v-model:mode="proxyMode" v-model:proxy-id="proxyId" :preserve="preserveProxy" :error="proxyError" :endpoint="endpoint" :account-id="accountId" :disabled="disabled" />
   </div>
 </template>

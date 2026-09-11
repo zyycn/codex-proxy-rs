@@ -25,7 +25,7 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
-const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -61,11 +61,12 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         v-model:weight="weight"
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
-        v-model:proxy-url="proxyUrl"
+        v-model:proxy-id="proxyId"
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="saving"
         :endpoint="account.outboundProxyEndpoint"
+        :account-id="account.id"
       />
     </div>
 

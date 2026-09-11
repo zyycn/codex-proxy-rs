@@ -820,6 +820,12 @@ pub(super) async fn read_error_response_body(
 
 pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
+    // Upstream execution is streaming; downstream delivery keeps the original preference.
+    if !request.stream() {
+        request
+            .body_mut()
+            .insert("stream".to_owned(), Value::Bool(true));
+    }
     project_websocket_client_metadata(&mut request);
     request
 }

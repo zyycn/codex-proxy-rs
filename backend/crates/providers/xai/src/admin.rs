@@ -429,8 +429,11 @@ impl ProviderAdmin for XaiAdminProvider {
             command.document.into_provider_data().into_inner(),
         ))
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
-        let document = GrokOAuthImportDocument::parse_json(&document)
-            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
+        let document = GrokOAuthImportDocument::parse_json_with_proxy(
+            &document,
+            command.default_outbound_proxy.as_ref(),
+        )
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
         let mut subjects = BTreeSet::new();
         let mut credentials = Vec::new();
         // 逐条目独立成败：verify 会真实轮换 RT，后续条目的任何失败都不得

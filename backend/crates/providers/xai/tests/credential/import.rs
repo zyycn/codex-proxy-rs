@@ -205,6 +205,45 @@ fn strict_oauth_account_document_should_parse_without_exposing_credentials() {
 }
 
 #[test]
+fn import_default_proxy_preserves_explicit_account_exits() {
+    let default_proxy =
+        gateway_core::account::OutboundProxy::parse("http://default.example:8080").unwrap();
+    for (field, value, expected) in [
+        (
+            None,
+            serde_json::Value::Null,
+            Some("http://default.example:8080/"),
+        ),
+        (
+            Some("outboundProxyUrl"),
+            serde_json::json!("socks5h://override.example:1080"),
+            Some("socks5h://override.example:1080"),
+        ),
+        (Some("outbound_proxy_url"), serde_json::json!(""), None),
+        (Some("outboundProxyUrl"), serde_json::Value::Null, None),
+        (Some("proxy_key"), serde_json::Value::Null, None),
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&oauth_account_document()).unwrap();
+        if let Some(field) = field {
+            document["accounts"][0][field] = value;
+        }
+        let parsed = GrokOAuthImportDocument::parse_json_with_proxy(
+            &serde_json::to_vec(&document).unwrap(),
+            Some(&default_proxy),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.into_entries()[0]
+                .outbound_proxy()
+                .map(|proxy| proxy.endpoint())
+                .as_deref(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn oauth_account_document_should_reject_api_key_credential_field() {
     let mut document: serde_json::Value =
         serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");

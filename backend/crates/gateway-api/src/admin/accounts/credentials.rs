@@ -53,6 +53,7 @@ impl AccountImportSettingsRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
+    pub outbound_proxy_id: Option<String>,
     pub settings: Option<AccountImportSettingsRequest>,
     pub provider: String,
     pub data: Value,
@@ -60,6 +61,9 @@ pub struct AccountImportRequest {
 
 impl AccountImportRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(id) = &self.outbound_proxy_id {
+            require_wire_id(id, "outboundProxyId")?;
+        }
         if let Some(settings) = &self.settings {
             settings.validate()?;
         }
@@ -82,6 +86,7 @@ impl AccountImportRequest {
         Ok((
             provider,
             ImportCredentials {
+                outbound_proxy_id: self.outbound_proxy_id,
                 settings: self
                     .settings
                     .map(AccountImportSettingsRequest::into_settings)
@@ -96,6 +101,7 @@ impl AccountImportRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartAccountAuthorizationRequest {
+    pub outbound_proxy_id: Option<String>,
     pub provider: String,
     pub name: String,
     pub account_id: Option<String>,
@@ -129,7 +135,10 @@ impl StartAccountAuthorizationRequest {
                 context,
                 name: self.name,
                 reauthorization,
-                outbound_proxy: self.outbound_proxy_url.and_then(|value| value.0),
+                outbound_proxy: super::wire::proxy_selection(
+                    self.outbound_proxy_id,
+                    self.outbound_proxy_url,
+                )?,
             },
         ))
     }
@@ -188,6 +197,7 @@ impl CompleteAccountAuthorizationRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAccountRequest {
+    pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
     pub enabled: bool,
@@ -209,7 +219,10 @@ impl UpdateAccountRequest {
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
         Ok(UpdateAccount {
-            outbound_proxy: self.outbound_proxy_url.map(|value| value.0),
+            outbound_proxy: super::wire::proxy_selection(
+                self.outbound_proxy_id,
+                self.outbound_proxy_url,
+            )?,
             account_id: self.account_id,
             enabled: self.enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,

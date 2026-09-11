@@ -21,6 +21,11 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/accounts/index.vue'),
       },
       {
+        path: 'proxies',
+        name: 'proxies',
+        component: () => import('@/views/proxies/index.vue'),
+      },
+      {
         path: 'account-groups',
         name: 'account-groups',
         component: () => import('@/views/account-groups/index.vue'),

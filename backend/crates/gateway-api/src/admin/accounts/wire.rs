@@ -17,6 +17,33 @@ impl<'de> Deserialize<'de> for AccountProxyUpdate {
     }
 }
 
+pub(super) fn proxy_selection(
+    id: Option<String>,
+    url: Option<AccountProxyUpdate>,
+) -> Result<Option<gateway_admin::model::proxies::AccountProxySelection>, WireValidationError> {
+    use gateway_admin::model::proxies::AccountProxySelection;
+    match (id, url) {
+        (Some(_), Some(_)) => Err(WireValidationError::new("outboundProxyId")),
+        (Some(id), None) if id.is_empty() => Ok(Some(AccountProxySelection::Direct)),
+        (Some(id), None) => {
+            if id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            {
+                return Err(WireValidationError::new("outboundProxyId"));
+            }
+            Ok(Some(AccountProxySelection::Saved(id)))
+        }
+        (None, Some(value)) => Ok(Some(
+            value
+                .0
+                .map_or(AccountProxySelection::Direct, AccountProxySelection::Url),
+        )),
+        (None, None) => Ok(None),
+    }
+}
+
 /// 账号列表查询参数。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -34,6 +61,7 @@ pub struct ListQuery {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
     pub enabled: bool,
@@ -84,7 +112,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
-            outbound_proxy: self.outbound_proxy_url.map(|value| value.0),
+            outbound_proxy: proxy_selection(self.outbound_proxy_id, self.outbound_proxy_url)?,
             account_ids: self.account_ids,
             enabled: self.enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,

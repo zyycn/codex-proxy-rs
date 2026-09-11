@@ -291,9 +291,10 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> Result<PreparedCredentialImport, ProviderAdminError> {
         let prepared = self
             .credentials
-            .prepare_import_document(Value::Object(
-                command.document.into_provider_data().into_inner(),
-            ))
+            .prepare_import_document_with_proxy(
+                Value::Object(command.document.into_provider_data().into_inner()),
+                command.default_outbound_proxy.as_ref(),
+            )
             .await
             .inspect_err(|error| {
                 log_import_failure("prepare_document", credential_admin_error_code(error));

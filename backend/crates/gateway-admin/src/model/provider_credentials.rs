@@ -108,6 +108,7 @@ pub struct CredentialDetails {
 
 /// Provider 正式文档批量导入命令。
 pub struct ImportCredentials {
+    pub outbound_proxy_id: Option<String>,
     pub settings: Option<AccountImportSettings>,
     pub context: MutationContext,
     pub document: ProviderDocument,
@@ -132,6 +133,7 @@ pub struct CredentialImportResult {
 
 /// Provider 解析导入文档时只接收不透明文档，不接触 revision 或审计上下文。
 pub struct PrepareCredentialImport {
+    pub default_outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub document: ProviderDocument,
 }
 
@@ -175,6 +177,7 @@ pub struct PreparedCredentialImport {
 /// Admin 交给 Store 的导入事务命令。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialImportCommit {
+    pub outbound_proxy: Option<super::proxies::ImportProxyBinding>,
     pub settings: Option<AccountImportSettings>,
     pub prepared: PreparedCredentialImport,
 }
@@ -255,6 +258,7 @@ pub struct PendingAuthorizationMutation {
     target: AuthorizationMutationTarget,
     owner_binding: AuthorizationOwnerBinding,
     outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+    outbound_proxy_id: Option<String>,
 }
 
 impl PendingAuthorizationMutation {
@@ -269,6 +273,7 @@ impl PendingAuthorizationMutation {
             target,
             owner_binding,
             outbound_proxy: None,
+            outbound_proxy_id: None,
         }
     }
 
@@ -298,6 +303,16 @@ impl PendingAuthorizationMutation {
 
     pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
         self.outbound_proxy.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_outbound_proxy_id(mut self, id: Option<String>) -> Self {
+        self.outbound_proxy_id = id;
+        self
+    }
+
+    pub fn outbound_proxy_id(&self) -> Option<&str> {
+        self.outbound_proxy_id.as_deref()
     }
 }
 
@@ -337,6 +352,9 @@ impl PendingAuthorizationMutation {
                 "outbound_proxy_url".to_owned(),
                 Value::String(proxy.expose_url().to_owned()),
             );
+        }
+        if let Some(id) = &self.outbound_proxy_id {
+            document.insert("outbound_proxy_id".to_owned(), Value::String(id.clone()));
         }
         document
     }
@@ -382,7 +400,8 @@ impl PendingAuthorizationMutation {
                 started_request_id: document.started_request_id,
             },
         )
-        .with_outbound_proxy(proxy))
+        .with_outbound_proxy(proxy)
+        .with_outbound_proxy_id(document.outbound_proxy_id))
     }
 }
 
@@ -395,6 +414,8 @@ struct StoredAuthorizationMutationV1 {
     started_request_id: String,
     #[serde(default)]
     outbound_proxy_url: Option<String>,
+    #[serde(default)]
+    outbound_proxy_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -418,7 +439,7 @@ pub struct StartAuthorization {
     pub context: MutationContext,
     pub name: String,
     pub reauthorization: Option<ProviderAccountId>,
-    pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+    pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
 }
 
 /// OAuth 流程启动结果。
