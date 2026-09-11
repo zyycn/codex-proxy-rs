@@ -7,6 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_protocol::openai::{
     X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER, X_OPENAI_MEMGEN_REQUEST_HEADER,
+    is_transport_managed_request_header,
 };
 use serde_json::{Map, Value};
 
@@ -458,7 +459,7 @@ fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
     if connection_headers
         .iter()
         .any(|connection_header| connection_header.eq_ignore_ascii_case(name))
-        || name.starts_with("sec-websocket-")
+        || is_transport_managed_request_header(name)
         || name.starts_with("x-grok-")
         || name.starts_with("x-xai-")
     {
@@ -467,30 +468,8 @@ fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
 
     !matches!(
         name,
-        // 逐跳头、上游 authority 和重序列化后的实体长度由 transport 重建。
-        "connection"
-            | "keep-alive"
-            | "proxy-connection"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-            | "host"
-            | "content-length"
-            // 下游连接诊断事实只用于本地观测，不能伪装成 OpenAI 请求事实。
-            | "forwarded"
-            | "x-forwarded-for"
-            | "x-forwarded-host"
-            | "x-forwarded-proto"
-            | "x-forwarded-port"
-            | "x-real-ip"
-            | "true-client-ip"
-            | "cf-connecting-ip"
-            | "x-request-id"
-            // 下游鉴权和账号 cookie 绝不能成为上游账号身份。
-            | "authorization"
+        // 下游鉴权和账号 cookie 绝不能成为上游账号身份。
+        "authorization"
             | "x-api-key"
             // Codex 的服务端托管认证标记只用于客户端能力判断，不代表上游身份。
             | "x-openai-actor-authorization"

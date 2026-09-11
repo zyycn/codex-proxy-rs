@@ -370,6 +370,46 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
 }
 
 #[test]
+fn decoder_should_exclude_downstream_transport_headers_from_opaque_context() {
+    let mut headers = HeaderMap::new();
+    for name in [
+        "cf-visitor",
+        "cf-connecting-ip",
+        "cf-connecting-ipv6",
+        "cf-pseudo-ipv4",
+        "cf-ray",
+        "cf-ipcountry",
+        "cf-warp-tag-id",
+        "cf-worker",
+        "cf-ew-via",
+        "cdn-loop",
+        "via",
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-prefix",
+        "accept-encoding",
+        "content-encoding",
+    ] {
+        headers.insert(name, HeaderValue::from_static("downstream-only"));
+    }
+    headers.insert(
+        "CF-Visitor",
+        HeaderValue::from_static(r#"{"scheme":"https"}"#),
+    );
+    headers.insert("accept-encoding", HeaderValue::from_static("br, gzip"));
+    headers.insert("x-openai-future-mode", HeaderValue::from_static("keep"));
+
+    let decoded =
+        decode_request_with_headers(br#"{"model":"smart-code","input":"hello"}"#, &headers)
+            .expect("decode request behind a reverse proxy");
+
+    assert_eq!(
+        openai_protocol_context(&decoded).get("opaque_request_headers"),
+        Some(&json!([["x-openai-future-mode", STANDARD.encode(b"keep")]])),
+    );
+}
+
+#[test]
 fn decoder_should_preserve_unknown_nested_values_without_debug_disclosure() {
     let secret = "nested-private-value";
     let decoded = generate_request(json!({
