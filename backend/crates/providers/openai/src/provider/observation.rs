@@ -528,16 +528,28 @@ pub(super) fn nonnegative_millis(value: Option<i64>) -> Option<u64> {
     value.and_then(|value| u64::try_from(value).ok())
 }
 
-pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabilities {
+pub(super) fn compile_model_capabilities(
+    model: &CodexCatalogModel,
+    metadata_overrides: &std::collections::BTreeMap<
+        String,
+        crate::config::CodexModelMetadataOverride,
+    >,
+) -> ProviderModelCapabilities {
     // Catalog membership is enough to publish Generate. `supported_in_api` is advisory;
     // the upstream response is authoritative for normal and diagnostic requests.
     let capabilities = ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None)
         .with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
-        .with_presentation(codex_model_presentation(model))
+        .with_presentation(codex_model_presentation(model, metadata_overrides))
 }
 
-pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresentation {
+pub(super) fn codex_model_presentation(
+    model: &CodexCatalogModel,
+    metadata_overrides: &std::collections::BTreeMap<
+        String,
+        crate::config::CodexModelMetadataOverride,
+    >,
+) -> ModelPresentation {
     let capabilities = model.capabilities();
     let reasoning_efforts = capabilities.reasoning_efforts().to_vec();
     // Codex 目录不声明默认 effort；有 medium 时对齐官方 picker 缺省，否则取首项。
@@ -551,7 +563,7 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
         Some(CodexCatalogVisibility::Hide | CodexCatalogVisibility::None)
     );
 
-    ModelPresentation::new(
+    let presentation = ModelPresentation::new(
         Some(model.display_name().to_owned()),
         model.metadata().description().map(str::to_owned),
     )
@@ -560,6 +572,12 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
         model
             .limits()
             .context_window_tokens()
+            .map(std::num::NonZeroU64::get),
+    )
+    .with_max_context_window_tokens(
+        model
+            .limits()
+            .max_context_window_tokens()
             .map(std::num::NonZeroU64::get),
     )
     .with_image_input(capabilities.image_input() == CodexCatalogCapabilityEvidence::DeclaredNative)
@@ -573,7 +591,30 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
         capabilities.image_detail_original() == CodexCatalogCapabilityEvidence::DeclaredNative,
     )
     .with_verbosity(capabilities.verbosity() == CodexCatalogCapabilityEvidence::DeclaredNative)
-    .with_hidden(hidden)
+    .with_hidden(hidden);
+    apply_model_metadata_override(
+        presentation,
+        model.request_model().as_str(),
+        metadata_overrides,
+    )
+}
+
+/// 在目录元数据之上应用 config.yaml 声明的按模型覆盖。
+fn apply_model_metadata_override(
+    mut presentation: ModelPresentation,
+    slug: &str,
+    overrides: &std::collections::BTreeMap<String, crate::config::CodexModelMetadataOverride>,
+) -> ModelPresentation {
+    let Some(metadata) = overrides.get(slug) else {
+        return presentation;
+    };
+    if let Some(context_window) = metadata.context_window {
+        presentation = presentation.with_context_window_tokens(Some(context_window));
+    }
+    if let Some(max_context_window) = metadata.max_context_window {
+        presentation = presentation.with_max_context_window_tokens(Some(max_context_window));
+    }
+    presentation
 }
 
 pub(super) fn selected_transport(request: &CodexResponsesRequest) -> CodexProviderTransport {

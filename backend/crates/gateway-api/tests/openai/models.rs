@@ -92,6 +92,7 @@ impl ExecutionService for ModelsExecution {
                     .to_vec(),
             )
             .with_context_window_tokens(Some(500_000))
+            .with_max_context_window_tokens(Some(900_000))
             .with_image_input(true)
             .with_agent_tools(true, true)
             .with_service_tiers(vec![
@@ -289,6 +290,7 @@ async fn models_should_encode_provider_profiles_for_current_codex_clients() {
     assert_eq!(model["slug"], "grok-4.5");
     assert_eq!(model["default_reasoning_level"], "medium");
     assert_eq!(model["context_window"], 500_000);
+    assert_eq!(model["max_context_window"], 900_000);
     assert_eq!(model["apply_patch_tool_type"], "freeform");
     assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
     assert_eq!(

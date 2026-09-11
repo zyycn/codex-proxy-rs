@@ -267,6 +267,7 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         base_url,
         websocket_pool,
         stream_max_retries,
+        std::collections::BTreeMap::new(),
     )
     .expect("official OpenAI provider");
     (provider, quota)

@@ -78,6 +78,13 @@ openai:
     residency: us
     verified_at: '2026-09-06T11:26:12.084+08:00'
 
+  # 按模型 slug 覆盖客户端目录的上下文窗口元数据。
+  # 官方 Codex 客户端的本地 model_context_window 覆盖会被服务端
+  # max_context_window 钳制;自托管部署可按账号实际能力抬高上限。
+  # models:
+  #   gpt-5.6-terra:
+  #     context_window: 272000
+  #     max_context_window: 872000
 xai:
   # OAuth 端点、额度与模型目录策略由 xAI Provider 固定管理；这里只声明请求画像启动基线。
   wire_profile:

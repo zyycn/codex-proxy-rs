@@ -1,6 +1,6 @@
 //! Codex 的 `gateway-core` Provider adapter。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -148,6 +148,7 @@ pub struct CodexProvider {
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
     stream_max_retries: u32,
+    model_metadata: BTreeMap<String, crate::config::CodexModelMetadataOverride>,
 }
 
 impl CodexProvider {
@@ -163,6 +164,7 @@ impl CodexProvider {
         base_url: String,
         websocket_pool: Arc<CodexWebSocketPool>,
         stream_max_retries: u32,
+        model_metadata: BTreeMap<String, crate::config::CodexModelMetadataOverride>,
     ) -> Result<Self, CodexProviderConfigError> {
         let responses_url = Url::parse(&endpoint_url(&base_url, CODEX_RESPONSES_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
@@ -188,6 +190,7 @@ impl CodexProvider {
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             stream_max_retries,
+            model_metadata,
         })
     }
 
@@ -287,7 +290,7 @@ impl Provider for CodexProvider {
         Ok(snapshot
             .models()
             .iter()
-            .map(compile_model_capabilities)
+            .map(|model| compile_model_capabilities(model, &self.model_metadata))
             .collect())
     }
 

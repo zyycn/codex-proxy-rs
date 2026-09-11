@@ -141,6 +141,7 @@ pub async fn initialize(
             config.base_url().to_owned(),
             Arc::clone(&websocket_pool),
             config.stream_max_retries(),
+            config.model_metadata_overrides().clone(),
         )
         .map_err(OpenAiInitializeError::Provider)?
         .with_session_identity(session_identity),

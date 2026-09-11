@@ -124,6 +124,10 @@ fn codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {
         .iter()
         .any(|effort| effort != "none");
     let context_window = presentation.context_window_tokens();
+    let max_context_window = presentation
+        .max_context_window_tokens()
+        .or(context_window)
+        .unwrap_or(context_window.unwrap_or(0));
     let input_modalities = if presentation.image_input() {
         vec!["text", "image"]
     } else {
@@ -173,7 +177,7 @@ fn codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {
         "supports_parallel_tool_calls": presentation.parallel_tool_calls(),
         "supports_image_detail_original": presentation.image_detail_original(),
         "context_window": context_window,
-        "max_context_window": context_window,
+        "max_context_window": max_context_window,
         "effective_context_window_percent": 95,
         "experimental_supported_tools": [],
         "input_modalities": input_modalities,
