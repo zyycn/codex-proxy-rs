@@ -7,16 +7,27 @@ use tokio_tungstenite::tungstenite::http::HeaderMap as WsHeaderMap;
 
 use super::*;
 
+const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
+    ("CF-Visitor", r#"{"scheme":"https"}"#),
+    ("cf-connecting-ip", "192.0.2.1"),
+    ("cf-connecting-ipv6", "2001:db8::1"),
+    ("cf-pseudo-ipv4", "240.0.0.1"),
+    ("cf-ray", "downstream-ray"),
+    ("cf-ipcountry", "US"),
+    ("cf-warp-tag-id", "downstream-warp"),
+    ("cf-worker", "worker.example"),
+    ("cf-ew-via", "15"),
+    ("cdn-loop", "cloudflare; loops=1"),
+    ("via", "1.1 downstream-proxy"),
+    ("forwarded", "for=192.0.2.1;proto=https"),
+    ("x-forwarded-for", "192.0.2.1"),
+    ("x-forwarded-prefix", "/gateway"),
+    ("accept-encoding", "br, gzip"),
+    ("content-encoding", "downstream-encoding"),
+];
+
 fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
-    let payload = ProtocolPayload::json_object(
-        "openai",
-        json!({"model": "gpt-test", "input": "hello"})
-            .as_object()
-            .expect("request object")
-            .clone(),
-    )
-    .expect("OpenAI payload")
-    .with_context(Map::from_iter([
+    let mut context = Map::from_iter([
         (
             "opaque_request_headers".to_owned(),
             json!([
@@ -61,7 +72,25 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
             ]),
         ),
         ("turn_state".to_owned(), json!("typed-turn-state")),
-    ]));
+    ]);
+    context
+        .get_mut("opaque_request_headers")
+        .and_then(Value::as_array_mut)
+        .expect("opaque headers")
+        .extend(
+            DOWNSTREAM_TRANSPORT_HEADERS
+                .iter()
+                .map(|(name, value)| json!([name, STANDARD.encode(value.as_bytes())])),
+        );
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        json!({"model": "gpt-test", "input": "hello"})
+            .as_object()
+            .expect("request object")
+            .clone(),
+    )
+    .expect("OpenAI payload")
+    .with_context(context);
     let mut request = encode_generate_request(
         &GenerateRequest::from_protocol_payload(payload),
         "gpt-routed",
@@ -352,7 +381,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
 }
 
 #[tokio::test]
-async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_identity() {
+async fn backend_http_should_preserve_business_headers_without_downstream_transport_headers() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind opaque HTTP server");
@@ -394,6 +423,17 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
         .expect("opaque HTTP response");
     let raw = server.await.expect("opaque HTTP server task");
 
+    for &(name, _) in DOWNSTREAM_TRANSPORT_HEADERS {
+        // HTTP 正文由 transport 重编码为 zstd，不能沿用下游 Content-Encoding。
+        if name == "content-encoding" {
+            assert_eq!(raw_header_values(&raw, name), vec![b"zstd".to_vec()]);
+        } else {
+            assert!(
+                raw_header_values(&raw, name).is_empty(),
+                "unexpected {name}"
+            );
+        }
+    }
     assert_eq!(
         raw_header_values(&raw, "x-openai-future-mode"),
         vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
@@ -450,7 +490,7 @@ async fn backend_http_should_restore_opaque_multivalue_header_bytes_and_lease_id
 }
 
 #[tokio::test]
-async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values() {
+async fn backend_websocket_should_preserve_business_headers_without_downstream_transport_headers() {
     let received = Arc::new(Mutex::new(WsHeaderMap::new()));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -520,6 +560,17 @@ async fn backend_websocket_should_drop_only_unrepresentable_opaque_header_values
             .collect::<Vec<_>>()
     };
 
+    for (name, _) in DOWNSTREAM_TRANSPORT_HEADERS {
+        assert!(values(name).is_empty(), "unexpected {name}");
+    }
+    assert!(
+        received
+            .get("sec-websocket-extensions")
+            .expect("upstream WebSocket compression negotiation")
+            .to_str()
+            .expect("extension value")
+            .contains("permessage-deflate")
+    );
     assert_eq!(
         values("x-openai-future-mode"),
         vec![b"future-ascii".to_vec()]

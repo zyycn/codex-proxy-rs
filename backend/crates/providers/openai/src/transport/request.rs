@@ -4,7 +4,9 @@ use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::GenerateRequest;
-use gateway_protocol::openai::WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY;
+use gateway_protocol::openai::{
+    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize as _;
 use serde_json::{Map, Value};
@@ -619,32 +621,12 @@ fn decode_passthrough_headers(context: &Map<String, Value>) -> HeaderMap {
 }
 
 fn provider_managed_header(name: &str) -> bool {
-    name.starts_with("sec-websocket-")
+    is_transport_managed_request_header(name)
         || name.starts_with("x-grok-")
         || name.starts_with("x-xai-")
         || matches!(
             name,
-            "connection"
-                | "keep-alive"
-                | "proxy-connection"
-                | "proxy-authenticate"
-                | "proxy-authorization"
-                | "te"
-                | "trailer"
-                | "transfer-encoding"
-                | "upgrade"
-                | "host"
-                | "content-length"
-                | "forwarded"
-                | "x-forwarded-for"
-                | "x-forwarded-host"
-                | "x-forwarded-proto"
-                | "x-forwarded-port"
-                | "x-real-ip"
-                | "true-client-ip"
-                | "cf-connecting-ip"
-                | "x-request-id"
-                | "authorization"
+            "authorization"
                 | "x-api-key"
                 | "x-openai-actor-authorization"
                 | "cookie"
