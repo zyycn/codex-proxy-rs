@@ -305,6 +305,67 @@ async fn proxy_routes_save_reload_test_rename_and_delete_without_exposing_creden
 }
 
 #[tokio::test]
+async fn proxy_probe_checks_unsaved_address_without_creating_or_changing_records() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let draft = json!({
+        "proxyUrl": "http://test-user:private-password@proxy.example:8080"
+    });
+    let (status, probed) = request(
+        &fixture,
+        "/api/admin/proxies/probe",
+        Some(draft.clone()),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        probed["data"],
+        json!({"success": true, "latencyMs": 15, "exitIp": "203.0.113.2", "message": "Connected"})
+    );
+    let (_, listed) = request(&fixture, "/api/admin/proxies", None, true).await;
+    assert_eq!(listed["data"]["page"]["total"], 0);
+
+    let (_, created) = request(
+        &fixture,
+        "/api/admin/proxies/create",
+        Some(json!({"name": "Saved", "proxyUrl": "http://saved.example:8080"})),
+        true,
+    )
+    .await;
+    let (status, _) = request(&fixture, "/api/admin/proxies/probe", Some(draft), true).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, listed) = request(&fixture, "/api/admin/proxies", None, true).await;
+    assert_eq!(listed["data"]["items"][0], created["data"]["record"]);
+}
+
+#[tokio::test]
+async fn proxy_probe_rejects_empty_or_invalid_addresses() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (body, expected) in [
+        (json!({"proxyUrl": ""}), StatusCode::BAD_REQUEST),
+        (json!({"proxyUrl": null}), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!({}), StatusCode::UNPROCESSABLE_ENTITY),
+        (
+            json!({"proxyUrl": "ftp://test-user:private-password@proxy.example"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"proxyUrl": "http://proxy.example:8080", "name": "Not saved"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        assert_eq!(
+            request(&fixture, "/api/admin/proxies/probe", Some(body), true)
+                .await
+                .0,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 async fn proxy_routes_require_auth_and_reject_invalid_input() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
@@ -355,7 +416,14 @@ async fn proxy_routes_require_auth_and_reject_invalid_input() {
         .0,
         StatusCode::NOT_FOUND
     );
-    for action in ["create", "update", "delete", "test", "accounts/remove"] {
+    for action in [
+        "create",
+        "update",
+        "delete",
+        "test",
+        "probe",
+        "accounts/remove",
+    ] {
         assert_eq!(
             request(
                 &fixture,

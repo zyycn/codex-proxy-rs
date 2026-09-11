@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
-use gateway_core::{account::ProviderAccountId, routing::ProviderKind, runtime::SnapshotControl};
+use gateway_core::{
+    account::{OutboundProxy, ProviderAccountId},
+    routing::ProviderKind,
+    runtime::SnapshotControl,
+};
 use tokio::sync::Semaphore;
 
 use super::{map_store_error, publish_committed};
@@ -54,6 +58,8 @@ pub trait ProxiesService: Send + Sync {
         revision: Revision,
         context: &MutationContext,
     ) -> Result<ProxyRecord, AdminError>;
+    /// 探测未保存的连接地址，不写入代理记录或修改账号绑定。
+    async fn probe(&self, proxy: &OutboundProxy) -> Result<ProxyTestResult, AdminError>;
 }
 
 pub(crate) struct DefaultProxiesService {
@@ -212,6 +218,13 @@ impl ProxiesService for DefaultProxiesService {
             .map_err(|error| map_store_error(error, "proxy"))?;
         publish_committed(self.snapshot.as_ref(), result).await?;
         Ok(result)
+    }
+
+    async fn probe(&self, proxy: &OutboundProxy) -> Result<ProxyTestResult, AdminError> {
+        let _permit = self.test_slots.try_acquire().map_err(|_| {
+            AdminError::new(AdminErrorKind::RateLimited, "代理测试繁忙，请稍后重试")
+        })?;
+        Ok(self.probe.test(proxy).await)
     }
 
     async fn test(

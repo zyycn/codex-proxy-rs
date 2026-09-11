@@ -8,7 +8,8 @@ use axum::{
 use gateway_admin::model::{
     PageSize, Revision,
     proxies::{
-        NewProxy, ProxyAccountListQuery, ProxyListQuery, ProxyMutation, ProxyRecord, UpdateProxy,
+        NewProxy, ProxyAccountListQuery, ProxyListQuery, ProxyMutation, ProxyRecord,
+        ProxyTestResult, UpdateProxy,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,12 @@ struct IdRequest {
     revision: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProbeRequest {
+    proxy_url: AccountProxyUpdate,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyTestView {
@@ -73,6 +80,17 @@ struct ProxyTestView {
     latency_ms: u64,
     exit_ip: Option<String>,
     message: String,
+}
+
+impl From<ProxyTestResult> for ProxyTestView {
+    fn from(result: ProxyTestResult) -> Self {
+        Self {
+            success: result.success,
+            latency_ms: result.latency_ms,
+            exit_ip: result.exit_ip.map(|ip| ip.to_string()),
+            message: result.message,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -115,12 +133,7 @@ impl From<ProxyRecord> for ProxyView {
             revision: record.revision.get(),
             account_count: record.account_count,
             last_test_at: record.last_test_at.map(|at| at.to_rfc3339()),
-            last_test: record.last_test.map(|result| ProxyTestView {
-                success: result.success,
-                latency_ms: result.latency_ms,
-                exit_ip: result.exit_ip.map(|ip| ip.to_string()),
-                message: result.message,
-            }),
+            last_test: record.last_test.map(Into::into),
             created_at: record.created_at.to_rfc3339(),
             updated_at: record.updated_at.to_rfc3339(),
         }
@@ -170,6 +183,7 @@ where
         .route("/api/admin/proxies/update", post(update::<S>))
         .route("/api/admin/proxies/delete", post(delete::<S>))
         .route("/api/admin/proxies/test", post(test::<S>))
+        .route("/api/admin/proxies/probe", post(probe::<S>))
 }
 
 fn revision(value: u64) -> Result<Revision, AdminError> {
@@ -386,6 +400,30 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({"configRevision": result.get()})),
+    ))
+}
+
+async fn probe<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<ProbeRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let proxy = request
+        .proxy_url
+        .0
+        .ok_or_else(|| AdminError::bad_request("代理 URL 不能为空"))?;
+    let result = state
+        .admin_services()
+        .proxies()
+        .probe(&proxy)
+        .await
+        .map_err(map_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(ProxyTestView::from(result)),
     ))
 }
 

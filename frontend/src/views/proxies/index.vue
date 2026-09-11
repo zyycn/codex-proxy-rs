@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
-import { LockKeyhole, Pencil, Plus, RefreshCw, Search, Trash2, Users, Wifi } from '@lucide/vue'
+import { LockKeyhole, Pencil, Plus, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
-import { createProxy, deleteProxy, getProxies, testProxy, updateProxy } from '@/api'
+import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -30,12 +30,12 @@ const query = usePagedQuery({
 const { items: proxies, loading } = query
 const pagination = computed(() => ({ currentPage: query.page.value, pageSize: query.pageSize.value, total: query.total.value }))
 const columns = defineTableColumns<OutboundProxyRecord>([
-  { key: 'identity', label: '代理', kind: 'identity' },
+  { key: 'identity', label: '代理', kind: 'identity', size: 'xl' },
   { key: 'exitIp', label: '出口 IP', kind: 'custom' },
   { key: 'latency', label: '耗时', kind: 'custom', size: 'sm' },
   { key: 'accounts', label: '关联账号', kind: 'custom', size: 'sm' },
   { key: 'testedAt', label: '测试时间', kind: 'datetime' },
-  { key: 'actions', label: '操作', kind: 'actions' },
+  { key: 'actions', label: '操作', kind: 'actions', size: 'lg', fixedWidth: true },
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
@@ -47,6 +47,8 @@ const { loading: deleting } = deleteAction
 const showDelete = shallowRef(false)
 const pendingDelete = shallowRef<OutboundProxyRecord | null>(null)
 const testingIds = ref(new Set<string>())
+const formTestAction = useAsyncAction()
+const testingForm = computed(() => formTestAction.loading.value || (editing.value !== null && testingIds.value.has(editing.value.id)))
 const showAccounts = shallowRef(false)
 const inspected = shallowRef<OutboundProxyRecord | null>(null)
 
@@ -77,8 +79,30 @@ async function checkProxy(proxy: OutboundProxyRecord) {
   }
 }
 
-async function save(testAfter: boolean) {
-  if (saving.value)
+async function testConnection() {
+  if (saving.value || testingForm.value)
+    return
+  const proxyUrl = form.proxyUrl.trim()
+  if (!proxyUrl && editing.value) {
+    await checkProxy(editing.value)
+    return
+  }
+  if (!proxyUrl) {
+    toast.warning('请填写代理连接地址')
+    return
+  }
+  await formTestAction.run(async () => {
+    // 新地址只做探测，保存前不修改代理及关联账号的连接配置。
+    const result = await probeProxy({ proxyUrl })
+    if (result.success)
+      toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
+    else
+      toast.error(result.message)
+  }, { errorText: '代理测试失败' })
+}
+
+async function save() {
+  if (saving.value || testingForm.value)
     return
   const name = form.name.trim()
   const proxyUrl = form.proxyUrl.trim()
@@ -88,17 +112,15 @@ async function save(testAfter: boolean) {
   }
   await saveAction.run(async () => {
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
-    const result = editing.value
-      ? await updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined })
-      : await createProxy({ name, proxyUrl })
+    await (editing.value
+      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined })
+      : createProxy({ name, proxyUrl }))
     showForm.value = false
     form.proxyUrl = ''
     toast.success('代理已保存')
     search.value = ''
     query.page.value = 1
     await query.execute()
-    if (testAfter)
-      await checkProxy(result.record)
   }, { errorText: '代理保存失败' })
 }
 
@@ -154,9 +176,6 @@ onMounted(() => void query.execute())
             </template>
           </BaseInput>
           <div class="flex shrink-0 items-center justify-end gap-2 sm:ml-auto">
-            <BaseIconButton label="刷新代理列表" :loading="loading" @click="query.execute()">
-              <RefreshCw class="size-4" />
-            </BaseIconButton>
             <BaseButton variant="primary" @click="openForm()">
               <template #icon>
                 <Plus class="size-4" />
@@ -223,7 +242,9 @@ onMounted(() => void query.execute())
       v-model:proxy-url="form.proxyUrl"
       :proxy="editing"
       :saving="saving"
+      :testing="testingForm"
       @save="save"
+      @test="testConnection"
     />
     <BaseConfirmModal v-model="showDelete" title="删除代理" destructive :loading="deleting" @confirm="confirmDelete">
       <p class="m-0">

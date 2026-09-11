@@ -24,6 +24,7 @@ export interface BaseTableColumn<Row extends TableRow = TableRow> {
   label?: string
   kind?: TableColumnKind
   size?: TableColumnSize
+  fixedWidth?: boolean
   align?: TableColumnAlign
   sortable?: boolean | string
   format?: (value: unknown, row: Row) => unknown
@@ -212,11 +213,14 @@ export function columnStyle<Row extends TableRow>(
   column: ResolvedTableColumn<Row>,
   columns: ResolvedTableColumn<Row>[],
 ) {
-  const tableWidth = minimumTableWidth(columns)
-  const widthPercent = tableWidth > 0 ? (column.basisWidth / tableWidth) * 100 : 0
+  const fixedWidth = columns.reduce((total, item) => total + (item.fixedWidth ? item.basisWidth : 0), 0)
+  const flexibleWidth = minimumTableWidth(columns) - fixedWidth
+  const ratio = flexibleWidth > 0 ? column.basisWidth / flexibleWidth : 0
 
   return {
-    width: `${widthPercent}%`,
+    width: column.fixedWidth
+      ? `${column.basisWidth}px`
+      : `${ratio * 100}%`,
     minWidth: `${column.basisWidth}px`,
   }
 }

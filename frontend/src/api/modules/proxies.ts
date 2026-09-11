@@ -104,3 +104,12 @@ export function testProxy(data: { id: string, revision: number }) {
     timeout: 25000,
   })
 }
+
+export function probeProxy(data: { proxyUrl: string }) {
+  return request<OutboundProxyTest>({
+    url: '/api/admin/proxies/probe',
+    method: 'POST',
+    data,
+    timeout: 25000,
+  })
+}
