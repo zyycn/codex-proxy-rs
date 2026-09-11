@@ -562,6 +562,12 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
             .context_window_tokens()
             .map(std::num::NonZeroU64::get),
     )
+    .with_max_context_window_tokens(
+        model
+            .limits()
+            .max_context_window_tokens()
+            .map(std::num::NonZeroU64::get),
+    )
     .with_image_input(capabilities.image_input() == CodexCatalogCapabilityEvidence::DeclaredNative)
     // Codex Responses 工具协议随 API 支持一并可用；只有明确不支持才关闭。
     .with_agent_tools(

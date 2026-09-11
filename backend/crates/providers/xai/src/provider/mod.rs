@@ -563,6 +563,7 @@ fn default_grok_model_presentation() -> ModelPresentation {
         Some("xAI Grok 4.5 frontier model with reasoning and vision.".to_owned()),
     )
     .with_context_window_tokens(Some(500_000))
+    .with_max_context_window_tokens(Some(500_000))
     .with_image_input(true)
     .with_agent_tools(true, true)
 }
@@ -621,6 +622,8 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
     )
     .with_reasoning(default_reasoning, reasoning_efforts)
     .with_context_window_tokens(context_window_tokens)
+    // Grok 目录只声明一个窗口，继续将它作为客户端可覆盖上限。
+    .with_max_context_window_tokens(context_window_tokens)
     .with_image_input(known_grok_4_5)
     .with_agent_tools(
         tool_evidence != GrokCatalogCapabilityEvidence::DeclaredUnsupported,

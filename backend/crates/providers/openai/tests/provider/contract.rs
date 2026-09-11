@@ -6249,6 +6249,7 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
     assert_eq!(presentation.supported_reasoning_efforts(), ["low", "high"]);
     assert_eq!(presentation.default_reasoning_effort(), Some("low"));
     assert_eq!(presentation.context_window_tokens(), Some(272_000));
+    assert_eq!(presentation.max_context_window_tokens(), Some(272_000));
     assert!(presentation.image_input());
     assert!(presentation.agent_tools());
     assert!(presentation.parallel_tool_calls());
@@ -6256,6 +6257,48 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
     assert!(presentation.image_detail_original());
     assert!(presentation.verbosity());
     assert!(!presentation.hidden());
+}
+
+#[tokio::test]
+async fn provider_preserves_independent_catalog_context_windows() {
+    for (context_window, max_context_window) in [
+        (Some(272_000), Some(872_000)),
+        (Some(272_000), None),
+        (None, Some(872_000)),
+        (None, None),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_context_windows").await;
+        let server = MockServer::start().await;
+        let mut model = json!({"slug": "gpt-5.6-terra", "display_name": "GPT-5.6-Terra"});
+        if let Some(context_window) = context_window {
+            model["context_window"] = json!(context_window);
+        }
+        if let Some(max_context_window) = max_context_window {
+            model["max_context_window"] = json!(max_context_window);
+        }
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [model]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let provider = provider_with_base_url(&store, server.uri());
+
+        let capabilities = provider
+            .query_model_capabilities()
+            .await
+            .expect("catalog model capabilities");
+        let presentation = capabilities[0].presentation().expect("model presentation");
+
+        assert_eq!(
+            (
+                presentation.context_window_tokens(),
+                presentation.max_context_window_tokens(),
+            ),
+            (context_window, max_context_window),
+        );
+    }
 }
 
 #[tokio::test]
