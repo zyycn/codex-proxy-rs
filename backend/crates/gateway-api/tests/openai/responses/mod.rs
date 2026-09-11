@@ -675,3 +675,89 @@ fn transparent_encoder_should_only_require_wire_terminal_for_buffered_conversion
         ResponseEncodeError::MissingWireTerminal
     );
 }
+
+fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).expect("gzip encode");
+    encoder.finish().expect("gzip finish")
+}
+
+fn zstd_bytes(data: &[u8]) -> Vec<u8> {
+    zstd::stream::encode_all(std::io::Cursor::new(data), 3).expect("zstd encode")
+}
+
+fn content_encoding_headers(encoding: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_ENCODING,
+        HeaderValue::from_str(encoding).expect("valid header value"),
+    );
+    headers
+}
+
+#[test]
+fn http_decode_accepts_gzip_request_body() {
+    let body = json!({"model": "gpt-test", "input": []}).to_string();
+    let decoded = decode_request_with_headers(
+        gzip_bytes(body.as_bytes()).as_slice(),
+        &content_encoding_headers("gzip"),
+    )
+    .expect("gzip body should decode");
+    assert_eq!(decoded.metadata().requested_model().to_string(), "gpt-test");
+}
+
+#[test]
+fn http_decode_accepts_zstd_request_body() {
+    let body = json!({"model": "gpt-test", "input": []}).to_string();
+    let decoded = decode_request_with_headers(
+        zstd_bytes(body.as_bytes()).as_slice(),
+        &content_encoding_headers("zstd"),
+    )
+    .expect("zstd body should decode");
+    assert_eq!(decoded.metadata().requested_model().to_string(), "gpt-test");
+}
+
+#[test]
+fn http_decode_treats_identity_encoding_as_plain_json() {
+    let body = json!({"model": "gpt-test", "input": []}).to_string();
+    let decoded =
+        decode_request_with_headers(body.as_bytes(), &content_encoding_headers("identity"))
+            .expect("identity body should decode");
+    assert_eq!(decoded.metadata().requested_model().to_string(), "gpt-test");
+}
+
+#[test]
+fn http_decode_rejects_unsupported_content_encoding() {
+    let body = json!({"model": "gpt-test", "input": []}).to_string();
+    let error = decode_request_with_headers(body.as_bytes(), &content_encoding_headers("br"))
+        .expect_err("unsupported encoding must fail");
+    assert_eq!(
+        error,
+        RequestDecodeError::UnsupportedContentEncoding {
+            encoding: "br".to_owned()
+        }
+    );
+}
+
+#[test]
+fn http_decode_rejects_corrupted_compressed_body() {
+    let error = decode_request_with_headers(
+        b"not-a-valid-gzip-stream",
+        &content_encoding_headers("gzip"),
+    )
+    .expect_err("corrupted gzip body must fail");
+    // 损坏的压缩载荷统一按 invalid_json 返回，不区分内部解压细节。
+    assert_eq!(error, RequestDecodeError::MalformedJson);
+}
+
+#[test]
+fn http_decode_rejects_decompression_bomb() {
+    // 高压缩比载荷：解压后超过 64 MiB 上限时必须拒绝。
+    let bomb = vec![0u8; 128 * 1024 * 1024];
+    let compressed = zstd_bytes(&bomb);
+    let error =
+        decode_request_with_headers(compressed.as_slice(), &content_encoding_headers("zstd"))
+            .expect_err("decompression bomb must fail");
+    assert_eq!(error, RequestDecodeError::DecompressedBodyTooLarge);
+}
