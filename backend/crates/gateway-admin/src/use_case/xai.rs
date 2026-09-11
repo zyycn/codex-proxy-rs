@@ -84,11 +84,14 @@ impl XaiService for DefaultXaiService {
         command: ImportCredentials,
     ) -> Result<CredentialImportResult, AdminError> {
         let context = command.context;
-        let outbound_proxy = super::import_proxy_binding(
+        let proxy_reservation = super::import_proxy_binding(
             self.proxies.as_ref(),
             command.outbound_proxy_id.as_deref(),
         )
         .await?;
+        let outbound_proxy = proxy_reservation
+            .as_ref()
+            .map(|reservation| reservation.binding.clone());
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
@@ -116,6 +119,7 @@ impl XaiService for DefaultXaiService {
             )
             .await
             .map_err(|error| map_store_error(error, "xAI credential import"))?;
+        drop(proxy_reservation);
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         // 导入已经提交，额度属于可重建观察事实；单个账号查询失败由周期任务重试。
         for account_id in &result.credential_ids {

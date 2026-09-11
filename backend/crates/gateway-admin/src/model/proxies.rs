@@ -1,4 +1,4 @@
-//! Reusable account egress configurations and redacted connectivity observations.
+//! 可复用的账号出口配置，以及脱敏后的连通性测试结果。
 
 use chrono::{DateTime, Utc};
 use gateway_core::account::OutboundProxy;

@@ -28,6 +28,12 @@ fn missing() -> AdminStoreError {
 
 #[async_trait]
 impl ProxyStore for MemoryProxies {
+    async fn reserve_import(
+        &self,
+        _: &str,
+    ) -> AdminStoreResult<gateway_admin::ports::proxy::ProxyImportReservation> {
+        Err(missing())
+    }
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage> {
         let items: Vec<_> = self.0.lock().unwrap().iter().cloned().collect();
         Ok(ProxyPage {

@@ -83,6 +83,7 @@ pub(super) struct AdminHarness {
     default_password: String,
     session_ttl_minutes: u64,
     accounts: Arc<dyn AccountStore>,
+    proxies: Arc<dyn gateway_admin::ports::proxy::ProxyStore>,
     account_runtime: Arc<dyn AccountRuntimeStore>,
     account_groups: Arc<dyn AccountGroupStore>,
     auth: Arc<dyn AuthStore>,
@@ -102,6 +103,7 @@ impl AdminHarness {
             default_password: "strong-test-password".to_owned(),
             session_ttl_minutes: 60,
             accounts: unavailable.clone(),
+            proxies: Arc::new(proxies::TestProxies::default()),
             account_runtime: unavailable.clone(),
             account_groups: Arc::new(UnavailableAccountGroupStore),
             auth: Arc::new(BootstrapAuthStore::default()),
@@ -180,6 +182,14 @@ impl AdminHarness {
         self
     }
 
+    pub(super) fn proxies(
+        mut self,
+        proxies: Arc<dyn gateway_admin::ports::proxy::ProxyStore>,
+    ) -> Self {
+        self.proxies = proxies;
+        self
+    }
+
     pub(super) fn system(mut self, system: Arc<dyn SystemOperations>) -> Self {
         self.system = system;
         self
@@ -197,7 +207,7 @@ impl AdminHarness {
                     self.accounts,
                     self.account_runtime,
                     self.account_groups,
-                    Arc::new(proxies::UnavailableProxies),
+                    self.proxies,
                 ),
                 self.auth,
                 self.client_keys,
@@ -207,7 +217,7 @@ impl AdminHarness {
             ),
             self.providers,
             Arc::new(NoopSnapshot),
-            (self.probe, Arc::new(proxies::UnavailableProxies)),
+            (self.probe, Arc::new(proxies::TestProxies::default())),
             Arc::new(NoopClientDistribution),
             self.system,
         )

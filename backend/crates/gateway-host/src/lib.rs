@@ -83,8 +83,14 @@ impl HostBundle {
     }
 
     #[must_use]
-    pub fn proxy_probe(&self) -> Arc<dyn gateway_admin::ports::proxy::ProxyProbe> {
-        Arc::new(proxy_probe::HttpProxyProbe::default())
+    pub fn proxy_probe<E>(
+        &self,
+        build_client: impl Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, E>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Arc<dyn gateway_admin::ports::proxy::ProxyProbe> {
+        Arc::new(proxy_probe::HttpProxyProbe::default().with_client_builder(build_client))
     }
 
     #[must_use]

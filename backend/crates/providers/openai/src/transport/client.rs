@@ -820,7 +820,7 @@ pub(super) async fn read_error_response_body(
 
 pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
-    // Upstream execution is streaming; downstream delivery keeps the original preference.
+    // 上游通过流式事件执行，下游仍按客户端原来的偏好返回响应。
     if !request.stream() {
         request
             .body_mut()

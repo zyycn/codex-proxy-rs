@@ -44,6 +44,113 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
 }
 
 #[tokio::test]
+async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are_committed() {
+    use gateway_store::postgres::{
+        ImportProviderAccounts, ProviderAccountAdminRepository, ProviderAccountAdminScope,
+    };
+    let Some(database) = TestDatabase::create("proxy_import_reservation").await else {
+        return;
+    };
+    let store = PgProxyRepository::new(database.pool.clone());
+    let other_process = PgProxyRepository::new(database.pool.clone());
+    let context = context();
+    let saved = store
+        .create(
+            NewProxy {
+                name: "导入出口".to_owned(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    assert!(store.reserve_import(&saved.id).await.is_err());
+    store
+        .record_test(&saved.id, saved.revision, success(), &context)
+        .await
+        .unwrap();
+    let reservation = store.reserve_import(&saved.id).await.unwrap();
+    let replacement = UpdateProxy {
+        id: saved.id.clone(),
+        revision: saved.revision,
+        name: saved.name,
+        proxy: Some(OutboundProxy::parse("http://127.0.0.1:9090").unwrap()),
+    };
+    assert!(
+        other_process
+            .update(replacement.clone(), &context)
+            .await
+            .is_err()
+    );
+    assert!(
+        other_process
+            .delete(&saved.id, saved.revision, &context)
+            .await
+            .is_err()
+    );
+    assert!(
+        other_process
+            .record_test(
+                &saved.id,
+                saved.revision,
+                ProxyTestResult {
+                    success: false,
+                    ..success()
+                },
+                &context
+            )
+            .await
+            .is_err()
+    );
+
+    // 模拟上游已轮换的新凭据；持有保护时，另一个连接仍能完成导入事务。
+    let mut candidate = account("acct_reserved_import", "reserved-import-user");
+    candidate.outbound_proxy = Some(reservation.binding.proxy.clone());
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let audit =
+        super::provider_accounts::audit("audit_reserved_import", "import", "acct_reserved_import");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        repository.import_provider_accounts(ImportProviderAccounts {
+            settings: None,
+            outbound_proxy: Some(reservation.binding.clone()),
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            accounts: vec![candidate],
+            audit,
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    drop(reservation);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if other_process
+                .update(replacement.clone(), &context)
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        repository
+            .load_provider_account("acct_reserved_import")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_tests() {
     let Some(database) = TestDatabase::create("managed_proxies").await else {
         return;

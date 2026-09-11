@@ -60,3 +60,19 @@ async fn unavailable_proxy_never_falls_back_to_direct_connection() {
     let result = HttpProxyProbe::new(target.uri()).test(&proxy).await;
     assert!(!result.success);
 }
+
+#[tokio::test]
+async fn invalid_certificate_configuration_should_not_fall_back_or_expose_details() {
+    let target = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&target)
+        .await;
+    let result = HttpProxyProbe::new(target.uri())
+        .with_client_builder(|_| Err("private-certificate-path"))
+        .test(&OutboundProxy::parse(&target.uri()).unwrap())
+        .await;
+    assert!(!result.success);
+    assert!(!result.message.contains("private-certificate-path"));
+}

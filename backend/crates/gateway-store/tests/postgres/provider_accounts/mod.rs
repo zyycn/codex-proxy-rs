@@ -2562,7 +2562,7 @@ fn plaintext_credential(marker: &str) -> PlaintextCredential {
     )
 }
 
-fn audit(id: &str, action: &str, entity_ref: &str) -> AdminAuditEvent {
+pub(super) fn audit(id: &str, action: &str, entity_ref: &str) -> AdminAuditEvent {
     AdminAuditEvent {
         id: id.to_owned(),
         actor_kind: AdminAuditActorKind::System,

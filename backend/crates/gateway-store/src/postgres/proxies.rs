@@ -1,15 +1,18 @@
-//! Named proxies own credentials; accounts retain the resolved URL for provider transports.
+//! 命名代理持有认证信息，账号保留解析后的 URL 供 Provider 传输使用。
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use gateway_admin::{
     model::{MutationContext, Revision as AdminRevision, proxies::*},
     ports::{
-        proxy::ProxyStore,
+        proxy::{ProxyImportGuard, ProxyImportReservation, ProxyStore},
         store::{AdminStoreError, AdminStoreResult},
     },
 };
 use gateway_core::account::OutboundProxy;
-use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction, postgres::PgRow};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row as _, Transaction, postgres::PgRow};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{append_admin_audit_event_in_transaction, bump_config_revision_in_transaction};
 use crate::{
@@ -26,13 +29,42 @@ const SELECT: &str = "select p.*,
 #[derive(Clone)]
 pub struct PgProxyRepository {
     pool: PgPool,
+    import_slots: Arc<Semaphore>,
 }
 
 impl PgProxyRepository {
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            import_slots: Arc::new(Semaphore::new(4)),
+        }
     }
+}
+
+struct PgProxyImportGuard {
+    // 独立会话持有咨询锁，避免空闲事务超时，也不给提交事务占用的连接池制造死锁。
+    // 每个仓储最多增加四个会话；取消请求或进程退出时，关闭连接会自动释放锁。
+    _connection: PgConnection,
+    _slot: OwnedSemaphorePermit,
+}
+
+impl ProxyImportGuard for PgProxyImportGuard {}
+
+async fn exclude_active_imports(
+    transaction: &mut Transaction<'_, Postgres>,
+    id: &str,
+) -> StoreResult<()> {
+    let acquired: bool =
+        sqlx::query_scalar("select pg_try_advisory_xact_lock(hashtextextended($1, 739219))")
+            .bind(id)
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(|_| unavailable())?;
+    if !acquired {
+        return Err(conflict(id));
+    }
+    Ok(())
 }
 
 fn store_error(error: StoreError) -> AdminStoreError {
@@ -111,7 +143,7 @@ async fn lock_url(
     Ok(())
 }
 
-/// Imports and legacy URL writes join the catalog in the same account transaction.
+/// 导入和旧版 URL 写入在账号事务内登记到共享代理目录。
 pub(crate) async fn ensure_proxy_for_url(
     transaction: &mut Transaction<'_, Postgres>,
     proxy: &OutboundProxy,
@@ -191,6 +223,43 @@ async fn audit(
 
 #[async_trait]
 impl ProxyStore for PgProxyRepository {
+    async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation> {
+        let slot = self
+            .import_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| store_error(conflict(id)))?;
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|_| store_error(unavailable()))?
+            .detach();
+        let acquired: bool =
+            sqlx::query_scalar("select pg_try_advisory_lock_shared(hashtextextended($1, 739219))")
+                .bind(id)
+                .fetch_one(&mut connection)
+                .await
+                .map_err(|_| store_error(unavailable()))?;
+        if !acquired {
+            return Err(store_error(conflict(id)));
+        }
+        let record = self.get(id).await?;
+        if !record.last_test.is_some_and(|test| test.success) {
+            return Err(store_error(conflict(id)));
+        }
+        Ok(ProxyImportReservation {
+            binding: ImportProxyBinding {
+                id: record.id,
+                proxy: record.proxy,
+            },
+            guard: Box::new(PgProxyImportGuard {
+                _connection: connection,
+                _slot: slot,
+            }),
+        })
+    }
+
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage> {
         if query.page == 0 {
             return Err(store_error(invalid()));
@@ -294,6 +363,9 @@ impl ProxyStore for PgProxyRepository {
             .begin()
             .await
             .map_err(|_| store_error(unavailable()))?;
+        exclude_active_imports(&mut transaction, &command.id)
+            .await
+            .map_err(store_error)?;
         let revision = bump_config_revision_in_transaction(&mut transaction)
             .await
             .map_err(store_error)?;
@@ -360,6 +432,9 @@ impl ProxyStore for PgProxyRepository {
             .begin()
             .await
             .map_err(|_| store_error(unavailable()))?;
+        exclude_active_imports(&mut transaction, id)
+            .await
+            .map_err(store_error)?;
         let config_revision = bump_config_revision_in_transaction(&mut transaction)
             .await
             .map_err(store_error)?;
@@ -369,7 +444,7 @@ impl ProxyStore for PgProxyRepository {
             .execute(&mut *transaction)
             .await
             .map_err(|error| {
-                // PostgreSQL 18 distinguishes RESTRICT from other foreign-key violations.
+                // PostgreSQL 18 为 RESTRICT 返回不同于普通外键违规的错误码。
                 if error.as_database_error().is_some_and(|error| {
                     error.is_foreign_key_violation() || error.code().as_deref() == Some("23001")
                 }) {
@@ -410,6 +485,9 @@ impl ProxyStore for PgProxyRepository {
             .begin()
             .await
             .map_err(|_| store_error(unavailable()))?;
+        exclude_active_imports(&mut transaction, id)
+            .await
+            .map_err(store_error)?;
         let updated = sqlx::query("update outbound_proxies set last_test_at = now(), last_test_success = $3, last_test_latency_ms = $4, last_test_ip = $5, last_test_message = $6 where id = $1 and revision = $2")
             .bind(id).bind(i64::try_from(revision.get()).map_err(|_| store_error(invalid()))?)
             .bind(result.success).bind(i64::try_from(result.latency_ms).map_err(|_| store_error(invalid()))?)

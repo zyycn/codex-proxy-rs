@@ -1,7 +1,8 @@
-//! Bounded egress checks using the same explicit proxy protocols as provider requests.
+//! 使用与 Provider 请求一致的显式代理协议，执行有超时和响应大小限制的出口测试。
 
 use std::{
     net::IpAddr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -12,7 +13,11 @@ use serde::Deserialize;
 
 pub struct HttpProxyProbe {
     endpoint: String,
+    build_client: Arc<ProxyClientBuilder>,
 }
+
+type ProxyClientBuilder =
+    dyn Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, &'static str> + Send + Sync;
 
 impl Default for HttpProxyProbe {
     fn default() -> Self {
@@ -25,19 +30,31 @@ impl HttpProxyProbe {
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
+            build_client: Arc::new(|builder| builder.build().map_err(|_| "无法创建代理连接")),
         }
+    }
+
+    /// 由组合根注入与 Provider 请求一致的证书信任策略。
+    #[must_use]
+    pub fn with_client_builder<E>(
+        mut self,
+        build: impl Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, E> + Send + Sync + 'static,
+    ) -> Self {
+        self.build_client = Arc::new(move |builder| {
+            build(builder).map_err(|_| "无法创建代理连接，请检查证书信任配置")
+        });
+        self
     }
 
     async fn exit_ip(&self, proxy: &OutboundProxy) -> Result<IpAddr, &'static str> {
         let proxy = reqwest::Proxy::all(proxy.expose_url()).map_err(|_| "代理地址不合法")?;
-        let client = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .no_proxy()
             .proxy(proxy)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(12))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| "无法创建代理连接")?;
+            .redirect(reqwest::redirect::Policy::none());
+        let client = (self.build_client)(builder)?;
         let mut response = client.get(&self.endpoint).send().await.map_err(|error| {
             if error.is_timeout() {
                 "代理连接超时"

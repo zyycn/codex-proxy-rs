@@ -131,11 +131,14 @@ impl OpenAiService for DefaultOpenAiService {
         command: ImportCredentials,
     ) -> Result<CredentialImportResult, AdminError> {
         let context = command.context;
-        let outbound_proxy = super::import_proxy_binding(
+        let proxy_reservation = super::import_proxy_binding(
             self.proxies.as_ref(),
             command.outbound_proxy_id.as_deref(),
         )
         .await?;
+        let outbound_proxy = proxy_reservation
+            .as_ref()
+            .map(|reservation| reservation.binding.clone());
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
@@ -163,6 +166,7 @@ impl OpenAiService for DefaultOpenAiService {
             )
             .await
             .map_err(|error| map_store_error(error, "OpenAI credential import"))?;
+        drop(proxy_reservation);
         self.provider
             .account_facts_changed(&result.credential_ids)
             .await;

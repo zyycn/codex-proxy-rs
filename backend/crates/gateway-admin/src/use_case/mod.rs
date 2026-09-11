@@ -113,19 +113,13 @@ async fn required_credential(
 async fn import_proxy_binding(
     proxies: &dyn crate::ports::proxy::ProxyStore,
     id: Option<&str>,
-) -> Result<Option<crate::model::proxies::ImportProxyBinding>, AdminError> {
+) -> Result<Option<crate::ports::proxy::ProxyImportReservation>, AdminError> {
     let Some(id) = id else { return Ok(None) };
-    let record = proxies
-        .get(id)
+    let reservation = proxies
+        .reserve_import(id)
         .await
         .map_err(|error| map_store_error(error, "proxy"))?;
-    if !record.last_test.is_some_and(|test| test.success) {
-        return Err(AdminError::conflict("请先测试代理连接"));
-    }
-    Ok(Some(crate::model::proxies::ImportProxyBinding {
-        id: record.id,
-        proxy: record.proxy,
-    }))
+    Ok(Some(reservation))
 }
 
 async fn pending_authorization(

@@ -236,14 +236,19 @@ Tests persist only when the requested revision still matches. Connectivity failu
 The test concurrency limit returns 429.
 
 测试固定经代理访问 `https://api.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。
+探测器复用 OpenAI 的证书信任配置：优先读取非空的 `CODEX_CA_CERTIFICATE`，
+其次读取 `SSL_CERT_FILE`，并保留系统根证书；证书配置错误不会回退为不验证证书。
 出口测试通过不表示 Provider 账号权限或额度可用；账号可用性使用账号连接测试。
 导入请求可以携带顶层 `outboundProxyId`，在令牌交换前解析为默认出口；文件中显式的代理配置优先。
-OAuth 或导入期间若所选代理被删除、连接配置改变或测试失败，提交会拒绝过期配置。
+文件及 AT/RT 导入从凭据交换到落库期间保护所选代理；此时修改、删除或写入测试结果返回 409，
+避免已轮换的凭据因代理状态变化而丢失。完成导入或请求取消后自动释放保护。
+OAuth 等待回调期间不持有保护；提交仍拒绝已删除、连接配置改变或测试失败的代理。
 
 Tests reach `https://api.ipify.org?format=json` through the configured proxy, with a 15-second timeout
 and four concurrent tests per process. Provider access still requires the account connection test.
 Imports accept a top-level `outboundProxyId` as the default exit before token exchange; explicit per-account
-settings in the document take precedence. OAuth and import commits reject a deleted, changed or failed proxy.
+settings in the document take precedence. Credential imports reserve their selected proxy until commit;
+concurrent proxy mutations return 409. OAuth commits still reject a deleted, changed or failed proxy.
 
 ### 账号连接测试 SSE
 
