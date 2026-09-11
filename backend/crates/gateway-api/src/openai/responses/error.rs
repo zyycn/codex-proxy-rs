@@ -40,9 +40,6 @@ pub enum RequestDecodeError {
     /// 请求不是合法 JSON。
     #[error("request body must be valid JSON")]
     MalformedJson,
-    /// `Content-Encoding` 指示的压缩正文无法解压。
-    #[error("request body could not be decompressed")]
-    MalformedContentEncoding,
     /// 请求体解压后超过允许上限。
     #[error("decompressed request body is too large")]
     DecompressedBodyTooLarge,
@@ -106,7 +103,7 @@ impl RequestDecodeError {
     #[must_use]
     pub fn protocol_body(&self) -> ProtocolErrorBody {
         let (code, message, param) = match self {
-            Self::MalformedJson | Self::MalformedContentEncoding => (
+            Self::MalformedJson => (
                 "invalid_json",
                 "Request body must be valid JSON.".to_owned(),
                 None,

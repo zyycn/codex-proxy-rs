@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{
     Arc, Mutex,
@@ -11,7 +12,7 @@ use axum::{
     extract::connect_info::ConnectInfo,
     http::{
         HeaderMap, HeaderValue, Request, StatusCode,
-        header::{AUTHORIZATION, CONTENT_TYPE},
+        header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
     },
 };
 use bytes::Bytes;
@@ -451,9 +452,26 @@ async fn captured_client_context(
 async fn captured_http_request(
     provider_name: &str,
     body: Value,
-    mut headers: HeaderMap,
+    headers: HeaderMap,
     peer_address: Option<SocketAddr>,
 ) -> CapturedClientContext {
+    let (response, observed) = http_request_with_body(
+        provider_name,
+        body.to_string().into(),
+        headers,
+        peer_address,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    observed.expect("captured request context")
+}
+
+async fn http_request_with_body(
+    provider_name: &str,
+    body: Bytes,
+    mut headers: HeaderMap,
+    peer_address: Option<SocketAddr>,
+) -> (axum::response::Response, Option<CapturedClientContext>) {
     headers.insert(
         AUTHORIZATION,
         "Bearer sk_context_test".parse().expect("authorization"),
@@ -464,7 +482,7 @@ async fn captured_http_request(
         client: authenticated_client_for_provider("sk_context_test", provider_name),
     });
     let mut request = Request::post("/v1/responses")
-        .body(Body::from(body.to_string()))
+        .body(Body::from(body))
         .expect("context request");
     *request.headers_mut() = headers;
     if let Some(peer_address) = peer_address {
@@ -475,12 +493,75 @@ async fn captured_http_request(
         .oneshot(request)
         .await
         .expect("context response");
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    observed
-        .lock()
-        .expect("context capture lock")
-        .clone()
-        .expect("captured request context")
+    let observed = observed.lock().expect("context capture lock").clone();
+    (response, observed)
+}
+
+#[tokio::test]
+async fn compressed_http_requests_should_preserve_execution_context_without_transport_headers() {
+    let body = json!({
+        "model": "model-a", "input": "hello", "previous_response_id": "resp_previous",
+        "prompt_cache_key": "cache-key", "client_metadata": {"source": "test"}
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert("session_id", HeaderValue::from_static("session-test"));
+    let expected = captured_http_request("openai", body.clone(), headers.clone(), None).await;
+    for encoding in ["gzip", "deflate", "zstd"] {
+        let compressed = super::request::encode_body(encoding, body.to_string().as_bytes());
+        let mut headers = headers.clone();
+        headers.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
+        headers.insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&compressed.len().to_string()).expect("compressed length"),
+        );
+        let (response, observed) =
+            http_request_with_body("openai", compressed.into(), headers, None).await;
+        // 捕获执行器在解码成功后主动返回 500；正文和业务头应与未压缩请求一致，
+        // 压缩编码及长度不能泄漏到已解压正文的上游协议上下文。
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(observed.as_ref(), Some(&expected), "{encoding}");
+    }
+}
+
+#[tokio::test]
+async fn invalid_compressed_http_requests_should_fail_before_execution() {
+    for (encoding, body, code, message) in [
+        (
+            "gzip",
+            Bytes::from_static(b"broken gzip"),
+            "invalid_json",
+            "Request body must be valid JSON.",
+        ),
+        (
+            "br",
+            Bytes::from_static(b"{}"),
+            "unsupported_content_encoding",
+            "Content-Encoding `br` is not supported.",
+        ),
+        (
+            "zstd",
+            super::request::encode_body("zstd", std::io::repeat(0).take(64 * 1024 * 1024 + 1))
+                .into(),
+            "request_too_large",
+            "Decompressed request body exceeds the allowed size.",
+        ),
+    ] {
+        let headers = HeaderMap::from_iter([
+            (CONTENT_ENCODING, HeaderValue::from_static(encoding)),
+            (CONTENT_TYPE, HeaderValue::from_static("application/json")),
+        ]);
+        let (response, observed) = http_request_with_body("openai", body, headers, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{encoding}");
+        assert!(observed.is_none(), "invalid body must not start execution");
+        let body = to_bytes(response.into_body(), 4096)
+            .await
+            .expect("error body");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("error JSON"),
+            json!({"error": {"type": "invalid_request_error", "code": code, "message": message}})
+        );
+    }
 }
 
 async fn captured_http_compaction(provider_name: &str) -> CapturedClientContext {

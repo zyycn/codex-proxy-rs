@@ -1,6 +1,6 @@
 //! OpenAI Responses JSON 到 Core 路由事实与不透明 wire payload 的单一解码边界。
 
-use std::{fmt, net::IpAddr};
+use std::{borrow::Cow, fmt, net::IpAddr};
 
 use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -323,7 +323,7 @@ impl fmt::Debug for DecodedResponsesRequest {
 ///
 /// # Errors
 ///
-/// JSON 非法、顶层不是 object，或网关必须解释的路由字段无效时返回安全错误。
+/// 编码不支持、压缩正文损坏或超限、JSON 非法，或路由字段无效时返回安全错误。
 pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
@@ -337,36 +337,40 @@ const MAX_DECOMPRESSED_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 
 /// 按 `Content-Encoding` 解压下游请求体。
 ///
-/// 官方 Codex 客户端对较大的 `/v1/responses` 请求体默认 zstd 压缩，亦可能使用
-/// gzip；未压缩与 `identity` 原样透传。解压结果超过
-/// [`MAX_DECOMPRESSED_REQUEST_BYTES`] 时拒绝，避免解压炸弹。
-fn decompress_request_body(
-    body: &[u8],
+/// 未压缩与 `identity` 借用原始正文；压缩正文在读取过程中限制展开大小，
+/// 避免先完整分配再检查。只接受单一编码，重复头和叠加编码不能只解释第一项。
+fn decompress_request_body<'a>(
+    body: &'a [u8],
     headers: &HeaderMap,
-) -> Result<Vec<u8>, RequestDecodeError> {
-    let Some(value) = headers.get(axum::http::header::CONTENT_ENCODING) else {
-        return Ok(body.to_vec());
-    };
-    let encoding = value
-        .to_str()
-        .map_err(|_| RequestDecodeError::MalformedJson)?;
+) -> Result<Cow<'a, [u8]>, RequestDecodeError> {
+    let encoding = headers
+        .get_all(axum::http::header::CONTENT_ENCODING)
+        .iter()
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| RequestDecodeError::MalformedJson)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join(",");
     match encoding.trim().to_ascii_lowercase().as_str() {
-        "" | "identity" => Ok(body.to_vec()),
+        "" | "identity" => Ok(Cow::Borrowed(body)),
         "gzip" => {
-            let decoder = flate2::read::GzDecoder::new(body);
-            read_bounded(decoder)
+            let decoder = flate2::read::MultiGzDecoder::new(body);
+            read_bounded(decoder).map(Cow::Owned)
         }
         "deflate" => {
             let decoder = flate2::read::ZlibDecoder::new(body);
-            read_bounded(decoder)
+            read_bounded(decoder).map(Cow::Owned)
         }
         "zstd" => {
-            let decoded = zstd::stream::decode_all(std::io::Cursor::new(body))
+            let mut decoder = zstd::stream::read::Decoder::with_buffer(body)
                 .map_err(|_| RequestDecodeError::MalformedJson)?;
-            if decoded.len() > MAX_DECOMPRESSED_REQUEST_BYTES {
-                return Err(RequestDecodeError::DecompressedBodyTooLarge);
-            }
-            Ok(decoded)
+            // 输出有界之外，也限制压缩帧声明的回溯窗口，防止解码器内部过量分配。
+            decoder
+                .window_log_max(MAX_DECOMPRESSED_REQUEST_BYTES.ilog2())
+                .map_err(|_| RequestDecodeError::MalformedJson)?;
+            read_bounded(decoder).map(Cow::Owned)
         }
         other => Err(RequestDecodeError::UnsupportedContentEncoding {
             encoding: other.to_owned(),
@@ -375,17 +379,31 @@ fn decompress_request_body(
 }
 
 fn read_bounded<R: std::io::Read>(mut reader: R) -> Result<Vec<u8>, RequestDecodeError> {
-    use std::io::Read;
     let mut decoded = Vec::new();
-    reader
-        .by_ref()
-        .take((MAX_DECOMPRESSED_REQUEST_BYTES + 1) as u64)
-        .read_to_end(&mut decoded)
-        .map_err(|_| RequestDecodeError::MalformedJson)?;
-    if decoded.len() > MAX_DECOMPRESSED_REQUEST_BYTES {
-        return Err(RequestDecodeError::DecompressedBodyTooLarge);
+    let mut chunk = [0; 8192];
+    loop {
+        let remaining = MAX_DECOMPRESSED_REQUEST_BYTES - decoded.len();
+        let read_limit = chunk.len().min(remaining + 1);
+        let read = reader
+            .read(&mut chunk[..read_limit])
+            .map_err(|_| RequestDecodeError::MalformedJson)?;
+        if read == 0 {
+            return Ok(decoded);
+        }
+        if read > remaining {
+            return Err(RequestDecodeError::DecompressedBodyTooLarge);
+        }
+        // 默认 Vec 扩容和 read_to_end 的 EOF 探测可能突破输出上限；
+        // 容量增长也受相同边界约束，越界探测只使用栈上分块缓冲区。
+        let required = decoded.len() + read;
+        if required > decoded.capacity() {
+            let capacity = (decoded.capacity() * 2)
+                .max(required)
+                .min(MAX_DECOMPRESSED_REQUEST_BYTES);
+            decoded.reserve_exact(capacity - decoded.len());
+        }
+        decoded.extend_from_slice(&chunk[..read]);
     }
-    Ok(decoded)
 }
 
 pub(super) fn decode_request_inner(

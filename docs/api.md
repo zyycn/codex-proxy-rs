@@ -113,8 +113,8 @@ body 不进入这个通用信封。稳定业务码如下：
 
 ## 3. OpenAI 数据面与模型目录
 
-Responses、Images 和 standalone Search HTTP body、WebSocket message 和 frame 不设置网关私有长度上限；
-协议可接受性由上游决定。
+除下述 Responses 入站解压保护外，Responses、Images 和 standalone Search HTTP body、
+WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -128,6 +128,15 @@ Responses、Images 和 standalone Search HTTP body、WebSocket message 和 frame
 
 Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-openai-subagent` 请求头携带子代理类型；
 网关不提供独立的子代理请求路径。
+
+`POST /v1/responses` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
+`deflate`（zlib 封装）和 `zstd`，缺省、空值或 `identity` 直接使用原始正文。gzip 多成员与 zstd
+多帧连续解码，整体展开结果最多 64 MiB，超限在继续展开前返回 `400 request_too_large`；zstd
+回溯窗口同样最多 64 MiB，不能满足该限制的帧按解码失败处理。这个限制保护入站解压资源，不是
+模型上下文或 Token 上限，也不新增未压缩正文的长度限制。
+不支持的编码、逗号分隔的叠加编码和重复 `Content-Encoding` 头返回
+`400 unsupported_content_encoding`；压缩正文损坏、截断或解压后不是合法 JSON 返回
+`400 invalid_json`。本地错误不包含原始正文或解压库细节。WebSocket 文本帧不经过这条解压路径。
 
 Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwarded-*`、`forwarded`、`via`、
 `cdn-loop`）以及 `Accept-Encoding` / `Content-Encoding`。链路元数据和编解码能力
