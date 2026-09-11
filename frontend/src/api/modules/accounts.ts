@@ -75,6 +75,7 @@ export interface AccountModelUsage {
 }
 
 export interface AccountUsage {
+  windowLabelDisplay: string
   requestCount: number | null
   requestCountDisplay: string
   inputTokens: number | null

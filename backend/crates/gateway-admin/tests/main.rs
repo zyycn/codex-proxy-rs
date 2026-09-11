@@ -157,7 +157,7 @@ fn representative_quota_should_prefer_account_wide_window_over_model_specific_wi
 }
 
 #[test]
-fn representative_window_usage_should_accept_account_wide_rolling_window_without_reset() {
+fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
     let usage = AccountUsage {
         account_id: "acct_xai".to_owned(),
         request_count: 5,
@@ -194,14 +194,14 @@ fn representative_window_usage_should_accept_account_wide_rolling_window_without
             used_percent: None,
             reset_at: None,
             limit_reached: false,
-            local_usage: Some(usage.clone()),
+            local_usage: Some(usage),
             provider_data: None,
         }],
         limit_reached: false,
         provider_data: None,
     };
 
-    assert_eq!(quota.representative_window_usage(), Some(&usage));
+    assert_eq!(quota.usage_window(), None);
 }
 
 #[test]

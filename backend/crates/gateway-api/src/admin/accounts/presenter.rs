@@ -69,6 +69,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     let expires_at = account.access_token_expires_at.as_ref().map(china_rfc3339);
     let added_at = china_rfc3339(&account.created_at);
     let updated_at = china_rfc3339(&account.updated_at);
+    let usage_period = quota.usage_window().map(|(_, period)| period);
     let (quota, refresh_token_expires_at) = account_quota_view(quota, rate_limited_until, now);
     AccountView {
         id: account.id.clone(),
@@ -117,7 +118,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         updated_at,
         updated_at_display: china_datetime(&account.updated_at),
         quota,
-        usage: account_usage_view(usage, now),
+        usage: account_usage_view(usage, usage_period, now),
     }
 }
 
@@ -211,6 +212,7 @@ pub(super) fn quota_local_usage(usage: &AccountUsage) -> Value {
 
 pub(super) fn account_usage_view(
     usage: Option<AccountUsage>,
+    period: Option<AccountUsagePeriod>,
     now: DateTime<Utc>,
 ) -> AccountUsageView {
     let Some(usage) = usage else {
@@ -228,6 +230,12 @@ pub(super) fn account_usage_view(
         "known"
     };
     AccountUsageView {
+        window_label_display: match period {
+            Some(AccountUsagePeriod::Weekly) => "周额度窗口",
+            Some(AccountUsagePeriod::Monthly) => "月额度窗口",
+            None => "周/月额度窗口",
+        }
+        .to_owned(),
         request_count: Some(usage.request_count),
         request_count_display: format_number(usage.request_count),
         input_tokens: usage.input_tokens,
@@ -347,6 +355,7 @@ pub(super) fn display_optional_tokens(value: Option<u64>) -> String {
 
 pub(super) fn empty_account_usage() -> AccountUsageView {
     AccountUsageView {
+        window_label_display: "周/月额度窗口".to_owned(),
         request_count: None,
         request_count_display: "—".to_owned(),
         input_tokens: None,

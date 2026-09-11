@@ -316,6 +316,7 @@ pub struct AccountQuotaWindowView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageView {
+    pub window_label_display: String,
     pub request_count: Option<u64>,
     pub request_count_display: String,
     pub input_tokens: Option<u64>,

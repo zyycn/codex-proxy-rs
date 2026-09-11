@@ -37,7 +37,7 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
       >
         <span
           class="flex min-w-0 items-baseline gap-1 font-mono tabular-nums"
-          title="当前额度窗口总 Token"
+          :title="`${account.usage.windowLabelDisplay}总 Token`"
         >
           <strong class="truncate text-cp-xs font-heavy text-cp-text">
             {{ account.usage.totalTokensDisplay }}

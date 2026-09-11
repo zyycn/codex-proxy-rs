@@ -279,7 +279,9 @@ impl DefaultAccountsService {
             std::slice::from_mut(&mut quota),
         )
         .await?;
-        let usage = quota.representative_window_usage().cloned();
+        let usage = quota
+            .usage_window()
+            .and_then(|(window, _)| window.local_usage.clone());
         Ok(AccountDirectoryItem {
             plan_type_display: self.providers.resolve_account_plan(
                 stored.account.provider_kind.as_str(),
@@ -372,7 +374,9 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .zip(quotas)
             .map(|(mut item, quota)| {
-                let usage = quota.representative_window_usage().cloned();
+                let usage = quota
+                    .usage_window()
+                    .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
                     plan_type_display: self.providers.resolve_account_plan(
                         item.account.provider_kind.as_str(),

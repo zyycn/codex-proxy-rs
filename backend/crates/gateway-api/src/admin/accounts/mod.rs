@@ -26,13 +26,13 @@ use gateway_admin::model::{
     },
     provider_credentials::{
         AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountRefreshResult,
-        AuthorizationStarted, CompleteAuthorization, ConsumeProviderResetCredit,
-        CredentialDeletion, CredentialDeletionResult, CredentialImportResult, CredentialMutation,
-        CredentialMutationResult, ImportCredentials, ProviderDocument, ProviderModels,
-        ProviderProfileActivityInsights, ProviderProfileAvatar, ProviderProfileDailyUsage,
-        ProviderProfileInvocation, ProviderProfileStatistics, ProviderProfileStatisticsSummary,
-        ProviderQuota, ProviderQuotaWindow, ProviderResetCredit, ProviderResetCreditResult,
-        ProviderResetCredits, RotateCredential, StartAuthorization,
+        AccountUsagePeriod, AuthorizationStarted, CompleteAuthorization,
+        ConsumeProviderResetCredit, CredentialDeletion, CredentialDeletionResult,
+        CredentialImportResult, CredentialMutation, CredentialMutationResult, ImportCredentials,
+        ProviderDocument, ProviderModels, ProviderProfileActivityInsights, ProviderProfileAvatar,
+        ProviderProfileDailyUsage, ProviderProfileInvocation, ProviderProfileStatistics,
+        ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaWindow, ProviderResetCredit,
+        ProviderResetCreditResult, ProviderResetCredits, RotateCredential, StartAuthorization,
     },
 };
 use gateway_core::{

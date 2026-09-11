@@ -771,6 +771,13 @@ pub struct ProviderQuotaWindow {
     pub provider_data: Option<ProviderDocument>,
 }
 
+/// 账号用量统计周期，按周优先、月次之选择；短期限流窗口不参与统计面板。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccountUsagePeriod {
+    Weekly,
+    Monthly,
+}
+
 /// Provider 解释 quota 所需的公共请求事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderQuotaRequest {
@@ -921,23 +928,34 @@ impl ProviderQuota {
         }
     }
 
-    /// 返回账号展开面板使用的当前额度窗口用量。
+    /// 选择账号用量统计的周/月窗口，同时返回展示所需的周期事实。
     ///
-    /// Provider 已提供账号级本地用量时，固定窗口和无固定重置点的滚动窗口
-    /// 都可作为代表用量；优先级与 Dashboard 代表性额度窗口一致，
-    /// 同一优先级保持 Provider 投影顺序。
+    /// 只使用边界完整、可归属到整个账号的窗口；周优先于月，同周期保持
+    /// Provider 投影顺序。没有符合条件的窗口时不回退到短期或历史累计。
     #[must_use]
-    pub fn representative_window_usage(&self) -> Option<&AccountUsage> {
+    pub fn usage_window(&self) -> Option<(&ProviderQuotaWindow, AccountUsagePeriod)> {
         self.windows
             .iter()
             .enumerate()
-            .filter(|(_, window)| {
-                window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
-                    && window.window_seconds.is_some()
-                    && window.local_usage.is_some()
+            .filter_map(|(index, window)| {
+                if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide
+                    || window.reset_at.is_none()
+                    || window.local_usage.is_none()
+                {
+                    return None;
+                }
+                let seconds = window.window_seconds?;
+                let period = if is_week_window(seconds) {
+                    AccountUsagePeriod::Weekly
+                } else if window.group == "monthly" && seconds >= 7 * 24 * 60 * 60 {
+                    AccountUsagePeriod::Monthly
+                } else {
+                    return None;
+                };
+                Some((index, window, period))
             })
-            .min_by_key(|(index, window)| (quota_usage_priority(window), *index))
-            .and_then(|(_, window)| window.local_usage.as_ref())
+            .min_by_key(|(index, _, period)| (*period, *index))
+            .map(|(_, window, period)| (window, period))
     }
 
     /// 返回 Dashboard 使用的代表性额度比例。

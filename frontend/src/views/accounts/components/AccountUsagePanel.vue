@@ -37,7 +37,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
         <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
           Tokens 结构
         </h3>
-        <span class="text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
+        <span class="text-cp-xs font-emphasis text-cp-text-quaternary">{{ account.usage.windowLabelDisplay }}</span>
       </div>
       <div class="grid gap-2 xl:min-h-0 xl:flex-1 xl:grid-rows-5">
         <div class="flex items-center justify-between rounded-lg bg-cp-green-container px-3 py-2">
@@ -79,7 +79,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
           模型使用排行
         </h3>
 
-        <div class="ml-auto flex items-center gap-4">
+        <div class="ml-auto flex items-baseline gap-4">
           <div v-if="hasUsageSummary" class="flex items-baseline gap-1.5 whitespace-nowrap">
             <Sigma class="size-3.5 self-center text-cp-text-tertiary" :stroke-width="1.75" />
             <span title="总 Token">
@@ -96,7 +96,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
               </span>
             </span>
           </div>
-          <span class="whitespace-nowrap text-cp-xs font-emphasis text-cp-text-quaternary">当前额度窗口</span>
+          <span class="whitespace-nowrap text-cp-xs font-emphasis text-cp-text-quaternary">{{ account.usage.windowLabelDisplay }}</span>
         </div>
       </div>
 

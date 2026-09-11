@@ -340,6 +340,7 @@ mod response {
     #[test]
     fn account_usage_view_should_keep_unobserved_numbers_null() {
         let view = AccountUsageView {
+            window_label_display: "周/月额度窗口".to_owned(),
             request_count: None,
             request_count_display: "-".to_owned(),
             input_tokens: None,
@@ -374,6 +375,7 @@ mod response {
             models: Vec::new(),
         };
         let value = serde_json::to_value(view).expect("serialize account usage");
+        assert_eq!(value["windowLabelDisplay"], "周/月额度窗口");
         assert!(value["inputTokens"].is_null());
         assert!(value["totalTokens"].is_null());
         assert!(value["reasoningTokens"].is_null());
