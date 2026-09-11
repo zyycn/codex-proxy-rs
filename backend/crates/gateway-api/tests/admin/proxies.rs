@@ -77,9 +77,10 @@ async fn list_route_should_keep_camel_case_wire() {
     assert_eq!(value["data"]["page"]["pageSize"], 20);
     assert_eq!(value["data"]["page"]["total"], 1);
     assert_eq!(value["data"]["items"][0]["name"], "US 节点");
+    // socks5 是非 special scheme，URL 规范化不追加尾部斜杠。
     assert_eq!(
         value["data"]["items"][0]["endpoint"],
-        "socks5://10.0.0.1:1080/"
+        "socks5://10.0.0.1:1080"
     );
     assert!(value["data"]["items"][0].get("account_count").is_none());
 }
