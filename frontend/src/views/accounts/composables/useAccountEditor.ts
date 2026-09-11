@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { getAccounts } from '@/api'
 
 import { computed, ref, shallowRef, watch } from 'vue'
-import { updateAccount } from '@/api'
+import { revealOutboundProxy, updateAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
@@ -21,6 +21,7 @@ export function useAccountEditor(options: {
   const weight = shallowRef('1')
   const proxyMode = shallowRef('preserve')
   const proxyUrl = shallowRef('')
+  const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -35,6 +36,7 @@ export function useAccountEditor(options: {
     editingAccountId.value = account.id
     proxyMode.value = 'preserve'
     proxyUrl.value = ''
+    proxyId.value = ''
     schedulingEnabled.value = account.enabled
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
@@ -51,15 +53,27 @@ export function useAccountEditor(options: {
       toast.warning('请输入代理 URL')
       return
     }
+    if (proxyMode.value === 'pool' && !proxyId.value) {
+      toast.warning('请选择 IP 池中的代理')
+      return
+    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
     }
 
     await saveAction.run(async () => {
+      // 池内代理仅存脱敏 endpoint，提交前 reveal 完整 URL。
+      const outboundProxyUrl = proxyMode.value === 'preserve'
+        ? undefined
+        : proxyMode.value === 'direct'
+          ? ''
+          : proxyMode.value === 'pool'
+            ? (await revealOutboundProxy({ id: proxyId.value })).url
+            : proxyUrl.value.trim()
       await updateAccount({
         accountId,
-        outboundProxyUrl: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyUrl.value.trim(),
+        outboundProxyUrl,
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
@@ -77,6 +91,7 @@ export function useAccountEditor(options: {
     editingAccountId.value = null
     proxyMode.value = 'preserve'
     proxyUrl.value = ''
+    proxyId.value = ''
     schedulingEnabled.value = true
     concurrencyLimit.value = ''
     weight.value = '1'
@@ -91,6 +106,7 @@ export function useAccountEditor(options: {
     weight,
     proxyMode,
     proxyUrl,
+    proxyId,
     selectedGroupIds,
     saving,
     open,

@@ -116,6 +116,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             )?,
         }),
         Arc::new(postgres::PgAdminClientKeyStore::new(pool.clone())),
+        Arc::new(postgres::PgOutboundProxyRepository::new(pool.clone())),
         Arc::new(postgres::PgAdminObservabilityStore::new(
             pool.clone(),
             Some(credential_leases.clone()),

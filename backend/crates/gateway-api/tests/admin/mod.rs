@@ -47,6 +47,11 @@ use gateway_admin::{
             PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput,
             ProviderModels, ProviderQuota,
         },
+        proxies::{
+            DeleteOutboundProxy, NewOutboundProxy, OutboundProxyId, OutboundProxyListQuery,
+            OutboundProxyMutation, OutboundProxyPage, OutboundProxyRecord, OutboundProxyTestReport,
+            RevealedOutboundProxy, UpdateOutboundProxy,
+        },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
             RotationStrategy, RuntimeSettings,
@@ -56,10 +61,11 @@ use gateway_admin::{
     ports::{
         client_distribution::ClientDistributionResolver,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
+        proxy::OutboundProxyProbe,
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
             AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-            ClientKeyStore, ObservabilityStore, SettingsStore,
+            ClientKeyStore, ObservabilityStore, OutboundProxyStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -82,6 +88,7 @@ mod auth;
 mod client_keys;
 mod errors;
 mod observability;
+mod proxies;
 mod settings;
 mod system;
 mod wire;
@@ -96,6 +103,7 @@ pub(super) struct AdminTestFixture {
     pub ops_errors: Arc<Mutex<Vec<OpsError>>>,
     pub dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
     pub dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
+    pub proxy_probe: Arc<StaticOutboundProxyProbe>,
 }
 
 impl AdminTestFixture {
@@ -109,6 +117,8 @@ impl AdminTestFixture {
         let settings = Arc::new(MemorySettingsStore::new(api_key));
         let client_keys = Arc::new(MemoryClientKeyStore);
         let account_groups = Arc::new(MemoryAccountGroupStore::new());
+        let outbound_proxies = Arc::new(MemoryOutboundProxyStore::new());
+        let proxy_probe = Arc::new(StaticOutboundProxyProbe::new());
         let usage_records = Arc::new(Mutex::new(Vec::new()));
         let usage_detail = Arc::new(Mutex::new(None));
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
@@ -127,6 +137,7 @@ impl AdminTestFixture {
             AdminAccountStorePorts::new(unused.clone(), unused.clone(), account_groups.clone()),
             auth.clone(),
             client_keys.clone(),
+            outbound_proxies,
             unused,
             settings.clone(),
             gateway_admin::ports::backup::BackupStorePorts::disabled(),
@@ -145,6 +156,7 @@ impl AdminTestFixture {
             providers,
             Arc::new(NoopSnapshot),
             Arc::new(NoopProbe),
+            proxy_probe.clone(),
             Arc::new(StaticClientDistribution),
             system,
         )
@@ -160,6 +172,7 @@ impl AdminTestFixture {
             ops_errors,
             dashboard_observation,
             dashboard_summary_range,
+            proxy_probe,
         }
     }
 
@@ -391,6 +404,179 @@ pub(super) const SECONDARY_GROUP_ID: &str = "grp_2222222222222222222222222222222
 struct MemoryAccountGroupState {
     revision: Revision,
     groups: BTreeMap<gateway_core::routing::AccountGroupId, AccountGroupRecord>,
+}
+
+pub(super) struct MemoryOutboundProxyStore {
+    proxies: Mutex<BTreeMap<OutboundProxyId, OutboundProxyRecord>>,
+    revision: Mutex<u64>,
+}
+
+impl MemoryOutboundProxyStore {
+    fn new() -> Self {
+        Self {
+            proxies: Mutex::new(BTreeMap::new()),
+            revision: Mutex::new(1),
+        }
+    }
+
+    fn bump(&self) -> Revision {
+        let mut revision = self.revision.lock().expect("proxy revision");
+        *revision += 1;
+        Revision::new(*revision).expect("nonzero proxy revision")
+    }
+
+    fn current(&self) -> Revision {
+        Revision::new(*self.revision.lock().expect("proxy revision"))
+            .expect("nonzero proxy revision")
+    }
+}
+
+#[async_trait]
+impl OutboundProxyStore for MemoryOutboundProxyStore {
+    async fn list_outbound_proxies(
+        &self,
+        query: OutboundProxyListQuery,
+    ) -> AdminStoreResult<OutboundProxyPage> {
+        let proxies = self.proxies.lock().expect("proxies");
+        let items = proxies
+            .values()
+            .filter(|record| {
+                query.search.as_deref().is_none_or(|search| {
+                    record.name.to_lowercase().contains(&search.to_lowercase())
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(OutboundProxyPage {
+            config_revision: self.current(),
+            total: items.len() as u64,
+            items,
+            page: query.page,
+            page_size: query.page_size.get(),
+        })
+    }
+
+    async fn load_outbound_proxy(
+        &self,
+        id: &OutboundProxyId,
+    ) -> AdminStoreResult<Option<RevealedOutboundProxy>> {
+        Ok(self
+            .proxies
+            .lock()
+            .expect("proxies")
+            .get(id)
+            .map(|record| RevealedOutboundProxy {
+                id: record.id.clone(),
+                proxy: record.proxy.clone(),
+            }))
+    }
+
+    async fn create_outbound_proxy(
+        &self,
+        command: NewOutboundProxy,
+        _: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation> {
+        let mut proxies = self.proxies.lock().expect("proxies");
+        if proxies.values().any(|record| record.name == command.name) {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Conflict,
+                "outbound proxy",
+                "duplicate proxy name",
+            ));
+        }
+        let now = Utc::now();
+        let record = OutboundProxyRecord {
+            id: command.id.clone(),
+            name: command.name,
+            proxy: command.proxy,
+            account_count: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        proxies.insert(command.id.clone(), record.clone());
+        Ok(OutboundProxyMutation {
+            config_revision: self.bump(),
+            id: command.id,
+            record: Some(record),
+        })
+    }
+
+    async fn update_outbound_proxy(
+        &self,
+        command: UpdateOutboundProxy,
+        _: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation> {
+        let mut proxies = self.proxies.lock().expect("proxies");
+        let record = proxies.get_mut(&command.id).ok_or_else(|| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::NotFound,
+                "outbound proxy",
+                "proxy not found",
+            )
+        })?;
+        record.name = command.name;
+        if let Some(proxy) = command.proxy {
+            record.proxy = proxy;
+        }
+        record.updated_at = Utc::now();
+        let record = record.clone();
+        Ok(OutboundProxyMutation {
+            config_revision: self.bump(),
+            id: command.id,
+            record: Some(record),
+        })
+    }
+
+    async fn delete_outbound_proxy(
+        &self,
+        command: DeleteOutboundProxy,
+        _: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation> {
+        let mut proxies = self.proxies.lock().expect("proxies");
+        if proxies.remove(&command.id).is_none() {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::NotFound,
+                "outbound proxy",
+                "proxy not found",
+            ));
+        }
+        Ok(OutboundProxyMutation {
+            config_revision: self.bump(),
+            id: command.id,
+            record: None,
+        })
+    }
+}
+
+/// 返回固定成功报告的探测桩；记录最近一次探测目标。
+pub(super) struct StaticOutboundProxyProbe {
+    pub last_target: Mutex<Option<String>>,
+}
+
+impl StaticOutboundProxyProbe {
+    fn new() -> Self {
+        Self {
+            last_target: Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait]
+impl OutboundProxyProbe for StaticOutboundProxyProbe {
+    async fn probe(
+        &self,
+        _: &gateway_core::account::OutboundProxy,
+        target_url: &str,
+    ) -> OutboundProxyTestReport {
+        *self.last_target.lock().expect("last target") = Some(target_url.to_owned());
+        OutboundProxyTestReport {
+            success: true,
+            latency_ms: 12,
+            status_code: Some(200),
+            target_url: target_url.to_owned(),
+            error: None,
+        }
+    }
 }
 
 pub(super) struct MemoryAccountGroupStore {

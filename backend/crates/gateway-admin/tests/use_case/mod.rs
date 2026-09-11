@@ -51,6 +51,11 @@ use gateway_admin::{
             PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput,
             ProviderModels, ProviderQuota,
         },
+        proxies::{
+            DeleteOutboundProxy, NewOutboundProxy, OutboundProxyId, OutboundProxyListQuery,
+            OutboundProxyMutation, OutboundProxyPage, OutboundProxyTestReport,
+            RevealedOutboundProxy, UpdateOutboundProxy,
+        },
         settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
     },
@@ -58,10 +63,11 @@ use gateway_admin::{
         backup::BackupStorePorts,
         client_distribution::ClientDistributionResolver,
         provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
+        proxy::OutboundProxyProbe,
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
             AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-            ClientKeyStore, ObservabilityStore, SettingsStore,
+            ClientKeyStore, ObservabilityStore, OutboundProxyStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -86,6 +92,7 @@ pub(super) struct AdminHarness {
     account_groups: Arc<dyn AccountGroupStore>,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
+    outbound_proxies: Arc<dyn OutboundProxyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
@@ -105,6 +112,7 @@ impl AdminHarness {
             account_groups: Arc::new(UnavailableAccountGroupStore),
             auth: Arc::new(BootstrapAuthStore::default()),
             client_keys: unavailable.clone(),
+            outbound_proxies: Arc::new(UnavailableOutboundProxyStore),
             observability: unavailable.clone(),
             settings: unavailable,
             backup: BackupStorePorts::disabled(),
@@ -199,6 +207,7 @@ impl AdminHarness {
                 ),
                 self.auth,
                 self.client_keys,
+                self.outbound_proxies,
                 self.observability,
                 self.settings,
                 self.backup,
@@ -206,6 +215,7 @@ impl AdminHarness {
             self.providers,
             Arc::new(NoopSnapshot),
             self.probe,
+            Arc::new(UnavailableOutboundProxyProbe),
             Arc::new(NoopClientDistribution),
             self.system,
         )
@@ -781,6 +791,68 @@ struct NoopSnapshot;
 impl SnapshotControl for NoopSnapshot {
     fn publish_committed(&self, _: ConfigRevision) -> BoxFuture<'_, ()> {
         Box::pin(async {})
+    }
+}
+
+struct UnavailableOutboundProxyStore;
+
+#[async_trait]
+impl OutboundProxyStore for UnavailableOutboundProxyStore {
+    async fn list_outbound_proxies(
+        &self,
+        _: OutboundProxyListQuery,
+    ) -> AdminStoreResult<OutboundProxyPage> {
+        Err(unavailable("outbound proxies"))
+    }
+
+    async fn load_outbound_proxy(
+        &self,
+        _: &OutboundProxyId,
+    ) -> AdminStoreResult<Option<RevealedOutboundProxy>> {
+        Err(unavailable("outbound proxy load"))
+    }
+
+    async fn create_outbound_proxy(
+        &self,
+        _: NewOutboundProxy,
+        _: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation> {
+        Err(unavailable("outbound proxy create"))
+    }
+
+    async fn update_outbound_proxy(
+        &self,
+        _: UpdateOutboundProxy,
+        _: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation> {
+        Err(unavailable("outbound proxy update"))
+    }
+
+    async fn delete_outbound_proxy(
+        &self,
+        _: DeleteOutboundProxy,
+        _: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation> {
+        Err(unavailable("outbound proxy delete"))
+    }
+}
+
+struct UnavailableOutboundProxyProbe;
+
+#[async_trait]
+impl OutboundProxyProbe for UnavailableOutboundProxyProbe {
+    async fn probe(
+        &self,
+        _: &gateway_core::account::OutboundProxy,
+        target_url: &str,
+    ) -> OutboundProxyTestReport {
+        OutboundProxyTestReport {
+            success: false,
+            latency_ms: 0,
+            status_code: None,
+            target_url: target_url.to_owned(),
+            error: Some("test outbound proxy probe is unavailable".to_owned()),
+        }
     }
 }
 

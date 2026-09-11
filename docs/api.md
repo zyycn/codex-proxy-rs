@@ -427,7 +427,26 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 `providerCounts` 和 `clientKeyCount`。查询分组成员使用账号列表的 `groupId` 筛选，
 不提供独立的分组成员路由；账号的 Provider 不代表整个分组的 Provider。
 
-## 7. Client Key
+## 7. 出站代理（IP 管理）
+
+出站代理池维护可复用的代理 IP；账号更新时可从池中取完整 URL 写入
+`outboundProxyUrl`，实现每个账号独立代理。常规列表只返回脱敏 `endpoint`
+（去掉用户名与密码），完整 URL 仅由显式 reveal 返回。
+
+| 方法 | 路由 | 主要 query/body | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/proxies` | `page`、`pageSize`、`search` | 分页查询；`accountCount` 为当前把该 URL 设为出站隧道的账号数 |
+| `GET` | `/api/admin/proxies/reveal` | `id` | 一次性返回完整代理 URL；响应带 `Cache-Control: no-store` |
+| `POST` | `/api/admin/proxies/create` | `{ name, url }` | 添加代理；URL 仅支持 http/https/socks5/socks5h 且需含主机和端口 |
+| `POST` | `/api/admin/proxies/update` | `{ id, name, url? }` | 更新名称；`url` 缺省或空串保留当前地址 |
+| `POST` | `/api/admin/proxies/delete` | `{ id }` | 删除池条目；已写入账号的代理地址不受影响 |
+| `POST` | `/api/admin/proxies/test` | `{ id?, url?, targetUrl? }` | 连通性测试；`id` 与 `url` 二选一，`targetUrl` 缺省为 `https://api.openai.com/v1/models` |
+
+测试经指定代理发起一次 GET；目标返回任意 HTTP 状态均视为链路可达
+（`success=true` 并附 `statusCode` 与 `latencyMs`），连接失败或超时返回脱敏
+错误描述，不回显代理 URL、凭据或响应正文。`targetUrl` 仅支持 http/https。
+
+## 8. Client Key
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
@@ -468,7 +487,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 自动结算按网关请求 ID 幂等执行。账本独立于使用统计日志，记录保留至删除 Key，
 不受 `usageRetentionDays` 影响。
 
-## 8. 运行设置
+## 9. 运行设置
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -527,7 +546,7 @@ Windows 离线包接口固定解析 Microsoft Store Product ID `9PLM9XGG6VKS` �
 Desktop 三段 SemVer 门禁，也不会自动回写最低版本设置。门禁规则见
 [鉴权与公共约定](#1-鉴权与公共约定)，解析器职责见 [架构文档](architecture.md#11-生命周期安全与恢复)。
 
-## 9. 备份
+## 10. 备份
 
 全部备份端点位于 `/api/admin/settings/backups/*`，内部由独立 BackupService 承担，不并入设置用例。响应继续使用 `AdminEnvelope`，wire 字段 camelCase，`Cache-Control: no-store`。
 
@@ -604,7 +623,7 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 
 审计动作：`backup.s3_config_updated`、`backup.s3_connection_tested`、`backup.schedule_updated`、`backup.created`、`backup.download_url_created`、`backup.delete_requested`。审计详情与记录表均不保存 Secret、数据库连接串或预签名 URL query。
 
-## 10. Dashboard、用量与错误
+## 11. Dashboard、用量与错误
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -643,7 +662,7 @@ OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 
 `flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。Fast 优先使用模型的
 priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex 为 `0.50x`，Default 为 `1.00x`。
 
-## 11. 版本、更新与重启
+## 12. 版本、更新与重启
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |

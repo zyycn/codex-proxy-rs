@@ -35,6 +35,10 @@ use crate::model::{
         CredentialListQuery, CredentialMutationResult, CredentialPage, CredentialRotationCommit,
         ProviderExportCredentialInput,
     },
+    proxies::{
+        DeleteOutboundProxy, NewOutboundProxy, OutboundProxyId, OutboundProxyListQuery,
+        OutboundProxyMutation, OutboundProxyPage, RevealedOutboundProxy, UpdateOutboundProxy,
+    },
     settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
 };
 
@@ -290,6 +294,38 @@ pub trait AccountGroupStore: Send + Sync {
     ) -> AdminStoreResult<AccountGroupMutation>;
 }
 
+/// 出站代理池管理事务。
+#[async_trait]
+pub trait OutboundProxyStore: Send + Sync {
+    async fn list_outbound_proxies(
+        &self,
+        query: OutboundProxyListQuery,
+    ) -> AdminStoreResult<OutboundProxyPage>;
+
+    async fn load_outbound_proxy(
+        &self,
+        id: &OutboundProxyId,
+    ) -> AdminStoreResult<Option<RevealedOutboundProxy>>;
+
+    async fn create_outbound_proxy(
+        &self,
+        command: NewOutboundProxy,
+        context: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation>;
+
+    async fn update_outbound_proxy(
+        &self,
+        command: UpdateOutboundProxy,
+        context: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation>;
+
+    async fn delete_outbound_proxy(
+        &self,
+        command: DeleteOutboundProxy,
+        context: &MutationContext,
+    ) -> AdminStoreResult<OutboundProxyMutation>;
+}
+
 /// 逐条读取的已计算费用事实；消费结束或丢弃时释放查询资源。
 pub type UsageCalculatedBillingStream<'a> =
     BoxStream<'a, AdminStoreResult<UsageCalculatedBillingFact>>;
@@ -407,6 +443,7 @@ pub struct AdminStorePorts {
     accounts: AdminAccountStorePorts,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
+    outbound_proxies: Arc<dyn OutboundProxyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
@@ -418,6 +455,7 @@ impl AdminStorePorts {
         accounts: AdminAccountStorePorts,
         auth: Arc<dyn AuthStore>,
         client_keys: Arc<dyn ClientKeyStore>,
+        outbound_proxies: Arc<dyn OutboundProxyStore>,
         observability: Arc<dyn ObservabilityStore>,
         settings: Arc<dyn SettingsStore>,
         backup: BackupStorePorts,
@@ -426,6 +464,7 @@ impl AdminStorePorts {
             accounts,
             auth,
             client_keys,
+            outbound_proxies,
             observability,
             settings,
             backup,
@@ -455,6 +494,11 @@ impl AdminStorePorts {
     #[must_use]
     pub fn client_keys(&self) -> Arc<dyn ClientKeyStore> {
         self.client_keys.clone()
+    }
+
+    #[must_use]
+    pub fn outbound_proxies(&self) -> Arc<dyn OutboundProxyStore> {
+        self.outbound_proxies.clone()
     }
 
     #[must_use]

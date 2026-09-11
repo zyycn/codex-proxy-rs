@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountGroup } from '@/api'
+import type { AccountGroup, OutboundProxy } from '@/api'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -13,13 +13,16 @@ withDefaults(defineProps<{
   endpoint?: string | null
   preserveProxy?: boolean
   proxyError?: string
-}>(), { preserveProxy: true })
+  proxies?: OutboundProxy[]
+  proxiesLoading?: boolean
+}>(), { preserveProxy: true, proxies: () => [], proxiesLoading: false })
 
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const proxyId = defineModel<string>('proxyId', { required: false, default: '' })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -67,6 +70,16 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :disabled="disabled"
       />
     </BaseFormItem>
-    <AccountProxyField v-model:mode="proxyMode" v-model:url="proxyUrl" :preserve="preserveProxy" :error="proxyError" :endpoint="endpoint" :disabled="disabled" />
+    <AccountProxyField
+      v-model:mode="proxyMode"
+      v-model:url="proxyUrl"
+      v-model:proxy-id="proxyId"
+      :preserve="preserveProxy"
+      :error="proxyError"
+      :endpoint="endpoint"
+      :disabled="disabled"
+      :proxies="proxies"
+      :proxies-loading="proxiesLoading"
+    />
   </div>
 </template>

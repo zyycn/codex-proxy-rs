@@ -67,11 +67,12 @@ impl DatabaseDumpPort for PgDumpAdapter {
             .take()
             .ok_or_else(|| pg_dump_failed("无法读取 pg_dump 输出"))?;
 
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
+        let mut open_options = tokio::fs::OpenOptions::new();
+        open_options.create(true).write(true).truncate(true);
+        // 暂存文件包含完整数据库导出；Unix 上限制为仅属主可读写。
+        #[cfg(unix)]
+        open_options.mode(0o600);
+        let file = open_options
             .open(&partial)
             .await
             .map_err(|_| pg_dump_failed("无法创建暂存文件"))?;

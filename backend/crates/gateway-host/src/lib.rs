@@ -3,6 +3,7 @@
 pub mod client_distribution;
 pub mod config;
 mod logging;
+mod proxy_probe;
 pub mod serve;
 pub mod system_update;
 pub mod workers;
@@ -11,7 +12,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use gateway_admin::ports::{
-    client_distribution::ClientDistributionResolver, system::SystemOperations,
+    client_distribution::ClientDistributionResolver, proxy::OutboundProxyProbe,
+    system::SystemOperations,
 };
 use gateway_core::health::{HealthProbe, WorkerHealthSource};
 use gateway_core::lifecycle::CancellationToken;
@@ -79,6 +81,12 @@ impl HostBundle {
     /// 返回惰性下载解析能力；网络请求只会在管理 API 调用时发生。
     pub fn client_distribution_resolver(&self) -> Arc<dyn ClientDistributionResolver> {
         self.client_distribution.clone()
+    }
+
+    /// 返回出站代理连通性探测能力；网络请求只会在管理 API 调用时发生。
+    #[must_use]
+    pub fn outbound_proxy_probe(&self) -> Arc<dyn OutboundProxyProbe> {
+        Arc::new(proxy_probe::ReqwestOutboundProxyProbe)
     }
 
     #[must_use]

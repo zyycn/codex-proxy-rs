@@ -26,6 +26,11 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/account-groups/index.vue'),
       },
       {
+        path: 'proxies',
+        name: 'proxies',
+        component: () => import('@/views/proxies/index.vue'),
+      },
+      {
         path: 'api-keys',
         name: 'api-keys',
         component: () => import('@/views/api-keys/index.vue'),

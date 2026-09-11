@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import type { AccountGroup } from '@/api'
+import type { AccountGroup, OutboundProxy } from '@/api'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
@@ -9,12 +9,14 @@ import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
-defineProps<{
+withDefaults(defineProps<{
   account: AccountRow | null
   groups: AccountGroup[]
   groupsLoading: boolean
   saving: boolean
-}>()
+  proxies?: OutboundProxy[]
+  proxiesLoading?: boolean
+}>(), { proxies: () => [], proxiesLoading: false })
 
 const emit = defineEmits<{
   save: []
@@ -26,6 +28,7 @@ const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: tru
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const proxyId = defineModel<string>('proxyId', { required: false, default: '' })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -62,10 +65,13 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
         v-model:proxy-url="proxyUrl"
+        v-model:proxy-id="proxyId"
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="saving"
         :endpoint="account.outboundProxyEndpoint"
+        :proxies="proxies"
+        :proxies-loading="proxiesLoading"
       />
     </div>
 

@@ -16,6 +16,9 @@ export * from './modules/backups'
 // Dashboard 聚合
 export * from './modules/dashboard'
 
+// 出站代理（IP 管理）
+export * from './modules/proxies'
+
 // 设置管理
 export * from './modules/settings'
 

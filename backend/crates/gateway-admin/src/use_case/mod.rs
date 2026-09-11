@@ -8,6 +8,7 @@ pub mod client_distribution;
 pub mod client_keys;
 pub mod observability;
 pub mod openai;
+pub mod proxies;
 pub mod settings;
 pub mod system;
 pub mod xai;

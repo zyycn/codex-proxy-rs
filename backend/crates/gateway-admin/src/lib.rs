@@ -22,16 +22,25 @@ pub mod ports;
 mod use_case;
 
 pub use use_case::{
-    account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
-    backup::BackupService, client_distribution::ClientDistributionService,
-    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
-    settings::SettingsService, system::SystemService, xai::XaiService,
+    account_groups::AccountGroupService,
+    accounts::AccountsService,
+    auth::AuthService,
+    backup::BackupService,
+    client_distribution::ClientDistributionService,
+    client_keys::ClientKeyService,
+    observability::ObservabilityService,
+    openai::OpenAiService,
+    proxies::{DEFAULT_PROXY_TEST_TARGET, OutboundProxyService},
+    settings::SettingsService,
+    system::SystemService,
+    xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
 use ports::{
     client_distribution::ClientDistributionResolver,
     provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind, ProviderAdminRegistry},
+    proxy::OutboundProxyProbe,
     store::AdminStorePorts,
     system::SystemOperations,
 };
@@ -40,7 +49,8 @@ use use_case::{
     auth::DefaultAuthService, backup::DefaultBackupService,
     client_distribution::DefaultClientDistributionService, client_keys::DefaultClientKeyService,
     observability::DefaultObservabilityService, openai::DefaultOpenAiService,
-    settings::DefaultSettingsService, system::DefaultSystemService, xai::DefaultXaiService,
+    proxies::DefaultOutboundProxyService, settings::DefaultSettingsService,
+    system::DefaultSystemService, xai::DefaultXaiService,
 };
 
 const OPENAI_PROVIDER_KIND: &str = "openai";
@@ -153,6 +163,7 @@ pub struct AdminServices {
     accounts: Arc<dyn AccountsService>,
     account_groups: Arc<dyn AccountGroupService>,
     client_keys: Arc<dyn ClientKeyService>,
+    outbound_proxies: Arc<dyn OutboundProxyService>,
     client_distribution: Arc<dyn ClientDistributionService>,
     observability: Arc<dyn ObservabilityService>,
     settings: Arc<dyn SettingsService>,
@@ -181,6 +192,11 @@ impl AdminServices {
     #[must_use]
     pub fn client_keys(&self) -> &dyn ClientKeyService {
         self.client_keys.as_ref()
+    }
+
+    #[must_use]
+    pub fn outbound_proxies(&self) -> &dyn OutboundProxyService {
+        self.outbound_proxies.as_ref()
     }
 
     #[must_use]
@@ -242,12 +258,14 @@ impl AdminBundle {
 /// # Errors
 ///
 /// 配置非法、Provider 注册冲突/缺失或默认管理员初始化失败时返回错误。
+#[expect(clippy::too_many_arguments)]
 pub async fn initialize(
     mut config: AdminConfig,
     store: AdminStorePorts,
     providers: Vec<Arc<dyn ProviderAdmin>>,
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
+    proxy_probe: Arc<dyn OutboundProxyProbe>,
     client_distribution: Arc<dyn ClientDistributionResolver>,
     system: Arc<dyn SystemOperations>,
 ) -> Result<AdminBundle, AdminError> {
@@ -299,6 +317,11 @@ pub async fn initialize(
         )),
         client_keys: Arc::new(DefaultClientKeyService::new(
             store.client_keys(),
+            snapshot.clone(),
+        )),
+        outbound_proxies: Arc::new(DefaultOutboundProxyService::new(
+            store.outbound_proxies(),
+            proxy_probe,
             snapshot.clone(),
         )),
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),

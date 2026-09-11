@@ -12,6 +12,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
+import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal/index.vue'
@@ -57,6 +58,11 @@ const {
   loading: groupsLoading,
   loadGroups,
 } = useAccountGroupCatalog()
+
+const {
+  proxies,
+  loading: proxiesLoading,
+} = useProxyCatalog()
 
 const {
   showCreateModal,
@@ -149,6 +155,7 @@ const {
   weight: editingWeight,
   proxyMode: editingProxyMode,
   proxyUrl: editingProxyUrl,
+  proxyId: editingProxyId,
   selectedGroupIds: editingGroupIds,
   saving: savingAccountEdit,
   open: openAccountEdit,
@@ -351,11 +358,14 @@ const {
       v-model:weight="editingWeight"
       v-model:proxy-mode="editingProxyMode"
       v-model:proxy-url="editingProxyUrl"
+      v-model:proxy-id="editingProxyId"
       v-model:selected-group-ids="editingGroupIds"
       :account="editingAccount"
       :groups="groups"
       :groups-loading="groupsLoading"
       :saving="savingAccountEdit"
+      :proxies="proxies"
+      :proxies-loading="proxiesLoading"
       @save="saveAccountEdit"
     />
 

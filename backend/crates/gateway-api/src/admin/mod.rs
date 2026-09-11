@@ -16,6 +16,7 @@ pub mod client_keys;
 mod extract;
 pub mod observability;
 pub mod presenter;
+pub mod proxies;
 pub mod settings;
 pub mod system;
 pub mod wire;
@@ -39,6 +40,7 @@ where
         .merge(backups::router::<S>())
         .merge(client_keys::router::<S>())
         .merge(observability::router::<S>())
+        .merge(proxies::router::<S>())
         .merge(settings::router::<S>())
         .merge(system::router::<S>())
         .method_not_allowed_fallback(method_not_allowed)
