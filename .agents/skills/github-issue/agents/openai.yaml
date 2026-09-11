@@ -1,0 +1,4 @@
+interface:
+  display_name: "github-issue"
+  short_description: "按仓库表单整理复现证据、检查重复反馈并提交脱敏 Issue"
+  default_prompt: "使用 $github-issue 将当前问题整理为符合仓库表单的 Issue 并提交。"

@@ -1,0 +1,111 @@
+name: 问题反馈
+description: 提交可复现的问题，帮助定位和修复
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请提供最小复现信息。请求、日志和截图发布前请移除密钥、令牌、Cookie、代理认证及私人内容。
+
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: 问题类型
+      options:
+        - 接口请求或响应异常
+        - 页面或交互异常
+        - 配置或部署异常
+        - 其他问题
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 说明发生了什么、实际结果以及出现的频率。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 服务版本
+      description: 填写具体版本号；从源码运行时填写提交号。
+      placeholder: 版本号或提交号
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - 其他容器部署
+        - 二进制运行
+        - 源码运行
+        - 其他方式（请在环境信息中说明）
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 填写操作系统与版本；页面问题同时填写浏览器与版本。
+      placeholder: |
+        操作系统与版本：
+        浏览器与版本（页面问题）：
+    validations:
+      required: true
+
+  - type: textarea
+    id: account-client
+    attributes:
+      label: 账号与客户端
+      description: 接口问题请填写平台、认证类型、模型和客户端信息，不要提供账号凭据。
+      placeholder: |
+        平台与认证类型：
+        模型名称：
+        客户端名称与版本：
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 描述触发问题的操作；无法稳定复现时，说明已知触发条件。
+      placeholder: |
+        1. 使用什么配置或输入
+        2. 执行什么操作
+        3. 出现什么结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 预期行为
+      description: 说明原本期望得到的结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: request-response
+    attributes:
+      label: 请求与响应
+      description: |
+        接口问题请提供脱敏后的 cURL 或最小请求体、HTTP 状态码、响应片段，以及请求 ID / 发生时间。
+        如需详细报文，可按部署文档开启 `host.logging.request_dump`，仅摘取定位所需片段并脱敏，不要直接上传完整转储。
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏
+      description: 页面或交互问题可在此拖入相关截图、录屏，并说明对应的操作。
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: 最近的升级或配置变更；网络问题补充系统代理、TUN 和自定义证书等相关环境。

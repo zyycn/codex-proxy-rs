@@ -123,6 +123,7 @@ curl http://127.0.0.1:8080/v1/models \
 - [系统架构](docs/architecture.md)
 - [管理端主题](docs/theme.md)
 - [数据库迁移](backend/migrations/README.md)
+- [贡献与审查](CONTRIBUTING.md)
 
 ## 社区
 

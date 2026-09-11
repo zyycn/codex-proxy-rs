@@ -1,0 +1,75 @@
+name: Agent Instructions Guard
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: agents-md-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 只查询 PR 元数据，禁止检出或执行贡献分支中的代码。
+      - name: Enforce agent instructions policy
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const params = { owner, repo, pull_number: pr.number };
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...params,
+              per_page: 100,
+            });
+            const isInstructions = path => typeof path === 'string'
+              && (path === 'AGENTS.md' || path.endsWith('/AGENTS.md'));
+
+            // 同时检查重命名前后的路径，避免通过移走规则文件绕过检查。
+            if (!files.some(file => isInstructions(file.filename) || isInstructions(file.previous_filename))) {
+              core.info('No agent instruction changes detected.');
+              return;
+            }
+
+            // 旧事件不处理后续提交，也不重复处理已关闭的 PR。
+            const { data: current } = await github.rest.pulls.get(params);
+            if (current.state !== 'open' || current.head.sha !== pr.head.sha) {
+              core.info('Pull request state has changed; skipping this event.');
+              return;
+            }
+
+            const marker = '<!-- agents-md-guard -->';
+            const body = [
+              marker,
+              '此 PR 修改了 `AGENTS.md`，已按贡献规则关闭。',
+              '',
+              'PR 不接受根目录或子目录中 `AGENTS.md` 的新增、修改、删除或重命名。',
+              '请撤销相关变更后重新打开 PR；如需调整协作规则，请先提交 Issue 说明原因和建议，由维护者处理。',
+            ].join('\n');
+
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              const notified = comments.some(comment => comment.user?.login === 'github-actions[bot]'
+                && comment.body?.includes(marker));
+              if (!notified) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+              }
+            } catch (error) {
+              core.warning(`Unable to post policy explanation: ${error.message}`);
+            }
+
+            await github.rest.pulls.update({ ...params, state: 'closed' });
+            core.setFailed('Pull requests must not change AGENTS.md.');

@@ -1,0 +1,4 @@
+interface:
+  display_name: "github-pr"
+  short_description: "按项目规范创建拉取请求，或基于明确提交审查代码与界面"
+  default_prompt: "使用 $github-pr 审查当前 PR，按仓库规范报告问题与验证缺口。"

@@ -1,0 +1,4 @@
+interface:
+  display_name: "release"
+  short_description: "按仓库流程整理中文发布说明、核对版本并完成发行与验证"
+  default_prompt: "使用 $release 准备下一个版本的中文发布说明，并核对发版条件。"

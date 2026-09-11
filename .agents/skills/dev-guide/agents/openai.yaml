@@ -1,0 +1,4 @@
+interface:
+  display_name: "dev-guide"
+  short_description: "从仓库规范与架构文档定位实现、验证和交付的正确入口"
+  default_prompt: "使用 $dev-guide 按当前仓库规范与架构完成开发、验证或发布。"

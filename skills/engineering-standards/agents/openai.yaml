@@ -1,4 +1,0 @@
-interface:
-  display_name: "工程规范"
-  short_description: "证据优先、边界清晰、拒绝兼容旁路的长期工程维护工作流"
-  default_prompt: "使用 $engineering-standards 追清当前链路，并在唯一所有权边界内完成干净修复。"

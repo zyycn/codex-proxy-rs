@@ -33,7 +33,6 @@ Thumbs.db
 # Local tools and worktrees
 /.codegraph/
 /.codex-ws-audit/
-/.agents/
 /.reasonix/
 /.claude
 /.worktrees/
