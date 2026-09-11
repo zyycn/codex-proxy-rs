@@ -36,7 +36,7 @@ pub use provider::{
 pub mod credential;
 pub mod transport;
 
-pub use transport::tls::ensure_rustls_provider;
+pub use transport::tls::{build_reqwest_client_with_custom_ca, ensure_rustls_provider};
 pub use transport::{
     CodexCanonicalDecoder, CodexCanonicalError, CodexRequestEncodeError, OpenAiBillingUsage,
     encode_generate_request, openai_billing_breakdown,

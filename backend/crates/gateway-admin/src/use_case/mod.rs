@@ -8,6 +8,7 @@ pub mod client_distribution;
 pub mod client_keys;
 pub mod observability;
 pub mod openai;
+pub mod proxies;
 pub mod settings;
 pub mod system;
 pub mod xai;
@@ -109,13 +110,27 @@ async fn required_credential(
         .ok_or_else(|| AdminError::not_found("Provider 凭据不存在"))
 }
 
+async fn import_proxy_binding(
+    proxies: &dyn crate::ports::proxy::ProxyStore,
+    id: Option<&str>,
+) -> Result<Option<crate::ports::proxy::ProxyImportReservation>, AdminError> {
+    let Some(id) = id else { return Ok(None) };
+    let reservation = proxies
+        .reserve_import(id)
+        .await
+        .map_err(|error| map_store_error(error, "proxy"))?;
+    Ok(Some(reservation))
+}
+
 async fn pending_authorization(
     accounts: &dyn AccountStore,
+    proxies: &dyn crate::ports::proxy::ProxyStore,
     provider_kind: &ProviderKind,
     command: &StartAuthorization,
     resource: &'static str,
 ) -> Result<PendingAuthorizationMutation, AdminError> {
-    let mut proxy = command.outbound_proxy.clone();
+    let proxy;
+    let mut proxy_id = None;
     let target = match &command.reauthorization {
         Some(account_id) => {
             proxy = required_credential(accounts, provider_kind, account_id, resource)
@@ -126,9 +141,27 @@ async fn pending_authorization(
                 account_id: account_id.clone(),
             }
         }
-        None => AuthorizationMutationTarget::Create {
-            name: command.name.clone(),
-        },
+        None => {
+            use crate::model::proxies::AccountProxySelection;
+            proxy = match &command.outbound_proxy {
+                Some(AccountProxySelection::Url(value)) => Some(value.clone()),
+                Some(AccountProxySelection::Saved(id)) => {
+                    let record = proxies
+                        .get(id)
+                        .await
+                        .map_err(|error| map_store_error(error, "proxy"))?;
+                    if !record.last_test.is_some_and(|test| test.success) {
+                        return Err(AdminError::conflict("请先测试代理连接"));
+                    }
+                    proxy_id = Some(record.id);
+                    Some(record.proxy)
+                }
+                Some(AccountProxySelection::Direct) | None => None,
+            };
+            AuthorizationMutationTarget::Create {
+                name: command.name.clone(),
+            }
+        }
     };
     Ok(PendingAuthorizationMutation::new(
         provider_kind.clone(),
@@ -137,7 +170,8 @@ async fn pending_authorization(
             &command.context,
         ),
     )
-    .with_outbound_proxy(proxy))
+    .with_outbound_proxy(proxy)
+    .with_outbound_proxy_id(proxy_id))
 }
 
 fn validate_prepared_import(

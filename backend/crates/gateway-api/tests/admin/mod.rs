@@ -82,6 +82,7 @@ mod auth;
 mod client_keys;
 mod errors;
 mod observability;
+mod proxies;
 mod settings;
 mod system;
 mod wire;
@@ -124,7 +125,12 @@ impl AdminTestFixture {
             dashboard_summary_range: Arc::clone(&dashboard_summary_range),
         });
         let stores = AdminStorePorts::new(
-            AdminAccountStorePorts::new(unused.clone(), unused.clone(), account_groups.clone()),
+            AdminAccountStorePorts::new(
+                unused.clone(),
+                unused.clone(),
+                account_groups.clone(),
+                Arc::new(proxies::MemoryProxies::default()),
+            ),
             auth.clone(),
             client_keys.clone(),
             unused,
@@ -144,7 +150,7 @@ impl AdminTestFixture {
             stores,
             providers,
             Arc::new(NoopSnapshot),
-            Arc::new(NoopProbe),
+            (Arc::new(NoopProbe), Arc::new(proxies::SuccessfulProbe)),
             Arc::new(StaticClientDistribution),
             system,
         )

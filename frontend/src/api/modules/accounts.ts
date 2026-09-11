@@ -291,6 +291,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 
 interface AccountUpdateParam {
   outboundProxyUrl?: string
+  outboundProxyId?: string
   accountId: string
   enabled: boolean
   concurrencyLimit: number | null
@@ -300,6 +301,7 @@ interface AccountUpdateParam {
 
 interface AccountBatchUpdateParam {
   outboundProxyUrl?: string
+  outboundProxyId?: string
   accountIds: string[]
   enabled: boolean
   concurrencyLimit: number | null
@@ -320,6 +322,7 @@ interface AccountImportSettings {
 }
 
 interface AccountImportParam {
+  outboundProxyId?: string
   settings?: AccountImportSettings
   provider: string
   data: unknown
@@ -327,6 +330,7 @@ interface AccountImportParam {
 
 interface AccountOAuthStartParam {
   outboundProxyUrl?: string
+  outboundProxyId?: string
   provider: string
   name: string
   accountId?: string

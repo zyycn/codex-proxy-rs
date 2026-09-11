@@ -252,6 +252,19 @@ impl ProviderAdminRegistry {
             .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
+    /// 账号目录与关联列表共用套餐补全和展示规则，已知账号套餐优先于额度快照。
+    pub(crate) fn resolve_account_plan(
+        &self,
+        provider_kind: &str,
+        plan_type: &mut Option<String>,
+        quota: Option<&ProviderQuota>,
+    ) -> Option<String> {
+        if let Some(quota) = quota {
+            quota.fill_missing_plan_type(plan_type);
+        }
+        self.plan_type_display(provider_kind, plan_type.as_deref())
+    }
+
     /// 账号页和 Dashboard 共用的大驼峰套餐展示名称，不修改原始套餐值。
     pub(crate) fn plan_type_display(
         &self,

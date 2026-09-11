@@ -1224,7 +1224,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
-                outbound_proxy: Some(Some(
+                outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
                         "socks5h://next:new-secret@127.0.0.1:1080",
                     )
@@ -1240,7 +1240,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
-                outbound_proxy: Some(None),
+                outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
                 ..command
             },
             &context,
@@ -1546,6 +1546,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![account("acct_admin_upsert", "user-admin-upsert")],
             audit: audit("audit_admin_upsert_create", "import", "acct_admin_upsert"),
@@ -1569,6 +1570,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![updated],
             audit: audit("audit_admin_upsert_update", "import", "acct_admin_upsert"),
@@ -1604,6 +1606,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope,
             accounts: vec![account("acct_admin_upsert", "another-user")],
             audit: audit("audit_admin_upsert_rebind", "import", "acct_admin_upsert"),
@@ -1690,6 +1693,111 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
     );
     let settings: (bool, Option<i64>, i16) = sqlx::query_as("select enabled, concurrency_limit, weight from provider_accounts where id = 'acct_authorization_existing'").fetch_one(&database.pool).await.expect("OAuth settings");
     assert_eq!(settings, (false, None, 9));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
+    use gateway_admin::{
+        model::proxies::{NewProxy, ProxyTestResult, UpdateProxy},
+        ports::proxy::ProxyStore,
+    };
+    let Some(database) = TestDatabase::create("oauth_proxy_guard").await else {
+        return;
+    };
+    let proxies = gateway_store::postgres::PgProxyRepository::new(database.pool.clone());
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "oauth-proxy".to_owned(),
+    };
+    let original = gateway_core::account::OutboundProxy::parse("http://127.0.0.1:8080").unwrap();
+    let saved = proxies
+        .create(
+            NewProxy {
+                name: "OAuth".to_owned(),
+                proxy: original.clone(),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    let success = ProxyTestResult {
+        success: true,
+        latency_ms: 1,
+        exit_ip: Some("203.0.113.5".parse().unwrap()),
+        message: "Connected".to_owned(),
+    };
+    proxies
+        .record_test(&saved.id, saved.revision, success.clone(), &context)
+        .await
+        .unwrap();
+    let replacement = gateway_core::account::OutboundProxy::parse("http://127.0.0.1:9090").unwrap();
+    let edited = proxies
+        .update(
+            UpdateProxy {
+                id: saved.id.clone(),
+                revision: saved.revision,
+                name: saved.name,
+                proxy: Some(replacement.clone()),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    proxies
+        .record_test(&edited.id, edited.revision, success, &context)
+        .await
+        .unwrap();
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut candidate = account("acct_oauth_proxy", "oauth-user");
+    candidate.outbound_proxy = Some(original);
+    let command = |candidate: NewProviderAccount| ImportProviderAccounts {
+        settings: None,
+        outbound_proxy: Some(gateway_admin::model::proxies::ImportProxyBinding {
+            id: saved.id.clone(),
+            proxy: candidate.outbound_proxy.clone().unwrap(),
+        }),
+        scope: ProviderAccountAdminScope {
+            provider_kind: "openai".to_owned(),
+        },
+        accounts: vec![candidate],
+        audit: audit("audit_oauth_proxy", "authorize", "acct_oauth_proxy"),
+    };
+    assert!(
+        repository
+            .import_provider_accounts(command(candidate.clone()))
+            .await
+            .is_err()
+    );
+    assert_eq!(account_count(&database.pool, "acct_oauth_proxy").await, 0);
+    candidate.outbound_proxy = Some(replacement);
+    repository
+        .import_provider_accounts(command(candidate))
+        .await
+        .unwrap();
+    assert_eq!(
+        proxies
+            .list_accounts(gateway_admin::model::proxies::ProxyAccountListQuery {
+                proxy_id: saved.id.clone(),
+                page: 1,
+                page_size: gateway_admin::model::PageSize::new(20).unwrap(),
+                search: String::new(),
+            })
+            .await
+            .unwrap()
+            .items[0]
+            .id,
+        "acct_oauth_proxy"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select count(*) from outbound_proxies")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap(),
+        1
+    );
     database.close().await;
 }
 
@@ -1884,6 +1992,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![
                 account("acct_admin_a", "user-admin-a"),
@@ -1912,6 +2021,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![
                 account("acct_admin_transient", "user-admin-transient"),
@@ -2101,6 +2211,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
     let imported = repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![account("acct_grouped_import", "user-grouped-import")],
             audit: audit("audit_grouped_import", "import", "acct_grouped_import"),
@@ -2135,6 +2246,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
     repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![account("acct_reimport_candidate", "user-grouped-import")],
             audit: audit("audit_grouped_reimport", "import", "acct_grouped_import"),
@@ -2203,6 +2315,7 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
     repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![account("acct_rotation_quota", "user-rotation-quota")],
             audit: audit(
@@ -2345,6 +2458,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
+            outbound_proxy: None,
             scope: scope.clone(),
             accounts: vec![disabled],
             audit: audit(
@@ -2398,7 +2512,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     database.close().await;
 }
 
-fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
+pub(super) fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
     NewProviderAccount {
         outbound_proxy: None,
         id: id.to_owned(),
@@ -2458,7 +2572,7 @@ fn plaintext_credential(marker: &str) -> PlaintextCredential {
     )
 }
 
-fn audit(id: &str, action: &str, entity_ref: &str) -> AdminAuditEvent {
+pub(super) fn audit(id: &str, action: &str, entity_ref: &str) -> AdminAuditEvent {
     AdminAuditEvent {
         id: id.to_owned(),
         actor_kind: AdminAuditActorKind::System,
@@ -2604,7 +2718,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],
-                outbound_proxy: Some(Some(
+                outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse("http://127.0.0.1:18080").unwrap(),
                 )),
             },
@@ -2663,6 +2777,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     let result = repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: Some(settings.clone()),
+            outbound_proxy: None,
             scope: ProviderAccountAdminScope {
                 provider_kind: "openai".to_owned(),
             },
@@ -2693,6 +2808,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .expect("existing account");
     let failed = repository
         .import_provider_accounts(ImportProviderAccounts {
+            outbound_proxy: None,
             settings: Some(AccountImportSettings {
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092")

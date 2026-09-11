@@ -984,6 +984,7 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
     let admin = bundle.admin_provider();
     let import_error = admin
         .prepare_import(PrepareCredentialImport {
+            default_outbound_proxy: None,
             document: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
         .await
@@ -1025,6 +1026,7 @@ async fn initialized_provider_reports_a_safe_pat_format_error_before_network_acc
     let error = bundle
         .admin_provider()
         .prepare_import(PrepareCredentialImport {
+            default_outbound_proxy: None,
             document: ProviderDocument::new(OpaqueProviderData::new(Map::from_iter([(
                 "accessToken".to_owned(),
                 json!("at-sensitive-token with whitespace"),

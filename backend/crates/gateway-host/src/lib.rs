@@ -3,6 +3,7 @@
 pub mod client_distribution;
 pub mod config;
 mod logging;
+pub mod proxy_probe;
 pub mod serve;
 pub mod system_update;
 pub mod workers;
@@ -79,6 +80,17 @@ impl HostBundle {
     /// 返回惰性下载解析能力；网络请求只会在管理 API 调用时发生。
     pub fn client_distribution_resolver(&self) -> Arc<dyn ClientDistributionResolver> {
         self.client_distribution.clone()
+    }
+
+    #[must_use]
+    pub fn proxy_probe<E>(
+        &self,
+        build_client: impl Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, E>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Arc<dyn gateway_admin::ports::proxy::ProxyProbe> {
+        Arc::new(proxy_probe::HttpProxyProbe::default().with_client_builder(build_client))
     }
 
     #[must_use]

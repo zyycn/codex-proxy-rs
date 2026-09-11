@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  Network,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
@@ -24,6 +25,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppBrandMark from '@/components/AppBrandMark.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
+import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useThemeStore } from '@/stores/modules/theme'
@@ -58,6 +60,7 @@ const preferredMotion = usePreferredReducedMotion()
 const navItems = [
   { label: '概览', icon: LayoutDashboard, path: '/' },
   { label: '账号管理', icon: Users, path: '/accounts' },
+  { label: '代理管理', icon: Network, path: '/proxies' },
   { label: '分组管理', icon: FolderTree, path: '/account-groups' },
   { label: 'API 密钥', icon: KeyRound, path: '/api-keys' },
   { label: '使用统计', icon: ChartNoAxesColumn, path: '/usage' },
@@ -316,15 +319,15 @@ onBeforeUnmount(() => {
 <template>
   <aside
     ref="sidebarEl"
-    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-layout-sider-bg) px-4 shadow-cp-layout-sider"
+    class="z-20 h-dvh shrink-0 flex-col overflow-hidden bg-(--cp-layout-sider-bg) shadow-cp-layout-sider"
     :class="[
       mobile ? 'flex' : 'hidden min-[961px]:flex',
       isCollapsed ? 'w-22 basis-22 items-center' : 'w-62.75 basis-62.75',
     ]"
   >
     <div
-      class="mt-6 grid h-12 grid-cols-[44px_minmax(0,1fr)] items-center"
-      :class="isCollapsed ? 'w-11 justify-start' : 'w-full gap-3'"
+      class="mx-4 mt-6 grid h-12 shrink-0 grid-cols-[44px_minmax(0,1fr)] items-center"
+      :class="isCollapsed ? 'w-11 justify-start' : 'self-stretch gap-3'"
     >
       <BaseMotionIcon
         variant="brand"
@@ -355,44 +358,48 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <nav class="relative mt-6 grid gap-3" :class="isCollapsed ? 'w-11.5' : 'w-full'" aria-label="主导航">
-      <span
-        class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-        :style="activeNavIndicatorStyle"
-      >
-        <span
-          ref="navSignal"
-          class="absolute inset-y-0 left-0 w-2/3 [background:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--cp-color-info)_9%,transparent),transparent)]"
-        />
-      </span>
-      <button
-        v-for="item in navItems"
-        :key="item.label"
-        type="button"
-        class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
-        :class="[
-          isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
-          isActive(item.path)
-            ? navFeedbackMuted
-              ? 'bg-transparent font-bold text-cp-text transition-none'
-              : 'bg-transparent font-bold text-cp-text transition-colors duration-200'
-            : navFeedbackMuted
-              ? 'bg-transparent font-semibold text-cp-text-secondary transition-none'
-              : 'bg-transparent font-semibold text-cp-text-secondary transition-colors duration-200 hover:bg-cp-fill-quaternary hover:text-cp-text',
-        ]"
-        @click="navigate(item.path)"
-      >
-        <component :is="item.icon" class="shrink-0" :size="20" />
-        <span
-          class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
-          :class="isCollapsed ? 'pointer-events-none w-0' : 'w-auto'"
-        >
-          {{ item.label }}
-        </span>
-      </button>
-    </nav>
+    <BaseScrollbar class="my-6 w-full flex-1">
+      <div class="px-4">
+        <nav class="relative grid gap-3" :class="isCollapsed ? 'mx-auto w-11.5' : 'w-full'" aria-label="主导航">
+          <span
+            class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+            :style="activeNavIndicatorStyle"
+          >
+            <span
+              ref="navSignal"
+              class="absolute inset-y-0 left-0 w-2/3 [background:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--cp-color-info)_9%,transparent),transparent)]"
+            />
+          </span>
+          <button
+            v-for="item in navItems"
+            :key="item.label"
+            type="button"
+            class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
+            :class="[
+              isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
+              isActive(item.path)
+                ? navFeedbackMuted
+                  ? 'bg-transparent font-bold text-cp-text transition-none'
+                  : 'bg-transparent font-bold text-cp-text transition-colors duration-200'
+                : navFeedbackMuted
+                  ? 'bg-transparent font-semibold text-cp-text-secondary transition-none'
+                  : 'bg-transparent font-semibold text-cp-text-secondary transition-colors duration-200 hover:bg-cp-fill-quaternary hover:text-cp-text',
+            ]"
+            @click="navigate(item.path)"
+          >
+            <component :is="item.icon" class="shrink-0" :size="20" />
+            <span
+              class="sidebar-label overflow-hidden whitespace-nowrap transition-[opacity,transform] duration-200"
+              :class="isCollapsed ? 'pointer-events-none w-0' : 'w-auto'"
+            >
+              {{ item.label }}
+            </span>
+          </button>
+        </nav>
+      </div>
+    </BaseScrollbar>
 
-    <div class="mt-auto mb-6" :class="isCollapsed ? 'w-11' : 'w-full'">
+    <div class="mx-4 mb-6 shrink-0" :class="isCollapsed ? 'w-11' : 'self-stretch'">
       <div
         class="bg-cp-fill-quaternary"
         :class="isCollapsed ? 'grid gap-1 rounded-cp p-1' : 'flex h-11 items-center justify-between rounded-cp-lg px-2'"

@@ -33,10 +33,9 @@ export function useModalDrag(
     if (!target.value)
       return
 
-    target.value.style.transform
-      = offset.x === 0 && offset.y === 0
-        ? ''
-        : `translate3d(${offset.x}px, ${offset.y}px, 0)`
+    // 使用相对定位保留普通绘制，避免变换合成层在表格单元格之间产生像素缝。
+    target.value.style.left = offset.x === 0 ? '' : `${offset.x}px`
+    target.value.style.top = offset.y === 0 ? '' : `${offset.y}px`
   }
 
   function removeDragListeners() {

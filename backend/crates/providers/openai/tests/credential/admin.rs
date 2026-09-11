@@ -57,6 +57,54 @@ async fn sub2api_import_resolves_distinct_proxy_bindings_and_encodes_credentials
 }
 
 #[tokio::test]
+async fn import_default_proxy_preserves_explicit_account_exits() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let default_proxy =
+        gateway_core::account::OutboundProxy::parse("http://default.example:8080").unwrap();
+    for (field, value, expected) in [
+        (
+            None,
+            serde_json::Value::Null,
+            Some("http://default.example:8080/"),
+        ),
+        (
+            Some("outboundProxyUrl"),
+            serde_json::json!("socks5h://override.example:1080"),
+            Some("socks5h://override.example:1080"),
+        ),
+        (Some("outbound_proxy_url"), serde_json::json!(""), None),
+        (Some("outboundProxyUrl"), serde_json::Value::Null, None),
+        (Some("proxy_key"), serde_json::Value::Null, None),
+    ] {
+        let mut account = serde_json::json!({"access_token": test_jwt(serde_json::json!({
+            "https://api.openai.com/auth": {"chatgpt_user_id": "default-proxy-user"}
+        }))});
+        if let Some(field) = field {
+            account[field] = value;
+        }
+        let prepared = service
+            .prepare_import_document_with_proxy(
+                serde_json::json!({"data": {"accounts": [account]}}),
+                Some(&default_proxy),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.accounts()[0]
+                .account
+                .outbound_proxy()
+                .map(|proxy| proxy.endpoint())
+                .as_deref(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 async fn sub2api_invalid_proxy_bindings_are_rejected_before_any_token_refresh() {
     let service = CodexCredentialAdminService::new(
         Arc::new(UnusedRefresher),
@@ -746,7 +794,7 @@ async fn oauth_import_rejects_legacy_bare_token_field() {
 
 #[tokio::test]
 async fn pat_import_uses_account_proxy_without_direct_fallback() {
-    for status in [200, 503] {
+    for (status, use_default) in [(200, false), (503, false), (200, true), (503, true)] {
         let origin = MockServer::start().await;
         let proxy = MockServer::start().await;
         Mock::given(method("GET"))
@@ -756,11 +804,13 @@ async fn pat_import_uses_account_proxy_without_direct_fallback() {
             .expect(1)
             .mount(&proxy)
             .await;
+        let default_proxy = gateway_core::account::OutboundProxy::parse(&proxy.uri()).unwrap();
+        let mut document = serde_json::json!({"accessToken": "at-proxy-token"});
+        if !use_default {
+            document["outboundProxyUrl"] = serde_json::json!(proxy.uri());
+        }
         let imported = pat_service(&origin)
-            .prepare_import_document(serde_json::json!({
-                "accessToken": "at-proxy-token",
-                "outboundProxyUrl": proxy.uri(),
-            }))
+            .prepare_import_document_with_proxy(document, use_default.then_some(&default_proxy))
             .await;
         if status == 200 {
             let prepared = imported.expect("PAT validated through account proxy");

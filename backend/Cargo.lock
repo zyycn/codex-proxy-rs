@@ -744,6 +744,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

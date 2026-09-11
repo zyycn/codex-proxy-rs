@@ -82,7 +82,7 @@ export function useAccountOnboarding(options: {
           throw new Error(proxyError)
         const result = await startAccountOAuth({
           ...input,
-          outboundProxyUrl: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyUrl.trim() : undefined,
+          outboundProxyId: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
           ...(account
             ? {
                 accountId: account.id,
@@ -180,9 +180,8 @@ export function useAccountOnboarding(options: {
       const result = await importAccounts({
         provider,
         settings: accountImportSettings(createForm.value),
-        data: createForm.value.proxyMode === 'proxy'
-          ? withDefaultImportProxy(entry.document, createForm.value.proxyUrl.trim())
-          : entry.document,
+        outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+        data: entry.document,
       })
       importedCount += result.importedCount
     }
@@ -199,9 +198,8 @@ export function useAccountOnboarding(options: {
         const result = await importAccounts({
           provider: entry.provider,
           settings: accountImportSettings(createForm.value),
-          data: createForm.value.proxyMode === 'proxy'
-            ? withDefaultImportProxy(entry.document, createForm.value.proxyUrl.trim())
-            : entry.document,
+          outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+          data: entry.document,
         })
         importedCount += result.importedCount
       }
@@ -245,7 +243,7 @@ export function useAccountOnboarding(options: {
   watch(
     [
       () => createForm.value.proxyMode,
-      () => createForm.value.proxyMode === 'proxy' ? createForm.value.proxyUrl.trim() : '',
+      () => createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : '',
     ],
     () => {
       createForm.value.oauthFlowId = ''
@@ -266,20 +264,6 @@ export function useAccountOnboarding(options: {
     openCreateAccount,
     openReauthorizeAccount,
   }
-}
-
-function withDefaultImportProxy(document: Record<string, unknown>, proxyUrl: string): Record<string, unknown> {
-  if (isRecord(document.data) && Array.isArray(document.data.accounts))
-    return { ...document, data: withDefaultImportProxy(document.data, proxyUrl) }
-  if (Array.isArray(document.accounts)) {
-    return {
-      ...document,
-      accounts: document.accounts.map(account => isRecord(account) ? withDefaultImportProxy(account, proxyUrl) : account),
-    }
-  }
-  if (['outboundProxyUrl', 'outbound_proxy_url', 'proxy_key'].some(key => Object.hasOwn(document, key)))
-    return document
-  return { ...document, outboundProxyUrl: proxyUrl }
 }
 
 function parseImportJson(value: string) {

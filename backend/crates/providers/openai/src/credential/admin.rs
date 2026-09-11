@@ -825,6 +825,14 @@ impl CodexCredentialAdminService {
         &self,
         payload: Value,
     ) -> Result<PreparedCodexAccountImport, CodexCredentialAdminError> {
+        self.prepare_import_document_with_proxy(payload, None).await
+    }
+
+    pub async fn prepare_import_document_with_proxy(
+        &self,
+        payload: Value,
+        default_proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<PreparedCodexAccountImport, CodexCredentialAdminError> {
         if serde_json::to_vec(&payload)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?
             .len()
@@ -832,7 +840,7 @@ impl CodexCredentialAdminService {
         {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
-        let candidates = parse_import_document(&payload)?;
+        let candidates = parse_import_document(&payload, default_proxy)?;
         if candidates.is_empty() || candidates.len() > MAX_BATCH {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
@@ -1041,6 +1049,7 @@ fn log_manual_refresh_failure(account_id: &ProviderAccountId, error: &RefreshFai
 
 fn parse_import_document(
     payload: &Value,
+    default_proxy: Option<&gateway_core::account::OutboundProxy>,
 ) -> Result<Vec<ParsedCodexImportAccount>, CodexCredentialAdminError> {
     let payload = payload
         .get("data")
@@ -1052,7 +1061,14 @@ fn parse_import_document(
             continue;
         }
         let mut account = parse_oauth_import_account(value)?;
-        account.outbound_proxy = import_proxy(payload, value)?;
+        account.outbound_proxy = if ["outboundProxyUrl", "outbound_proxy_url", "proxy_key"]
+            .iter()
+            .any(|field| value.get(field).is_some())
+        {
+            import_proxy(payload, value)?
+        } else {
+            default_proxy.cloned()
+        };
         accounts.push(account);
     }
     Ok(accounts)

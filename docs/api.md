@@ -171,12 +171,12 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`groupId`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
-| `POST` | `/api/admin/accounts/import` | `{ provider, data, settings? }` | 导入或按上游身份更新账号，可同时应用调度与分组设置 |
+| `POST` | `/api/admin/accounts/import` | `{ provider, data, settings?, outboundProxyId? }` | 导入或按上游身份更新账号，可同时应用调度、分组设置与默认代理 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, outboundProxyUrl? }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
-| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyUrl? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
+| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
@@ -186,7 +186,7 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
-| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
+| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 
 账号列表支持以下稳定值：
@@ -203,12 +203,62 @@ OpenAI 的 `self_serve_business_prolite` 等 Team 套餐显示为 `Business`；�
 账号套餐为空或 `unknown` 时，后端优先用已保存的上游额度响应
 中的明确套餐值补全 `planType` 和 `planTypeDisplay`；两处均无套餐信息时才显示“未知套餐”。
 
-`outboundProxyUrl` 接受 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码。
+`outboundProxyId` 绑定已保存且最近测试成功的代理；省略或 `null` 保留当前绑定，空字符串清除绑定。
+`outboundProxyUrl` 兼容 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码；不能与 ID 同时设置。
 编辑时省略或 `null` 表示保持原配置，空字符串表示清除代理并直连。列表和详情只返回
 不含认证信息的 `outboundProxyEndpoint`（直连时为 `null`）；只有显式敏感导出包含完整 URL。
 指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
 浏览器打开的第三方 OAuth 授权页仍使用浏览器自身网络。
 账号出口与连接隔离见 [架构说明](architecture.md#账号出站代理)。
+
+### 独立代理管理 / Managed Proxies
+
+所有端点要求管理员身份。所有响应只返回去掉认证信息的 `endpoint`，不会返回完整 URL。
+All endpoints require admin authentication and redact proxy credentials from responses.
+
+| 方法 / Method | 路径 / Path | 请求 / Request | 结果 / Result |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/proxies` | `page`、`pageSize`（1-200）、`search`（名称） | `{ items, page }` |
+| `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
+| `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
+| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl }` | `201 { record, configRevision }` |
+| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl? }` | `{ record, configRevision }` |
+| `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
+| `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
+
+`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、
+`lastTestAt`、`lastTest: { success, latencyMs, exitIp, message }`、`createdAt`、`updatedAt`。
+未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
+记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
+
+代理列表只返回关联账号数量。关联账号按需查询，每项包含 `id`、`name`、`email`、`provider`、`enabled`、
+`authenticationKind`、`planType`、`planTypeDisplay` 和 `groups: [{ id, name, color, enabled }]`，
+不返回账号凭据。默认每页 20 条，按名称、ID 稳定排序；搜索不区分大小写，匹配名称或邮箱的字面子串。
+不存在的代理返回 404，未绑定账号或没有匹配结果时返回空页。数量与当前页来自同一个数据库只读快照。
+
+移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
+若账号已不再绑定请求中的代理，则返回 409；成功后在同一事务中更新配置版本与审计，并发布运行时快照。
+
+更新省略 `proxyUrl` 保留认证；连接配置改变时清除测试结果并更新所有绑定账号。
+Omit `proxyUrl` to preserve credentials. Connection changes invalidate the previous test and update all bound accounts.
+Tests persist only when the requested revision still matches. Connectivity failures use HTTP 200 with
+`lastTest.success=false`; stale revisions, duplicate URLs and deleting an in-use proxy return 409.
+The test concurrency limit returns 429.
+
+测试固定经代理访问 `https://api.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。
+探测器复用 OpenAI 的证书信任配置：优先读取非空的 `CODEX_CA_CERTIFICATE`，
+其次读取 `SSL_CERT_FILE`，并保留系统根证书；证书配置错误不会回退为不验证证书。
+出口测试通过不表示 Provider 账号权限或额度可用；账号可用性使用账号连接测试。
+导入请求可以携带顶层 `outboundProxyId`，在令牌交换前解析为默认出口；文件中显式的代理配置优先。
+文件及 AT/RT 导入从凭据交换到落库期间保护所选代理；此时修改、删除或写入测试结果返回 409，
+避免已轮换的凭据因代理状态变化而丢失。完成导入或请求取消后自动释放保护。
+OAuth 等待回调期间不持有保护；提交仍拒绝已删除、连接配置改变或测试失败的代理。
+
+Tests reach `https://api.ipify.org?format=json` through the configured proxy, with a 15-second timeout
+and four concurrent tests per process. Provider access still requires the account connection test.
+Imports accept a top-level `outboundProxyId` as the default exit before token exchange; explicit per-account
+settings in the document take precedence. Credential imports reserve their selected proxy until commit;
+concurrent proxy mutations return 409. OAuth commits still reject a deleted, changed or failed proxy.
 
 ### 账号连接测试 SSE
 
@@ -467,6 +517,10 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 自动结算按网关请求 ID 幂等执行。账本独立于使用统计日志，记录保留至删除 Key，
 不受 `usageRetentionDays` 影响。
+
+English: Daily and weekly budgets use automatically recorded costs. Missing usage or interrupted requests
+do not block a Key, and no manual reconciliation is required. New requests receive `429` once recorded
+costs reach the daily or weekly limit; requests already admitted can finish above that threshold.
 
 ## 8. 运行设置
 

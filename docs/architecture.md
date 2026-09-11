@@ -189,10 +189,28 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 连接池按出口隔离。修改代理推进配置 revision，使后续请求使用新出口；已执行请求可沿原连接完成。
 代理变更不推进 `credential_revision`，不会使进行中的令牌刷新因凭据版本冲突而丢失结果。
 
-导入器在认证交换前解析并校验账号出口。sub2api 的代理引用转换为账号上的代理 URL，不创建共享代理资源；
+代理独立保存和测试，通过 `outboundProxyId` 绑定账号；账号保留解析后的 URL 供 Provider 使用。
+连接配置改变时在同一事务内同步关联账号并清除旧测试结果，已绑定的代理不可删除。
+关联账号支持单独移除：在原子更新中校验当前代理 ID，只清除账号的代理 ID 和 URL，
+保留账号其他设置；提交配置版本与审计后复用快照发布流程，使后续请求使用直连。
+代理目录只携带关联数量；账号明细通过独立分页读端口按需查询，复用代理 ID 索引，
+在同一个只读快照中统计并读取有界页面，不在目录中聚合完整账号数组。
+文件及 AT/RT 导入在上游凭据交换前取得 PostgreSQL 会话级共享咨询锁，直到凭据提交后释放。
+代理修改、删除和测试结果写入通过同一资源的事务级独占锁检查，导入期间直接返回冲突。
+锁连接不占用提交所需的连接池槽位，也不持有空闲事务；每进程最多增加四个导入保护连接。
+请求取消或进程退出时关闭会话并释放锁。探测器由组合根注入 OpenAI 的 HTTP 客户端构建函数，
+复用其自定义 CA 加载与证书校验规则，Host 不依赖具体 Provider 包。
+迁移 `0005_managed_outbound_proxies.sql` 将已有 URL 按完整连接信息合并为共享代理，保留认证及账号绑定。
+
+导入器在认证交换前解析并校验账号出口。sub2api 的代理引用按完整 URL 登记为共享代理并绑定账号；
 其 SOCKS5 配置按远端 DNS 语义转换为 SOCKS5H。账号导入只迁移账号及出口，不迁移下游 Key、余额或历史用量。
 代理认证信息仅通过敏感账号导出返回，列表、详情、Debug 和普通审计不得暴露；数据库及备份按凭据保护。
 输入字段、协议支持与导入校验见 [账号 API](api.md#5-账号)。
+
+Managed proxies store names, credentials and connectivity results independently. Accounts bind by ID and retain
+the resolved URL for provider transports. Connection edits update all bound accounts atomically and invalidate
+old tests; in-use proxies cannot be deleted. Migration 0005 preserves existing credentials and account bindings.
+Proxy changes advance the runtime configuration revision without invalidating in-flight token refreshes.
 
 ### Codex 原生生图与认证
 

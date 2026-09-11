@@ -162,6 +162,13 @@ impl GrokOAuthImportDocument {
     /// 独立代理 URL 随账号导入；其他展示 metadata 不参与认证。
     /// 实际 token 仍须通过官方 refresh/user-info 验证；API Key 不能混入 OAuth 条目。
     pub fn parse_json(document: &[u8]) -> Result<Self, GrokOAuthImportError> {
+        Self::parse_json_with_proxy(document, None)
+    }
+
+    pub fn parse_json_with_proxy(
+        document: &[u8],
+        default_proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<Self, GrokOAuthImportError> {
         if document.is_empty() || document.len() > MAX_IMPORT_DOCUMENT_BYTES {
             return Err(GrokOAuthImportError::InvalidField("document"));
         }
@@ -174,7 +181,13 @@ impl GrokOAuthImportDocument {
         let now = Utc::now();
         let mut entries = Vec::with_capacity(accounts.len());
         for (index, account) in accounts.into_iter().enumerate() {
-            if let Some(entry) = parse_account_entry(account, index, now)? {
+            if let Some(mut entry) = parse_account_entry(account, index, now)? {
+                if !["outboundProxyUrl", "outbound_proxy_url", "proxy_key"]
+                    .iter()
+                    .any(|field| account.get(field).is_some())
+                {
+                    entry.outbound_proxy = default_proxy.cloned();
+                }
                 entries.push(entry);
             }
         }
