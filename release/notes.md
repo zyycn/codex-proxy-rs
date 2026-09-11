@@ -1,26 +1,26 @@
 # v3.4.0
 
-## What's new
+## 新增功能
 
-- Add a dedicated proxy management page to create, edit, and test outbound proxies, with connection latency and exit IP information.
-- Test new or edited proxy URLs before saving, without changing saved connection settings or linked accounts.
-- Select managed proxies when importing accounts or editing individual and multiple accounts. Proxy changes apply to linked accounts without restarting the gateway.
-- Search and paginate accounts linked to a proxy, with account identity, provider and authentication type, plan, and group information. Remove an account from its proxy to restore a direct connection.
+- 新增代理管理页面，支持创建、编辑和测试出站代理，查看连接耗时与出口 IP。
+- 新建或编辑代理时，可在保存前测试连接；测试不会修改已保存的连接配置和账号绑定。
+- 导入账号、编辑单个账号或批量编辑账号时，可选择已管理的代理。代理配置变更会应用到关联账号，无需重启网关。
+- 支持搜索和分页查看代理关联的账号，展示账号信息、平台与认证类型、套餐及分组。可将账号从当前代理移除，恢复直连。
 
-## Fixes
+## 问题修复
 
-- Apply the same certificate trust configuration to proxy tests and OpenAI requests, including `CODEX_CA_CERTIFICATE`, so usable proxies are not rejected by the selector because of inconsistent certificate handling.
-- Protect credential imports from concurrent proxy changes, preserving credentials exchanged during import and their intended proxy binding.
-- Correct the upstream WebSocket stream flag for non-streaming OpenAI client requests.
-- Prevent table background seams after dragging dialogs.
+- 代理测试与 OpenAI 请求使用一致的证书信任配置，包括 `CODEX_CA_CERTIFICATE`，避免可用代理因证书处理不一致而无法选择。
+- 防止并发修改代理影响凭据导入，保留导入过程中换取的凭据及其预期代理绑定。
+- 修正 OpenAI 客户端非流式请求对应的上游 WebSocket 流式标记。
+- 修复拖动弹窗后表格背景出现拼接缝的问题。
 
-## Improvements
+## 体验优化
 
-- Keep proxy creation and editing consistent, with separate test and save actions and clearer input prompts. Display masked connection addresses in account selectors and preserve saved proxy credentials when the connection address is left unchanged.
-- Refine proxy table column widths and compact actions, remove the redundant list refresh button, and reuse account plan labels across account management and linked-account dialogs.
-- Make sidebar navigation scroll independently with an automatically hidden scrollbar, keeping the logo and footer controls accessible.
-- Trim unnecessary trailing zeros from API key budget amounts and refine budget details and reset-time displays. Exact amounts remain available in the details popover.
+- 统一代理新建与编辑表单，将测试连接与保存代理拆分为独立操作，并优化输入提示。账号代理选择器展示脱敏后的连接地址；连接地址未修改时保留已保存的代理凭据。
+- 优化代理表格列宽与操作区，移除多余的列表刷新按钮；账号管理与关联账号弹窗复用套餐展示逻辑。
+- 侧边栏导航支持独立滚动，滚动条自动隐藏，Logo 和底部操作保持可见。
+- API Key 限额金额省略无意义的末尾零，并优化限额详情与重置时间展示；详情浮层仍可查看精确金额。
 
-## Upgrade
+## 升级说明
 
-The database migration automatically adds existing account proxy URLs to the managed proxy catalog and preserves account bindings. Existing connections continue to work. Run a connection test before selecting a migrated proxy for a new or changed account binding.
+数据库迁移会自动将现有账号的代理 URL 纳入代理管理，并保留账号绑定，原有连接可继续使用。为账号新增或修改代理绑定时，请先对迁移后的代理执行连接测试。
