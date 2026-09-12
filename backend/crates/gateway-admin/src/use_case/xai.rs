@@ -11,8 +11,8 @@ use crate::{
         provider_credentials::{
             AuthorizationStarted, CompleteAuthorization, CredentialDeletion,
             CredentialDeletionResult, CredentialImportCommit, CredentialImportResult,
-            CredentialListQuery, CredentialMutationResult, CredentialPage, ImportCredentials,
-            PrepareCredentialImport, ProviderQuotaRequest, StartAuthorization,
+            CredentialMutationResult, ImportCredentials, PrepareCredentialImport,
+            StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -20,14 +20,13 @@ use crate::{
 
 use super::{
     commit_authorization, delete_credentials, map_provider_error, map_store_error,
-    pending_authorization, publish_committed, validate_authorization_commit,
-    validate_prepared_import,
+    pending_authorization, publish_committed, publish_credentials_and_observe_quota,
+    validate_authorization_commit, validate_prepared_import,
 };
 
 /// xAI 固定管理路由消费的服务。
 #[async_trait]
 pub trait XaiService: Send + Sync {
-    async fn list(&self, query: CredentialListQuery) -> Result<CredentialPage, AdminError>;
     async fn import_document(
         &self,
         command: ImportCredentials,
@@ -72,13 +71,6 @@ impl DefaultXaiService {
 
 #[async_trait]
 impl XaiService for DefaultXaiService {
-    async fn list(&self, query: CredentialListQuery) -> Result<CredentialPage, AdminError> {
-        self.accounts
-            .list_credentials(self.provider.provider_kind(), query)
-            .await
-            .map_err(|error| map_store_error(error, "xAI credential"))
-    }
-
     async fn import_document(
         &self,
         command: ImportCredentials,
@@ -120,18 +112,14 @@ impl XaiService for DefaultXaiService {
             .await
             .map_err(|error| map_store_error(error, "xAI credential import"))?;
         drop(proxy_reservation);
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        // 导入已经提交，额度属于可重建观察事实；单个账号查询失败由周期任务重试。
-        for account_id in &result.credential_ids {
-            let _ = self
-                .provider
-                .quota(ProviderQuotaRequest {
-                    account_id: account_id.clone(),
-                    refresh: true,
-                    rolling_usage: None,
-                })
-                .await;
-        }
+        publish_credentials_and_observe_quota(
+            &self.provider,
+            self.snapshot.as_ref(),
+            result.config_revision,
+            &result.credential_ids,
+            &context.request_id,
+        )
+        .await?;
         Ok(result)
     }
 
@@ -179,7 +167,14 @@ impl XaiService for DefaultXaiService {
             "xAI authorization",
         )
         .await?;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        publish_credentials_and_observe_quota(
+            &self.provider,
+            self.snapshot.as_ref(),
+            result.config_revision,
+            std::slice::from_ref(&result.account_id),
+            &context.request_id,
+        )
+        .await?;
         Ok(result)
     }
 

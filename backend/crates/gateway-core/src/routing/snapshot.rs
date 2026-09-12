@@ -8,7 +8,6 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 
 use crate::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
-use crate::engine::provider::{ProviderCatalogGeneration, ProviderRegistry};
 use crate::operation::Operation;
 use crate::policy::{
     ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,
@@ -18,8 +17,9 @@ use crate::validation::RoutingError;
 
 use super::{
     AccountGroupId, ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,
-    ProviderCandidate, ProviderKind, ProviderModel, PublicModelId, RoutingContext,
-    RoutingGroupSnapshot, RoutingPlan, RuntimeAccount, RuntimeAccountDirectory, UpstreamModelId,
+    ProviderCandidate, ProviderCatalogGeneration, ProviderCatalogPort, ProviderKind, ProviderModel,
+    PublicModelId, RoutingContext, RoutingGroupSnapshot, RoutingPlan, RuntimeAccount,
+    RuntimeAccountDirectory, UpstreamModelId,
 };
 
 const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
@@ -212,13 +212,16 @@ pub enum RuntimeSnapshotCompileError {
 #[derive(Clone)]
 pub struct RuntimeSnapshotCompiler {
     store: Arc<dyn SnapshotStorePort>,
-    providers: ProviderRegistry,
+    catalogs: Arc<dyn ProviderCatalogPort>,
 }
 
 impl RuntimeSnapshotCompiler {
     #[must_use]
-    pub const fn new(store: Arc<dyn SnapshotStorePort>, providers: ProviderRegistry) -> Self {
-        Self { store, providers }
+    pub const fn new(
+        store: Arc<dyn SnapshotStorePort>,
+        catalogs: Arc<dyn ProviderCatalogPort>,
+    ) -> Self {
+        Self { store, catalogs }
     }
 
     pub(crate) fn store(&self) -> Arc<dyn SnapshotStorePort> {
@@ -228,13 +231,13 @@ impl RuntimeSnapshotCompiler {
     pub(crate) fn provider_catalog_generations(
         &self,
     ) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
-        self.providers.catalog_generations()
+        self.catalogs.catalog_generations()
     }
 
     /// 读取一个 revision，并为已注册 Provider 查询实时模型目录。
     pub async fn compile(&self) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
         for _ in 0..MAXIMUM_CATALOG_STABILITY_ATTEMPTS {
-            let catalog_generations = self.providers.catalog_generations();
+            let catalog_generations = self.catalogs.catalog_generations();
             let facts = self
                 .store
                 .load_snapshot_facts()
@@ -243,8 +246,10 @@ impl RuntimeSnapshotCompiler {
             if facts.config_revision != facts.observed_current_revision {
                 return Err(RuntimeSnapshotCompileError::RevisionChanged);
             }
-            let snapshot = compile_runtime_snapshot(facts, &self.providers).await?;
-            let observed_generations = self.providers.catalog_generations();
+            let provider_kinds = catalog_generations.keys().cloned().collect();
+            let snapshot =
+                compile_runtime_snapshot(facts, self.catalogs.as_ref(), provider_kinds).await?;
+            let observed_generations = self.catalogs.catalog_generations();
             if catalog_generations == observed_generations {
                 return Ok(snapshot.with_provider_catalog_generations(observed_generations));
             }
@@ -255,16 +260,16 @@ impl RuntimeSnapshotCompiler {
 
 async fn compile_runtime_snapshot(
     facts: SnapshotFacts,
-    providers: &ProviderRegistry,
+    catalogs: &dyn ProviderCatalogPort,
+    provider_kinds: Vec<ProviderKind>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-    let provider_kinds = providers.provider_kinds().cloned().collect::<Vec<_>>();
     let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
     // 目录查询失败表示未知；查询成功后，即使为空，也必须与“已知缺少模型”区分。
     let mut provider_models = Vec::new();
     let mut known_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
-        let Ok(models) = providers.query_model_capabilities(provider).await else {
+        let Ok(models) = catalogs.query_model_capabilities(provider).await else {
             continue;
         };
         known_provider_catalogs.insert(provider.clone());

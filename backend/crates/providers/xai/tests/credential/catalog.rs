@@ -19,7 +19,7 @@ use provider_xai::{
     GrokCredentialCatalogSeed, GrokCredentialRepository, GrokModelCatalogRequest,
     GrokModelCatalogTransport, GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
     GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokPlanCatalog,
-    GrokQuotaError, SecretValue,
+    GrokQuotaError,
 };
 
 use crate::support::{
@@ -641,26 +641,6 @@ fn seed_rejects_duplicates_and_supports_exact_membership() {
         GrokCredentialCatalogSeed::new(["grok-4.5", "grok-code-fast-1"], None).expect("valid seed");
     assert!(seed.permits("grok-4.5"));
     assert!(!seed.permits("grok-4"));
-}
-
-#[tokio::test]
-async fn fetch_seed_rejects_non_header_safe_identity() {
-    let (_, repository) = repository_with_accounts(&[]).await;
-    let service = crate::support::grok_catalog_service(
-        repository,
-        QueueCatalogTransport::from_bodies([OFFICIAL_FIXTURE.to_vec()]),
-        MemoryGrokCatalogCache::shared(),
-    );
-    assert!(matches!(
-        service
-            .fetch_seed(
-                SecretValue::new("access"),
-                SecretValue::new("非-ascii"),
-                None,
-            )
-            .await,
-        Err(GrokCredentialCatalogError::InvalidCredentialData)
-    ));
 }
 
 #[tokio::test]

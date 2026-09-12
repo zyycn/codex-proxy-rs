@@ -8,16 +8,6 @@ import { usePagedQuery } from '@/composables/usePagedQuery'
 import { errorMessage } from '@/utils/async'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-type AccountSummary = Awaited<ReturnType<typeof getAccounts>>['summary']
-type AccountSummaryStatusKey = Exclude<keyof AccountSummary, 'total'>
-
-const summaryKeyByStatus = {
-  normal: 'normal',
-  quota_exhausted: 'quotaExhausted',
-  rate_limited: 'rateLimited',
-  disabled: 'disabled',
-  error: 'error',
-} as const satisfies Record<AccountRow['status'], AccountSummaryStatusKey>
 
 export function useAccountsQuery() {
   const searchQuery = shallowRef('')
@@ -78,42 +68,12 @@ export function useAccountsQuery() {
     void query.execute()
   }
 
-  function replaceAccount(updated: AccountRow) {
-    const index = query.items.value.findIndex(account => account.id === updated.id)
-    if (index < 0)
-      return false
-
-    const current = query.items.value[index]
-    if (!current)
-      return false
-
-    updateAccountSummary(current.status, updated.status)
-
-    if (statusQuery.value && statusQuery.value !== updated.status) {
-      query.items.value = query.items.value.filter(account => account.id !== updated.id)
-      query.total.value = Math.max(0, query.total.value - 1)
-      return false
-    }
-
-    const accounts = [...query.items.value]
-    accounts[index] = updated
-    query.items.value = accounts
-    return true
-  }
-
-  function updateAccountSummary(
-    previousStatus: AccountRow['status'],
-    nextStatus: AccountRow['status'],
-  ) {
-    if (previousStatus === nextStatus)
-      return
-
-    const previousKey = summaryKeyByStatus[previousStatus]
-    const nextKey = summaryKeyByStatus[nextStatus]
-    const summary = { ...accountSummary.value }
-    summary[previousKey] = Math.max(0, summary[previousKey] - 1)
-    summary[nextKey] += 1
-    accountSummary.value = summary
+  async function replaceAccount(updated: AccountRow) {
+    // 状态变更可能影响筛选、排序及全局概览，统一回读并复用分页查询的末页回退。
+    query.invalidate()
+    if (!await query.execute())
+      return true // 回读失败或被新查询取代时，不依据旧页面取消选择。
+    return query.items.value.some(account => account.id === updated.id)
   }
 
   watchDebounced(

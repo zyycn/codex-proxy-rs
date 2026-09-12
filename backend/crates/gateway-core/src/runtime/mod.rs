@@ -6,17 +6,17 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
+use futures::lock::Mutex;
 use futures::{FutureExt as _, Stream, StreamExt as _, pin_mut, select_biased};
 use futures_timer::Delay;
 
-use crate::engine::provider::ProviderCatalogGeneration;
 use crate::health::{HealthProbe, HealthState};
 use crate::identity::ProviderKind;
 use crate::lifecycle::CancellationToken;
-use crate::routing::ConfigRevision;
 use crate::routing::snapshot::{
-    RuntimeSnapshot, RuntimeSnapshotCompileError, RuntimeSnapshotCompiler, SnapshotStorePort,
+    RuntimeSnapshot, RuntimeSnapshotCompileError, RuntimeSnapshotCompiler,
 };
+use crate::routing::{ConfigRevision, ProviderCatalogGeneration};
 use crate::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerRegistration, WorkerRunnable,
@@ -135,11 +135,17 @@ pub struct RuntimeSnapshotPublisher {
     compiler: Arc<RuntimeSnapshotCompiler>,
     snapshots: RuntimeSnapshotHandle,
     subscriptions: Arc<dyn SnapshotSubscriptionPort>,
+    refresh_lock: Arc<Mutex<()>>,
+}
+
+enum RefreshMode {
+    Required,
+    Reconcile,
 }
 
 impl RuntimeSnapshotPublisher {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         compiler: Arc<RuntimeSnapshotCompiler>,
         snapshots: RuntimeSnapshotHandle,
         subscriptions: Arc<dyn SnapshotSubscriptionPort>,
@@ -148,19 +154,53 @@ impl RuntimeSnapshotPublisher {
             compiler,
             snapshots,
             subscriptions,
+            refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    /// 重新编译并原子替换本进程快照。
+    /// 串行重编译并替换本进程快照；无法确认配置时暂停新请求。
     pub async fn refresh(&self) -> Result<ConfigRevision, RuntimeSnapshotCompileError> {
-        let snapshot = self.compiler.compile().await?;
+        self.refresh_with_mode(RefreshMode::Required).await
+    }
+
+    async fn refresh_with_mode(
+        &self,
+        mode: RefreshMode,
+    ) -> Result<ConfigRevision, RuntimeSnapshotCompileError> {
+        // 所有入口共享从读取事实到发布或暂停的完整临界区；只锁最后的替换会让
+        // 旧编译覆盖新授权，或让晚到的失败暂停新快照。请求读取不等待此锁。
+        let _refresh = self.refresh_lock.lock().await;
+        let configuration_changed = if matches!(mode, RefreshMode::Reconcile) {
+            let persisted_revision = self
+                .compiler
+                .store()
+                .current_config_revision()
+                .await
+                .map_err(|_| {
+                    self.snapshots.suspend();
+                    RuntimeSnapshotCompileError::StoreUnavailable
+                })?;
+            let changed = runtime_revision_needs_refresh(
+                self.published_revision().map(ConfigRevision::get),
+                persisted_revision.get(),
+            );
+            if !changed && !self.provider_catalogs_need_refresh() {
+                return Ok(persisted_revision);
+            }
+            changed
+        } else {
+            true
+        };
+        let snapshot = self.compiler.compile().await.inspect_err(|_| {
+            // 仅目录代次变化时保留旧快照，下一周期继续对账；配置缺失、变化
+            // 或持久 revision 回退均须 fail closed，不按 revision 大小丢弃刷新。
+            if configuration_changed {
+                self.snapshots.suspend();
+            }
+        })?;
         let revision = snapshot.revision();
         self.snapshots.publish(snapshot);
         Ok(revision)
-    }
-
-    pub fn suspend(&self) {
-        self.snapshots.suspend();
     }
 
     #[must_use]
@@ -176,9 +216,7 @@ impl RuntimeSnapshotPublisher {
 
     /// 数据库提交不能被目录或通知基础设施的暂时故障伪装成回滚。
     async fn publish_committed_inner(&self, committed_revision: ConfigRevision) {
-        if self.refresh().await.is_err() {
-            self.suspend();
-        }
+        let _ = self.refresh().await;
         let _ = self
             .subscriptions
             .publish_snapshot_revision(committed_revision)
@@ -204,7 +242,6 @@ impl RuntimeSnapshotPublisher {
                 schedule,
                 lease: None,
                 task: Box::new(RuntimeSnapshotReconciliationTask {
-                    store: self.compiler.store(),
                     publisher: self.clone(),
                 }),
             },
@@ -238,7 +275,6 @@ impl SnapshotControl for RuntimeSnapshotPublisher {
 }
 
 struct RuntimeSnapshotReconciliationTask {
-    store: Arc<dyn SnapshotStorePort>,
     publisher: RuntimeSnapshotPublisher,
 }
 
@@ -248,33 +284,11 @@ impl ScheduledTask for RuntimeSnapshotReconciliationTask {
         _context: WorkerCycleContext,
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            let persisted_revision = match self.store.current_config_revision().await {
-                Ok(revision) => revision,
-                Err(_) => {
-                    self.publisher.suspend();
-                    return Err(WorkerTaskError::safe(
-                        "runtime snapshot revision is unavailable",
-                    ));
-                }
-            };
-            let configuration_changed = runtime_revision_needs_refresh(
-                self.publisher.published_revision().map(ConfigRevision::get),
-                persisted_revision.get(),
-            );
-            if !configuration_changed && !self.publisher.provider_catalogs_need_refresh() {
-                return Ok(());
-            }
-            if self.publisher.refresh().await.is_err() {
-                // 已提交的配置无法确认时必须 fail closed；仅目录重编译失败时继续
-                // 服务旧的不可变快照，单调代次会让下一周期再次尝试。
-                if configuration_changed {
-                    self.publisher.suspend();
-                }
-                return Err(WorkerTaskError::safe(
-                    "runtime snapshot reconciliation failed",
-                ));
-            }
-            Ok(())
+            self.publisher
+                .refresh_with_mode(RefreshMode::Reconcile)
+                .await
+                .map(|_| ())
+                .map_err(|_| WorkerTaskError::safe("runtime snapshot reconciliation failed"))
         })
     }
 }
@@ -314,9 +328,7 @@ impl DaemonTask for RuntimeSnapshotSubscriptionTask {
                     };
                     match notified {
                         Some(Ok(_)) => {
-                            if self.publisher.refresh().await.is_err() {
-                                self.publisher.suspend();
-                            }
+                            let _ = self.publisher.refresh().await;
                         }
                         Some(Err(_)) | None => break,
                     }

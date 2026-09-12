@@ -9,11 +9,10 @@ use chrono::{DateTime, Utc};
 use gateway_core::account::{
     CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
 };
-use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
 };
-use gateway_core::routing::{ProviderKind, UpstreamModelId};
+use gateway_core::routing::{ProviderCatalogGeneration, ProviderKind, UpstreamModelId};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 use tokio::sync::Notify;

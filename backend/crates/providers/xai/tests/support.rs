@@ -115,7 +115,10 @@ impl LoopbackGrokEndpointPolicy {
             && url.fragment().is_none()
     }
 
-    fn build_client(timeout: Option<Duration>) -> Result<Client, GrokReqwestTransportBuildError> {
+    fn build_client(
+        timeout: Option<Duration>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<Client, GrokReqwestTransportBuildError> {
         let mut builder = Client::builder()
             .redirect(Policy::none())
             .no_proxy()
@@ -123,6 +126,12 @@ impl LoopbackGrokEndpointPolicy {
             .tcp_nodelay(true);
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
+        }
+        if let Some(proxy) = proxy {
+            builder = builder.proxy(
+                reqwest::Proxy::all(proxy.expose_url())
+                    .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?,
+            );
         }
         builder
             .build()
@@ -134,15 +143,17 @@ impl GrokEndpointPolicy for LoopbackGrokEndpointPolicy {
     fn build_oauth_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        Self::build_client(timeout)
+        Self::build_client(timeout, proxy)
     }
 
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        Self::build_client(timeout)
+        Self::build_client(timeout, proxy)
     }
 
     fn validate_oauth(&self, url: &Url) -> bool {
@@ -193,6 +204,35 @@ pub fn loopback_endpoint_policy(origin: &Url) -> Arc<dyn GrokEndpointPolicy> {
     Arc::new(LoopbackGrokEndpointPolicy::for_origin(origin))
 }
 
+pub async fn rejecting_account_proxy() -> (
+    gateway_core::account::OutboundProxy,
+    tokio::task::JoinHandle<String>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://user:pass@{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(stream.read_u8().await.unwrap());
+            assert!(header.len() < 8192);
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        String::from_utf8(header).unwrap()
+    });
+    (proxy, task)
+}
+
 #[derive(Clone)]
 struct StoredAccount {
     account: ProviderAccount,
@@ -230,6 +270,16 @@ impl MemoryProviderAccountStore {
             .account
             .clone()
             .with_scheduling(concurrency_limit, weight);
+    }
+
+    pub fn set_outbound_proxy(
+        &self,
+        id: &ProviderAccountId,
+        proxy: Option<gateway_core::account::OutboundProxy>,
+    ) {
+        let mut accounts = lock(&self.accounts);
+        let stored = accounts.get_mut(id).expect("seeded account");
+        stored.account = stored.account.clone().with_outbound_proxy(proxy);
     }
 
     pub fn last_error_message(&self, id: &ProviderAccountId) -> Option<String> {
@@ -619,6 +669,7 @@ fn rebuild_account(previous: &ProviderAccount, replacement: AccountReplacement) 
     )
     .with_scheduling(previous.concurrency_limit(), previous.weight())
     .with_refresh_schedule(replacement.has_refresh_token, replacement.next_refresh_at)
+    .with_outbound_proxy(previous.outbound_proxy().cloned())
 }
 
 #[derive(Default)]

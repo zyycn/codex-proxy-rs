@@ -718,9 +718,6 @@ impl GrokCredentialRefreshService {
         let account_id = credential.account_id.clone();
         let access_expires_at = refreshed_access_token_expiry(tokens.expires_in)
             .ok_or(GrokCredentialRefreshError::InvalidRefreshResponse)?;
-        let access_token = tokens.access_token.clone();
-        let subject = credential.subject.clone();
-        let email = credential.email.clone();
         let record = match self
             .repository
             .rotate_oauth_credential(&RotateGrokCredential {
@@ -754,17 +751,9 @@ impl GrokCredentialRefreshService {
             Err(error) => return Err(error.into()),
         };
 
-        if let Ok(seed) = self
-            .catalog
-            .fetch_seed(
-                access_token,
-                SecretValue::new(subject),
-                email.map(SecretValue::new),
-            )
-            .await
-        {
-            let _ = self.catalog.cache_seed(&account_id, seed).await;
-        }
+        // 凭据提交后重新读取账号事实；刷新期间切换出口不会改变 credential CAS，
+        // 但后续目录请求必须使用已提交的当前出口，不能复用旧的 token-only 请求。
+        let _ = self.catalog.refresh_account_catalog(&account_id).await;
         let _ = self
             .credential_state
             .clear_refresh_backoff(&account_id)

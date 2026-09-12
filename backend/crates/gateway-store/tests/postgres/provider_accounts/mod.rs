@@ -16,8 +16,7 @@ use gateway_admin::{
         observability::TimeRange,
         provider_credentials::{
             AuthorizationCommit, AuthorizationCredentialCommit, AuthorizationMutationTarget,
-            AuthorizationOwnerBinding, CredentialListQuery, CredentialListWindow,
-            CredentialStateFilter, PendingAuthorizationMutation, PreparedCredentialCreate,
+            AuthorizationOwnerBinding, PendingAuthorizationMutation, PreparedCredentialCreate,
             ProviderDocument,
         },
     },
@@ -773,83 +772,6 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(error_accounts.items.len(), 2);
     assert_eq!(error_accounts.items[0].account.id, "acct_beta");
     assert_eq!(error_accounts.items[1].account.id, "acct_invalid");
-    database.close().await;
-}
-
-#[tokio::test]
-async fn terminal_credential_list_preserves_grouped_filters_and_unpaged_collections() {
-    let Some(database) = TestDatabase::create("provider_credential_terminal_windows").await else {
-        return;
-    };
-    let repository = PgProviderAccountRepository::new(database.pool.clone());
-    for index in 0..205_u16 {
-        let mut credential = account(
-            &format!("acct_xai_{index:03}"),
-            &format!("user-xai-{index:03}"),
-        );
-        credential.provider_kind = "xai".to_owned();
-        credential.credential_state = match index {
-            0 => CredentialState::Expired,
-            1 => CredentialState::Banned,
-            2 => CredentialState::Invalid,
-            _ => CredentialState::Ready,
-        };
-        repository
-            .insert_provider_account(credential)
-            .await
-            .expect("insert xAI credential fixture");
-    }
-
-    let store = admin_account_store(&database.pool);
-    let provider = ProviderKind::new("xai").expect("xAI Provider kind");
-    let complete = store
-        .list_credentials(
-            &provider,
-            CredentialListQuery {
-                credential_state: None,
-                enabled: None,
-                window: CredentialListWindow::All,
-            },
-        )
-        .await
-        .expect("unpaged credential collection");
-    assert_eq!(complete.items.len(), 205);
-    assert!(complete.next_cursor.is_none());
-
-    let page = store
-        .list_credentials(
-            &provider,
-            CredentialListQuery {
-                credential_state: None,
-                enabled: None,
-                window: CredentialListWindow::Page {
-                    cursor: None,
-                    page_size: PageSize::new(200).expect("page size"),
-                },
-            },
-        )
-        .await
-        .expect("paged credential collection");
-    assert_eq!(page.items.len(), 200);
-    assert!(page.next_cursor.is_some());
-
-    let invalid_group = store
-        .list_credentials(
-            &provider,
-            CredentialListQuery {
-                credential_state: Some(CredentialStateFilter::AnyOf(vec![
-                    CredentialState::Expired,
-                    CredentialState::Banned,
-                    CredentialState::Invalid,
-                ])),
-                enabled: None,
-                window: CredentialListWindow::All,
-            },
-        )
-        .await
-        .expect("grouped invalid credential filter");
-    assert_eq!(invalid_group.items.len(), 3);
-
     database.close().await;
 }
 

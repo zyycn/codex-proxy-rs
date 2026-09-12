@@ -24,36 +24,7 @@ use provider_xai::{
     ReqwestOAuthTransport, SecretValue,
 };
 
-use crate::support::loopback_endpoint_policy;
-
-async fn rejecting_account_proxy() -> (
-    gateway_core::account::OutboundProxy,
-    tokio::task::JoinHandle<String>,
-) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
-        "http://user:pass@{}",
-        listener.local_addr().unwrap()
-    ))
-    .unwrap();
-    let task = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut header = Vec::new();
-        while !header.ends_with(b"\r\n\r\n") {
-            header.push(stream.read_u8().await.unwrap());
-            assert!(header.len() < 8192);
-        }
-        stream
-            .write_all(
-                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-        String::from_utf8(header).unwrap()
-    });
-    (proxy, task)
-}
+use crate::support::{loopback_endpoint_policy, rejecting_account_proxy};
 
 #[tokio::test]
 async fn inference_and_oauth_connect_through_each_accounts_authenticated_proxy() {
@@ -232,6 +203,130 @@ async fn inference_transport_should_reuse_one_client_only_within_the_same_bindin
     execute_inference(&transport, &origin, "account-b").await;
 
     assert_eq!(client_builds.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inference_proxy_client_is_built_once_for_concurrent_same_binding() {
+    let origin_server = MockServer::start().await;
+    let proxy_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("data: [DONE]\n\n", "text/event-stream"),
+        )
+        .expect(2)
+        .mount(&proxy_server)
+        .await;
+    let origin = Url::parse(&origin_server.uri()).unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&proxy_server.uri()).unwrap();
+    let builds = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(
+        ReqwestGrokInferenceTransport::new(Arc::new(CountingEndpointPolicy {
+            inner: loopback_endpoint_policy(&origin),
+            inference_client_builds: Arc::clone(&builds),
+            concurrency: Some(Arc::new(BuildConcurrency::new(Duration::from_millis(100)))),
+        }))
+        .unwrap(),
+    );
+    let start = Arc::new(tokio::sync::Barrier::new(2));
+    let tasks = (0..2)
+        .map(|_| {
+            let transport = Arc::clone(&transport);
+            let start = Arc::clone(&start);
+            let binding = GrokSessionBinding::new("same-proxy-account")
+                .unwrap()
+                .with_outbound_proxy(Some(proxy.clone()));
+            let request = GrokInferenceRequest::new(
+                origin.join("v1/responses").unwrap(),
+                Vec::new(),
+                b"{}".to_vec(),
+                binding,
+            );
+            tokio::spawn(async move {
+                start.wait().await;
+                transport
+                    .execute(request)
+                    .await
+                    .unwrap()
+                    .into_body()
+                    .collect::<Vec<_>>()
+                    .await
+            })
+        })
+        .collect::<Vec<_>>();
+    for task in tasks {
+        assert!(task.await.unwrap().iter().all(Result::is_ok));
+    }
+    // 启动时的直连 client + 一个代理 client；不再先构建并丢弃另一个直连 client。
+    assert_eq!(builds.load(Ordering::SeqCst), 2);
+    assert!(origin_server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auxiliary_proxy_clients_single_flight_and_clearing_restores_direct() {
+    let origin_server = MockServer::start().await;
+    let exit_a = MockServer::start().await;
+    let exit_b = MockServer::start().await;
+    for (server, expected) in [(&origin_server, 1), (&exit_a, 3), (&exit_b, 1)] {
+        Mock::given(method("GET"))
+            .and(path("/v1/billing"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"config":{"creditUsagePercent":25}})),
+            )
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+    let origin = Url::parse(&origin_server.uri()).unwrap();
+    let builds = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(
+        ReqwestGrokModelCatalogTransport::new(Arc::new(CountingEndpointPolicy {
+            inner: loopback_endpoint_policy(&origin),
+            inference_client_builds: Arc::clone(&builds),
+            concurrency: Some(Arc::new(BuildConcurrency::new(Duration::from_millis(100)))),
+        }))
+        .unwrap(),
+    );
+    let proxy_a = gateway_core::account::OutboundProxy::parse(&exit_a.uri()).unwrap();
+    let proxy_b = gateway_core::account::OutboundProxy::parse(&exit_b.uri()).unwrap();
+    let start = Arc::new(tokio::sync::Barrier::new(2));
+    let tasks = (0..2)
+        .map(|_| {
+            let client = GrokBillingClient::new(transport.clone());
+            let start = Arc::clone(&start);
+            let proxy = proxy_a.clone();
+            tokio::spawn(async move {
+                let session = GrokModelCatalogSession::new(
+                    SecretValue::new("access-token"),
+                    SecretValue::new("user-id"),
+                    None,
+                    crate::support::xai_wire_profile(),
+                )
+                .unwrap()
+                .with_outbound_proxy(Some(proxy));
+                start.wait().await;
+                client.fetch(&session).await.unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    for task in tasks {
+        task.await.unwrap();
+    }
+    assert_eq!(builds.load(Ordering::SeqCst), 2, "同出口并发仅初始化一次");
+    let client = GrokBillingClient::new(transport);
+    for (proxy, expected_builds) in [(Some(proxy_a), 2), (Some(proxy_b), 3), (None, 3)] {
+        let session = GrokModelCatalogSession::new(
+            SecretValue::new("access-token"),
+            SecretValue::new("user-id"),
+            None,
+            crate::support::xai_wire_profile(),
+        )
+        .unwrap()
+        .with_outbound_proxy(proxy);
+        client.fetch(&session).await.unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), expected_builds);
+    }
 }
 
 #[tokio::test]
@@ -1089,22 +1184,24 @@ impl GrokEndpointPolicy for CountingEndpointPolicy {
     fn build_oauth_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        self.inner.build_oauth_client(timeout)
+        self.inner.build_oauth_client(timeout, proxy)
     }
 
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
         self.inference_client_builds.fetch_add(1, Ordering::SeqCst);
         let Some(concurrency) = &self.concurrency else {
-            return self.inner.build_inference_client(timeout);
+            return self.inner.build_inference_client(timeout, proxy);
         };
         let active = concurrency.active.fetch_add(1, Ordering::SeqCst) + 1;
         concurrency.max_active.fetch_max(active, Ordering::SeqCst);
         std::thread::sleep(concurrency.delay);
-        let result = self.inner.build_inference_client(timeout);
+        let result = self.inner.build_inference_client(timeout, proxy);
         concurrency.active.fetch_sub(1, Ordering::SeqCst);
         result
     }

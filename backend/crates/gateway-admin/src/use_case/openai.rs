@@ -3,17 +3,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use gateway_core::{account::ProviderAccountId, runtime::SnapshotControl};
+use gateway_core::runtime::SnapshotControl;
 
 use crate::{
     model::{
         AdminError,
         provider_credentials::{
             AuthorizationStarted, CompleteAuthorization, CredentialDeletion,
-            CredentialDeletionResult, CredentialDetails, CredentialImportCommit,
-            CredentialImportResult, CredentialListQuery, CredentialMutationResult, CredentialPage,
-            ImportCredentials, PrepareCredentialImport, PrepareCredentialRotation,
-            ProviderQuotaRequest, RotateCredential, StartAuthorization,
+            CredentialDeletionResult, CredentialImportCommit, CredentialImportResult,
+            CredentialMutationResult, ImportCredentials, PrepareCredentialImport,
+            PrepareCredentialRotation, RotateCredential, StartAuthorization,
         },
     },
     ports::{provider::ProviderAdmin, store::AccountStore},
@@ -21,18 +20,14 @@ use crate::{
 
 use super::{
     commit_authorization, commit_credential_rotation, delete_credentials, map_provider_error,
-    map_store_error, pending_authorization, publish_committed, required_credential,
-    validate_authorization_commit, validate_prepared_import, validate_prepared_rotation,
+    map_store_error, pending_authorization, publish_committed,
+    publish_credentials_and_observe_quota, required_credential, validate_authorization_commit,
+    validate_prepared_import, validate_prepared_rotation,
 };
 
 /// OpenAI 固定管理路由消费的服务。
 #[async_trait]
 pub trait OpenAiService: Send + Sync {
-    async fn list(&self, query: CredentialListQuery) -> Result<CredentialPage, AdminError>;
-    async fn details(
-        &self,
-        account_id: &ProviderAccountId,
-    ) -> Result<CredentialDetails, AdminError>;
     async fn import_document(
         &self,
         command: ImportCredentials,
@@ -77,55 +72,10 @@ impl DefaultOpenAiService {
             snapshot,
         }
     }
-
-    fn observe_initial_quotas(&self, account_ids: &[ProviderAccountId], request_id: &str) {
-        let provider = Arc::clone(&self.provider);
-        let account_ids = account_ids.to_vec();
-        let request_id = request_id.to_owned();
-        tokio::spawn(async move {
-            for account_id in account_ids {
-                if let Err(error) = provider
-                    .quota(ProviderQuotaRequest {
-                        account_id: account_id.clone(),
-                        refresh: true,
-                        rolling_usage: None,
-                    })
-                    .await
-                {
-                    tracing::warn!(
-                        request_id,
-                        account_id = %account_id.as_str(),
-                        quota_error = ?error.kind(),
-                        "OpenAI initial quota observation failed"
-                    );
-                }
-            }
-        });
-    }
 }
 
 #[async_trait]
 impl OpenAiService for DefaultOpenAiService {
-    async fn list(&self, query: CredentialListQuery) -> Result<CredentialPage, AdminError> {
-        self.accounts
-            .list_credentials(self.provider.provider_kind(), query)
-            .await
-            .map_err(|error| map_store_error(error, "OpenAI credential"))
-    }
-
-    async fn details(
-        &self,
-        account_id: &ProviderAccountId,
-    ) -> Result<CredentialDetails, AdminError> {
-        required_credential(
-            self.accounts.as_ref(),
-            self.provider.provider_kind(),
-            account_id,
-            "OpenAI credential",
-        )
-        .await
-    }
-
     async fn import_document(
         &self,
         command: ImportCredentials,
@@ -167,12 +117,14 @@ impl OpenAiService for DefaultOpenAiService {
             .await
             .map_err(|error| map_store_error(error, "OpenAI credential import"))?;
         drop(proxy_reservation);
-        self.provider
-            .account_facts_changed(&result.credential_ids)
-            .await;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        // 导入完成后立即做一次观察；失败不回滚已经提交的 credential。
-        self.observe_initial_quotas(&result.credential_ids, &context.request_id);
+        publish_credentials_and_observe_quota(
+            &self.provider,
+            self.snapshot.as_ref(),
+            result.config_revision,
+            &result.credential_ids,
+            &context.request_id,
+        )
+        .await?;
         Ok(result)
     }
 
@@ -220,14 +172,14 @@ impl OpenAiService for DefaultOpenAiService {
             "OpenAI authorization",
         )
         .await?;
-        self.provider
-            .account_facts_changed(std::slice::from_ref(&result.account_id))
-            .await;
-        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-        self.observe_initial_quotas(
+        publish_credentials_and_observe_quota(
+            &self.provider,
+            self.snapshot.as_ref(),
+            result.config_revision,
             std::slice::from_ref(&result.account_id),
             &context.request_id,
-        );
+        )
+        .await?;
         Ok(result)
     }
 

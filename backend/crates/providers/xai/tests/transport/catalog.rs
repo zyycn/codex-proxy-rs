@@ -641,6 +641,19 @@ async fn client_should_enforce_hard_limit_for_injected_transport_too() {
 }
 
 #[test]
+fn session_rejects_non_header_safe_identity() {
+    assert!(matches!(
+        GrokModelCatalogSession::new(
+            SecretValue::new("oauth-access"),
+            SecretValue::new("非-ascii"),
+            None,
+            crate::support::xai_wire_profile(),
+        ),
+        Err(provider_xai::GrokModelCatalogSessionError::InvalidHeaderData)
+    ));
+}
+
+#[test]
 fn session_debug_should_redact_oauth_and_identity_values() {
     let debug = format!("{:?}", session(Some("person@example.com")));
 

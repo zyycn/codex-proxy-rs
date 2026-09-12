@@ -12,8 +12,7 @@ use futures::{StreamExt, future::BoxFuture};
 use gateway_core::account::{AccountFeedbackStats, ProviderAccount};
 use gateway_core::engine::continuation::{ContinuationBinding, NativeContinuationScope};
 use gateway_core::engine::provider::{
-    ContinuationRequestObservation, EventStream, Provider, ProviderCallMetadata,
-    ProviderCatalogGeneration, ProviderModelCapabilities, ProviderRequest,
+    ContinuationRequestObservation, EventStream, Provider, ProviderCallMetadata, ProviderRequest,
     ProviderRequestObservation, ProviderSelectionObservation, ProviderStream,
 };
 use gateway_core::engine::{AttemptContext, AttemptTransport, ContinuationAttempt};
@@ -34,7 +33,8 @@ use gateway_core::operation::{
 };
 use gateway_core::provider_ports::ProviderSessionAffinityKey;
 use gateway_core::routing::{
-    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, UpstreamModelId,
+    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderCatalogGeneration,
+    ProviderKind, ProviderModelCapabilities, UpstreamModelId,
 };
 use gateway_core::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,

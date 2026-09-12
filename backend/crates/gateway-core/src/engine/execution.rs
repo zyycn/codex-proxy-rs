@@ -173,8 +173,11 @@ pub trait ExecutionSession: Send {
         &mut self,
         client_status_code: u16,
     ) -> BoxFuture<'_, Result<(), EngineError>>;
+    /// 执行已终结且结算、准入释放均已返回，协议层才可以放弃清理责任。
+    /// 结算失败仍由 Store 保留费用重试，释放失败仍按租约 TTL 收敛。
     fn is_finalized(&self) -> bool;
     fn cancel(&self);
+    /// 将会话交给宿主持续驱动清理；取消请求事件的等待不会丢弃已开始的结算。
     fn detach_finalize(self: Box<Self>) -> BoxFuture<'static, ()>;
 }
 
@@ -978,8 +981,9 @@ impl AdmissionLease {
 }
 
 struct DefaultExecutionSession {
-    core: Option<ResponseExecutionSession<dyn ExecutionStore>>,
+    core: ResponseExecutionSession<dyn ExecutionStore>,
     admission: Option<AdmissionLease>,
+    cleanup: Option<BoxFuture<'static, ()>>,
     circuits: Arc<dyn ProviderCircuitPort>,
     continuation: Arc<dyn NativeContinuationPort>,
     observed_provider_outcomes: usize,
@@ -996,8 +1000,9 @@ impl DefaultExecutionSession {
         budget: Option<Arc<dyn ClientBudgetPort>>,
     ) -> Self {
         Self {
-            core: Some(core),
+            core,
             admission: Some(admission),
+            cleanup: None,
             circuits,
             continuation,
             observed_provider_outcomes: 0,
@@ -1006,33 +1011,29 @@ impl DefaultExecutionSession {
         }
     }
 
-    fn core_mut(
-        &mut self,
-    ) -> Result<&mut ResponseExecutionSession<dyn ExecutionStore>, EngineError> {
-        self.core.as_mut().ok_or(EngineError::InvalidDeliveryState)
-    }
-
     async fn settle_if_finalized(&mut self) {
-        if self
-            .core
-            .as_ref()
-            .is_some_and(ResponseExecutionSession::is_finalized)
+        if self.core.is_finalized()
             && let Some(admission) = self.admission.take()
         {
-            if let Some(budget) = self.budget.take()
-                && let Some(core) = &self.core
-            {
-                settle_budget(budget.as_ref(), core.budget_charge()).await;
-            }
-            admission.release().await;
+            let budget = self.budget.take();
+            let charge = self.core.budget_charge();
+            // 在首次 await 前把完整清理责任留在会话内。事件等待被取消后，后续 poll
+            // 或 detach 继续同一个 future，既不丢失费用，也不重启已完成的结算。
+            self.cleanup = Some(Box::pin(async move {
+                if let Some(budget) = budget {
+                    settle_budget(budget.as_ref(), charge).await;
+                }
+                admission.release().await;
+            }));
+        }
+        if let Some(cleanup) = self.cleanup.as_mut() {
+            cleanup.await;
+            self.cleanup = None;
         }
     }
 
     async fn observe_provider_outcomes(&mut self) {
-        let Some(core) = self.core.as_ref() else {
-            return;
-        };
-        let outcomes = core.provider_attempt_outcomes();
+        let outcomes = self.core.provider_attempt_outcomes();
         let new_outcomes = outcomes
             .get(self.observed_provider_outcomes..)
             .unwrap_or_default()
@@ -1048,11 +1049,7 @@ impl DefaultExecutionSession {
         let Some(state) = state else {
             return;
         };
-        let Some(pin) = self
-            .core
-            .as_ref()
-            .and_then(|core| core.native_continuation_pin(state))
-        else {
+        let Some(pin) = self.core.native_continuation_pin(state) else {
             return;
         };
         self.continuation_recorded = true;
@@ -1060,47 +1057,27 @@ impl DefaultExecutionSession {
     }
 
     async fn finalize_detached(&mut self) {
-        let Some(mut core) = self.core.take() else {
-            return;
-        };
-        core.cancel();
-        if !core.is_finalized()
-            && let Err(error) = core.cancel_and_finalize().await
-        {
+        if let Err(error) = self.core.cancel_and_finalize().await {
             tracing::warn!(%error, "Detached execution 终态收敛失败");
         }
-        let pending = core
-            .provider_attempt_outcomes()
-            .get(self.observed_provider_outcomes..)
-            .unwrap_or_default();
-        publish_provider_attempt_outcomes(self.circuits.as_ref(), pending).await;
-        if let Some(budget) = self.budget.take() {
-            settle_budget(budget.as_ref(), core.budget_charge()).await;
-        }
-        if let Some(admission) = self.admission.take() {
-            admission.release().await;
-        }
+        self.observe_provider_outcomes().await;
+        self.settle_if_finalized().await;
     }
 }
 
 impl Drop for DefaultExecutionSession {
     fn drop(&mut self) {
-        if let Some(core) = &self.core {
-            core.cancel();
-        }
+        self.core.cancel();
     }
 }
 
 impl ExecutionSession for DefaultExecutionSession {
     fn trace(&self) -> crate::diagnostics::TraceContext {
-        self.core
-            .as_ref()
-            .map(ResponseExecutionSession::trace)
-            .unwrap_or_default()
+        self.core.trace()
     }
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
-            let result = self.core_mut()?.next_event().await;
+            let result = self.core.next_event().await;
             if let Ok(Some(event)) = result.as_ref() {
                 self.record_continuation(event.session_update()).await;
             }
@@ -1112,7 +1089,7 @@ impl ExecutionSession for DefaultExecutionSession {
 
     fn collect_uncommitted(&mut self) -> BoxFuture<'_, Result<Vec<ProviderEvent>, EngineError>> {
         Box::pin(async move {
-            let result = self.core_mut()?.collect_uncommitted().await;
+            let result = self.core.collect_uncommitted().await;
             if let Ok(events) = result.as_ref() {
                 let state = events.iter().find_map(ProviderEvent::session_update);
                 self.record_continuation(state).await;
@@ -1124,16 +1101,11 @@ impl ExecutionSession for DefaultExecutionSession {
     }
 
     fn response_headers(&self) -> &[ProviderResponseHeader] {
-        self.core
-            .as_ref()
-            .map(ResponseExecutionSession::response_headers)
-            .unwrap_or_default()
+        self.core.response_headers()
     }
 
     fn response_status_code(&self) -> Option<u16> {
-        self.core
-            .as_ref()
-            .and_then(ResponseExecutionSession::response_status_code)
+        self.core.response_status_code()
     }
 
     fn commit_downstream(
@@ -1141,7 +1113,7 @@ impl ExecutionSession for DefaultExecutionSession {
         client_status_code: Option<u16>,
     ) -> BoxFuture<'_, Result<(), EngineError>> {
         Box::pin(async move {
-            let result = self.core_mut()?.commit_downstream(client_status_code).await;
+            let result = self.core.commit_downstream(client_status_code).await;
             self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
@@ -1153,10 +1125,7 @@ impl ExecutionSession for DefaultExecutionSession {
         client_status_code: u16,
     ) -> BoxFuture<'_, Result<(), EngineError>> {
         Box::pin(async move {
-            let result = self
-                .core_mut()?
-                .record_client_status(client_status_code)
-                .await;
+            let result = self.core.record_client_status(client_status_code).await;
             self.observe_provider_outcomes().await;
             self.settle_if_finalized().await;
             result
@@ -1164,15 +1133,11 @@ impl ExecutionSession for DefaultExecutionSession {
     }
 
     fn is_finalized(&self) -> bool {
-        self.core
-            .as_ref()
-            .is_none_or(ResponseExecutionSession::is_finalized)
+        self.core.is_finalized() && self.admission.is_none() && self.cleanup.is_none()
     }
 
     fn cancel(&self) {
-        if let Some(core) = &self.core {
-            core.cancel();
-        }
+        self.core.cancel();
     }
 
     fn detach_finalize(mut self: Box<Self>) -> BoxFuture<'static, ()> {

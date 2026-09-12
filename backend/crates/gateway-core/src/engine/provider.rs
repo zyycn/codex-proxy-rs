@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, future::BoxFuture};
 use thiserror::Error;
 
 use crate::account::{
@@ -21,7 +21,8 @@ use crate::identity::ProviderKind;
 use crate::operation::Operation;
 use crate::policy::ClientApiKeyId;
 use crate::routing::{
-    ModelCapabilities, ModelPresentation, ProviderCandidate, PublicModelId, UpstreamModelId,
+    ProviderCandidate, ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
+    ProviderModelCapabilities, PublicModelId, UpstreamModelId,
 };
 use crate::upstream::OpaqueUpstreamValue;
 use crate::upstream::{UpstreamSendState, UpstreamTransport};
@@ -437,64 +438,6 @@ pub struct ContinuationRequestObservation {
     pub requested: bool,
 }
 
-/// Provider 实时目录编译后的单模型能力。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderModelCapabilities {
-    upstream_model: UpstreamModelId,
-    capabilities: ModelCapabilities,
-    presentation: Option<ModelPresentation>,
-}
-
-/// Provider 实时目录成功发布后的进程内单调代次。
-///
-/// 代次只表达“目录内容已经变化”，不承载模型、ETag 或 Provider 私有数据。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProviderCatalogGeneration(u64);
-
-impl ProviderCatalogGeneration {
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl ProviderModelCapabilities {
-    #[must_use]
-    pub const fn new(upstream_model: UpstreamModelId, capabilities: ModelCapabilities) -> Self {
-        Self {
-            upstream_model,
-            capabilities,
-            presentation: None,
-        }
-    }
-
-    #[must_use]
-    pub fn with_presentation(mut self, presentation: ModelPresentation) -> Self {
-        self.presentation = Some(presentation);
-        self
-    }
-
-    #[must_use]
-    pub const fn upstream_model(&self) -> &UpstreamModelId {
-        &self.upstream_model
-    }
-
-    #[must_use]
-    pub const fn capabilities(&self) -> &ModelCapabilities {
-        &self.capabilities
-    }
-
-    #[must_use]
-    pub const fn presentation(&self) -> Option<&ModelPresentation> {
-        self.presentation.as_ref()
-    }
-}
-
 impl ProviderRequest {
     /// 绑定 operation 与请求计划中冻结的 Provider 候选。
     #[must_use]
@@ -586,15 +529,6 @@ pub enum RegistryError {
     },
 }
 
-/// Registry 实时目录查询错误。
-#[derive(Debug, Error)]
-pub enum ProviderCatalogError {
-    #[error("provider `{provider}` is not registered")]
-    NotRegistered { provider: String },
-    #[error("provider model catalog query failed")]
-    Query(#[source] ProviderError),
-}
-
 /// 唯一保存 `Arc<dyn Provider>` 的异构注册表。
 #[derive(Default)]
 pub struct ProviderRegistryBuilder {
@@ -665,11 +599,6 @@ impl ProviderRegistry {
         self.providers.get(provider)
     }
 
-    /// 返回全部已注册 Provider。
-    pub fn provider_kinds(&self) -> impl Iterator<Item = &ProviderKind> {
-        self.providers.keys()
-    }
-
     #[must_use]
     pub fn request_observation(
         &self,
@@ -682,35 +611,6 @@ impl ProviderRegistry {
             .map_or_else(ProviderRequestObservation::default, |registered| {
                 registered.request_observation(operation, client_api_key_id)
             })
-    }
-
-    /// 读取全部 Provider 的目录代次，用于 Core 快照稳定性校验与对账。
-    #[must_use]
-    pub fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
-        self.providers
-            .iter()
-            .map(|(kind, provider)| (kind.clone(), provider.catalog_generation()))
-            .collect()
-    }
-
-    /// 通过编译期 Provider adapter 查询并编译实时能力目录。
-    ///
-    /// # Errors
-    ///
-    /// Provider 未注册或目录查询失败时返回错误。
-    pub async fn query_model_capabilities(
-        &self,
-        provider_kind: &ProviderKind,
-    ) -> Result<Vec<ProviderModelCapabilities>, ProviderCatalogError> {
-        let provider = self.providers.get(provider_kind).ok_or_else(|| {
-            ProviderCatalogError::NotRegistered {
-                provider: provider_kind.as_str().to_owned(),
-            }
-        })?;
-        provider
-            .query_model_capabilities()
-            .await
-            .map_err(ProviderCatalogError::Query)
     }
 
     /// 判断 Provider 是否已注册。
@@ -729,5 +629,28 @@ impl ProviderRegistry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
+    }
+}
+
+impl ProviderCatalogPort for ProviderRegistry {
+    fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+        self.providers
+            .iter()
+            .map(|(kind, provider)| (kind.clone(), provider.catalog_generation()))
+            .collect()
+    }
+
+    fn query_model_capabilities(
+        &self,
+        provider_kind: &ProviderKind,
+    ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>> {
+        let provider = self.providers.get(provider_kind);
+        Box::pin(async move {
+            provider
+                .ok_or(ProviderCatalogUnavailable)?
+                .query_model_capabilities()
+                .await
+                .map_err(|_| ProviderCatalogUnavailable)
+        })
     }
 }

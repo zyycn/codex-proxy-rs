@@ -38,15 +38,108 @@ use gateway_core::task::{
     WorkerContribution, WorkerCycleContext, WorkerKind, WorkerRunnable, WorkerTaskError,
 };
 use provider_xai::{
-    DiscoveryDocument, GrokOAuthConfig, PendingAuthorization, RedirectUriAllowlist,
+    DiscoveryDocument, GrokAccountSessionSelector, GrokCredentialFailure, GrokCredentialRepository,
+    GrokOAuthConfig, GrokSessionBinding, GrokSessionSelector, OfficialGrokEndpointPolicy,
+    PendingAuthorization, RedirectUriAllowlist, ReqwestGrokModelCatalogTransport, SecretValue,
+    SelectedGrokSession,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::support::{
-    MemoryProviderAccountStore, TestSessionAffinity, TestSessionExclusions, create_input,
-    seed_input, xai_config,
+    MemoryCooldownPort, MemoryGrokCatalogCache, MemoryProviderAccountStore, TestSessionAffinity,
+    TestSessionExclusions, account_id, create_input, seed_input, xai_config,
 };
+
+#[tokio::test]
+async fn account_unavailable_clears_real_selector_cooldowns_only_for_deleted_account() {
+    let store = MemoryProviderAccountStore::shared();
+    let cooldowns = Arc::new(MemoryCooldownPort::default());
+    let ports = ProviderStorePorts::new(
+        store.clone(),
+        Arc::new(TestLeases),
+        Arc::new(TestSessionAffinity),
+        Arc::new(TestSessionExclusions),
+        Arc::new(TestCatalogCache::default()),
+        Arc::new(TestArtifactProfiles),
+        Arc::new(TestCredentialState),
+        cooldowns.clone(),
+        Arc::new(TestRuntimePolicy),
+        Arc::new(TestOAuthPending::default()),
+    );
+    let repository = GrokCredentialRepository::new(store.clone());
+    let selector = GrokAccountSessionSelector::new(
+        ProviderKind::new("xai").unwrap(),
+        repository.clone(),
+        MemoryGrokCatalogCache::shared(),
+        Arc::new(crate::support::grok_quota_service(
+            repository,
+            Arc::new(
+                ReqwestGrokModelCatalogTransport::new(Arc::new(OfficialGrokEndpointPolicy))
+                    .unwrap(),
+            ),
+        )),
+        ports.leases(),
+        cooldowns.clone(),
+        ports.account_feedback(),
+    );
+    let bundle = provider_xai::initialize(xai_config(), ports).await.unwrap();
+    let models = ["grok-4.5", "grok-4.6"].map(|id| UpstreamModelId::new(id).unwrap());
+    for suffix in ["deleted-cooldown", "retained-cooldown"] {
+        let input = create_input(suffix, &format!("subject-{suffix}"));
+        seed_input(&store, &input).await.unwrap();
+        let session = SelectedGrokSession::new(
+            input.account_id,
+            CredentialRevision::new(1).unwrap(),
+            input.secret.access_token,
+            SecretValue::new(input.account.subject),
+            None,
+            GrokSessionBinding::new(suffix).unwrap(),
+            (),
+        )
+        .unwrap();
+        // cooldown 必须来自生产 selector 对真实反馈类型的处理，不能由 mock 手工伪造。
+        selector
+            .record_failure(
+                &session,
+                GrokCredentialFailure::RateLimited {
+                    retry_after: Some(Duration::from_secs(60)),
+                },
+            )
+            .await;
+        for model in &models {
+            selector
+                .record_failure(
+                    &session,
+                    GrokCredentialFailure::ModelQuotaExhausted {
+                        upstream_model: model.clone(),
+                        retry_after: None,
+                    },
+                )
+                .await;
+            assert!(
+                cooldowns
+                    .scoped_cooldown(
+                        session.account_id(),
+                        &ProviderCooldownScope::upstream_model(model.clone())
+                    )
+                    .is_some()
+            );
+        }
+        assert!(cooldowns.cooldown(session.account_id()).is_some());
+    }
+    let deleted = account_id("deleted-cooldown");
+    store.delete_account(&deleted).await.unwrap();
+    bundle.admin_provider().account_unavailable(&deleted).await;
+    assert!(cooldowns.cooldown(&deleted).is_none());
+    let retained = account_id("retained-cooldown");
+    assert!(cooldowns.cooldown(&retained).is_some());
+    for model in models {
+        let scope = ProviderCooldownScope::upstream_model(model);
+        assert!(cooldowns.scoped_cooldown(&deleted, &scope).is_none());
+        assert!(cooldowns.scoped_cooldown(&retained, &scope).is_some());
+    }
+}
 
 #[tokio::test]
 async fn xai_bundle_exposes_core_admin_and_drains_worker_contributions_once() {

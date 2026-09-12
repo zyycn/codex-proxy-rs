@@ -2,16 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use futures::executor::block_on;
 use futures::future::BoxFuture;
 
-use gateway_core::engine::AttemptContext;
-use gateway_core::engine::provider::{
-    Provider, ProviderCatalogGeneration, ProviderModelCapabilities, ProviderRegistry,
-    ProviderRequest, ProviderStream,
-};
-use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::operation::OperationKind;
 use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::{
@@ -20,10 +13,10 @@ use gateway_core::routing::snapshot::{
     SnapshotProviderAccountFacts, SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
 };
 use gateway_core::routing::{
-    ConfigRevision, ModelCapabilities, ModelPresentation, ProviderKind, PublicModelId,
-    UpstreamModelId,
+    ConfigRevision, ModelCapabilities, ModelPresentation, ProviderCatalogGeneration,
+    ProviderCatalogPort, ProviderCatalogUnavailable, ProviderKind, ProviderModelCapabilities,
+    PublicModelId, UpstreamModelId,
 };
-use gateway_core::upstream::UpstreamSendState;
 
 #[derive(Clone)]
 struct TestSnapshotStore {
@@ -51,90 +44,72 @@ impl SnapshotStorePort for TestSnapshotStore {
     }
 }
 
-struct PublishingCatalogProvider {
+struct PublishingCatalog {
     generation: AtomicU64,
     queries: AtomicUsize,
 }
 
-enum TestCatalogProvider {
+enum TestCatalog {
+    NoProviders,
     Unavailable,
     Empty,
 }
 
-#[async_trait]
-impl Provider for TestCatalogProvider {
-    fn name(&self) -> &'static str {
-        "alpha"
-    }
-
-    fn catalog_generation(&self) -> ProviderCatalogGeneration {
-        ProviderCatalogGeneration::new(0)
-    }
-
-    async fn query_model_capabilities(
-        &self,
-    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+impl ProviderCatalogPort for TestCatalog {
+    fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
         match self {
-            Self::Unavailable => Err(ProviderError::new(
-                ProviderErrorKind::Unavailable,
-                UpstreamSendState::NotSent,
-            )),
-            Self::Empty => Ok(Vec::new()),
+            Self::NoProviders => BTreeMap::new(),
+            Self::Unavailable | Self::Empty => catalog_generations(0),
         }
     }
 
-    async fn execute(
+    fn query_model_capabilities(
         &self,
-        _: ProviderRequest,
-        _: AttemptContext,
-    ) -> Result<ProviderStream, ProviderError> {
-        Err(ProviderError::new(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        ))
+        _: &ProviderKind,
+    ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>> {
+        Box::pin(async move {
+            match self {
+                Self::NoProviders | Self::Unavailable => Err(ProviderCatalogUnavailable),
+                Self::Empty => Ok(Vec::new()),
+            }
+        })
     }
 }
 
-#[async_trait]
-impl Provider for PublishingCatalogProvider {
-    fn name(&self) -> &'static str {
-        "alpha"
+fn catalog_generations(generation: u64) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+    BTreeMap::from([(
+        ProviderKind::new("alpha").expect("provider"),
+        ProviderCatalogGeneration::new(generation),
+    )])
+}
+
+impl ProviderCatalogPort for PublishingCatalog {
+    fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+        catalog_generations(self.generation.load(Ordering::SeqCst))
     }
 
-    fn catalog_generation(&self) -> ProviderCatalogGeneration {
-        ProviderCatalogGeneration::new(self.generation.load(Ordering::SeqCst))
-    }
-
-    async fn query_model_capabilities(
+    fn query_model_capabilities(
         &self,
-    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        if self.queries.fetch_add(1, Ordering::SeqCst) == 0 {
-            self.generation.store(1, Ordering::SeqCst);
-        }
-        Ok(vec![
-            ProviderModelCapabilities::new(
-                UpstreamModelId::new("upstream-model").expect("model"),
-                ModelCapabilities::new(
-                    std::collections::BTreeSet::from([OperationKind::Generate]),
+        _: &ProviderKind,
+    ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>> {
+        Box::pin(async move {
+            if self.queries.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.generation.store(1, Ordering::SeqCst);
+            }
+            Ok(vec![
+                ProviderModelCapabilities::new(
+                    UpstreamModelId::new("upstream-model").expect("model"),
+                    ModelCapabilities::new(
+                        std::collections::BTreeSet::from([OperationKind::Generate]),
+                        None,
+                    ),
+                )
+                .with_presentation(ModelPresentation::new(
+                    Some("Upstream Model".to_owned()),
                     None,
-                ),
-            )
-            .with_presentation(ModelPresentation::new(
-                Some("Upstream Model".to_owned()),
-                None,
-            )),
-        ])
-    }
-
-    async fn execute(
-        &self,
-        _: ProviderRequest,
-        _: AttemptContext,
-    ) -> Result<ProviderStream, ProviderError> {
-        Err(ProviderError::new(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        ))
+                )),
+            ])
+        })
     }
 }
 
@@ -150,11 +125,10 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 
 #[test]
 fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
-    let providers =
-        ProviderRegistry::new([Arc::new(TestCatalogProvider::Unavailable) as Arc<dyn Provider>])
-            .expect("provider registry");
-    let compiler =
-        RuntimeSnapshotCompiler::new(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))), providers);
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),
+        Arc::new(TestCatalog::Unavailable),
+    );
 
     let snapshot = block_on(compiler.compile()).expect("compile snapshot");
     let provider = ProviderKind::new("alpha").expect("provider");
@@ -170,11 +144,10 @@ fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
 
 #[test]
 fn known_empty_catalog_should_report_model_not_found() {
-    let providers =
-        ProviderRegistry::new([Arc::new(TestCatalogProvider::Empty) as Arc<dyn Provider>])
-            .expect("provider registry");
-    let compiler =
-        RuntimeSnapshotCompiler::new(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))), providers);
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),
+        Arc::new(TestCatalog::Empty),
+    );
     let snapshot = block_on(compiler.compile()).expect("compile empty catalog");
     let error = snapshot
         .plan(
@@ -199,18 +172,18 @@ fn known_empty_catalog_should_report_model_not_found() {
 
 #[test]
 fn compiler_retries_when_provider_publishes_catalog_during_compilation() {
-    let provider = Arc::new(PublishingCatalogProvider {
+    let catalog = Arc::new(PublishingCatalog {
         generation: AtomicU64::new(0),
         queries: AtomicUsize::new(0),
     });
-    let providers =
-        ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).expect("provider registry");
-    let compiler =
-        RuntimeSnapshotCompiler::new(Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))), providers);
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),
+        catalog.clone(),
+    );
 
     let snapshot = block_on(compiler.compile()).expect("stable catalog snapshot");
 
-    assert_eq!(provider.queries.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.queries.load(Ordering::SeqCst), 2);
     assert_eq!(
         snapshot
             .provider_catalog_generations()
@@ -311,7 +284,7 @@ fn facts_revision(facts: &SnapshotFacts) -> ConfigRevision {
 }
 
 fn compiler(store: Arc<dyn SnapshotStorePort>) -> RuntimeSnapshotCompiler {
-    RuntimeSnapshotCompiler::new(store, ProviderRegistry::default())
+    RuntimeSnapshotCompiler::new(store, Arc::new(TestCatalog::NoProviders))
 }
 
 fn revision(value: u64) -> ConfigRevision {

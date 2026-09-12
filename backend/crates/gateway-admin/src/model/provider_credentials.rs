@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::{
-    AdminError, MutationActor, MutationContext, PageSize, Revision,
+    AdminError, MutationActor, MutationContext, Revision,
     accounts::{
         AccountImportSettings, AccountRecord, AccountSummary, AccountUsage, CredentialState,
     },
@@ -47,56 +47,6 @@ impl fmt::Debug for ProviderDocument {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ProviderDocument([PROVIDER_OWNED])")
     }
-}
-
-/// Credential 列表稳定游标。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialCursor {
-    pub created_at: DateTime<Utc>,
-    pub account_id: ProviderAccountId,
-}
-
-/// Provider credential 列表查询。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialListQuery {
-    pub credential_state: Option<CredentialStateFilter>,
-    pub enabled: Option<bool>,
-    pub window: CredentialListWindow,
-}
-
-/// Credential 状态筛选。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CredentialStateFilter {
-    Exact(CredentialState),
-    AnyOf(Vec<CredentialState>),
-}
-
-impl CredentialStateFilter {
-    #[must_use]
-    pub fn matches(&self, credential_state: CredentialState) -> bool {
-        match self {
-            Self::Exact(expected) => *expected == credential_state,
-            Self::AnyOf(expected) => expected.contains(&credential_state),
-        }
-    }
-}
-
-/// Credential 目录的集合窗口；完整列表与游标分页互斥。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CredentialListWindow {
-    All,
-    Page {
-        cursor: Option<CredentialCursor>,
-        page_size: PageSize,
-    },
-}
-
-/// Provider credential 列表。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialPage {
-    pub config_revision: Revision,
-    pub items: Vec<AccountRecord>,
-    pub next_cursor: Option<CredentialCursor>,
 }
 
 /// Provider credential 详情。

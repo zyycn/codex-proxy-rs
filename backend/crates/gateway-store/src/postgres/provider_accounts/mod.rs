@@ -21,9 +21,8 @@ use gateway_admin::{
             CostCoverage as AdminCostCoverage, DecimalAmount as AdminDecimalAmount, TimeRange,
         },
         provider_credentials::{
-            AuthorizationCommit, AuthorizationCredentialCommit, CredentialCursor,
-            CredentialDetails, CredentialImportCommit, CredentialImportResult, CredentialListQuery,
-            CredentialListWindow, CredentialMutationResult, CredentialPage,
+            AuthorizationCommit, AuthorizationCredentialCommit, CredentialDetails,
+            CredentialImportCommit, CredentialImportResult, CredentialMutationResult,
             CredentialRotationCommit, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotationFacts, ProviderDocument, ProviderExportCredentialInput,
         },

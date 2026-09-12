@@ -43,3 +43,8 @@ export CPR_TEST_REDIS_URL='redis://:<password>@127.0.0.1:6379'
 测试自建随机 schema / key 前缀做隔离，但仍应使用专用开发或测试实例，不要连接生产库。
 凭据从自己的部署配置或 CI Secret 中读取，不要粘贴未脱敏的 `docker inspect` 输出。
 环境变量未设置导致的跳过不算数据库测试通过。
+
+运行包含 `StoreBundle` 初始化的完整集成测试时，两条测试 URL 都须包含密码，且密码满足 Store
+启动配置的 48 位十六进制要求；仅能连接数据库并不代表该初始化合同通过。专用服务使用对应测试密码，
+并在测试进程中清除 `CPR_DATABASE_URL`、`CPR_REDIS_URL`、`CPR_DATABASE_PASSWORD` 和
+`CPR_REDIS_PASSWORD`，避免启动配置被部署环境覆盖。

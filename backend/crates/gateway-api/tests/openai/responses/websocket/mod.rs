@@ -7,6 +7,7 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime};
 
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderValue, Request, StatusCode, header::AUTHORIZATION},
@@ -17,18 +18,40 @@ use gateway_api::openai::responses::{
     DecodedResponsesRequest, OpenAiRequestHeaders, ResponseCreateFrameError,
     decode_response_create_with_context,
 };
+use gateway_core::account::ProviderAccountId;
+use gateway_core::engine::admission::{
+    ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
+    ClientAdmissionRequest, ClientAdmissionRestoreResult,
+};
+use gateway_core::engine::budget::{ClientBudgetCharge, ClientBudgetError, ClientBudgetPort};
 use gateway_core::engine::execution::{
-    AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
+    AuthenticatedClient, ClientAuthenticationError, DefaultExecutionService, ExecutionService,
+    ExecutionSession, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
     StartExecution, StartProviderExecution, StartedExecution,
 };
-use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
-use gateway_core::error::{GatewayError, ProviderError, ProviderErrorKind};
+use gateway_core::engine::provider::{
+    Provider, ProviderCallMetadata, ProviderRegistry, ProviderRequest, ProviderStream,
+};
+use gateway_core::engine::{
+    AttemptContext, AttemptRecord, CommitRequirement, CoordinatedEvent, EngineError,
+    ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    RecoveryReport,
+};
+use gateway_core::error::{GatewayError, ProviderError, ProviderErrorKind, StoreError};
 use gateway_core::event::{
     GatewayEvent, ProtocolWireEvent, ProviderEvent, ProviderResponseHeader, ResponseMeta,
 };
+use gateway_core::lifecycle::{
+    CancellationToken, ConnectionDraining, ConnectionGuard, ConnectionLifecycle,
+};
+use gateway_core::metering::{Decimal, ProviderReportedCost};
 use gateway_core::operation::Operation;
-use gateway_core::routing::PublicModelId;
-use gateway_core::upstream::UpstreamSendState;
+use gateway_core::policy::ClientApiKeyId;
+use gateway_core::routing::{
+    ProviderCatalogGeneration, ProviderKind, ProviderModelCapabilities, PublicModelId,
+};
+use gateway_core::runtime::RuntimeSnapshotHandle;
+use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use gateway_protocol::openai::codex_responses_request_semantics;
 use serde_json::{Value, json};
 use tokio_tungstenite::connect_async;
@@ -37,7 +60,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::ServiceExt;
 
 use super::decode_response_create;
-use crate::openai::{api_router, authenticated_client, models::ModelsExecution};
+use crate::openai::{
+    EmptyWorkerHealth, IgnoredClientApiKeyUsage, UnusedContinuation, api_router,
+    authenticated_client, models::ModelsExecution, snapshot,
+};
 
 fn decode_response_create_with_turn_header(
     payload: Value,
@@ -810,6 +836,352 @@ async fn websocket_response_create_should_not_have_a_private_16_mib_frame_limit(
 }
 
 const TEST_WEBSOCKET_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAA==";
+
+#[derive(Default)]
+struct SettlementPorts {
+    request_id: Mutex<Option<ModelRequestId>>,
+    finalizations: Mutex<Vec<ModelRequestFinalization>>,
+    active: AtomicBool,
+    settlement_calls: AtomicUsize,
+    settlement_started: tokio::sync::Notify,
+    settlement_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    charges: Mutex<Vec<ClientBudgetCharge>>,
+    releases: AtomicUsize,
+    released: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ExecutionStore for SettlementPorts {
+    async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
+        *self.request_id.lock().unwrap() = Some(request.id);
+        Ok(())
+    }
+
+    async fn record_attempt(&self, _: AttemptRecord) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_send_state(
+        &self,
+        _: &ModelRequestId,
+        _: UpstreamSendState,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_downstream_committed(
+        &self,
+        _: &ModelRequestId,
+        _: SystemTime,
+        _: Option<u16>,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_client_status(&self, _: &ModelRequestId, _: u16) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn record_intermediate_failure(&self, _: IntermediateFailure) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn finalize_model_request(
+        &self,
+        finalization: ModelRequestFinalization,
+    ) -> Result<(), StoreError> {
+        self.finalizations.lock().unwrap().push(finalization);
+        Ok(())
+    }
+
+    async fn recover_expired(&self, _: SystemTime) -> Result<RecoveryReport, StoreError> {
+        unreachable!("the WebSocket test does not recover requests")
+    }
+}
+
+impl ClientAdmissionPort for SettlementPorts {
+    fn admit(
+        &self,
+        _: ClientAdmissionRequest,
+    ) -> BoxFuture<'_, Result<ClientAdmissionDecision, ClientAdmissionError>> {
+        Box::pin(async {
+            assert!(!self.active.swap(true, Ordering::SeqCst));
+            Ok(ClientAdmissionDecision::Granted)
+        })
+    }
+
+    fn release<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        request_id: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        Box::pin(async move {
+            assert_eq!(
+                self.charges.lock().unwrap().len(),
+                1,
+                "settlement must finish first"
+            );
+            assert_eq!(self.request_id.lock().unwrap().as_ref(), Some(request_id));
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            let active = self.active.swap(false, Ordering::SeqCst);
+            self.released.notify_one();
+            Ok(active)
+        })
+    }
+
+    fn restore(
+        &self,
+        _: ClientAdmissionRecovery,
+    ) -> BoxFuture<'_, Result<ClientAdmissionRestoreResult, ClientAdmissionError>> {
+        Box::pin(async { unreachable!("the WebSocket test does not restore admission") })
+    }
+}
+
+impl ClientBudgetPort for SettlementPorts {
+    fn admit(&self, _: ClientApiKeyId) -> BoxFuture<'_, Result<(), GatewayError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn settle(&self, charge: ClientBudgetCharge) -> BoxFuture<'_, Result<(), ClientBudgetError>> {
+        Box::pin(async move {
+            self.settlement_calls.fetch_add(1, Ordering::SeqCst);
+            assert!(self.active.load(Ordering::SeqCst));
+            let gate = self
+                .settlement_gate
+                .lock()
+                .unwrap()
+                .take()
+                .expect("one settlement");
+            self.settlement_started.notify_one();
+            gate.await
+                .expect("release settlement after client disconnect");
+            assert!(self.active.load(Ordering::SeqCst));
+            self.charges.lock().unwrap().push(charge);
+            Ok(())
+        })
+    }
+}
+
+impl ProviderCircuitPort for SettlementPorts {
+    fn decision<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
+        Box::pin(async { Ok(ProviderCircuitDecision::Allow) })
+    }
+
+    fn observe_failure<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn observe_success<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct ChargedWebSocketProvider;
+
+fn websocket_charge() -> Decimal {
+    "1.25".parse().unwrap()
+}
+
+#[async_trait]
+impl Provider for ChargedWebSocketProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        request: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let candidate = request.candidate();
+        let metadata = ProviderCallMetadata::new(
+            candidate.provider().clone(),
+            candidate.upstream_model().unwrap().clone(),
+            ProviderAccountId::new("acct_api_test").unwrap(),
+            UpstreamTransport::new("websocket").unwrap(),
+        );
+        let response = ResponseMeta::new("resp_ws_settlement", "model-a");
+        let events = [
+            ProviderEvent::canonical_with_wire(
+                vec![GatewayEvent::Started(response.clone())],
+                ProtocolWireEvent::json("openai", Some("response.created".to_owned()), json!({
+                    "type": "response.created",
+                    "response": {"id": "resp_ws_settlement", "model": "model-a", "status": "in_progress"}
+                })).unwrap(),
+            ),
+            ProviderEvent::canonical_with_wire(
+                vec![
+                    GatewayEvent::ProviderCost(
+                        ProviderReportedCost::from_usd_ticks(websocket_charge().scaled()).unwrap(),
+                    ),
+                    GatewayEvent::Completed(response),
+                ],
+                ProtocolWireEvent::json("openai", Some("response.completed".to_owned()), json!({
+                    "type": "response.completed",
+                    "response": {"id": "resp_ws_settlement", "model": "model-a", "status": "completed"}
+                })).unwrap(),
+            ),
+        ];
+        Ok(ProviderStream::new(
+            metadata,
+            futures::stream::iter(events.map(Ok)),
+            (),
+        ))
+    }
+}
+
+#[derive(Default)]
+struct SettlementConnectionLifecycle {
+    closed: Arc<tokio::sync::Notify>,
+}
+
+struct SettlementConnectionGuard(Arc<tokio::sync::Notify>);
+
+impl ConnectionGuard for SettlementConnectionGuard {}
+
+impl Drop for SettlementConnectionGuard {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+impl ConnectionLifecycle for SettlementConnectionLifecycle {
+    fn try_register(&self) -> Result<Box<dyn ConnectionGuard>, ConnectionDraining> {
+        Ok(Box::new(SettlementConnectionGuard(self.closed.clone())))
+    }
+
+    fn cancellation(&self) -> CancellationToken {
+        CancellationToken::new()
+    }
+
+    fn is_draining(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn websocket_disconnect_during_core_settlement_finishes_charge_before_releasing_admission() {
+    let (release_settlement, gate) = tokio::sync::oneshot::channel();
+    let ports = Arc::new(SettlementPorts {
+        settlement_gate: Mutex::new(Some(gate)),
+        ..Default::default()
+    });
+    let execution = Arc::new(
+        DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(snapshot("sk_ws_settlement", "openai")),
+            ports.clone(),
+            ProviderRegistry::new([Arc::new(ChargedWebSocketProvider) as Arc<dyn Provider>])
+                .unwrap(),
+            ports.clone(),
+            ports.clone(),
+            Arc::new(UnusedContinuation),
+            Arc::new(IgnoredClientApiKeyUsage),
+        )
+        .with_budget(ports.clone()),
+    );
+    let lifecycle = Arc::new(SettlementConnectionLifecycle::default());
+    let admin = crate::admin::AdminTestFixture::new().await;
+    let app = gateway_api::initialize(
+        gateway_api::ApiConfig {
+            asset_directory: std::env::temp_dir(),
+            cors_allowed_origins: Vec::new(),
+            request_timeout_seconds: None,
+            request_id_header: "x-request-id".to_owned(),
+        },
+        execution,
+        admin.services,
+        Vec::new(),
+        Arc::new(EmptyWorkerHealth),
+        lifecycle.clone(),
+    )
+    .unwrap()
+    .router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut request = format!("ws://{address}/v1/responses")
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer sk_ws_settlement"),
+    );
+    let (mut socket, response) = connect_async(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    socket
+        .send(ClientMessage::Text(
+            json!({
+                "type": "response.create", "model": "model-a", "input": "hello"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), ports.settlement_started.notified())
+        .await
+        .expect("production Core reached settlement");
+    {
+        let finalizations = ports.finalizations.lock().unwrap();
+        assert_eq!(finalizations.len(), 1);
+        assert_eq!(
+            finalizations[0].outcome,
+            gateway_core::engine::ExecutionOutcome::Succeeded,
+            "unexpected execution error: {:?}",
+            finalizations[0].error,
+        );
+    }
+    assert!(ports.charges.lock().unwrap().is_empty());
+    assert_eq!(ports.releases.load(Ordering::SeqCst), 0);
+
+    // 等到生产连接 guard 释放，保证 forward 的 select 已因断连取消 next_event；
+    // 在此之前不能打开结算屏障，否则只会验证正常完成而错过取消窗口。
+    socket.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), lifecycle.closed.notified())
+        .await
+        .expect("production WebSocket handler exited");
+    assert!(ports.active.load(Ordering::SeqCst));
+    release_settlement
+        .send(())
+        .expect("the original settlement future survived disconnect");
+    tokio::time::timeout(Duration::from_secs(5), ports.released.notified())
+        .await
+        .expect("detached Core cleanup released admission");
+    assert!(!ports.active.load(Ordering::SeqCst));
+    assert_eq!(ports.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(ports.settlement_calls.load(Ordering::SeqCst), 1);
+    {
+        let charges = ports.charges.lock().unwrap();
+        assert_eq!(charges.len(), 1);
+        assert_eq!(charges[0].amount_usd, websocket_charge());
+        assert_eq!(charges[0].key_id.as_str(), "key_api_test");
+        assert_eq!(
+            Some(&charges[0].request_id),
+            ports.request_id.lock().unwrap().as_ref()
+        );
+    }
+    server.abort();
+    let _ = server.await;
+}
 
 fn upgrade_request(authorization: &str) -> Request<Body> {
     Request::get("/v1/responses")

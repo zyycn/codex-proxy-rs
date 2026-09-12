@@ -1,34 +1,9 @@
 use super::*;
 
 #[test]
-fn reqwest_client_should_keep_http2_fallback_hot_while_idle() {
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/transport/client.rs"),
-    )
-    .expect("transport client source");
-
-    for setting in [
-        ".pool_idle_timeout(None::<Duration>)",
-        ".http2_keep_alive_interval(Duration::from_secs(30))",
-        ".http2_keep_alive_timeout(Duration::from_secs(5))",
-        ".http2_keep_alive_while_idle(true)",
-    ] {
-        assert!(source.contains(setting), "missing HTTP/2 setting {setting}");
-    }
-    assert!(!source.contains(".http1_only()"));
-}
-
-#[test]
-fn endpoints_should_join_backend_paths() {
-    assert_eq!(
-        provider_openai::transport::endpoint_url("https://api.example.com/", "/codex/responses"),
-        "https://api.example.com/codex/responses"
-    );
-}
-
-#[test]
 fn custom_ca_should_report_environment_cache_key_consistently() {
     const CASE_ENV: &str = "CODEX_PROXY_TEST_CUSTOM_CA_CACHE_KEY_CASE";
+    const CASE_COMPLETED: &str = "custom-ca-cache-key-case-completed:";
     const SSL_CERT_PATH: &str = "/tmp/codex-proxy-ssl-cert-file.pem";
     const CODEX_CA_PATH: &str = "/tmp/codex-proxy-codex-ca-certificate.pem";
 
@@ -50,6 +25,7 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             provider_openai::transport::tls::custom_ca_env_cache_key(),
             expected
         );
+        println!("\n{CASE_COMPLETED}{case}");
         return;
     }
 
@@ -81,7 +57,7 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
         let mut command = Command::new(&current_exe);
         command
             .arg("--exact")
-            .arg("custom_ca_should_report_environment_cache_key_consistently")
+            .arg("transport::http_client::custom_ca_should_report_environment_cache_key_consistently")
             .arg("--nocapture")
             .env(CASE_ENV, case)
             .env_remove(provider_openai::transport::tls::CODEX_CA_CERT_ENV)
@@ -99,6 +75,14 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             "isolated custom CA case {case} failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+        // libtest 匹配零个测试也返回成功；完成标记证明该环境分支执行了生产断言。
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let completed = format!("{CASE_COMPLETED}{case}");
+        assert_eq!(
+            stdout.lines().filter(|line| *line == completed).count(),
+            1,
+            "isolated custom CA case {case} did not complete exactly once\nstdout:\n{stdout}"
         );
     }
 }
@@ -563,8 +547,11 @@ async fn build_reqwest_client_should_reuse_cached_connection_pool() {
     });
 
     let url = format!("http://{addr}/reuse");
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    // 前后分别取得生产缓存中的客户端，避免只验证单个 reqwest client 自身能复用连接。
+    // 本地服务使用 HTTP/1.1；该断言不代表已验证 HTTP/2 的 idle ping 或保活间隔。
+    let client = provider_openai::transport::build_reqwest_client().unwrap();
     client.get(&url).send().await.unwrap().text().await.unwrap();
+    let client = provider_openai::transport::build_reqwest_client().unwrap();
     client.get(&url).send().await.unwrap().text().await.unwrap();
 
     assert!(server.await.unwrap());

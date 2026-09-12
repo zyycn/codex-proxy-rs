@@ -45,12 +45,11 @@ use gateway_admin::{
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
-            CredentialImportCommit, CredentialImportResult, CredentialListQuery,
-            CredentialMutationResult, CredentialPage, CredentialRotationCommit,
-            PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
-            PrepareCredentialRotation, PreparedAuthorizationCommit, PreparedCredentialImport,
-            PreparedCredentialRotation, ProviderExport, ProviderExportCredentialInput,
-            ProviderModels, ProviderQuota,
+            CredentialImportCommit, CredentialImportResult, CredentialMutationResult,
+            CredentialRotationCommit, PendingAuthorizationMutation, PrepareCredentialImport,
+            PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
+            PreparedCredentialImport, PreparedCredentialRotation, ProviderExport,
+            ProviderExportCredentialInput, ProviderModels, ProviderQuota,
         },
         settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
@@ -370,14 +369,6 @@ impl AccountStore for UnavailableStore {
         _: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>> {
         Err(unavailable("account quota window usage"))
-    }
-
-    async fn list_credentials(
-        &self,
-        _: &ProviderKind,
-        _: CredentialListQuery,
-    ) -> AdminStoreResult<CredentialPage> {
-        Err(unavailable("credentials"))
     }
 
     async fn credential_details(

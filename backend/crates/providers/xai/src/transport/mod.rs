@@ -4,6 +4,7 @@ pub(crate) mod canonical;
 pub(crate) mod catalog;
 pub(crate) mod compaction;
 pub(crate) mod config;
+pub(crate) mod egress;
 pub(crate) mod headers;
 mod inference;
 pub(crate) mod network;

@@ -16,8 +16,7 @@ use gateway_core::engine::continuation::{
 };
 use gateway_core::engine::execution::gateway_error_from_engine;
 use gateway_core::engine::provider::{
-    Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
-    ProviderRegistry, ProviderRequest, ProviderStream,
+    Provider, ProviderCallMetadata, ProviderRegistry, ProviderRequest, ProviderStream,
 };
 use gateway_core::engine::{
     AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, CommitRequirement,
@@ -41,8 +40,9 @@ use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, Provi
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
     AccountRoutingSnapshot, ClientRoutingScope, ConfigRevision, FrozenAccountScope,
-    ModelCapabilities, ProviderKind, ProviderModel, PublicModelId, RoutingContext, RoutingPlan,
-    RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
+    ModelCapabilities, ProviderCatalogGeneration, ProviderKind, ProviderModel,
+    ProviderModelCapabilities, PublicModelId, RoutingContext, RoutingPlan, RuntimeAccount,
+    RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::{Map, Value, json};

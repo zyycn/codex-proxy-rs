@@ -140,7 +140,7 @@ pub async fn initialize(
     .map_err(|_| CoreError::AdmissionRecoveryUnavailable)?;
     let compiler = Arc::new(RuntimeSnapshotCompiler::new(
         Arc::clone(&ports.snapshots),
-        providers.clone(),
+        Arc::new(providers.clone()),
     ));
     let initial = compiler
         .compile()

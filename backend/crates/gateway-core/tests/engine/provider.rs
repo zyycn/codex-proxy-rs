@@ -11,8 +11,8 @@ use futures_timer::Delay;
 use gateway_core::account::{AccountFeedbackStats, ProviderAccountId};
 use gateway_core::engine::AttemptContext;
 use gateway_core::engine::provider::{
-    EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRegistry, ProviderRequest, ProviderStream, RegistryError,
+    EventStream, Provider, ProviderCallMetadata, ProviderRegistry, ProviderRequest, ProviderStream,
+    RegistryError,
 };
 use gateway_core::error::{ProviderError, ProviderErrorKind};
 use gateway_core::event::{
@@ -20,7 +20,10 @@ use gateway_core::event::{
     TextDelta,
 };
 use gateway_core::operation::OperationKind;
-use gateway_core::routing::{ModelCapabilities, ProviderKind, UpstreamModelId};
+use gateway_core::routing::{
+    ModelCapabilities, ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
+    ProviderKind, ProviderModelCapabilities, UpstreamModelId,
+};
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::json;
 
@@ -84,9 +87,14 @@ fn registry_should_query_provider_compiled_model_capabilities() {
         .expect("provider");
     let registry = builder.build();
     let provider = ProviderKind::new("openai").expect("provider kind");
-    let models = futures::executor::block_on(registry.query_model_capabilities(&provider))
+    let catalog: &dyn ProviderCatalogPort = &registry;
+    let models = futures::executor::block_on(catalog.query_model_capabilities(&provider))
         .expect("live catalog");
 
+    assert_eq!(
+        catalog.catalog_generations(),
+        std::collections::BTreeMap::from([(provider, ProviderCatalogGeneration::default())]),
+    );
     assert_eq!(models[0].upstream_model().as_str(), "live-model");
     assert!(
         models[0]
@@ -96,6 +104,75 @@ fn registry_should_query_provider_compiled_model_capabilities() {
             ))
             .is_some()
     );
+}
+
+struct CatalogProvider(Result<Vec<ProviderModelCapabilities>, ProviderErrorKind>);
+
+#[async_trait]
+impl Provider for CatalogProvider {
+    fn name(&self) -> &'static str {
+        "alpha"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::new(7)
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        self.0
+            .clone()
+            .map_err(|kind| ProviderError::new(kind, UpstreamSendState::NotSent))
+    }
+
+    async fn execute(
+        &self,
+        _: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        panic!("目录端口不得触发执行")
+    }
+}
+
+#[test]
+fn registry_catalog_port_should_preserve_unknown_and_known_empty_catalogs() {
+    let provider = ProviderKind::new("alpha").expect("provider");
+    for (response, expected) in [
+        (
+            Err(ProviderErrorKind::Unavailable),
+            Err(ProviderCatalogUnavailable),
+        ),
+        (Ok(Vec::new()), Ok(Vec::new())),
+    ] {
+        let registry =
+            ProviderRegistry::new([Arc::new(CatalogProvider(response)) as Arc<dyn Provider>])
+                .expect("registry");
+        let catalog: &dyn ProviderCatalogPort = &registry;
+
+        assert_eq!(
+            futures::executor::block_on(catalog.query_model_capabilities(&provider)),
+            expected,
+        );
+        assert_eq!(
+            catalog.catalog_generations().get(&provider),
+            Some(&ProviderCatalogGeneration::new(7)),
+            "目录不可读也不能丢失注册身份和最近成功发布的代次",
+        );
+    }
+}
+
+#[test]
+fn registry_catalog_port_should_report_unregistered_provider_as_unknown() {
+    let registry = ProviderRegistry::default();
+    let catalog: &dyn ProviderCatalogPort = &registry;
+    let provider = ProviderKind::new("missing").expect("provider");
+
+    assert_eq!(
+        futures::executor::block_on(catalog.query_model_capabilities(&provider)),
+        Err(ProviderCatalogUnavailable),
+    );
+    assert!(catalog.catalog_generations().is_empty());
 }
 
 struct DropLease(Arc<AtomicBool>);

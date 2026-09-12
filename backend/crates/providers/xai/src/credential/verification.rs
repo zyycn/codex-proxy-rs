@@ -112,7 +112,10 @@ impl<'a> TokenVerificationContext<'a> {
         }
     }
 
-    pub(crate) fn with_outbound_proxy(
+    /// 绑定 OAuth owner 选择的账号出口，供公开的 [`TokenVerifier`] 实现遵守同一代理合同。
+    /// 出口只决定路由，不改变 issuer、JWKS、签名和 nonce 的信任校验。
+    #[must_use]
+    pub fn with_outbound_proxy(
         mut self,
         proxy: Option<&'a gateway_core::account::OutboundProxy>,
     ) -> Self {
@@ -120,7 +123,9 @@ impl<'a> TokenVerificationContext<'a> {
         self
     }
 
-    pub(crate) fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
+    /// 返回本次验证的显式出口；`None` 表示直连，不得继承环境代理。
+    #[must_use]
+    pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
         self.outbound_proxy
     }
 

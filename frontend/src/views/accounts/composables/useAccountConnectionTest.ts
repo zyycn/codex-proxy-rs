@@ -8,6 +8,7 @@ import { getAccountModels, refreshAccountModels } from '@/api'
 import { API_BASE_URL } from '@/api/constants'
 import { toast } from '@/components/base/BaseToast'
 import { useIdSet } from '@/composables/useIdSet'
+import { useRequestState } from '@/composables/useRequestState'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
 
@@ -162,8 +163,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const connectionTestFinishedAt = shallowRef('')
   const connectionTestDurationMs = shallowRef<number | null>(null)
   const testingConnections = useIdSet<string>()
-  const loadingConnectionTestModels = shallowRef(false)
-  const refreshingConnectionTestModels = shallowRef(false)
+  const modelsRequest = useRequestState()
+  const modelsRequestMode = shallowRef<'load' | 'refresh'>('load')
+  const loadingConnectionTestModels = computed(() => modelsRequest.loading.value && modelsRequestMode.value === 'load')
+  const refreshingConnectionTestModels = computed(() => modelsRequest.loading.value && modelsRequestMode.value === 'refresh')
   const connectionTestSelectedModel = shallowRef('')
   const connectionTestModelOptions = ref<ConnectionTestModelOption[]>([])
   const connectionTestStreamUrl = shallowRef<string>()
@@ -396,25 +399,39 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     clearConnectionTestRun()
   }
 
-  async function loadConnectionTestModels(account = testingAccount.value) {
-    if (!account?.id)
+  async function loadConnectionTestModels(account = testingAccount.value, refresh = false) {
+    if (!account?.id || !showConnectionTestModal.value || account.id !== testingAccount.value?.id)
       return
-    loadingConnectionTestModels.value = true
+    // 初次查询与主动刷新属于同一弹窗会话，旧请求不得覆盖新账号或新一轮查询。
+    const requestId = modelsRequest.start()
+    modelsRequestMode.value = refresh ? 'refresh' : 'load'
     connectionTestError.value = ''
     try {
-      const result = await getAccountModels({ accountId: account.id })
-      applyConnectionTestModels(result)
-      if (!connectionTestSelectedModel.value) {
+      const result = await (refresh ? refreshAccountModels : getAccountModels)({ accountId: account.id })
+      if (!modelsRequest.isCurrent(requestId))
+        return
+      applyConnectionTestModels(result, refresh)
+      if (refresh) {
+        toast.success(`已刷新 ${connectionTestModelOptions.value.length} 个上游模型`)
+      }
+      else if (!connectionTestSelectedModel.value) {
         connectionTestError.value = '没有可测试模型'
       }
     }
     catch (error: unknown) {
-      connectionTestError.value = errorMessage(error, '加载测试模型失败')
-      connectionTestModelOptions.value = []
-      connectionTestSelectedModel.value = ''
+      if (!modelsRequest.isCurrent(requestId))
+        return
+      connectionTestError.value = errorMessage(error, refresh ? '刷新上游模型失败' : '加载测试模型失败')
+      if (refresh) {
+        toast.error(connectionTestError.value)
+      }
+      else {
+        connectionTestModelOptions.value = []
+        connectionTestSelectedModel.value = ''
+      }
     }
     finally {
-      loadingConnectionTestModels.value = false
+      modelsRequest.finish(requestId)
     }
   }
 
@@ -435,22 +452,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   }
 
   async function handleRefreshConnectionTestModels(account = testingAccount.value) {
-    if (!account?.id || refreshingConnectionTestModels.value)
+    if (modelsRequest.loading.value)
       return
-    refreshingConnectionTestModels.value = true
-    connectionTestError.value = ''
-    try {
-      const result = await refreshAccountModels({ accountId: account.id })
-      applyConnectionTestModels(result, true)
-      toast.success(`已刷新 ${connectionTestModelOptions.value.length} 个上游模型`)
-    }
-    catch (error: unknown) {
-      connectionTestError.value = errorMessage(error, '刷新上游模型失败')
-      toast.error(connectionTestError.value)
-    }
-    finally {
-      refreshingConnectionTestModels.value = false
-    }
+    await loadConnectionTestModels(account, true)
   }
 
   async function handleTestConnection(account = testingAccount.value) {
@@ -524,11 +528,12 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       failConnectionTest('测试连接已断开')
   })
 
-  watch(showConnectionTestModal, (open) => {
+  watch([showConnectionTestModal, () => testingAccount.value?.id], ([open]) => {
+    modelsRequest.invalidate()
     if (!open) {
       abortConnectionTest()
     }
-  })
+  }, { flush: 'sync' })
 
   onBeforeUnmount(() => {
     abortConnectionTest()

@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::account::{
-    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
+    CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState, OutboundProxy,
     ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
 };
 use gateway_core::provider_ports::{
@@ -18,19 +18,169 @@ use gateway_core::provider_ports::{
 use provider_xai::{
     GrokCredentialCatalogCache, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
     GrokCredentialRefreshError, GrokCredentialRefreshOutcome, GrokCredentialRefreshService,
-    GrokCredentialRefresher, GrokCredentialRepository, GrokModelCatalogRequest,
+    GrokCredentialRefresher, GrokCredentialRepository, GrokEndpointPolicy, GrokModelCatalogRequest,
     GrokModelCatalogTransport, GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse,
-    GrokRefreshFailure, GrokRefreshTokens, SecretValue,
+    GrokRefreshFailure, GrokRefreshTokens, GrokReqwestTransportBuildError,
+    OfficialGrokEndpointPolicy, ReqwestGrokModelCatalogTransport, SecretValue,
 };
 
 use crate::support::{
     MemoryGrokCatalogCache, MemoryProviderAccountStore, create_input, credential_object,
-    runtime_policy, seed_input,
+    rejecting_account_proxy, runtime_policy, seed_input,
 };
 
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../transport/catalog/fixtures/official_grok_models_snapshot.json");
 const OAUTH_BACKOFF_ATTEMPTS: u32 = 5;
+
+#[tokio::test]
+async fn refreshed_catalog_uses_committed_account_exit_including_proxy_changes() {
+    // 0: 保留 A；1: 刷新在途时 A→B；2: 刷新在途时 A→直连。
+    for selected_exit in 0..3 {
+        let (proxy_a, capture_a) = rejecting_account_proxy().await;
+        let (proxy_b, capture_b) = rejecting_account_proxy().await;
+        let (direct_sink, capture_direct) = rejecting_account_proxy().await;
+        let current_proxy = [Some(proxy_a.clone()), Some(proxy_b), None][selected_exit].clone();
+        let store = MemoryProviderAccountStore::shared();
+        let input = due_input("postcommit-egress");
+        seed_input(&store, &input).await.unwrap();
+        store.set_outbound_proxy(&input.account_id, Some(proxy_a.clone()));
+        let repository = GrokCredentialRepository::new(store.clone());
+        let refresher = Arc::new(SwitchingProxyRefresher {
+            store: Arc::clone(&store),
+            account_id: input.account_id.clone(),
+            initial_proxy: proxy_a,
+            current_proxy: current_proxy.clone(),
+        });
+        let catalog = Arc::new(crate::support::grok_catalog_service(
+            repository.clone(),
+            Arc::new(
+                ReqwestGrokModelCatalogTransport::new(Arc::new(CatalogExitPolicy { direct_sink }))
+                    .unwrap(),
+            ),
+            MemoryGrokCatalogCache::shared(),
+        ));
+        let service = GrokCredentialRefreshService::new(
+            repository,
+            refresher,
+            catalog,
+            Arc::new(TestRefreshLeases {
+                available: true,
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(CountingCredentialState::default()),
+            runtime_policy(),
+        );
+        let outcomes = tokio::time::timeout(Duration::from_secs(5), service.refresh_due())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcomes.as_slice(), [
+            GrokCredentialRefreshOutcome::Refreshed { credential_revision, .. }
+        ] if credential_revision.get() == 2));
+        let committed = store.account(&input.account_id).unwrap();
+        assert_eq!(committed.outbound_proxy(), current_proxy.as_ref());
+        assert_eq!(committed.revision().get(), 2);
+        for (index, mut capture) in [capture_a, capture_b, capture_direct]
+            .into_iter()
+            .enumerate()
+        {
+            if index == selected_exit {
+                let connect = tokio::time::timeout(Duration::from_secs(5), &mut capture)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(connect.starts_with("CONNECT cli-chat-proxy.grok.com:443 HTTP/1.1"));
+            } else {
+                assert!(!capture.is_finished(), "目录请求不得到达旧出口或误走直连");
+                capture.abort();
+            }
+        }
+    }
+}
+
+struct SwitchingProxyRefresher {
+    store: Arc<MemoryProviderAccountStore>,
+    account_id: ProviderAccountId,
+    initial_proxy: OutboundProxy,
+    current_proxy: Option<OutboundProxy>,
+}
+
+#[async_trait]
+impl GrokCredentialRefresher for SwitchingProxyRefresher {
+    async fn prepare_cycle(&self) -> Result<(), GrokRefreshFailure> {
+        Ok(())
+    }
+
+    async fn refresh(&self, _: &SecretValue) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
+        panic!("refresh service must forward the selected account proxy")
+    }
+
+    async fn refresh_with_proxy(
+        &self,
+        _: &SecretValue,
+        proxy: Option<&OutboundProxy>,
+    ) -> Result<GrokRefreshTokens, GrokRefreshFailure> {
+        assert_eq!(proxy, Some(&self.initial_proxy));
+        // 精确合成网络刷新已开始、credential CAS 尚未提交的出口修改。
+        self.store
+            .set_outbound_proxy(&self.account_id, self.current_proxy.clone());
+        assert_eq!(
+            self.store
+                .account(&self.account_id)
+                .unwrap()
+                .revision()
+                .get(),
+            1
+        );
+        Ok(success_tokens(Some("new-refresh")))
+    }
+}
+
+#[derive(Debug)]
+struct CatalogExitPolicy {
+    direct_sink: OutboundProxy,
+}
+
+impl GrokEndpointPolicy for CatalogExitPolicy {
+    fn build_oauth_client(
+        &self,
+        timeout: Option<Duration>,
+        proxy: Option<&OutboundProxy>,
+    ) -> Result<reqwest::Client, GrokReqwestTransportBuildError> {
+        self.build_inference_client(timeout, proxy)
+    }
+
+    fn build_inference_client(
+        &self,
+        timeout: Option<Duration>,
+        proxy: Option<&OutboundProxy>,
+    ) -> Result<reqwest::Client, GrokReqwestTransportBuildError> {
+        // “直连”也终止于本地 sink，旧实现漏代理时不会触达真实上游。
+        // 显式代理分支仍使用生产构造器及官方 HTTPS/CONNECT 目标。
+        OfficialGrokEndpointPolicy
+            .build_inference_client(timeout, Some(proxy.unwrap_or(&self.direct_sink)))
+    }
+
+    fn validate_oauth(&self, url: &url::Url) -> bool {
+        OfficialGrokEndpointPolicy.validate_oauth(url)
+    }
+    fn validate_inference(&self, url: &url::Url) -> bool {
+        OfficialGrokEndpointPolicy.validate_inference(url)
+    }
+    fn validate_model_catalog(&self, url: &url::Url) -> bool {
+        OfficialGrokEndpointPolicy.validate_model_catalog(url)
+    }
+    fn route_billing(&self, url: &url::Url) -> Option<url::Url> {
+        OfficialGrokEndpointPolicy.route_billing(url)
+    }
+    fn validate_jwks(&self, url: &url::Url) -> bool {
+        OfficialGrokEndpointPolicy.validate_jwks(url)
+    }
+    fn validate_userinfo(&self, url: &url::Url) -> bool {
+        OfficialGrokEndpointPolicy.validate_userinfo(url)
+    }
+}
 
 struct StaticCatalogTransport;
 

@@ -33,10 +33,9 @@ use gateway_admin::{
             AuthorizationCommit, AuthorizationCommitGuard, AuthorizationCredentialCommit,
             AuthorizationMutationTarget, AuthorizationStarted, CompleteAuthorization,
             ConsumeProviderResetCredit, CredentialCommitGuard, CredentialDetails,
-            CredentialImportCommit, CredentialImportResult, CredentialListQuery,
-            CredentialMutationResult, CredentialPage, CredentialRotationCommit,
-            PendingAuthorizationMutation, PrepareCredentialImport, PrepareCredentialRefresh,
-            PrepareCredentialRotation, PreparedAuthorizationCommit,
+            CredentialImportCommit, CredentialImportResult, CredentialMutationResult,
+            CredentialRotationCommit, PendingAuthorizationMutation, PrepareCredentialImport,
+            PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
             PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
             ProviderExport, ProviderExportCredentialInput, ProviderModels, ProviderQuota,
@@ -71,6 +70,8 @@ pub(super) struct FakeProviderAdmin {
     export_inputs: Mutex<Vec<ProviderExportCredentialInput>>,
     import_account_ids: Mutex<Vec<String>>,
     quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
+    quota_started: tokio::sync::Notify,
+    quota_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     quota: Mutex<ProviderQuota>,
     quota_refresh_account: Mutex<Option<(Arc<FakeAccountStore>, AccountRecord)>>,
     current_credential_revision: Mutex<Revision>,
@@ -89,6 +90,8 @@ impl FakeProviderAdmin {
             export_inputs: Mutex::new(Vec::new()),
             import_account_ids: Mutex::new(vec!["acct_prepared".to_owned()]),
             quota_requests: Mutex::new(Vec::new()),
+            quota_started: tokio::sync::Notify::new(),
+            quota_gate: Mutex::new(None),
             quota: Mutex::new(empty_quota()),
             quota_refresh_account: Mutex::new(None),
             current_credential_revision: Mutex::new(revision(1)),
@@ -136,6 +139,26 @@ impl FakeProviderAdmin {
             .lock()
             .expect("provider quota requests")
             .clone()
+    }
+
+    pub(super) fn pause_next_quota(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *self.quota_gate.lock().expect("quota gate") = Some(receiver);
+        sender
+    }
+
+    pub(super) async fn wait_for_quota_requests(&self, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let notified = self.quota_started.notified();
+                if self.quota_requests().len() >= expected {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .expect("quota observation started");
     }
 
     fn reset_credit_commands(&self) -> Vec<ConsumeProviderResetCredit> {
@@ -377,6 +400,11 @@ impl ProviderAdmin for FakeProviderAdmin {
             .lock()
             .expect("provider quota requests")
             .push(request);
+        self.quota_started.notify_one();
+        let gate = self.quota_gate.lock().expect("quota gate").take();
+        if let Some(gate) = gate {
+            gate.await.expect("release paused quota");
+        }
         if let Some(kind) = self
             .quota_failure
             .lock()
@@ -610,23 +638,6 @@ impl AccountStore for FakeAccountStore {
             .lock()
             .expect("quota window usage")
             .clone())
-    }
-
-    async fn list_credentials(
-        &self,
-        provider_kind: &ProviderKind,
-        _: CredentialListQuery,
-    ) -> AdminStoreResult<CredentialPage> {
-        self.record("store.list_credentials");
-        let accounts = self.accounts.lock().expect("accounts").clone();
-        Ok(CredentialPage {
-            config_revision: revision(1),
-            items: accounts
-                .into_iter()
-                .filter(|account| &account.provider_kind == provider_kind)
-                .collect(),
-            next_cursor: None,
-        })
     }
 
     async fn credential_details(

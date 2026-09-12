@@ -24,6 +24,135 @@ use crate::support::loopback_endpoint_policy;
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::test]
+async fn proxy_jwks_cache_evicts_idle_exits_at_the_fixed_bound() {
+    let origin = MockServer::start().await;
+    let exit = MockServer::start().await;
+    let endpoint = endpoints(&origin);
+    let capacity = provider_xai::ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS;
+    let key = TestKey::new(36, "bounded-proxy-key");
+    mount_jwks(&exit, key.jwks(), (capacity + 2) as u64).await;
+    let verifier = verifier(&endpoint.origin, CACHE_TTL);
+    let nonce = SecretValue::new("bounded-proxy-nonce");
+    let algorithms = vec!["ES256".to_owned()];
+    let access = SecretValue::new("access-token");
+    let token = SecretValue::new(key.sign(&valid_claims(&nonce), Algorithm::ES256));
+    let proxies = (0..=capacity)
+        .map(|index| {
+            let mut url = Url::parse(&exit.uri()).unwrap();
+            url.set_username(&format!("synthetic-exit-{index}"))
+                .unwrap();
+            gateway_core::account::OutboundProxy::parse(url.as_str()).unwrap()
+        })
+        .collect::<Vec<_>>();
+    for index in (0..=capacity).chain([capacity, 0]) {
+        verifier
+            .verify(
+                auth_context(&endpoint, &algorithms, &nonce)
+                    .with_outbound_proxy(Some(&proxies[index])),
+                TokenCandidate::new(&access, Some(&token), None),
+            )
+            .await
+            .unwrap();
+    }
+    // 65 个出口各取一次，最近出口命中，最旧出口被淘汰后重新获取。
+    assert_eq!(exit.received_requests().await.unwrap().len(), capacity + 2);
+    assert!(origin.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn proxy_jwks_cache_single_flights_and_isolates_each_exit() {
+    let origin = MockServer::start().await;
+    let exit_a = MockServer::start().await;
+    let exit_b = MockServer::start().await;
+    let endpoint = endpoints(&origin);
+    let proxy_a = gateway_core::account::OutboundProxy::parse(&exit_a.uri()).unwrap();
+    let proxy_b = gateway_core::account::OutboundProxy::parse(&exit_b.uri()).unwrap();
+    let nonce = SecretValue::new("proxy-bound-nonce");
+    let algorithms = vec!["ES256".to_owned()];
+    let access = SecretValue::new("access-token");
+    let verifier = verifier(&endpoint.origin, CACHE_TTL);
+    // 同一 kid 配不同密钥：复用别的出口缓存会直接使验签失败。
+    for (server, proxy, seed) in [
+        (&exit_a, Some(&proxy_a), 31),
+        (&exit_b, Some(&proxy_b), 32),
+        (&origin, None, 33),
+    ] {
+        let key = TestKey::new(seed, "shared-kid");
+        Mock::given(method("GET"))
+            .and(path("/.well-known/jwks.json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(key.jwks())
+                    .set_delay(Duration::from_millis(25)),
+            )
+            .expect(1)
+            .mount(server)
+            .await;
+        let token = SecretValue::new(key.sign(&valid_claims(&nonce), Algorithm::ES256));
+        let verify = || {
+            verifier.verify(
+                auth_context(&endpoint, &algorithms, &nonce).with_outbound_proxy(proxy),
+                TokenCandidate::new(&access, Some(&token), None),
+            )
+        };
+        let (first, second) = tokio::join!(verify(), verify());
+        assert_eq!(first.unwrap().subject(), "user-123");
+        assert_eq!(second.unwrap().subject(), "user-123");
+        assert!(verify().await.is_ok(), "同出口后续验证必须命中缓存");
+    }
+}
+
+#[tokio::test]
+async fn proxy_jwks_rotation_and_expired_cache_remain_fail_closed() {
+    for ttl in [CACHE_TTL, Duration::ZERO] {
+        let origin = MockServer::start().await;
+        let exit = MockServer::start().await;
+        let endpoint = endpoints(&origin);
+        let proxy = gateway_core::account::OutboundProxy::parse(&exit.uri()).unwrap();
+        let verifier = verifier(&endpoint.origin, ttl);
+        let old = TestKey::new(34, "old-proxy-key");
+        let new = TestKey::new(35, "rotated-proxy-key");
+        mount_jwks_once_then(&exit, old.jwks(), new.jwks()).await;
+        let nonce = SecretValue::new("rotation-proxy-nonce");
+        let algorithms = vec!["ES256".to_owned()];
+        let access = SecretValue::new("access-token");
+        for key in [&old, &new] {
+            let token = SecretValue::new(key.sign(&valid_claims(&nonce), Algorithm::ES256));
+            assert!(
+                verifier
+                    .verify(
+                        auth_context(&endpoint, &algorithms, &nonce)
+                            .with_outbound_proxy(Some(&proxy)),
+                        TokenCandidate::new(&access, Some(&token), None),
+                    )
+                    .await
+                    .is_ok()
+            );
+        }
+        exit.verify().await;
+        exit.reset().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&exit)
+            .await;
+        // TTL 到期或未知 kid 均不能在获取失败后借用旧缓存。
+        let rejected_key = if ttl.is_zero() { &new } else { &old };
+        let token = SecretValue::new(rejected_key.sign(&valid_claims(&nonce), Algorithm::ES256));
+        assert!(matches!(
+            verifier
+                .verify(
+                    auth_context(&endpoint, &algorithms, &nonce).with_outbound_proxy(Some(&proxy)),
+                    TokenCandidate::new(&access, Some(&token), None),
+                )
+                .await,
+            Err(VerificationFailure::Unavailable)
+        ));
+        assert!(origin.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn authorization_code_should_validate_es256_and_cache_jwks() {
     let server = MockServer::start().await;
     let endpoint = endpoints(&server);

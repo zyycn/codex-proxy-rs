@@ -1,7 +1,6 @@
 //! Explicit account egress with redirects and business retries disabled.
 
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext};
-use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -34,7 +33,9 @@ use gateway_core::error::{ClientVisibleUpstreamError, OpaqueUpstreamValue, Provi
 use gateway_core::event::UpstreamHttpVersion;
 use gateway_core::upstream::UpstreamSendState;
 
+use super::egress::{EgressCache, MAX_CACHED_EGRESS_STATES};
 use super::{GrokQuotaFailureKind, classify_grok_quota_failure, scrub_account_fingerprints};
+use gateway_core::account::OutboundProxy;
 
 pub(crate) const OFFICIAL_OAUTH_HOST: &str = "auth.x.ai";
 const OFFICIAL_INFERENCE_HOST: &str = "cli-chat-proxy.grok.com";
@@ -167,10 +168,12 @@ pub trait GrokEndpointPolicy: fmt::Debug + Send + Sync {
     fn build_oauth_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError>;
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError>;
     fn validate_oauth(&self, url: &Url) -> bool;
     fn validate_inference(&self, url: &Url) -> bool;
@@ -187,15 +190,21 @@ impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
     fn build_oauth_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        build_official_client(GrokDnsResolutionPolicy::official_oauth(), timeout)
+        build_official_client(GrokDnsResolutionPolicy::official_oauth(), timeout, proxy)
     }
 
     fn build_inference_client(
         &self,
         timeout: Option<Duration>,
+        proxy: Option<&OutboundProxy>,
     ) -> Result<Client, GrokReqwestTransportBuildError> {
-        build_official_client(GrokDnsResolutionPolicy::official_inference(), timeout)
+        build_official_client(
+            GrokDnsResolutionPolicy::official_inference(),
+            timeout,
+            proxy,
+        )
     }
 
     fn validate_oauth(&self, url: &Url) -> bool {
@@ -229,7 +238,7 @@ impl GrokEndpointPolicy for OfficialGrokEndpointPolicy {
 
 /// 官方 OAuth HTTP transport。只允许 `auth.x.ai:443`。
 pub struct ReqwestOAuthTransport {
-    client: Client,
+    clients: EgressCache<Option<OutboundProxy>, Client>,
     endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
@@ -242,9 +251,9 @@ impl ReqwestOAuthTransport {
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = endpoint_policy.build_oauth_client(Some(OAUTH_REQUEST_TIMEOUT))?;
+        let client = endpoint_policy.build_oauth_client(Some(OAUTH_REQUEST_TIMEOUT), None)?;
         Ok(Self {
-            client,
+            clients: EgressCache::with_entry(None, client),
             endpoint_policy,
         })
     }
@@ -262,18 +271,24 @@ impl fmt::Debug for ReqwestOAuthTransport {
 
 impl OAuthHttpTransport for ReqwestOAuthTransport {
     fn execute(&self, request: OAuthHttpRequest) -> TransportFuture<'_> {
-        let client = self.client.clone();
         let endpoint_policy = self.endpoint_policy.clone();
         Box::pin(async move {
             if !endpoint_policy.validate_oauth(request.url()) {
                 return Err(TransportFailure::new(TransportFailureKind::NotSent));
             }
-            let client = account_proxy_client(
-                &client,
-                request.outbound_proxy.as_ref(),
-                Some(OAUTH_REQUEST_TIMEOUT),
-            )
-            .map_err(|_| TransportFailure::new(TransportFailureKind::NotSent))?;
+            let entry = self
+                .clients
+                .entry(request.outbound_proxy.clone())
+                .ok_or_else(|| TransportFailure::new(TransportFailureKind::NotSent))?;
+            let client = entry
+                .get_or_try_init(|| async {
+                    endpoint_policy.build_oauth_client(
+                        Some(OAUTH_REQUEST_TIMEOUT),
+                        request.outbound_proxy.as_ref(),
+                    )
+                })
+                .await
+                .map_err(|_| TransportFailure::new(TransportFailureKind::NotSent))?;
             let mut builder = match request.method() {
                 HttpMethod::Get => client.get(request.url().clone()),
                 HttpMethod::Post => client.post(request.url().clone()),
@@ -305,13 +320,14 @@ impl OAuthHttpTransport for ReqwestOAuthTransport {
 
 /// 官方 Grok Responses HTTP SSE transport。
 pub struct ReqwestGrokInferenceTransport {
-    clients: Mutex<BoundInferenceClients>,
+    clients: EgressCache<GrokSessionBinding, Client>,
+    unbound_client: Mutex<Option<Client>>,
     endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
 impl ReqwestGrokInferenceTransport {
     /// 单个进程缓存的账号隔离推理连接池上限。
-    pub const MAX_CACHED_ACCOUNT_CLIENTS: usize = 64;
+    pub const MAX_CACHED_ACCOUNT_CLIENTS: usize = MAX_CACHED_EGRESS_STATES;
 
     /// 构建只允许官方 CLI proxy 的生产 transport。
     ///
@@ -321,47 +337,44 @@ impl ReqwestGrokInferenceTransport {
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let unbound_client = endpoint_policy.build_inference_client(None)?;
+        let unbound_client = endpoint_policy.build_inference_client(None, None)?;
         Ok(Self {
-            clients: Mutex::new(BoundInferenceClients::new(unbound_client)),
+            clients: EgressCache::new(),
+            unbound_client: Mutex::new(Some(unbound_client)),
             endpoint_policy,
         })
     }
 
-    fn client_for(
+    async fn client_for(
         &self,
         binding: &GrokSessionBinding,
     ) -> Result<(Client, GrokInferenceClientCacheStatus), GrokInferenceTransportError> {
-        let unbound_client = {
-            let mut clients = self
-                .clients
-                .lock()
-                .map_err(|_| inference_client_pool_unavailable())?;
-            if let Some(client) = clients.get(binding) {
-                return Ok((client, GrokInferenceClientCacheStatus::Hit));
-            }
-            if binding.outbound_proxy().is_none() {
-                clients.take_unbound()
-            } else {
-                None
-            }
-        };
-
-        let client = match unbound_client {
-            Some(client) => client,
-            None => self
-                .endpoint_policy
-                .build_inference_client(None)
-                .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?,
-        };
-        let client = account_proxy_client(&client, binding.outbound_proxy(), None)
-            .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?;
-        let client = self
+        let entry = self
             .clients
-            .lock()
-            .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?
-            .insert_if_absent(binding, client);
-        Ok((client, GrokInferenceClientCacheStatus::Miss))
+            .entry(binding.clone())
+            .ok_or_else(inference_client_pool_unavailable_for_cache_miss)?;
+        let status = if entry.initialized() {
+            GrokInferenceClientCacheStatus::Hit
+        } else {
+            GrokInferenceClientCacheStatus::Miss
+        };
+        let client = entry
+            .get_or_try_init(|| async {
+                if binding.outbound_proxy().is_none()
+                    && let Some(client) = self
+                        .unbound_client
+                        .lock()
+                        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?
+                        .take()
+                {
+                    return Ok(client);
+                }
+                self.endpoint_policy
+                    .build_inference_client(None, binding.outbound_proxy())
+            })
+            .await
+            .map_err(|_| inference_client_pool_unavailable_for_cache_miss())?;
+        Ok((client.clone(), status))
     }
 }
 
@@ -396,7 +409,7 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                     .map(|header| (header.name(), header.value().expose().as_bytes())),
             );
             trace.capture("upstream.request.body", request.body());
-            let (client, client_cache_status) = self.client_for(request.binding())?;
+            let (client, client_cache_status) = self.client_for(request.binding()).await?;
             let mut builder = client
                 .post(request.endpoint().clone())
                 .body(request.body().to_vec());
@@ -475,62 +488,6 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
     }
 }
 
-struct BoundInferenceClients {
-    by_binding: HashMap<GrokSessionBinding, Client>,
-    least_recently_used: VecDeque<GrokSessionBinding>,
-    unbound_client: Option<Client>,
-}
-
-impl BoundInferenceClients {
-    fn new(unbound_client: Client) -> Self {
-        Self {
-            by_binding: HashMap::with_capacity(
-                ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS,
-            ),
-            least_recently_used: VecDeque::with_capacity(
-                ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS,
-            ),
-            unbound_client: Some(unbound_client),
-        }
-    }
-
-    fn get(&mut self, binding: &GrokSessionBinding) -> Option<Client> {
-        if let Some(client) = self.by_binding.get(binding).cloned() {
-            self.record_use(binding);
-            return Some(client);
-        }
-        None
-    }
-
-    fn take_unbound(&mut self) -> Option<Client> {
-        self.unbound_client.take()
-    }
-
-    fn insert_if_absent(&mut self, binding: &GrokSessionBinding, client: Client) -> Client {
-        if let Some(existing) = self.get(binding) {
-            return existing;
-        }
-        self.insert(binding.clone(), client.clone());
-        client
-    }
-
-    fn insert(&mut self, binding: GrokSessionBinding, client: Client) {
-        if self.by_binding.len() == ReqwestGrokInferenceTransport::MAX_CACHED_ACCOUNT_CLIENTS
-            && let Some(expired_binding) = self.least_recently_used.pop_front()
-        {
-            self.by_binding.remove(&expired_binding);
-        }
-        self.least_recently_used.push_back(binding.clone());
-        self.by_binding.insert(binding, client);
-    }
-
-    fn record_use(&mut self, binding: &GrokSessionBinding) {
-        self.least_recently_used
-            .retain(|candidate| candidate != binding);
-        self.least_recently_used.push_back(binding.clone());
-    }
-}
-
 fn inference_client_pool_unavailable() -> GrokInferenceTransportError {
     GrokInferenceTransportError::new(
         GrokInferenceTransportErrorKind::Unavailable,
@@ -563,7 +520,7 @@ fn inference_transport_metrics(
 
 /// 官方 Grok CLI proxy 模型目录 GET transport。
 pub struct ReqwestGrokModelCatalogTransport {
-    client: Client,
+    clients: EgressCache<Option<OutboundProxy>, Client>,
     endpoint_policy: Arc<dyn GrokEndpointPolicy>,
 }
 
@@ -576,9 +533,9 @@ impl ReqwestGrokModelCatalogTransport {
     pub fn new(
         endpoint_policy: Arc<dyn GrokEndpointPolicy>,
     ) -> Result<Self, GrokReqwestTransportBuildError> {
-        let client = endpoint_policy.build_inference_client(Some(OAUTH_REQUEST_TIMEOUT))?;
+        let client = endpoint_policy.build_inference_client(Some(OAUTH_REQUEST_TIMEOUT), None)?;
         Ok(Self {
-            client,
+            clients: EgressCache::with_entry(None, client),
             endpoint_policy,
         })
     }
@@ -596,7 +553,6 @@ impl fmt::Debug for ReqwestGrokModelCatalogTransport {
 
 impl GrokModelCatalogTransport for ReqwestGrokModelCatalogTransport {
     fn execute(&self, request: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
-        let client = self.client.clone();
         let endpoint_policy = self.endpoint_policy.clone();
         Box::pin(async move {
             if !endpoint_policy.validate_model_catalog(request.endpoint()) {
@@ -604,14 +560,27 @@ impl GrokModelCatalogTransport for ReqwestGrokModelCatalogTransport {
                     GrokModelCatalogTransportErrorKind::Protocol,
                 ));
             }
-            let client = account_proxy_client(
-                &client,
-                request.outbound_proxy.as_ref(),
-                Some(OAUTH_REQUEST_TIMEOUT),
-            )
-            .map_err(|_| {
-                GrokModelCatalogTransportError::new(GrokModelCatalogTransportErrorKind::Protocol)
-            })?;
+            let entry = self
+                .clients
+                .entry(request.outbound_proxy.clone())
+                .ok_or_else(|| {
+                    GrokModelCatalogTransportError::new(
+                        GrokModelCatalogTransportErrorKind::Transport,
+                    )
+                })?;
+            let client = entry
+                .get_or_try_init(|| async {
+                    endpoint_policy.build_inference_client(
+                        Some(OAUTH_REQUEST_TIMEOUT),
+                        request.outbound_proxy.as_ref(),
+                    )
+                })
+                .await
+                .map_err(|_| {
+                    GrokModelCatalogTransportError::new(
+                        GrokModelCatalogTransportErrorKind::Protocol,
+                    )
+                })?;
             let mut builder = client.get(request.endpoint().clone());
             for header in request.headers() {
                 builder = builder.header(header.name(), header.value().expose());
@@ -655,7 +624,6 @@ impl GrokModelCatalogTransport for ReqwestGrokModelCatalogTransport {
 
 impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
     fn execute(&self, request: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
-        let client = self.client.clone();
         let endpoint_policy = self.endpoint_policy.clone();
         Box::pin(async move {
             let endpoint = endpoint_policy
@@ -663,12 +631,23 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
                 .ok_or_else(|| {
                     GrokBillingTransportError::new(GrokBillingTransportErrorKind::Protocol)
                 })?;
-            let client = account_proxy_client(
-                &client,
-                request.outbound_proxy.as_ref(),
-                Some(OAUTH_REQUEST_TIMEOUT),
-            )
-            .map_err(|_| GrokBillingTransportError::new(GrokBillingTransportErrorKind::Protocol))?;
+            let entry = self
+                .clients
+                .entry(request.outbound_proxy.clone())
+                .ok_or_else(|| {
+                    GrokBillingTransportError::new(GrokBillingTransportErrorKind::Transport)
+                })?;
+            let client = entry
+                .get_or_try_init(|| async {
+                    endpoint_policy.build_inference_client(
+                        Some(OAUTH_REQUEST_TIMEOUT),
+                        request.outbound_proxy.as_ref(),
+                    )
+                })
+                .await
+                .map_err(|_| {
+                    GrokBillingTransportError::new(GrokBillingTransportErrorKind::Protocol)
+                })?;
             let mut builder = client.get(endpoint);
             for header in request.headers() {
                 builder = builder.header(header.name(), header.value().expose());
@@ -702,41 +681,11 @@ impl GrokBillingTransport for ReqwestGrokModelCatalogTransport {
 fn build_official_client(
     dns_policy: GrokDnsResolutionPolicy,
     timeout: Option<Duration>,
+    proxy: Option<&OutboundProxy>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
         .redirect(Policy::none())
         .no_proxy()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-        .http2_adaptive_window(true)
-        .http2_keep_alive_interval(HTTP2_KEEP_ALIVE_INTERVAL)
-        .http2_keep_alive_timeout(HTTP2_KEEP_ALIVE_TIMEOUT)
-        .http2_keep_alive_while_idle(true)
-        .tcp_nodelay(true)
-        .https_only(true)
-        .dns_resolver(Arc::new(StrictDnsResolver::new(dns_policy)?));
-    if let Some(timeout) = timeout {
-        builder = builder.timeout(timeout);
-    }
-    builder
-        .build()
-        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)
-}
-
-pub(crate) fn account_proxy_client(
-    base: &Client,
-    proxy: Option<&gateway_core::account::OutboundProxy>,
-    timeout: Option<Duration>,
-) -> Result<Client, GrokReqwestTransportBuildError> {
-    let Some(proxy) = proxy else {
-        return Ok(base.clone());
-    };
-    let invalid = || GrokReqwestTransportBuildError::ClientInitialization;
-    let mut builder = Client::builder()
-        .no_proxy()
-        .redirect(Policy::none())
-        .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| invalid())?)
         .connect_timeout(CONNECT_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
@@ -746,10 +695,22 @@ pub(crate) fn account_proxy_client(
         .http2_keep_alive_while_idle(true)
         .tcp_nodelay(true)
         .https_only(true);
+    if let Some(proxy) = proxy {
+        // 保留 reqwest 的代理解析语义（socks5 本地解析、socks5h 远端解析）；
+        // 只允许官方 host 的直连 resolver 不能用于解析代理端点。
+        builder = builder.proxy(
+            reqwest::Proxy::all(proxy.expose_url())
+                .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?,
+        );
+    } else {
+        builder = builder.dns_resolver(Arc::new(StrictDnsResolver::new(dns_policy)?));
+    }
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }
-    builder.build().map_err(|_| invalid())
+    builder
+        .build()
+        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)
 }
 
 fn valid_official_url(url: &Url, host: &str, path: Option<&str>) -> bool {

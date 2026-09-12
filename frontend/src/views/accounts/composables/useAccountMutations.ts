@@ -23,7 +23,7 @@ export function useAccountMutations(options: {
   accounts: Ref<AccountRow[]>
   selectedIds: Ref<Set<string>>
   reload: () => Promise<unknown>
-  replaceAccount: (account: AccountRow) => boolean
+  replaceAccount: (account: AccountRow) => Promise<boolean>
 }) {
   const loadAccounts = options.reload
   const { downloadJson } = useDownload()
@@ -174,7 +174,7 @@ export function useAccountMutations(options: {
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
         const result = await withMinimumDuration(() => refreshAccountQuota({ accountId }))
-        const remainsVisible = options.replaceAccount(result.account)
+        const remainsVisible = await options.replaceAccount(result.account)
         if (!remainsVisible) {
           const selectedIds = new Set(options.selectedIds.value)
           selectedIds.delete(accountId)
@@ -192,7 +192,7 @@ export function useAccountMutations(options: {
     await recoveringAccounts.run(accountId, async () => {
       try {
         const result = await withMinimumDuration(() => recoverAccount({ accountId }))
-        const remainsVisible = options.replaceAccount(result.account)
+        const remainsVisible = await options.replaceAccount(result.account)
         if (!remainsVisible) {
           const selectedIds = new Set(options.selectedIds.value)
           selectedIds.delete(accountId)

@@ -13,6 +13,8 @@ pub mod settings;
 pub mod system;
 pub mod xai;
 
+use std::sync::Arc;
+
 use crate::{
     model::{
         AdminError, AdminErrorKind, MutationContext,
@@ -22,7 +24,7 @@ use crate::{
             CredentialDetails, CredentialMutationResult, CredentialRotationCommit,
             PendingAuthorizationMutation, PreparedAuthorizationCommit,
             PreparedAuthorizationCredential, PreparedCredentialImport, PreparedCredentialRotation,
-            StartAuthorization,
+            ProviderQuotaRequest, StartAuthorization,
         },
     },
     ports::{
@@ -94,6 +96,43 @@ async fn publish_committed(
     let revision = ConfigRevision::new(revision.get())
         .map_err(|_| AdminError::internal("已提交的配置版本不合法"))?;
     snapshot.publish_committed(revision).await;
+    Ok(())
+}
+
+async fn publish_credentials_and_observe_quota(
+    provider: &Arc<dyn ProviderAdmin>,
+    snapshot: &dyn SnapshotControl,
+    revision: crate::model::Revision,
+    account_ids: &[ProviderAccountId],
+    request_id: &str,
+) -> Result<(), AdminError> {
+    provider.account_facts_changed(account_ids).await;
+    publish_committed(snapshot, revision).await?;
+
+    // 凭据已经提交；额度只是可重建的观察，不能拖住管理请求或回滚提交结果。
+    let provider = Arc::clone(provider);
+    let account_ids = account_ids.to_vec();
+    let request_id = request_id.to_owned();
+    tokio::spawn(async move {
+        for account_id in account_ids {
+            if let Err(error) = provider
+                .quota(ProviderQuotaRequest {
+                    account_id: account_id.clone(),
+                    refresh: true,
+                    rolling_usage: None,
+                })
+                .await
+            {
+                tracing::warn!(
+                    request_id,
+                    provider = %provider.provider_kind().as_str(),
+                    account_id = %account_id.as_str(),
+                    quota_error = ?error.kind(),
+                    "initial quota observation failed"
+                );
+            }
+        }
+    });
     Ok(())
 }
 

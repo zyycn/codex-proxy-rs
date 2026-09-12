@@ -32,8 +32,7 @@ use crate::model::{
     },
     provider_credentials::{
         AuthorizationCommit, CredentialDetails, CredentialImportCommit, CredentialImportResult,
-        CredentialListQuery, CredentialMutationResult, CredentialPage, CredentialRotationCommit,
-        ProviderExportCredentialInput,
+        CredentialMutationResult, CredentialRotationCommit, ProviderExportCredentialInput,
     },
     settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
 };
@@ -109,12 +108,6 @@ pub trait AccountStore: Send + Sync {
         &self,
         windows: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>>;
-
-    async fn list_credentials(
-        &self,
-        provider_kind: &gateway_core::routing::ProviderKind,
-        query: CredentialListQuery,
-    ) -> AdminStoreResult<CredentialPage>;
 
     async fn credential_details(
         &self,

@@ -11,11 +11,10 @@ use gateway_core::account::{
     AccountQuotaSignals, CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount,
     ProviderAccountId, QuotaObservation, QuotaState,
 };
-use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
 };
-use gateway_core::routing::ProviderKind;
+use gateway_core::routing::{ProviderCatalogGeneration, ProviderKind};
 use tokio::sync::Mutex;
 
 use super::repository::{GrokCredentialRepository, LoadedGrokCredential};
@@ -900,42 +899,6 @@ impl GrokCredentialCatalogService {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         ProviderCatalogGeneration::new(published.generation)
-    }
-
-    pub async fn fetch_seed(
-        &self,
-        access_token: SecretValue,
-        user_id: SecretValue,
-        email: Option<SecretValue>,
-    ) -> Result<GrokCredentialCatalogSeed, GrokCredentialCatalogError> {
-        let session =
-            GrokModelCatalogSession::new(access_token, user_id, email, self.wire_profile.clone())
-                .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
-        let snapshot = self
-            .client
-            .fetch(&session)
-            .await
-            .map_err(|_| GrokCredentialCatalogError::Upstream)?;
-        GrokCredentialCatalogSeed::from_snapshot(&snapshot)
-    }
-
-    pub async fn cache_seed(
-        &self,
-        account_id: &ProviderAccountId,
-        seed: GrokCredentialCatalogSeed,
-    ) -> Result<(), GrokCredentialCatalogError> {
-        let account = self
-            .repository
-            .load_current(account_id)
-            .await
-            .map_err(|_| GrokCredentialCatalogError::Store)?
-            .account;
-        let scope = GrokCatalogScope::for_account(&account)
-            .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
-        self.cache
-            .replace(GrokPlanCatalog::new(scope, Utc::now(), seed))
-            .await
-            .map_err(|_| GrokCredentialCatalogError::Cache)
     }
 
     /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。

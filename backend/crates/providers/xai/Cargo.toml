@@ -34,7 +34,7 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 
 [dev-dependencies]
 p256 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
-tokio = { version = "1.52.3", features = ["macros", "rt"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6.5"
 
 [[test]]

@@ -12,8 +12,7 @@ use gateway_core::account::{
 };
 use gateway_core::engine::continuation::ContinuationBinding;
 use gateway_core::engine::provider::{
-    EventStream, Provider, ProviderCallMetadata, ProviderCatalogGeneration,
-    ProviderModelCapabilities, ProviderRequest, ProviderRequestObservation,
+    EventStream, Provider, ProviderCallMetadata, ProviderRequest, ProviderRequestObservation,
     ProviderSelectionObservation, ProviderStream,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
@@ -29,8 +28,8 @@ use gateway_core::operation::{
     Feature, GenerateRequest, Operation, OperationKind, ProviderSessionState,
 };
 use gateway_core::routing::{
-    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderKind, SupportLevel,
-    UpstreamModelId,
+    ModelCapabilities, ModelPresentation, ProviderCandidate, ProviderCatalogGeneration,
+    ProviderKind, ProviderModelCapabilities, SupportLevel, UpstreamModelId,
 };
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerDefinitionError, WorkerId,

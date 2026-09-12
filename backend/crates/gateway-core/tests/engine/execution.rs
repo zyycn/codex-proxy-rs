@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -14,6 +14,8 @@ use gateway_core::error::GatewayError;
 struct Admissions {
     active: Arc<AtomicBool>,
     limits: Mutex<Vec<RateLimits>>,
+    release_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    releases: AtomicUsize,
 }
 
 impl ClientAdmissionPort for Admissions {
@@ -32,7 +34,14 @@ impl ClientAdmissionPort for Admissions {
         _: &'a ClientApiKeyId,
         _: &'a ModelRequestId,
     ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
-        Box::pin(async { Ok(self.active.swap(false, Ordering::SeqCst)) })
+        Box::pin(async {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            let gate = self.release_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.await.expect("release gate");
+            }
+            Ok(self.active.swap(false, Ordering::SeqCst))
+        })
     }
     fn restore(
         &self,
@@ -42,10 +51,14 @@ impl ClientAdmissionPort for Admissions {
     }
 }
 
+#[derive(Default)]
 struct Budget {
     reject: bool,
     active: Arc<AtomicBool>,
     charges: Mutex<Vec<ClientBudgetCharge>>,
+    settlement_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    settlements: AtomicUsize,
+    fail_settlement: bool,
 }
 
 impl ClientBudgetPort for Budget {
@@ -64,12 +77,22 @@ impl ClientBudgetPort for Budget {
     }
     fn settle(&self, charge: ClientBudgetCharge) -> BoxFuture<'_, Result<(), ClientBudgetError>> {
         Box::pin(async move {
+            self.settlements.fetch_add(1, Ordering::SeqCst);
             assert!(
                 self.active.load(Ordering::SeqCst),
                 "settle before releasing the concurrent request slot"
             );
+            let gate = self.settlement_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.await.expect("settlement gate");
+            }
+            assert!(self.active.load(Ordering::SeqCst));
             self.charges.lock().unwrap().push(charge);
-            Ok(())
+            if self.fail_settlement {
+                Err(ClientBudgetError)
+            } else {
+                Ok(())
+            }
         })
     }
 }
@@ -111,6 +134,7 @@ fn budget_rejection_releases_client_concurrency_without_creating_a_charge() {
         reject: true,
         active: admissions.active.clone(),
         charges: Mutex::default(),
+        ..Default::default()
     });
     let service = service(admissions.clone(), budget.clone());
     for transport in [
@@ -200,6 +224,7 @@ fn cancellation_and_pre_send_failure_settle_zero_and_release_concurrency_for_all
         reject: false,
         active: admissions.active.clone(),
         charges: Mutex::default(),
+        ..Default::default()
     });
     let service = service(admissions.clone(), budget.clone());
     for transport in [
@@ -232,9 +257,336 @@ fn cancellation_and_pre_send_failure_settle_zero_and_release_concurrency_for_all
     );
 }
 
+struct ChargedProvider {
+    fail: bool,
+}
+
+fn known_charge() -> Decimal {
+    "1.25".parse().unwrap()
+}
+
+#[async_trait]
+impl Provider for ChargedProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        request: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let candidate = request.candidate();
+        let metadata = ProviderCallMetadata::new(
+            candidate.provider().clone(),
+            candidate.upstream_model().unwrap().clone(),
+            ProviderAccountId::new("acct_start").unwrap(),
+            UpstreamTransport::new("websocket").unwrap(),
+        );
+        let response = ResponseMeta::new("resp_cleanup", "gpt-start");
+        let terminal = if self.fail {
+            Err(ProviderError::new(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::Sent,
+            ))
+        } else {
+            Ok(GatewayEvent::Completed(response.clone()).into())
+        };
+        let events: Vec<Result<ProviderEvent, ProviderError>> = vec![
+            Ok(GatewayEvent::Started(response).into()),
+            Ok(GatewayEvent::ProviderCost(
+                ProviderReportedCost::from_usd_ticks(known_charge().scaled()).unwrap(),
+            )
+            .into()),
+            terminal,
+        ];
+        Ok(ProviderStream::new(
+            metadata,
+            futures::stream::iter(events),
+            (),
+        ))
+    }
+}
+
+fn charged_service(
+    admissions: Arc<Admissions>,
+    budget: Option<Arc<Budget>>,
+    fail: bool,
+) -> DefaultExecutionService {
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(ChargedProvider { fail }) as Arc<dyn Provider>]).unwrap(),
+        admissions,
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    match budget {
+        Some(budget) => service.with_budget(budget),
+        None => service,
+    }
+}
+
+async fn consume_charged_prefix(session: &mut dyn ExecutionSession) {
+    let first = session.next_event().await.unwrap().unwrap();
+    assert_eq!(
+        first.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    session.commit_downstream(None).await.unwrap();
+    let cost = session.next_event().await.unwrap().unwrap();
+    assert_eq!(
+        cost.commit_requirement(),
+        CommitRequirement::AlreadyCommitted
+    );
+}
+
+fn assert_cleanup_completed(admissions: &Admissions, budget: &Budget, request_id: &ModelRequestId) {
+    assert!(!admissions.active.load(Ordering::SeqCst));
+    assert_eq!(admissions.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.settlements.load(Ordering::SeqCst), 1);
+    let charges = budget.charges.lock().unwrap();
+    assert_eq!(charges.len(), 1);
+    assert_eq!(charges[0].request_id, *request_id);
+    assert_eq!(charges[0].key_id.as_str(), "key_start_test");
+    assert_eq!(charges[0].amount_usd, known_charge());
+}
+
+#[test]
+fn normal_completion_settles_known_charge_once_for_all_transports() {
+    block_on(async {
+        for transport in [
+            ClientTransport::HttpJson,
+            ClientTransport::HttpSse,
+            ClientTransport::WebSocket,
+        ] {
+            let admissions = Arc::new(Admissions::default());
+            let budget = Arc::new(Budget {
+                active: admissions.active.clone(),
+                ..Default::default()
+            });
+            let service = charged_service(admissions.clone(), Some(budget.clone()), false);
+            let mut started = service.start(request(&service, transport)).await.unwrap();
+            if transport == ClientTransport::HttpJson {
+                assert_eq!(
+                    started.session.collect_uncommitted().await.unwrap().len(),
+                    3
+                );
+                assert!(!started.session.is_finalized());
+                started.session.commit_downstream(Some(200)).await.unwrap();
+            } else {
+                consume_charged_prefix(started.session.as_mut()).await;
+                assert!(started.session.next_event().await.unwrap().is_some());
+            }
+            assert!(started.session.next_event().await.unwrap().is_none());
+            assert!(started.session.is_finalized());
+            started.session.detach_finalize().await;
+            assert_cleanup_completed(&admissions, &budget, &started.request_id);
+        }
+    });
+}
+
+#[test]
+fn settlement_survives_cancelled_event_wait_and_resumes_without_restart() {
+    block_on(async {
+        for fail in [false, true] {
+            let admissions = Arc::new(Admissions::default());
+            let (release, gate) = oneshot::channel();
+            let budget = Arc::new(Budget {
+                active: admissions.active.clone(),
+                settlement_gate: Mutex::new(Some(gate)),
+                ..Default::default()
+            });
+            let service = charged_service(admissions.clone(), Some(budget.clone()), fail);
+            let mut started = service
+                .start(request(&service, ClientTransport::WebSocket))
+                .await
+                .unwrap();
+            consume_charged_prefix(started.session.as_mut()).await;
+            if !fail {
+                assert!(started.session.next_event().await.unwrap().is_some());
+            }
+            for _ in 0..2 {
+                let mut terminal = started.session.next_event();
+                assert!(futures::poll!(terminal.as_mut()).is_pending());
+                drop(terminal);
+                assert!(!started.session.is_finalized());
+                assert_eq!(budget.settlements.load(Ordering::SeqCst), 1);
+                assert!(budget.charges.lock().unwrap().is_empty());
+                assert_eq!(admissions.releases.load(Ordering::SeqCst), 0);
+            }
+            release
+                .send(())
+                .expect("the original settlement is still alive");
+            assert!(started.session.next_event().await.unwrap().is_none());
+            assert!(started.session.is_finalized());
+            started.session.detach_finalize().await;
+            assert_cleanup_completed(&admissions, &budget, &started.request_id);
+        }
+    });
+}
+
+#[test]
+fn detached_cleanup_settles_cancelled_execution_and_resumes_existing_settlement() {
+    block_on(async {
+        for cancel_event_wait in [false, true] {
+            let admissions = Arc::new(Admissions::default());
+            let (release, gate) = oneshot::channel();
+            let budget = Arc::new(Budget {
+                active: admissions.active.clone(),
+                settlement_gate: Mutex::new(Some(gate)),
+                ..Default::default()
+            });
+            let service = charged_service(admissions.clone(), Some(budget.clone()), false);
+            let mut started = service
+                .start(request(&service, ClientTransport::WebSocket))
+                .await
+                .unwrap();
+            consume_charged_prefix(started.session.as_mut()).await;
+            if cancel_event_wait {
+                started.session.cancel();
+                let mut terminal = started.session.next_event();
+                assert!(futures::poll!(terminal.as_mut()).is_pending());
+                drop(terminal);
+                assert!(!started.session.is_finalized());
+            }
+            let mut detached = started.session.detach_finalize();
+            assert!(futures::poll!(detached.as_mut()).is_pending());
+            assert_eq!(budget.settlements.load(Ordering::SeqCst), 1);
+            assert_eq!(admissions.releases.load(Ordering::SeqCst), 0);
+            release
+                .send(())
+                .expect("detached cleanup retains settlement");
+            detached.await;
+            assert_cleanup_completed(&admissions, &budget, &started.request_id);
+        }
+    });
+}
+
+#[test]
+fn cancelled_release_resumes_without_repeating_settlement_with_or_without_budget() {
+    block_on(async {
+        for with_budget in [false, true] {
+            let (release, gate) = oneshot::channel();
+            let admissions = Arc::new(Admissions {
+                release_gate: Mutex::new(Some(gate)),
+                ..Default::default()
+            });
+            let budget = Arc::new(Budget {
+                active: admissions.active.clone(),
+                ..Default::default()
+            });
+            let service = charged_service(
+                admissions.clone(),
+                with_budget.then(|| budget.clone()),
+                false,
+            );
+            let mut started = service
+                .start(request(&service, ClientTransport::HttpSse))
+                .await
+                .unwrap();
+            consume_charged_prefix(started.session.as_mut()).await;
+            assert!(started.session.next_event().await.unwrap().is_some());
+            let mut terminal = started.session.next_event();
+            assert!(futures::poll!(terminal.as_mut()).is_pending());
+            drop(terminal);
+            assert!(!started.session.is_finalized());
+            assert!(admissions.active.load(Ordering::SeqCst));
+            assert_eq!(
+                budget.settlements.load(Ordering::SeqCst),
+                usize::from(with_budget)
+            );
+            let mut detached = started.session.detach_finalize();
+            assert!(futures::poll!(detached.as_mut()).is_pending());
+            assert_eq!(admissions.releases.load(Ordering::SeqCst), 1);
+            release
+                .send(())
+                .expect("the original release is still alive");
+            detached.await;
+            if with_budget {
+                assert_cleanup_completed(&admissions, &budget, &started.request_id);
+            } else {
+                assert!(!admissions.active.load(Ordering::SeqCst));
+                assert_eq!(admissions.releases.load(Ordering::SeqCst), 1);
+                assert!(budget.charges.lock().unwrap().is_empty());
+            }
+        }
+    });
+}
+
+#[test]
+fn cancelled_buffered_commit_keeps_settlement_for_detached_cleanup() {
+    block_on(async {
+        let admissions = Arc::new(Admissions::default());
+        let (release, gate) = oneshot::channel();
+        let budget = Arc::new(Budget {
+            active: admissions.active.clone(),
+            settlement_gate: Mutex::new(Some(gate)),
+            ..Default::default()
+        });
+        let service = charged_service(admissions.clone(), Some(budget.clone()), false);
+        let mut started = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .unwrap();
+        assert_eq!(
+            started.session.collect_uncommitted().await.unwrap().len(),
+            3
+        );
+        let mut commit = started.session.commit_downstream(Some(200));
+        assert!(futures::poll!(commit.as_mut()).is_pending());
+        drop(commit);
+        assert!(!started.session.is_finalized());
+        release
+            .send(())
+            .expect("buffered commit retains settlement");
+        started.session.detach_finalize().await;
+        assert_cleanup_completed(&admissions, &budget, &started.request_id);
+    });
+}
+
+#[test]
+fn settlement_failure_keeps_provider_error_and_releases_concurrency_once() {
+    block_on(async {
+        for fail_settlement in [false, true] {
+            let admissions = Arc::new(Admissions::default());
+            let budget = Arc::new(Budget {
+                active: admissions.active.clone(),
+                fail_settlement,
+                ..Default::default()
+            });
+            let service = charged_service(admissions.clone(), Some(budget.clone()), true);
+            let mut started = service
+                .start(request(&service, ClientTransport::WebSocket))
+                .await
+                .unwrap();
+            consume_charged_prefix(started.session.as_mut()).await;
+            assert!(matches!(
+                started.session.next_event().await,
+                Err(EngineError::Provider(error)) if error.kind() == ProviderErrorKind::InvalidRequest
+            ));
+            assert!(started.session.is_finalized());
+            started.session.detach_finalize().await;
+            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算。
+            assert_cleanup_completed(&admissions, &budget, &started.request_id);
+        }
+    });
+}
+
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{executor::block_on, future::BoxFuture};
+use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
 use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
@@ -245,31 +597,34 @@ use gateway_core::engine::continuation::{
 };
 use gateway_core::engine::execution::{
     ClientApiKeyUsageSink, ClientTransport, DefaultExecutionService, ExecutionRequestMetadata,
-    ExecutionService, ProviderCircuitDecision, ProviderCircuitError, ProviderCircuitPort,
-    StartExecution, StartProviderExecution, provider_failure_affects_circuit,
+    ExecutionService, ExecutionSession, ProviderCircuitDecision, ProviderCircuitError,
+    ProviderCircuitPort, StartExecution, StartProviderExecution, provider_failure_affects_circuit,
 };
 use gateway_core::engine::probe::{AccountProbe, AccountProbeErrorSource, AccountProbeRequest};
 use gateway_core::engine::provider::{
-    Provider, ProviderCallMetadata, ProviderCatalogGeneration, ProviderModelCapabilities,
-    ProviderRegistry, ProviderRequest, ProviderRequestObservation, ProviderStream,
+    Provider, ProviderCallMetadata, ProviderRegistry, ProviderRequest, ProviderRequestObservation,
+    ProviderStream,
 };
 use gateway_core::engine::{
-    AttemptContext, AttemptRecord, ExecutionStore, IntermediateFailure, ModelRequestFinalization,
-    ModelRequestId, NewModelRequest, ProbeFailure, RecoveryReport,
+    AttemptContext, AttemptRecord, CommitRequirement, EngineError, ExecutionStore,
+    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest, ProbeFailure,
+    RecoveryReport,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamResponse, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError,
     StoreErrorKind,
 };
+use gateway_core::event::{GatewayEvent, ProviderEvent, ResponseMeta};
+use gateway_core::metering::{Decimal, ProviderReportedCost};
 use gateway_core::operation::{
     GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind, ProtocolPayload,
     RawJsonPayload,
 };
 use gateway_core::policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::{
-    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
-    ProviderModel, PublicModelId, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
-    UpstreamModelId,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,
+    ProviderCatalogGeneration, ProviderKind, ProviderModel, ProviderModelCapabilities,
+    PublicModelId, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::runtime::RuntimeSnapshotHandle;
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};

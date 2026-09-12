@@ -12,9 +12,8 @@ use gateway_core::account::{
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
-    ProviderStoreError,
+    ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderSchedulingLeaseRequest, ProviderSchedulingState, ProviderStoreError,
 };
 use gateway_core::routing::{
     ClientRoutingScope, FrozenAccountScope, RuntimeAccount, RuntimeAccountDirectory,
@@ -1030,66 +1029,6 @@ async fn quota_reset_strategy_uses_provider_reported_earliest_reset() {
         .expect("reset-ranked account");
 
     assert_eq!(session.account_id(), &account_id("zzz-earlier-reset"));
-}
-
-#[tokio::test]
-async fn deleting_account_clears_all_account_and_model_scoped_cooldowns() {
-    // 删除账号后其 account/model scoped cooldown key 全部清除。
-    let fixture = SelectorFixture::new(&["clear-cooldowns", "available"]).await;
-    let session = fixture
-        .selector
-        .select(fixture.request(BTreeSet::new()))
-        .await
-        .expect("session");
-    let selected = session.account_id().clone();
-    let model = UpstreamModelId::new("grok-4.5").expect("model");
-    // 写 account cooldown + model scoped cooldown。
-    fixture
-        .selector
-        .record_failure(
-            &session,
-            GrokCredentialFailure::RateLimited {
-                retry_after: Some(Duration::from_secs(60)),
-            },
-        )
-        .await;
-    fixture
-        .selector
-        .record_failure(
-            &session,
-            GrokCredentialFailure::ModelQuotaExhausted {
-                upstream_model: model.clone(),
-                retry_after: Some(Duration::from_secs(3600)),
-            },
-        )
-        .await;
-    assert!(fixture.cooldowns.cooldown(&selected).is_some());
-    assert!(
-        fixture
-            .cooldowns
-            .scoped_cooldown(
-                &selected,
-                &ProviderCooldownScope::upstream_model(model.clone())
-            )
-            .is_some()
-    );
-
-    // 删除账号（clear_all 清全部）。
-    fixture
-        .cooldowns
-        .clear_all(&selected)
-        .await
-        .expect("clear all cooldowns");
-    assert!(fixture.cooldowns.cooldown(&selected).is_none());
-    assert!(
-        fixture
-            .cooldowns
-            .scoped_cooldown(
-                &selected,
-                &ProviderCooldownScope::upstream_model(model.clone())
-            )
-            .is_none()
-    );
 }
 
 #[tokio::test]

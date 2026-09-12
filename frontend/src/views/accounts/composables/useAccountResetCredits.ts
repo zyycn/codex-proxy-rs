@@ -1,5 +1,5 @@
 import type { Account, AccountResetCredit } from '@/api'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowReactive, shallowRef, watch } from 'vue'
 
 import {
   consumeAccountResetCredit,
@@ -23,23 +23,75 @@ interface ResetCreditsSnapshot {
   availableCount: number
 }
 
-// 只保留本次前端会话中由用户主动查询得到的结果，避免账号列表渲染触发上游请求。
-const snapshotsByAccountId = new Map<string, ResetCreditsSnapshot>()
+interface ResetCreditsSession {
+  accountId: string
+  snapshot: ResetCreditsSnapshot | null
+  pendingOperation: PendingResetCreditOperation | null
+  consuming: boolean
+  loading: boolean
+  loadError: string
+  loadSequence: number
+  accountUpdatedListeners: Set<(account: Account) => void>
+}
+
+// 库存仍以主动查询的上游结果为准；未决操作和消费锁必须跨展开行卸载存续。
+const sessionsByAccountId = new Map<string, ResetCreditsSession>()
+
+function getResetCreditsSession(accountId: string) {
+  let session = sessionsByAccountId.get(accountId)
+  if (!session) {
+    session = shallowReactive<ResetCreditsSession>({
+      accountId,
+      snapshot: null,
+      pendingOperation: null,
+      consuming: false,
+      loading: false,
+      loadError: '',
+      loadSequence: 0,
+      accountUpdatedListeners: new Set(),
+    })
+    sessionsByAccountId.set(accountId, session)
+  }
+  return session
+}
+
+async function loadSessionCredits(session: ResetCreditsSession) {
+  const sequence = ++session.loadSequence
+  session.loading = true
+  session.loadError = ''
+  try {
+    const result = await getAccountResetCredits({ accountId: session.accountId })
+    if (sequence !== session.loadSequence)
+      return
+    session.snapshot = {
+      credits: result.credits,
+      availableCount: Math.max(0, result.availableCount),
+    }
+  }
+  catch (error: unknown) {
+    if (sequence === session.loadSequence)
+      session.loadError = errorMessage(error, '重置卡查询失败')
+  }
+  finally {
+    if (sequence === session.loadSequence)
+      session.loading = false
+  }
+}
 
 export function useAccountResetCredits(options: {
   accountId: () => string
   onAccountUpdated: (account: Account) => void
 }) {
-  const credits = shallowRef<AccountResetCredit[]>([])
-  const availableCount = shallowRef(0)
-  const hasSnapshot = shallowRef(false)
-  const loading = shallowRef(false)
-  const consuming = shallowRef(false)
-  const loadError = shallowRef('')
+  const session = shallowRef(getResetCreditsSession(options.accountId()))
+  const credits = computed(() => session.value.snapshot?.credits ?? [])
+  const availableCount = computed(() => session.value.snapshot?.availableCount ?? 0)
+  const hasSnapshot = computed(() => session.value.snapshot !== null)
+  const loading = computed(() => session.value.loading)
+  const consuming = computed(() => session.value.consuming)
+  const loadError = computed(() => session.value.loadError)
   const showConfirm = shallowRef(false)
   const selectedCreditId = shallowRef('')
-  const pendingOperation = shallowRef<PendingResetCreditOperation | null>(null)
-  let loadSequence = 0
+  const pendingOperation = computed(() => session.value.pendingOperation)
 
   const availableCredits = computed(() =>
     credits.value.filter(credit => credit.status === 'available'),
@@ -55,36 +107,15 @@ export function useAccountResetCredits(options: {
     ambiguous.value || (availableCount.value > 0 && selectedCredit.value !== undefined),
   )
 
-  function reconcileSelectedCredit(accountId: string) {
-    if (accountId !== options.accountId())
-      return
-
+  function reconcileSelectedCredit() {
     const operation = pendingOperation.value
-    if (operation?.accountId === accountId) {
+    if (operation) {
       selectedCreditId.value = operation.creditId
       return
     }
 
     if (!selectedCredit.value)
       selectedCreditId.value = ''
-  }
-
-  function applySnapshot(accountId: string, snapshot: ResetCreditsSnapshot) {
-    snapshotsByAccountId.set(accountId, snapshot)
-    if (accountId !== options.accountId())
-      return
-    credits.value = snapshot.credits
-    availableCount.value = snapshot.availableCount
-    hasSnapshot.value = true
-    reconcileSelectedCredit(accountId)
-  }
-
-  function restoreSnapshot(accountId: string) {
-    const snapshot = snapshotsByAccountId.get(accountId)
-    credits.value = snapshot?.credits ?? []
-    availableCount.value = snapshot?.availableCount ?? 0
-    hasSnapshot.value = snapshot !== undefined
-    reconcileSelectedCredit(accountId)
   }
 
   function selectCredit(creditId: string) {
@@ -95,77 +126,52 @@ export function useAccountResetCredits(options: {
     selectedCreditId.value = creditId
   }
 
-  function applyConfirmedConsumption(operation: PendingResetCreditOperation) {
-    const snapshot = snapshotsByAccountId.get(operation.accountId)
+  function applyConfirmedConsumption(target: ResetCreditsSession, operation: PendingResetCreditOperation) {
+    const snapshot = target.snapshot
     if (!snapshot)
       return
     const creditIndex = snapshot.credits.findIndex(credit => credit.id === operation.creditId)
     const nextCredits = creditIndex < 0
       ? snapshot.credits
       : snapshot.credits.filter((_, index) => index !== creditIndex)
-    applySnapshot(operation.accountId, {
+    target.snapshot = {
       credits: nextCredits,
       availableCount: Math.max(0, snapshot.availableCount - 1),
-    })
-  }
-
-  async function loadCredits() {
-    const accountId = options.accountId()
-    const sequence = ++loadSequence
-    loading.value = true
-    loadError.value = ''
-    try {
-      const result = await getAccountResetCredits({ accountId })
-      if (sequence !== loadSequence || accountId !== options.accountId())
-        return
-      applySnapshot(accountId, {
-        credits: result.credits,
-        availableCount: Math.max(0, result.availableCount),
-      })
-    }
-    catch (error: unknown) {
-      if (sequence !== loadSequence || accountId !== options.accountId())
-        return
-      loadError.value = errorMessage(error, '重置卡查询失败')
-    }
-    finally {
-      if (sequence === loadSequence)
-        loading.value = false
     }
   }
 
   function requestConsume() {
-    const accountId = options.accountId()
-    const existing = pendingOperation.value
-    if (!existing || existing.accountId !== accountId) {
-      if (availableCount.value <= 0)
-        return
-      const credit = selectedCredit.value
-      if (!credit)
-        return
-      pendingOperation.value = {
-        accountId,
-        creditId: credit.id,
-        credit,
-        redeemRequestId: generateRedeemRequestId(),
-        hasTransportFailure: false,
-      }
-    }
+    if (consuming.value || loading.value || !canRequestConsume.value)
+      return
     showConfirm.value = true
   }
 
   function cancelConsume() {
+    if (consuming.value)
+      return
     showConfirm.value = false
-    if (!pendingOperation.value?.hasTransportFailure)
-      pendingOperation.value = null
   }
 
   async function confirmConsume(): Promise<boolean> {
-    const operation = pendingOperation.value
-    if (!operation || consuming.value)
+    const target = session.value
+    if (!showConfirm.value || target.consuming || target.loading)
       return false
 
-    consuming.value = true
+    const credit = selectedCredit.value
+    // 确认发送时才建立操作；仅打开或取消确认弹窗不占用账号的消费状态。
+    const operation = target.pendingOperation ?? (credit && availableCount.value > 0
+      ? {
+          accountId: target.accountId,
+          creditId: credit.id,
+          credit,
+          redeemRequestId: generateRedeemRequestId(),
+          hasTransportFailure: false,
+        }
+      : null)
+    if (!operation)
+      return false
+    target.pendingOperation = operation
+    target.consuming = true
     try {
       const result = await consumeAccountResetCredit({
         accountId: operation.accountId,
@@ -174,23 +180,23 @@ export function useAccountResetCredits(options: {
       })
       const confirmed = result.code === 'reset'
         || (result.code === 'already_redeemed' && operation.hasTransportFailure)
-      pendingOperation.value = null
-      showConfirm.value = false
+      target.pendingOperation = null
       if (!confirmed) {
         toast.error(resetResultMessage(result.code))
-        await loadCredits()
+        await loadSessionCredits(target)
         return false
       }
 
       const successMessage = result.code === 'already_redeemed'
         ? '上次重置已完成'
         : '额度已重置'
-      applyConfirmedConsumption(operation)
-      await loadCredits()
+      applyConfirmedConsumption(target, operation)
+      await loadSessionCredits(target)
       try {
         const quota = await refreshAccountQuota({ accountId: operation.accountId })
-        if (operation.accountId === options.accountId())
-          options.onAccountUpdated(quota.account)
+        // 原组件可能已经卸载或换号，只通知仍订阅该账号的实例。
+        for (const listener of target.accountUpdatedListeners)
+          listener(quota.account)
         toast.success(successMessage)
       }
       catch (error: unknown) {
@@ -202,39 +208,44 @@ export function useAccountResetCredits(options: {
       return true
     }
     catch (error: unknown) {
-      showConfirm.value = false
       if (isAmbiguousConsumeError(error)) {
-        pendingOperation.value = {
+        target.pendingOperation = {
           ...operation,
           hasTransportFailure: true,
         }
         toast.warning('消费结果暂不确定；重试会复用同一个请求标识', { duration: 5000 })
       }
       else {
-        pendingOperation.value = null
+        target.pendingOperation = null
         toast.error(errorMessage(error, '额度重置失败'))
-        await loadCredits()
+        await loadSessionCredits(target)
       }
       return false
     }
     finally {
-      consuming.value = false
+      target.consuming = false
     }
   }
 
   watch(
     options.accountId,
-    (accountId) => {
-      loadSequence += 1
-      pendingOperation.value = null
+    (accountId, _, onCleanup) => {
+      const target = getResetCreditsSession(accountId)
+      session.value = target
       selectedCreditId.value = ''
-      restoreSnapshot(accountId)
-      loading.value = false
-      loadError.value = ''
       showConfirm.value = false
+      const listener = (account: Account) => options.onAccountUpdated(account)
+      target.accountUpdatedListeners.add(listener)
+      onCleanup(() => target.accountUpdatedListeners.delete(listener))
     },
-    { immediate: true },
+    { immediate: true, flush: 'sync' },
   )
+
+  watch([credits, pendingOperation], reconcileSelectedCredit, { immediate: true, flush: 'sync' })
+  watch(consuming, (isConsuming) => {
+    if (!isConsuming)
+      showConfirm.value = false
+  }, { flush: 'sync' })
 
   return {
     credits,
@@ -249,7 +260,7 @@ export function useAccountResetCredits(options: {
     loadError,
     ambiguous,
     showConfirm,
-    loadCredits,
+    loadCredits: () => loadSessionCredits(session.value),
     selectCredit,
     requestConsume,
     cancelConsume,

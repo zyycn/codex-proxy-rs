@@ -1,5 +1,6 @@
 //! Provider、模型目录、精确模型映射与请求级候选计划。
 
+mod catalog;
 pub mod snapshot;
 
 pub use crate::account::scope::{
@@ -7,6 +8,10 @@ pub use crate::account::scope::{
     FrozenAccountScope, RoutingGroupSnapshot, RuntimeAccount, RuntimeAccountDirectory,
 };
 pub use crate::identity::ProviderKind;
+pub use catalog::{
+    ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
+    ProviderModelCapabilities,
+};
 pub use snapshot::RuntimeSnapshot;
 
 use std::collections::{BTreeMap, BTreeSet};
