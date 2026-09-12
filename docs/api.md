@@ -726,6 +726,10 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
 
+请求记录列表的 `search` 使用区分大小写的字面量前缀匹配，支持请求 ID、Client Key ID / Key 前缀、
+账号 ID、账号邮箱与名称、请求 / 上游模型 ID、上游请求 ID。账号邮箱与名称按请求记录的历史快照检索，
+不随当前账号修改或删除而改变；`%`、`_` 和 `\` 均按普通字符处理，不作为搜索通配符。
+
 请求 ID 和上游 ID 继续通过既有字段查询；不增加入口 ID 字段，也不扫描 trace 建立查询映射。
 旧响应中只有入口 ID 时仍需结合时间与入口日志定位，不能回填不存在的关联。
 管理端搜索完整 `sk_` Client Key 时仅提交其可见前缀，不将完整密钥放入 URL。

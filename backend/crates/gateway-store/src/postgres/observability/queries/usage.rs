@@ -85,6 +85,8 @@ pub(crate) fn push_usage_filter(
         for column in [
             "client_api_key_ref",
             "provider_account_ref",
+            "provider_account_email_snapshot",
+            "provider_account_name_snapshot",
             "requested_model_id",
             "upstream_model_id",
             "upstream_request_id",

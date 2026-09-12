@@ -188,6 +188,149 @@ async fn usage_search_should_match_literal_prefix_instead_of_substring() {
 }
 
 #[tokio::test]
+async fn usage_search_should_match_account_email_and_name_prefixes() {
+    let Some(database) = TestDatabase::create("usage_account_prefix").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    for search in ["account@example.invalid", "account@", "primary", "pri"] {
+        assert_usage_search_ids(&database.pool, range, search, &["req_observe_success"]).await;
+    }
+    for search in ["count@example.invalid", "rimary", "missing@example.invalid"] {
+        assert_usage_search_ids(&database.pool, range, search, &[]).await;
+    }
+
+    sqlx::query("update model_requests set provider_account_email_snapshot = null")
+        .execute(&database.pool)
+        .await
+        .expect("clear account email snapshots");
+    assert_usage_search_ids(&database.pool, range, "primary", &["req_observe_success"]).await;
+    assert_usage_search_ids(&database.pool, range, "account@", &[]).await;
+
+    sqlx::query("update model_requests set provider_account_name_snapshot = null")
+        .execute(&database.pool)
+        .await
+        .expect("clear account name snapshots");
+    assert_usage_search_ids(
+        &database.pool,
+        range,
+        "acct_observe",
+        &["req_observe_success"],
+    )
+    .await;
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_search_should_preserve_account_snapshots_after_account_changes() {
+    let Some(database) = TestDatabase::create("usage_account_history").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    // 搜索与列表都使用请求发生时的快照，不能随当前账号资料变化或删除而改变。
+    for mutation in [
+        "update provider_accounts set name = 'renamed', email = 'renamed@example.invalid'
+         where id = 'acct_observe'",
+        "delete from provider_accounts where id = 'acct_observe'",
+    ] {
+        sqlx::query(mutation)
+            .execute(&database.pool)
+            .await
+            .expect("change current account");
+        for search in ["account@example.invalid", "primary"] {
+            assert_usage_search_ids(&database.pool, range, search, &["req_observe_success"]).await;
+        }
+        for search in ["renamed@example.invalid", "renamed"] {
+            assert_usage_search_ids(&database.pool, range, search, &[]).await;
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_search_should_treat_account_snapshot_wildcards_as_literals() {
+    let Some(database) = TestDatabase::create("usage_account_literals").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now)
+        .await
+        .expect("seed observability facts");
+    sqlx::query(
+        "update model_requests
+         set provider_account_email_snapshot = $1, provider_account_name_snapshot = $2",
+    )
+    .bind("account_team%tag@example.invalid")
+    .bind(r"primary\ops_100%")
+    .execute(&database.pool)
+    .await
+    .expect("set account snapshots with literal wildcard characters");
+    let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+        .expect("observability range");
+
+    for search in [
+        "account_team%tag@example.invalid",
+        "account_",
+        "account_team%",
+        r"primary\",
+        r"primary\ops_",
+        r"primary\ops_100%",
+    ] {
+        assert_usage_search_ids(&database.pool, range, search, &["req_observe_success"]).await;
+    }
+    for search in ["account%", "account_team_", "primary_", r"primary\ops%"] {
+        assert_usage_search_ids(&database.pool, range, search, &[]).await;
+    }
+    database.close().await;
+}
+
+async fn assert_usage_search_ids(
+    pool: &PgPool,
+    range: ObservabilityRange,
+    search: &str,
+    expected_ids: &[&str],
+) {
+    let page = observability_repository(pool)
+        .list_usage_records(UsageRecordQuery {
+            range,
+            filter: UsageRecordFilter {
+                search: Some(search.to_owned()),
+                ..UsageRecordFilter::default()
+            },
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("search usage by account snapshot");
+
+    assert_eq!(
+        page.total,
+        u64::try_from(expected_ids.len()).expect("expected total"),
+        "search: {search}"
+    );
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        expected_ids,
+        "search: {search}"
+    );
+}
+
+#[tokio::test]
 async fn usage_search_should_match_client_api_key_prefix() {
     let Some(database) = TestDatabase::create("usage_client_api_key_search").await else {
         return;
