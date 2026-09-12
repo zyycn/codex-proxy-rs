@@ -996,6 +996,108 @@ fn probe_observation_store_failure_preserves_the_provider_error() {
 
 struct FailingProvider;
 
+struct NativeCatalogProvider {
+    fail: bool,
+}
+
+#[async_trait]
+impl Provider for NativeCatalogProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+    async fn query_client_model_catalog(
+        &self,
+        scope: &FrozenAccountScope,
+        protocol: &str,
+        version: &str,
+    ) -> Result<
+        Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
+        gateway_core::routing::ProviderCatalogUnavailable,
+    > {
+        assert!(scope.allows(&ProviderAccountId::new("acct_start").expect("account")));
+        assert!(!scope.allows(&ProviderAccountId::new("acct_other").expect("account")));
+        assert_eq!((protocol, version), ("codex", "0.154.0"));
+        if self.fail {
+            return Err(gateway_core::routing::ProviderCatalogUnavailable);
+        }
+        Ok(Some(
+            ["gpt-new", "gpt-start"]
+                .into_iter()
+                .map(|id| gateway_core::routing::ProviderModelDescriptor {
+                    model: UpstreamModelId::new(id).expect("id"),
+                    payload: RawJsonPayload::new(
+                        "codex",
+                        serde_json::to_vec(&json!({"slug":id,"future":null}))
+                            .expect("JSON")
+                            .into(),
+                    )
+                    .expect("payload"),
+                })
+                .collect(),
+        ))
+    }
+    async fn execute(
+        &self,
+        _: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        panic!("catalog must not use metered execution")
+    }
+}
+
+#[test]
+fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models() {
+    for fail in [false, true] {
+        let snapshot = start_snapshot().with_model_mappings(BTreeMap::from([
+            ("alias".to_owned(), "gpt-start".to_owned()),
+            ("missing-alias".to_owned(), "unavailable-model".to_owned()),
+        ]));
+        let service = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(snapshot),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::new([Arc::new(NativeCatalogProvider { fail }) as Arc<dyn Provider>])
+                .expect("registry"),
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let client = service.authenticate("sk_start_test").expect("authenticate");
+        let result = block_on(service.client_model_catalog(&client, "codex", "0.154.0"));
+        if fail {
+            assert!(
+                result.is_err(),
+                "native failure cannot use the global synthesized catalog"
+            );
+            continue;
+        }
+        let models = result.expect("models");
+        let pairs = models
+            .iter()
+            .map(|entry| {
+                let gateway_core::routing::PublicModelDescriptor::Native { model, payload } = entry
+                else {
+                    panic!("native required")
+                };
+                (model.as_str(), payload.body())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pairs.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            ["gpt-start", "alias"]
+        );
+        assert_eq!(pairs[0].1, pairs[1].1, "Core preserves alias payload bytes");
+    }
+}
+
 #[async_trait]
 impl Provider for FailingProvider {
     fn name(&self) -> &'static str {

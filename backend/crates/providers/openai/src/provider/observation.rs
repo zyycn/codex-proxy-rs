@@ -615,6 +615,7 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
         capabilities.image_detail_original() == CodexCatalogCapabilityEvidence::DeclaredNative,
     )
     .with_verbosity(capabilities.verbosity() == CodexCatalogCapabilityEvidence::DeclaredNative)
+    .with_service_tiers(model.metadata().service_tiers().to_vec())
     .with_hidden(hidden)
 }
 

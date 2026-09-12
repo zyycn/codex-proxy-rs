@@ -1,14 +1,42 @@
 use chrono::{TimeZone, Utc};
+use gateway_core::routing::ModelServiceTier;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use provider_openai::transport::{
     CodexBackendClient, CodexCatalogCapabilityEvidence, CodexCatalogVisibility, CodexClientError,
     CodexModelCatalogError, CodexRequestContext, MAX_CODEX_MODEL_CATALOG_BYTES,
     build_reqwest_client, parse_codex_model_catalog,
 };
+use serde_json::{Value, json};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const OFFICIAL_FIXTURE: &[u8] = include_bytes!("fixtures/official_models_snapshot.json");
+
+#[test]
+fn native_document_keeps_unknown_nested_fields_nulls_and_model_instructions() {
+    let original = json!({
+        "slug": "gpt-native", "display_name": "Native",
+        "base_instructions": "original model instructions\nwith line breaks",
+        "model_messages": {"future_instructions": {"template": "do not replace"}},
+        "future_field": [null, {"new": true}], "explicit_null": null,
+        "service_tiers": [{"id":"priority", "name":"Fast", "description":"1.5x speed", "future":true}]
+    });
+    let body = serde_json::to_vec(&json!({"models":[original]})).expect("body");
+    let snapshot = parse_codex_model_catalog(&body, None).expect("catalog");
+    let model = &snapshot.models()[0];
+    let preserved: Value = serde_json::from_slice(model.document().body()).expect("document");
+    assert_eq!(preserved, original);
+    assert!(!format!("{model:?}").contains("original model instructions"));
+    assert!(!format!("{model:?}").contains("future_instructions"));
+    let mut changed = original;
+    changed["model_messages"]["future_instructions"]["template"] = json!("new content");
+    let changed = parse_codex_model_catalog(
+        &serde_json::to_vec(&json!({"models":[changed]})).expect("body"),
+        None,
+    )
+    .expect("catalog");
+    assert_ne!(snapshot.models(), changed.models());
+}
 
 #[test]
 fn official_fixture_should_produce_safe_full_snapshot() {
@@ -65,7 +93,7 @@ fn official_fixture_should_produce_safe_full_snapshot() {
 }
 
 #[test]
-fn non_whitelisted_wire_fields_should_not_survive_normalization() {
+fn raw_instructions_and_unknown_fields_should_not_appear_in_snapshot_debug() {
     let snapshot =
         parse_codex_model_catalog(OFFICIAL_FIXTURE, None).expect("official fixture should parse");
     let debug = format!("{snapshot:?}");
@@ -75,6 +103,91 @@ fn non_whitelisted_wire_fields_should_not_survive_normalization() {
             && !debug.contains("provider-only template")
             && !debug.contains("available_in_plans")
     );
+}
+
+#[test]
+fn service_tiers_should_preserve_declared_ids_names_and_descriptions() {
+    let body = json!({"models": [{
+        "slug": "gpt-future",
+        "display_name": "Future",
+        "service_tiers": [
+            {"id": "priority", "name": "Fast", "description": "Priority processing."},
+            {"id": "deferred", "name": "Economy", "description": ""}
+        ]
+    }]});
+    let snapshot = parse_codex_model_catalog(&serde_json::to_vec(&body).expect("JSON"), None)
+        .expect("declared service tiers");
+
+    assert_eq!(
+        snapshot.models()[0].metadata().service_tiers(),
+        [
+            ModelServiceTier::new("priority", "Fast", "Priority processing."),
+            ModelServiceTier::new("deferred", "Economy", ""),
+        ]
+    );
+}
+
+#[test]
+fn missing_or_empty_service_tiers_should_not_infer_fast_from_legacy_metadata() {
+    for service_tiers in [None, Some(json!([]))] {
+        let mut model = json!({
+            "slug": "gpt-5.4",
+            "display_name": "GPT-5.4",
+            "additional_speed_tiers": ["fast"]
+        });
+        if let Some(service_tiers) = service_tiers {
+            model["service_tiers"] = service_tiers;
+        }
+        let body = json!({"models": [model]});
+        let snapshot = parse_codex_model_catalog(&serde_json::to_vec(&body).expect("JSON"), None)
+            .expect("optional service tiers");
+
+        assert!(snapshot.models()[0].metadata().service_tiers().is_empty());
+    }
+}
+
+#[test]
+fn invalid_service_tier_metadata_should_fail_the_entire_snapshot() {
+    for (field, value) in [
+        ("id", String::new()),
+        ("id", "p".repeat(65)),
+        ("name", " ".to_owned()),
+        ("name", "f".repeat(257)),
+        ("name", "Fast\u{1b}".to_owned()),
+        ("description", "d".repeat(4097)),
+        ("description", "unsafe\u{0}".to_owned()),
+    ] {
+        let mut tier = json!({"id": "priority", "name": "Fast", "description": "Priority."});
+        tier[field] = Value::String(value);
+        let body = json!({"models": [{
+            "slug": "gpt-5.4", "display_name": "GPT-5.4", "service_tiers": [tier]
+        }]});
+
+        assert_eq!(
+            parse_codex_model_catalog(&serde_json::to_vec(&body).expect("JSON"), None),
+            Err(CodexModelCatalogError::InvalidMetadata),
+            "invalid {field}"
+        );
+    }
+}
+
+#[test]
+fn malformed_service_tiers_should_fail_the_official_wire_contract() {
+    for service_tiers in [
+        Value::Null,
+        json!("fast"),
+        json!([{"id": "priority", "name": "Fast"}]),
+        json!([{"id": 1, "name": "Fast", "description": "Priority."}]),
+    ] {
+        let body = json!({"models": [{
+            "slug": "gpt-5.4", "display_name": "GPT-5.4", "service_tiers": service_tiers
+        }]});
+
+        assert_eq!(
+            parse_codex_model_catalog(&serde_json::to_vec(&body).expect("JSON"), None),
+            Err(CodexModelCatalogError::InvalidWire)
+        );
+    }
 }
 
 #[test]
@@ -241,7 +354,7 @@ async fn fetch_should_send_official_catalog_headers_and_query() {
         profile(),
     );
     let snapshot = client
-        .fetch_models_with_context(context())
+        .fetch_models_with_context(context(), None)
         .await
         .expect("fetch strict snapshot");
 
@@ -285,7 +398,7 @@ async fn fetch_should_reject_streamed_body_over_hard_limit() {
         profile(),
     );
 
-    let result = client.fetch_models_with_context(context()).await;
+    let result = client.fetch_models_with_context(context(), None).await;
 
     assert!(matches!(
         result,

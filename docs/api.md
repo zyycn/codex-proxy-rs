@@ -188,8 +188,34 @@ message/type/code；没有结构化错误时使用稳定安全文案，不把原
 `GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
 `client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`。
 
+OpenAI Provider 按客户端传入的 `client_version` 请求上游目录，完整保留每个模型 JSON 对象，包括
+`base_instructions`、`model_messages`、`service_tiers`、工具与能力字段，以及未知嵌套字段、显式 `null`
+和字段缺失的区别。Core 不解释这些协议字段，API 不再根据通用模型画像重建 OpenAI 目录。
+模型别名仅替换 `slug`，不替换上游展示名、提示词、能力或 `priority`；保持原生模型顺序，新增别名附在后面。
+目录仍按当前路由快照的模型存在性过滤，避免公布已知无法路由的模型；新模型需待后台目录对账后进入列表。
+xAI 没有 Codex 原生目录，继续使用明确的通用画像适配。
+
+目录账号只能来自本次 Client Key 冻结的账号范围。OpenAI 在其中按账号 ID 排序，使用首个成功读取的
+合格账号，最多尝试三个账号；同名模型不跨账号或套餐混拼字段。因此单账号、无别名时可保持该账号的
+模型对象一致，多账号/多 Provider 聚合不代表“与某个官方账号的整个目录完全一致”，也不会固定后续推理账号。
+读取失败返回 `503 model_catalog_unavailable`，不以简化模板或空成功响应覆盖客户端缓存。
+
+原生目录使用 Provider 内的有界缓存：最多 32 份，成功 TTL 为 5 分钟，失败短缓存为 5 秒，单次上游
+读取超时为 15 秒。缓存按账号、凭据 revision、套餐、上游账号身份、客户端版本和请求画像隔离；并发
+读取合并，新的目录 ETag、后台目录内容变化或显式失效会清理缓存。每次读取仍重新检查账号资格和 Key 范围，
+不会因缓存命中跨越权限。完整对象不写 PostgreSQL 或 Redis；现有套餐 Redis cache 仍只保存模型 ID。
+成功目录响应带 `Cache-Control: private, no-store`，不借用上游 ETag 标识经过选择/别名/聚合后的正文。
+Codex 自己仍会写 `models_cache.json`；Responses 的 `x-models-etag` 保持原协议，这可能让客户端再次
+读取目录，但通常命中上述服务端缓存，不表示每轮都重新请求上游。
+
+`service_tiers` 的 `name` 用于生成 `/fast` 等命令，`id` 是请求使用的 `service_tier` 值，二者不能互换。
+上游未声明或明确返回空数组时不补档位，也不根据模型名或旧 `additional_speed_tiers` 字段推断 Fast。
+该合同对齐
+[官方 Codex 0.154.0 的模型元数据](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/openai_models.rs)
+与其动态服务档位命令；升级网关后，已有客户端缓存需要在重新加载模型目录后才能反映修复。
+
 Codex 专用目录中的 `context_window` 与 `max_context_window` 分别表示默认上下文窗口和客户端本地
-覆盖的上限。OpenAI Provider 分别传递上游目录中的对应字段，缺失时保留 `null`；网关不通过部署配置
+覆盖的上限。OpenAI Provider 原样保留上游对应字段，缺失与 `null` 不互相转换；网关不通过部署配置
 覆盖这些值。Codex 客户端配置 `model_context_window` 后，按该值与非空 `max_context_window` 的较小值
 使用窗口；上限为空时保留客户端本地值。xAI 目录只声明一个窗口，其 Provider 继续以该值作为客户端覆盖上限。
 
@@ -469,7 +495,7 @@ OAuth start 使用：
 不轮询。关闭弹窗取消未完成的查询，重新打开重新采样。“刷新额度”仍调用现有
 `POST /api/admin/accounts/quota/refresh`，成功后替换账号行并重新查询预测。
 
-响应 `data` 包含 `accountId`、`generatedAt`、`generatedAtDisplay` 和 `forecasts`（`weekly`、`monthly`）：
+响应 `data` 包含 `accountId`、`generatedAt` 和 `forecasts`（`weekly`、`monthly`）：
 
 - `targetDays`、`extrapolated`：对应周期存在真实账号级窗口时采用实际时长；缺少对应窗口时，使用
   可统计的周/月窗口按 7/30 天折算，明确标记 `extrapolated: true`。不把短期限流或模型专属桶当作账号容量。
@@ -477,22 +503,23 @@ OAuth start 使用：
   公式为 `样本用量 × 100 / sampledPercent × 目标窗口秒数 / 源窗口秒数`。
 - `remainingTokens` / `remainingUsd` 及对应 `*Display`：**额度快照时源窗口**的剩余估算，
   公式为 `样本用量 × (100 - usedPercent) / sampledPercent`；不随目标周期折算，不代表当前可消费余额。
-- `method` / `methodDisplay`：`incremental` 为近期分段估算，`cumulative` 为窗口累计估算。
-  同一额度段内，以历史额度和截至相应完成时间的累计用量建立基线，每累计至少 5 个百分点形成一段，
-  使用最近 3 个完整段及未满一段的尾部。只对合并区间计算比值，不平均逐请求小分母比值。
-  重复读数不增加段数；大于 1 个百分点的回落或累计计数倒退会中断采样，不能静默跨越。
-- `source`：源窗口标识、实际天数、原始已用比例、窗口开始 / 额度快照 / 重置时间，
-  **选中采样区间**的请求数、总 Token、输入 / 输出 / 缓存命中构成、USD 费用与费用记录数。
-  `sampleStartAt` / `sampleStartAtDisplay` 为实际采样开始，`baselinePercent` 为基线已用比例，
-  `sampledPercent` / `sampledPercentDisplay` 为有效额度进度（百分点，而非时间进度）。
-  `blockCount` 是采用的完整进度段数，`observationCount` 是可供配对的历史点数，二者均不是独立统计样本数。
-  `missingTokenCount` 为不能由 total 或完整 input/output 确定 Token 的请求数；
-  `excludedRequestCount` 为选中区间内未进入成功用量口径的已结束请求数；
-  `pendingRequestCount` 为查询范围内在额度快照时尚未结束的请求数。
-  缓存命中属于输入，不重复相加。费用覆盖针对有效 USD 记录；其他币种或缺少有效金额均不能当成零 USD。
+- `source`：只返回容量卡所需的源窗口名称 `label`、已用比例 `usedPercent` / `usedPercentDisplay`、
+  额度观测时间 `observedAt` / `observedAtDisplay`、用于过期检查的 `resetAt`，以及选中采样区间
+  已记录的 `tokensDisplay` / `usdDisplay`。`source: null` 表示没有可选的源窗口。
+  不再返回请求数、Token 构成、费用覆盖计数、采样方法、基线与进度段等右侧明细，
+  Admin 结果模型也不再复制这些诊断字段；计算与完整性检查所需的内部采样事实不变。
 - `unavailableReason`：不能估算时的说明，正常为 `null`。有效进度少于 5 个百分点不预测；
   `lowSample` 表示有效进度不足 10 个百分点，或增量采样少于 2 个完整段，仅是质量提示，不承诺精度。
   `incompleteCost` 仅抑制费用预测；`incompleteTokens` 仅抑制 Token 预测。未知值不按确定的零消耗外推。
+  弹窗仅显示容量卡，将低样本展示为“初步估算”，以简短说明提示估算限制；底部的更新时间取
+  `source.observedAtDisplay`，不能用查询生成时间冒充额度观测时间。只有实际阻止 Token 或费用
+  预测的数据缺失展示一条合并提示，不改变预测门槛。
+
+内部采样优先采用近期分段，条件不足时才使用窗口累计估算。同一额度段内，以历史额度和截至相应
+完成时间的累计用量建立基线，每累计至少 5 个百分点形成一段，使用最近 3 个完整段及未满一段的尾部。
+上式中的 `sampledPercent` 是内部有效额度进度（百分点），不是时间进度或对外响应字段。
+只对合并区间计算比值，不平均逐请求小分母比值；重复读数不增加段数，大于 1 个百分点的回落或累计
+计数倒退会中断采样，不能静默跨越。缓存命中属于输入，不重复相加；其他币种或缺少有效金额不能当成零 USD。
 
 采样查询 `[max(resetAt - windowSeconds, accountAddedAt), observedAt)` 内开始的请求，
 仅把 `completedAt <= observedAt` 的完整交付用量计入当前分子；历史分子按各点的完成时间累计，
@@ -794,7 +821,10 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 鉴权、解析、路由和准入等入口拒绝不属于该范围；请求观测仍是可能延迟或丢弃的异步投影。
 
 汇总与洞察中的请求数与 outcome 分布覆盖筛选范围内全部请求；token、缓存、延迟与成本聚合仅统计
-已完整交付客户端的成功响应。
+已完整交付客户端的成功推理响应。OpenAI 的 `generate: false` 连接与上下文准备记录归类为
+`requestKind: "prewarm"`，不进入用量列表、账号用量或额度预测的 Token / 费用覆盖统计，但仍可按
+请求 ID 读取审计详情，响应中的额度观测仍可用于预测配对。此分类以实际 `generate` 字段为准，
+不能仅凭客户端的同名 metadata 或输出 Token 为零排除普通推理；其他 Provider 不套用该规则。
 
 详情接口按 `id` 可读取成功、失败或未完成请求。新增 `trace`（历史未采集记录为 `null`）和
 `relatedRequests[]`（`requestId / relation / outcome / completedAt`）；`relation` 为 `recovered_by` 或

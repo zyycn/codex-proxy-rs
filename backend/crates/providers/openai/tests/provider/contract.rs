@@ -33,9 +33,9 @@ use gateway_core::operation::{
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
-    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
-    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
-    RuntimeSnapshot, UpstreamModelId,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ModelServiceTier,
+    ProviderKind, ProviderModel, PublicModelId, RoutingContext, RuntimeAccount,
+    RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::upstream::UpstreamSendState;
 use provider_openai::config::DEFAULT_STREAM_MAX_RETRIES;
@@ -6114,6 +6114,56 @@ fn request_observation_reads_openai_metadata_without_changing_the_operation() {
 }
 
 #[test]
+fn request_observation_classifies_prewarm_from_generate_without_rewriting_the_payload() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let provider = provider(&store);
+    let client_key_id = ClientApiKeyId::new("key_prewarm_observation").expect("client key");
+    for (generate, request_kind, expected_kind) in [
+        (Some(json!(false)), None, Some("prewarm")),
+        (Some(json!(false)), Some("prewarm"), Some("prewarm")),
+        (Some(json!(false)), Some("review"), Some("prewarm")),
+        (Some(json!(true)), Some("prewarm"), None),
+        (None, Some("prewarm"), None),
+        (Some(json!(null)), Some("prewarm"), None),
+        (Some(json!("false")), Some("prewarm"), None),
+        (None, Some("review"), Some("review")),
+        (None, None, None),
+    ] {
+        let mut body = Map::from_iter([
+            ("model".to_owned(), json!("gpt-test")),
+            ("input".to_owned(), json!("hello")),
+            ("store".to_owned(), json!(false)),
+        ]);
+        if let Some(generate) = generate {
+            body.insert("generate".to_owned(), generate);
+        }
+        let payload = ProtocolPayload::json_object("openai", body.clone())
+            .expect("OpenAI payload")
+            .with_context(Map::from_iter([(
+                "turn_metadata".to_owned(),
+                Value::String(
+                    json!({"request_kind": request_kind, "subagent_kind": "worker"}).to_string(),
+                ),
+            )]));
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+
+        let observation = provider.request_observation(&operation, &client_key_id);
+
+        assert_eq!(
+            observation.request_kind.as_deref(),
+            expected_kind,
+            "generate={:?}, request_kind={request_kind:?}",
+            body.get("generate"),
+        );
+        assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
+        let Operation::Generate(generation) = operation else {
+            unreachable!();
+        };
+        assert_eq!(generation.protocol_payload().body(), &body);
+    }
+}
+
+#[test]
 fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_catalog() {
     let store = Arc::new(MemoryAccountStore::default());
     let provider = provider(&store);
@@ -6257,6 +6307,41 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
     assert!(presentation.image_detail_original());
     assert!(presentation.verbosity());
     assert!(!presentation.hidden());
+    assert_eq!(
+        presentation.service_tiers(),
+        [ModelServiceTier::new(
+            "priority",
+            "Fast",
+            "Priority processing."
+        )]
+    );
+
+    let scope = FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_presentation").expect("account"),
+            RuntimeAccount::new(
+                ProviderKind::new("openai").expect("provider"),
+                BTreeSet::new(),
+            ),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    );
+    let native = provider
+        .query_client_model_catalog(&scope, "codex", "0.154.0")
+        .await
+        .expect("native catalog")
+        .expect("supported");
+    let original: Value = serde_json::from_slice(OFFICIAL_FIXTURE).expect("fixture");
+    let document: Value = serde_json::from_slice(native[0].payload.body()).expect("document");
+    assert_eq!(document, original["models"][0]);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .any(|request| request.url.query() == Some("client_version=0.154.0"))
+    );
 }
 
 #[tokio::test]

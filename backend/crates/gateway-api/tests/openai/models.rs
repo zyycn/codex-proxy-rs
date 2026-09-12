@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::{
     body::{Body, to_bytes},
@@ -11,7 +11,8 @@ use gateway_core::engine::execution::{
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::routing::{
-    ModelPresentation, ModelServiceTier, PublicModelId, PublicModelProfile,
+    ModelPresentation, ModelServiceTier, ProviderCatalogUnavailable, PublicModelDescriptor,
+    PublicModelId, PublicModelProfile,
 };
 use tower::ServiceExt;
 
@@ -20,6 +21,8 @@ use super::{api_router, authenticated_client, authenticated_client_with_min_vers
 pub(super) struct ModelsExecution {
     client: AuthenticatedClient,
     presentation: Option<ModelPresentation>,
+    native: Option<Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>>,
+    requested_versions: Mutex<Vec<String>>,
 }
 
 impl ModelsExecution {
@@ -27,6 +30,8 @@ impl ModelsExecution {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
             presentation: None,
+            native: None,
+            requested_versions: Mutex::default(),
         })
     }
 
@@ -61,6 +66,8 @@ impl ModelsExecution {
         Arc::new(Self {
             client: authenticated_client("sk_models_test"),
             presentation: Some(presentation),
+            native: None,
+            requested_versions: Mutex::default(),
         })
     }
 
@@ -68,6 +75,8 @@ impl ModelsExecution {
         Arc::new(Self {
             client: authenticated_client_with_min_versions("sk_models_test", None, Some("0.40.0")),
             presentation: None,
+            native: None,
+            requested_versions: Mutex::default(),
         })
     }
 
@@ -79,11 +88,48 @@ impl ModelsExecution {
                 None,
             ),
             presentation: None,
+            native: None,
+            requested_versions: Mutex::default(),
         })
+    }
+
+    fn profiles(&self) -> Vec<PublicModelProfile> {
+        self.presentation
+            .as_ref()
+            .map(|presentation| {
+                PublicModelProfile::new(
+                    PublicModelId::new("grok-4.5").expect("model"),
+                    presentation.clone(),
+                )
+            })
+            .into_iter()
+            .collect()
     }
 }
 
 impl ExecutionService for ModelsExecution {
+    fn client_model_catalog<'a>(
+        &'a self,
+        _client: &'a AuthenticatedClient,
+        protocol: &'a str,
+        version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
+        Box::pin(async move {
+            assert_eq!(protocol, "codex");
+            self.requested_versions
+                .lock()
+                .expect("versions")
+                .push(version.to_owned());
+            self.native.clone().unwrap_or_else(|| {
+                Ok(self
+                    .profiles()
+                    .into_iter()
+                    .map(PublicModelDescriptor::Adapted)
+                    .collect())
+            })
+        })
+    }
+
     fn authenticate(
         &self,
         plaintext: &str,
@@ -100,16 +146,6 @@ impl ExecutionService for ModelsExecution {
             .into_iter()
             .map(|model| PublicModelId::new(model).expect("model"))
             .collect()
-    }
-
-    fn public_model_profiles(&self, _: &AuthenticatedClient) -> Vec<PublicModelProfile> {
-        let Some(presentation) = &self.presentation else {
-            return Vec::new();
-        };
-        vec![PublicModelProfile::new(
-            PublicModelId::new("grok-4.5").expect("model"),
-            presentation.clone(),
-        )]
     }
 
     fn contains_public_model(&self, _: &AuthenticatedClient, model: &PublicModelId) -> bool {
@@ -143,6 +179,102 @@ fn authorized_request(path: &str) -> Request<Body> {
         .header(AUTHORIZATION, "Bearer sk_models_test")
         .body(Body::empty())
         .expect("build models request")
+}
+
+#[tokio::test]
+async fn native_catalog_preserves_complete_objects_and_only_rewrites_alias_slug() {
+    let original = serde_json::json!({
+        "slug": "gpt-native", "display_name": "Official name", "priority": 47,
+        "base_instructions": "Official instructions\nDo not replace.",
+        "model_messages": {"token_budget": "upstream template", "future_section": [null, {"a": true}]},
+        "service_tiers": [{"id": "priority", "name": "Fast", "description": "Official speed tier"}],
+        "tool_mode": "code_mode_only", "use_responses_lite": true,
+        "future_field": {"nested": [1, null, "value"]}, "explicit_null": null
+    });
+    let entry = |model: &str| PublicModelDescriptor::Native {
+        model: PublicModelId::new(model).expect("model"),
+        payload: gateway_core::operation::RawJsonPayload::new(
+            "codex",
+            serde_json::to_vec(&original).expect("JSON").into(),
+        )
+        .expect("payload"),
+    };
+    let execution = Arc::new(ModelsExecution {
+        client: authenticated_client("sk_models_test"),
+        presentation: None,
+        native: Some(Ok(vec![entry("gpt-native"), entry("my-alias")])),
+        requested_versions: Mutex::default(),
+    });
+    let response = api_router(execution.clone())
+        .await
+        .oneshot(authorized_request(
+            "/v1/models?client_version=0.154.0-alpha.3",
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    assert!(response.headers().get("etag").is_none());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+    assert_eq!(value["models"][0], original);
+    let mut alias = original;
+    alias["slug"] = serde_json::json!("my-alias");
+    assert_eq!(value["models"][1], alias);
+    assert_eq!(
+        *execution.requested_versions.lock().expect("versions"),
+        ["0.154.0-alpha.3"]
+    );
+}
+
+#[tokio::test]
+async fn native_catalog_failure_does_not_publish_a_synthetic_or_empty_success() {
+    let execution = Arc::new(ModelsExecution {
+        client: authenticated_client("sk_models_test"),
+        presentation: None,
+        native: Some(Err(ProviderCatalogUnavailable)),
+        requested_versions: Mutex::default(),
+    });
+    let response = api_router(execution)
+        .await
+        .oneshot(authorized_request("/v1/models?client_version=0.154.0"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+    assert_eq!(value["error"]["code"], "model_catalog_unavailable");
+    assert!(value.get("models").is_none());
+}
+
+#[tokio::test]
+async fn catalog_rejects_unbounded_or_control_character_versions_before_fetching() {
+    for version in [
+        "x".repeat(65),
+        "0.154.0%0A".to_owned(),
+        "0.154.0%20".to_owned(),
+    ] {
+        let execution = ModelsExecution::new();
+        let response = api_router(execution.clone())
+            .await
+            .oneshot(authorized_request(&format!(
+                "/v1/models?client_version={version}"
+            )))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            execution
+                .requested_versions
+                .lock()
+                .expect("versions")
+                .is_empty()
+        );
+    }
 }
 
 #[tokio::test]
