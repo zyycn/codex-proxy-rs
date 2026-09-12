@@ -254,5 +254,6 @@ fn push_prefix_search(statement: &mut QueryBuilder<Postgres>, columns: &[&str], 
         statement.push_bind(pattern.clone());
         statement.push(" escape '\\'");
     }
+    push_client_key_name_search(statement, "mr.client_api_key_ref", pattern);
     statement.push(")");
 }

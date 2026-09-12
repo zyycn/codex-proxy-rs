@@ -76,10 +76,28 @@ fn bearer_client_api_key_should_reject_empty_bearer_token() {
 }
 
 #[test]
-fn bearer_client_api_key_should_reject_non_gateway_key_prefix() {
-    let mut headers = HeaderMap::new();
-    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer xai-secret"));
+fn bearer_client_api_key_should_accept_migrated_formats_without_rewriting() {
+    for key in [
+        "q".to_owned(),
+        "sk-old/key+value=:!@".to_owned(),
+        "x".repeat(8192),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
+        );
+        assert_eq!(bearer_client_api_key(&headers), Ok(key.as_str()));
+    }
+}
 
+#[test]
+fn bearer_client_api_key_should_reject_whitespace_inside_tokens() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer key with spaces"),
+    );
     assert_eq!(
         bearer_client_api_key(&headers),
         Err(ClientApiKeyAuthError::InvalidKeyFormat)

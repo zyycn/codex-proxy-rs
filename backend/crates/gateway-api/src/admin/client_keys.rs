@@ -13,7 +13,7 @@ use gateway_admin::model::client_keys::{
 use gateway_core::{
     engine::budget::ClientBudgetLimits,
     metering::Decimal,
-    policy::{ClientApiKeyId, RateLimits},
+    policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
     routing::AccountGroupId,
 };
 use serde::{Deserialize, Serialize};
@@ -70,9 +70,7 @@ impl ListClientKeysQuery {
         }
         let search = self.search.map(|search| search.trim().to_owned());
         if search.as_deref().is_some_and(|search| {
-            search.len() > MAX_SEARCH_BYTES
-                || search.chars().any(char::is_control)
-                || contains_client_key_material(search)
+            search.len() > MAX_SEARCH_BYTES || search.chars().any(char::is_control)
         }) {
             return Err(WireValidationError::new("search"));
         }
@@ -143,9 +141,10 @@ impl ClientKeySort {
 }
 
 /// 创建 Client Key 请求。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
+    custom_key: Option<String>,
     name: String,
     label: Option<String>,
     group_ids: Vec<String>,
@@ -153,6 +152,16 @@ pub struct CreateClientKeyRequest {
     requests_per_minute: u64,
     daily_limit_usd: Option<String>,
     weekly_limit_usd: Option<String>,
+}
+
+impl fmt::Debug for CreateClientKeyRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateClientKeyRequest")
+            .field("name", &self.name)
+            .field("custom_key", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl CreateClientKeyRequest {
@@ -164,6 +173,12 @@ impl CreateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(CreateClientKey {
+            custom_key: self
+                .custom_key
+                .filter(|key| !key.is_empty())
+                .map(PlaintextClientApiKey::new)
+                .transpose()
+                .map_err(|_| WireValidationError::new("customKey"))?,
             name: self.name,
             label: self.label,
             group_ids,
@@ -659,15 +674,6 @@ fn validate_optional_text(
         return Err(WireValidationError::new(field));
     }
     Ok(())
-}
-
-fn contains_client_key_material(value: &str) -> bool {
-    value.as_bytes().windows(46).any(|window| {
-        &window[..3] == b"sk_"
-            && window[3..]
-                .iter()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    })
 }
 
 /// 构造固定 GET/POST 且 ID 仅位于 query/body 的 Client API Key 路由。

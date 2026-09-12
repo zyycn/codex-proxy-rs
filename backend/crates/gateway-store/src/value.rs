@@ -13,6 +13,7 @@ pub enum StoreBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictKind {
     StaleRevision,
+    DuplicateName,
     AlreadyFinalized,
     DownstreamAlreadyCommitted,
     RequestNotRunning,
@@ -105,6 +106,10 @@ pub(crate) fn admin_store_error(resource: &'static str, error: StoreError) -> Ad
             kind: ConflictKind::StaleRevision,
             ..
         } => AdminStoreErrorKind::StaleRevision,
+        StoreError::Conflict {
+            kind: ConflictKind::DuplicateName,
+            ..
+        } => AdminStoreErrorKind::DuplicateName,
         StoreError::Conflict { .. } => AdminStoreErrorKind::Conflict,
         StoreError::InvalidData { .. } => AdminStoreErrorKind::Invalid,
         StoreError::Unavailable { .. } => AdminStoreErrorKind::Unavailable,

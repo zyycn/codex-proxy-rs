@@ -11,7 +11,6 @@ import {
   getUsageRecordSummary,
 } from '@/api'
 import { withMinimumDuration } from '@/utils/async'
-import { usageSearchParam } from '../utils/search'
 
 interface UseUsageRecordsTableOptions {
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
@@ -36,7 +35,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const pageSize = shallowRef(10)
   const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
-  const search = computed(() => usageSearchParam(searchQuery.value))
+  const search = computed(() => searchQuery.value.trim() || undefined)
   const providerQuery = shallowRef('')
   let tableParams = snapshot()
   const refreshingList = shallowRef(false)

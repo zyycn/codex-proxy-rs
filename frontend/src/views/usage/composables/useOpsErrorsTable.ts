@@ -6,7 +6,6 @@ import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getOpsErrors } from '@/api'
 import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
 import { withMinimumDuration } from '@/utils/async'
-import { usageSearchParam } from '../utils/search'
 
 interface UseOpsErrorsTableOptions {
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
@@ -18,7 +17,7 @@ interface UseOpsErrorsTableOptions {
 export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
   const refreshing = shallowRef(false)
   const searchQuery = shallowRef('')
-  const search = computed(() => usageSearchParam(searchQuery.value))
+  const search = computed(() => searchQuery.value.trim() || undefined)
   let disposed = false
   // 时间、平台和搜索共同构成分页快照，避免翻页混入另一组筛选结果。
   let tableParams = snapshot()
