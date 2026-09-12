@@ -5,7 +5,11 @@ use std::fmt;
 use axum::{
     Router,
     extract::{FromRequestParts, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE, request::Parts},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{ORIGIN, SET_COOKIE},
+        request::Parts,
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -15,16 +19,35 @@ use gateway_admin::{
 };
 use serde::{Deserialize, Serialize};
 use tower_http::request_id::RequestId;
+use url::Url;
 
 use super::{AdminEnvelope, AdminError, AdminJson, AdminResponse};
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";
-const ADMIN_SESSION_COOKIE_ATTRS: &str = "Path=/; Secure; HttpOnly; SameSite=Lax";
 
 /// 所有管理 HTTP 模块从 state 消费同一个认证用例端口。
 pub trait AdminSessionState {
     fn admin_services(&self) -> &AdminServices;
+}
+
+fn admin_session_cookie_attrs(headers: &HeaderMap) -> &'static str {
+    // 同源管理端的 POST 由浏览器携带 Origin，HTTPS 反代回源 HTTP 不改变它。
+    // 只对明确的 HTTP 来源放宽；缺失、opaque 或非法来源继续使用 Secure。
+    let http_origin = headers.get_all(ORIGIN).iter().count() == 1
+        && headers
+            .get(ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|origin| {
+                Url::parse(origin).is_ok_and(|url| {
+                    url.scheme() == "http" && url.origin().ascii_serialization() == origin
+                })
+            });
+    if http_origin {
+        "Path=/; HttpOnly; SameSite=Lax"
+    } else {
+        "Path=/; Secure; HttpOnly; SameSite=Lax"
+    }
 }
 
 /// 已通过管理员会话或部署级管理 API Key 鉴权的请求。
@@ -203,6 +226,7 @@ where
 
 async fn login<S>(
     State(state): State<S>,
+    headers: HeaderMap,
     AdminJson(payload): AdminJson<AdminLoginRequest>,
 ) -> Result<Response, AdminError>
 where
@@ -221,8 +245,9 @@ where
     )
     .into_response();
     let cookie = format!(
-        "{ADMIN_SESSION_COOKIE}={}; {ADMIN_SESSION_COOKIE_ATTRS}",
-        session.session_id
+        "{ADMIN_SESSION_COOKIE}={}; {}",
+        session.session_id,
+        admin_session_cookie_attrs(&headers)
     );
     response.headers_mut().insert(
         SET_COOKIE,
@@ -260,7 +285,10 @@ where
     let mut response =
         AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(AdminLogoutData::new()))
             .into_response();
-    let cookie = format!("{ADMIN_SESSION_COOKIE}=; {ADMIN_SESSION_COOKIE_ATTRS}; Max-Age=0");
+    let cookie = format!(
+        "{ADMIN_SESSION_COOKIE}=; {}; Max-Age=0",
+        admin_session_cookie_attrs(&headers)
+    );
     response.headers_mut().insert(
         SET_COOKIE,
         HeaderValue::from_str(&cookie).map_err(|_| AdminError::internal())?,

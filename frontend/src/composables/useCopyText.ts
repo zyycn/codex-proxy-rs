@@ -13,7 +13,8 @@ interface CopyTextOptions {
 
 // 剪贴板复制 + toast 反馈；空值与错误文案语义由调用方按站点配置。
 export function useCopyText() {
-  const { copy } = useClipboard()
+  // 普通 HTTP 页面没有 Clipboard API，启用 VueUse 内置的兼容复制路径。
+  const { copy } = useClipboard({ legacy: true })
 
   return async function copyText(value: string, options: CopyTextOptions) {
     if (!value) {

@@ -10,6 +10,106 @@ use super::models::ModelsExecution;
 const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 #[tokio::test]
+async fn browser_origin_controls_http_admin_sessions_without_configuration() {
+    use axum::body::to_bytes;
+    use serde_json::{Value, json};
+    for (origins, secure) in [
+        (vec!["http://admin.example.test"], false),
+        (vec!["http://192.0.2.1:8080"], false),
+        (vec!["http://[::1]:8080"], false),
+        (vec!["https://admin.example.test"], true),
+        (vec![], true),
+        (vec!["null"], true),
+        (vec!["invalid-origin"], true),
+        (vec!["http://admin.example.test/path"], true),
+        (vec!["http://admin.example.test?https"], true),
+        (vec!["http://user@admin.example.test"], true),
+        (
+            vec!["http://admin.example.test", "https://admin.example.test"],
+            true,
+        ),
+    ] {
+        let app = api_router_with_origins(ModelsExecution::new(), Vec::new()).await;
+        let request = |path: &str| {
+            let mut builder = Request::post(path)
+                .header("content-type", "application/json")
+                .header("x-forwarded-proto", "http")
+                .header("forwarded", "proto=http");
+            for origin in &origins {
+                builder = builder.header("origin", *origin);
+            }
+            builder
+        };
+        let response = app
+            .clone()
+            .oneshot(
+                request("/api/admin/auth/login")
+                    .body(Body::from(
+                        json!({"username": "admin_1", "password": "strong-admin-password"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response.headers()["set-cookie"].to_str().unwrap();
+        let session = cookie.split(';').next().unwrap().to_owned();
+        let attrs: Vec<_> = cookie.split(';').map(str::trim).collect();
+        assert_eq!(attrs.contains(&"Secure"), secure);
+        for attribute in ["Path=/", "HttpOnly", "SameSite=Lax"] {
+            assert!(attrs.contains(&attribute));
+        }
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/admin/auth/status")
+                    .header("cookie", &session)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], true);
+
+        let response = app
+            .clone()
+            .oneshot(
+                request("/api/admin/auth/logout")
+                    .header("cookie", &session)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response.headers()["set-cookie"].to_str().unwrap();
+        assert!(cookie.starts_with("cpr_admin_session=;"));
+        let attrs: Vec<_> = cookie.split(';').map(str::trim).collect();
+        assert_eq!(attrs.contains(&"Secure"), secure);
+        for attribute in ["Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"] {
+            assert!(attrs.contains(&attribute));
+        }
+
+        let response = app
+            .oneshot(
+                Request::get("/api/admin/auth/status")
+                    .header("cookie", &session)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], false);
+    }
+}
+
+#[tokio::test]
 async fn removed_responses_review_route_should_not_reach_the_responses_handler() {
     let response = api_router_with_origins(ModelsExecution::new(), Vec::new())
         .await
