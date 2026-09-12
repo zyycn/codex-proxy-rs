@@ -664,6 +664,7 @@ pub(super) fn stream_transport_allows_pre_delivery_retry(error: &CodexClientErro
     match error {
         CodexClientError::Http(_)
         | CodexClientError::HttpJson(_)
+        | CodexClientError::ErrorBodyRead { .. }
         | CodexClientError::StreamIdleTimeout { .. } => true,
         CodexClientError::WebSocket(error) => !matches!(
             error.classified(),
@@ -766,6 +767,27 @@ pub(super) fn map_client_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::Sent,
         )),
+        CodexClientError::ErrorBodyRead {
+            source,
+            status,
+            diagnostics,
+            ..
+        } => {
+            // 已知响应头只补充观测事实；不将残缺响应重新分类成可换号重放的上游拒绝。
+            let mut error = provider_error(
+                if source.is_timeout() {
+                    ProviderErrorKind::Timeout
+                } else {
+                    ProviderErrorKind::Transport
+                },
+                uncertain_state,
+            )
+            .with_status(status.as_u16());
+            if let Some(request_id) = diagnostics.request_id {
+                error = error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id));
+            }
+            MappedProviderFailure::plain(error)
+        }
         CodexClientError::Http(error) | CodexClientError::HttpJson(error) => {
             let send_state = if error.is_connect() {
                 UpstreamSendState::NotSent
@@ -807,10 +829,9 @@ pub(super) fn map_client_error(
                             "websocket_close_{close_code}"
                         )));
             }
-            if matches!(
-                error.classified(),
-                CodexWebSocketExchangeError::ConnectionLimitReached
-            ) {
+            if let CodexWebSocketExchangeError::ConnectionLimitReached(upstream) =
+                error.classified()
+            {
                 failure.error =
                     failure
                         .error
@@ -818,6 +839,14 @@ pub(super) fn map_client_error(
                         .with_upstream_code(OpaqueUpstreamValue::new(
                             WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE.to_owned(),
                         ));
+                if let Some(status) = upstream.explicit_status_code {
+                    failure.error = failure.error.with_status(status);
+                }
+                if let Some(request_id) = &upstream.request_id {
+                    failure.error = failure
+                        .error
+                        .with_upstream_request_id(OpaqueUpstreamValue::new(request_id.clone()));
+                }
             }
             if let Some(client_visible_error) = client_visible_error {
                 failure.error = failure
@@ -854,6 +883,15 @@ pub(super) fn map_client_error(
 fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
         CodexClientError::WebSocket(error) => return Some(websocket_diagnostic(error)),
+        CodexClientError::ErrorBodyRead { status, source, .. } => {
+            return Some(
+                ProviderDiagnostic::new(format!(
+                    "OpenAI HTTP error response body read failed: status={status}; complete body unavailable"
+                ))
+                .with_io_cause(source)
+                .with_classification("receive", "body_read_failed"),
+            );
+        }
         CodexClientError::Http(error) | CodexClientError::HttpJson(error) => {
             let (stage, code) = if error.is_builder() {
                 ("prepare", "http_request_build_failed")
@@ -945,7 +983,7 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         CodexWebSocketExchangeError::ClosedBeforeTerminal(_) => {
             ("receive", "closed_before_terminal")
         }
-        CodexWebSocketExchangeError::ConnectionLimitReached => {
+        CodexWebSocketExchangeError::ConnectionLimitReached(_) => {
             ("upstream", "connection_limit_reached")
         }
         CodexWebSocketExchangeError::ContinuationUnavailable { .. } => {
@@ -1028,7 +1066,7 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
             "OpenAI WebSocket opening was rejected with status {}",
             upstream.status_code
         ),
-        CodexWebSocketExchangeError::ConnectionLimitReached => {
+        CodexWebSocketExchangeError::ConnectionLimitReached(_) => {
             "OpenAI requested a new WebSocket connection".to_owned()
         }
         CodexWebSocketExchangeError::ContinuationUnavailable { reason } => {
@@ -1053,6 +1091,9 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
 }
 
 fn websocket_raw_error(error: &CodexWebSocketExchangeError) -> Option<RawUpstreamError> {
+    if let CodexWebSocketExchangeError::ConnectionLimitReached(failure) = error.classified() {
+        return Some(RawUpstreamError::new(failure.raw_body().to_owned()));
+    }
     let close = error.close_before_terminal()?;
     Some(RawUpstreamError::new(
         json!({
@@ -1068,14 +1109,11 @@ fn websocket_raw_error(error: &CodexWebSocketExchangeError) -> Option<RawUpstrea
 pub(super) fn websocket_client_visible_error(
     error: &CodexWebSocketExchangeError,
 ) -> Option<ClientVisibleUpstreamError> {
-    if matches!(
-        error.classified(),
-        CodexWebSocketExchangeError::ConnectionLimitReached
-    ) {
+    if let CodexWebSocketExchangeError::ConnectionLimitReached(failure) = error.classified() {
         return Some(ClientVisibleUpstreamError::new(
-            "websocket connection limit reached",
-            Some(WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE.to_owned()),
-            Some("websocket_error".to_owned()),
+            failure.message.clone(),
+            failure.upstream_code.clone(),
+            failure.upstream_type.clone(),
         ));
     }
     let close = error.close_before_terminal()?;
@@ -1288,7 +1326,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         | CodexWebSocketExchangeError::SharedConnectFailed
         | CodexWebSocketExchangeError::ContinuationUnavailable { .. } => UpstreamSendState::NotSent,
         CodexWebSocketExchangeError::Upstream(_)
-        | CodexWebSocketExchangeError::ConnectionLimitReached
+        | CodexWebSocketExchangeError::ConnectionLimitReached(_)
         | CodexWebSocketExchangeError::InvalidSse(_)
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => UpstreamSendState::Sent,
         CodexWebSocketExchangeError::Transport(_)
@@ -1320,7 +1358,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
             ProviderErrorKind::Unavailable
         }
         CodexWebSocketExchangeError::Upstream(_) => ProviderErrorKind::Unavailable,
-        CodexWebSocketExchangeError::ConnectionLimitReached => ProviderErrorKind::RateLimited,
+        CodexWebSocketExchangeError::ConnectionLimitReached(_) => ProviderErrorKind::RateLimited,
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }

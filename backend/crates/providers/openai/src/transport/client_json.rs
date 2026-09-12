@@ -92,9 +92,15 @@ impl CodexBackendClient {
                 .get(CONTENT_TYPE)
                 .map(|value| value.as_bytes().to_vec());
             let client_headers = response_meta::client_headers(response.headers());
-            let raw_body = read_error_response_body(response)
-                .await
-                .map_err(CodexClientError::HttpJson)?;
+            let raw_body = read_error_response_body(response).await.map_err(|source| {
+                CodexClientError::ErrorBodyRead {
+                    source,
+                    status,
+                    diagnostics: Box::new(diagnostics.clone()),
+                    transport: CodexBackendTransport::HttpJson,
+                    transport_metrics: Box::new(transport_metrics.clone()),
+                }
+            })?;
             trace.capture("upstream.error.body", &raw_body);
             let error_body = String::from_utf8_lossy(&raw_body).into_owned();
             return Err(CodexClientError::Upstream {

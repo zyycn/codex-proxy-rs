@@ -194,6 +194,16 @@ pub enum CodexClientError {
     /// 非流式 JSON 请求的 Reqwest 传输失败。
     #[error("HTTP JSON transport error: {0}")]
     HttpJson(#[source] reqwest::Error),
+    /// 已收到错误响应头，但未能读取完整正文；不能作为可透传的 HTTP 原响应。
+    #[error("upstream error response body read failed for status {status}")]
+    ErrorBodyRead {
+        #[source]
+        source: reqwest::Error,
+        status: StatusCode,
+        diagnostics: Box<CodexUpstreamDiagnostics>,
+        transport: CodexBackendTransport,
+        transport_metrics: Box<CodexTransportMetrics>,
+    },
     /// 自定义 CA 构建失败。
     #[error("custom CA transport error: {0}")]
     CustomCa(#[from] CustomCaError),
@@ -258,6 +268,13 @@ impl fmt::Debug for CodexClientError {
         match self {
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
             Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
+            Self::ErrorBodyRead {
+                status, transport, ..
+            } => formatter
+                .debug_struct("CodexClientError::ErrorBodyRead")
+                .field("status", status)
+                .field("transport", transport)
+                .finish_non_exhaustive(),
             Self::CustomCa(_) => formatter.write_str("CodexClientError::CustomCa([REDACTED])"),
             Self::InvalidHeaderName(_) => {
                 formatter.write_str("CodexClientError::InvalidHeaderName([REDACTED])")
@@ -312,7 +329,9 @@ impl CodexClientError {
             | Self::ModelCatalog(_) => Some(CodexBackendTransport::HttpSse),
             Self::HttpJson(_) => Some(CodexBackendTransport::HttpJson),
             Self::WebSocket(_) => Some(CodexBackendTransport::WebSocket),
-            Self::Upstream { transport, .. } => Some(*transport),
+            Self::Upstream { transport, .. } | Self::ErrorBodyRead { transport, .. } => {
+                Some(*transport)
+            }
             Self::CustomCa(_)
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)

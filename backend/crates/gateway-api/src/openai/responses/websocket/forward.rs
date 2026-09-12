@@ -14,7 +14,7 @@ use crate::openai::error::{gateway_error_contract, gateway_error_from_engine};
 use super::{
     super::{DecodedResponsesRequest, OpenAiResponsesEncoder, PendingExecution, ProtocolErrorBody},
     connection::{FramePhase, ResponsesWebSocketConnection, WriteContext},
-    protocol::{error_event, response_metadata_event},
+    protocol::{error_event, initial_engine_error_event, response_metadata_event},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -273,8 +273,12 @@ async fn send_initial_engine_error(
     {
         return ForwardOutcome::Disconnect;
     }
-    let error = gateway_error_from_engine(error);
-    send_gateway_error(connection, &error, request_id).await
+    send_error_message(
+        connection,
+        initial_engine_error_event(error, request_id, &response_headers),
+        request_id,
+    )
+    .await
 }
 
 fn commit_connection_replay(
@@ -394,9 +398,30 @@ async fn send_error(
     param: Option<&str>,
     request_id: &Arc<str>,
 ) -> ForwardOutcome {
+    send_error_message(
+        connection,
+        error_event(
+            status,
+            error_type,
+            code,
+            message,
+            param,
+            Some(request_id),
+            serde_json::Map::new(),
+        ),
+        request_id,
+    )
+    .await
+}
+
+async fn send_error_message(
+    connection: &mut ResponsesWebSocketConnection,
+    message: String,
+    request_id: &Arc<str>,
+) -> ForwardOutcome {
     if connection
         .send_text(
-            error_event(status, error_type, code, message, param, Some(request_id)),
+            message,
             WriteContext::request(request_id, FramePhase::Error),
         )
         .await

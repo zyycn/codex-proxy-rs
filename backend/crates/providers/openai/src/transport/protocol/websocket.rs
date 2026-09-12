@@ -2,7 +2,9 @@ use gateway_protocol::openai::sse::encode_sse_event;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::transport::protocol::responses::{CodexResponsesRequest, transport_requirement};
+use crate::transport::protocol::responses::{
+    CodexResponsesRequest, ResponsesSseFailure, transport_requirement,
+};
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
 
@@ -103,8 +105,8 @@ fn is_websocket_metadata_event(event: Option<&str>) -> bool {
 pub(crate) const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str =
     "websocket_connection_limit_reached";
 
-/// 若首个可投递 SSE 帧是上游连接寿命限制错误帧，返回其 message。
-pub(crate) fn websocket_connection_limit_message(frame: &[u8]) -> Option<String> {
+/// 若首个可投递 SSE 帧是连接寿命限制错误，保留原始失败事实而不改变恢复分类。
+pub(crate) fn websocket_connection_limit_failure(frame: &[u8]) -> Option<ResponsesSseFailure> {
     let text = std::str::from_utf8(frame).ok()?;
     let event = gateway_protocol::openai::sse::parse_sse_events(text)
         .ok()?
@@ -116,11 +118,15 @@ pub(crate) fn websocket_connection_limit_message(frame: &[u8]) -> Option<String>
     let value = serde_json::from_str::<Value>(&event.data).ok()?;
     let code = value.pointer("/error/code").and_then(Value::as_str)?;
     (code == WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE).then(|| {
-        value
+        let mut failure = ResponsesSseFailure::from_raw_event("error", &event.data, &value);
+        if value
             .pointer("/error/message")
             .and_then(Value::as_str)
-            .unwrap_or("websocket connection limit reached")
-            .to_owned()
+            .is_none()
+        {
+            failure.message = "websocket connection limit reached".to_owned();
+        }
+        failure
     })
 }
 

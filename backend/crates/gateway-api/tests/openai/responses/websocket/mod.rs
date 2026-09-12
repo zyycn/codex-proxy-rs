@@ -1,4 +1,5 @@
 mod connection;
+mod forward;
 mod protocol;
 
 use std::sync::{
@@ -307,6 +308,8 @@ struct AtomicFailureTrace {
     committed: AtomicBool,
     finalized: AtomicBool,
     downstream_websocket_connection_ids: Mutex<Vec<String>>,
+    initial_errors: Mutex<std::collections::VecDeque<EngineError>>,
+    first_batch: Mutex<Option<CoordinatedEvent>>,
 }
 
 struct AtomicFailureSession {
@@ -319,6 +322,10 @@ impl ExecutionSession for AtomicFailureSession {
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
             let next_call = self.trace.next_calls.fetch_add(1, Ordering::AcqRel);
+            if let Some(error) = self.trace.initial_errors.lock().unwrap().pop_front() {
+                self.trace.finalized.store(true, Ordering::Release);
+                return Err(error);
+            }
             if self.fail_before_first_event && next_call == 0 {
                 return Err(EngineError::Provider(ProviderError::new(
                     ProviderErrorKind::Unavailable,
@@ -326,7 +333,14 @@ impl ExecutionSession for AtomicFailureSession {
                 )));
             }
             match next_call {
-                0 => Ok(Some(atomic_failure_batch())),
+                0 => Ok(Some(
+                    self.trace
+                        .first_batch
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap_or_else(atomic_failure_batch),
+                )),
                 1 => {
                     self.trace.finalized.store(true, Ordering::Release);
                     Err(EngineError::Provider(ProviderError::new(

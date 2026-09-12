@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Eye } from '@lucide/vue'
-import { shallowRef, watch } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -47,6 +47,7 @@ const {
 } = useUsageRecordsTable({
   timeRangeParams,
   latestTimeRangeParams,
+  active: computed(() => recordView.value === 'success'),
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
@@ -141,7 +142,12 @@ watch(timeRange, () => {
         </div>
 
         <div v-show="recordView === 'errors'" class="min-h-130 min-w-0 flex-1">
-          <OpsErrorPanel :time-range-params="timeRangeParams" />
+          <OpsErrorPanel
+            :time-range-params="timeRangeParams"
+            :latest-time-range-params="latestTimeRangeParams"
+            :provider="providerQuery"
+            :active="recordView === 'errors'"
+          />
         </div>
       </template>
     </BaseCard>

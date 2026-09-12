@@ -24,9 +24,11 @@ use crate::transport::{
     headers::websocket_header_pairs,
     profile::CodexWireProfileState,
     protocol::{
-        responses::{CodexResponsesRequest, TransportRequirement, transport_requirement},
+        responses::{
+            CodexResponsesRequest, ResponsesSseFailure, TransportRequirement, transport_requirement,
+        },
         websocket::{
-            websocket_audit_artifact_from_attempt, websocket_connection_limit_message,
+            websocket_audit_artifact_from_attempt, websocket_connection_limit_failure,
             websocket_payload_audit_snapshot,
         },
     },
@@ -146,7 +148,19 @@ impl CodexBackendClient {
                 .get(CONTENT_TYPE)
                 .map(|value| value.as_bytes().to_vec());
             let client_headers = response_meta::client_headers(response.headers());
-            let raw_body = read_error_response_body(response).await?;
+            let raw_body = read_error_response_body(response).await.map_err(|source| {
+                CodexClientError::ErrorBodyRead {
+                    source,
+                    status,
+                    diagnostics: Box::new(diagnostics.clone()),
+                    transport: CodexBackendTransport::HttpSse,
+                    transport_metrics: Box::new(CodexTransportMetrics {
+                        upstream_headers_ms: Some(upstream_headers_ms),
+                        http_version: Some(http_version.clone()),
+                        ..CodexTransportMetrics::default()
+                    }),
+                }
+            })?;
             trace.capture("upstream.error.body", &raw_body);
             let body = String::from_utf8_lossy(&raw_body).into_owned();
             let retry_after_seconds =
@@ -424,9 +438,9 @@ impl CodexBackendClient {
                 if requirement.allows_connection_restart() {
                     match await_websocket_delivery_boundary(&mut exchange).await {
                         Ok(DeliveryBoundary::Ready) => {}
-                        Ok(DeliveryBoundary::ConnectionLimitReached) => {
+                        Ok(DeliveryBoundary::ConnectionLimitReached(failure)) => {
                             return Err(CodexClientError::WebSocket(
-                                CodexWebSocketExchangeError::ConnectionLimitReached,
+                                CodexWebSocketExchangeError::ConnectionLimitReached(failure),
                             ));
                         }
                         Err(error) => {
@@ -531,7 +545,7 @@ enum DeliveryBoundary {
     /// 已越过边界，可开始向下游投递。
     Ready,
     /// 首个可投递帧是上游连接寿命限制错误。
-    ConnectionLimitReached,
+    ConnectionLimitReached(Box<ResponsesSseFailure>),
 }
 
 async fn await_websocket_delivery_boundary(
@@ -542,14 +556,14 @@ async fn await_websocket_delivery_boundary(
         match exchange.body.next().await {
             Some(Ok(frame)) if is_websocket_lifecycle_prelude(&frame) => prelude.push(frame),
             Some(Ok(frame)) => {
-                let connection_limit_reached = websocket_connection_limit_message(&frame).is_some();
+                let connection_limit_failure = websocket_connection_limit_failure(&frame);
                 prelude.push(frame);
                 let remaining =
                     std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
                 exchange.body =
                     Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
-                return Ok(if connection_limit_reached {
-                    DeliveryBoundary::ConnectionLimitReached
+                return Ok(if let Some(failure) = connection_limit_failure {
+                    DeliveryBoundary::ConnectionLimitReached(Box::new(failure))
                 } else {
                     DeliveryBoundary::Ready
                 });

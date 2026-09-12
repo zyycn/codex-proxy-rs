@@ -1539,7 +1539,7 @@ async fn websocket_connection_limit_should_be_reported_without_transport_retry()
         .expect_err("transport reports rejection");
     assert!(matches!(
         error,
-        CodexClientError::WebSocket(CodexWebSocketExchangeError::ConnectionLimitReached)
+        CodexClientError::WebSocket(CodexWebSocketExchangeError::ConnectionLimitReached(_))
     ));
     server.await.unwrap();
 }
@@ -2306,10 +2306,12 @@ async fn diagnostics_capture_metadata_and_unknown_events_before_normal_close() {
         metadata["data"]["metadata"]["headers"]["x-request-id"],
         "upstream-metadata-request"
     );
+    // 未知事件名可能来自用户内容；仍记录事件，但按默认诊断合同仅保留摘要。
+    let unknown_event = gateway_core::diagnostics::body_fingerprint(b"future.metadata");
     assert!(
         events
             .iter()
-            .any(|event| event["data"]["eventType"] == "future.metadata")
+            .any(|event| event["data"]["eventType"] == unknown_event)
     );
     let close = events
         .iter()

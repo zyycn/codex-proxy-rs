@@ -94,8 +94,17 @@ body:
     attributes:
       label: 请求与响应
       description: |
-        接口问题请提供脱敏后的 cURL 或最小请求体、HTTP 状态码、响应片段，以及请求 ID / 发生时间。
-        如需详细报文，可按部署文档开启 `host.logging.request_dump`，仅摘取定位所需片段并脱敏，不要直接上传完整转储。
+        接口问题请提供脱敏后的最小请求、网关实际状态/响应片段和客户端终端显示，区分两者。
+        优先附管理端默认诊断包并检查其缺失说明；原始错误与日志片段需另行审阅脱敏。
+        先按部署文档的“请求错误排查”检查关联 ID、错误详情与 application 日志，不默认开启完整 dump。
+      placeholder: |
+        发生时间与时区：
+        传输（HTTP JSON / SSE / WebSocket）：
+        网关关联 ID（x-gateway-request-id / 配置的入口头）：
+        上游关联 ID（x-request-id / x-oai-request-id，注明来源）：
+        网关实际状态与响应片段：
+        客户端终端显示：
+        诊断包或无法取得的信息：
       render: text
 
   - type: textarea

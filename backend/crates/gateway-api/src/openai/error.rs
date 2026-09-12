@@ -190,7 +190,15 @@ pub fn engine_error_response(error: &EngineError) -> Response {
         }
         return response;
     }
-    gateway_error_response(&gateway_error_from_engine(error))
+    let mut response = gateway_error_response(&gateway_error_from_engine(error));
+    // 正文未完整取得时不能透传残缺响应，但已确认的上游关联 ID 仍应交付。
+    if let EngineError::Provider(error) = error
+        && let Some(request_id) = error.upstream_request_id()
+        && let Ok(value) = HeaderValue::from_str(request_id.as_str())
+    {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
 }
 
 /// Gateway 错误稳定映射，供 HTTP、SSE 和 WebSocket 共用。

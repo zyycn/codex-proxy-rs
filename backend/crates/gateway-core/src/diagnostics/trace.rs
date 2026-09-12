@@ -10,8 +10,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::capture::bounded;
-use super::{body_fingerprint, diagnostic_headers, diagnostic_json};
+use super::capture::{bounded, diagnostic_event_json, diagnostic_event_type};
+use super::{body_fingerprint, diagnostic_headers};
 
 const MAX_EVENTS: usize = 128;
 const HEAD_EVENTS: usize = 8;
@@ -124,7 +124,7 @@ impl TraceContext {
     }
 
     /// 同一个头部边界只采集一次：默认脱敏，显式开启 dump 时另存完整字节。
-    /// facts 必须为调用方构造的安全对象；原始头值只进入独立 dump。
+    /// facts 必须为调用方构造的安全对象；仅受控诊断头可明文保留，完整头部另存 dump。
     pub fn headers<'a>(
         &self,
         stage: &'static str,
@@ -182,27 +182,27 @@ impl TraceContext {
             .as_ref()
             .and_then(|v| v.get("type"))
             .and_then(Value::as_str)
-            .or(name)
-            .filter(|kind| super::capture::protocol_label(kind));
+            .or(name);
+        // 后缀只用于观测合并，不授予明文权限；未知事件用摘要区分，避免合并成同一类。
         let delta = event_type.is_some_and(|kind| kind.ends_with(".delta"));
         let data = json!({
             "body": fingerprint,
-            "eventType": event_type.map(|kind| bounded(kind, 128)),
+            "eventType": event_type.map(diagnostic_event_type),
             "jsonValid": parsed.is_some(),
-            "metadata": parsed.as_ref().filter(|_| !delta).map(diagnostic_json),
+            "metadata": parsed.as_ref().filter(|_| !delta)
+                .map(|value| diagnostic_event_json(value, stage)),
         });
         self.push(stage, data, delta);
     }
 
     /// 只记录业务解析边界；metadata 已由 transport 在解析前捕获。
     pub fn wire_event(&self, protocol: &str, event_type: Option<&str>) {
-        let event_type = event_type.filter(|kind| super::capture::protocol_label(kind));
         let delta = event_type.is_some_and(|kind| kind.ends_with(".delta"));
         self.push(
             "provider.event",
             json!({
                 "protocol": protocol,
-                "eventType": event_type.map(|kind| bounded(kind, 128)),
+                "eventType": event_type.map(diagnostic_event_type),
             }),
             delta,
         );

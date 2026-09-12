@@ -6413,7 +6413,7 @@ async fn connection_limit_rejection_requests_one_provider_retry_and_reconnects_i
             let mut ws = accept_codex_test_websocket(stream).await;
             ws.next().await.expect("request").expect("valid frame");
             let event = if first {
-                json!({"type":"error","status":400,"error":{"code":"websocket_connection_limit_reached","type":"invalid_request_error","message":"connection expired"}})
+                json!({"type":"error","status":400,"headers":{"x-request-id":"req-limit-retry"},"error":{"code":"websocket_connection_limit_reached","type":"invalid_request_error","message":"connection expired"}})
             } else {
                 json!({"type":"response.completed","response":{"id":"resp_reconnected","model":"gpt-5.4","status":"completed","output":[]}})
             };
@@ -6453,6 +6453,23 @@ async fn connection_limit_rejection_requests_one_provider_retry_and_reconnects_i
     assert!(
         matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. }) if retry_index.get() == 1)
     );
+    assert_eq!(error.upstream_status(), Some(400));
+    assert_eq!(
+        error.upstream_request_id().map(|id| id.as_str()),
+        Some("req-limit-retry")
+    );
+    let visible = error
+        .client_visible_upstream_error()
+        .expect("original limit error");
+    assert_eq!(visible.message(), "connection expired");
+    assert_eq!(visible.error_type(), Some("invalid_request_error"));
+    assert!(
+        error
+            .raw_upstream_error()
+            .expect("original frame")
+            .as_str()
+            .contains("req-limit-retry")
+    );
     drop(stream);
     let retry_context = context("req_rejected", CancellationToken::new()).with_transport(
         AttemptTransport::Retry(NonZeroU32::new(1).expect("retry index")),
@@ -6470,4 +6487,382 @@ async fn connection_limit_rejection_requests_one_provider_retry_and_reconnects_i
     }
     assert!(pooled);
     server.await.expect("server");
+}
+
+#[tokio::test]
+async fn error_body_read_failure_preserves_http_sse_response_facts_without_replay() {
+    assert_error_body_read_failure(false).await;
+}
+
+#[tokio::test]
+async fn error_body_read_failure_preserves_http_json_response_facts_without_replay() {
+    assert_error_body_read_failure(true).await;
+}
+
+async fn assert_error_body_read_failure(image: bool) {
+    for status in [401, 429, 503] {
+        for chunked in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+            let base_url = format!("http://{}", listener.local_addr().expect("address"));
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept HTTP");
+                read_http_request(&mut stream).await;
+                let framing = if chunked {
+                    "transfer-encoding: chunked"
+                } else {
+                    "content-length: 4096"
+                };
+                stream
+                    .write_all(format!(
+                        "HTTP/1.1 {status} Error\r\n{framing}\r\ncontent-type: application/json\r\nx-request-id: req-body-truncated\r\nretry-after: 99\r\nconnection: close\r\n\r\n"
+                    ).as_bytes())
+                    .await
+                    .expect("headers");
+                if chunked {
+                    stream.write_all(b"1000\r\n").await.expect("chunk size");
+                }
+                stream
+                    .write_all(b"{\"error\":{\"message\":\"synthetic-private-body")
+                    .await
+                    .expect("partial body");
+                stream.shutdown().await.expect("truncate response");
+            });
+            let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
+            let request = if image {
+                let payload = RawJsonPayload::new(
+                    "openai",
+                    Bytes::from_static(br#"{"model":"gpt-image-2","prompt":"test"}"#),
+                )
+                .expect("image payload");
+                planned_provider_endpoint_request(
+                    "openai",
+                    Operation::GenerateImage(ImageRequest::from_raw_json(
+                        ImageRequestKind::Generation,
+                        payload,
+                    )),
+                )
+            } else {
+                planned_request("openai", http_generate_operation())
+            };
+            let mut stream = provider
+                .execute(
+                    request,
+                    context("req_body_read_failure", CancellationToken::new()),
+                )
+                .await
+                .expect("prepare");
+            let mut observation = None;
+            let error = timeout(Duration::from_secs(5), async {
+                loop {
+                    match stream.next().await {
+                        Some(Ok(event)) => {
+                            if let Some(current) = event.response_observation() {
+                                observation = Some(current.clone());
+                            }
+                        }
+                        Some(Err(error)) => break error,
+                        None => panic!("expected body read failure"),
+                    }
+                }
+            })
+            .await
+            .expect("bounded body read");
+            server.await.expect("server");
+            assert_eq!(
+                error.upstream_status(),
+                Some(status),
+                "image={image}, chunked={chunked}"
+            );
+            assert_eq!(
+                error.upstream_request_id().map(|id| id.as_str()),
+                Some("req-body-truncated")
+            );
+            assert_eq!(error.kind(), ProviderErrorKind::Transport);
+            assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+            assert!(!error.replay_is_safe());
+            assert!(error.pre_delivery_retry().is_none());
+            assert!(error.retry_after().is_none());
+            assert!(error.client_visible_upstream_response().is_none());
+            assert!(error.raw_upstream_error().is_none());
+            let diagnostic = error.diagnostic().expect("body read diagnostic");
+            assert_eq!(diagnostic.stage(), Some("receive"));
+            assert_eq!(diagnostic.code(), Some("body_read_failed"));
+            assert!(!diagnostic.as_str().contains("synthetic-private"));
+            let observation = observation.expect("known HTTP response facts");
+            assert_eq!(observation.status_code(), Some(status));
+            assert_eq!(
+                observation.request_id().map(|id| id.as_str()),
+                Some("req-body-truncated")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn websocket_failure_headers_override_opening_id_without_changing_raw_events() {
+    assert_websocket_failure_headers(
+        json!({"X-Request-Id": "req-current-error", "authorization": "synthetic-private-token"}),
+        Some("req-current-error"),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_failure_without_valid_headers_does_not_claim_opening_request_id() {
+    for headers in [
+        Value::Null,
+        json!({}),
+        json!({"x-request-id": " "}),
+        json!({"x-request-id": ["invalid"], "x-oai-request-id": "\r\ninvalid"}),
+    ] {
+        assert_websocket_failure_headers(headers, None, false).await;
+    }
+}
+
+#[tokio::test]
+async fn reused_websocket_response_failed_uses_current_request_id() {
+    assert_websocket_failure_headers(
+        json!({"x-request-id": "", "X-Oai-Request-Id": "req-reused-error"}),
+        Some("req-reused-error"),
+        true,
+    )
+    .await;
+}
+
+async fn assert_websocket_failure_headers(headers: Value, request_id: Option<&str>, reuse: bool) {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("address"));
+    let upstream_error = json!({
+        "code":"invalid_request","type":"invalid_request_error","message":"synthetic failure"
+    });
+    let raw = if reuse {
+        json!({
+            "type":"response.failed", "status_code":400, "headers":headers,
+            "response":{"id":"resp-failed","status":"failed","error":upstream_error}
+        })
+    } else {
+        json!({"type":"error", "status":400, "headers":headers, "error":upstream_error})
+    }
+    .to_string();
+    let server_raw = raw.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept WS");
+        let mut ws = crate::transport::accept_codex_test_websocket_with(stream, |_, response| {
+            response
+                .headers_mut()
+                .insert("x-request-id", "req-opening".parse().expect("ID"));
+        })
+        .await;
+        if reuse {
+            ws.next()
+                .await
+                .expect("first request")
+                .expect("valid frame");
+            ws.send(Message::Text(
+                json!({
+                    "type":"response.created","response":{"id":"resp-initial","model":"gpt-5.4"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("created");
+            ws.send(Message::Text(json!({
+                "type":"response.completed","response":{"id":"resp-initial","model":"gpt-5.4","status":"completed","output":[]}
+            }).to_string().into())).await.expect("completed");
+        }
+        ws.next().await.expect("request").expect("valid frame");
+        ws.send(Message::Text(
+            json!({
+                "type":"response.metadata","headers":{"x-request-id":"req-metadata"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("metadata");
+        ws.send(Message::Text(server_raw.into()))
+            .await
+            .expect("error frame");
+    });
+    let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
+    let operation = || {
+        Operation::Generate(generate_with_persisted_session_context(
+            "acct_provider_contract",
+            "conversation-error-headers",
+            "session-error-headers",
+            "thread",
+        ))
+    };
+    if reuse {
+        let mut first = provider
+            .execute(
+                planned_request("openai", operation()),
+                context("req_ws_initial", CancellationToken::new()),
+            )
+            .await
+            .expect("prepare first request");
+        timeout(Duration::from_secs(5), async {
+            while let Some(event) = first.next().await {
+                event.expect("successful first request");
+            }
+        })
+        .await
+        .expect("bounded first request");
+    }
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation()),
+            context("req_ws_headers", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare");
+    let mut observation = None;
+    let mut error = timeout(Duration::from_secs(5), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(event)) => {
+                    if let Some(current) = event.response_observation() {
+                        observation = Some(current.clone());
+                    }
+                }
+                Some(Err(error)) => break error,
+                None => panic!("expected error"),
+            }
+        }
+    })
+    .await
+    .expect("bounded failure");
+    server.await.expect("server");
+    assert_eq!(
+        error.upstream_request_id().map(|id| id.as_str()),
+        request_id
+    );
+    let observation = observation.expect("failure observation");
+    assert_eq!(observation.status_code(), Some(400));
+    let metadata: Value = serde_json::from_str(
+        observation
+            .provider_metadata()
+            .expect("provider facts")
+            .as_json(),
+    )
+    .expect("metadata JSON");
+    assert_eq!(metadata["websocketOpeningRequestId"], "req-opening");
+    assert_eq!(observation.request_id().map(|id| id.as_str()), request_id);
+    if reuse {
+        assert_eq!(observation.websocket_pool(), Some(WebSocketPoolKind::Reuse));
+    }
+    assert_eq!(error.upstream_status(), Some(400));
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    assert!(!error.replay_is_safe());
+    assert_eq!(error.raw_upstream_error().expect("raw error").as_str(), raw);
+    let events = error.take_atomic_client_events();
+    let event_type = if reuse { "response.failed" } else { "error" };
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| event.wire_event()?.event_type())
+            .collect::<Vec<_>>(),
+        vec![event_type],
+        "original failure stays atomically deliverable",
+    );
+    let wire = events
+        .iter()
+        .find_map(|event| event.wire_event()?.raw_sse_frame())
+        .expect("raw frame");
+    assert_eq!(
+        wire.as_ref(),
+        format!("event: {event_type}\ndata: {raw}\n\n").as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn connection_limit_payload_survives_exhausted_retry_budget() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("address"));
+    let raw = r#"{ "type":"error", "status":400, "headers":{"x-request-id":"req-limit-final"}, "error":{"code":"websocket_connection_limit_reached","type":"invalid_request_error","message":"synthetic expired connection"}, "retry_after_seconds":99, "future":9007199254740993 }"#;
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept WS");
+        let mut ws = accept_codex_test_websocket(stream).await;
+        ws.next().await.expect("request").expect("valid frame");
+        ws.send(Message::Text(raw.into()))
+            .await
+            .expect("limit frame");
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "Provider reports recovery intent, never sends a hidden retry"
+        );
+    });
+    let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
+    let mut stream = provider
+        .execute(
+            planned_request("openai", generate_operation()),
+            context("req_limit_final", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare");
+    let mut observation = None;
+    let error = timeout(Duration::from_secs(5), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(event)) => {
+                    assert!(!event.has_client_event(), "lifetime preflight stays atomic");
+                    if let Some(current) = event.response_observation() {
+                        observation = Some(current.clone());
+                    }
+                }
+                Some(Err(error)) => break error,
+                None => panic!("expected limit rejection"),
+            }
+        }
+    })
+    .await
+    .expect("bounded rejection");
+    server.await.expect("server");
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    assert!(error.replay_is_safe());
+    assert!(matches!(
+        error.pre_delivery_retry(),
+        Some(PreDeliveryRetry::SameAccountTransportFallback)
+    ));
+    assert!(
+        error.retry_after().is_none(),
+        "raw retry hint must not alter existing lifetime recovery policy"
+    );
+    assert_eq!(error.upstream_status(), Some(400));
+    assert_eq!(
+        error.upstream_request_id().map(|id| id.as_str()),
+        Some("req-limit-final")
+    );
+    assert_eq!(error.raw_upstream_error().expect("raw frame").as_str(), raw);
+    let visible = error
+        .client_visible_upstream_error()
+        .expect("original structured error");
+    assert_eq!(visible.message(), "synthetic expired connection");
+    assert_eq!(visible.error_type(), Some("invalid_request_error"));
+    assert!(
+        !error
+            .diagnostic()
+            .expect("safe diagnostic")
+            .as_str()
+            .contains("synthetic expired")
+    );
+    assert!(error.client_visible_upstream_response().is_none());
+    let observation = observation.expect("failure observation");
+    assert_eq!(observation.status_code(), Some(400));
+    assert_eq!(
+        observation.request_id().map(|id| id.as_str()),
+        Some("req-limit-final")
+    );
 }

@@ -258,6 +258,7 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
             .oneshot(
                 Request::post(*path)
                     .header(AUTHORIZATION, "Bearer sk_images_test")
+                    .header("x-request-id", "caller-image-request")
                     .header("content-type", "application/json")
                     .header("x-codex-image-turn-id", "turn_image_route")
                     .header("session-id", "root-image-session")
@@ -268,6 +269,11 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
             .await
             .expect("image response");
         assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers()["x-request-id"], "req_images_test");
+        assert_eq!(
+            response.headers()["x-gateway-request-id"],
+            "req_images_test"
+        );
         assert_eq!(
             response.headers().get("x-image-rate-limit"),
             Some(&"42".parse().expect("header value"))
@@ -315,6 +321,11 @@ async fn image_route_should_return_the_exact_upstream_error_response() {
         .expect("image response");
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.headers()["x-request-id"], "req_images_test");
+    assert_eq!(
+        response.headers()["x-gateway-request-id"],
+        "req_images_test"
+    );
     assert_eq!(
         response.headers().get("content-type"),
         Some(&"application/problem+json".parse().expect("content type"))

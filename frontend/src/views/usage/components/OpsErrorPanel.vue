@@ -18,10 +18,14 @@ import UsageClientIpCell from './UsageClientIpCell.vue'
 
 const props = defineProps<{
   timeRangeParams: UsageTimeRangeParams
+  latestTimeRangeParams: () => UsageTimeRangeParams
+  provider: string
+  active: boolean
 }>()
 
 const {
   loading,
+  error,
   refreshing,
   records,
   searchQuery,
@@ -29,7 +33,12 @@ const {
   handlePageChange,
   handlePageSizeChange,
   refresh,
-} = useOpsErrorsTable(toRef(props, 'timeRangeParams'))
+} = useOpsErrorsTable({
+  timeRangeParams: toRef(props, 'timeRangeParams'),
+  latestTimeRangeParams: () => props.latestTimeRangeParams(),
+  provider: toRef(props, 'provider'),
+  active: toRef(props, 'active'),
+})
 
 const selectedRecord = shallowRef<OpsError | null>(null)
 const detailOpen = shallowRef(false)
@@ -82,7 +91,8 @@ function upstreamSendStateText(value: string | null | undefined) {
       <div class="min-w-0 flex-1">
         <BaseInput
           v-model="searchQuery"
-          placeholder="请求 ID、Key 或账号"
+          placeholder="请求 ID、Key ID / 可见前缀或账号"
+          aria-label="搜索错误：请求 ID、Key ID / 可见前缀或账号"
           class="min-w-0 w-full lg:max-w-96"
         >
           <template #prefix>
@@ -109,7 +119,11 @@ function upstreamSendStateText(value: string | null | undefined) {
     </div>
 
     <div class="flex min-h-0 min-w-0 flex-col">
+      <p v-if="error && !loading" role="alert" class="text-cp-sm text-cp-error-text">
+        {{ error }}。请刷新重试。
+      </p>
       <BaseTable
+        v-else
         class="min-h-0 flex-1"
         :columns="opsErrorColumns"
         :rows="records"

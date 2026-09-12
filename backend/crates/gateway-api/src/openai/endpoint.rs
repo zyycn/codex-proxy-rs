@@ -5,7 +5,7 @@ use axum::{
     http::{HeaderName, HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
-use gateway_core::engine::execution::StartedExecution;
+use gateway_core::engine::execution::{ExecutionSession, StartedExecution};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 
 use super::{
@@ -15,7 +15,12 @@ use super::{
 
 /// 收集一个 Provider 原生 JSON 响应，并在 Core commit 后按原始 bytes 交付。
 pub(super) async fn collect_raw_json_response(started: StartedExecution) -> Response {
-    let mut execution = PendingExecution::new(started.session);
+    let response = collect_raw_json_session(started.session).await;
+    super::with_model_request_id(response, &started.request_id)
+}
+
+async fn collect_raw_json_session(session: Box<dyn ExecutionSession>) -> Response {
+    let mut execution = PendingExecution::new(session);
     let Some(session) = execution.session_mut() else {
         return invalid_upstream_response();
     };

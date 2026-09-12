@@ -230,11 +230,22 @@ struct CurrentAttempt {
     response_observation: Option<ProviderResponseObservation>,
 }
 
+impl CurrentAttempt {
+    fn upstream_request_id(&self) -> Option<&str> {
+        self.response_observation
+            .as_ref()
+            .and_then(ProviderResponseObservation::request_id)
+            .or_else(|| self.metadata.upstream_request_id())
+            .map(|id| id.as_str())
+    }
+}
+
 struct FailureFinalization {
     outcome: ExecutionOutcome,
     send_state: UpstreamSendState,
     error: GatewayError,
     upstream_status_code: Option<u16>,
+    upstream_request_id: Option<String>,
     provider_error_code: Option<String>,
     raw_upstream_error: Option<String>,
     retry_after_ms: Option<u64>,
@@ -698,6 +709,7 @@ where
                 send_state: self.current_send_state(),
                 error,
                 upstream_status_code: None,
+                upstream_request_id: None,
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
@@ -871,6 +883,7 @@ where
                 send_state: self.current_send_state(),
                 error,
                 upstream_status_code: None,
+                upstream_request_id: None,
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
@@ -902,6 +915,7 @@ where
                 send_state: self.current_send_state(),
                 error,
                 upstream_status_code: None,
+                upstream_request_id: None,
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
@@ -923,6 +937,7 @@ where
                 send_state: self.current_send_state(),
                 error,
                 upstream_status_code: None,
+                upstream_request_id: None,
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
@@ -947,6 +962,7 @@ where
                 send_state: self.current_send_state(),
                 error,
                 upstream_status_code: None,
+                upstream_request_id: None,
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
@@ -1220,15 +1236,17 @@ where
                             provider_kind: current.metadata.provider().clone(),
                             account_id: Some(current.metadata.provider_account_id().clone()),
                             upstream_model_id: current.metadata.upstream_model().cloned(),
-                            upstream_status_code: current
-                                .response_observation
-                                .as_ref()
-                                .and_then(ProviderResponseObservation::status_code),
-                            upstream_request_id: current
-                                .response_observation
-                                .as_ref()
-                                .and_then(ProviderResponseObservation::request_id)
-                                .map(|value| value.as_str().to_owned()),
+                            upstream_status_code: error.upstream_status().or_else(|| {
+                                current
+                                    .response_observation
+                                    .as_ref()
+                                    .and_then(ProviderResponseObservation::status_code)
+                            }),
+                            upstream_request_id: error
+                                .upstream_request_id()
+                                .map(|id| id.as_str())
+                                .or_else(|| current.upstream_request_id())
+                                .map(str::to_owned),
                             latency: current.started_at.elapsed().unwrap_or_default(),
                             error,
                         }),
@@ -1376,22 +1394,11 @@ where
         let completed_at = SystemTime::now();
         self.finalized_at = Some(completed_at);
         self.observation.finish();
-        let upstream_request_id = self.current.as_ref().and_then(|current| {
-            current
-                .response_observation
-                .as_ref()
-                .and_then(|observation| {
-                    observation
-                        .request_id()
-                        .map(|value| value.as_str().to_owned())
-                })
-                .or_else(|| {
-                    current
-                        .metadata
-                        .upstream_request_id()
-                        .map(|value| value.as_str().to_owned())
-                })
-        });
+        let upstream_request_id = self
+            .current
+            .as_ref()
+            .and_then(CurrentAttempt::upstream_request_id)
+            .map(str::to_owned);
         let upstream_status_code = self
             .current
             .as_ref()
@@ -1469,6 +1476,7 @@ where
             send_state,
             error: GatewayError::from_provider(error),
             upstream_status_code: error.upstream_status(),
+            upstream_request_id: error.upstream_request_id().map(|id| id.as_str().to_owned()),
             provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
             raw_upstream_error: error
                 .raw_upstream_error()
@@ -1531,6 +1539,7 @@ where
             send_state,
             error: gateway_error,
             upstream_status_code: None,
+            upstream_request_id: None,
             provider_error_code: None,
             raw_upstream_error: None,
             retry_after_ms: None,
@@ -1561,22 +1570,11 @@ where
             return Ok(());
         }
         self.observation.finish();
-        let upstream_request_id = self.current.as_ref().and_then(|current| {
-            current
-                .response_observation
-                .as_ref()
-                .and_then(|observation| {
-                    observation
-                        .request_id()
-                        .map(|value| value.as_str().to_owned())
-                })
-                .or_else(|| {
-                    current
-                        .metadata
-                        .upstream_request_id()
-                        .map(|value| value.as_str().to_owned())
-                })
-        });
+        let upstream_request_id = self
+            .current
+            .as_ref()
+            .and_then(CurrentAttempt::upstream_request_id)
+            .map(str::to_owned);
         let observed_status_code = self
             .current
             .as_ref()
@@ -1602,7 +1600,7 @@ where
                         .upstream_status_code
                         .or(observed_status_code),
                     client_response_id: self.observation.client_response_id.clone(),
-                    upstream_request_id,
+                    upstream_request_id: finalization.upstream_request_id.or(upstream_request_id),
                     upstream_response_id: self.observation.upstream_response_id.clone(),
                     upstream_transport,
                     http_version,
@@ -1908,6 +1906,7 @@ fn record_trace_error(trace: &TraceContext, error: &ProviderError) {
             "stage": diagnostic.stage(), "code": diagnostic.code(), "message": diagnostic.as_str(),
         })),
         "upstreamStatus": error.upstream_status(),
+        "upstreamRequestId": error.upstream_request_id().map(|id| id.as_str()),
         "upstreamCode": error.upstream_code().map(|code| code.as_str()),
         "rawError": error.raw_upstream_error().map(|raw| {
             let value = serde_json::from_str(raw.as_str()).unwrap_or_else(|_| json!(raw.as_str()));

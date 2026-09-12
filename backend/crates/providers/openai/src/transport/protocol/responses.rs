@@ -404,6 +404,8 @@ pub struct ResponsesSseFailure {
     pub explicit_status_code: Option<u16>,
     /// 上游显式重试间隔，或从官方限流消息中解析出的重试间隔。
     pub retry_after_seconds: Option<u64>,
+    /// 当前错误事件自身携带的请求 ID；不是连接 opening ID。
+    pub(crate) request_id: Option<String>,
     /// 上游错误事件的原始 JSON data；只应在明确的失败审计边界读取。
     raw_body: String,
 }
@@ -435,6 +437,10 @@ impl ResponsesSseFailure {
             upstream_type: failure_type(value),
             explicit_status_code: failure_explicit_status_code(value),
             retry_after_seconds: events::retry_after_seconds_from_value(value),
+            request_id:
+                crate::transport::diagnostics::CodexUpstreamDiagnostics::error_event_request_id(
+                    value,
+                ),
             raw_body: raw_body.to_owned(),
         }
     }

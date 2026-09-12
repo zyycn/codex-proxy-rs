@@ -130,7 +130,7 @@ function visibleFields(items: DetailField[]) {
     size="xl"
   >
     <template v-if="record">
-      <RequestDiagnosticsPanel v-if="open && record.requestId" class="mb-3" :request-id="record.requestId" :metadata="record.metadata" />
+      <RequestDiagnosticsPanel v-if="open && record.requestId" class="mb-3" :request-id="record.requestId" :metadata="record.metadata" :error-record="record" />
       <section :class="panelClass">
         <h3 :class="panelTitleClass">
           错误

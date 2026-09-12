@@ -13,15 +13,15 @@ import {
 import { toast } from '@/components/base/BaseToast'
 
 import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { usageSearchParam } from '../utils/search'
 
 interface UseUsageRecordsTableOptions {
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
   latestTimeRangeParams: () => UsageTimeRangeParams
+  active: Readonly<Ref<boolean>>
 }
 
 type UsageLoadScope = 'all' | 'table'
-
-const CLIENT_API_KEY_VISIBLE_PREFIX_LENGTH = 10
 
 interface UsageLoadOptions {
   scope?: UsageLoadScope
@@ -38,27 +38,32 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const pageSize = shallowRef(10)
   const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
+  const search = computed(() => usageSearchParam(searchQuery.value))
   const providerQuery = shallowRef('')
-  const tableTimeRangeParams = shallowRef<UsageTimeRangeParams>({
-    ...options.timeRangeParams.value,
-  })
+  let tableParams = snapshot()
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
   let tableRequestId = 0
   let analyticsRequestId = 0
   let diagnosticRequestId = 0
+  let disposed = false
   const scopedParams = () => ({
     ...options.timeRangeParams.value,
     ...(providerQuery.value ? { provider: providerQuery.value } : {}),
-  })
-  const filterParams = () => ({
-    search: usageSearchParam(searchQuery.value),
   })
   const usagePagination = computed(() => ({
     currentPage: currentPage.value,
     pageSize: pageSize.value,
     total: totalRecords.value,
   }))
+
+  function snapshot() {
+    return {
+      ...options.latestTimeRangeParams(),
+      provider: providerQuery.value || undefined,
+      search: search.value,
+    }
+  }
 
   function resetPagination() {
     currentPage.value = 1
@@ -70,11 +75,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const globalParams = scopedParams()
     if (scope === 'all') {
       resetPagination()
-      tableTimeRangeParams.value = { ...globalParams }
+      tableParams = snapshot()
     }
 
     await Promise.all([
-      loadUsagePage(background),
+      ...(options.active.value ? [loadUsagePage(background)] : []),
       ...(scope === 'all' ? [loadUsageAnalytics(globalParams, background)] : []),
     ])
   }
@@ -86,8 +91,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       const result = await getUsageRecords({
         currentPage: currentPage.value,
         pageSize: pageSize.value,
-        ...tableTimeRangeParams.value,
-        ...filterParams(),
+        ...tableParams,
       })
       if (requestId !== tableRequestId)
         return
@@ -175,22 +179,34 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       return
     refreshingList.value = true
     try {
-      tableTimeRangeParams.value = options.latestTimeRangeParams()
-      resetPagination()
-      await withMinimumDuration(() => loadUsageRecords({ scope: 'table' }))
+      await withMinimumDuration(reloadLatestTable)
     }
     finally {
       refreshingList.value = false
     }
   }
 
+  function reloadLatestTable() {
+    tableParams = snapshot()
+    resetPagination()
+    return loadUsageRecords({ scope: 'table' })
+  }
+
   function handlePageChange(nextPage: number) {
+    if (tableParams.search !== search.value) {
+      void reloadLatestTable()
+      return
+    }
     currentPage.value = nextPage
     void loadUsageRecords({ scope: 'table' })
   }
 
   function handlePageSizeChange(nextPageSize: number) {
     pageSize.value = nextPageSize
+    if (tableParams.search !== search.value) {
+      void reloadLatestTable()
+      return
+    }
     resetPagination()
     void loadUsageRecords({ scope: 'table' })
   }
@@ -207,16 +223,24 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     void loadUsageRecords({ background: true })
   })
 
+  watch(options.active, (active) => {
+    if (active)
+      void reloadLatestTable()
+    else
+      tableRequestId += 1
+  })
+
   watchDebounced(
-    searchQuery,
+    search,
     () => {
-      resetPagination()
-      void loadUsageRecords({ scope: 'table' })
+      if (!disposed && options.active.value && tableParams.search !== search.value)
+        void reloadLatestTable()
     },
     { debounce: 250 },
   )
 
   onScopeDispose(() => {
+    disposed = true
     tableRequestId += 1
     analyticsRequestId += 1
     diagnosticRequestId += 1
@@ -240,15 +264,6 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     handlePageChange,
     handlePageSizeChange,
   }
-}
-
-function usageSearchParam(value: string) {
-  const search = value.trim()
-  if (!search)
-    return undefined
-  if (search.startsWith('sk_'))
-    return search.slice(0, CLIENT_API_KEY_VISIBLE_PREFIX_LENGTH)
-  return search
 }
 
 function emptySummary() {

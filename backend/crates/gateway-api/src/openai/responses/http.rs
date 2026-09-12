@@ -93,20 +93,17 @@ pub(crate) async fn responses(
         "ingressRequestId": ingress_id.as_ref().and_then(|Extension(id)| id.header_value().to_str().ok()),
     }), headers.iter().map(|(name, value)| (name.as_str(), value.as_bytes())));
     trace.capture("client.request.body", &body);
-    let request_id_header = HeaderValue::from_str(started.request_id.as_str()).ok();
+    let request_id = started.request_id;
     let StartedExecution {
         stream, session, ..
     } = started;
-    let mut response = if stream {
+    let response = if stream {
         stream_execution_response(session, connection_guard).await
     } else {
         drop(connection_guard);
         collect_execution_response(session).await
     };
-    if let Some(id) = request_id_header {
-        response.headers_mut().insert("x-gateway-request-id", id);
-    }
-    response
+    crate::openai::with_model_request_id(response, &request_id)
 }
 
 /// 从 socket 与标准转发头提取旧 Usage 页面使用的诊断事实。
@@ -271,7 +268,26 @@ fn engine_error_response_with_headers(
     error: &EngineError,
     response_headers: &[ProviderResponseHeader],
 ) -> Response {
-    apply_response_headers(engine_error_response(error), response_headers)
+    let response = engine_error_response(error);
+    let failure_request_ids: Vec<_> = ["x-request-id", "x-oai-request-id"]
+        .into_iter()
+        .flat_map(|name| {
+            response
+                .headers()
+                .get_all(name)
+                .iter()
+                .cloned()
+                .map(move |value| (name, value))
+        })
+        .collect();
+    // 失败后仍须交付已采集的 turn state；只隔离 opening 身份，不丢弃会话状态。
+    let mut response = apply_response_headers(response, response_headers);
+    response.headers_mut().remove("x-request-id");
+    response.headers_mut().remove("x-oai-request-id");
+    for (name, value) in failure_request_ids {
+        response.headers_mut().append(name, value);
+    }
+    response
 }
 
 /// 编码首个 SSE frame 后提交下游，再持续驱动同一执行会话。

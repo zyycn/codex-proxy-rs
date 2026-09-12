@@ -22,7 +22,7 @@ use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
     StartExecution, StartProviderExecution, StartedExecution,
 };
-use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
+use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, ModelRequestId};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind,
     ProviderError, ProviderErrorKind,
@@ -33,7 +33,7 @@ use gateway_core::event::{
 };
 use gateway_core::operation::{Operation, OperationKind};
 use gateway_core::routing::PublicModelId;
-use gateway_core::upstream::UpstreamSendState;
+use gateway_core::upstream::{OpaqueUpstreamValue, UpstreamSendState};
 use serde_json::{Value, json};
 
 use gateway_api::openai::responses::{collect_execution_response, stream_execution_response};
@@ -1818,4 +1818,224 @@ async fn buffered_rate_limit_should_persist_the_returned_429_status() {
 fn response_status_from_body(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     value.pointer("/error/code")?.as_str().map(str::to_owned)
+}
+
+const MODEL_REQUEST_ID: &str = "req_model_correlation";
+
+struct SessionExecution {
+    client: AuthenticatedClient,
+    session: Mutex<Option<Box<dyn ExecutionSession>>>,
+}
+
+impl ExecutionService for SessionExecution {
+    fn authenticate(&self, _: &str) -> Result<AuthenticatedClient, ClientAuthenticationError> {
+        Ok(self.client.clone())
+    }
+
+    fn public_models(&self, _: &AuthenticatedClient) -> Vec<PublicModelId> {
+        Vec::new()
+    }
+
+    fn contains_public_model(&self, _: &AuthenticatedClient, _: &PublicModelId) -> bool {
+        true
+    }
+
+    fn start(
+        &self,
+        request: StartExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async move {
+            Ok(StartedExecution {
+                request_id: ModelRequestId::new(MODEL_REQUEST_ID).unwrap(),
+                created_at: std::time::SystemTime::now(),
+                stream: request.metadata.stream,
+                session: self.session.lock().unwrap().take().expect("one execution"),
+            })
+        })
+    }
+
+    fn start_provider_endpoint(
+        &self,
+        _: StartProviderExecution,
+    ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
+        Box::pin(async { panic!("Responses must use model execution") })
+    }
+}
+
+async fn response(
+    provider: &str,
+    session: FakeSession,
+    streaming: bool,
+) -> axum::response::Response {
+    let execution = Arc::new(SessionExecution {
+        client: authenticated_client_for_provider("sk_correlation_test", provider),
+        session: Mutex::new(Some(Box::new(session))),
+    });
+    api_router(execution)
+        .await
+        .oneshot(
+            Request::post("/v1/responses")
+                .header(AUTHORIZATION, "Bearer sk_correlation_test")
+                .header("x-request-id", "caller-chosen-not-a-model-id")
+                .header("user-agent", "AnotherTerminal/1.0")
+                .body(Body::from(
+                    json!({
+                        "model": "model-a", "input": "synthetic", "stream": streaming
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+fn headers(values: &[(&str, &'static str)]) -> Vec<ProviderResponseHeader> {
+    values
+        .iter()
+        .map(|(name, value)| {
+            ProviderResponseHeader::new(*name, Bytes::from_static(value.as_bytes()))
+        })
+        .collect()
+}
+
+fn failed_session(streaming: bool, error: EngineError) -> FakeSession {
+    let trace = Arc::new(Trace::default());
+    if streaming {
+        FakeSession::streaming(trace, vec![NextStep::Error(error)])
+    } else {
+        FakeSession::buffered(trace, Vec::new()).with_collect_error(error)
+    }
+}
+
+#[tokio::test]
+async fn response_ids_are_provider_and_client_independent() {
+    let cases: &[(&[(&str, &str)], &str)] = &[
+        (&[], MODEL_REQUEST_ID),
+        (&[("x-request-id", "upstream-primary")], "upstream-primary"),
+        (&[("x-oai-request-id", "upstream-alias")], "upstream-alias"),
+        (
+            &[
+                ("x-request-id", "upstream-primary"),
+                ("x-oai-request-id", "upstream-alias"),
+            ],
+            "upstream-primary",
+        ),
+        (
+            &[
+                ("x-request-id", " "),
+                ("x-oai-request-id", "upstream-alias"),
+            ],
+            "upstream-alias",
+        ),
+        (&[("x-request-id", "")], MODEL_REQUEST_ID),
+    ];
+    for provider in ["openai", "xai"] {
+        for streaming in [false, true] {
+            for (upstream_headers, expected) in cases {
+                let trace = Arc::new(Trace::default());
+                let session = if streaming {
+                    FakeSession::streaming(
+                        trace,
+                        vec![
+                            NextStep::Event(delivery(
+                                started(),
+                                CommitRequirement::CommitBeforeDelivery,
+                            )),
+                            NextStep::Event(delivery(
+                                completed(),
+                                CommitRequirement::AlreadyCommitted,
+                            )),
+                            NextStep::FinalizeSuccess,
+                        ],
+                    )
+                } else {
+                    FakeSession::buffered(trace, vec![started(), completed()])
+                }
+                .with_response_headers(headers(upstream_headers));
+                let response = response(provider, session, streaming).await;
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(response.headers()["x-request-id"], *expected);
+                assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
+                assert!(
+                    !to_bytes(response.into_body(), 64 * 1024)
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn failure_ids_prefer_the_actual_error_over_session_headers() {
+    for provider in ["openai", "xai"] {
+        for streaming in [false, true] {
+            for upstream_headers in [vec![], headers(&[("x-oai-request-id", "actual-error")])] {
+                let expected = if upstream_headers.is_empty() {
+                    MODEL_REQUEST_ID
+                } else {
+                    "actual-error"
+                };
+                let raw =
+                    Bytes::from_static(br#"{"error":{"message":"synthetic upstream detail"}}"#);
+                let error =
+                    ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
+                        .with_client_visible_upstream_response(
+                            ClientVisibleUpstreamResponse::new(
+                                422,
+                                Some(b"application/json".to_vec()),
+                                raw.clone(),
+                            )
+                            .with_headers(upstream_headers),
+                        );
+                let session = failed_session(streaming, EngineError::Provider(error))
+                    .with_response_headers(headers(&[("x-request-id", "earlier-session")]));
+                let response = response(provider, session, streaming).await;
+                assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(response.headers()["x-request-id"], expected);
+                assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
+                assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), raw);
+            }
+
+            let error =
+                ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+                    .with_status(503)
+                    .with_upstream_request_id(OpaqueUpstreamValue::new("body-read-error"));
+            let session = failed_session(streaming, EngineError::Provider(error))
+                .with_response_headers(headers(&[
+                    ("x-request-id", "earlier-session"),
+                    ("x-oai-request-id", "earlier-alias"),
+                ]));
+            let response = response(provider, session, streaming).await;
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            assert_eq!(response.headers()["x-request-id"], "body-read-error");
+            assert_eq!(response.headers().get_all("x-request-id").iter().count(), 1);
+            assert!(response.headers().get("x-oai-request-id").is_none());
+            assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_execution_failure_uses_the_existing_model_id() {
+    for provider in ["openai", "xai"] {
+        for streaming in [false, true] {
+            let session =
+                failed_session(streaming, EngineError::Deadline).with_response_headers(headers(&[
+                    ("x-request-id", "opening-primary"),
+                    ("x-oai-request-id", "opening-alias"),
+                    ("x-codex-turn-state", "retained-turn-state"),
+                ]));
+            let response = response(provider, session, streaming).await;
+            assert_eq!(response.headers()["x-request-id"], MODEL_REQUEST_ID);
+            assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
+            assert!(response.headers().get("x-oai-request-id").is_none());
+            assert_eq!(
+                response.headers()["x-codex-turn-state"],
+                "retained-turn-state"
+            );
+        }
+    }
 }

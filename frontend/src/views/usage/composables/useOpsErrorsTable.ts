@@ -2,28 +2,45 @@ import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
 import { watchDebounced } from '@vueuse/core'
 
-import { computed, onMounted, shallowRef, watch } from 'vue'
+import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getOpsErrors } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { usageSearchParam } from '../utils/search'
 
-export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>) {
+interface UseOpsErrorsTableOptions {
+  timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
+  latestTimeRangeParams: () => UsageTimeRangeParams
+  provider: Readonly<Ref<string>>
+  active: Readonly<Ref<boolean>>
+}
+
+export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
   const refreshing = shallowRef(false)
   const searchQuery = shallowRef('')
+  const search = computed(() => usageSearchParam(searchQuery.value))
+  let disposed = false
+  // 时间、平台和搜索共同构成分页快照，避免翻页混入另一组筛选结果。
+  let tableParams = snapshot()
+
+  function snapshot() {
+    return {
+      ...options.latestTimeRangeParams(),
+      provider: options.provider.value || undefined,
+      search: search.value,
+    }
+  }
+
   const query = useStablePagedQuery({
     initialPageSize: 10,
     load: ({ currentPage, pageSize }) => getOpsErrors({
       currentPage,
       pageSize,
-      search: searchQuery.value.trim() || undefined,
-      ...timeRangeParams.value,
+      ...tableParams,
     }),
     onError: error => toast.error(errorMessage(error, '加载错误明细失败')),
   })
-  // 首屏进入即处于加载态；首次 execute 完成后由 usePagedQuery 维护。
-  query.loading.value = true
-
   const pagination = computed(() => ({
     currentPage: query.currentPage.value,
     pageSize: query.pageSize.value,
@@ -31,12 +48,26 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
   }))
 
   function handlePageChange(nextPage: number) {
+    if (tableParams.search !== search.value) {
+      void reloadLatest()
+      return
+    }
     void query.execute(nextPage)
   }
 
   function handlePageSizeChange(nextPageSize: number) {
     query.pageSize.value = nextPageSize
-    void query.reloadFromStart()
+    if (tableParams.search !== search.value)
+      void reloadLatest()
+    else
+      void query.reloadFromStart()
+  }
+
+  function reloadLatest() {
+    tableParams = snapshot()
+    // 筛选失败不能继续展示上一范围的数据，错误态由面板单独呈现。
+    query.items.value = []
+    return query.reloadFromStart()
   }
 
   async function refresh() {
@@ -44,7 +75,7 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
       return
     refreshing.value = true
     try {
-      await withMinimumDuration(() => query.execute(query.currentPage.value))
+      await withMinimumDuration(reloadLatest)
     }
     finally {
       refreshing.value = false
@@ -52,21 +83,26 @@ export function useOpsErrorsTable(timeRangeParams: Readonly<Ref<UsageTimeRangePa
   }
 
   watchDebounced(
-    searchQuery,
+    search,
     () => {
-      void query.reloadFromStart()
+      if (!disposed && options.active.value && tableParams.search !== search.value)
+        void reloadLatest()
     },
     { debounce: 250 },
   )
 
-  watch(timeRangeParams, () => {
-    void query.reloadFromStart()
-  })
+  watch([options.timeRangeParams, options.provider, options.active], () => {
+    if (options.active.value)
+      void reloadLatest()
+    else
+      query.invalidate()
+  }, { immediate: true })
 
-  onMounted(() => void query.execute(1))
+  onScopeDispose(() => disposed = true)
 
   return {
     loading: query.loading,
+    error: query.error,
     refreshing,
     records: query.items,
     searchQuery,

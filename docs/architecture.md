@@ -376,6 +376,18 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 可恢复观测并累计指标，但不允许改变客户端响应。Usage 详情中的 attempt 因此是 best-effort，并通过
 `attemptsComplete: false` 明示不完整性。
 
+模型执行沿用 `model_requests.id`，上游身份沿用 `upstream_request_id`，不新增入口 ID 列或查询索引。
+API 的 `x-gateway-request-id` 标识模型执行；HTTP `x-request-id` 优先保留上游值，只有上游别名
+`x-oai-request-id` 时复用其值，两者均缺失时回传模型执行 ID。该规则属于客户端协议，不依赖所选
+Provider 或客户端名称。入口 middleware 的 ID 仍可用于入口日志，但不作为模型请求的主键或检索映射。
+失败终态及中间失败的上游请求 ID 优先取对应 `ProviderError`，缺失时再取该 attempt 的响应
+observation、调用 metadata；最终失败的关联头不与 opening 身份混合。HTTP 错误仍按既有合同
+返回已采集的 turn state 等允许的会话头，不为修复 ID 关联丢弃续接状态。
+
+请求行仍在首次合法 ProviderStream 建立后随 attempt 合并创建。建流前失败和未接纳为模型执行的
+入口拒绝不保证出现在错误列表；排障需结合入口日志，不能将“无记录”解释成没有发生错误。
+扩展此边界前必须先补齐真实 attempt 的账号、传输和发送事实，不能伪造零尝试或 `not_sent`。
+
 只有完整交付客户端的成功响应进入 Token、延迟和成本聚合。实际 `service_tier` 只接受上游响应事件确认，
 不能用请求期望值替代。
 
@@ -417,6 +429,9 @@ HTTP Client 构造失败也不会阻断网关启动。外部解析在已认证�
 - Provider 将安全诊断的阶段、原因码与消息独立于错误大类和发送状态传入 Core；
   `attempt.failed` 保存这些字段，最终错误记录优先持久化诊断消息。重试包装不能覆盖底层诊断，
   也不能因为错误更详细而改变已有重试安全边界。
+- 默认诊断区分 transport 采集的真实头部与用户 JSON；未知 map 的键和值均不原样保留，
+  嵌套的同名 header 不获得头部白名单权限。管理端反馈包只导出明确允许的关联、分类、阶段和计时，
+  不复制 trace 的事件 data，也不因历史 `sanitized` 标记而信任旧正文。
 - 真实 secret 不进入普通日志、Debug、fixture 或 audit details；明文只能通过账号导出、Key reveal、
   备份设置等明确的敏感 Admin 合同返回。
 - OAuth pending flow 使用有期限、带 owner 的一次性 claim；事务成功后才消费，失败释放 claim。

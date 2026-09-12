@@ -998,6 +998,50 @@ fn failed_image_request_should_persist_failure() {
 }
 
 #[test]
+fn failure_request_id_prefers_error_then_response_observation() {
+    for error_request_id in [None, Some("upstream-error")] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let observation = ProviderResponseObservation::new(
+            UpstreamTransport::new("http_sse").expect("transport"),
+        )
+        .with_status_code(200)
+        .with_request_id(OpaqueUpstreamValue::new("upstream-opening"));
+        let mut error =
+            ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
+                .with_status(400);
+        if let Some(request_id) = error_request_id {
+            error = error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id));
+        }
+        let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+            account_id: "acct_observed",
+            items: vec![Ok(ProviderEvent::observation(observation)), Err(error)],
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .expect("start execution");
+
+        assert!(matches!(
+            block_on(session.collect_uncommitted()),
+            Err(EngineError::Provider(error)) if error.kind() == ProviderErrorKind::InvalidRequest
+        ));
+        let state = store.state.lock().expect("store lock");
+        let finalization = &state.finalizations[0];
+        assert_eq!(
+            finalization.upstream_request_id.as_deref(),
+            Some(error_request_id.unwrap_or("upstream-opening"))
+        );
+        assert_eq!(finalization.upstream_status_code, Some(400));
+    }
+}
+
+#[test]
 fn response_observation_is_persisted_but_never_delivered() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
@@ -1292,6 +1336,8 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
                 Ok(ProviderEvent::observation(first_observation)),
                 Err(
                     ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+                        .with_status(504)
+                        .with_upstream_request_id(OpaqueUpstreamValue::new("discarded-error"))
                         .with_replay_safe()
                         .with_diagnostic(
                             gateway_core::error::ProviderDiagnostic::new(
@@ -1363,10 +1409,10 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
             .first_event_ms
             .is_some_and(|elapsed| elapsed < 987_654)
     );
-    assert_eq!(state.intermediate_status_codes, vec![Some(503)]);
+    assert_eq!(state.intermediate_status_codes, vec![Some(504)]);
     assert_eq!(
         state.intermediate_request_ids,
-        vec![Some("discarded-request".to_owned())]
+        vec![Some("discarded-error".to_owned())]
     );
 }
 

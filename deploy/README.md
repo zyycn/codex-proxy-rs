@@ -282,6 +282,34 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
 
 完整运行时、Provider、revision 与恢复边界见 [架构文档](../docs/architecture.md)。
 
+## 请求错误排查
+
+1. 先记录故障时间和时区、网关版本/提交、客户端名称与版本，以及 HTTP/SSE/WebSocket 传输。
+   区分“上游返回”“网关实际响应”和“客户端终端展示”，不要只凭终端的统一文案推断根因。
+2. 收集响应中的 `x-gateway-request-id`、`x-request-id` / `x-oai-request-id`；配置了
+   `api.request_id_header` 时也记录该入口头。WebSocket 合成错误的关联头位于本条错误的 `headers`。
+   在管理端错误列表按 ID 和时间搜索；检查平台条件并主动刷新，翻页不会推进查询时间。
+   已建立模型执行的 HTTP 响应在没有上游 ID 时以模型执行 ID 回传 `x-request-id`，
+   不需要新增入口 ID 数据列。旧响应或执行前拒绝若只有入口 ID，改用入口日志和时间定位。
+3. 打开错误详情，核对上游/客户端状态、发送状态、attempt、失败阶段及后续恢复关联。
+   下载默认诊断包作为反馈材料，先看 `availability`、`attemptsComplete` 和淘汰计数；
+   该包不含原始错误正文或完整 trace data。分享前仍应检查关联 ID 等内部信息。
+4. 需要更细上下文时，在 `codex-proxy-rs-application.*.log` 及 `.log.gz` 中按网关/上游 ID
+   和时间检索，结合 `attempt.started`、`attempt.failed`、`request.finished` 与 transport 阶段判断。
+   **开启 `host.logging.file.enabled` 时，stdout 仅保留 `gateway_startup` 通道**；
+   `docker logs` 看不到业务错误不代表没有错误。关闭普通文件日志且开启 `host.logging.stdout`
+   时，普通日志才按级别输出到 stdout；专用 dump/OAuth 恢复通道不会混入。
+5. 查不到请求记录时，检查观测队列丢弃/写入失败告警及 `file_logging` 健康状态。首次合法
+   ProviderStream 建立前的失败、鉴权/解析/准入拒绝不保证进入错误列表；应结合入口状态与日志，
+   不能据此认定请求未发生。异步投影有延迟，刷新后仍需核对缺口，而不是反复重放可能已发送的请求。
+6. 仅在上述信息不足且能够控制访问范围时临时开启 `host.logging.request_dump` 复现一次。
+   它会记录完整凭据与用户正文，应限定访问、摘取最小片段并人工脱敏；复现后关闭开关，
+   按配置的保留窗口及组织的数据处理要求管理已生成文件。不要为普通请求排查开启 OAuth 恢复记录，
+   也不要直接上传整个日志目录或完整转储。
+
+反馈入口见 [Issue 表单](../.github/ISSUE_TEMPLATE/bug_report.yml)；错误诊断与查询合同见
+[API 文档](../docs/api.md#10-dashboard用量与错误)。
+
 ## 密码语义
 
 - `admin.default_password` 只在首次创建管理员时使用。

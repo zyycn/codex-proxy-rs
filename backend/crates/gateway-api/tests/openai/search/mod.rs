@@ -171,6 +171,11 @@ async fn search_route_should_preserve_request_and_success_response_bytes() {
         .expect("search response");
 
     assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers()["x-request-id"], "req_search_test");
+    assert_eq!(
+        response.headers()["x-gateway-request-id"],
+        "req_search_test"
+    );
     assert_eq!(
         response.headers().get("x-search-rate-limit"),
         Some(&"42".parse().expect("header value"))
@@ -216,6 +221,11 @@ async fn search_route_should_return_the_exact_upstream_error_response() {
         .expect("search response");
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.headers()["x-request-id"], "req_search_test");
+    assert_eq!(
+        response.headers()["x-gateway-request-id"],
+        "req_search_test"
+    );
     assert_eq!(
         response.headers().get("content-type"),
         Some(&"application/problem+json".parse().expect("content type"))

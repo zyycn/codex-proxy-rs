@@ -209,7 +209,10 @@ impl CodexUpstreamFailure {
             identity_error_code: diagnostics.identity_error_code.clone(),
             usage_limit_resets_at: None,
             retry_after_seconds: failure.retry_after_seconds,
-            request_id: diagnostics.request_id.clone(),
+            request_id: failure
+                .request_id
+                .clone()
+                .or_else(|| diagnostics.request_id.clone()),
             set_cookie_headers: set_cookie_headers.to_vec(),
             rate_limit_headers: rate_limit_headers.to_vec(),
             send_phase,
@@ -326,6 +329,29 @@ pub struct CodexUpstreamDiagnostics {
 }
 
 impl CodexUpstreamDiagnostics {
+    pub(crate) fn error_event_request_id(value: &Value) -> Option<String> {
+        let headers = value.get("headers")?.as_object()?;
+        let mut mapped = HeaderMap::new();
+        for (name, value) in headers {
+            let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+                continue;
+            };
+            if !UPSTREAM_REQUEST_ID_HEADERS.contains(&name.as_str()) {
+                continue;
+            }
+            // 与官方 wrapped error 一致，只接受合法 HTTP 标量头；任意对象和数组不作 ID。
+            let value = match value {
+                Value::String(value) => value.clone(),
+                Value::Number(_) | Value::Bool(_) => value.to_string(),
+                _ => continue,
+            };
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&value) {
+                mapped.insert(name, value);
+            }
+        }
+        first_header(&mapped, UPSTREAM_REQUEST_ID_HEADERS)
+    }
+
     pub fn from_headers(status_code: Option<u16>, headers: &HeaderMap) -> Self {
         Self {
             status_code,

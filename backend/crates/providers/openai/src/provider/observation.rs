@@ -88,15 +88,32 @@ impl OpenAiResponseObservationState {
         }
     }
 
-    pub(super) fn observation(&self) -> Option<ProviderResponseObservation> {
+    pub(super) fn observation(
+        &self,
+        failure: Option<&ProviderError>,
+    ) -> Option<ProviderResponseObservation> {
+        // 失败快照的请求 ID 来自当前错误；连接诊断仍保持 opening 原貌，不维护第二份可变 ID。
+        let failure_diagnostics = failure
+            .filter(|_| self.transport == CodexBackendTransport::WebSocket)
+            .map(|error| {
+                let mut diagnostics = self.diagnostics.clone();
+                diagnostics.request_id =
+                    error.upstream_request_id().map(|id| id.as_str().to_owned());
+                diagnostics
+            });
         let mut observation = codex_response_observation(
             self.transport,
-            &self.diagnostics,
+            failure_diagnostics.as_ref().unwrap_or(&self.diagnostics),
             &self.response_metadata,
             &self.metrics,
             self.websocket_pool_decision,
             self.timings,
         )?;
+        if self.transport == CodexBackendTransport::WebSocket
+            && let Some(status) = failure.and_then(ProviderError::upstream_status)
+        {
+            observation = observation.with_status_code(status);
+        }
         if let Some(metadata) = self.provider_metadata() {
             observation = observation.with_provider_metadata(metadata);
         }
@@ -206,6 +223,11 @@ impl OpenAiResponseObservationState {
     pub(super) fn provider_metadata(&self) -> Option<ProviderResponseMetadata> {
         let mut metadata = Map::new();
         metadata.insert("schemaVersion".to_owned(), json!(2));
+        if self.transport == CodexBackendTransport::WebSocket
+            && let Some(request_id) = &self.diagnostics.request_id
+        {
+            metadata.insert("websocketOpeningRequestId".to_owned(), json!(request_id));
+        }
         if let Some(model) = self
             .response_metadata
             .effective_model
@@ -330,6 +352,13 @@ pub(super) fn codex_error_observation(
             transport,
             transport_metrics,
             ..
+        }
+        | CodexClientError::ErrorBodyRead {
+            status,
+            diagnostics,
+            transport,
+            transport_metrics,
+            ..
         } => {
             observation = codex_response_observation(
                 *transport,
@@ -341,14 +370,21 @@ pub(super) fn codex_error_observation(
             )?
             .with_status_code(status.as_u16());
         }
-        CodexClientError::WebSocket(error)
-            if matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)) =>
-        {
-            let CodexWebSocketExchangeError::Upstream(upstream) = error.classified() else {
-                unreachable!("websocket error was checked above")
+        CodexClientError::WebSocket(error) => {
+            let (status, request_id) = match error.classified() {
+                CodexWebSocketExchangeError::ConnectionLimitReached(failure) => {
+                    (failure.explicit_status_code, failure.request_id.as_deref())
+                }
+                CodexWebSocketExchangeError::Upstream(upstream) => (
+                    Some(upstream.status_code),
+                    upstream.diagnostics.request_id.as_deref(),
+                ),
+                _ => return Some(observation),
             };
-            observation = observation.with_status_code(upstream.status_code);
-            if let Some(request_id) = upstream.diagnostics.request_id.as_deref() {
+            if let Some(status) = status {
+                observation = observation.with_status_code(status);
+            }
+            if let Some(request_id) = request_id {
                 observation =
                     observation.with_request_id(OpaqueUpstreamValue::new(request_id.to_owned()));
             }

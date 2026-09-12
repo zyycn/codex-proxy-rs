@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::transport::client::CodexClientVisibleUpstreamResponse;
 use crate::transport::diagnostics::CodexUpstreamDiagnostics;
 use crate::transport::diagnostics::CodexUpstreamSendPhase;
+use crate::transport::protocol::responses::ResponsesSseFailure;
 
 use super::PreviousResponseUnavailableReason;
 use super::pump::WebSocketConnectionObservation;
@@ -63,7 +64,7 @@ pub enum CodexWebSocketExchangeError {
     Upstream(Box<CodexWebSocketUpstreamError>),
     /// 上游要求结束当前 WebSocket 连接并在新连接上重试。
     #[error("websocket connection limit reached")]
-    ConnectionLimitReached,
+    ConnectionLimitReached(Box<ResponsesSseFailure>),
     /// 请求依赖的连接本地 previous response 无法在当前连接满足。
     #[error("websocket continuation unavailable: {reason}")]
     ContinuationUnavailable {

@@ -681,7 +681,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             &response,
             &request,
         );
-        if let Some(observation) = observation_state.observation() {
+        if let Some(observation) = observation_state.observation(None) {
             yield ProviderEvent::observation(observation);
         }
         if let Some(etag) = response.response_metadata.models_etag.as_deref()
@@ -710,7 +710,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let response_transport = response.transport;
         let websocket_connection_id = response.websocket_connection_id;
         let mut body = response.body;
-        let failure_diagnostics = response.diagnostics.clone();
+        let mut failure_diagnostics = response.diagnostics.clone();
+        if response_transport == CodexBackendTransport::WebSocket {
+            // opening ID 标识连接，不可作为缺失请求级错误头时的当前请求 ID。
+            failure_diagnostics.request_id = None;
+        }
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
         let failure_rate_limit_headers = response.rate_limit_headers.clone();
         let mut passive_quota_observation =
@@ -791,7 +795,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     )
                     .await;
                     let observation_event = if rate_limits_changed || turn_state_merge.is_some() {
-                        observation_state.observation().map(ProviderEvent::observation)
+                        observation_state.observation(None).map(ProviderEvent::observation)
                     } else {
                         None
                     };
@@ -934,8 +938,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 || service_tier_changed
                 || timing_changed
                 || turn_state_changed
-                || terminal_changed)
-                && let Some(observation) = observation_state.observation()
+                || terminal_changed
+                || (response_transport == CodexBackendTransport::WebSocket && terminal_failure.is_some()))
+                && let Some(observation) = observation_state.observation(
+                    terminal_failure.as_ref().map(|(failure, _)| &failure.error)
+                )
             {
                 yield ProviderEvent::observation(observation);
             }
@@ -1054,8 +1061,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             || timing_changed
             || rate_limits_changed
             || turn_state_changed
-            || terminal_changed)
-            && let Some(observation) = observation_state.observation()
+            || terminal_changed
+            || (response_transport == CodexBackendTransport::WebSocket && terminal_failure.is_some()))
+            && let Some(observation) = observation_state.observation(
+                terminal_failure.as_ref().map(|(failure, _)| &failure.error)
+            )
         {
             yield ProviderEvent::observation(observation);
         }
