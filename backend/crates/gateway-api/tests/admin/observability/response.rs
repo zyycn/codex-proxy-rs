@@ -519,6 +519,98 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
 }
 
 #[tokio::test]
+async fn zero_attempt_failure_detail_keeps_missing_upstream_facts_and_preparation_trace() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use gateway_admin::model::observability::{RequestOutcome, UsageDetail};
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    use crate::admin::{AdminTestFixture, AdminTestState};
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut record = usage_record_with_account("req_early", "", "", "", "", Utc::now());
+    record.provider_kind = None;
+    record.provider_account_ref = None;
+    record.provider_account_name = None;
+    record.provider_account_email = None;
+    record.provider_account_authentication_kind = None;
+    record.upstream_model_id = None;
+    record.upstream_transport = None;
+    record.http_version = None;
+    record.attempt_count = 0;
+    record.upstream_send_state = "not_sent".to_owned();
+    record.downstream_committed_at = None;
+    record.outcome = RequestOutcome::Failed;
+    record.client_status_code = Some(503);
+    record.upstream_status_code = None;
+    record.error_kind = Some("no_available_provider".to_owned());
+    record.error_message = Some("no upstream account is available".to_owned());
+    record.input_tokens = None;
+    record.output_tokens = None;
+    record.cached_tokens = None;
+    record.cache_write_tokens = None;
+    record.reasoning_tokens = None;
+    record.image_input_tokens = None;
+    record.image_output_tokens = None;
+    record.total_tokens = None;
+    let trace = json!({
+        "events": [
+            {"stage": "attempt.started", "attemptIndex": 1},
+            {"stage": "attempt.failed", "attemptIndex": 1},
+            {"stage": "request.finished", "data": {"attempts": 0}},
+        ]
+    });
+    fixture.usage_detail.lock().unwrap().replace(UsageDetail {
+        request: record,
+        attempts: Vec::new(),
+        trace: Some(trace.clone()),
+        related_requests: Vec::new(),
+    });
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/usage/records/detail?id=req_early")
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_zero_attempt_detail")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = &value["data"];
+    assert_eq!(data["requestId"], "req_early");
+    assert_eq!(data["attemptCount"], 0);
+    assert_eq!(data["attempts"], json!([]));
+    // 明细仍沿用全局 best-effort 合同，不从预备 trace 推断完整尝试列表。
+    assert_eq!(data["attemptsComplete"], false);
+    assert_eq!(data["trace"], trace);
+    assert_eq!(data["logicalOutcome"], "failed");
+    assert_eq!(data["clientStatusCode"], 503);
+    assert_eq!(data["message"], "no upstream account is available");
+    assert_eq!(data["model"], "coding");
+    assert!(data.get("upstreamStatusCode").is_none());
+    assert!(data.get("httpVersion").is_none());
+    for field in [
+        "provider",
+        "accountId",
+        "upstreamModel",
+        "upstreamTransport",
+        "inputTokens",
+        "outputTokens",
+    ] {
+        assert_eq!(data.get(field), Some(&serde_json::Value::Null), "{field}");
+    }
+}
+
+#[tokio::test]
 async fn ops_errors_should_keep_account_label_and_authentication_contract() {
     use axum::{
         body::{Body, to_bytes},

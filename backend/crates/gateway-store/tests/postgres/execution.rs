@@ -1,18 +1,34 @@
-use chrono::{Duration, Utc};
+use std::time::{Duration as StdDuration, SystemTime};
+
+use chrono::{DateTime, Duration, Utc};
+use futures::TryStreamExt as _;
+use gateway_admin::{
+    model::{PageSize, observability as admin_observability},
+    ports::store::ObservabilityStore as _,
+};
+use gateway_core::diagnostics::TraceContext;
 use gateway_core::engine::{
     ExecutionOutcome, ExecutionStore, ModelRequestFailureObservation,
     ModelRequestFinalization as CoreModelRequestFinalization, ModelRequestId,
-    ModelRequestTimings as CoreModelRequestTimings,
+    ModelRequestTimings as CoreModelRequestTimings, NewModelRequest as CoreNewModelRequest,
 };
-use gateway_core::error::{GatewayError, GatewayErrorKind, ProviderConnectionObservation};
+use gateway_core::error::{
+    GatewayError, GatewayErrorKind, ProviderConnectionObservation, StoreErrorKind,
+};
 use gateway_core::metering::{CalculatedCost, CostEstimate, Usage};
+use gateway_core::operation::OperationKind;
+use gateway_core::policy::ClientApiKeyId;
+use gateway_core::routing::{AccountRoutingSnapshot, ConfigRevision, PublicModelId};
 use gateway_core::upstream::UpstreamSendState;
 use gateway_store::postgres::{
-    ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest, ObservabilityRepository,
-    PgExecutionStore,
+    AttemptMetrics, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
+    ObservabilityPageSize, ObservabilityRange, ObservabilityRepository, OpsErrorFilter,
+    OpsErrorQuery, PgExecutionStore, UsageRecordFilter, UsageRecordQuery,
 };
+use serde_json::{Value, json};
+use sqlx::PgPool;
 
-use super::TestDatabase;
+use super::{TestDatabase, admin_observability_store, observability_repository};
 
 #[test]
 fn postgres_execution_adapter_implements_core_port() {
@@ -1148,5 +1164,598 @@ async fn diagnostic_trace_is_finalized_atomically_and_available_for_failed_reque
         .unwrap();
     assert_eq!(detail.trace, Some(trace));
     assert!(detail.related_requests.is_empty());
+    database.close().await;
+}
+
+// 只构造已接纳的入口事实；未选择账号、未出站，也没有上游用量。
+pub(super) fn accepted_request(id: &str) -> CoreNewModelRequest {
+    let started_at = SystemTime::from(
+        DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+            .expect("PostgreSQL timestamp precision"),
+    );
+    CoreNewModelRequest {
+        id: ModelRequestId::new(id).expect("request id"),
+        client_api_key_id: None,
+        client_api_key_ref: ClientApiKeyId::new("key_zero_attempt").expect("client key ref"),
+        config_revision: ConfigRevision::new(1).expect("revision"),
+        routing: AccountRoutingSnapshot::all(),
+        protocol: "openai".to_owned(),
+        operation: OperationKind::Generate,
+        endpoint: "/v1/responses".to_owned(),
+        client_transport: "http_sse".to_owned(),
+        requested_model: Some(PublicModelId::new("coding").expect("public model")),
+        client_ip: None,
+        user_agent: None,
+        reasoning_effort: None,
+        reasoning_preset: None,
+        request_kind: None,
+        subagent_kind: None,
+        compact: false,
+        continuation: Default::default(),
+        image_generation_requested: false,
+        admission_decision_ms: Some(2),
+        started_at,
+        deadline_at: started_at + StdDuration::from_secs(30),
+    }
+}
+
+pub(super) fn early_failure(request: &CoreNewModelRequest) -> CoreModelRequestFinalization {
+    let trace = TraceContext::new(request.id.as_str());
+    trace.record("request.started", json!({"operation": "generate"}));
+    // trace 的 index 是预备阶段关联，不证明已经拿到账号、建流或实际发送。
+    let preparation = trace.attempt(1);
+    preparation.record(
+        "attempt.started",
+        json!({"provider": "openai", "model": "coding", "pinnedAccount": null}),
+    );
+    preparation.record(
+        "attempt.failed",
+        json!({"kind": "no_eligible_account", "sendState": "NotSent"}),
+    );
+    trace.record(
+        "request.finished",
+        json!({"outcome": "failed", "errorKind": "no_available_provider", "attemptCount": 0}),
+    );
+    CoreModelRequestFinalization {
+        request_id: request.id.clone(),
+        outcome: ExecutionOutcome::Failed,
+        send_state: UpstreamSendState::NotSent,
+        attempt_count: 0,
+        downstream_committed_at: None,
+        client_status_code: Some(503),
+        client_response_id: None,
+        upstream_status_code: None,
+        upstream_request_id: None,
+        upstream_response_id: None,
+        upstream_transport: None,
+        http_version: None,
+        websocket_pool: None,
+        service_tier: None,
+        provider_metadata_json: None,
+        diagnostic_trace_json: trace.snapshot().map(|value| value.to_string()),
+        error: Some(GatewayError::new(
+            GatewayErrorKind::NoAvailableProvider,
+            "no available provider",
+        )),
+        provider_error_code: None,
+        raw_upstream_error: None,
+        failure_observation: Default::default(),
+        retry_after_ms: None,
+        usage: Usage::new(),
+        image_generation_succeeded: None,
+        cost: CostEstimate::unavailable(),
+        timings: CoreModelRequestTimings {
+            latency_ms: Some(1_000),
+            ..Default::default()
+        },
+        completed_at: request.started_at + StdDuration::from_secs(1),
+    }
+}
+
+async fn stored_row(pool: &PgPool, request_id: &str) -> Value {
+    sqlx::query_scalar("select to_jsonb(mr) from model_requests mr where id = $1")
+        .bind(request_id)
+        .fetch_one(pool)
+        .await
+        .expect("load complete synthetic request row")
+}
+
+fn zero_attempt_range(request: &CoreNewModelRequest) -> ObservabilityRange {
+    ObservabilityRange::new(
+        DateTime::from(request.started_at - StdDuration::from_secs(60)),
+        DateTime::from(request.deadline_at + StdDuration::from_secs(60)),
+    )
+    .expect("observation range")
+}
+
+#[tokio::test]
+async fn zero_attempt_failure_is_queryable_without_fabricating_upstream_facts() {
+    let Some(database) = TestDatabase::create("zero_attempt_queries").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_zero_attempt_queries");
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create accepted request without attempt");
+    let finalization = early_failure(&request);
+    let trace: Value = serde_json::from_str(
+        finalization
+            .diagnostic_trace_json
+            .as_deref()
+            .expect("trace snapshot"),
+    )
+    .expect("trace JSON");
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("finalize zero-attempt failure with trace");
+
+    let repository = observability_repository(&database.pool);
+    let detail = repository
+        .usage_record_detail(request.id.as_str())
+        .await
+        .expect("load failed request detail");
+    assert_eq!(detail.request.outcome, "failed");
+    assert_eq!(detail.request.attempt_count, 0);
+    assert_eq!(detail.request.upstream_send_state, "not_sent");
+    assert_eq!(detail.request.client_api_key_ref, "key_zero_attempt");
+    assert_eq!(detail.request.requested_model_id.as_deref(), Some("coding"));
+    assert_eq!(detail.request.admission_decision_ms, Some(2));
+    assert_eq!(detail.request.latency_ms, Some(1_000));
+    assert_eq!(detail.request.client_status_code, Some(503));
+    assert_eq!(
+        detail.request.error_kind.as_deref(),
+        Some("no_available_provider")
+    );
+    assert_eq!(
+        detail.request.error_message.as_deref(),
+        Some("no available provider")
+    );
+    assert!(detail.attempts.is_empty());
+    assert!(detail.related_requests.is_empty());
+    assert_eq!(detail.trace, Some(trace.clone()));
+    let row = stored_row(&database.pool, request.id.as_str()).await;
+    for field in [
+        "provider_kind",
+        "provider_account_id",
+        "provider_account_ref",
+        "provider_account_name_snapshot",
+        "provider_account_email_snapshot",
+        "provider_account_authentication_kind_snapshot",
+        "upstream_model_id",
+        "upstream_transport",
+        "http_version",
+        "upstream_status_code",
+        "upstream_request_id",
+        "upstream_response_id",
+        "client_response_id",
+        "downstream_committed_at",
+        "service_tier",
+        "provider_observation_json",
+        "raw_upstream_error",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_amount",
+        "cost_currency",
+        "account_selection_wait_ms",
+        "capacity_used_slots",
+        "capacity_total_slots",
+    ] {
+        assert_eq!(
+            row.get(field),
+            Some(&Value::Null),
+            "{field} must remain absent"
+        );
+    }
+    assert_eq!(row["cost_source"], "unavailable");
+    let events = trace["events"].as_array().expect("events");
+    assert!(events.iter().all(|event| event["exchangeId"].is_null()));
+    let prepared_attempts: Vec<_> = events
+        .iter()
+        .filter(|event| event["attemptIndex"] == 1)
+        .map(|event| event["stage"].as_str().expect("stage"))
+        .collect();
+    assert_eq!(prepared_attempts, ["attempt.started", "attempt.failed"]);
+
+    let query = OpsErrorQuery {
+        range: zero_attempt_range(&request),
+        filter: OpsErrorFilter {
+            request_id: Some(request.id.as_str().to_owned()),
+            ..Default::default()
+        },
+        current_page: 1,
+        page_size: ObservabilityPageSize::new(10).expect("page size"),
+    };
+    let errors = repository
+        .list_ops_errors(query.clone())
+        .await
+        .expect("ops errors");
+    assert_eq!(errors.total, 1);
+    assert_eq!(errors.items.len(), 1);
+    let error = &errors.items[0];
+    assert_eq!(error.source, "model_request");
+    assert_eq!(error.request_id.as_deref(), Some(request.id.as_str()));
+    assert_eq!(error.attempt_index, None);
+    assert_eq!(error.failure_kind, "no_available_provider");
+    assert_eq!(error.message, "no available provider");
+    assert_eq!(error.upstream_send_state.as_deref(), Some("not_sent"));
+    assert_eq!(error.provider_kind, None);
+    assert_eq!(error.provider_account_ref, None);
+    assert_eq!(error.upstream_transport, None);
+    assert_eq!(error.upstream_status_code, None);
+    assert_eq!(error.upstream_request_id, None);
+    assert_eq!(error.raw_upstream_error, None);
+
+    // 路由入口不等于已选择 Provider；没有平台事实时不能被平台/attempt 筛选命中。
+    for filter in [
+        OpsErrorFilter {
+            provider_kind: Some("openai".to_owned()),
+            ..query.filter.clone()
+        },
+        OpsErrorFilter {
+            attempt_index: Some(1),
+            ..query.filter.clone()
+        },
+    ] {
+        let page = repository
+            .list_ops_errors(OpsErrorQuery {
+                filter,
+                ..query.clone()
+            })
+            .await
+            .expect("filter absent upstream facts");
+        assert_eq!(page.total, 0);
+        assert!(page.items.is_empty());
+    }
+    let admin = admin_observability_store(&database.pool);
+    let admin_detail = admin
+        .usage_record_detail(request.id.as_str())
+        .await
+        .expect("admin detail");
+    assert_eq!(admin_detail.trace, Some(trace));
+    assert_eq!(admin_detail.request.attempt_count, 0);
+    assert!(admin_detail.attempts.is_empty());
+    let admin_errors = admin
+        .list_ops_errors(admin_observability::OpsErrorQuery {
+            range: admin_observability::TimeRange::new(query.range.start, query.range.end)
+                .expect("admin time range"),
+            filter: admin_observability::OpsErrorFilter {
+                request_id: Some(request.id.as_str().to_owned()),
+                ..Default::default()
+            },
+            current_page: 1,
+            page_size: PageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("admin ops errors without provider facts");
+    assert_eq!(admin_errors.total, 1);
+    assert_eq!(admin_errors.items.len(), 1);
+    assert_eq!(admin_errors.items[0].attempt_index, None);
+    assert_eq!(admin_errors.items[0].provider_kind, None);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn zero_attempt_finalization_rejects_sent_or_missing_attempt_facts_atomically() {
+    let Some(database) = TestDatabase::create("zero_attempt_constraints").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_zero_attempt_constraints");
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create request");
+    let before = stored_row(&database.pool, request.id.as_str()).await;
+
+    for (count, send_state) in [
+        (0, UpstreamSendState::Sent),
+        (0, UpstreamSendState::Ambiguous),
+        (1, UpstreamSendState::NotSent),
+    ] {
+        let mut finalization = early_failure(&request);
+        finalization.attempt_count = count;
+        finalization.send_state = send_state;
+        assert!(
+            ExecutionStore::finalize_model_request(&store, finalization)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            stored_row(&database.pool, request.id.as_str()).await,
+            before
+        );
+    }
+    for invalid_trace in [
+        "not JSON".to_owned(),
+        "[]".to_owned(),
+        json!({"data": "x".repeat(65_536)}).to_string(),
+    ] {
+        let mut finalization = early_failure(&request);
+        finalization.diagnostic_trace_json = Some(invalid_trace);
+        assert_eq!(
+            ExecutionStore::finalize_model_request(&store, finalization)
+                .await
+                .expect_err("invalid trace")
+                .kind(),
+            StoreErrorKind::InvalidData,
+        );
+        assert_eq!(
+            stored_row(&database.pool, request.id.as_str()).await,
+            before
+        );
+    }
+    ExecutionStore::finalize_model_request(&store, early_failure(&request))
+        .await
+        .expect("valid zero attempt");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn zero_attempt_duplicate_create_and_finalization_never_overwrite_terminal_facts() {
+    let Some(database) = TestDatabase::create("zero_attempt_idempotency").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_zero_attempt_idempotency");
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create request");
+    let (first, second) = tokio::join!(
+        ExecutionStore::finalize_model_request(&store, early_failure(&request)),
+        ExecutionStore::finalize_model_request(&store, early_failure(&request)),
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert_eq!(
+        first
+            .err()
+            .or_else(|| second.err())
+            .expect("CAS loser")
+            .kind(),
+        StoreErrorKind::InvalidState
+    );
+    let terminal = stored_row(&database.pool, request.id.as_str()).await;
+    assert!(store.create_model_request(request.clone()).await.is_err());
+    let mut late = early_failure(&request);
+    late.outcome = ExecutionOutcome::Cancelled;
+    late.error = Some(GatewayError::new(
+        GatewayErrorKind::Cancelled,
+        "request was cancelled",
+    ));
+    late.diagnostic_trace_json = None;
+    late.completed_at += StdDuration::from_secs(1);
+    assert_eq!(
+        ExecutionStore::finalize_model_request(&store, late)
+            .await
+            .expect_err("already finalized")
+            .kind(),
+        StoreErrorKind::InvalidState
+    );
+    assert_eq!(
+        store
+            .recover_expired(request.deadline_at)
+            .await
+            .expect("recover")
+            .requests,
+        0
+    );
+    assert_eq!(
+        stored_row(&database.pool, request.id.as_str()).await,
+        terminal
+    );
+    let count: i64 = sqlx::query_scalar("select count(*) from model_requests")
+        .fetch_one(&database.pool)
+        .await
+        .expect("one request row");
+    assert_eq!(count, 1);
+    let ops: i64 = sqlx::query_scalar("select count(*) from ops_events")
+        .fetch_one(&database.pool)
+        .await
+        .expect("no extra error ledger");
+    assert_eq!(ops, 0);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
+    let Some(database) = TestDatabase::create("zero_attempt_recovery").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_zero_attempt_recovery");
+    let mut active = request.clone();
+    active.id = ModelRequestId::new("req_zero_attempt_still_running").expect("request id");
+    active.deadline_at += StdDuration::from_secs(30);
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create interrupted request");
+    store
+        .create_model_request(active.clone())
+        .await
+        .expect("create active request");
+    assert_eq!(
+        store
+            .recover_expired(request.deadline_at - StdDuration::from_micros(1))
+            .await
+            .expect("before deadline")
+            .requests,
+        0
+    );
+    assert_eq!(
+        store
+            .recover_expired(request.deadline_at)
+            .await
+            .expect("at deadline")
+            .requests,
+        1
+    );
+    let recovered = stored_row(&database.pool, request.id.as_str()).await;
+    assert_eq!(
+        store
+            .recover_expired(request.deadline_at)
+            .await
+            .expect("repeat recovery")
+            .requests,
+        0
+    );
+    assert_eq!(
+        ExecutionStore::finalize_model_request(&store, early_failure(&request))
+            .await
+            .expect_err("late finalize after recovery")
+            .kind(),
+        StoreErrorKind::InvalidState
+    );
+    assert_eq!(
+        stored_row(&database.pool, request.id.as_str()).await,
+        recovered
+    );
+    let repository = observability_repository(&database.pool);
+    let detail = repository
+        .usage_record_detail(request.id.as_str())
+        .await
+        .expect("recovered detail");
+    assert_eq!(detail.request.outcome, "incomplete");
+    assert_eq!(
+        detail.request.error_kind.as_deref(),
+        Some("process_interrupted")
+    );
+    assert_eq!(
+        detail.request.completed_at,
+        Some(DateTime::from(request.deadline_at))
+    );
+    assert_eq!(detail.request.attempt_count, 0);
+    assert_eq!(detail.request.upstream_send_state, "not_sent");
+    assert_eq!(detail.trace, None);
+    assert!(detail.attempts.is_empty());
+    let errors = repository
+        .list_ops_errors(OpsErrorQuery {
+            range: zero_attempt_range(&request),
+            filter: OpsErrorFilter::default(),
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("recovered ops error");
+    assert_eq!(errors.total, 1);
+    assert_eq!(errors.items[0].failure_kind, "process_interrupted");
+    assert_eq!(errors.items[0].attempt_index, None);
+    assert_eq!(
+        repository
+            .usage_record_detail(active.id.as_str())
+            .await
+            .expect("active detail")
+            .request
+            .outcome,
+        "running"
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates() {
+    let Some(database) = TestDatabase::create("zero_attempt_metrics").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_zero_attempt_metrics");
+    seed_running_request(&database.pool, "req_zero_attempt_success_control")
+        .await
+        .expect("success control");
+    let mut success = successful_core_finalization("req_zero_attempt_success_control");
+    success.downstream_committed_at = Some(success.completed_at);
+    success.usage = Usage {
+        input_tokens: Some(100),
+        output_tokens: Some(20),
+        total_tokens: Some(120),
+        ..Usage::new()
+    };
+    success.timings.latency_ms = Some(200);
+    success.cost = gateway_core::metering::CalculatedCost::from_usd_ticks(12_500_000_000)
+        .expect("calculated cost")
+        .into_estimate();
+    ExecutionStore::finalize_model_request(&store, success)
+        .await
+        .expect("finalize success control");
+    let repository = observability_repository(&database.pool);
+    let before = repository
+        .usage_summary(zero_attempt_range(&request), UsageRecordFilter::default())
+        .await
+        .expect("baseline usage");
+    assert_eq!(before.requests.total_tokens, 120);
+    assert!(!before.attempts.costs.is_empty());
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create zero attempt");
+    ExecutionStore::finalize_model_request(&store, early_failure(&request))
+        .await
+        .expect("finalize failure");
+    let after = repository
+        .usage_summary(zero_attempt_range(&request), UsageRecordFilter::default())
+        .await
+        .expect("usage after failure");
+    assert_eq!(
+        after.requests.request_count,
+        before.requests.request_count + 1
+    );
+    assert_eq!(
+        after.requests.failure_count,
+        before.requests.failure_count + 1
+    );
+    assert_eq!(after.requests.success_count, before.requests.success_count);
+    assert_eq!(after.requests.total_tokens, before.requests.total_tokens);
+    assert_eq!(after.requests.latency_sum, before.requests.latency_sum);
+    assert_eq!(after.requests.latency_count, before.requests.latency_count);
+    assert_eq!(after.attempts, before.attempts);
+    let successes = repository
+        .usage_summary(
+            zero_attempt_range(&request),
+            UsageRecordFilter {
+                outcome: Some("succeeded".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("successful aggregation unchanged");
+    assert_eq!(successes, before);
+    let filter = UsageRecordFilter {
+        request_id: Some(request.id.as_str().to_owned()),
+        ..Default::default()
+    };
+    let failed = repository
+        .usage_summary(zero_attempt_range(&request), filter.clone())
+        .await
+        .expect("failed request metrics");
+    assert_eq!(failed.requests.request_count, 1);
+    assert_eq!(failed.requests.failure_count, 1);
+    assert_eq!(failed.requests.total_tokens, 0);
+    assert_eq!(failed.requests.latency_count, 0);
+    assert_eq!(failed.attempts, AttemptMetrics::default());
+    let page = repository
+        .list_usage_records(UsageRecordQuery {
+            range: zero_attempt_range(&request),
+            filter: filter.clone(),
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).expect("page size"),
+        })
+        .await
+        .expect("successful usage list excludes failure");
+    assert_eq!(page.total, 0);
+    assert!(page.items.is_empty());
+    let billing: Vec<_> = repository
+        .usage_calculated_billing_facts(zero_attempt_range(&request), filter)
+        .try_collect()
+        .await
+        .expect("billing facts");
+    assert!(billing.is_empty());
+    let charges: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
+        .fetch_one(&database.pool)
+        .await
+        .expect("observations do not settle budgets");
+    assert_eq!(charges, 0);
     database.close().await;
 }

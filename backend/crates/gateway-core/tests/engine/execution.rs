@@ -257,6 +257,224 @@ fn cancellation_and_pre_send_failure_settle_zero_and_release_concurrency_for_all
     );
 }
 
+fn early_failure_service(
+    store: Arc<TrackingExecutionStore>,
+    admissions: Arc<Admissions>,
+    budget: Arc<Budget>,
+) -> DefaultExecutionService {
+    DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        store,
+        ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>]).unwrap(),
+        admissions,
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    )
+    .with_budget(budget)
+}
+
+fn assert_early_failure_recorded(
+    store: &TrackingExecutionStore,
+    request_id: &ModelRequestId,
+    transport: ClientTransport,
+) {
+    assert_eq!(store.creates.load(Ordering::SeqCst), 1);
+    assert_eq!(store.finalizes.load(Ordering::SeqCst), 1);
+    assert!(store.attempts.lock().unwrap().is_empty());
+    let requests = store.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.id, *request_id);
+    assert_eq!(request.client_api_key_ref.as_str(), "key_start_test");
+    assert_eq!(
+        request.client_api_key_id.as_ref(),
+        Some(&request.client_api_key_ref)
+    );
+    assert_eq!(request.protocol, "openai");
+    assert_eq!(request.endpoint, "/v1/responses");
+    assert_eq!(request.client_transport, transport.as_str());
+    assert_eq!(request.operation, OperationKind::Generate);
+    assert_eq!(
+        request.requested_model.as_ref().map(PublicModelId::as_str),
+        Some("gpt-start")
+    );
+    let finalizations = store.finalizations.lock().unwrap();
+    assert_eq!(finalizations.len(), 1);
+    let finalization = &finalizations[0];
+    assert_eq!(finalization.request_id, *request_id);
+    assert_eq!(finalization.outcome, ExecutionOutcome::Failed);
+    assert_eq!(finalization.send_state, UpstreamSendState::NotSent);
+    assert_eq!(finalization.attempt_count, 0);
+    assert!(finalization.downstream_committed_at.is_none());
+    assert!(finalization.upstream_request_id.is_none());
+    assert!(finalization.upstream_response_id.is_none());
+    assert!(finalization.upstream_status_code.is_none());
+    assert!(finalization.upstream_transport.is_none());
+    assert!(finalization.http_version.is_none());
+    assert!(finalization.websocket_pool.is_none());
+    assert!(finalization.provider_metadata_json.is_none());
+    assert_eq!(
+        finalization
+            .error
+            .as_ref()
+            .expect("original failure")
+            .kind(),
+        GatewayErrorKind::Unsupported,
+        "detached cancellation must not replace the original provider failure"
+    );
+    assert_eq!(finalization.usage, Default::default());
+    assert!(finalization.cost.total().is_none());
+}
+
+fn assert_zero_cleanup_completed(
+    admissions: &Admissions,
+    budget: &Budget,
+    store: &TrackingExecutionStore,
+    request_id: &ModelRequestId,
+) {
+    assert!(!admissions.active.load(Ordering::SeqCst));
+    assert_eq!(admissions.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.settlements.load(Ordering::SeqCst), 1);
+    let charges = budget.charges.lock().unwrap();
+    assert_eq!(charges.len(), 1);
+    assert_eq!(charges[0].request_id, *request_id);
+    assert_eq!(charges[0].key_id.as_str(), "key_start_test");
+    assert_eq!(charges[0].amount_usd, Decimal::ZERO);
+    assert_eq!(
+        charges[0].completed_at,
+        store.finalizations.lock().unwrap()[0].completed_at,
+        "settlement must retain the original failure completion time"
+    );
+}
+
+#[test]
+fn early_provider_failure_records_request_and_settles_zero_for_all_transports() {
+    block_on(async {
+        for transport in [
+            ClientTransport::HttpJson,
+            ClientTransport::HttpSse,
+            ClientTransport::WebSocket,
+        ] {
+            let store = Arc::new(TrackingExecutionStore::default());
+            let admissions = Arc::new(Admissions::default());
+            let budget = Arc::new(Budget {
+                active: admissions.active.clone(),
+                ..Default::default()
+            });
+            let service = early_failure_service(store.clone(), admissions.clone(), budget.clone());
+            let mut started = service.start(request(&service, transport)).await.unwrap();
+            assert!(admissions.active.load(Ordering::SeqCst));
+            assert_eq!(store.creates.load(Ordering::SeqCst), 0);
+            let error = if transport == ClientTransport::HttpJson {
+                started.session.collect_uncommitted().await.unwrap_err()
+            } else {
+                started.session.next_event().await.unwrap_err()
+            };
+            assert!(matches!(
+                error,
+                EngineError::Provider(error)
+                    if error.kind() == ProviderErrorKind::Unsupported
+                        && error.send_state() == UpstreamSendState::NotSent
+            ));
+            assert!(started.session.is_finalized());
+            assert_early_failure_recorded(&store, &started.request_id, transport);
+            assert_zero_cleanup_completed(&admissions, &budget, &store, &started.request_id);
+            assert!(started.session.next_event().await.unwrap().is_none());
+            started.session.detach_finalize().await;
+            assert_early_failure_recorded(&store, &started.request_id, transport);
+            assert_zero_cleanup_completed(&admissions, &budget, &store, &started.request_id);
+        }
+    });
+}
+
+#[test]
+fn detached_early_failure_resumes_cancelled_store_write_and_settles_once_for_all_transports() {
+    block_on(async {
+        for transport in [
+            ClientTransport::HttpJson,
+            ClientTransport::HttpSse,
+            ClientTransport::WebSocket,
+        ] {
+            for suspend_create in [true, false] {
+                let (complete_write, write_gate) = oneshot::channel();
+                let store = Arc::new(TrackingExecutionStore::default());
+                if suspend_create {
+                    *store.create_gate.lock().unwrap() = Some(write_gate);
+                } else {
+                    *store.finalize_gate.lock().unwrap() = Some(write_gate);
+                }
+                let (complete_release, release_gate) = oneshot::channel();
+                let admissions = Arc::new(Admissions {
+                    release_gate: Mutex::new(Some(release_gate)),
+                    ..Default::default()
+                });
+                let (complete_settlement, settlement_gate) = oneshot::channel();
+                let budget = Arc::new(Budget {
+                    active: admissions.active.clone(),
+                    settlement_gate: Mutex::new(Some(settlement_gate)),
+                    ..Default::default()
+                });
+                let service =
+                    early_failure_service(store.clone(), admissions.clone(), budget.clone());
+                let mut started = service.start(request(&service, transport)).await.unwrap();
+                let mut next = started.session.next_event();
+                assert!(futures::poll!(next.as_mut()).is_pending());
+                drop(next);
+                assert!(!started.session.is_finalized());
+                assert_eq!(store.creates.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    store.finalizes.load(Ordering::SeqCst),
+                    usize::from(!suspend_create)
+                );
+                assert_eq!(
+                    store.requests.lock().unwrap().len(),
+                    usize::from(!suspend_create)
+                );
+                assert!(store.finalizations.lock().unwrap().is_empty());
+                assert_eq!(budget.settlements.load(Ordering::SeqCst), 0);
+                assert_eq!(admissions.releases.load(Ordering::SeqCst), 0);
+                assert!(admissions.active.load(Ordering::SeqCst));
+
+                let mut detached = started.session.detach_finalize();
+                assert!(futures::poll!(detached.as_mut()).is_pending());
+                assert_eq!(store.creates.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    store.finalizes.load(Ordering::SeqCst),
+                    usize::from(!suspend_create)
+                );
+                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号。
+                complete_write
+                    .send(())
+                    .expect("detached cleanup retains the original store write");
+                assert!(futures::poll!(detached.as_mut()).is_pending());
+                assert_early_failure_recorded(&store, &started.request_id, transport);
+                assert_eq!(budget.settlements.load(Ordering::SeqCst), 1);
+                assert!(budget.charges.lock().unwrap().is_empty());
+                assert_eq!(admissions.releases.load(Ordering::SeqCst), 0);
+                assert!(admissions.active.load(Ordering::SeqCst));
+
+                complete_settlement.send(()).expect("original settlement");
+                assert!(futures::poll!(detached.as_mut()).is_pending());
+                assert_eq!(budget.settlements.load(Ordering::SeqCst), 1);
+                {
+                    let charges = budget.charges.lock().unwrap();
+                    assert_eq!(charges.len(), 1);
+                    assert_eq!(charges[0].amount_usd, Decimal::ZERO);
+                }
+                assert_eq!(admissions.releases.load(Ordering::SeqCst), 1);
+                assert!(admissions.active.load(Ordering::SeqCst));
+                complete_release
+                    .send(())
+                    .expect("original admission release");
+                detached.await;
+                assert_early_failure_recorded(&store, &started.request_id, transport);
+                assert_zero_cleanup_completed(&admissions, &budget, &store, &started.request_id);
+            }
+        }
+    });
+}
+
 struct ChargedProvider {
     fail: bool,
 }
@@ -606,9 +824,9 @@ use gateway_core::engine::provider::{
     ProviderStream,
 };
 use gateway_core::engine::{
-    AttemptContext, AttemptRecord, CommitRequirement, EngineError, ExecutionStore,
-    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest, ProbeFailure,
-    RecoveryReport,
+    AttemptContext, AttemptRecord, CommitRequirement, EngineError, ExecutionOutcome,
+    ExecutionStore, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    ProbeFailure, RecoveryReport,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamResponse, GatewayErrorKind, ProviderError, ProviderErrorKind, StoreError,
@@ -1176,9 +1394,13 @@ impl ClientApiKeyUsageSink for RecordingClientApiKeyUsage {
 struct TrackingExecutionStore {
     touched: AtomicBool,
     probe_failures: Mutex<Vec<String>>,
-    model_request_endpoints: Mutex<Vec<String>>,
-    requested_models: Mutex<Vec<Option<String>>>,
-    upstream_models: Mutex<Vec<Option<String>>>,
+    requests: Mutex<Vec<NewModelRequest>>,
+    attempts: Mutex<Vec<AttemptRecord>>,
+    finalizations: Mutex<Vec<ModelRequestFinalization>>,
+    create_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    finalize_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    creates: AtomicUsize,
+    finalizes: AtomicUsize,
     fail_probe_observation: AtomicBool,
 }
 
@@ -1195,24 +1417,40 @@ impl TrackingExecutionStore {
     }
 
     fn model_request_endpoints(&self) -> Vec<String> {
-        self.model_request_endpoints
+        self.requests
             .lock()
-            .expect("model request endpoints lock")
-            .clone()
+            .expect("model requests lock")
+            .iter()
+            .map(|request| request.endpoint.clone())
+            .collect()
     }
 
     fn requested_models(&self) -> Vec<Option<String>> {
-        self.requested_models
+        self.requests
             .lock()
-            .expect("requested models lock")
-            .clone()
+            .expect("model requests lock")
+            .iter()
+            .map(|request| {
+                request
+                    .requested_model
+                    .as_ref()
+                    .map(|model| model.as_str().to_owned())
+            })
+            .collect()
     }
 
     fn upstream_models(&self) -> Vec<Option<String>> {
-        self.upstream_models
+        self.attempts
             .lock()
-            .expect("upstream models lock")
-            .clone()
+            .expect("attempts lock")
+            .iter()
+            .map(|attempt| {
+                attempt
+                    .upstream_model_id
+                    .as_ref()
+                    .map(|model| model.as_str().to_owned())
+            })
+            .collect()
     }
 }
 
@@ -1220,33 +1458,21 @@ impl TrackingExecutionStore {
 impl ExecutionStore for TrackingExecutionStore {
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.touch();
-        self.requested_models
+        self.creates.fetch_add(1, Ordering::SeqCst);
+        let gate = self.create_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.await.expect("create model request gate");
+        }
+        self.requests
             .lock()
-            .expect("requested models lock")
-            .push(
-                request
-                    .requested_model
-                    .as_ref()
-                    .map(|model| model.as_str().to_owned()),
-            );
-        self.model_request_endpoints
-            .lock()
-            .expect("model request endpoints lock")
-            .push(request.endpoint);
+            .expect("model requests lock")
+            .push(request);
         Ok(())
     }
 
     async fn record_attempt(&self, attempt: AttemptRecord) -> Result<(), StoreError> {
         self.touch();
-        self.upstream_models
-            .lock()
-            .expect("upstream models lock")
-            .push(
-                attempt
-                    .upstream_model_id
-                    .as_ref()
-                    .map(|model| model.as_str().to_owned()),
-            );
+        self.attempts.lock().expect("attempts lock").push(attempt);
         Ok(())
     }
 
@@ -1290,8 +1516,20 @@ impl ExecutionStore for TrackingExecutionStore {
         Ok(())
     }
 
-    async fn finalize_model_request(&self, _: ModelRequestFinalization) -> Result<(), StoreError> {
+    async fn finalize_model_request(
+        &self,
+        finalization: ModelRequestFinalization,
+    ) -> Result<(), StoreError> {
         self.touch();
+        self.finalizes.fetch_add(1, Ordering::SeqCst);
+        let gate = self.finalize_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.await.expect("finalize model request gate");
+        }
+        self.finalizations
+            .lock()
+            .expect("finalizations lock")
+            .push(finalization);
         Ok(())
     }
 

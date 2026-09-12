@@ -2,12 +2,16 @@
 
 use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
+use futures::channel::oneshot;
 use futures::executor::block_on;
 
 use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
@@ -49,6 +53,7 @@ use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FinalState {
+    error_kind: Option<GatewayErrorKind>,
     diagnostic_trace_json: Option<String>,
     outcome: ExecutionOutcome,
     send_state: UpstreamSendState,
@@ -101,6 +106,8 @@ struct StoreState {
 struct FakeStore {
     state: Mutex<StoreState>,
     failures: BTreeSet<StoreWriteFailure>,
+    create_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    finalize_gate: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -113,8 +120,8 @@ enum StoreWriteFailure {
 impl FakeStore {
     fn failing(failure: StoreWriteFailure) -> Self {
         Self {
-            state: Mutex::new(StoreState::default()),
             failures: BTreeSet::from([failure]),
+            ..Self::default()
         }
     }
 
@@ -132,6 +139,10 @@ impl ExecutionStore for FakeStore {
     async fn create_model_request(&self, _request: NewModelRequest) -> Result<(), StoreError> {
         self.fails(StoreWriteFailure::Create)?;
         self.state.lock().expect("store lock").created += 1;
+        let gate = self.create_gate.lock().expect("create gate lock").take();
+        if let Some(gate) = gate {
+            gate.await.expect("create released");
+        }
         Ok(())
     }
 
@@ -208,6 +219,7 @@ impl ExecutionStore for FakeStore {
             .expect("store lock")
             .finalizations
             .push(FinalState {
+                error_kind: finalization.error.as_ref().map(|error| error.kind()),
                 diagnostic_trace_json: finalization.diagnostic_trace_json,
                 outcome: finalization.outcome,
                 send_state: finalization.send_state,
@@ -244,6 +256,14 @@ impl ExecutionStore for FakeStore {
                     .total()
                     .map(|total| total.amount().scaled()),
             });
+        let gate = self
+            .finalize_gate
+            .lock()
+            .expect("finalize gate lock")
+            .take();
+        if let Some(gate) = gate {
+            gate.await.expect("finalize released");
+        }
         Ok(())
     }
 
@@ -267,12 +287,22 @@ enum Script {
         items: Vec<Result<ProviderEvent, ProviderError>>,
     },
     Error(ProviderError),
+    Pending,
 }
 
 struct ScriptedProvider {
     scripts: Mutex<VecDeque<Script>>,
     contexts: Mutex<Vec<AttemptContext>>,
     operations: Mutex<Vec<Operation>>,
+    released_leases: Arc<AtomicUsize>,
+}
+
+struct TrackedLease(Arc<AtomicUsize>);
+
+impl Drop for TrackedLease {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 impl ScriptedProvider {
@@ -281,6 +311,7 @@ impl ScriptedProvider {
             scripts: Mutex::new(scripts.into()),
             contexts: Mutex::new(Vec::new()),
             operations: Mutex::new(Vec::new()),
+            released_leases: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -319,6 +350,7 @@ impl Provider for ScriptedProvider {
             .expect("one script per provider call");
         match script {
             Script::Error(error) => Err(error),
+            Script::Pending => futures::future::pending().await,
             Script::Stream { account_id, items } => {
                 let candidate = request.candidate();
                 let metadata = ProviderCallMetadata::new(
@@ -336,7 +368,7 @@ impl Provider for ScriptedProvider {
                     Box::pin(futures::stream::iter(
                         items.into_iter().map(canonical_provider_event),
                     )),
-                    (),
+                    TrackedLease(Arc::clone(&self.released_leases)),
                 ))
             }
             Script::HangingStream { account_id, items } => {
@@ -1979,7 +2011,17 @@ fn provider_metadata_for_another_account_fails_closed() {
     assert_eq!(provider.scripts.lock().expect("scripts lock").len(), 1);
     let state = store.state.lock().expect("store lock");
     assert!(state.attempts.is_empty());
-    assert!(state.finalizations.is_empty());
+    assert_eq!(state.created, 1);
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].attempt_count, 0);
+    assert_eq!(
+        state.finalizations[0].send_state,
+        UpstreamSendState::NotSent
+    );
+    assert_eq!(
+        state.finalizations[0].error_kind,
+        Some(GatewayErrorKind::Internal)
+    );
 }
 
 #[test]
@@ -3544,7 +3586,7 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
 }
 
 #[test]
-fn no_eligible_account_before_stream_does_not_create_request_detail() {
+fn no_eligible_account_before_stream_records_failure_without_fabricating_an_attempt() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::Error(ProviderError::new(
@@ -3570,10 +3612,35 @@ fn no_eligible_account_before_stream_does_not_create_request_detail() {
             if error.kind() == ProviderErrorKind::NoEligibleAccount
     ));
     assert!(session.provider_attempt_outcomes().is_empty());
+    assert!(session.is_finalized());
+    block_on(session.record_client_status(503)).expect("HTTP error status");
+    block_on(session.cancel_and_finalize()).expect("repeated finalization");
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.created, 0);
+    assert_eq!(state.created, 1);
     assert!(state.attempts.is_empty());
-    assert!(state.finalizations.is_empty());
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.recorded_statuses, [503]);
+    let finalization = &state.finalizations[0];
+    assert_eq!(finalization.outcome, ExecutionOutcome::Failed);
+    assert_eq!(finalization.attempt_count, 0);
+    assert_eq!(finalization.send_state, UpstreamSendState::NotSent);
+    assert_eq!(
+        finalization.error_kind,
+        Some(GatewayErrorKind::NoAvailableProvider)
+    );
+    assert_eq!(finalization.upstream_transport, None);
+    assert_eq!(finalization.total_tokens, None);
+    assert_eq!(finalization.cost_ticks, None);
+    assert_eq!(session.budget_charge().amount_usd.scaled(), 0);
+    let trace: Value =
+        serde_json::from_str(finalization.diagnostic_trace_json.as_deref().unwrap()).unwrap();
+    let events = trace["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["stage"] == "attempt.failed")
+    );
+    assert_eq!(events.last().unwrap()["stage"], "request.finished");
 }
 
 #[test]
@@ -3581,9 +3648,12 @@ fn expired_deadline_finalizes_without_calling_provider() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![]);
+    let deadline = SystemTime::now() - Duration::from_secs(1);
+    let mut request = model_request(&operation, deadline);
+    request.started_at = deadline - Duration::from_secs(30);
 
     let error = match block_on(coordinator.start(
-        model_request(&operation, SystemTime::UNIX_EPOCH),
+        request,
         operation,
         route_plan,
         None,
@@ -3597,9 +3667,483 @@ fn expired_deadline_finalizes_without_calling_provider() {
     assert!(matches!(error, gateway_core::engine::EngineError::Deadline));
     assert!(provider.contexts.lock().expect("contexts lock").is_empty());
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.created, 0);
+    assert_eq!(state.created, 1);
     assert!(state.attempts.is_empty());
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].attempt_count, 0);
+    assert_eq!(
+        state.finalizations[0].send_state,
+        UpstreamSendState::NotSent
+    );
+    assert_eq!(
+        state.finalizations[0].error_kind,
+        Some(GatewayErrorKind::Timeout)
+    );
+}
+
+#[test]
+fn preparation_failures_preserve_the_error_when_observation_writes_fail() {
+    for failure in [
+        None,
+        Some(StoreWriteFailure::Create),
+        Some(StoreWriteFailure::Finalize),
+    ] {
+        let operation = generate_operation();
+        let store = Arc::new(failure.map_or_else(FakeStore::default, FakeStore::failing));
+        let (coordinator, store, provider) = coordinator_with_store(
+            vec![Script::Error(ProviderError::new(
+                ProviderErrorKind::ProviderInfrastructureUnavailable,
+                UpstreamSendState::NotSent,
+            ))],
+            store,
+        );
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation.clone(),
+            plan(&operation),
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+
+        assert!(matches!(
+            block_on(session.next_event()),
+            Err(EngineError::Provider(ref error))
+                if error.kind() == ProviderErrorKind::ProviderInfrastructureUnavailable
+        ));
+        assert!(session.is_finalized());
+        let charge = session.budget_charge();
+        block_on(session.cancel_and_finalize()).unwrap();
+        assert!(block_on(session.next_event()).unwrap().is_none());
+        assert_eq!(session.budget_charge().completed_at, charge.completed_at);
+        assert_eq!(charge.amount_usd.scaled(), 0);
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        let state = store.state.lock().unwrap();
+        assert!(state.attempts.is_empty());
+        assert_eq!(
+            state.created,
+            usize::from(failure != Some(StoreWriteFailure::Create))
+        );
+        assert_eq!(state.finalizations.len(), usize::from(failure.is_none()));
+    }
+}
+
+#[test]
+fn interrupted_early_finalization_resumes_the_same_write_and_keeps_the_original_failure() {
+    block_on(async {
+        for create in [true, false] {
+            for detach in [true, false] {
+                let (release, gate) = oneshot::channel();
+                let store = Arc::new(if create {
+                    FakeStore {
+                        create_gate: Mutex::new(Some(gate)),
+                        ..FakeStore::default()
+                    }
+                } else {
+                    FakeStore {
+                        finalize_gate: Mutex::new(Some(gate)),
+                        ..FakeStore::default()
+                    }
+                });
+                let operation = generate_operation();
+                let (coordinator, store, provider) = coordinator_with_store(
+                    vec![Script::Error(ProviderError::new(
+                        ProviderErrorKind::NoEligibleAccount,
+                        UpstreamSendState::NotSent,
+                    ))],
+                    store,
+                );
+                let mut session = coordinator
+                    .start(
+                        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                        operation.clone(),
+                        plan(&operation),
+                        None,
+                        None,
+                        CancellationToken::new(),
+                    )
+                    .await
+                    .unwrap();
+                for _ in 0..2 {
+                    let mut next = Box::pin(session.next_event());
+                    assert!(futures::poll!(next.as_mut()).is_pending());
+                    drop(next);
+                    assert!(!session.is_finalized());
+                    assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+                }
+                let completed_at = session.budget_charge().completed_at;
+                release
+                    .send(())
+                    .expect("original write must still be alive");
+                if detach {
+                    session.cancel_and_finalize().await.unwrap();
+                } else {
+                    assert!(session.next_event().await.unwrap().is_none());
+                }
+                assert!(session.is_finalized());
+                session.cancel_and_finalize().await.unwrap();
+                assert_eq!(session.budget_charge().completed_at, completed_at);
+                let state = store.state.lock().unwrap();
+                assert_eq!(state.created, 1);
+                assert!(state.attempts.is_empty());
+                assert_eq!(state.finalizations.len(), 1);
+                assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
+                assert_eq!(
+                    state.finalizations[0].error_kind,
+                    Some(GatewayErrorKind::NoAvailableProvider)
+                );
+                let trace: Value = serde_json::from_str(
+                    state.finalizations[0]
+                        .diagnostic_trace_json
+                        .as_deref()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    trace["events"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| event["stage"] == "request.finished")
+                        .count(),
+                    1
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn cancellation_before_or_during_preparation_records_a_zero_attempt_terminal_request() {
+    block_on(async {
+        for before_start in [true, false] {
+            let operation = generate_operation();
+            let (coordinator, store, provider) = coordinator(vec![Script::Pending]);
+            let cancellation = CancellationToken::new();
+            if before_start {
+                cancellation.cancel();
+            }
+            let result = coordinator
+                .start(
+                    model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                    operation.clone(),
+                    plan(&operation),
+                    None,
+                    None,
+                    cancellation.clone(),
+                )
+                .await;
+            if before_start {
+                assert!(matches!(result, Err(EngineError::Cancelled)));
+                assert!(provider.contexts.lock().unwrap().is_empty());
+            } else {
+                let mut session = result.unwrap();
+                let mut next = Box::pin(session.next_event());
+                assert!(futures::poll!(next.as_mut()).is_pending());
+                cancellation.cancel();
+                assert!(matches!(next.await, Err(EngineError::Cancelled)));
+                assert!(session.is_finalized());
+                session.cancel_and_finalize().await.unwrap();
+                assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+            }
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.created, 1);
+            assert!(state.attempts.is_empty());
+            assert_eq!(state.finalizations.len(), 1);
+            assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Cancelled);
+            assert_eq!(
+                state.finalizations[0].send_state,
+                UpstreamSendState::NotSent
+            );
+            assert_eq!(state.finalizations[0].attempt_count, 0);
+        }
+    });
+}
+
+#[test]
+fn deadline_during_preparation_records_failure_without_an_upstream_attempt() {
+    let operation = generate_operation();
+    let (coordinator, store, provider) = coordinator(vec![Script::Pending]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_millis(300)),
+        operation.clone(),
+        plan(&operation),
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    assert!(matches!(
+        block_on(session.next_event()),
+        Err(EngineError::Deadline)
+    ));
+    assert!(session.provider_attempt_outcomes().is_empty());
+    assert!(session.is_finalized());
+    assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.created, 1);
+    assert!(state.attempts.is_empty());
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(
+        state.finalizations[0].error_kind,
+        Some(GatewayErrorKind::Timeout)
+    );
+    assert_eq!(state.finalizations[0].attempt_count, 0);
+    assert_eq!(
+        state.finalizations[0].send_state,
+        UpstreamSendState::NotSent
+    );
+}
+
+#[test]
+fn pre_stream_send_facts_cannot_be_rewritten_as_a_zero_attempt_not_sent_request() {
+    for send_state in [UpstreamSendState::Sent, UpstreamSendState::Ambiguous] {
+        let operation = generate_operation();
+        let (coordinator, store, _) = coordinator(vec![Script::Error(ProviderError::new(
+            ProviderErrorKind::Transport,
+            send_state,
+        ))]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation.clone(),
+            plan(&operation),
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert!(matches!(
+            block_on(session.next_event()),
+            Err(EngineError::Provider(ref error)) if error.send_state() == send_state
+        ));
+        assert!(session.is_finalized());
+        block_on(session.cancel_and_finalize()).unwrap();
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.created, 0);
+        assert!(state.attempts.is_empty());
+        assert!(state.finalizations.is_empty());
+    }
+}
+
+#[test]
+fn failed_first_attempt_write_is_not_replaced_with_a_fabricated_zero_attempt_record() {
+    let operation = generate_operation();
+    let (coordinator, store, _) = coordinator_with_store(
+        vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Sent,
+            ))],
+        }],
+        Arc::new(FakeStore::failing(StoreWriteFailure::Create)),
+    );
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation.clone(),
+        plan(&operation),
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    assert!(matches!(
+        block_on(session.next_event()),
+        Err(EngineError::Provider(_))
+    ));
+    assert!(session.is_finalized());
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.created, 0);
     assert!(state.finalizations.is_empty());
+}
+
+#[test]
+fn interrupted_first_attempt_write_never_restarts_selection_or_creates_a_zero_attempt_request() {
+    block_on(async {
+        for cancel in [true, false] {
+            let (release, gate) = oneshot::channel();
+            let operation = generate_operation();
+            let (coordinator, store, provider) = coordinator_with_store(
+                vec![Script::Stream {
+                    account_id: "acct_first",
+                    items: complete_stream(None),
+                }],
+                Arc::new(FakeStore {
+                    create_gate: Mutex::new(Some(gate)),
+                    ..FakeStore::default()
+                }),
+            );
+            let mut session = coordinator
+                .start(
+                    model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                    operation.clone(),
+                    plan(&operation),
+                    None,
+                    None,
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let mut next = Box::pin(session.next_event());
+            assert!(futures::poll!(next.as_mut()).is_pending());
+            drop(next);
+            assert_eq!(store.state.lock().unwrap().created, 1);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
+            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建。
+            assert!(release.send(()).is_err());
+            if cancel {
+                session.cancel_and_finalize().await.unwrap();
+            } else {
+                session.collect_uncommitted().await.unwrap();
+                session.commit_downstream(Some(200)).await.unwrap();
+            }
+            assert!(session.is_finalized());
+            assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+            let trace = session.trace().snapshot().unwrap();
+            let events = trace["events"].as_array().unwrap();
+            assert_eq!(events.last().unwrap()["data"]["attempts"], 1);
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.created, 1);
+            assert!(state.finalizations.is_empty());
+            drop(state);
+            drop(session);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        }
+    });
+}
+
+#[test]
+fn rejected_cold_stream_releases_its_lease_before_waiting_for_observation_writes() {
+    block_on(async {
+        let (release, gate) = oneshot::channel();
+        let operation = generate_operation();
+        let (coordinator, store, provider) = coordinator_with_store(
+            vec![Script::Stream {
+                account_id: "acct_wrong",
+                items: complete_stream(None),
+            }],
+            Arc::new(FakeStore {
+                create_gate: Mutex::new(Some(gate)),
+                ..FakeStore::default()
+            }),
+        );
+        let mut session = coordinator
+            .start(
+                model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                operation.clone(),
+                plan(&operation),
+                Some(ProviderAccountId::new("acct_required").unwrap()),
+                None,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut next = Box::pin(session.next_event());
+        assert!(futures::poll!(next.as_mut()).is_pending());
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        assert!(matches!(
+            next.await,
+            Err(EngineError::RequiredAccountMismatch)
+        ));
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.created, 1);
+        assert!(state.attempts.is_empty());
+        assert_eq!(state.finalizations[0].attempt_count, 0);
+    });
+}
+
+#[test]
+fn charged_terminal_write_resumes_without_replacing_success_failure_or_send_facts() {
+    block_on(async {
+        for failed in [true, false] {
+            for cancel in [true, false] {
+                let (release, gate) = oneshot::channel();
+                let operation = generate_operation();
+                let mut items = vec![
+                    Ok(GatewayEvent::Started(ResponseMeta::new(
+                        "charged-response",
+                        "gpt-5",
+                    ))),
+                    Ok(GatewayEvent::ProviderCost(
+                        ProviderReportedCost::from_usd_ticks(25).unwrap(),
+                    )),
+                ];
+                items.push(if failed {
+                    Err(ProviderError::new(
+                        ProviderErrorKind::Unavailable,
+                        UpstreamSendState::Sent,
+                    ))
+                } else {
+                    Ok(GatewayEvent::Completed(ResponseMeta::new(
+                        "charged-response",
+                        "gpt-5",
+                    )))
+                });
+                let (coordinator, store, provider) = coordinator_with_store(
+                    vec![Script::Stream {
+                        account_id: "acct_first",
+                        items,
+                    }],
+                    Arc::new(FakeStore {
+                        finalize_gate: Mutex::new(Some(gate)),
+                        ..FakeStore::default()
+                    }),
+                );
+                let mut session = coordinator
+                    .start(
+                        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                        operation.clone(),
+                        plan(&operation),
+                        None,
+                        None,
+                        CancellationToken::new(),
+                    )
+                    .await
+                    .unwrap();
+                if failed {
+                    let mut collect = Box::pin(session.collect_uncommitted());
+                    assert!(futures::poll!(collect.as_mut()).is_pending());
+                } else {
+                    session.collect_uncommitted().await.unwrap();
+                    let mut commit = Box::pin(session.commit_downstream(Some(200)));
+                    assert!(futures::poll!(commit.as_mut()).is_pending());
+                }
+                assert!(!session.is_finalized());
+                let charge = session.budget_charge();
+                assert_eq!(charge.amount_usd.scaled(), 25);
+                release
+                    .send(())
+                    .expect("the original finalization still owns its gate");
+                if cancel {
+                    session.cancel_and_finalize().await.unwrap();
+                } else {
+                    assert!(session.next_event().await.unwrap().is_none());
+                }
+                assert!(session.is_finalized());
+                assert_eq!(session.budget_charge().amount_usd, charge.amount_usd);
+                assert_eq!(session.budget_charge().completed_at, charge.completed_at);
+                assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+                let state = store.state.lock().unwrap();
+                assert_eq!(state.created, 1);
+                assert_eq!(state.attempts.len(), 1);
+                assert_eq!(state.finalizations.len(), 1);
+                let finalization = &state.finalizations[0];
+                assert_eq!(finalization.attempt_count, 1);
+                assert_eq!(finalization.send_state, UpstreamSendState::Sent);
+                assert_eq!(finalization.cost_ticks, Some(25));
+                assert_eq!(
+                    finalization.outcome,
+                    if failed {
+                        ExecutionOutcome::Failed
+                    } else {
+                        ExecutionOutcome::Succeeded
+                    }
+                );
+            }
+        }
+    });
 }
 
 #[test]

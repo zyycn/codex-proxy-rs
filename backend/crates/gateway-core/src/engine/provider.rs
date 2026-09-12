@@ -505,9 +505,14 @@ pub trait Provider: Send + Sync {
 
     /// 选择一个未被排除的资源并返回 cold [`ProviderStream`]。
     ///
+    /// 返回成功、返回错误或准备 future 被取消前，均不得发送本次请求的上游握手或业务
+    /// 载荷，也不得启动可独立完成这些发送的后台任务。发送只在返回的流被 poll 后发生，
+    /// 保证 Core 能在真实出站前校验账号范围并登记 attempt。
+    ///
     /// # Errors
     ///
-    /// 没有可用资源、请求无效或在产生 stream 前失败时返回 Provider 错误。
+    /// 没有可用资源、请求无效或准备失败时返回 `NotSent` 错误；
+    /// 可能已发送的失败必须通过 stream 返回，不得降级发送事实。
     async fn execute(
         &self,
         request: ProviderRequest,
