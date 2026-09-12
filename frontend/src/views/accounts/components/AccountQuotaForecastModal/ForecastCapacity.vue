@@ -1,19 +1,10 @@
 <script setup lang="ts">
 import type { AccountQuotaForecast } from '@/api'
-import { ArrowRight, Info, TriangleAlert } from '@lucide/vue'
+import { ArrowRight, Info } from '@lucide/vue'
 import { computed } from 'vue'
 
 const props = defineProps<{ forecast: AccountQuotaForecast }>()
 const source = computed(() => props.forecast.source)
-const incompleteNotice = computed(() => {
-  if (props.forecast.incompleteTokens && props.forecast.incompleteCost)
-    return '用量和费用数据不完整，暂时无法预测。'
-  if (props.forecast.incompleteTokens)
-    return '用量数据不完整，暂时无法预测 Token 容量。'
-  if (props.forecast.incompleteCost)
-    return '费用数据不完整，暂时无法估算金额。'
-  return null
-})
 const metrics = computed(() => [
   {
     label: 'Token 容量',
@@ -89,9 +80,9 @@ const metrics = computed(() => [
           {{ forecast.remainingUsdDisplay }}
         </span>
       </div>
-      <p v-if="incompleteNotice" class="m-0 flex items-start gap-1.5 text-cp-xs leading-relaxed text-cp-warning-text">
-        <TriangleAlert class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-        {{ incompleteNotice }}
+      <p v-if="forecast.incompleteTokens || forecast.incompleteCost" class="m-0 flex items-start gap-1.5 text-cp-xs leading-relaxed text-cp-text-secondary">
+        <Info class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+        按已记录数据估算，缺失的用量或费用可能使结果偏低。
       </p>
     </div>
   </section>

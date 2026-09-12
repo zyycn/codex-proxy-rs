@@ -243,15 +243,11 @@ async fn exact_limit_success_body_should_be_accepted() {
 fn billing_should_use_explicit_variant_prices_and_verified_snapshots() {
     // 每个用例包含一个普通输入 token 和一个输出 token，金额单位为 USD ticks。
     for (model, expected) in [
-        ("gpt-5.1-codex-mini", 22_500),
-        ("gpt-5.3-chat-latest", 157_500),
         ("gpt-5.6-cyber", 875_000),
         ("gpt-5.5-cyber", 875_000),
         ("gpt-daybreak-red-latest", 875_000),
         ("gpt-daybreak-blue-latest", 350_000),
         ("chat-latest", 350_000),
-        ("gpt-5.1-codex-max", 112_500),
-        ("gpt-5.2-codex", 157_500),
         ("gpt-5.4-2026-03-05", 175_000),
         (" OpenAI/GPT-4o-2024-08-06 ", 125_000),
         ("gpt-4o-2024-05-13", 200_000),
@@ -263,6 +259,53 @@ fn billing_should_use_explicit_variant_prices_and_verified_snapshots() {
         assert_eq!(
             billing.total_amount().amount().scaled(),
             expected,
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn billing_should_not_price_shutdown_models_or_restore_them_through_aliases() {
+    // 官方关闭日期已过；同族仍在服务的基础型号不能为这些旧型号兜底。
+    for model in [
+        "gpt-4-0314",
+        " OpenAI/GPT-4-0314 ",
+        "gpt-5-codex",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2-codex",
+        "gpt-5-chat-latest",
+        "gpt-5.1-chat-latest",
+        "gpt-5.2-chat-latest",
+        "gpt-5.3-chat-latest",
+    ] {
+        for tier in [None, Some("flex"), Some("fast")] {
+            assert!(
+                openai_billing_breakdown(model, billing_usage(100, 10, 20, 0), tier).is_none(),
+                "{model} {tier:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn billing_should_keep_deprecated_models_before_their_shutdown_dates() {
+    // 截至 2026-09-13，这些型号尚未到官方关闭日期，仍按已公布单价计费。
+    for model in [
+        "gpt-3.5-turbo-instruct",
+        "gpt-3.5-turbo-1106",
+        "gpt-4-0613",
+        "gpt-4-turbo-2024-04-09",
+        "gpt-4o-2024-05-13",
+        "gpt-4.1-nano",
+        "o1",
+        "o1-pro",
+        "o3-mini",
+        "o4-mini",
+    ] {
+        assert!(
+            openai_billing_breakdown(model, billing_usage(100, 10, 20, 0), None).is_some(),
             "{model}"
         );
     }
@@ -291,7 +334,7 @@ fn billing_should_not_inherit_prices_for_unknown_models_or_tiers() {
         ("gpt-5.6-cyber", 272_001, None),
         ("gpt-5.5-cyber", 272_001, None),
         ("gpt-5.6-cyber", 1, Some("fast")),
-        ("gpt-5.1-codex-mini", 1, Some("flex")),
+        ("gpt-5.3-codex", 1, Some("flex")),
         ("gpt-6-astra", 1, Some("auto")),
         ("gpt-6-astra", 1, Some("ultrafast")),
     ] {

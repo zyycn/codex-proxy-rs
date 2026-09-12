@@ -123,7 +123,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
               仅供参考
             </h4>
             <p class="m-0">
-              根据已记录用量估算，结果会随使用的模型和方式变化，并非官方承诺额度。
+              根据已记录用量估算，漏记或失败请求的消耗可能使结果偏低；结果会随使用的模型和方式变化，并非官方承诺额度。
             </p>
             <p v-if="forecast?.lowSample" class="m-0">
               目前数据还较少，结果可能有较大波动。

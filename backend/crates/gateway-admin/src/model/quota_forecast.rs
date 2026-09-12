@@ -173,22 +173,19 @@ impl AccountQuotaForecast {
         };
         self.low_sample = sample.sampled_percent < LOW_SAMPLE_PERCENT
             || (method == QuotaForecastMethod::Incremental && sample.block_count < 2);
+        // 漏记和个别缺失只影响精度，仍按已记录数值估算，不按请求数补齐未知消耗。
         // 预测是近似展示值；不复用为账单金额，也不把月折算当成自然月或额外余额。
         let capacity_factor = 100.0 / sample.sampled_percent;
         let factor = capacity_factor * self.target_seconds as f64 / seconds as f64;
-        let tokens = Some(usage.tokens).filter(|tokens| *tokens > 0 && !self.incomplete_tokens);
+        let tokens = Some(usage.tokens).filter(|tokens| *tokens > 0);
         self.estimated_tokens = tokens.and_then(|value| estimate_tokens(value, factor));
-        self.estimated_usd = usd
-            .filter(|_| !self.incomplete_cost)
-            .and_then(|value| estimate(value, factor));
+        self.estimated_usd = usd.and_then(|value| estimate(value, factor));
         let remaining_factor = (100.0 - percent) / sample.sampled_percent;
         self.remaining_tokens = tokens.and_then(|value| estimate_tokens(value, remaining_factor));
-        self.remaining_usd = usd
-            .filter(|_| !self.incomplete_cost)
-            .and_then(|value| estimate(value, remaining_factor));
+        self.remaining_usd = usd.and_then(|value| estimate(value, remaining_factor));
         self.unavailable_reason = if self.estimated_tokens.is_none() && self.estimated_usd.is_none()
         {
-            Some("本周期缺少可用的 Token 或完整费用记录，暂时无法预测额度。")
+            Some("本周期暂无可用于估算的 Token 或费用数据，请积累用量后重试。")
         } else {
             None
         };

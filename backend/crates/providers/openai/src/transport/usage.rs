@@ -222,6 +222,8 @@ struct PricingRule {
 // 价格来源：https://developers.openai.com/api/docs/pricing，核验日期 2026-09-09。
 // 使用常规价，不采用 Sol 的临时 $4/$20 优惠；缓存、Flex、Fast 和长上下文
 // 档位也统一按常规价计算。
+// 已按 https://developers.openai.com/api/docs/deprecations 核验至 2026-09-13，
+// 移除已关闭的型号；仅宣布弃用但尚未到关闭日期的型号继续保留。
 const PRICING_RULES: &[PricingRule] = &[
     // Astra：https://developers.openai.com/api/docs/models/gpt-6-astra
     // 已于 2026-09-09 对照官方价目表核验。
@@ -429,14 +431,6 @@ const PRICING_RULES: &[PricingRule] = &[
     // 各变体独立采用已公开的价格与档位，不能继承父型号的所有档位。
     // Cyber 长上下文的官方来源存在差异，该区间暂不估价。
     PricingRule {
-        model: "gpt-5.1-codex-mini",
-        pricing: ModelPricing::new(2_500, 20_000, 250),
-    },
-    PricingRule {
-        model: "gpt-5.3-chat-latest",
-        pricing: ModelPricing::new(17_500, 140_000, 1_750),
-    },
-    PricingRule {
         model: "gpt-5.6-cyber",
         pricing: ModelPricing::new(125_000, 750_000, 12_500)
             .with_cache_write(125)
@@ -449,34 +443,6 @@ const PRICING_RULES: &[PricingRule] = &[
     PricingRule {
         model: "chat-latest",
         pricing: ModelPricing::new(50_000, 300_000, 5_000),
-    },
-    PricingRule {
-        model: "gpt-5-codex",
-        pricing: ModelPricing::new(12_500, 100_000, 1_250),
-    },
-    PricingRule {
-        model: "gpt-5.1-codex",
-        pricing: ModelPricing::new(12_500, 100_000, 1_250),
-    },
-    PricingRule {
-        model: "gpt-5.1-codex-max",
-        pricing: ModelPricing::new(12_500, 100_000, 1_250),
-    },
-    PricingRule {
-        model: "gpt-5-chat-latest",
-        pricing: ModelPricing::new(12_500, 100_000, 1_250),
-    },
-    PricingRule {
-        model: "gpt-5.1-chat-latest",
-        pricing: ModelPricing::new(12_500, 100_000, 1_250),
-    },
-    PricingRule {
-        model: "gpt-5.2-codex",
-        pricing: ModelPricing::new(17_500, 140_000, 1_750),
-    },
-    PricingRule {
-        model: "gpt-5.2-chat-latest",
-        pricing: ModelPricing::new(17_500, 140_000, 1_750),
     },
 ];
 
@@ -784,7 +750,6 @@ fn normalize_model_name(model: &str) -> String {
 fn pricing_model_name(model: &str) -> &str {
     match model {
         "gpt-3.5-turbo-0125" => "gpt-3.5-turbo",
-        "gpt-4-0314" => "gpt-4",
         "gpt-4-0613" => "gpt-4",
         "gpt-4-turbo-2024-04-09" => "gpt-4-turbo",
         "gpt-4.1-2025-04-14" => "gpt-4.1",

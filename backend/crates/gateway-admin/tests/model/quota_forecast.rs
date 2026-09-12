@@ -246,14 +246,15 @@ fn incremental_sample_supports_mid_cycle_accounts_and_remaining_uses_current_per
 }
 
 #[test]
-fn missing_tokens_suppress_token_estimates_without_discarding_complete_costs() {
+fn missing_tokens_keep_estimates_from_recorded_usage() {
     let source = quota(vec![window("week", 7)]);
     let mut sample = samples(&source).remove(0);
     sample.usage.missing_token_count = 1;
     let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_tokens);
-    assert_eq!(week.estimated_tokens, None);
-    assert_eq!(week.remaining_tokens, None);
+    assert!(week.unavailable_reason.is_none());
+    assert_eq!(week.estimated_tokens, Some(5_000));
+    assert_eq!(week.remaining_tokens, Some(4_000));
     assert_eq!(week.estimated_usd, Some(10.0));
     assert_eq!(week.source.unwrap().tokens, Some(1_000));
 }
@@ -269,7 +270,7 @@ fn discontinuous_samples_never_fall_back_to_cumulative_predictions() {
 }
 
 #[test]
-fn partial_or_unknown_costs_suppress_only_money_estimates() {
+fn partial_costs_keep_estimates_from_known_amounts() {
     for coverage in [
         CostCoverage {
             calculated_count: 9,
@@ -281,17 +282,75 @@ fn partial_or_unknown_costs_suppress_only_money_estimates() {
             unavailable_count: 1,
             ..Default::default()
         },
-        CostCoverage::default(),
     ] {
         let mut sample = window("week", 7);
         sample.local_usage.as_mut().unwrap().cost_coverage = coverage;
         let [week, _] = forecast(&quota(vec![sample]));
         assert!(week.incomplete_cost);
         assert!(week.unavailable_reason.is_none());
-        assert!(week.estimated_usd.is_none());
-        assert!(week.remaining_usd.is_none());
+        assert_eq!(week.estimated_usd, Some(10.0));
+        assert_eq!(week.remaining_usd, Some(8.0));
         assert_eq!(week.estimated_tokens, Some(5_000));
     }
+}
+
+#[test]
+fn missing_tokens_and_costs_do_not_block_recorded_capacity_or_remaining_estimates() {
+    let source = quota(vec![window("week", 7)]);
+    let mut sample = samples(&source).remove(0);
+    // 完整请求之外混有缺少计量的成功请求，不把已有用量和费用一并作废。
+    sample.usage.request_count += 2;
+    sample.usage.missing_token_count = 2;
+    sample.usage.unavailable_cost_count = 2;
+    sample.usage.excluded_request_count = 1;
+    sample.pending_request_count = 1;
+    let [week, month] =
+        account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
+    assert!(week.incomplete_tokens);
+    assert!(week.incomplete_cost);
+    assert!(week.unavailable_reason.is_none());
+    assert_eq!(week.estimated_tokens, Some(5_000));
+    assert_eq!(week.estimated_usd, Some(10.0));
+    assert_eq!(week.remaining_tokens, Some(4_000));
+    assert_eq!(week.remaining_usd, Some(8.0));
+    assert_eq!(month.estimated_tokens, Some(21_429));
+    assert_eq!(month.remaining_tokens, week.remaining_tokens);
+    assert_eq!(month.remaining_usd, week.remaining_usd);
+}
+
+#[test]
+fn entirely_unknown_costs_leave_only_money_estimates_unavailable() {
+    let mut sample = window("week", 7);
+    let usage = sample.local_usage.as_mut().unwrap();
+    usage.cost_coverage = CostCoverage {
+        unavailable_count: usage.request_count,
+        ..Default::default()
+    };
+    usage.costs.clear();
+    let [week, _] = forecast(&quota(vec![sample]));
+    assert!(week.incomplete_cost);
+    assert!(week.unavailable_reason.is_none());
+    assert_eq!(week.estimated_tokens, Some(5_000));
+    assert_eq!(week.estimated_usd, None);
+    assert_eq!(week.remaining_usd, None);
+}
+
+#[test]
+fn entirely_unknown_tokens_and_costs_do_not_invent_zero_estimates() {
+    let source = quota(vec![window("week", 7)]);
+    let mut sample = samples(&source).remove(0);
+    sample.usage = QuotaForecastUsage {
+        request_count: 2,
+        missing_token_count: 2,
+        unavailable_cost_count: 2,
+        ..Default::default()
+    };
+    let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
+    assert!(week.unavailable_reason.is_some());
+    assert_eq!(week.estimated_tokens, None);
+    assert_eq!(week.estimated_usd, None);
+    assert_eq!(week.remaining_tokens, None);
+    assert_eq!(week.remaining_usd, None);
 }
 
 #[test]
