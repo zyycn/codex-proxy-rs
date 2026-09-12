@@ -61,7 +61,6 @@ async function handleSubmit(): Promise<void> {
       <LoginPanel
         v-model:username="username"
         v-model:password="password"
-        :error="authStore.error"
         :loading="loginLoading"
         :submit-disabled="submitDisabled"
         :effective-theme="effectiveTheme"

@@ -19,7 +19,7 @@ export function useClientDownloads() {
       downloads.value = await getCodexDesktopWindowsDownloads(refresh)
     }
     catch (cause: unknown) {
-      error.value = errorMessage(cause, 'Windows 离线安装包加载失败')
+      error.value = errorMessage(cause)
     }
     finally {
       loading.value = false

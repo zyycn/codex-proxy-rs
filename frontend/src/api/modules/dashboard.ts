@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import type { AccountQuotaWindow } from './accounts'
 import type { UsageListRecord } from './usage'
 import request from '../request'
@@ -185,18 +186,20 @@ interface DashboardQuery {
   kind: string
 }
 
-export function getDashboardSummary(data: DashboardQuery) {
+export function getDashboardSummary(data: DashboardQuery, options: RequestOptions = {}) {
   return request<DashboardSummaryResponse>({
     url: '/api/admin/dashboard/summary',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function getDashboardTrend(data: DashboardQuery) {
+export function getDashboardTrend(data: DashboardQuery, options: RequestOptions = {}) {
   return request<DashboardTrendResponse>({
     url: '/api/admin/dashboard/trend',
     method: 'GET',
     params: data,
+    ...options,
   })
 }

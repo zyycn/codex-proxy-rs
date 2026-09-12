@@ -2,14 +2,17 @@ import type { rotationOptions } from '../constants'
 import { computed, reactive, ref, shallowRef } from 'vue'
 
 import { getSettings, updateSettings } from '@/api'
+import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
+import { useAsyncAction } from '@/composables/useAsyncAction'
 import { errorMessage } from '@/utils/async'
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
 
 export function useSettingsForm() {
   const loading = shallowRef(true)
-  const saving = shallowRef(false)
+  const saveAction = useAsyncAction()
+  const saving = saveAction.loading
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
@@ -68,15 +71,14 @@ export function useSettingsForm() {
     }))
   }
 
-  async function loadSettings() {
+  async function loadSettings(silent = false) {
     loading.value = true
     error.value = ''
     try {
-      applySettings(await getSettings())
+      applySettings(await getSettings({ silent }))
     }
     catch (cause: unknown) {
-      error.value = errorMessage(cause, '设置加载失败')
-      toast.error(error.value)
+      error.value = errorMessage(cause)
     }
     finally {
       loading.value = false
@@ -127,8 +129,7 @@ export function useSettingsForm() {
       toast.warning('请修正客户端最低版本格式')
       return
     }
-    try {
-      saving.value = true
+    await saveAction.run(async () => {
       const result = await updateSettings({
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
@@ -144,15 +145,12 @@ export function useSettingsForm() {
       })
       applySettings(result)
       toast.success('设置已保存')
-    }
-    catch (cause: unknown) {
-      error.value = errorMessage(cause, '保存失败')
-      toast.error(error.value)
-      await loadSettings()
-    }
-    finally {
-      saving.value = false
-    }
+    }, {
+      onError: (cause) => {
+        if (cause instanceof ApiError)
+          void loadSettings(true)
+      },
+    })
   }
 
   return {

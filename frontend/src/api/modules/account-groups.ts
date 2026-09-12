@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import request from '../request'
 
 export interface AccountGroupRef {
@@ -78,50 +79,56 @@ interface AccountGroupIdParam {
   id: string
 }
 
-export function getAccountGroups(data: AccountGroupListParams) {
+export function getAccountGroups(data: AccountGroupListParams, options: RequestOptions = {}) {
   return request<AccountGroupListResponse>({
     url: '/api/admin/account-groups',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function createAccountGroup(data: AccountGroupCreateParam) {
+export function createAccountGroup(data: AccountGroupCreateParam, options: RequestOptions = {}) {
   return request<AccountGroupMutationResponse>({
     url: '/api/admin/account-groups/create',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function updateAccountGroup(data: AccountGroupUpdateParam) {
+export function updateAccountGroup(data: AccountGroupUpdateParam, options: RequestOptions = {}) {
   return request<AccountGroupMutationResponse>({
     url: '/api/admin/account-groups/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function enableAccountGroup(data: AccountGroupIdParam) {
+export function enableAccountGroup(data: AccountGroupIdParam, options: RequestOptions = {}) {
   return request<AccountGroupMutationResponse>({
     url: '/api/admin/account-groups/enable',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function disableAccountGroup(data: AccountGroupIdParam) {
+export function disableAccountGroup(data: AccountGroupIdParam, options: RequestOptions = {}) {
   return request<AccountGroupMutationResponse>({
     url: '/api/admin/account-groups/disable',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function deleteAccountGroup(data: AccountGroupIdParam) {
+export function deleteAccountGroup(data: AccountGroupIdParam, options: RequestOptions = {}) {
   return request<AccountGroupMutationResponse>({
     url: '/api/admin/account-groups/delete',
     method: 'POST',
     data,
+    ...options,
   })
 }

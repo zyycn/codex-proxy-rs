@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { getAccounts } from '@/api'
+import type { RequestOptions } from '@/api/request'
 import dayjs from 'dayjs'
 import { ref, watch } from 'vue'
 import {
@@ -83,7 +84,6 @@ export function useAccountMutations(options: {
         await loadAccounts()
         toast.success('账号已删除')
       },
-      { errorText: '删除失败' },
     )
   }
 
@@ -96,7 +96,7 @@ export function useAccountMutations(options: {
       async () => {
         const selected = accountsById([...options.selectedIds.value])
         for (const accounts of accountDeletionGroups(selected)) {
-          await deleteAccountBatch(accounts)
+          await deleteAccountBatch(accounts, { silent: true })
           deletedCount += accounts.length
           const deletedIds = new Set(accounts.map(account => account.id))
           const remaining = new Set(options.selectedIds.value)
@@ -164,9 +164,7 @@ export function useAccountMutations(options: {
         }
         toast.success('Token 已刷新')
       }
-      catch (error: unknown) {
-        toast.error(errorMessage(error, '刷新失败'))
-      }
+      catch {}
     })
   }
 
@@ -182,9 +180,7 @@ export function useAccountMutations(options: {
         }
         toast.success('额度已刷新')
       }
-      catch (error: unknown) {
-        toast.error(errorMessage(error, '额度刷新失败'))
-      }
+      catch {}
     })
   }
 
@@ -200,9 +196,7 @@ export function useAccountMutations(options: {
         }
         toast.success('账号状态已恢复')
       }
-      catch (error: unknown) {
-        toast.error(errorMessage(error, '恢复状态失败'))
-      }
+      catch {}
     })
   }
 
@@ -217,7 +211,7 @@ export function useAccountMutations(options: {
     return accounts
   }
 
-  async function deleteAccountBatch(accounts: AccountRow[]) {
+  async function deleteAccountBatch(accounts: AccountRow[], options?: RequestOptions) {
     const account = accounts[0]
     if (!account)
       return
@@ -225,7 +219,7 @@ export function useAccountMutations(options: {
       provider: account.provider,
       accountIds: accounts.map(account => account.id),
     }
-    const result = await deleteAccounts(payload)
+    const result = await deleteAccounts(payload, options)
     if (!result)
       throw new Error(`不支持的 Provider：${account.provider}`)
   }

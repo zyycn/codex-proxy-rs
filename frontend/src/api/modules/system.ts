@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import request from '../request'
 
 export interface SystemVersion {
@@ -42,11 +43,11 @@ export interface SystemRestartAccepted {
   operationId: string
 }
 
-export function getSystemVersion(timeout = 0) {
+export function getSystemVersion(options: RequestOptions = {}) {
   return request<SystemVersion>({
     url: '/api/admin/system/version',
     method: 'GET',
-    ...(timeout ? { timeout } : {}),
+    ...options,
   })
 }
 
@@ -58,25 +59,28 @@ interface SystemUpdateTarget {
   targetVersion?: string
 }
 
-export function getSystemUpdateDetail(data: SystemUpdateDetailQuery) {
+export function getSystemUpdateDetail(data: SystemUpdateDetailQuery, options: RequestOptions = {}) {
   return request<SystemUpdateDetail>({
     url: '/api/admin/system/update/detail',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function performSystemUpdate(data: SystemUpdateTarget) {
+export function performSystemUpdate(data: SystemUpdateTarget, options: RequestOptions = {}) {
   return request<SystemUpdateAccepted>({
     url: '/api/admin/system/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function restartSystem() {
+export function restartSystem(options: RequestOptions = {}) {
   return request<SystemRestartAccepted>({
     url: '/api/admin/system/restart',
     method: 'POST',
+    ...options,
   })
 }

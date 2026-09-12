@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
@@ -349,43 +350,48 @@ interface AccountExportParam {
   confirm: string
 }
 
-export function getAccounts(data: AccountListParams) {
+export function getAccounts(data: AccountListParams, options: RequestOptions = {}) {
   return request<AccountListResponse>({
     url: '/api/admin/accounts',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function exportAccounts(data: AccountExportParam) {
+export function exportAccounts(data: AccountExportParam, options: RequestOptions = {}) {
   return request<unknown>({
     url: '/api/admin/accounts/export',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function refreshAccount(data: AccountIdParam) {
+export function refreshAccount(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountRefreshResponse>({
     url: '/api/admin/accounts/refresh',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function recoverAccount(data: AccountIdParam) {
+export function recoverAccount(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountRefreshResponse>({
     url: '/api/admin/accounts/recover',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function getAccountProfileStatistics(data: AccountIdParam) {
+export function getAccountProfileStatistics(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountProfileStatisticsResponse>({
     url: '/api/admin/accounts/profile-statistics',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
@@ -404,90 +410,101 @@ function stableAvatarVersion(value: string) {
   return hash.toString(36)
 }
 
-export function refreshAccountQuota(data: AccountIdParam) {
+export function refreshAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountQuotaResponse>({
     url: '/api/admin/accounts/quota/refresh',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function getAccountResetCredits(data: AccountIdParam) {
+export function getAccountResetCredits(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountResetCreditsResponse>({
     url: '/api/admin/accounts/reset-credits',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function consumeAccountResetCredit(data: AccountResetCreditConsumeParam) {
+export function consumeAccountResetCredit(data: AccountResetCreditConsumeParam, options: RequestOptions = {}) {
   return request<AccountResetCreditResultResponse>({
     url: '/api/admin/accounts/reset-credits',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function getAccountModels(data: AccountIdParam) {
+export function getAccountModels(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountModelsResponse>({
     url: '/api/admin/accounts/models',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function refreshAccountModels(data: AccountIdParam) {
+export function refreshAccountModels(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountModelsResponse>({
     url: '/api/admin/accounts/models/refresh',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function importAccounts(data: AccountImportParam) {
+export function importAccounts(data: AccountImportParam, options: RequestOptions = {}) {
   return request<AccountImportResponse>({
     url: '/api/admin/accounts/import',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function updateAccount(data: AccountUpdateParam) {
+export function updateAccount(data: AccountUpdateParam, options: RequestOptions = {}) {
   return request<AccountUpdateResponse>({
     url: '/api/admin/accounts/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function batchUpdateAccounts(data: AccountBatchUpdateParam) {
+export function batchUpdateAccounts(data: AccountBatchUpdateParam, options: RequestOptions = {}) {
   return request<AccountBatchUpdateResponse>({
     url: '/api/admin/accounts/batch-update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function deleteAccounts(data: AccountDeleteParams) {
+export function deleteAccounts(data: AccountDeleteParams, options: RequestOptions = {}) {
   return request<AccountDeletionResponse>({
     url: '/api/admin/accounts/delete',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function startAccountOAuth(data: AccountOAuthStartParam) {
+export function startAccountOAuth(data: AccountOAuthStartParam, options: RequestOptions = {}) {
   return request<AccountOAuthStartResponse>({
     url: '/api/admin/accounts/oauth/start',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function completeAccountOAuth(data: AccountOAuthCompleteParam) {
+export function completeAccountOAuth(data: AccountOAuthCompleteParam, options: RequestOptions = {}) {
   return request<AccountOAuthCompleteResponse>({
     url: '/api/admin/accounts/oauth/complete',
     method: 'POST',
     data,
+    ...options,
   })
 }

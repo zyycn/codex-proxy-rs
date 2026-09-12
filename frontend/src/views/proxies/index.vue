@@ -16,7 +16,6 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
-import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
@@ -24,8 +23,7 @@ import ProxyFormModal from './components/ProxyFormModal.vue'
 const search = shallowRef('')
 const query = usePagedQuery({
   initialPageSize: 20,
-  load: pagination => getProxies({ ...pagination, search: search.value.trim() || undefined }),
-  onError: error => toast.error(errorMessage(error, '代理列表加载失败')),
+  load: (pagination, options) => getProxies({ ...pagination, search: search.value.trim() || undefined }, options),
 })
 const { items: proxies, loading } = query
 const pagination = computed(() => ({ currentPage: query.page.value, pageSize: query.pageSize.value, total: query.total.value }))
@@ -70,9 +68,7 @@ async function checkProxy(proxy: OutboundProxyRecord) {
     else
       toast.error(result.lastTest?.message ?? '代理测试失败')
   }
-  catch (error) {
-    toast.error(errorMessage(error, '代理测试失败'))
-  }
+  catch {}
   finally {
     testingIds.value.delete(proxy.id)
     await query.execute({ silent: true })
@@ -98,7 +94,7 @@ async function testConnection() {
       toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
     else
       toast.error(result.message)
-  }, { errorText: '代理测试失败' })
+  })
 }
 
 async function save() {
@@ -121,7 +117,7 @@ async function save() {
     search.value = ''
     query.page.value = 1
     await query.execute()
-  }, { errorText: '代理保存失败' })
+  })
 }
 
 function requestDelete(proxy: OutboundProxyRecord) {
@@ -138,7 +134,7 @@ async function confirmDelete() {
     showDelete.value = false
     await query.execute()
     toast.success('代理已删除')
-  }, { errorText: '代理删除失败，请确认没有账号使用该代理' })
+  })
 }
 
 function setPage(page: number) {

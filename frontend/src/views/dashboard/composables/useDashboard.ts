@@ -19,6 +19,8 @@ export function useDashboard() {
   const lastRefreshedAt = shallowRef('')
   let trendRequestId = 0
   let disposed = false
+  let summaryController: AbortController | undefined
+  let trendController: AbortController | undefined
 
   const metrics = computed(() => snapshot.value.metrics)
   const healthTimeline = computed(() => snapshot.value.healthTimeline)
@@ -36,18 +38,18 @@ export function useDashboard() {
 
   const { resume: startAutoRefresh } = useIntervalFn(
     () => {
-      void loadDashboardData()
+      void loadDashboardData(true)
     },
     30_000,
     { immediate: false },
   )
 
-  async function loadDashboardData() {
+  async function loadDashboardData(silent = false) {
     if (loading.value || refreshing.value)
       return
     try {
       loading.value = true
-      await loadDashboardSnapshot()
+      await loadDashboardSnapshot(silent)
     }
     catch {
       // 自动刷新会继续重试，保留最后一次成功快照。
@@ -76,16 +78,18 @@ export function useDashboard() {
     const trendKind = normalizeDashboardTrendKind(kind)
     activeTrendKind.value = trendKind
     const requestId = ++trendRequestId
+    trendController?.abort()
+    trendController = new AbortController()
     trendLoading.value = true
     trendError.value = ''
     try {
-      const result = await getDashboardTrend({ kind: trendKind })
+      const result = await getDashboardTrend({ kind: trendKind }, { signal: trendController.signal })
       if (isCurrentTrendRequest(requestId, trendKind))
         trend.value = result
     }
     catch (error: unknown) {
       if (isCurrentTrendRequest(requestId, trendKind))
-        trendError.value = errorMessage(error, '趋势加载失败')
+        trendError.value = errorMessage(error)
     }
     finally {
       if (isCurrentTrendRequest(requestId, trendKind))
@@ -93,13 +97,16 @@ export function useDashboard() {
     }
   }
 
-  async function loadDashboardSnapshot() {
+  async function loadDashboardSnapshot(silent = false) {
     const trendKind = activeTrendKind.value
     const requestId = ++trendRequestId
+    summaryController?.abort()
+    trendController?.abort()
+    summaryController = new AbortController()
     trendLoading.value = true
     trendError.value = ''
     try {
-      const summary = await getDashboardSummary({ kind: trendKind })
+      const summary = await getDashboardSummary({ kind: trendKind }, { silent, signal: summaryController.signal })
       if (disposed)
         return
       snapshot.value = dashboardSnapshotView(summary)
@@ -110,7 +117,7 @@ export function useDashboard() {
     }
     catch (error: unknown) {
       if (isCurrentTrendRequest(requestId, trendKind))
-        trendError.value = errorMessage(error, '趋势加载失败')
+        trendError.value = errorMessage(error)
       throw error
     }
     finally {
@@ -134,6 +141,8 @@ export function useDashboard() {
   onScopeDispose(() => {
     disposed = true
     trendRequestId += 1
+    summaryController?.abort()
+    trendController?.abort()
   })
 
   return {

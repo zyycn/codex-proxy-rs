@@ -1,8 +1,6 @@
 import type { UsageDisplayRecord, UsageViewModel } from '../utils/records'
 import { shallowRef } from 'vue'
 import { getUsageRecordDetail } from '@/api'
-import { toast } from '@/components/base/BaseToast'
-import { errorMessage } from '@/utils/async'
 import { normalizeUsageRecord } from '../utils/records'
 
 export function useUsageRecordDetail() {
@@ -15,9 +13,7 @@ export function useUsageRecordDetail() {
       selectedUsageRecord.value = normalizeUsageRecord(detail)
       showDetailModal.value = true
     }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '加载详情失败'))
-    }
+    catch {}
   }
 
   return {

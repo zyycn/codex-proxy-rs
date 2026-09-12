@@ -2,14 +2,13 @@ import type { Ref } from 'vue'
 import { shallowRef, watch } from 'vue'
 
 import { getAccountProfileStatistics } from '@/api'
-import { errorMessage } from '@/utils/async'
+import { useRequestState } from '@/composables/useRequestState'
 
 export function useAccountProfileStatistics(accountId: Ref<string>, open: Ref<boolean>) {
   const profile = shallowRef<Awaited<ReturnType<typeof getAccountProfileStatistics>> | null>(null)
   const loadedAccountId = shallowRef('')
-  const loading = shallowRef(false)
-  const error = shallowRef('')
-  let requestVersion = 0
+  const request = useRequestState()
+  const { loading, error } = request
 
   async function load(force = false) {
     const targetAccountId = accountId.value
@@ -18,31 +17,26 @@ export function useAccountProfileStatistics(accountId: Ref<string>, open: Ref<bo
     if (!force && profile.value && loadedAccountId.value === targetAccountId)
       return
 
-    const version = ++requestVersion
-    loading.value = true
-    error.value = ''
+    const version = request.start()
     try {
-      const result = await getAccountProfileStatistics({ accountId: targetAccountId })
-      if (version !== requestVersion)
+      const result = await getAccountProfileStatistics({ accountId: targetAccountId }, { signal: request.signal })
+      if (!request.isCurrent(version))
         return
       profile.value = result
       loadedAccountId.value = targetAccountId
     }
     catch (cause) {
-      if (version !== requestVersion)
-        return
-      error.value = errorMessage(cause, '官方个人资料加载失败')
+      request.fail(version, cause)
     }
     finally {
-      if (version === requestVersion)
-        loading.value = false
+      request.finish(version)
     }
   }
 
   watch([open, accountId], ([isOpen, nextAccountId], previousValues) => {
     const previousAccountId = previousValues?.[1]
     if (nextAccountId !== previousAccountId) {
-      requestVersion += 1
+      request.invalidate()
       profile.value = null
       loadedAccountId.value = ''
       loading.value = false
@@ -50,6 +44,8 @@ export function useAccountProfileStatistics(accountId: Ref<string>, open: Ref<bo
     }
     if (isOpen)
       void load()
+    else
+      request.invalidate()
   }, { immediate: true })
 
   return {

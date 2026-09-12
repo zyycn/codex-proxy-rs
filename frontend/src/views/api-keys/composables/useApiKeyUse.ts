@@ -3,8 +3,6 @@ import type { getApiKeys } from '@/api'
 import { computed, shallowRef, watch } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
-import { toast } from '@/components/base/BaseToast'
-import { errorMessage } from '@/utils/async'
 import { buildCodexCcSwitchImportDeeplink } from '../utils/ccswitchImport'
 
 // “使用密钥”弹窗展示明文时，在列表行上补挂 reveal 得到的完整 key。
@@ -15,7 +13,7 @@ type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number] & { key
 export function useApiKeyUse(options: {
   createdKey: Readonly<Ref<string>>
   createdKeyName: Readonly<Ref<string>>
-  revealPlaintextKey: (apiKey: ApiKeyRow) => Promise<string>
+  revealPlaintextKey: (apiKey: ApiKeyRow) => Promise<string | undefined>
 }) {
   const showUseKeyModal = shallowRef(false)
   const selectedUseKey: ShallowRef<ApiKeyRow | null> = shallowRef(null)
@@ -54,28 +52,22 @@ export function useApiKeyUse(options: {
   }
 
   async function openUseKeyModal(apiKey: ApiKeyRow) {
-    try {
-      const key = await options.revealPlaintextKey(apiKey)
-      selectedUseKey.value = { ...apiKey, key }
-      showUseKeyModal.value = true
-    }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '读取完整密钥失败'))
-    }
+    const key = await options.revealPlaintextKey(apiKey)
+    if (!key)
+      return
+    selectedUseKey.value = { ...apiKey, key }
+    showUseKeyModal.value = true
   }
 
   async function importToCcs(apiKey: ApiKeyRow) {
-    try {
-      const key = await options.revealPlaintextKey(apiKey)
-      window.location.href = buildCodexCcSwitchImportDeeplink({
-        apiKey: key,
-        baseUrl: openAiBaseUrl.value,
-        providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
-      })
-    }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '读取完整密钥失败'))
-    }
+    const key = await options.revealPlaintextKey(apiKey)
+    if (!key)
+      return
+    window.location.href = buildCodexCcSwitchImportDeeplink({
+      apiKey: key,
+      baseUrl: openAiBaseUrl.value,
+      providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
+    })
   }
 
   watch(showUseKeyModal, (open) => {

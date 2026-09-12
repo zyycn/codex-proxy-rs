@@ -2,8 +2,6 @@ import type { AccountGroup } from '@/api'
 
 import { onMounted, shallowRef } from 'vue'
 import { getAccountGroups } from '@/api'
-import { toast } from '@/components/base/BaseToast'
-import { errorMessage } from '@/utils/async'
 
 export function useAccountGroupCatalog(options: { immediate?: boolean } = {}) {
   const groups = shallowRef<AccountGroup[]>([])
@@ -21,8 +19,7 @@ export function useAccountGroupCatalog(options: { immediate?: boolean } = {}) {
       groups.value = items
       return items
     }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '账号分组加载失败'))
+    catch {
       return []
     }
     finally {

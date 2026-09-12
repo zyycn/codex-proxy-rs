@@ -8,7 +8,6 @@ import {
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useCopyText } from '@/composables/useCopyText'
-import { errorMessage } from '@/utils/async'
 
 export function useAdminApiKey() {
   const loading = shallowRef(true)
@@ -26,9 +25,7 @@ export function useAdminApiKey() {
       loading.value = true
       status.exists = (await getAdminApiKeyStatus()).exists
     }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '管理员 API Key 状态加载失败'))
-    }
+    catch {}
     finally {
       loading.value = false
     }
@@ -45,7 +42,6 @@ export function useAdminApiKey() {
         status.exists = true
         toast.success(wasEnabled ? '管理员 API Key 已更新' : '管理员 API Key 已生成')
       },
-      { errorText: false, onError: error => toast.error(errorMessage(error, '生成失败')) },
     )
   }
 
@@ -61,7 +57,6 @@ export function useAdminApiKey() {
         showDeleteModal.value = false
         toast.success('管理员 API Key 已删除')
       },
-      { errorText: false, onError: error => toast.error(errorMessage(error, '删除失败')) },
     )
   }
 

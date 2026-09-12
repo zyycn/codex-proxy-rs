@@ -4,9 +4,8 @@ import { watchDebounced } from '@vueuse/core'
 
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getOpsErrors } from '@/api'
-import { toast } from '@/components/base/BaseToast'
 import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
-import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { withMinimumDuration } from '@/utils/async'
 import { usageSearchParam } from '../utils/search'
 
 interface UseOpsErrorsTableOptions {
@@ -34,12 +33,11 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
 
   const query = useStablePagedQuery({
     initialPageSize: 10,
-    load: ({ currentPage, pageSize }) => getOpsErrors({
+    load: ({ currentPage, pageSize }, requestOptions) => getOpsErrors({
       currentPage,
       pageSize,
       ...tableParams,
-    }),
-    onError: error => toast.error(errorMessage(error, '加载错误明细失败')),
+    }, requestOptions),
   })
   const pagination = computed(() => ({
     currentPage: query.currentPage.value,

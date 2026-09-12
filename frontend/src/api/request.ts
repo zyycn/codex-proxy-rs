@@ -4,12 +4,23 @@ import type {
   AxiosRequestConfig,
   AxiosResponse,
 } from 'axios'
-import axios from 'axios'
+import type { ApiError } from './error'
 
+import axios from 'axios'
+import { toast } from '@/components/base/BaseToast'
 import { API_BASE_URL, API_TIMEOUT_MS } from './constants'
-import { normalizeApiError } from './error'
+import { normalizeApiError, normalizeApiResponseError } from './error'
 
 export { ApiError } from './error'
+
+export interface RequestOptions {
+  // 静默只关闭全局提示，不吞掉异常，也不跳过会话失效处理。
+  silent?: boolean
+  signal?: AbortSignal
+  timeout?: number
+}
+
+type RequestConfig = AxiosRequestConfig & RequestOptions
 
 const http: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -42,21 +53,29 @@ function handleUnauthorizedOnce() {
 }
 
 http.interceptors.response.use(
-  (response: AxiosResponse) => {
+  (response: AxiosResponse<unknown>) => {
+    const error = normalizeApiResponseError(response)
+    if (error)
+      return rejectRequest(error, response.config)
     return response
   },
   (error: AxiosError<unknown>) => {
-    const { response } = error
-
-    const status = response?.status ?? 0
-
-    if (status === 401 && !isAuthenticationRequest(error.config?.url)) {
-      handleUnauthorizedOnce()
-    }
-
-    return Promise.reject(normalizeApiError(error))
+    return rejectRequest(normalizeApiError(error), error.config)
   },
 )
+
+function rejectRequest(error: ApiError, config?: AxiosRequestConfig & Pick<RequestOptions, 'silent'>) {
+  if (error.kind === 'cancelled' || config?.signal?.aborted)
+    return Promise.reject(error)
+
+  const sessionExpired = error.status === 401 && !isAuthenticationRequest(config?.url)
+  const alreadyHandled = sessionExpired && unauthorizedHandled
+  if (sessionExpired)
+    handleUnauthorizedOnce()
+  if (!config?.silent && !alreadyHandled)
+    toast.error(error.message)
+  return Promise.reject(error)
+}
 
 interface ApiEnvelope {
   code: number
@@ -69,12 +88,12 @@ function isApiEnvelope(value: unknown): value is ApiEnvelope {
     typeof value === 'object'
     && value !== null
     && 'data' in value
-    && 'code' in value
-    && 'message' in value
+    && 'code' in value && typeof value.code === 'number'
+    && 'message' in value && typeof value.message === 'string'
   )
 }
 
-export default async function request<T = unknown>(config: AxiosRequestConfig): Promise<T> {
+export default async function request<T = unknown>(config: RequestConfig): Promise<T> {
   const response = await http.request<unknown>({
     ...config,
   })

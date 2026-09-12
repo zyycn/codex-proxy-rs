@@ -4,7 +4,6 @@ import { getProxyAccounts, removeProxyAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
-import { errorMessage } from '@/utils/async'
 
 export function useProxyAccounts(options: {
   isOpen: () => boolean
@@ -15,12 +14,11 @@ export function useProxyAccounts(options: {
   const removeAction = useAsyncAction()
   const query = usePagedQuery({
     initialPageSize: 20,
-    load: pagination => getProxyAccounts({
+    load: (pagination, requestOptions) => getProxyAccounts({
       ...pagination,
       proxyId: options.proxyId() ?? '',
       search: search.value.trim() || undefined,
-    }),
-    onError: error => toast.error(errorMessage(error, '关联账号加载失败')),
+    }, requestOptions),
   })
   const pagination = computed(() => ({
     currentPage: query.page.value,
@@ -60,7 +58,7 @@ export function useProxyAccounts(options: {
         await query.execute()
       }
       return true
-    }, { errorText: '移除关联账号失败' }) ?? false
+    }) ?? false
   }
 
   watch([options.isOpen, options.proxyId], () => {

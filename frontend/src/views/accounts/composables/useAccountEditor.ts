@@ -68,7 +68,7 @@ export function useAccountEditor(options: {
       showEditModal.value = false
       await Promise.all([options.reloadAccounts(), options.reloadGroups()])
       toast.success('账号已更新')
-    }, { errorText: '账号更新失败' })
+    })
   }
 
   watch([showEditModal, saving], ([open, isSaving]) => {

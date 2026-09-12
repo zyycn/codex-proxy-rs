@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
@@ -43,19 +44,21 @@ interface ProxyAccountPage {
   page: ProxyPage['page']
 }
 
-export function getProxyAccounts(params: { proxyId: string, page: number, pageSize: number, search?: string }) {
+export function getProxyAccounts(params: { proxyId: string, page: number, pageSize: number, search?: string }, options: RequestOptions = {}) {
   return request<ProxyAccountPage>({
     url: '/api/admin/proxies/accounts',
     method: 'GET',
     params,
+    ...options,
   })
 }
 
-export function removeProxyAccount(data: { proxyId: string, accountId: string }) {
+export function removeProxyAccount(data: { proxyId: string, accountId: string }, options: RequestOptions = {}) {
   return request<{ configRevision: number }>({
     url: '/api/admin/proxies/accounts/remove',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
@@ -64,52 +67,58 @@ interface ProxyMutation {
   configRevision: number
 }
 
-export function getProxies(params: { page: number, pageSize: number, search?: string }) {
+export function getProxies(params: { page: number, pageSize: number, search?: string }, options: RequestOptions = {}) {
   return request<ProxyPage>({
     url: '/api/admin/proxies',
     method: 'GET',
     params,
+    ...options,
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string }) {
+export function createProxy(data: { name: string, proxyUrl: string }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/create',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string }) {
+export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function deleteProxy(data: { id: string, revision: number }) {
+export function deleteProxy(data: { id: string, revision: number }, options: RequestOptions = {}) {
   return request<{ configRevision: number }>({
     url: '/api/admin/proxies/delete',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function testProxy(data: { id: string, revision: number }) {
+export function testProxy(data: { id: string, revision: number }, options: RequestOptions = {}) {
   return request<OutboundProxyRecord>({
     url: '/api/admin/proxies/test',
     method: 'POST',
     data,
     timeout: 25000,
+    ...options,
   })
 }
 
-export function probeProxy(data: { proxyUrl: string }) {
+export function probeProxy(data: { proxyUrl: string }, options: RequestOptions = {}) {
   return request<OutboundProxyTest>({
     url: '/api/admin/proxies/probe',
     method: 'POST',
     data,
     timeout: 25000,
+    ...options,
   })
 }

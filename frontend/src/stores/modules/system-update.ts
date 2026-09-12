@@ -197,7 +197,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     if (loadVersionPromise)
       return loadVersionPromise
 
-    loadVersionPromise = getSystemVersion()
+    loadVersionPromise = getSystemVersion({ silent: true })
     try {
       const versionData = await loadVersionPromise
       version.value = versionData
@@ -252,7 +252,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       return result
     }
     catch (error: unknown) {
-      updateError.value = errorMessage(error, '更新失败')
+      updateError.value = errorMessage(error)
       appendUpdateLog({
         id: `update-client-error-${Date.now()}`,
         level: 'error',
@@ -270,7 +270,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
 
     while (Date.now() < deadline) {
       try {
-        const readyVersion = await getSystemVersion(restartProbeTimeoutMs)
+        const readyVersion = await getSystemVersion({ timeout: restartProbeTimeoutMs, silent: true })
         if (normalizeSystemVersion(readyVersion.version) === expectedVersion) {
           window.location.reload()
           return
@@ -306,12 +306,13 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     disconnectUpdateEvents()
 
     try {
-      await restartSystem()
+      // 进程可能在返回响应前退出，由下面的目标版本探测判定是否完成。
+      await restartSystem({ silent: true })
     }
     catch (error: unknown) {
       if (error instanceof ApiError && error.status > 0) {
         setPhase({ kind: 'failed' })
-        updateError.value = errorMessage(error, '重启失败')
+        updateError.value = errorMessage(error)
         throw error
       }
     }

@@ -99,9 +99,7 @@ async function handleCheckUpdates(force = true) {
     const data = await checkUpdates(force)
     toast.success(data?.hasUpdate ? '发现可用更新' : '当前已是最新版本')
   }
-  catch (error: unknown) {
-    toast.error(errorMessage(error, '检查更新失败'))
-  }
+  catch {}
 }
 
 async function handleUpdateRequest() {
@@ -129,9 +127,7 @@ async function handleUpdateRequest() {
     }
     await runConfirmedUpdate(remoteTargetVersion)
   }
-  catch (error: unknown) {
-    toast.error(errorMessage(error, '检查更新失败'))
-  }
+  catch {}
   finally {
     preparingUpdate.value = false
   }
@@ -144,9 +140,7 @@ async function runConfirmedUpdate(targetVersion: string) {
       toast.success('更新完成，请重启服务')
     }
   }
-  catch (error: unknown) {
-    toast.error(errorMessage(error, '更新失败'))
-  }
+  catch {}
 }
 
 async function handleConfirmUpdate() {
@@ -170,9 +164,7 @@ async function handleRestart() {
 
 watch(open, (visible) => {
   if (visible && !loadedOnce.value) {
-    void loadSystem(false).catch((error: unknown) => {
-      toast.error(errorMessage(error, '加载系统更新信息失败'))
-    })
+    void loadSystem(false).catch(() => undefined)
   }
 })
 

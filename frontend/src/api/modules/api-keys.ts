@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
@@ -73,58 +74,65 @@ interface ApiKeyIdParam {
   id: string
 }
 
-export function getApiKeys(data: ApiKeyListParams) {
+export function getApiKeys(data: ApiKeyListParams, options: RequestOptions = {}) {
   return request<ApiKeyListResponse>({
     url: '/api/admin/client-keys',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function createApiKey(data: ApiKeyWriteParam) {
+export function createApiKey(data: ApiKeyWriteParam, options: RequestOptions = {}) {
   return request<ApiKeyCreateResponse>({
     url: '/api/admin/client-keys/create',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function updateApiKey(data: ApiKeyUpdateParam) {
+export function updateApiKey(data: ApiKeyUpdateParam, options: RequestOptions = {}) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function revealApiKey(data: ApiKeyIdParam) {
+export function revealApiKey(data: ApiKeyIdParam, options: RequestOptions = {}) {
   return request<ApiKeyRevealResponse>({
     url: '/api/admin/client-keys/reveal',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function deleteApiKey(data: ApiKeyIdParam) {
+export function deleteApiKey(data: ApiKeyIdParam, options: RequestOptions = {}) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/delete',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function disableApiKey(data: ApiKeyIdParam) {
+export function disableApiKey(data: ApiKeyIdParam, options: RequestOptions = {}) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/disable',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function enableApiKey(data: ApiKeyIdParam) {
+export function enableApiKey(data: ApiKeyIdParam, options: RequestOptions = {}) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/enable',
     method: 'POST',
     data,
+    ...options,
   })
 }

@@ -1,25 +1,24 @@
 import { shallowRef } from 'vue'
 
+import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 
 type MaybePromise<T> = T | Promise<T>
-type AsyncActionErrorText = string | false | ((error: unknown) => string | false)
-
 interface AsyncActionRunOptions {
-  errorText?: AsyncActionErrorText
+  // 仅用于本地校验、文件与浏览器操作；接口错误由请求层负责提示。
+  errorText?: string | false
   minimumMs?: number
   onError?: (error: unknown) => void
   rethrow?: boolean
 }
 
-function resolveErrorText(error: unknown, errorText: AsyncActionErrorText | undefined) {
-  const fallback = typeof errorText === 'function' ? errorText(error) : errorText
-  if (fallback === false) {
+function resolveErrorText(error: unknown, errorText: string | false | undefined) {
+  if (error instanceof ApiError || errorText === false) {
     return ''
   }
 
-  return errorMessage(error, '') || fallback || ''
+  return errorMessage(error, errorText || '操作失败')
 }
 
 export function useAsyncAction() {

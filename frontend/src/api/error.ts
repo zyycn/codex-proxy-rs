@@ -1,4 +1,4 @@
-import type { AxiosError, AxiosResponseHeaders, RawAxiosResponseHeaders } from 'axios'
+import type { AxiosError, AxiosResponse, AxiosResponseHeaders, RawAxiosResponseHeaders } from 'axios'
 
 export type ApiErrorKind = 'api' | 'timeout' | 'network' | 'http' | 'cancelled'
 
@@ -23,16 +23,15 @@ export class ApiError extends Error {
 export function normalizeApiError(error: AxiosError<unknown>) {
   const status = error.response?.status ?? 0
   const requestId = responseHeader(error.response?.headers, 'x-request-id')
-  const envelope = adminErrorEnvelope(error.response?.data)
 
-  if (envelope) {
-    return new ApiError(envelope.message, status, envelope.code, requestId, 'api')
-  }
-  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || error.code === 'ERR_TIMEOUT') {
-    return new ApiError('请求超时，请稍后重试', status, undefined, requestId, 'timeout')
-  }
   if (error.code === 'ERR_CANCELED') {
     return new ApiError('请求已取消', status, undefined, requestId, 'cancelled')
+  }
+  const apiError = error.response && normalizeApiResponseError(error.response)
+  if (apiError)
+    return apiError
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || error.code === 'ERR_TIMEOUT') {
+    return new ApiError('请求超时，请稍后重试', status, undefined, requestId, 'timeout')
   }
   if (!error.response) {
     return new ApiError('网络连接失败，请检查网络后重试', 0, undefined, requestId, 'network')
@@ -40,14 +39,27 @@ export function normalizeApiError(error: AxiosError<unknown>) {
   return new ApiError(httpFallback(status), status, undefined, requestId, 'http')
 }
 
+export function normalizeApiResponseError(response: AxiosResponse<unknown>) {
+  const envelope = adminErrorEnvelope(response.data)
+  if (!envelope || envelope.code === 200)
+    return undefined
+  return new ApiError(
+    envelope.message || httpFallback(response.status >= 400 ? response.status : 0),
+    response.status,
+    envelope.code,
+    responseHeader(response.headers, 'x-request-id'),
+    'api',
+  )
+}
+
 function adminErrorEnvelope(value: unknown): AdminErrorEnvelope | null {
   if (!value || typeof value !== 'object')
     return null
   const record = value as Record<string, unknown>
-  if (typeof record.code !== 'number' || typeof record.message !== 'string')
+  if (typeof record.code !== 'number' || !Number.isSafeInteger(record.code))
     return null
-  const message = record.message.trim()
-  return message ? { code: record.code, message } : null
+  const message = typeof record.message === 'string' ? record.message.trim() : ''
+  return { code: record.code, message }
 }
 
 function responseHeader(

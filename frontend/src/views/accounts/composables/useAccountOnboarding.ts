@@ -65,7 +65,6 @@ export function useAccountOnboarding(options: {
           : await importAccountDocument()
         await finishCreate(message)
       },
-      { errorText: '导入失败' },
     )
   }
 
@@ -98,7 +97,6 @@ export function useAccountOnboarding(options: {
         }
         toast.success('授权链接已生成')
       },
-      { errorText: '授权链接生成失败' },
     )
   }
 
@@ -130,9 +128,6 @@ export function useAccountOnboarding(options: {
               ? 'xAI OAuth 账号已添加'
               : 'OpenAI OAuth 账号已添加',
         )
-      },
-      {
-        errorText: reauthorizingAccount.value ? '重新授权失败' : 'OAuth 授权导入失败',
       },
     )
   }
@@ -200,7 +195,7 @@ export function useAccountOnboarding(options: {
           settings: accountImportSettings(createForm.value),
           outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
           data: entry.document,
-        })
+        }, { silent: true })
         importedCount += result.importedCount
       }
       catch (error) {

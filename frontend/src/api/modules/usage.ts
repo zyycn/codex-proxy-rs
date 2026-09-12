@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import request from '../request'
 
 export interface UsageTokenDetails {
@@ -471,50 +472,56 @@ interface UsageDetailQuery {
 
 type UsageDiagnosticsQuery = UsageRangeQuery & { dimension: string }
 
-export function getUsageRecords(data: UsagePageQuery) {
+export function getUsageRecords(data: UsagePageQuery, options: RequestOptions = {}) {
   return request<UsageRecordsResponse>({
     url: '/api/admin/usage/records',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function getOpsErrors(data: OpsErrorPageQuery) {
+export function getOpsErrors(data: OpsErrorPageQuery, options: RequestOptions = {}) {
   return request<OpsErrorsResponse>({
     url: '/api/admin/operations/errors',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function getUsageRecordDetail(data: UsageDetailQuery) {
+export function getUsageRecordDetail(data: UsageDetailQuery, options: RequestOptions = {}) {
   return request<UsageRecordDetail>({
     url: '/api/admin/usage/records/detail',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function getUsageRecordSummary(data: UsageRangeQuery) {
+export function getUsageRecordSummary(data: UsageRangeQuery, options: RequestOptions = {}) {
   return request<UsageSummaryResponse>({
     url: '/api/admin/usage/records/summary',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function getUsageRecordInsightsOverview(data: UsageRangeQuery) {
+export function getUsageRecordInsightsOverview(data: UsageRangeQuery, options: RequestOptions = {}) {
   return request<UsageInsightsOverviewResponse>({
     url: '/api/admin/usage/insights/overview',
     method: 'GET',
     params: data,
+    ...options,
   })
 }
 
-export function getUsageRecordInsightsDiagnostics(data: UsageDiagnosticsQuery) {
+export function getUsageRecordInsightsDiagnostics(data: UsageDiagnosticsQuery, options: RequestOptions = {}) {
   return request<UsageDiagnosticsResponse>({
     url: '/api/admin/usage/insights/diagnostics',
     method: 'GET',
     params: data,
+    ...options,
   })
 }

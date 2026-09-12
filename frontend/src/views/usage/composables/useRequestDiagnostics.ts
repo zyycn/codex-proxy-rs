@@ -14,18 +14,22 @@ export function useRequestDiagnostics(requestId: () => string) {
   watch(requestId, id => selectedId.value = id)
   watch([selectedId, revision], async ([id], _previous, onCleanup) => {
     let active = true
-    onCleanup(() => active = false)
+    const controller = new AbortController()
+    onCleanup(() => {
+      active = false
+      controller.abort()
+    })
     detail.value = null
     error.value = ''
     loading.value = true
     try {
-      const result = await getUsageRecordDetail({ id })
+      const result = await getUsageRecordDetail({ id }, { signal: controller.signal })
       if (active)
         detail.value = result
     }
     catch (cause: unknown) {
       if (active)
-        error.value = errorMessage(cause, '诊断记录暂不可用，请稍后刷新')
+        error.value = errorMessage(cause)
     }
     finally {
       if (active)

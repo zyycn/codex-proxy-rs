@@ -13,7 +13,6 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useCopyText } from '@/composables/useCopyText'
 import { useIdSet } from '@/composables/useIdSet'
-import { errorMessage } from '@/utils/async'
 
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
@@ -125,7 +124,7 @@ export function useApiKeyMutations(options: {
           toast.success('API Key 创建成功')
         }
       },
-      { errorText: editingKey.value ? '更新失败' : '创建失败', onError: () => void options.reload() },
+      { onError: () => void options.reload() },
     )
   }
 
@@ -176,7 +175,7 @@ export function useApiKeyMutations(options: {
         await options.reload()
         toast.success('删除成功')
       },
-      { errorText: '删除失败', onError: () => void options.reload() },
+      { onError: () => void options.reload() },
     )
   }
 
@@ -197,7 +196,7 @@ export function useApiKeyMutations(options: {
         await options.reload()
         toast.success(`已删除 ${deleteCount} 个 API Key`)
       },
-      { errorText: '批量删除失败', onError: () => void options.reload() },
+      { onError: () => void options.reload() },
     )
   }
 
@@ -209,9 +208,8 @@ export function useApiKeyMutations(options: {
         await options.reload()
         toast.success(key.enabled ? '已禁用' : '已启用')
       }
-      catch (error: unknown) {
+      catch {
         void options.reload()
-        toast.error(errorMessage(error, '状态更新失败'))
       }
     })
   }
@@ -221,19 +219,25 @@ export function useApiKeyMutations(options: {
   }
 
   async function revealPlaintextKey(apiKey: ApiKeyRow) {
-    const result = await revealingKeys.run(apiKey.id, () => revealApiKey({ id: apiKey.id }))
-    if (!result?.plaintextKey)
-      throw new Error('完整 API Key 不可用')
-    return result.plaintextKey
+    try {
+      const result = await revealingKeys.run(apiKey.id, () => revealApiKey({ id: apiKey.id }))
+      if (!result)
+        return undefined
+      if (!result.plaintextKey) {
+        toast.error('完整 API Key 不可用')
+        return undefined
+      }
+      return result.plaintextKey
+    }
+    catch {
+      return undefined
+    }
   }
 
   async function copyApiKey(apiKey: ApiKeyRow) {
-    try {
-      await copyToClipboard(await revealPlaintextKey(apiKey))
-    }
-    catch (error: unknown) {
-      toast.error(errorMessage(error, '读取完整密钥失败'))
-    }
+    const key = await revealPlaintextKey(apiKey)
+    if (key)
+      await copyToClipboard(key)
   }
 
   watch(showKeyModal, (open) => {

@@ -1,3 +1,4 @@
+import type { RequestOptions } from '../request'
 import request from '../request'
 
 export interface BackupSettingsView {
@@ -95,63 +96,71 @@ export interface DownloadUrlResult {
   expiresInSeconds: number
 }
 
-export function getBackupSettings() {
+export function getBackupSettings(options: RequestOptions = {}) {
   return request<BackupSettingsView>({
     url: '/api/admin/settings/backups',
     method: 'GET',
+    ...options,
   })
 }
 
-export function updateBackupStorage(data: UpdateBackupStoragePayload) {
+export function updateBackupStorage(data: UpdateBackupStoragePayload, options: RequestOptions = {}) {
   return request<BackupSettingsView>({
     url: '/api/admin/settings/backups/storage/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function testBackupStorage() {
+export function testBackupStorage(options: RequestOptions = {}) {
   return request<ConnectionTestResult>({
     url: '/api/admin/settings/backups/storage/test',
     method: 'POST',
+    ...options,
   })
 }
 
-export function updateBackupSchedule(data: UpdateBackupSchedulePayload) {
+export function updateBackupSchedule(data: UpdateBackupSchedulePayload, options: RequestOptions = {}) {
   return request<BackupSettingsView>({
     url: '/api/admin/settings/backups/schedule/update',
     method: 'POST',
     data,
+    ...options,
   })
 }
 
-export function getBackupRecords(params: BackupRecordsParams) {
+export function getBackupRecords(params: BackupRecordsParams, options: RequestOptions = {}) {
   return request<BackupRecordPage>({
     url: '/api/admin/settings/backups/records',
     method: 'GET',
     params,
+    ...options,
   })
 }
 
-export function createBackup() {
+export function createBackup(options: RequestOptions = {}) {
   return request<BackupRecord>({
     url: '/api/admin/settings/backups/create',
     method: 'POST',
+    ...options,
   })
 }
 
-export function getBackupDownloadUrl(backupId: string) {
+export function getBackupDownloadUrl(backupId: string, options: RequestOptions = {}) {
   return request<DownloadUrlResult>({
     url: '/api/admin/settings/backups/download-url',
     method: 'POST',
     data: { backupId },
+    ...options,
   })
 }
 
-export function deleteBackup(backupId: string) {
+export function deleteBackup(backupId: string, options: RequestOptions = {}) {
   return request<BackupRecord>({
     url: '/api/admin/settings/backups/delete',
     method: 'POST',
     data: { backupId },
+    ...options,
   })
 }

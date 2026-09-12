@@ -1,8 +1,6 @@
 import type { OutboundProxyRecord } from '@/api'
 import { onMounted, shallowRef } from 'vue'
 import { getProxies } from '@/api'
-import { toast } from '@/components/base/BaseToast'
-import { errorMessage } from '@/utils/async'
 
 export function useProxyCatalog() {
   const proxies = shallowRef<OutboundProxyRecord[]>([])
@@ -20,9 +18,7 @@ export function useProxyCatalog() {
       }
       proxies.value = items
     }
-    catch (error) {
-      toast.error(errorMessage(error, '代理列表加载失败'))
-    }
+    catch {}
     finally {
       loading.value = false
     }

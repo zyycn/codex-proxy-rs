@@ -52,7 +52,7 @@ export function useBackupSettings() {
       loaded.value = true
     }
     catch (cause) {
-      error.value = errorMessage(cause, '加载备份配置失败')
+      error.value = errorMessage(cause)
     }
     finally {
       loading.value = false
@@ -97,8 +97,7 @@ export function useBackupSettings() {
       toast.success(schedulePaused ? '存储配置已保存，定时备份已暂停，请测试连接后重新启用' : '存储配置已保存')
       return true
     }
-    catch (cause) {
-      toast.error(errorMessage(cause, '保存存储配置失败'))
+    catch {
       return false
     }
     finally {
@@ -119,9 +118,8 @@ export function useBackupSettings() {
         toast.error(`${result.stage}: ${result.message}`)
       }
     }
-    catch (cause) {
+    catch {
       verified.value = false
-      toast.error(errorMessage(cause, '连接测试失败'))
     }
     finally {
       testing.value = false
@@ -142,8 +140,7 @@ export function useBackupSettings() {
       toast.success('调度配置已保存')
       return true
     }
-    catch (cause) {
-      toast.error(errorMessage(cause, '保存调度配置失败'))
+    catch {
       return false
     }
     finally {

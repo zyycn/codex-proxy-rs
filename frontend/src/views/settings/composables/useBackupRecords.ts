@@ -7,6 +7,7 @@ import {
   getBackupDownloadUrl,
   getBackupRecords,
 } from '@/api'
+import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { errorMessage } from '@/utils/async'
@@ -31,9 +32,8 @@ export function useBackupRecords() {
     page: { page: number, pageSize: number, total: number, totalPages: number }
   }>({
     initialPageSize: 10,
-    load: ({ page, pageSize }) =>
-      getBackupRecords({ page, pageSize }),
-    onError: () => undefined,
+    load: ({ page, pageSize }, options) =>
+      getBackupRecords({ page, pageSize }, options),
   })
 
   const records = computed<BackupRecord[]>(() => paged.items.value as BackupRecord[])
@@ -92,7 +92,7 @@ export function useBackupRecords() {
       return
     refreshing.value = true
     try {
-      await paged.execute({ silent: true })
+      await paged.execute({ background: true })
     }
     finally {
       refreshing.value = false
@@ -119,9 +119,7 @@ export function useBackupRecords() {
       toast.success('备份任务已创建')
       await paged.execute({ silent: true })
     }
-    catch (cause) {
-      toast.error(errorMessage(cause, '创建备份失败'))
-    }
+    catch {}
     finally {
       creating.value = false
     }
@@ -142,7 +140,8 @@ export function useBackupRecords() {
       link.remove()
     }
     catch (cause) {
-      toast.error(errorMessage(cause, '下载备份失败'))
+      if (!(cause instanceof ApiError))
+        toast.error(errorMessage(cause, '下载备份失败'))
     }
     finally {
       downloadStates.value = { ...downloadStates.value, [record.id]: false }
@@ -163,9 +162,7 @@ export function useBackupRecords() {
       toast.success('已请求删除备份')
       await paged.execute({ silent: true })
     }
-    catch (cause) {
-      toast.error(errorMessage(cause, '删除备份失败'))
-    }
+    catch {}
     finally {
       deleting.value = false
       deleteTarget.value = null

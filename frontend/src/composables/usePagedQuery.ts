@@ -1,3 +1,4 @@
+import type { RequestOptions } from '@/api/request'
 import { clamp } from 'es-toolkit'
 import { shallowRef } from 'vue'
 
@@ -15,7 +16,7 @@ interface PageResult {
 
 export function usePagedQuery<Result extends PageResult>(options: {
   initialPageSize: number
-  load: (pagination: { page: number, pageSize: number }) => Promise<Result>
+  load: (pagination: { page: number, pageSize: number }, options: RequestOptions) => Promise<Result>
   onSuccess?: (result: Result) => void
   onError?: (error: unknown) => void
 }) {
@@ -26,14 +27,16 @@ export function usePagedQuery<Result extends PageResult>(options: {
   const request = useRequestState(options.onError)
   const { loading, error, invalidate } = request
 
-  async function execute(execution: { silent?: boolean } = {}) {
-    const requestId = request.start(execution.silent)
+  async function execute(execution: { silent?: boolean, background?: boolean } = {}) {
+    // 保留当前列表的刷新不一定静默；手动刷新仍需由请求层提示失败。
+    const background = execution.background || execution.silent
+    const requestId = request.start(background)
 
     try {
       const result = await options.load({
         page: page.value,
         pageSize: pageSize.value,
-      })
+      }, { silent: execution.silent, signal: request.signal })
       if (!request.isCurrent(requestId))
         return false
 
@@ -50,7 +53,7 @@ export function usePagedQuery<Result extends PageResult>(options: {
       return true
     }
     catch (cause: unknown) {
-      request.fail(requestId, cause, execution.silent)
+      request.fail(requestId, cause, background)
       return false
     }
     finally {

@@ -407,7 +407,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     modelsRequestMode.value = refresh ? 'refresh' : 'load'
     connectionTestError.value = ''
     try {
-      const result = await (refresh ? refreshAccountModels : getAccountModels)({ accountId: account.id })
+      const result = await (refresh ? refreshAccountModels : getAccountModels)(
+        { accountId: account.id },
+        { signal: modelsRequest.signal },
+      )
       if (!modelsRequest.isCurrent(requestId))
         return
       applyConnectionTestModels(result, refresh)
@@ -421,11 +424,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     catch (error: unknown) {
       if (!modelsRequest.isCurrent(requestId))
         return
-      connectionTestError.value = errorMessage(error, refresh ? '刷新上游模型失败' : '加载测试模型失败')
-      if (refresh) {
-        toast.error(connectionTestError.value)
-      }
-      else {
+      connectionTestError.value = errorMessage(error)
+      if (!refresh) {
         connectionTestModelOptions.value = []
         connectionTestSelectedModel.value = ''
       }

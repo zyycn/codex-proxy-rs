@@ -10,9 +10,7 @@ import {
   getUsageRecords,
   getUsageRecordSummary,
 } from '@/api'
-import { toast } from '@/components/base/BaseToast'
-
-import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { withMinimumDuration } from '@/utils/async'
 import { usageSearchParam } from '../utils/search'
 
 interface UseUsageRecordsTableOptions {
@@ -46,6 +44,9 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   let tableRequestId = 0
   let analyticsRequestId = 0
   let diagnosticRequestId = 0
+  let tableController: AbortController | undefined
+  let analyticsController: AbortController | undefined
+  let diagnosticController: AbortController | undefined
   let disposed = false
   const scopedParams = () => ({
     ...options.timeRangeParams.value,
@@ -86,13 +87,15 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   async function loadUsagePage(background: boolean) {
     const requestId = ++tableRequestId
+    tableController?.abort()
+    tableController = new AbortController()
     loading.value = !background
     try {
       const result = await getUsageRecords({
         currentPage: currentPage.value,
         pageSize: pageSize.value,
         ...tableParams,
-      })
+      }, { signal: tableController.signal })
       if (requestId !== tableRequestId)
         return
 
@@ -101,11 +104,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       totalRecords.value = result.total
       currentPage.value = result.currentPage
     }
-    catch (error: unknown) {
-      if (requestId !== tableRequestId)
-        return
-      toast.error(errorMessage(error, '加载失败'))
-    }
+    catch {}
     finally {
       if (requestId === tableRequestId) {
         loading.value = false
@@ -116,16 +115,20 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   async function loadUsageAnalytics(globalParams: ReturnType<typeof scopedParams>, background: boolean) {
     const requestId = ++analyticsRequestId
     const diagnosticsId = ++diagnosticRequestId
+    analyticsController?.abort()
+    diagnosticController?.abort()
+    analyticsController = new AbortController()
+    const requestOptions = { signal: analyticsController.signal }
     const dimension = diagnosticDimension.value
     analyticsLoading.value = !background
     try {
       const [nextSummary, overview, diagnostics] = await Promise.all([
-        getUsageRecordSummary(globalParams),
-        getUsageRecordInsightsOverview(globalParams),
+        getUsageRecordSummary(globalParams, requestOptions),
+        getUsageRecordInsightsOverview(globalParams, requestOptions),
         getUsageRecordInsightsDiagnostics({
           ...globalParams,
           dimension,
-        }),
+        }, requestOptions),
       ])
       if (requestId !== analyticsRequestId)
         return
@@ -139,11 +142,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
             : insights.value.diagnostics,
       }
     }
-    catch (error: unknown) {
-      if (requestId !== analyticsRequestId)
-        return
-      toast.error(errorMessage(error, '加载失败'))
-    }
+    catch {}
     finally {
       if (requestId === analyticsRequestId) {
         analyticsLoading.value = false
@@ -153,13 +152,15 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   async function loadDiagnostics() {
     const requestId = ++diagnosticRequestId
+    diagnosticController?.abort()
+    diagnosticController = new AbortController()
     const dimension = diagnosticDimension.value
     const params = scopedParams()
     try {
       const diagnostics = await getUsageRecordInsightsDiagnostics({
         ...params,
         dimension,
-      })
+      }, { signal: diagnosticController.signal })
       if (requestId !== diagnosticRequestId || dimension !== diagnosticDimension.value)
         return
       insights.value = {
@@ -167,11 +168,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
         diagnostics,
       }
     }
-    catch (error: unknown) {
-      if (requestId !== diagnosticRequestId || dimension !== diagnosticDimension.value)
-        return
-      toast.error(errorMessage(error, '加载失败'))
-    }
+    catch {}
   }
 
   async function refreshUsageRecords() {
@@ -224,10 +221,13 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
 
   watch(options.active, (active) => {
-    if (active)
+    if (active) {
       void reloadLatestTable()
-    else
+    }
+    else {
       tableRequestId += 1
+      tableController?.abort()
+    }
   })
 
   watchDebounced(
@@ -244,6 +244,9 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     tableRequestId += 1
     analyticsRequestId += 1
     diagnosticRequestId += 1
+    tableController?.abort()
+    analyticsController?.abort()
+    diagnosticController?.abort()
   })
 
   return {

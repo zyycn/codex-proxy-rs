@@ -1,3 +1,4 @@
+import type { RequestOptions } from '@/api/request'
 import { shallowRef } from 'vue'
 
 import { useRequestState } from './useRequestState'
@@ -16,7 +17,7 @@ interface PageRequest {
 
 export function useStablePagedQuery<Result extends PageResult>(options: {
   initialPageSize: number
-  load: (pagination: PageRequest) => Promise<Result>
+  load: (pagination: PageRequest, options: RequestOptions) => Promise<Result>
   onSuccess?: (result: Result) => void
   onError?: (error: unknown) => void
 }) {
@@ -34,7 +35,7 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
       const result = await options.load({
         currentPage: Math.max(1, targetPage),
         pageSize: pageSize.value,
-      })
+      }, { silent: execution.silent, signal: request.signal })
       if (!request.isCurrent(requestId))
         return false
 

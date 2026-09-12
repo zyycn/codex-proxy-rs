@@ -3,9 +3,7 @@ import { watchDebounced } from '@vueuse/core'
 
 import { computed, onMounted, shallowRef, watch } from 'vue'
 import { getAccounts } from '@/api'
-import { toast } from '@/components/base/BaseToast'
 import { usePagedQuery } from '@/composables/usePagedQuery'
-import { errorMessage } from '@/utils/async'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -26,7 +24,7 @@ export function useAccountsQuery() {
 
   const query = usePagedQuery({
     initialPageSize: 20,
-    load: ({ page, pageSize }) =>
+    load: ({ page, pageSize }, options) =>
       getAccounts({
         page,
         pageSize,
@@ -36,12 +34,9 @@ export function useAccountsQuery() {
         groupId: groupQuery.value || undefined,
         sortBy: sort.value?.key,
         sortDirection: sort.value?.direction,
-      }),
+      }, options),
     onSuccess: (result) => {
       accountSummary.value = result.summary
-    },
-    onError: (error) => {
-      toast.error(errorMessage(error, '账号加载失败'))
     },
   })
 

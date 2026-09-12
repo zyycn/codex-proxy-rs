@@ -47,14 +47,13 @@ export function useAccountGroups() {
 
   const query = usePagedQuery({
     initialPageSize: 20,
-    load: ({ page, pageSize }) =>
+    load: ({ page, pageSize }, options) =>
       getAccountGroups({
         page,
         pageSize,
         search: searchQuery.value.trim() || undefined,
         enabled: statusQuery.value ? statusQuery.value === 'enabled' : undefined,
-      }),
-    onError: error => toast.error(errorMessage(error, '账号分组加载失败')),
+      }, options),
   })
 
   const groups = computed(() => query.items.value.map(group => ({
@@ -148,8 +147,6 @@ export function useAccountGroups() {
       form.value = emptyForm()
       await Promise.all([query.execute(), loadReferenceKeys()])
       toast.success(updating ? '分组已更新' : '分组已创建')
-    }, {
-      errorText: editingGroup.value ? '分组更新失败' : '分组创建失败',
     })
   }
 
@@ -172,7 +169,7 @@ export function useAccountGroups() {
       pendingDisableGroup.value = null
       await query.execute()
       toast.success('分组已禁用')
-    }, { errorText: '禁用分组失败' })
+    })
   }
 
   async function toggleStatus(group: AccountGroup) {
@@ -183,9 +180,7 @@ export function useAccountGroups() {
         await query.execute()
         toast.success(group.enabled ? '分组已禁用' : '分组已启用')
       }
-      catch (error: unknown) {
-        toast.error(errorMessage(error, '分组状态更新失败'))
-      }
+      catch {}
     })
   }
 
@@ -207,7 +202,7 @@ export function useAccountGroups() {
       pendingDeleteGroup.value = null
       await query.execute()
       toast.success('分组已删除')
-    }, { errorText: '删除分组失败', onError: () => void query.execute() })
+    }, { onError: () => void query.execute() })
   }
 
   async function confirmBatchDelete() {
@@ -219,7 +214,7 @@ export function useAccountGroups() {
       const failures: unknown[] = []
       for (const groupId of [...selectedIds.value]) {
         try {
-          await deleteAccountGroup({ id: groupId })
+          await deleteAccountGroup({ id: groupId }, { silent: true })
           deletedCount += 1
           const remaining = new Set(selectedIds.value)
           remaining.delete(groupId)

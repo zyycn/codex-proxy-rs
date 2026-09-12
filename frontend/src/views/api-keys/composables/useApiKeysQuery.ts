@@ -1,10 +1,9 @@
 import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import { watchDebounced } from '@vueuse/core'
 
-import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
+import { computed, onMounted, shallowRef } from 'vue'
 import { getApiKeys } from '@/api'
-import { toast } from '@/components/base/BaseToast'
-import { errorMessage } from '@/utils/async'
+import { useRequestState } from '@/composables/useRequestState'
 import { formatDateTime } from '@/utils/date'
 
 export function useApiKeysQuery() {
@@ -18,9 +17,9 @@ export function useApiKeysQuery() {
       createdAtDisplay: string
     }>
   >([])
-  const loading = shallowRef(false)
+  const request = useRequestState()
+  const { loading } = request
   const cursors = new Map<number, string | undefined>([[1, undefined]])
-  let requestSequence = 0
 
   const apiKeyPagination = computed(() => ({
     currentPage: page.value,
@@ -41,14 +40,14 @@ export function useApiKeysQuery() {
     )
   }
 
-  async function fetchPage(cursor: string | undefined, limit: number, search: string | undefined) {
+  async function fetchPage(cursor: string | undefined, limit: number, search: string | undefined, signal?: AbortSignal) {
     return getApiKeys({
       cursor,
       limit,
       search,
       sortBy: sort.value?.key,
       sortDirection: sort.value?.direction,
-    })
+    }, { signal })
   }
 
   function applyPage(result: Awaited<ReturnType<typeof getApiKeys>>, targetPage: number) {
@@ -61,19 +60,19 @@ export function useApiKeysQuery() {
   }
 
   async function execute(targetPage = page.value) {
-    const requestId = ++requestSequence
+    const requestId = request.start()
+    const signal = request.signal
     const requestedPage = Math.max(1, targetPage)
     const requestedPageSize = pageSize.value
     const requestedSearch = searchQuery.value.trim() || undefined
-    loading.value = true
 
     try {
       let currentPage = knownPageBefore(requestedPage)
       let result
 
       while (currentPage < requestedPage) {
-        result = await fetchPage(cursors.get(currentPage), requestedPageSize, requestedSearch)
-        if (requestId !== requestSequence)
+        result = await fetchPage(cursors.get(currentPage), requestedPageSize, requestedSearch, signal)
+        if (!request.isCurrent(requestId))
           return false
 
         if (!result.nextCursor) {
@@ -85,8 +84,8 @@ export function useApiKeysQuery() {
         currentPage += 1
       }
 
-      result = await fetchPage(cursors.get(currentPage), requestedPageSize, requestedSearch)
-      if (requestId !== requestSequence)
+      result = await fetchPage(cursors.get(currentPage), requestedPageSize, requestedSearch, signal)
+      if (!request.isCurrent(requestId))
         return false
 
       if (result.nextCursor)
@@ -96,14 +95,11 @@ export function useApiKeysQuery() {
       applyPage(result, currentPage)
       return true
     }
-    catch (error: unknown) {
-      if (requestId === requestSequence)
-        toast.error(errorMessage(error, 'API Key 加载失败'))
+    catch {
       return false
     }
     finally {
-      if (requestId === requestSequence)
-        loading.value = false
+      request.finish(requestId)
     }
   }
 
@@ -136,9 +132,6 @@ export function useApiKeysQuery() {
 
   onMounted(() => {
     void execute()
-  })
-  onScopeDispose(() => {
-    requestSequence += 1
   })
 
   return {

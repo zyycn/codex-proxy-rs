@@ -31,6 +31,7 @@ interface ResetCreditsSession {
   loading: boolean
   loadError: string
   loadSequence: number
+  loadController?: AbortController
   accountUpdatedListeners: Set<(account: Account) => void>
 }
 
@@ -55,12 +56,15 @@ function getResetCreditsSession(accountId: string) {
   return session
 }
 
-async function loadSessionCredits(session: ResetCreditsSession) {
+async function loadSessionCredits(session: ResetCreditsSession, silent = false) {
   const sequence = ++session.loadSequence
+  session.loadController?.abort()
+  const controller = new AbortController()
+  session.loadController = controller
   session.loading = true
   session.loadError = ''
   try {
-    const result = await getAccountResetCredits({ accountId: session.accountId })
+    const result = await getAccountResetCredits({ accountId: session.accountId }, { silent, signal: controller.signal })
     if (sequence !== session.loadSequence)
       return
     session.snapshot = {
@@ -70,7 +74,7 @@ async function loadSessionCredits(session: ResetCreditsSession) {
   }
   catch (error: unknown) {
     if (sequence === session.loadSequence)
-      session.loadError = errorMessage(error, '重置卡查询失败')
+      session.loadError = errorMessage(error)
   }
   finally {
     if (sequence === session.loadSequence)
@@ -173,17 +177,18 @@ export function useAccountResetCredits(options: {
     target.pendingOperation = operation
     target.consuming = true
     try {
+      // 不可逆消费由当前会话区分已确认失败与结果未知，不能先弹出可重试的通用错误。
       const result = await consumeAccountResetCredit({
         accountId: operation.accountId,
         creditId: operation.creditId,
         redeemRequestId: operation.redeemRequestId,
-      })
+      }, { silent: true })
       const confirmed = result.code === 'reset'
         || (result.code === 'already_redeemed' && operation.hasTransportFailure)
       target.pendingOperation = null
       if (!confirmed) {
         toast.error(resetResultMessage(result.code))
-        await loadSessionCredits(target)
+        await loadSessionCredits(target, true)
         return false
       }
 
@@ -191,9 +196,9 @@ export function useAccountResetCredits(options: {
         ? '上次重置已完成'
         : '额度已重置'
       applyConfirmedConsumption(target, operation)
-      await loadSessionCredits(target)
+      await loadSessionCredits(target, true)
       try {
-        const quota = await refreshAccountQuota({ accountId: operation.accountId })
+        const quota = await refreshAccountQuota({ accountId: operation.accountId }, { silent: true })
         // 原组件可能已经卸载或换号，只通知仍订阅该账号的实例。
         for (const listener of target.accountUpdatedListeners)
           listener(quota.account)
@@ -218,7 +223,7 @@ export function useAccountResetCredits(options: {
       else {
         target.pendingOperation = null
         toast.error(errorMessage(error, '额度重置失败'))
-        await loadSessionCredits(target)
+        await loadSessionCredits(target, true)
       }
       return false
     }

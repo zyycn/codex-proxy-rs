@@ -61,9 +61,6 @@ const { profile, loading, error, load } = useAccountProfileStatistics(accountId,
     </div>
 
     <template #footer>
-      <span v-if="error && profile" class="mr-auto self-center text-cp-xs font-semibold text-cp-error-text">
-        {{ error }}
-      </span>
       <BaseButton variant="secondary" @click="open = false">
         关闭
       </BaseButton>
