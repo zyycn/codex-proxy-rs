@@ -51,6 +51,11 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 - 浏览器登录后得到的 `cpr_admin_session` Cookie；
 - `x-api-key: <admin-api-key>`。
 
+管理员登录和退出默认签发带 `Secure`、`HttpOnly`、`SameSite=Lax` 的 Cookie。
+部署配置 `api.allow_insecure_http: true` 会仅移除 `Secure`，允许浏览器通过 HTTP 保存会话；
+省略或设为 `false` 保持默认行为，不根据 `X-Forwarded-Proto` 等请求头自动降级。
+配置和重启步骤见 [公网访问](../deploy/README.md#公网访问)。
+
 请求无需自带 `x-request-id`；缺失时服务端自动生成 UUID 并在响应头回传同一 request ID。
 `api.request_id_header` 可改变注入与回传的 header 名，管理端鉴权不依赖该名字。
 管理端响应统一带 `Cache-Control: no-store`。

@@ -20,11 +20,23 @@ use super::{AdminEnvelope, AdminError, AdminJson, AdminResponse};
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";
-const ADMIN_SESSION_COOKIE_ATTRS: &str = "Path=/; Secure; HttpOnly; SameSite=Lax";
 
 /// 所有管理 HTTP 模块从 state 消费同一个认证用例端口。
 pub trait AdminSessionState {
     fn admin_services(&self) -> &AdminServices;
+
+    /// 仅部署配置可放宽会话 Cookie；不根据客户端的转发头自动降级。
+    fn allow_insecure_http(&self) -> bool {
+        false
+    }
+}
+
+fn admin_session_cookie_attrs(allow_insecure_http: bool) -> &'static str {
+    if allow_insecure_http {
+        "Path=/; HttpOnly; SameSite=Lax"
+    } else {
+        "Path=/; Secure; HttpOnly; SameSite=Lax"
+    }
 }
 
 /// 已通过管理员会话或部署级管理 API Key 鉴权的请求。
@@ -221,8 +233,9 @@ where
     )
     .into_response();
     let cookie = format!(
-        "{ADMIN_SESSION_COOKIE}={}; {ADMIN_SESSION_COOKIE_ATTRS}",
-        session.session_id
+        "{ADMIN_SESSION_COOKIE}={}; {}",
+        session.session_id,
+        admin_session_cookie_attrs(state.allow_insecure_http())
     );
     response.headers_mut().insert(
         SET_COOKIE,
@@ -260,7 +273,10 @@ where
     let mut response =
         AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(AdminLogoutData::new()))
             .into_response();
-    let cookie = format!("{ADMIN_SESSION_COOKIE}=; {ADMIN_SESSION_COOKIE_ATTRS}; Max-Age=0");
+    let cookie = format!(
+        "{ADMIN_SESSION_COOKIE}=; {}; Max-Age=0",
+        admin_session_cookie_attrs(state.allow_insecure_http())
+    );
     response.headers_mut().insert(
         SET_COOKIE,
         HeaderValue::from_str(&cookie).map_err(|_| AdminError::internal())?,

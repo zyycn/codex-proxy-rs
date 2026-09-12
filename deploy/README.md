@@ -78,12 +78,35 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 
 ## 公网访问
 
-Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置 HTTPS 反向代理，
+Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置反向代理，
 不要把 PostgreSQL 或 Redis 暴露到公网。
+
+管理员会话默认使用 `Secure` Cookie，适用于浏览器通过 HTTPS 访问的部署。
+若需要通过 HTTP 登录，在现有 `deploy/config.yaml` 的 `api` 段添加：
+
+```yaml
+api:
+  allow_insecure_http: true
+```
+
+保留该段已有的其他字段。默认值为 `false`，旧配置省略此项时行为不变。开启后，登录及退出的
+会话 Cookie 不再携带 `Secure`，仍保留 `HttpOnly`、`SameSite=Lax` 和退出时的过期设置。
+HTTP 传输不加密，请由部署者按访问环境自行选择；此项不影响上游 TLS 证书验证。
+HTTPS 反向代理即使使用 HTTP 连接容器，也应保持默认值，开关取决于浏览器访问的协议。
+
+配置在启动时读取。升级到包含此功能的镜像后，重新创建应用容器以加载修改后的配置文件：
+
+```bash
+docker compose -f deploy/compose.yaml up -d --no-deps --force-recreate codex-proxy-rs
+```
+
+无需调整 Compose 的配置挂载，也无需 Nginx 重写 Cookie。若此前配置了移除或强加 `Secure` 的
+Cookie 重写规则，应移除该规则，使应用开关生效。直接暴露应用端口时，可将应用的端口映射改为
+`0.0.0.0:8080:8080`；数据库和 Redis 的端口保持仅本机访问。
 
 反向代理需要保留 `Authorization`，支持 `/v1/responses` 的 WebSocket Upgrade，
 并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
-客户端使用 `https://你的域名/v1`，不要使用前端开发服务的 `5173/dev/v1`。
+客户端使用部署地址下的 `/v1`，协议与部署一致，不要使用前端开发服务的 `5173/dev/v1`。
 当前应用只支持单副本，不能通过复制容器扩容。
 
 流式响应在首个上游事件提交后，每 15 秒无输出会发送一次 SSE 注释保活，

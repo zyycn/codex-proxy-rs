@@ -160,6 +160,14 @@ fn config_loader_should_load_complete_terminal_example() {
 }
 
 #[test]
+fn config_loader_should_accept_opt_in_http_and_existing_configs_without_the_switch() {
+    for value in ["  allow_insecure_http: true\n", ""] {
+        let yaml = valid_config().replace("  allow_insecure_http: false\n", value);
+        parse_config(&yaml).expect("HTTP policy remains backward compatible");
+    }
+}
+
+#[test]
 fn config_loader_should_resolve_paths_relative_to_config_file() {
     let (config, _directory) = parse_config(&valid_config()).expect("resolved config");
     let debug = format!("{config:?}");
