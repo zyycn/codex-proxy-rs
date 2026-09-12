@@ -121,6 +121,13 @@ Provider 模型能力、目录代次与 `ProviderCatalogPort` 由 `routing::cata
 该只读合同，不反向依赖执行注册表；现有 `ProviderRegistry` 直接实现目录端口，仍只维护一份 Provider
 注册集合。已知空目录与查询失败的未知目录保持不同语义，目录替身无需实现请求执行。
 
+客户端原生模型目录同样由 Provider 拥有，通过 `ExecutionService` 和现有 Registry 的只读调用传递。
+`routing::catalog` 的原生条目只包含模型 ID 与不透明协议正文，Core 负责冻结账号范围和整对象模型映射，
+不解析上游字段；API 负责协议输出，不直接依赖具体 Provider。原生目录失败不会退回通用画像，只有不提供
+该协议原生目录的 Provider（如 xAI 的 Codex 适配）才走画像转换。目录读取不创建计量请求或推理 attempt。
+OpenAI 的账号/凭据 revision/客户端版本隔离、并发合并、TTL、容量与失效均归属已有 credential catalog
+service；客户端原生对象只进有界进程缓存，不扩展套餐 Redis ID cache 或持久化模型字段副本。
+
 `engine::observation` 统一维护单次响应的用量、费用、时间和响应 ID，并负责重试前清理；协调器继续
 独占发送、提交、重试和终结顺序。Provider 上报费用优先于本地估算，丢弃的 attempt 不得污染最终计量。
 Client Key 费用账本独立累计各次 attempt 的实际费用，不能因请求重试而清空已产生的费用或未知计费状态。

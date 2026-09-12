@@ -33,9 +33,9 @@ use gateway_core::operation::{
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{
-    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
-    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
-    RuntimeSnapshot, UpstreamModelId,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ModelServiceTier,
+    ProviderKind, ProviderModel, PublicModelId, RoutingContext, RuntimeAccount,
+    RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::upstream::UpstreamSendState;
 use provider_openai::config::DEFAULT_STREAM_MAX_RETRIES;
@@ -6307,6 +6307,41 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
     assert!(presentation.image_detail_original());
     assert!(presentation.verbosity());
     assert!(!presentation.hidden());
+    assert_eq!(
+        presentation.service_tiers(),
+        [ModelServiceTier::new(
+            "priority",
+            "Fast",
+            "Priority processing."
+        )]
+    );
+
+    let scope = FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_presentation").expect("account"),
+            RuntimeAccount::new(
+                ProviderKind::new("openai").expect("provider"),
+                BTreeSet::new(),
+            ),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    );
+    let native = provider
+        .query_client_model_catalog(&scope, "codex", "0.154.0")
+        .await
+        .expect("native catalog")
+        .expect("supported");
+    let original: Value = serde_json::from_slice(OFFICIAL_FIXTURE).expect("fixture");
+    let document: Value = serde_json::from_slice(native[0].payload.body()).expect("document");
+    assert_eq!(document, original["models"][0]);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .iter()
+            .any(|request| request.url.query() == Some("client_version=0.154.0"))
+    );
 }
 
 #[tokio::test]

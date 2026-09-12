@@ -183,8 +183,34 @@ message/type/code；没有结构化错误时使用稳定安全文案，不把原
 `GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
 `client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`。
 
+OpenAI Provider 按客户端传入的 `client_version` 请求上游目录，完整保留每个模型 JSON 对象，包括
+`base_instructions`、`model_messages`、`service_tiers`、工具与能力字段，以及未知嵌套字段、显式 `null`
+和字段缺失的区别。Core 不解释这些协议字段，API 不再根据通用模型画像重建 OpenAI 目录。
+模型别名仅替换 `slug`，不替换上游展示名、提示词、能力或 `priority`；保持原生模型顺序，新增别名附在后面。
+目录仍按当前路由快照的模型存在性过滤，避免公布已知无法路由的模型；新模型需待后台目录对账后进入列表。
+xAI 没有 Codex 原生目录，继续使用明确的通用画像适配。
+
+目录账号只能来自本次 Client Key 冻结的账号范围。OpenAI 在其中按账号 ID 排序，使用首个成功读取的
+合格账号，最多尝试三个账号；同名模型不跨账号或套餐混拼字段。因此单账号、无别名时可保持该账号的
+模型对象一致，多账号/多 Provider 聚合不代表“与某个官方账号的整个目录完全一致”，也不会固定后续推理账号。
+读取失败返回 `503 model_catalog_unavailable`，不以简化模板或空成功响应覆盖客户端缓存。
+
+原生目录使用 Provider 内的有界缓存：最多 32 份，成功 TTL 为 5 分钟，失败短缓存为 5 秒，单次上游
+读取超时为 15 秒。缓存按账号、凭据 revision、套餐、上游账号身份、客户端版本和请求画像隔离；并发
+读取合并，新的目录 ETag、后台目录内容变化或显式失效会清理缓存。每次读取仍重新检查账号资格和 Key 范围，
+不会因缓存命中跨越权限。完整对象不写 PostgreSQL 或 Redis；现有套餐 Redis cache 仍只保存模型 ID。
+成功目录响应带 `Cache-Control: private, no-store`，不借用上游 ETag 标识经过选择/别名/聚合后的正文。
+Codex 自己仍会写 `models_cache.json`；Responses 的 `x-models-etag` 保持原协议，这可能让客户端再次
+读取目录，但通常命中上述服务端缓存，不表示每轮都重新请求上游。
+
+`service_tiers` 的 `name` 用于生成 `/fast` 等命令，`id` 是请求使用的 `service_tier` 值，二者不能互换。
+上游未声明或明确返回空数组时不补档位，也不根据模型名或旧 `additional_speed_tiers` 字段推断 Fast。
+该合同对齐
+[官方 Codex 0.154.0 的模型元数据](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/protocol/src/openai_models.rs)
+与其动态服务档位命令；升级网关后，已有客户端缓存需要在重新加载模型目录后才能反映修复。
+
 Codex 专用目录中的 `context_window` 与 `max_context_window` 分别表示默认上下文窗口和客户端本地
-覆盖的上限。OpenAI Provider 分别传递上游目录中的对应字段，缺失时保留 `null`；网关不通过部署配置
+覆盖的上限。OpenAI Provider 原样保留上游对应字段，缺失与 `null` 不互相转换；网关不通过部署配置
 覆盖这些值。Codex 客户端配置 `model_context_window` 后，按该值与非空 `max_context_window` 的较小值
 使用窗口；上限为空时保留客户端本地值。xAI 目录只声明一个窗口，其 Provider 继续以该值作为客户端覆盖上限。
 

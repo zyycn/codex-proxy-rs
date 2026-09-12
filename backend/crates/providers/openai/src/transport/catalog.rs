@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 
-use gateway_core::routing::UpstreamModelId;
+use bytes::Bytes;
+use gateway_core::operation::RawJsonPayload;
+use gateway_core::routing::{ModelServiceTier, UpstreamModelId};
 use reqwest::header::{ETAG, HeaderMap};
 use serde::Deserialize;
 
@@ -13,6 +15,7 @@ pub const MAX_CODEX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
 const MAX_CATALOG_MODELS: usize = 2_048;
 const MAX_DISPLAY_NAME_BYTES: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
+const MAX_SERVICE_TIER_ID_BYTES: usize = 64;
 const MAX_ETAG_BYTES: usize = 256;
 
 /// 上游目录对一项能力给出的明确证据。
@@ -133,6 +136,7 @@ pub struct CodexCatalogMetadata {
     description: Option<String>,
     priority: Option<i32>,
     visibility: Option<CodexCatalogVisibility>,
+    service_tiers: Vec<ModelServiceTier>,
 }
 
 impl CodexCatalogMetadata {
@@ -152,6 +156,12 @@ impl CodexCatalogMetadata {
     #[must_use]
     pub const fn visibility(&self) -> Option<CodexCatalogVisibility> {
         self.visibility
+    }
+
+    /// 返回上游明确声明的服务档位；缺失时为空，不根据模型名补齐。
+    #[must_use]
+    pub fn service_tiers(&self) -> &[ModelServiceTier] {
+        &self.service_tiers
     }
 }
 
@@ -173,6 +183,7 @@ pub enum CodexCatalogVisibility {
 /// 一个已完整校验的 Codex 真实模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexCatalogModel {
+    document: RawJsonPayload,
     request_model: UpstreamModelId,
     display_name: String,
     capabilities: CodexCatalogCapabilities,
@@ -181,6 +192,12 @@ pub struct CodexCatalogModel {
 }
 
 impl CodexCatalogModel {
+    /// 完整原生对象只用于客户端目录，不写入控制面画像或日志。
+    #[must_use]
+    pub const fn document(&self) -> &RawJsonPayload {
+        &self.document
+    }
+
     /// 返回实际写入上游请求的模型 slug。
     #[must_use]
     pub const fn request_model(&self) -> &UpstreamModelId {
@@ -270,7 +287,7 @@ pub enum CodexModelCatalogError {
 
 #[derive(Debug, Deserialize)]
 struct CodexModelsWire {
-    models: Vec<CodexModelWire>,
+    models: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,6 +306,15 @@ struct CodexModelWire {
     context_window: Option<i64>,
     max_context_window: Option<i64>,
     input_modalities: Option<Vec<CodexInputModalityWire>>,
+    #[serde(default)]
+    service_tiers: Vec<CodexServiceTierWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexServiceTierWire {
+    id: String,
+    name: String,
+    description: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,7 +335,7 @@ enum CodexInputModalityWire {
 ///
 /// # Errors
 ///
-/// 任一条目、重复 slug 或 ETag 不合法时整轮失败；上游新增的未知字段会忽略。
+/// 任一条目、重复 slug 或 ETag 不合法时整轮失败；未知字段保留在原生正文中。
 pub fn parse_codex_model_catalog(
     body: &[u8],
     etag: Option<&str>,
@@ -330,7 +356,16 @@ pub fn parse_codex_model_catalog(
     let mut seen = BTreeSet::new();
     let mut models = Vec::with_capacity(wire.models.len());
     for model in wire.models {
-        let model = normalize_model(model)?;
+        let wire =
+            CodexModelWire::deserialize(&model).map_err(|_| CodexModelCatalogError::InvalidWire)?;
+        let document = RawJsonPayload::new(
+            "codex",
+            Bytes::from(
+                serde_json::to_vec(&model).map_err(|_| CodexModelCatalogError::InvalidWire)?,
+            ),
+        )
+        .map_err(|_| CodexModelCatalogError::InvalidWire)?;
+        let model = normalize_model(wire, document)?;
         if !seen.insert(model.request_model.as_str().to_owned()) {
             return Err(CodexModelCatalogError::DuplicateModelSlug);
         }
@@ -351,7 +386,10 @@ pub(super) fn catalog_etag(headers: &HeaderMap) -> Result<Option<String>, CodexM
         .transpose()
 }
 
-fn normalize_model(wire: CodexModelWire) -> Result<CodexCatalogModel, CodexModelCatalogError> {
+fn normalize_model(
+    wire: CodexModelWire,
+    document: RawJsonPayload,
+) -> Result<CodexCatalogModel, CodexModelCatalogError> {
     if !valid_model_slug(&wire.slug) {
         return Err(CodexModelCatalogError::InvalidModelSlug);
     }
@@ -361,6 +399,17 @@ fn normalize_model(wire: CodexModelWire) -> Result<CodexCatalogModel, CodexModel
     if let Some(description) = wire.description.as_deref() {
         validate_public_text(description, MAX_DESCRIPTION_BYTES, true)?;
     }
+    // name 供客户端生成命令，id 才是请求选档值；不能从命令名推导或改写 id。
+    let service_tiers = wire
+        .service_tiers
+        .into_iter()
+        .map(|tier| {
+            validate_public_text(&tier.id, MAX_SERVICE_TIER_ID_BYTES, false)?;
+            validate_public_text(&tier.name, MAX_DISPLAY_NAME_BYTES, false)?;
+            validate_public_text(&tier.description, MAX_DESCRIPTION_BYTES, true)?;
+            Ok(ModelServiceTier::new(tier.id, tier.name, tier.description))
+        })
+        .collect::<Result<Vec<_>, CodexModelCatalogError>>()?;
 
     let context_window_tokens = optional_positive(wire.context_window)?;
     let max_context_window_tokens = optional_positive(wire.max_context_window)?;
@@ -382,6 +431,7 @@ fn normalize_model(wire: CodexModelWire) -> Result<CodexCatalogModel, CodexModel
     }
 
     Ok(CodexCatalogModel {
+        document,
         request_model,
         display_name: wire.display_name,
         capabilities: CodexCatalogCapabilities {
@@ -405,6 +455,7 @@ fn normalize_model(wire: CodexModelWire) -> Result<CodexCatalogModel, CodexModel
             description: wire.description,
             priority: wire.priority,
             visibility: wire.visibility,
+            service_tiers,
         },
     })
 }

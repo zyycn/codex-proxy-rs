@@ -13,6 +13,13 @@
       "supports_image_detail_original": true,
       "supports_search_tool": true,
       "support_verbosity": true,
+      "service_tiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "Priority processing."
+        }
+      ],
       "supported_reasoning_levels": [
         {
           "effort": "low",

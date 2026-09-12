@@ -32,7 +32,7 @@ async fn each_core_endpoint_uses_the_current_bundled_release() {
         });
         let context = request_context("audit", Some("audit-account"));
         client
-            .fetch_models_with_context(context)
+            .fetch_models_with_context(context, None)
             .await
             .expect_err("fixture rejection");
         client

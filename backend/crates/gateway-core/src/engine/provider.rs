@@ -503,6 +503,20 @@ pub trait Provider: Send + Sync {
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError>;
 
+    /// 读取当前客户端协议的原生目录，必须限定到认证时冻结的账号范围。
+    /// `None` 表示不提供该协议的原生目录；读取失败不能伪装成不支持。
+    async fn query_client_model_catalog(
+        &self,
+        _scope: &crate::account::scope::FrozenAccountScope,
+        _protocol: &str,
+        _client_version: &str,
+    ) -> Result<
+        Option<Vec<crate::routing::ProviderModelDescriptor>>,
+        crate::routing::ProviderCatalogUnavailable,
+    > {
+        Ok(None)
+    }
+
     /// 选择一个未被排除的资源并返回 cold [`ProviderStream`]。
     ///
     /// 返回成功、返回错误或准备 future 被取消前，均不得发送本次请求的上游握手或业务

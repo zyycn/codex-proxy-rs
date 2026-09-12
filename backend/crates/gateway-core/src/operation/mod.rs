@@ -225,10 +225,10 @@ impl fmt::Debug for ProtocolPayload {
     }
 }
 
-/// 客户端协议交给 Provider 的未经重编码 JSON 正文。
+/// 协议 adapter 与 Provider 之间不透明传递的 JSON 正文。
 ///
-/// 协议 adapter 只确定路由端点；Core 保留原始字节与非 wire 上下文，
-/// 不验证、解析或改写正文。
+/// Core 保留字节与非 wire 上下文，不验证、解析或改写正文；
+/// 请求载荷与原生模型目录均由协议 adapter 和对应 Provider 共同拥有语义。
 #[derive(Clone, PartialEq, Eq)]
 pub struct RawJsonPayload {
     protocol: String,
@@ -237,7 +237,7 @@ pub struct RawJsonPayload {
 }
 
 impl RawJsonPayload {
-    /// 创建未经重编码的协议 JSON 正文。
+    /// 创建不透明的协议 JSON 正文。
     ///
     /// # Errors
     ///
@@ -260,7 +260,7 @@ impl RawJsonPayload {
         &self.protocol
     }
 
-    /// 返回 adapter 收到的原始 JSON 字节。
+    /// 返回协议正文的 JSON 字节。
     #[must_use]
     pub const fn body(&self) -> &Bytes {
         &self.body
