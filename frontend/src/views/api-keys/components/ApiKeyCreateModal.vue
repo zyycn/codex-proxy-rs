@@ -64,7 +64,6 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
       <BaseFormItem
         v-if="!editing"
         label="自定义 Key（可选）"
-        description="迁移时可粘贴旧平台的完整 Key，不限前缀或长度；留空自动生成。"
       >
         <BaseInput
           v-model="form.customKey"
