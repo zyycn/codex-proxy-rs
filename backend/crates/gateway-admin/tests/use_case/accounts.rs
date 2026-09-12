@@ -1825,9 +1825,7 @@ async fn quota_forecast_does_not_query_usage_without_a_current_snapshot() {
 
 #[tokio::test]
 async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_changed_bucket() {
-    use gateway_admin::model::quota_forecast_sampling::{
-        QuotaForecastHistoryPoint, QuotaForecastMethod,
-    };
+    use gateway_admin::model::quota_forecast_sampling::QuotaForecastHistoryPoint;
     let now = Utc::now();
     let observed = now - TimeDelta::minutes(1);
     let reset = now + TimeDelta::days(1);
@@ -1884,7 +1882,7 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
         .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
         .await
         .unwrap();
-    assert_eq!(result.forecasts[0].method, QuotaForecastMethod::Incremental);
+    assert!(result.forecasts[0].unavailable_reason.is_none());
     assert_eq!(result.forecasts[0].estimated_tokens, Some(5_000));
     assert_eq!(result.forecasts[0].remaining_tokens, Some(3_000));
     assert_eq!(store.quota_window_queries()[0].range.start, added);

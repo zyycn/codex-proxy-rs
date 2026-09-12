@@ -291,6 +291,25 @@ impl Provider for CodexProvider {
             .collect())
     }
 
+    async fn query_client_model_catalog(
+        &self,
+        scope: &gateway_core::account::scope::FrozenAccountScope,
+        protocol: &str,
+        client_version: &str,
+    ) -> Result<
+        Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
+        gateway_core::routing::ProviderCatalogUnavailable,
+    > {
+        if protocol != "codex" {
+            return Ok(None);
+        }
+        self.catalog
+            .client_model_catalog(scope, client_version)
+            .await
+            .map(Some)
+            .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)
+    }
+
     async fn execute(
         &self,
         request: ProviderRequest,

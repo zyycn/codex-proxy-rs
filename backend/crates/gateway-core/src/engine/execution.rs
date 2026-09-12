@@ -37,7 +37,8 @@ use crate::lifecycle::CancellationToken;
 use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::{
-    PublicModelId, PublicModelProfile, RoutingContext, RuntimeSnapshot, UpstreamModelId,
+    ProviderCatalogUnavailable, PublicModelDescriptor, PublicModelId, RoutingContext,
+    RuntimeSnapshot, UpstreamModelId,
 };
 use crate::runtime::RuntimeSnapshotHandle;
 
@@ -187,8 +188,13 @@ pub trait ExecutionService: Send + Sync {
         plaintext: &str,
     ) -> Result<AuthenticatedClient, ClientAuthenticationError>;
     fn public_models(&self, client: &AuthenticatedClient) -> Vec<PublicModelId>;
-    fn public_model_profiles(&self, _client: &AuthenticatedClient) -> Vec<PublicModelProfile> {
-        Vec::new()
+    fn client_model_catalog<'a>(
+        &'a self,
+        _client: &'a AuthenticatedClient,
+        _protocol: &'a str,
+        _client_version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
+        Box::pin(async { Err(ProviderCatalogUnavailable) })
     }
     fn contains_public_model(&self, client: &AuthenticatedClient, model: &PublicModelId) -> bool;
     fn start(
@@ -920,10 +926,77 @@ impl ExecutionService for DefaultExecutionService {
             .public_models_for_scope(client.policy.account_scope())
     }
 
-    fn public_model_profiles(&self, client: &AuthenticatedClient) -> Vec<PublicModelProfile> {
-        client
-            .snapshot
-            .public_model_profiles_for_scope(client.policy.account_scope())
+    fn client_model_catalog<'a>(
+        &'a self,
+        client: &'a AuthenticatedClient,
+        protocol: &'a str,
+        client_version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
+        Box::pin(async move {
+            let scope = client.policy.account_scope();
+            let mut result = Vec::new();
+            let mut seen = BTreeSet::new();
+            for kind in scope.provider_kinds() {
+                let provider = self.providers.get(kind).ok_or(ProviderCatalogUnavailable)?;
+                let Some(models) = provider
+                    .query_client_model_catalog(scope, protocol, client_version)
+                    .await?
+                else {
+                    for profile in client.snapshot.public_model_profiles_for_provider(kind) {
+                        if seen.insert(profile.model().clone()) {
+                            result.push(PublicModelDescriptor::Adapted(profile));
+                        }
+                    }
+                    continue;
+                };
+                // 保留上游顺序；映射只选择完整的目标对象，不能跨账号/模型混拼字段。
+                let by_id = models
+                    .iter()
+                    .map(|entry| (entry.model.as_str(), entry))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                for entry in &models {
+                    let target = client.snapshot.mapped_model(entry.model.as_str());
+                    let Some(source) = by_id.get(target.as_str()) else {
+                        continue;
+                    };
+                    let model = PublicModelId::new(entry.model.as_str().to_owned())
+                        .map_err(|_| ProviderCatalogUnavailable)?;
+                    // 原生目录可能比路由快照更新，不能向客户端公布当前已知不可路由的模型。
+                    if !client
+                        .snapshot
+                        .contains_public_model_for_provider(&model, kind)
+                    {
+                        continue;
+                    }
+                    if seen.insert(model.clone()) {
+                        result.push(PublicModelDescriptor::Native {
+                            model,
+                            payload: source.payload.clone(),
+                        });
+                    }
+                }
+                for model in client.snapshot.public_models_for_provider(kind) {
+                    let target = client.snapshot.mapped_model(model.as_str());
+                    if target == model.as_str() || seen.contains(&model) {
+                        continue;
+                    }
+                    if !client
+                        .snapshot
+                        .contains_public_model_for_provider(&model, kind)
+                    {
+                        continue;
+                    }
+                    if let Some(source) = by_id.get(target.as_str()) {
+                        seen.insert(model.clone());
+                        result.push(PublicModelDescriptor::Native {
+                            model,
+                            payload: source.payload.clone(),
+                        });
+                    }
+                }
+            }
+            Ok(result)
+        })
     }
 
     fn contains_public_model(&self, client: &AuthenticatedClient, model: &PublicModelId) -> bool {

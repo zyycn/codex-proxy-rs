@@ -10,7 +10,7 @@ use gateway_core::engine::execution::{
 };
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
-use gateway_core::routing::{PublicModelId, PublicModelProfile};
+use gateway_core::routing::{ProviderCatalogUnavailable, PublicModelDescriptor, PublicModelId};
 use uuid::Uuid;
 
 use super::auth::ClientApiKeyAuthError;
@@ -52,11 +52,14 @@ impl OpenAiService {
             .collect()
     }
 
-    pub(crate) fn public_model_profiles(
+    pub(crate) async fn client_model_catalog(
         &self,
         client: &AuthenticatedClient,
-    ) -> Vec<PublicModelProfile> {
-        self.execution.public_model_profiles(client)
+        client_version: &str,
+    ) -> Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable> {
+        self.execution
+            .client_model_catalog(client, "codex", client_version)
+            .await
     }
 
     pub(crate) fn contains_public_model(

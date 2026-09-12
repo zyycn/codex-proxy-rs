@@ -78,12 +78,22 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 
 ## 公网访问
 
-Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置 HTTPS 反向代理，
+Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置反向代理，
 不要把 PostgreSQL 或 Redis 暴露到公网。
+
+同源管理端可直接通过 HTTP 或 HTTPS 登录，无需增加应用配置项。
+登录和退出根据浏览器自动携带的 `Origin` 设置会话 Cookie：HTTP 来源省略 `Secure`，
+HTTPS 来源保留 `Secure`，两者都保留 `HttpOnly`、`SameSite=Lax` 和退出时的过期设置。
+因此 HTTPS 反向代理使用 HTTP 回源时，浏览器会话仍使用 `Secure` Cookie。
+缺失、`null` 或非法 `Origin` 时保留 `Secure`，不根据 `X-Forwarded-Proto` 等转发头降级。
+反向代理应原样保留 `Origin`，不要清除它或改写 Cookie 的 `Secure` 属性。
+HTTP 传输不加密，公网部署仍建议使用 HTTPS。
+
+HTTP 页面上的 Key 和配置文件复制使用 VueUse 内置兼容路径；支持 Clipboard API 时使用现代 API。
 
 反向代理需要保留 `Authorization`，支持 `/v1/responses` 的 WebSocket Upgrade，
 并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
-客户端使用 `https://你的域名/v1`，不要使用前端开发服务的 `5173/dev/v1`。
+客户端使用部署地址下的 `/v1`，协议与部署一致，不要使用前端开发服务的 `5173/dev/v1`。
 当前应用只支持单副本，不能通过复制容器扩容。
 
 流式响应在首个上游事件提交后，每 15 秒无输出会发送一次 SSE 注释保活，

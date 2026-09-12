@@ -129,8 +129,8 @@ fn forecasts_use_actual_periods_and_do_not_extrapolate_remaining_capacity() {
 #[test]
 fn corresponding_actual_window_takes_priority_and_retains_its_duration() {
     let [week, month] = forecast(&quota(vec![window("month", 31), window("week", 7)]));
-    assert_eq!(week.source.unwrap().key, "week");
-    assert_eq!(month.source.unwrap().key, "month");
+    assert_eq!(week.source.unwrap().label, "week");
+    assert_eq!(month.source.unwrap().label, "month");
     assert!(!month.extrapolated);
     assert_eq!(month.target_seconds, 31 * 86_400);
     assert_eq!(month.estimated_tokens, Some(5_000));
@@ -241,7 +241,7 @@ fn incremental_sample_supports_mid_cycle_accounts_and_remaining_uses_current_per
     assert_eq!(week.estimated_tokens, Some(10_000));
     assert_eq!(week.remaining_tokens, Some(8_000));
     assert_eq!(month.remaining_tokens, Some(8_000));
-    assert_eq!(week.method, QuotaForecastMethod::Incremental);
+    assert!(week.unavailable_reason.is_none());
     assert!(!week.low_sample);
 }
 
@@ -255,7 +255,7 @@ fn missing_tokens_suppress_token_estimates_without_discarding_complete_costs() {
     assert_eq!(week.estimated_tokens, None);
     assert_eq!(week.remaining_tokens, None);
     assert_eq!(week.estimated_usd, Some(10.0));
-    assert_eq!(week.source.unwrap().missing_token_count, 1);
+    assert_eq!(week.source.unwrap().tokens, Some(1_000));
 }
 
 #[test]

@@ -644,10 +644,18 @@ impl CodexResponsesRequest {
 
     /// 提取 Codex 请求类型、子代理类型、推理预设与压缩语义。
     pub fn semantics(&self) -> CodexRequestSemantics {
-        codex_responses_request_semantics_with_turn_metadata(
+        let mut semantics = codex_responses_request_semantics_with_turn_metadata(
             self.body(),
             self.turn_metadata.as_deref(),
-        )
+        );
+        // 官方 generate=false 只准备连接与上下文，不是模型推理。
+        // 预热分类参与用量筛选，不能仅凭客户端的 request_kind 提示排除真实推理。
+        if !self.generate() {
+            semantics.request_kind = Some("prewarm".to_owned());
+        } else if semantics.request_kind.as_deref() == Some("prewarm") {
+            semantics.request_kind = None;
+        }
+        semantics
     }
 
     /// 返回请求语义与 child transport 隔离所用的子代理区分值。

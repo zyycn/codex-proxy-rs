@@ -495,10 +495,11 @@ impl CodexBackendClient {
         Some(key)
     }
 
-    /// 获取后端模型目录条目。
+    /// 客户端目录按调用方版本协商；后台目录仍使用经过核验的服务端画像版本。
     pub async fn fetch_models_with_context(
         &self,
         context: CodexRequestContext<'_>,
+        client_version: Option<&str>,
     ) -> CodexClientResult<CodexModelCatalogSnapshot> {
         let endpoint = endpoint_url(&self.base_url, "codex/models");
         let profile = self.profile.snapshot();
@@ -506,7 +507,10 @@ impl CodexBackendClient {
         let response = self
             .client
             .get(endpoint)
-            .query(&[("client_version", profile.codex_version.as_str())])
+            .query(&[(
+                "client_version",
+                client_version.unwrap_or(profile.codex_version.as_str()),
+            )])
             .headers(headers)
             .send()
             .await?;

@@ -1,12 +1,32 @@
-//! 快照编译需要的 Provider 目录事实，不暴露执行或账号选择能力。
+//! 快照编译与客户端读取需要的 Provider 目录合同，不暴露执行或账号选择能力。
 
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
 
 use crate::identity::ProviderKind;
+use crate::operation::RawJsonPayload;
 
-use super::{ModelCapabilities, ModelPresentation, UpstreamModelId};
+use super::{
+    ModelCapabilities, ModelPresentation, PublicModelId, PublicModelProfile, UpstreamModelId,
+};
+
+/// Provider 原生客户端目录条目；Core 只解释模型标识，不解释协议正文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelDescriptor {
+    pub model: UpstreamModelId,
+    pub payload: RawJsonPayload,
+}
+
+/// 对外目录保留原生正文；只有没有原生目录的 Provider 才使用通用画像适配。
+#[derive(Debug, Clone)]
+pub enum PublicModelDescriptor {
+    Native {
+        model: PublicModelId,
+        payload: RawJsonPayload,
+    },
+    Adapted(PublicModelProfile),
+}
 
 /// Provider 实时目录编译后的单模型能力。
 #[derive(Debug, Clone, PartialEq, Eq)]

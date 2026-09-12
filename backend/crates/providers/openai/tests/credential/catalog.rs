@@ -5,12 +5,16 @@ use chrono::{TimeZone as _, Utc};
 use futures::executor::block_on;
 use gateway_core::account::{ProviderAccount, ProviderAccountId};
 use gateway_core::provider_ports::ProviderCatalogCachePort;
+use gateway_core::routing::{
+    ClientRoutingScope, FrozenAccountScope, ModelServiceTier, ProviderKind, RuntimeAccount,
+    RuntimeAccountDirectory,
+};
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexCredentialCatalogError, CodexCredentialCatalogService, ImportCodexOAuthCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use crate::support::{MemoryAccountStore, catalog_cache, profile, secret};
@@ -113,6 +117,289 @@ async fn seed_account_with_plan(
     store.account(account_id).expect("seeded account")
 }
 
+fn client_scope(accounts: &[ProviderAccount]) -> FrozenAccountScope {
+    FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(
+            accounts
+                .iter()
+                .map(|account| {
+                    (
+                        account.id().clone(),
+                        RuntimeAccount::new(
+                            ProviderKind::new("openai").expect("provider"),
+                            Default::default(),
+                        ),
+                    )
+                })
+                .collect(),
+        )),
+        ClientRoutingScope::all_accounts(),
+    )
+}
+
+#[tokio::test]
+async fn client_catalog_is_account_and_version_scoped_and_keeps_original_objects() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let first = seed_account(&store, "acct_client_a").await;
+    let second = seed_account(&store, "acct_client_b").await;
+    let server = MockServer::start().await;
+    for (account, version, text) in [
+        ("acct_client_a", "0.154.0", "a-original"),
+        ("acct_client_b", "0.154.0", "b-original"),
+        ("acct_client_a", "0.155.0", "a-new-client"),
+    ] {
+        Mock::given(method("GET")).and(path("/codex/models"))
+            .and(header("authorization", format!("Bearer access-{account}")))
+            .and(header("chatgpt-account-id", format!("chatgpt-{account}")))
+            .and(query_param("client_version", version))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"models":[{
+                "slug":"gpt-native", "display_name":"Native", "base_instructions":text,
+                "future_field":{"null":null,"list":[1,true]}, "model_messages":{"new_template":text}
+            }]}))).expect(1).mount(&server).await;
+    }
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    for (accounts, version, text) in [
+        (vec![second.clone(), first.clone()], "0.154.0", "a-original"),
+        (vec![second.clone()], "0.154.0", "b-original"),
+        (vec![first.clone()], "0.155.0", "a-new-client"),
+        (vec![first], "0.154.0", "a-original"),
+    ] {
+        let models = service
+            .client_model_catalog(&client_scope(&accounts), version)
+            .await
+            .expect("catalog");
+        let document: serde_json::Value =
+            serde_json::from_slice(models[0].payload.body()).expect("document");
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "slug":"gpt-native", "display_name":"Native", "base_instructions":text,
+                "future_field":{"null":null,"list":[1,true]}, "model_messages":{"new_template":text}
+            })
+        );
+    }
+    assert!(
+        service
+            .client_model_catalog(&client_scope(&[]), "0.154.0")
+            .await
+            .is_err()
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn client_catalog_coalesces_reads_and_invalidates_on_etag_expiry_and_explicit_reset() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_client_cache").await;
+    let scope = client_scope(&[account]);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(OFFICIAL_FIXTURE, "application/json")
+                .set_delay(std::time::Duration::from_millis(20)),
+        )
+        .expect(4)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let (first, second) = tokio::join!(
+        service.client_model_catalog(&scope, "0.154.0"),
+        service.client_model_catalog(&scope, "0.154.0")
+    );
+    assert_eq!(first.expect("first"), second.expect("second"));
+    service
+        .invalidate()
+        .expect("reset without a routing snapshot");
+    service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("after reset");
+    assert!(service.observe_response_etag("catalog-new").expect("ETag"));
+    service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("after ETag");
+    assert!(
+        !service
+            .observe_response_etag("catalog-new")
+            .expect("same ETag")
+    );
+    service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("still cached");
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(301)).await;
+    tokio::time::resume();
+    service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("after TTL");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn client_catalog_cache_does_not_survive_credential_rotation() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_client_rotate").await;
+    let scope = client_scope(std::slice::from_ref(&account));
+    let server = MockServer::start().await;
+    for (token, text) in [
+        ("access-acct_client_rotate", "old"),
+        ("rotated-access", "new"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .and(header("authorization", format!("Bearer {token}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"models":[{
+                    "slug":"gpt-native", "display_name":"Native", "base_instructions":text
+                }]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let first = service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("old");
+    store
+        .repository()
+        .rotate_refreshed_oauth_secret(&account, secret("rotated-access"), None, None)
+        .await
+        .expect("rotate");
+    let second = service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("new");
+    assert_ne!(first, second);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn failed_client_catalog_never_falls_back_to_an_out_of_scope_account_or_plan_cache() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let allowed = seed_account(&store, "acct_client_allowed").await;
+    seed_account(&store, "acct_client_outside").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .and(header("authorization", "Bearer access-acct_client_allowed"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let scope = client_scope(&[allowed]);
+    for _ in 0..2 {
+        assert!(
+            service
+                .client_model_catalog(&scope, "0.154.0")
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn raw_instructions_only_change_advances_catalog_generation() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_account(&store, "acct_raw_generation").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/codex/models"))
+        .respond_with(SequencedCatalogResponder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: [
+                br#"{"models":[{"slug":"gpt-native","display_name":"Native","model_messages":{"future":"old"}}]}"#,
+                br#"{"models":[{"slug":"gpt-native","display_name":"Native","model_messages":{"future":"new"}}]}"#,
+            ],
+        }).expect(2).mount(&server).await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    service.synchronize().await.expect("initial");
+    let generation = service.catalog_generation();
+    service.refresh_catalogs().await.expect("refresh");
+    assert!(service.catalog_generation() > generation);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn client_catalog_evicts_old_entries_after_32_distinct_versions() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_client_bounded").await;
+    let scope = client_scope(&[account]);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(OFFICIAL_FIXTURE, "application/json"))
+        .expect(34)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    for patch in 0..33 {
+        service
+            .client_model_catalog(&scope, &format!("0.154.{patch}"))
+            .await
+            .expect("catalog");
+    }
+    service
+        .client_model_catalog(&scope, "0.154.32")
+        .await
+        .expect("newest is cached");
+    service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("oldest was evicted");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn client_catalog_retries_after_short_failure_cache_expires() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_client_retry").await;
+    let scope = client_scope(&[account]);
+    let server = MockServer::start().await;
+    let failure = Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    assert!(
+        service
+            .client_model_catalog(&scope, "0.154.0")
+            .await
+            .is_err()
+    );
+    drop(failure);
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(OFFICIAL_FIXTURE, "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(
+        service
+            .client_model_catalog(&scope, "0.154.0")
+            .await
+            .is_err()
+    );
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+    tokio::time::resume();
+    service
+        .client_model_catalog(&scope, "0.154.0")
+        .await
+        .expect("recovered after failure TTL");
+    server.verify().await;
+}
+
 #[test]
 fn catalog_starts_without_a_snapshot_or_generation() {
     let store = Arc::new(MemoryAccountStore::default());
@@ -190,6 +477,52 @@ async fn plan_catalog_cache_is_shared_and_manual_refresh_replaces_it() {
     assert_eq!(replaced.models(), ["gpt-5.5"]);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     server.verify().await;
+}
+
+#[tokio::test]
+async fn service_tier_changes_should_replace_cached_metadata_and_advance_generation() {
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_account(&store, "acct_service_tiers").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(SequencedCatalogResponder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: [
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","service_tiers":[{"id":"priority","name":"Fast","description":"Priority processing."}]}]}"#,
+                br#"{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","service_tiers":[]}]}"#,
+            ],
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let initial = service.synchronize().await.expect("initial catalog");
+    let generation = service.catalog_generation().get();
+    let cached = service.synchronize().await.expect("cached catalog");
+    assert_eq!(cached.models(), initial.models());
+    assert_eq!(
+        cached.models()[0].metadata().service_tiers(),
+        [ModelServiceTier::new(
+            "priority",
+            "Fast",
+            "Priority processing."
+        )]
+    );
+    assert_eq!(service.catalog_generation().get(), generation);
+
+    let refreshed = service.refresh_catalogs().await.expect("updated catalog");
+    assert!(refreshed.models()[0].metadata().service_tiers().is_empty());
+    assert_eq!(service.catalog_generation().get(), generation + 1);
+    assert_eq!(
+        service
+            .cached()
+            .expect("cache read")
+            .expect("cached snapshot")
+            .models(),
+        refreshed.models()
+    );
 }
 
 #[tokio::test]

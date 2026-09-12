@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use gateway_core::routing::{PublicModelId, PublicModelProfile};
+use gateway_core::routing::{PublicModelDescriptor, PublicModelId, PublicModelProfile};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -14,7 +14,7 @@ use crate::ApiState;
 
 use super::{
     auth::{authenticate_client, client_access_error_response},
-    error::model_not_found_response,
+    error::{model_not_found_response, openai_error_response},
 };
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
@@ -37,19 +37,53 @@ pub(crate) async fn models(
         Err(error) => return client_access_error_response(error),
     };
 
-    if query
+    if let Some(version) = query
         .client_version
         .as_deref()
-        .is_some_and(|version| !version.trim().is_empty())
+        .filter(|version| !version.trim().is_empty())
     {
-        let models = service
-            .public_model_profiles(&client)
+        if version.len() > 64
+            || !version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte))
+        {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                "Invalid client_version",
+                "invalid_request_error",
+                "invalid_client_version",
+            )
+            .into_response();
+        }
+        let catalog = match service.client_model_catalog(&client, version).await {
+            Ok(catalog) => catalog,
+            Err(_) => return catalog_unavailable_response(),
+        };
+        let models = catalog
             .iter()
             .enumerate()
-            .map(|(index, profile)| codex_model_json(profile, index))
-            .collect::<Vec<_>>();
+            .map(|(index, entry)| match entry {
+                PublicModelDescriptor::Adapted(profile) => Ok(codex_model_json(profile, index)),
+                PublicModelDescriptor::Native { model, payload } => {
+                    if payload.protocol() != "codex" {
+                        return Err(());
+                    }
+                    let mut value: Value =
+                        serde_json::from_slice(payload.body()).map_err(|_| ())?;
+                    let object = value.as_object_mut().ok_or(())?;
+                    // 别名只改变请求标识，能力、提示词、顺序等仍由上游目录决定。
+                    object.insert("slug".to_owned(), Value::String(model.as_str().to_owned()));
+                    Ok(value)
+                }
+            })
+            .collect::<Result<Vec<_>, ()>>();
+        let Ok(models) = models else {
+            return catalog_unavailable_response();
+        };
         return (
             StatusCode::OK,
+            // 目录经过账号选择/别名/多 Provider 聚合，不能借用上游 ETag 表示改写后的正文。
+            [("cache-control", "private, no-store")],
             Json(json!({
                 "models": models,
             })),
@@ -70,6 +104,16 @@ pub(crate) async fn models(
         })),
     )
         .into_response()
+}
+
+fn catalog_unavailable_response() -> Response {
+    openai_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Model catalog is temporarily unavailable",
+        "server_error",
+        "model_catalog_unavailable",
+    )
+    .into_response()
 }
 
 /// `GET /v1/models/{model_id}`。

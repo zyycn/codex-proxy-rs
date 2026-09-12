@@ -10,7 +10,7 @@ pub use crate::account::scope::{
 pub use crate::identity::ProviderKind;
 pub use catalog::{
     ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
-    ProviderModelCapabilities,
+    ProviderModelCapabilities, ProviderModelDescriptor, PublicModelDescriptor,
 };
 pub use snapshot::RuntimeSnapshot;
 

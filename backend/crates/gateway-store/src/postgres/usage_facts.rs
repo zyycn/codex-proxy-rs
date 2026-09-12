@@ -11,11 +11,15 @@ use sqlx::{Postgres, QueryBuilder};
 /// 因此不属于用量记录。图片端点由请求意图证明其用量语义，不依赖文本模型字段。
 /// 客户端 WebSocket 的每个 `response.create` 没有独立 HTTP 状态码；成功终态与下游
 /// 提交边界已足以证明交付，连接握手的 101 不能冒充单次请求状态。
+/// OpenAI Provider 将 `generate=false` 归类为 `prewarm`：它只准备连接与上下文，
+/// 即使响应带有模型和输入 Token，也不是推理用量；原始审计和费用事实仍保留。
 pub(crate) fn completed_usage_fact_predicate(alias: &str) -> String {
     let evidence = usage_evidence_predicate(alias);
     format!(
         "{alias}.outcome = 'succeeded'
          and {alias}.downstream_committed_at is not null
+         and ({alias}.provider_kind is distinct from 'openai'
+              or {alias}.request_kind is distinct from 'prewarm')
          and (({alias}.client_transport = 'websocket' and {alias}.client_status_code is null)
               or {alias}.client_status_code between 200 and 399)
          and ({evidence})"
