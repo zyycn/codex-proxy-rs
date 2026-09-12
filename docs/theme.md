@@ -76,7 +76,7 @@ flowchart LR
 `theme/` 根目录只保留公开入口 `index.ts` 和唯一类型文件 `types.ts`；内部实现按 `core/`、`derive/`、`runtime/` 分层，不增加嵌套 barrel。
 纯派生模块不访问 DOM，`theme/runtime/browser.ts` 不包含派生规则，Theme Store 不复制算法。
 普通 Map 字段按 camelCase → kebab-case 统一生成 `--cp-*`；Semantic 与 Preset Color 仅维护各自的短角色表。
-`ThemeTokenName` 在 `types.ts` 中由 Map 契约推导，新增字段不再要求同步手写大段联合类型和对象映射。
+`ThemeTokenName` 在 `types.ts` 中由 Map 契约推导，无需手写重复的联合类型和对象映射。
 
 ## Token 模型
 
@@ -265,9 +265,8 @@ createApp
 </style>
 ```
 
-根元素只保留 `data-theme` 与 `data-theme-color` 状态，不写整套内联 Token。运行时样式表比逐项调用
-`style.setProperty()` 更集中、可检查，也避免在 DOM 属性中形成超长变量串。全局弹窗通过 Teleport 挂到 `body`
-后仍继承根变量。
+根元素只保留 `data-theme` 与 `data-theme-color` 状态，Token 统一写入运行时样式表。
+全局弹窗通过 Teleport 挂到 `body` 后仍继承根变量。
 
 > [!NOTE]
 > Theme Editor 预览是例外：草稿 Token 以内联变量写在影子环境的局部根节点上，仅影响预览，不污染已保存主题。
@@ -393,23 +392,16 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 
 ## 验证
 
-前端改动至少执行：
-
-```bash
-cd frontend
-pnpm run lint
-pnpm run typecheck
-pnpm run build
-git diff --check
-```
-
-视觉验收覆盖：
+基础检查与受影响页面的验收按 [贡献与审查](../CONTRIBUTING.md#界面验证) 执行。
+修改主题派生、主题编辑器或共用组件的视觉行为时，按影响范围补充以下检查：
 
 - 四个预置、自定义 HEX、浅色、深色和跟随系统模式。
 - 页面、容器、浮层、输入框、表格、分页、主按钮、选中态、焦点和品牌图标。
 - 草稿隔离、保存刷新恢复与 Teleport 弹窗。
 - 首页画板缩放清晰度、组件概览滚动、ECharts 网格线和 Skeleton 动效。
 - 键盘操作、颜色之外的选中反馈和 `prefers-reduced-motion`。
+
+局部页面改动只验证受影响的页面与状态，无需执行整套主题编辑器验收。
 
 ## 上游参考
 

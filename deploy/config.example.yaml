@@ -1,9 +1,7 @@
 # Codex Proxy RS 应用配置模板。
 #
 # 使用：
-#   cp deploy/config.example.yaml deploy/config.yaml
-#   sudo chown "$(id -u):10001" deploy/config.yaml
-#   chmod 640 deploy/config.yaml
+#   sudo install -m 0640 -o "$(id -u)" -g 10001 deploy/config.example.yaml deploy/config.yaml
 #
 # PostgreSQL 与 Redis 密码分别执行 `openssl rand -hex 24` 生成；管理员初始密码单独设置。
 

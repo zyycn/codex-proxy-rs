@@ -5,7 +5,7 @@
 
 # Codex Proxy RS
 
-面向 Codex 的自托管多账号 AI 网关。
+面向 Codex 的自托管多账号 AI 网关
 
 [![CI](https://github.com/zyycn/codex-proxy-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/zyycn/codex-proxy-rs/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zyycn/codex-proxy-rs?display_name=tag&sort=semver&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/releases)
@@ -28,21 +28,16 @@
 ### 1. 下载部署文件并配置
 
 ```bash
-mkdir -p codex-proxy-rs/deploy
-cd codex-proxy-rs
+mkdir -p codex-proxy-rs/deploy && cd codex-proxy-rs
 
 curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/compose.yaml \
   -o deploy/compose.yaml
 curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/config.example.yaml \
   -o deploy/config.example.yaml
 
-mkdir -p .runtime/data .runtime/logs
 install -d -m 0750 .runtime/postgres .runtime/redis
-cp deploy/config.example.yaml deploy/config.yaml
-sudo chown "$(id -u):10001" deploy/config.yaml
-chmod 0640 deploy/config.yaml
-sudo chown -R "$(id -u):10001" .runtime/data .runtime/logs
-chmod 0770 .runtime/data .runtime/logs
+sudo install -d -m 0770 -o "$(id -u)" -g 10001 .runtime/data .runtime/logs
+sudo install -m 0640 -o "$(id -u)" -g 10001 deploy/config.example.yaml deploy/config.yaml
 ```
 
 分别生成数据库和 Redis 密码：
@@ -59,8 +54,6 @@ openssl rand -hex 24
 | `store.database.password` | 第一个生成的 48 位十六进制密码 |
 | `store.redis.password` | 第二个生成的 48 位十六进制密码 |
 | `admin.default_password` | 管理员初始密码，至少 12 位，不能包含 `$` |
-
-不需要创建 `.env`。管理员初始密码只在首次创建账号时使用。
 
 ### 2. 启动服务
 
@@ -79,7 +72,7 @@ curl -i http://127.0.0.1:8080/healthz
 
 ### 3. 添加账号与客户端密钥
 
-1. 在「账号」中添加 OpenAI 或 xAI 账号，完成授权或导入。
+1. 在「账号」中添加账号，完成授权或导入。
 2. 按需建立账号分组，再创建客户端密钥并选择可用分组。**不选分组表示可使用全部账号**。
 3. 打开密钥的「使用密钥」，复制客户端配置。
 
@@ -93,7 +86,7 @@ curl -i http://127.0.0.1:8080/healthz
 | 配置 | 值 |
 | --- | --- |
 | Base URL | `http://127.0.0.1:8080/v1`；远程接入使用服务器的 HTTPS 地址 |
-| API Key | 管理端创建的 `sk_...` 客户端密钥 |
+| API Key | 管理端创建的客户端密钥 |
 
 可用模型以该密钥查询到的模型列表为准：
 

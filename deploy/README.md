@@ -17,11 +17,9 @@
 按快速开始下载部署文件后，从安装目录执行：
 
 ```bash
-mkdir -p .runtime/data .runtime/logs
 install -d -m 0750 .runtime/postgres .runtime/redis
-cp deploy/config.example.yaml deploy/config.yaml
-sudo chown "$(id -u):10001" deploy/config.yaml
-chmod 0640 deploy/config.yaml
+sudo install -d -m 0770 -o "$(id -u)" -g 10001 .runtime/data .runtime/logs
+sudo install -m 0640 -o "$(id -u)" -g 10001 deploy/config.example.yaml deploy/config.yaml
 ```
 
 为 PostgreSQL 与 Redis 分别生成一个密码：
@@ -41,15 +39,9 @@ openssl rand -hex 24
 PostgreSQL 与 Redis 密码必须是 48 位十六进制字符。Compose 通过 `config.yaml` 的凭据桥接区
 引用同一密码；三个值都不需要额外导出为环境变量，数据库和 Redis 密码也不能嵌入连接 URL。
 
-Linux 上应用容器以 `10001:10001` 运行，需要允许该组写入应用数据和日志目录：
-
-```bash
-sudo chown -R "$(id -u):10001" .runtime/data .runtime/logs
-chmod 0770 .runtime/data .runtime/logs
-```
-
-`config.yaml` 通过 Compose `configs` 只读挂载。普通 Compose 对本地文件保留宿主机的
-UID/GID 和 mode，因此配置由当前用户持有，并只向容器组 `10001` 开放读取权限。
+Linux 上应用容器以 `10001:10001` 运行。上述命令将应用数据和日志目录设为 `0770`，
+配置设为 `0640`，均由当前用户持有、容器组 `10001` 访问。
+`config.yaml` 通过 Compose `configs` 只读挂载，普通 Compose 保留宿主机文件的 UID/GID 和 mode。
 
 模板中的 `openai` / `xai` 只保留请求画像启动基线。OpenAI 的上游地址、WebSocket 池、额度刷新
 与 OAuth 设置，以及 xAI 的 OAuth、额度和模型目录策略，均由各自 Provider 使用代码内默认值管理；
@@ -81,15 +73,10 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置反向代理，
 不要把 PostgreSQL 或 Redis 暴露到公网。
 
-同源管理端可直接通过 HTTP 或 HTTPS 登录，无需增加应用配置项。
-登录和退出根据浏览器自动携带的 `Origin` 设置会话 Cookie：HTTP 来源省略 `Secure`，
-HTTPS 来源保留 `Secure`，两者都保留 `HttpOnly`、`SameSite=Lax` 和退出时的过期设置。
-因此 HTTPS 反向代理使用 HTTP 回源时，浏览器会话仍使用 `Secure` Cookie。
-缺失、`null` 或非法 `Origin` 时保留 `Secure`，不根据 `X-Forwarded-Proto` 等转发头降级。
-反向代理应原样保留 `Origin`，不要清除它或改写 Cookie 的 `Secure` 属性。
+同源管理端支持 HTTP 和 HTTPS 登录。反向代理应原样保留浏览器的 `Origin`，
+不要清除它或改写 Cookie 的 `Secure` 属性；HTTPS 反代可以使用 HTTP 回源。
 HTTP 传输不加密，公网部署仍建议使用 HTTPS。
-
-HTTP 页面上的 Key 和配置文件复制使用 VueUse 内置兼容路径；支持 Clipboard API 时使用现代 API。
+会话 Cookie 合同见 [管理接口鉴权](../docs/api.md#管理接口)。
 
 反向代理需要保留 `Authorization`，支持 `/v1/responses` 的 WebSocket Upgrade，
 并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
@@ -166,7 +153,7 @@ goals = true
 
 ### 生图和 WebSocket
 
-新模板已启用原生生图。Codex 可在任务需要图片时调用 `image_gen.imagegen`，
+模板启用原生生图。Codex 可在任务需要图片时调用 `image_gen.imagegen`，
 再通过代理的 Images 接口生成或编辑图片；也可以在需求中明确要求生成并使用图片。
 需要支持该能力的客户端、支持图片输入的对话模型，以及有生图权限和额度的 OpenAI 账号。
 代理不会增加上游权限，xAI 账号不能承接这些 Images 请求。
@@ -183,7 +170,7 @@ goals = true
 仅含代理密钥的 `auth.json` 配合 `requires_openai_auth = true` 仍可用于已有请求，
 但 API Key 登录本身不会启用原生生图。需要生图时换用上述 Provider 配置。
 
-以已核验的 Codex 0.153.4 为准，管理端已移除以下旧字段：
+使用 Codex 0.153.4 时，旧配置中的以下字段需删除或替换：
 
 | 字段 | 处理 |
 | --- | --- |
@@ -299,8 +286,7 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
 2. 收集响应中的 `x-gateway-request-id`、`x-request-id` / `x-oai-request-id`；配置了
    `api.request_id_header` 时也记录该入口头。WebSocket 合成错误的关联头位于本条错误的 `headers`。
    在管理端错误列表按 ID 和时间搜索；检查平台条件并主动刷新，翻页不会推进查询时间。
-   已建立模型执行的 HTTP 响应在没有上游 ID 时以模型执行 ID 回传 `x-request-id`，
-   不需要新增入口 ID 数据列。旧响应或执行前拒绝若只有入口 ID，改用入口日志和时间定位。
+   只有入口 ID 时，改用入口日志和时间定位。
 3. 打开错误详情，核对上游/客户端状态、发送状态、attempt、失败阶段及后续恢复关联。
    下载默认诊断包作为反馈材料，先看 `availability`、`attemptsComplete` 和淘汰计数；
    该包不含原始错误正文或完整 trace data。分享前仍应检查关联 ID 等内部信息。
@@ -395,10 +381,8 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 
 ### 备份内容与限制
 
-- 运行时镜像的 `pg_dump`/`pg_restore` 在构建期从与 compose 服务端同一固定
-  `postgres:18-bookworm` 镜像（`Dockerfile` 的 `POSTGRES_IMAGE`）COPY 到
-  `/usr/lib/postgresql/18/bin` 并加入容器 PATH，版本与服务端严格一致；运行时只从
-  Debian 官方源补 `libpq5` 依赖，不引入第三方 APT 源，也不依赖运行时动态安装。
+- 官方运行镜像内置与 Compose 数据库服务版本一致的 `pg_dump` / `pg_restore`，无需额外安装。
+  自行替换 PostgreSQL 版本时，应同步核对备份工具版本。
 - 备份暂存目录为 `host.runtime_data_dir/backup-staging`；Compose 默认对应
   `/app/.runtime/data/backup-staging`，由 `.runtime/data` 卷持久化，权限 `0700`（仅 `cpr`
   用户可读写）。部署卷至少预留一个最大数据库归档的空间。

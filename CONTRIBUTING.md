@@ -81,7 +81,7 @@ PR 不接受根目录或子目录中 `AGENTS.md` 的新增、修改、删除或�
 - 业务数据的解析、校验和展示优先复用已有逻辑。新增抽象放在拥有该职责的模块，避免重复事实源或无实际需求的通用层。
 - 新增代码注释使用中文。提交信息使用英文 Conventional Commits，参考近期历史，按完整功能归并；确由 Codex 参与的提交保留 `Co-authored-by: Codex <noreply@openai.com>`。
 - 发布说明写入 `release/notes.md`，标题首行为目标版本的 `# vX.Y.Z`，章节标题和正文使用中文；命令、配置键、协议名等保留原文。只说明本次版本的实际变化，按影响交代升级事项。
-- PR 聚焦目标；无关格式化、重构和依赖升级单独处理。行为或合同变更同步到架构文档指定的文档位置，发布说明按维护者的发布安排更新。
+- PR 聚焦目标；无关格式化、重构和依赖升级单独处理。改动使现有说明失真或缺少必要信息时，按文档职责修订对应内容；变更经过留在 PR，发布说明按维护者的发布安排更新。
 
 ## 界面验证
 
@@ -113,7 +113,7 @@ pnpm --dir frontend build
 git diff --check
 ```
 
-`build` 已包含类型检查；按当前架构约定，不维护独立前端测试代码。后端的工具链、命令与线程栈设置统一见 [修改与验收](docs/architecture.md#12-修改与验收)。
+`build` 已包含类型检查；不维护独立前端测试代码。后端的工具链、命令与线程栈设置统一见 [修改与验收](docs/architecture.md#12-修改与验收)。
 
 依赖 PostgreSQL / Redis 的测试使用 [专用测试环境](backend/migrations/README.md#本地测试库)，未配置导致跳过时明确记录。CI 中已有对应服务和检查，见 [质量工作流](.github/workflows/_quality.yml) 与 [安全扫描](.github/workflows/security-scan.yml)。
 

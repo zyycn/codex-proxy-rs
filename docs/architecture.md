@@ -99,7 +99,7 @@ flowchart LR
 
 ### 3.2 `gateway-core` 内部 owner
 
-`gateway-core` 内共享事实按语义 owner 划分，不再借用 `engine` 作为通用命名空间：
+`gateway-core` 内共享事实按语义 owner 划分：
 
 | 模块 | 唯一责任 |
 | --- | --- |
@@ -113,7 +113,7 @@ flowchart LR
 | `routing` | 冻结路由事实、请求计划、Provider 只读目录合同以及运行时快照的表示与编译 |
 | `runtime` | 当前快照的发布、读取、revision 订阅与周期对账任务 |
 
-`event` 通过 `validation` / `upstream` 使用基础值，不再依赖承载原始事件的执行错误；账号值对象和
+`event` 通过 `validation` / `upstream` 使用基础值，不依赖承载原始事件的执行错误；账号值对象和
 选择策略通过 `identity` / `account::scope` 使用身份与范围，不依赖路由计划。`routing` 和 `error` 的
 既有公开类型路径保留 re-export，定义与 Core 内部使用均归属上述 owner。架构测试约束这些叶子依赖。
 
@@ -158,7 +158,7 @@ sequenceDiagram
 
 请求开始时冻结 `RuntimeSnapshot`、Client Key 的账号范围、模型映射、Codex 客户端最低版本、Provider
 候选顺序和调度策略。
-运行中的请求不再拼接新旧配置，也不在热路径查询分组关系。
+运行中的请求始终使用该快照，不拼接不同版本的配置，也不在热路径查询分组关系。
 
 Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/CLI，Core 使用同一请求冻结的
 `RuntimeSnapshot` 比较对应最低版本。Desktop 优先于其 User-Agent 内嵌的 CLI/Core 标记；未知客户端不
@@ -194,6 +194,10 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 - 请求画像以配置为启动基线。OpenAI Desktop 与 xAI CLI 的官方版本检查只更新各自负责的运行时画像，
   不回写 `config.yaml`。
 
+xAI Provider 负责 Codex custom 工具与 Grok function 工具的双向转换，保持工具类型、item ID 与
+`call_id` 配对；超限或转换失败终止流。默认 `store: false` 的续接由现有会话 owner 重放完整历史；
+原生续接按上游约束处理 `instructions` 与 `previous_response_id`，不把协议差异交给 Core。
+
 ### 账号出站代理
 
 出站代理属于账号配置，由各 Provider 在推理、OAuth 服务端交换/刷新、额度、目录和资料等请求中统一使用。
@@ -210,24 +214,18 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 连接配置改变时在同一事务内同步关联账号并清除旧测试结果，已绑定的代理不可删除。
 关联账号支持单独移除：在原子更新中校验当前代理 ID，只清除账号的代理 ID 和 URL，
 保留账号其他设置；提交配置版本与审计后复用快照发布流程，使后续请求使用直连。
-代理目录只携带关联数量；账号明细通过独立分页读端口按需查询，复用代理 ID 索引，
+代理目录只携带关联数量；账号明细通过独立分页读端口按需查询，
 在同一个只读快照中统计并读取有界页面，不在目录中聚合完整账号数组。
 文件及 AT/RT 导入在上游凭据交换前取得 PostgreSQL 会话级共享咨询锁，直到凭据提交后释放。
 代理修改、删除和测试结果写入通过同一资源的事务级独占锁检查，导入期间直接返回冲突。
-锁连接不占用提交所需的连接池槽位，也不持有空闲事务；每进程最多增加四个导入保护连接。
+导入保护连接数量有界，不占用提交所需的连接池槽位，也不持有空闲事务。
 请求取消或进程退出时关闭会话并释放锁。探测器由组合根注入 OpenAI 的 HTTP 客户端构建函数，
 复用其自定义 CA 加载与证书校验规则，Host 不依赖具体 Provider 包。
-迁移 `0005_managed_outbound_proxies.sql` 将已有 URL 按完整连接信息合并为共享代理，保留认证及账号绑定。
 
 导入器在认证交换前解析并校验账号出口。sub2api 的代理引用按完整 URL 登记为共享代理并绑定账号；
 其 SOCKS5 配置按远端 DNS 语义转换为 SOCKS5H。账号导入只迁移账号及出口，不迁移下游 Key、余额或历史用量。
 代理认证信息仅通过敏感账号导出返回，列表、详情、Debug 和普通审计不得暴露；数据库及备份按凭据保护。
 输入字段、协议支持与导入校验见 [账号 API](api.md#5-账号)。
-
-Managed proxies store names, credentials and connectivity results independently. Accounts bind by ID and retain
-the resolved URL for provider transports. Connection edits update all bound accounts atomically and invalidate
-old tests; in-use proxies cannot be deleted. Migration 0005 preserves existing credentials and account bindings.
-Proxy changes advance the runtime configuration revision without invalidating in-flight token refreshes.
 
 ### Codex 原生生图与认证
 
@@ -237,8 +235,7 @@ Proxy changes advance the runtime configuration revision without invalidating in
 
 `X-OpenAI-Actor-Authorization` 是客户端能力标记，不是账号凭据。API 解码和 OpenAI Provider
 都过滤该 header，网关继续校验 Client Key，上游认证由服务端账号产生。
-仅含代理密钥的本地 `auth.json` 可以与新配置共存。配置示例维护在
-[部署文档](../deploy/README.md#客户端配置)。
+客户端配置示例维护在 [部署文档](../deploy/README.md#客户端配置)。
 
 客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
 不禁止 Provider 使用上游 WebSocket。响应终态前的 Close 1000 仍视为失败，
@@ -268,7 +265,7 @@ Provider 管理适配在仍持有结构化失败事实时选择静态 `public_me
 
 Vue 普通管理请求的错误提示由 `api/request.ts` 响应拦截器统一负责：优先展示安全信封的 `message`，
 缺失或空白时才使用请求层的 HTTP、网络或超时兜底；成功业务码为 `200`，HTTP 成功但业务码失败也会拒绝。
-规范化异常保留 `status`、`code`、`requestId` 与 `kind`。页面和 `useAsyncAction` 不再重复弹出接口错误；
+规范化异常保留 `status`、`code`、`requestId` 与 `kind`。页面和 `useAsyncAction` 不重复弹出接口错误；
 查询可以保留失败状态与重试入口，本地校验、文件操作、SSE 诊断和成功响应中的业务结果仍归各自 owner。
 
 API 模块通过统一的 `RequestOptions` 传递 `signal`、`timeout` 和 `silent`。取消或已被新查询取代的请求
@@ -380,10 +377,6 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。刷新额度时同步查询官方实时订阅，
   只把套餐事实写入现有 quota JSON。明确无付费订阅的个人账号显示 Free；查询失败、缺失字段或
   团队身份不推断为 Free，订阅查询失败不影响额度观测。
-  Codex custom 工具统一以 function 的 `input` 字符串包装，保留说明与 grammar；响应恢复
-  原工具类型及对应 item ID，`call_id` 始终保持配对。转换仅处理协议字段，超限或转换失败终止流。
-  默认 `store: false` 的续接使用现有会话 owner 重放完整历史；上一轮要求上游存储且指令未变时，
-  原生续接移除本轮 `instructions`，避免 Grok 拒绝与 `previous_response_id` 同传。
 - 账号导入和 OAuth complete（包括重新授权）在 credential 提交、Provider 事实失效及快照发布后，
   由 Admin 共用流程后台读取一次额度；不等待观测完成才返回管理请求，失败记录告警但不回滚账号事务。
   手工和后台 credential refresh 仍不隐式刷新 quota。
@@ -406,13 +399,11 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 可恢复观测并累计指标，但不允许改变客户端响应。Usage 详情中的 attempt 因此是 best-effort，并通过
 `attemptsComplete: false` 明示不完整性。
 
-模型执行沿用 `model_requests.id`，上游身份沿用 `upstream_request_id`，不新增入口 ID 列或查询索引。
-API 的 `x-gateway-request-id` 标识模型执行；HTTP `x-request-id` 优先保留上游值，只有上游别名
-`x-oai-request-id` 时复用其值，两者均缺失时回传模型执行 ID。该规则属于客户端协议，不依赖所选
-Provider 或客户端名称。入口 middleware 的 ID 仍可用于入口日志，但不作为模型请求的主键或检索映射。
+模型执行以 `model_requests.id` 标识，上游身份由 `upstream_request_id` 保存。
+API 输出模型执行与上游请求的关联信息，具体响应头规则见 [数据面接口](api.md#3-openai-数据面与模型目录)。
+入口 middleware 的 ID 用于入口日志，不作为模型请求的主键或检索映射。
 失败终态及中间失败的上游请求 ID 优先取对应 `ProviderError`，缺失时再取该 attempt 的响应
-observation、调用 metadata；最终失败的关联头不与 opening 身份混合。HTTP 错误仍按既有合同
-返回已采集的 turn state 等允许的会话头，不为修复 ID 关联丢弃续接状态。
+observation、调用 metadata；最终失败的关联头不与 opening 身份混合。
 
 正常路径的请求行仍在首次合法 ProviderStream 建立后随 attempt 合并创建。已进入 Core 执行会话、
 但在首次合法冷流建立前发生的无可用账号、准备失败、超时或取消，复用同一请求表补写失败终态与
@@ -460,12 +451,9 @@ HTTP Client 构造失败也不会阻断网关启动。外部解析在已认证�
   与普通文件日志开关分别控制，不输出到普通日志或 stdout。`.runtime/logs` 同样属于敏感数据。
 - `host.logging.request_dump` 默认关闭；开启后独立请求转储包含原始请求头和正文，
   可能包含密钥及用户内容，只能在明确的排障范围内使用，不能作为普通日志公开。
-  普通及 OAuth 文件按 `file.retention_days`（默认 7）保留；报文按独立的
-  `request_dump_retention_days`（默认 1）保留。保留当天及前 N 个完整 UTC 日期的所有分片，
-  仅整组清理更早日期；近期被写入的旧日期组延后清理。不存在文件数量淘汰。
-  `file.max_file_size_mb` 只控制轮转；已关闭分片压缩后才删除原文件，启动和轮转时清理过期日期。
-  文件队列满时背压，正常关闭时排空并同步。`file_logging` 健康探针持续报告本次进程的写入缺口，
-  不将压缩/清理失败伪装成保留完成。容量规划须覆盖完整时间窗口，不能靠提前删窗口内分片解决磁盘不足。
+- Host 拥有文件日志写入、轮转、保留和关闭流程，以时间窗口完整性为约束，队列满时背压，正常关闭时排空并同步。
+  写入缺口必须通过健康状态持续报告，压缩或清理失败不能伪装成保留完成。
+  配置、保留窗口和容量规划见 [日志与持久化](../deploy/README.md#持久化与备份)。
 - Provider 将安全诊断的阶段、原因码与消息独立于错误大类和发送状态传入 Core；
   `attempt.failed` 保存这些字段，最终错误记录优先持久化诊断消息。重试包装不能覆盖底层诊断，
   也不能因为错误更详细而改变已有重试安全边界。
@@ -493,14 +481,11 @@ PostgreSQL 备份恢复属于人工维护操作。当前没有部署级维护模
 cargo +1.97.0 fmt --all --manifest-path backend/Cargo.toml -- --check
 RUST_MIN_STACK=16777216 cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
 RUST_MIN_STACK=16777216 cargo +1.97.0 test --manifest-path backend/Cargo.toml --test main --locked
-pnpm --dir frontend format:check
-pnpm --dir frontend build
-docker compose -f deploy/compose.yaml config --quiet
 ```
 
 线程栈设置与当前 CI 一致。PostgreSQL/Redis 集成测试需按
 [迁移文档](../backend/migrations/README.md#本地测试库) 配置专用测试库；未设置环境变量时，本地相关测试会跳过。
-前端以 lint、类型检查和构建验证，`build` 已包含类型检查，不维护独立前端测试代码。
+其他检查与界面验证按 [贡献与审查](../CONTRIBUTING.md#验证) 执行。
 
-行为、配置或边界变化必须同步其唯一文档 owner：用户入口写入根 README，HTTP 合同写入 `docs/api.md`，
+改动使现有说明失真或缺少必要信息时，修订所属文档：用户入口写入根 README，HTTP 合同写入 `docs/api.md`，
 部署操作写入 `deploy/README.md`，架构不变量保留在本文。
