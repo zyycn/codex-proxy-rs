@@ -318,3 +318,187 @@ async fn admin_auth_failures_should_use_stable_chinese_contracts() {
         ]
     );
 }
+
+mod provider {
+    use std::time::SystemTime;
+
+    use chrono::Utc;
+    use gateway_admin::{
+        model::{
+            Revision,
+            accounts::{AccountPageItem, AccountRecord},
+        },
+        ports::provider::{ProviderAdminError, ProviderAdminErrorKind as Kind},
+    };
+    use gateway_core::{
+        account::{
+            AccountStatusFacts, AccountWeight, CredentialState, QuotaState, resolve_account_status,
+        },
+        routing::ProviderKind,
+    };
+    use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn provider_public_errors_survive_import_and_refresh_http_handlers() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        for provider in ["openai", "xai"] {
+            *fixture.account.lock().unwrap() = Some(account(provider));
+            for (kind, status, code, message) in [
+                (Kind::Invalid, 400, 40001, "刷新令牌已被使用，请重新授权"),
+                (
+                    Kind::Conflict,
+                    409,
+                    40901,
+                    "令牌刷新繁忙，请等待当前刷新完成后重试",
+                ),
+                (
+                    Kind::BadGateway,
+                    502,
+                    50201,
+                    "OpenAI 返回的 Codex PAT 身份资料不完整或格式无效，请稍后重试",
+                ),
+                (
+                    Kind::Unavailable,
+                    503,
+                    50301,
+                    "暂时无法向 OpenAI 验证 Codex PAT，请稍后重试",
+                ),
+                (
+                    Kind::Ambiguous,
+                    502,
+                    50202,
+                    "令牌刷新结果未知，请先核对账号状态，不要立即重复刷新",
+                ),
+            ] {
+                *fixture.provider_error.lock().unwrap() = Some(
+                    ProviderAdminError::new(kind)
+                        .with_public_message(message)
+                        .with_message("raw-upstream-secret-marker"),
+                );
+                for (path, body) in [
+                    (
+                        "/api/admin/accounts/refresh",
+                        json!({"accountId": "acct_error_test"}),
+                    ),
+                    (
+                        "/api/admin/accounts/import",
+                        json!({"provider": provider, "data": {"accessToken": "at-synthetic-test"}}),
+                    ),
+                ] {
+                    let response = send(&fixture, path, body).await;
+                    assert_eq!(response.headers()["x-request-id"], "req_admin_errors");
+                    let actual = response_json(response).await;
+                    assert_eq!(
+                        actual,
+                        (
+                            StatusCode::from_u16(status).unwrap(),
+                            "application/json".to_owned(),
+                            json!({"code": code, "message": message, "data": null}),
+                        )
+                    );
+                    assert!(!actual.2.to_string().contains("raw-upstream-secret-marker"));
+                    assert_eq!(fixture.auth.audit_count(), 0);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_diagnostics_without_public_messages_still_use_safe_fallbacks() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        for (kind, status, code, message) in [
+            (Kind::BadGateway, 502, 50201, "上游服务请求失败"),
+            (Kind::Unavailable, 503, 50301, "Provider 服务暂不可用"),
+            (
+                Kind::Ambiguous,
+                502,
+                50202,
+                "上游执行结果未知，请刷新状态后再决定是否重试",
+            ),
+            (Kind::Internal, 500, 50001, "服务内部错误"),
+        ] {
+            let error = ProviderAdminError::new(kind).with_message("private-provider-diagnostics");
+            // 即使 Provider 错标了公开文案，未知内部异常仍不得通过 500 信封下发。
+            *fixture.provider_error.lock().unwrap() = Some(if kind == Kind::Internal {
+                error.with_public_message("internal-detail-must-stay-hidden")
+            } else {
+                error
+            });
+            let response = send(
+                &fixture,
+                "/api/admin/accounts/import",
+                json!({"provider": "openai", "data": {}}),
+            )
+            .await;
+            let (actual_status, _, body) = response_json(response).await;
+            assert_eq!(actual_status.as_u16(), status);
+            assert_eq!(
+                body,
+                json!({"code": code, "message": message, "data": null})
+            );
+        }
+    }
+
+    async fn send(fixture: &AdminTestFixture, path: &str, body: Value) -> axum::response::Response {
+        let mut request = request(Method::POST, path, Body::from(body.to_string()));
+        request
+            .headers_mut()
+            .insert(header::COOKIE, SESSION_COOKIE.parse().unwrap());
+        request
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        let name = header::HeaderName::from_static("x-request-id");
+        app(fixture.state())
+            .layer(PropagateRequestIdLayer::new(name.clone()))
+            .layer(SetRequestIdLayer::new(name, MakeRequestUuid))
+            .oneshot(request)
+            .await
+            .unwrap()
+    }
+
+    fn account(provider: &str) -> AccountPageItem {
+        let now = Utc::now();
+        let facts = AccountStatusFacts {
+            enabled: true,
+            credential_state: CredentialState::Ready,
+            access_token_expires_at: None,
+            quota: QuotaState::unknown(),
+            rate_limited_until: None,
+            last_error_reason: None,
+            last_error_message: None,
+        };
+        AccountPageItem {
+            account: AccountRecord {
+                id: "acct_error_test".to_owned(),
+                provider_kind: ProviderKind::new(provider).unwrap(),
+                groups: Vec::new(),
+                name: "synthetic account".to_owned(),
+                email: None,
+                upstream_user_id: None,
+                upstream_account_id: None,
+                plan_type: None,
+                authentication_kind: "oauth".to_owned(),
+                credential_revision: Revision::new(1).unwrap(),
+                has_refresh_token: true,
+                access_token_expires_at: None,
+                next_refresh_at: None,
+                enabled: facts.enabled,
+                concurrency_limit: None,
+                weight: AccountWeight::default(),
+                outbound_proxy: None,
+                credential_state: facts.credential_state,
+                credential_observed_at: now,
+                quota: facts.quota,
+                last_error_reason: None,
+                last_error_message: None,
+                created_at: now,
+                updated_at: now,
+            },
+            projection: resolve_account_status(&facts, SystemTime::now()),
+        }
+    }
+}

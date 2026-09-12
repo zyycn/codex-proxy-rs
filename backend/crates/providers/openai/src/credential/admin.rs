@@ -339,11 +339,20 @@ pub enum CodexCredentialAdminError {
     #[error("Codex refresh lease is unavailable")]
     RefreshLeaseUnavailable,
     #[error("Codex refresh token was rejected")]
-    RefreshRejected { message: Option<String> },
+    RefreshRejected {
+        code: Option<String>,
+        message: Option<String>,
+    },
     #[error("Codex account is banned")]
     AccountBanned { message: Option<String> },
     #[error("Codex refresh service is unavailable")]
     RefreshUnavailable,
+    #[error("Codex refresh upstream returned HTTP {status}")]
+    RefreshUpstream {
+        status: u16,
+        code: Option<String>,
+        message: Option<String>,
+    },
     #[error("Codex refresh send state is ambiguous")]
     RefreshAmbiguous { message: Option<String> },
 }
@@ -352,8 +361,9 @@ impl CodexCredentialAdminError {
     #[must_use]
     pub fn upstream_message(&self) -> Option<&str> {
         match self {
-            Self::RefreshRejected { message }
+            Self::RefreshRejected { message, .. }
             | Self::AccountBanned { message }
+            | Self::RefreshUpstream { message, .. }
             | Self::RefreshAmbiguous { message } => message.as_deref(),
             Self::PersonalAccessToken(_)
             | Self::InvalidInput
@@ -1020,16 +1030,29 @@ fn china_rfc3339(value: DateTime<Utc>) -> String {
 
 fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {
     match error {
-        RefreshFailure::InvalidGrant { message, .. } => {
-            CodexCredentialAdminError::RefreshRejected { message }
+        RefreshFailure::InvalidGrant { message, upstream } => {
+            CodexCredentialAdminError::RefreshRejected {
+                code: upstream
+                    .as_ref()
+                    .and_then(|failure| failure.code())
+                    .map(str::to_owned),
+                message,
+            }
         }
         RefreshFailure::Banned { message, .. } => {
             CodexCredentialAdminError::AccountBanned { message }
         }
         RefreshFailure::RetryableTransport { .. } => CodexCredentialAdminError::RefreshUnavailable,
-        RefreshFailure::Transport { message, .. } => {
-            CodexCredentialAdminError::RefreshAmbiguous { message }
-        }
+        // Worker 的 Transport 分类还承担 401 退避；管理提示只按已收到的响应事实细分，
+        // 不改变后台刷新策略，也不把明确失败响应误报为租约冲突或执行结果未知。
+        RefreshFailure::Transport { message, upstream } => match upstream {
+            Some(upstream) => CodexCredentialAdminError::RefreshUpstream {
+                status: upstream.status(),
+                code: upstream.code().map(str::to_owned),
+                message,
+            },
+            None => CodexCredentialAdminError::RefreshAmbiguous { message },
+        },
     }
 }
 

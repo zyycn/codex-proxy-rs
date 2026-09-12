@@ -331,7 +331,7 @@ impl AdminError {
 pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     use gateway_admin::model::AdminErrorKind;
 
-    match error.kind() {
+    let mut response = match error.kind() {
         AdminErrorKind::Invalid => AdminError::bad_request(error.message()),
         AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
         AdminErrorKind::NotFound => AdminError::not_found(error.message()),
@@ -341,7 +341,19 @@ pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -
         AdminErrorKind::UpstreamResultUnknown => AdminError::upstream_result_unknown(),
         AdminErrorKind::Unavailable => AdminError::service_unavailable(),
         AdminErrorKind::Internal => AdminError::internal(),
+    };
+    // Admin owner 已负责公开文案，不能在 HTTP 边界再次丢掉安全的业务原因。
+    // 认证与未知内部异常仍使用固定提示，不放行底层诊断或任意 500 消息。
+    if matches!(
+        error.kind(),
+        AdminErrorKind::BadGateway
+            | AdminErrorKind::UpstreamResultUnknown
+            | AdminErrorKind::Unavailable
+    ) && !error.message().trim().is_empty()
+    {
+        response.body.message = error.message().to_owned();
     }
+    response
 }
 
 impl IntoResponse for AdminError {

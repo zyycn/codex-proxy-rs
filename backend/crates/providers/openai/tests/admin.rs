@@ -1603,3 +1603,315 @@ impl OAuthPendingFlowPort for TestOAuthPending {
         })
     }
 }
+
+mod errors {
+    use gateway_admin::ports::provider::ProviderAdminErrorKind as Kind;
+    use gateway_core::provider_ports::{
+        ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
+        for (status, kind, message) in [
+            (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
+            (
+                401,
+                Kind::BadGateway,
+                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                    "error": {
+                        "message": "account has been deactivated: raw-secret-marker"
+                    }
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (bundle, store, _config) = refresh_fixture(&server, false, true).await;
+            let before = store.account("acct_refresh_error").unwrap();
+            let error = bundle
+                .admin_provider()
+                .prepare_refresh(PrepareCredentialRefresh {
+                    account: account_record(&before),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.public_message(), Some(message));
+            assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
+            assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_reports_known_upstream_failures_without_changing_account_state() {
+        for (status, code, expected_kind, expected_message) in [
+            (
+                401,
+                "refresh_token_reused",
+                Kind::BadGateway,
+                "刷新令牌已被使用，请重新授权",
+            ),
+            (
+                401,
+                "refresh_token_expired",
+                Kind::BadGateway,
+                "刷新令牌已过期，请重新授权",
+            ),
+            (
+                401,
+                "refresh_token_invalidated",
+                Kind::BadGateway,
+                "刷新令牌已被撤销，请重新授权",
+            ),
+            (
+                401,
+                "token_expired",
+                Kind::BadGateway,
+                "刷新令牌不可用，请重新授权",
+            ),
+            (
+                401,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+            ),
+            (
+                400,
+                "refresh_token_reused",
+                Kind::Invalid,
+                "刷新令牌已被使用，请重新授权",
+            ),
+            (
+                400,
+                "refresh_token_expired",
+                Kind::Invalid,
+                "刷新令牌已过期，请重新授权",
+            ),
+            (
+                400,
+                "refresh_token_invalidated",
+                Kind::Invalid,
+                "刷新令牌已被撤销，请重新授权",
+            ),
+            (
+                400,
+                "INVALID_GRANT",
+                Kind::BadGateway,
+                "刷新令牌无效或已失效，请重新授权",
+            ),
+            (
+                429,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 令牌刷新请求被限流，请稍后重试",
+            ),
+            (
+                503,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 令牌刷新服务异常，请稍后重试",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                    "error": {"code": code, "message": "raw-secret-marker"}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (bundle, store, _config) = refresh_fixture(&server, false, true).await;
+            let before = store.account("acct_refresh_error").unwrap();
+            let error = bundle
+                .admin_provider()
+                .prepare_refresh(PrepareCredentialRefresh {
+                    account: account_record(&before),
+                })
+                .await
+                .expect_err("upstream rejection");
+            assert_eq!(error.kind(), expected_kind, "HTTP {status} {code}");
+            assert_eq!(error.public_message(), Some(expected_message));
+            assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
+            assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_distinguishes_busy_missing_token_and_stale_account_before_exchange() {
+        for (busy, has_token, stale, kind, message) in [
+            (
+                true,
+                true,
+                false,
+                Kind::Conflict,
+                "令牌刷新繁忙，请等待当前刷新完成后重试",
+            ),
+            (
+                false,
+                false,
+                false,
+                Kind::Invalid,
+                "账号没有刷新令牌，请重新授权",
+            ),
+            (
+                false,
+                true,
+                true,
+                Kind::Conflict,
+                "账号凭据已被更新，请刷新账号列表后重试",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            let (bundle, store, _config) = refresh_fixture(&server, busy, has_token).await;
+            let before = store.account("acct_refresh_error").unwrap();
+            let mut account = account_record(&before);
+            if stale {
+                account.upstream_user_id = Some("previous-user".to_owned());
+            }
+            let error = bundle
+                .admin_provider()
+                .prepare_refresh(PrepareCredentialRefresh { account })
+                .await
+                .expect_err("local refresh failure");
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.public_message(), Some(message));
+            assert!(server.received_requests().await.unwrap().is_empty());
+            assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_invalid_success_and_unclassified_transport_stay_conservative() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("invalid-success-secret-marker"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (bundle, store, mut config) = refresh_fixture(&server, false, true).await;
+        let before = store.account("acct_refresh_error").unwrap();
+        let command = || PrepareCredentialRefresh {
+            account: account_record(&before),
+        };
+        let error = bundle
+            .admin_provider()
+            .prepare_refresh(command())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), Kind::Ambiguous);
+        assert_eq!(
+            error.public_message(),
+            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+        );
+        assert!(!format!("{error:?}").contains("invalid-success-secret-marker"));
+
+        config.config.auth.oauth_token_endpoint = "http://127.0.0.1:0/oauth/token".to_owned();
+        let bundle =
+            provider_openai::initialize(config.config, refresh_ports(store.clone(), false))
+                .await
+                .unwrap();
+        let error = bundle
+            .admin_provider()
+            .prepare_refresh(command())
+            .await
+            .unwrap_err();
+        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界。
+        assert_eq!(error.kind(), Kind::Ambiguous);
+        assert_eq!(
+            error.public_message(),
+            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+        );
+        assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+    }
+
+    async fn refresh_fixture(
+        server: &MockServer,
+        busy: bool,
+        has_token: bool,
+    ) -> (
+        provider_openai::ProviderBundle,
+        Arc<MemoryAccountStore>,
+        TestOpenAiConfig,
+    ) {
+        let store = Arc::new(MemoryAccountStore::default());
+        let mut credential = secret("synthetic-refresh-access");
+        if !has_token {
+            credential.refresh_token = None;
+        }
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: "acct_refresh_error".to_owned(),
+                name: "refresh error test".to_owned(),
+                secret: credential,
+                verified_account: profile("synthetic-refresh-user"),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+        let mut config = valid_config();
+        config.config.auth.oauth_token_endpoint = format!("{}/oauth/token", server.uri());
+        let bundle =
+            provider_openai::initialize(config.config.clone(), refresh_ports(store.clone(), busy))
+                .await
+                .unwrap();
+        (bundle, store, config)
+    }
+
+    fn refresh_ports(store: Arc<MemoryAccountStore>, busy: bool) -> ProviderStorePorts {
+        ProviderStorePorts::new(
+            store,
+            Arc::new(RefreshLeases { busy }),
+            Arc::new(MemorySessionAffinity::default()),
+            Arc::new(MemorySessionExclusions::default()),
+            Arc::new(TestCatalogCache::default()),
+            Arc::new(TestArtifactProfiles),
+            Arc::new(TestCredentialState),
+            Arc::new(TestCooldown),
+            Arc::new(TestRuntimePolicy),
+            Arc::new(TestOAuthPending::default()),
+        )
+    }
+
+    struct RefreshLeases {
+        busy: bool,
+    }
+
+    impl ProviderLeasePort for RefreshLeases {
+        fn load_state<'a>(
+            &'a self,
+            _: &'a ClientApiKeyId,
+            _: &'a ProviderKind,
+            _: &'a [ProviderAccountId],
+        ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+            panic!("manual refresh does not use scheduling leases")
+        }
+
+        fn try_acquire(
+            &self,
+            request: ProviderLeaseRequest,
+        ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+            assert!(matches!(
+                request,
+                ProviderLeaseRequest::Refresh(_) | ProviderLeaseRequest::RefreshCapacity(_)
+            ));
+            Box::pin(async move {
+                Ok(if self.busy {
+                    ProviderLeaseAcquisition::Busy { retry_after: None }
+                } else {
+                    ProviderLeaseAcquisition::Acquired(Box::new(()))
+                })
+            })
+        }
+    }
+}

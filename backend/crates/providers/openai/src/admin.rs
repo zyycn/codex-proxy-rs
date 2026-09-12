@@ -408,7 +408,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .await
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
-            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
+            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
         }
         let mut secret = rotation_secret(command.provider_material)?;
         if secret.id_token.is_none() {
@@ -440,7 +441,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .await
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
-            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
+            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
         }
         let prepared = self
             .credentials
@@ -1313,49 +1315,77 @@ fn map_store_error(error: gateway_core::error::StoreError) -> ProviderAdminError
 fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdminError {
     use crate::credential::token_client::PersonalAccessTokenError;
     use CodexCredentialAdminError as Error;
+    use ProviderAdminErrorKind as Kind;
     let upstream_message = error.upstream_message().map(ToOwned::to_owned);
-    let public_message = match &error {
-        Error::PersonalAccessToken(error) => Some(match error {
-            PersonalAccessTokenError::InvalidToken => {
-                "Codex PAT 格式无效：应为 at- 开头的完整令牌，不能包含空白或控制字符"
-            }
-            PersonalAccessTokenError::Rejected => {
-                "OpenAI 拒绝了 Codex PAT：令牌可能无效、已过期、已撤销或没有访问权限"
-            }
-            PersonalAccessTokenError::Unavailable => "暂时无法向 OpenAI 验证 Codex PAT，请稍后重试",
-            PersonalAccessTokenError::InvalidResponse => {
-                "OpenAI 返回的 Codex PAT 身份资料不完整或格式无效，请稍后重试"
-            }
-        }),
-        _ => None,
-    };
-    let kind = match error {
-        Error::PersonalAccessToken(
-            PersonalAccessTokenError::InvalidToken | PersonalAccessTokenError::Rejected,
-        )
-        | Error::InvalidInput
-        | Error::InvalidCredential
-        | Error::MissingRefreshToken
-        | Error::RefreshRejected { .. }
-        | Error::AccountBanned { .. } => ProviderAdminErrorKind::Invalid,
-        Error::NotFound => ProviderAdminErrorKind::NotFound,
-        Error::RefreshLeaseUnavailable | Error::RefreshAmbiguous { .. } => {
-            ProviderAdminErrorKind::Conflict
+    let (kind, public_message) = match error {
+        Error::PersonalAccessToken(error) => match error {
+            PersonalAccessTokenError::InvalidToken => (
+                Kind::Invalid,
+                "Codex PAT 格式无效：应为 at- 开头的完整令牌，不能包含空白或控制字符",
+            ),
+            PersonalAccessTokenError::Rejected => (
+                Kind::Invalid,
+                "OpenAI 拒绝了 Codex PAT：令牌可能无效、已过期、已撤销或没有访问权限",
+            ),
+            PersonalAccessTokenError::Unavailable => (
+                Kind::Unavailable,
+                "暂时无法向 OpenAI 验证 Codex PAT，请稍后重试",
+            ),
+            PersonalAccessTokenError::InvalidResponse => (
+                Kind::BadGateway,
+                "OpenAI 返回的 Codex PAT 身份资料不完整或格式无效，请稍后重试",
+            ),
+        },
+        Error::InvalidInput => (Kind::Invalid, "OpenAI 账号输入格式不合法，请检查导入内容"),
+        Error::InvalidCredential => (
+            Kind::Invalid,
+            "OpenAI 凭据不完整或格式无效，请检查凭据或重新授权",
+        ),
+        Error::MissingRefreshToken => (Kind::Invalid, "账号没有刷新令牌，请重新授权"),
+        Error::RefreshRejected { code, .. } => (
+            Kind::Invalid,
+            refresh_rejection_message(code.as_deref()).unwrap_or("刷新令牌已失效，请重新授权"),
+        ),
+        Error::AccountBanned { .. } => (Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
+        Error::NotFound => (Kind::NotFound, "OpenAI 账号不存在，请刷新账号列表"),
+        Error::RefreshLeaseUnavailable => {
+            (Kind::Conflict, "令牌刷新繁忙，请等待当前刷新完成后重试")
         }
-        Error::PersonalAccessToken(PersonalAccessTokenError::InvalidResponse) => {
-            ProviderAdminErrorKind::BadGateway
-        }
-        Error::PersonalAccessToken(PersonalAccessTokenError::Unavailable)
-        | Error::RefreshUnavailable => ProviderAdminErrorKind::Unavailable,
+        Error::RefreshUnavailable => (
+            Kind::Unavailable,
+            "令牌刷新服务暂不可用，请检查出站连接与依赖服务",
+        ),
+        Error::RefreshUpstream { status, code, .. } => (
+            Kind::BadGateway,
+            refresh_rejection_message(code.as_deref()).unwrap_or(match status {
+                401 | 403 => "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+                429 => "OpenAI 令牌刷新请求被限流，请稍后重试",
+                500..=599 => "OpenAI 令牌刷新服务异常，请稍后重试",
+                _ => "OpenAI 未能完成令牌刷新，请检查账号授权与上游服务状态",
+            }),
+        ),
+        Error::RefreshAmbiguous { .. } => (
+            Kind::Ambiguous,
+            "令牌刷新结果未知，请先核对账号状态，不要立即重复刷新",
+        ),
     };
-    let error = provider_admin_error(kind);
-    let error = match public_message {
-        Some(message) => error.with_public_message(message),
-        None => error,
-    };
+    let error = provider_admin_error(kind).with_public_message(public_message);
     match upstream_message {
         Some(message) => error.with_message(message),
         None => error,
+    }
+}
+
+fn refresh_rejection_message(code: Option<&str>) -> Option<&'static str> {
+    // 与官方 Codex 的失败原因对齐；只解释管理提示，不改动 Worker 的终态/退避判定。
+    match code.map(str::to_ascii_lowercase).as_deref() {
+        Some("refresh_token_expired") => Some("刷新令牌已过期，请重新授权"),
+        Some("refresh_token_reused") => Some("刷新令牌已被使用，请重新授权"),
+        Some("refresh_token_invalidated") => Some("刷新令牌已被撤销，请重新授权"),
+        // token_expired 也用于 RT 校验失败，不据此断言具体到期原因。
+        Some("token_expired") => Some("刷新令牌不可用，请重新授权"),
+        Some("invalid_grant") => Some("刷新令牌无效或已失效，请重新授权"),
+        _ => None,
     }
 }
 
@@ -1372,6 +1402,7 @@ const fn credential_admin_error_code(error: &CodexCredentialAdminError) -> &'sta
         CodexCredentialAdminError::RefreshRejected { .. } => "refresh_rejected",
         CodexCredentialAdminError::AccountBanned { .. } => "account_banned",
         CodexCredentialAdminError::RefreshUnavailable => "refresh_unavailable",
+        CodexCredentialAdminError::RefreshUpstream { .. } => "refresh_upstream_failed",
         CodexCredentialAdminError::RefreshAmbiguous { .. } => "refresh_ambiguous",
     }
 }
@@ -1400,17 +1431,31 @@ fn log_import_failure(stage: &'static str, error: &'static str) {
 
 fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
     use CodexOAuthAdminError as Error;
-    provider_admin_error(match error {
-        Error::InvalidInput
-        | Error::CallbackRejected
-        | Error::TokenRejected
-        | Error::Credential => ProviderAdminErrorKind::Invalid,
-        Error::NotFound | Error::FlowExpired => ProviderAdminErrorKind::NotFound,
-        Error::Conflict | Error::Ambiguous => ProviderAdminErrorKind::Conflict,
-        Error::UpstreamUnavailable | Error::StorageUnavailable => {
-            ProviderAdminErrorKind::Unavailable
-        }
-    })
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match error {
+        Error::InvalidInput => (Kind::Invalid, "OpenAI 授权参数不合法，请重新发起授权"),
+        Error::CallbackRejected => (Kind::Invalid, "OpenAI 授权回调校验失败，请重新发起授权"),
+        Error::TokenRejected => (Kind::Invalid, "OpenAI 拒绝了授权码，请重新发起授权"),
+        Error::Credential => (Kind::Invalid, "OpenAI 授权返回的凭据不完整或无效"),
+        Error::NotFound | Error::FlowExpired => (
+            Kind::NotFound,
+            "OpenAI 授权流程不存在或已过期，请重新发起授权",
+        ),
+        Error::Conflict => (
+            Kind::Conflict,
+            "OpenAI 授权流程正在处理或已被更新，请先检查授权状态",
+        ),
+        Error::Ambiguous => (
+            Kind::Ambiguous,
+            "OpenAI 授权结果未知，请先核对账号状态，不要立即重复提交",
+        ),
+        Error::UpstreamUnavailable => (
+            Kind::Unavailable,
+            "OpenAI 授权服务暂不可用，请检查出站连接后重试",
+        ),
+        Error::StorageUnavailable => (Kind::Unavailable, "OpenAI 授权状态存储暂不可用，请稍后重试"),
+    };
+    provider_admin_error(kind).with_public_message(message)
 }
 
 const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
@@ -1430,15 +1475,24 @@ const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
 
 fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
     use CodexCredentialQuotaError as Error;
-    provider_admin_error(match error {
-        Error::InvalidCredentialData => ProviderAdminErrorKind::Invalid,
-        Error::NotFound => ProviderAdminErrorKind::NotFound,
-        Error::RevisionConflict => ProviderAdminErrorKind::Conflict,
-        Error::CredentialRefreshRequired
-        | Error::Repository(_)
-        | Error::Store { .. }
-        | Error::Upstream { .. } => ProviderAdminErrorKind::Unavailable,
-    })
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match error {
+        Error::InvalidCredentialData => (Kind::Invalid, "OpenAI 额度查询凭据无效，请检查账号授权"),
+        Error::NotFound => (Kind::NotFound, "OpenAI 额度查询账号不存在"),
+        Error::RevisionConflict => (Kind::Conflict, "账号凭据已被更新，请刷新账号列表后重试"),
+        Error::CredentialRefreshRequired => (
+            Kind::Unavailable,
+            "OpenAI 额度查询需要有效凭据，请刷新令牌后重试",
+        ),
+        Error::Repository(_) | Error::Store { .. } => {
+            (Kind::Unavailable, "OpenAI 额度查询的依赖服务暂不可用")
+        }
+        Error::Upstream { .. } => (
+            Kind::Unavailable,
+            "OpenAI 额度查询失败，请检查出站连接与上游服务",
+        ),
+    };
+    provider_admin_error(kind).with_public_message(message)
 }
 
 fn map_profile_statistics_error(error: CodexProfileStatisticsError) -> ProviderAdminError {
@@ -1451,7 +1505,8 @@ fn map_profile_statistics_error(error: CodexProfileStatisticsError) -> ProviderA
             provider_admin_error(ProviderAdminErrorKind::Unavailable)
         }
         Error::CredentialRefreshRequired { upstream_body } => {
-            let mut error = provider_admin_error(ProviderAdminErrorKind::CredentialRefreshRequired);
+            let mut error = provider_admin_error(ProviderAdminErrorKind::CredentialRefreshRequired)
+                .with_public_message("OpenAI 资料查询需要有效凭据，请刷新令牌后重试");
             if let Some(body) = upstream_body {
                 error = error.with_message(format!(
                     "OpenAI profile-statistics upstream returned HTTP 401: {}",
@@ -1468,10 +1523,12 @@ fn map_profile_statistics_error(error: CodexProfileStatisticsError) -> ProviderA
             let retry_after = retry_after_seconds
                 .map(|seconds| format!("; retry-after={seconds}s"))
                 .unwrap_or_default();
-            provider_admin_error(ProviderAdminErrorKind::BadGateway).with_message(format!(
-                "OpenAI profile-statistics upstream returned HTTP {status}{retry_after}: {}",
-                bounded_upstream_body(&body)
-            ))
+            provider_admin_error(ProviderAdminErrorKind::BadGateway)
+                .with_public_message("OpenAI 资料查询失败，请检查账号授权与上游服务")
+                .with_message(format!(
+                    "OpenAI profile-statistics upstream returned HTTP {status}{retry_after}: {}",
+                    bounded_upstream_body(&body)
+                ))
         }
     }
 }
@@ -1543,10 +1600,17 @@ fn bounded_upstream_body(body: &str) -> String {
 
 fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
     use CodexCredentialCatalogError as Error;
-    provider_admin_error(match error {
-        Error::InvalidCredentialData | Error::InvalidEtag => ProviderAdminErrorKind::Invalid,
-        Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,
-        Error::ConcurrentUpdate => ProviderAdminErrorKind::Conflict,
-        Error::Upstream { .. } | Error::Cache => ProviderAdminErrorKind::Unavailable,
-    })
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match error {
+        Error::InvalidCredentialData => (Kind::Invalid, "OpenAI 模型查询凭据无效，请检查账号授权"),
+        Error::InvalidEtag => (Kind::Invalid, "OpenAI 模型目录版本标识无效，请重新查询"),
+        Error::NoEligibleCredential => (Kind::NotFound, "没有可用于查询 OpenAI 模型的账号"),
+        Error::ConcurrentUpdate => (Kind::Conflict, "OpenAI 模型目录正在更新，请稍后重试"),
+        Error::Upstream { .. } => (
+            Kind::Unavailable,
+            "OpenAI 模型查询失败，请检查出站连接与上游服务",
+        ),
+        Error::Cache => (Kind::Unavailable, "OpenAI 模型目录缓存暂不可用"),
+    };
+    provider_admin_error(kind).with_public_message(message)
 }

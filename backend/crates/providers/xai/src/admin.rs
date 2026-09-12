@@ -124,7 +124,7 @@ impl AuthorizationCommitGuard for XaiAuthorizationCommitGuard {
             OAuthPendingReleaseOutcome::NotFound
             | OAuthPendingReleaseOutcome::OwnerMismatch
             | OAuthPendingReleaseOutcome::ClaimMismatch => Err(AdminError::unavailable(
-                "xAI OAuth pending claim could not be released",
+                "xAI 授权处理状态暂时无法释放，请先检查授权状态",
             )),
         }
     }
@@ -611,7 +611,8 @@ impl ProviderAdmin for XaiAdminProvider {
             .await
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
-            return Err(provider_error(ProviderAdminErrorKind::Conflict));
+            return Err(provider_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
         }
         let rotation: RotationDocument = serde_json::from_value(Value::Object(
             command.provider_material.into_provider_data().into_inner(),
@@ -664,7 +665,8 @@ impl ProviderAdmin for XaiAdminProvider {
             .await
             .map_err(map_store_error)?;
         if !account_matches_record(&current.account, &command.account) {
-            return Err(provider_error(ProviderAdminErrorKind::Conflict));
+            return Err(provider_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
         }
         let prepared = self
             .refresh
@@ -1347,15 +1349,28 @@ fn build_connection_test_operation(
 }
 
 fn map_failure_class(class: FailureClass) -> ProviderAdminError {
-    provider_error(match class {
-        FailureClass::Transient => ProviderAdminErrorKind::Unavailable,
-        FailureClass::Ambiguous => ProviderAdminErrorKind::Conflict,
-        FailureClass::CredentialPermanent
-        | FailureClass::ConfigurationPermanent
-        | FailureClass::UserActionRequired
-        | FailureClass::Security => ProviderAdminErrorKind::Invalid,
-        FailureClass::Unsupported => ProviderAdminErrorKind::Unsupported,
-    })
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match class {
+        FailureClass::Transient => (
+            Kind::Unavailable,
+            "xAI 授权服务暂不可用，请检查出站连接后重试",
+        ),
+        FailureClass::Ambiguous => (
+            Kind::Ambiguous,
+            "xAI 授权结果未知，请先核对账号状态，不要立即重复提交",
+        ),
+        FailureClass::CredentialPermanent => (Kind::Invalid, "xAI 拒绝了当前凭据，请检查账号授权"),
+        FailureClass::ConfigurationPermanent => {
+            (Kind::Invalid, "xAI 授权配置无效，请检查客户端与授权配置")
+        }
+        FailureClass::UserActionRequired => (Kind::Invalid, "xAI 授权需要用户确认，请重新完成授权"),
+        FailureClass::Security => (
+            Kind::Invalid,
+            "xAI 授权安全校验失败，请检查授权来源与账号信息",
+        ),
+        FailureClass::Unsupported => (Kind::Unsupported, "xAI 不支持当前授权操作"),
+    };
+    provider_error(kind).with_public_message(message)
 }
 
 fn map_oauth_error(error: OAuthError) -> ProviderAdminError {
@@ -1379,7 +1394,7 @@ fn map_pending_claim_settlement_error(error: ProviderStoreError) -> AdminError {
             AdminError::conflict("xAI OAuth pending claim conflicts with current state")
         }
         ProviderStoreErrorKind::Unavailable => {
-            AdminError::unavailable("xAI OAuth pending claim store is unavailable")
+            AdminError::unavailable("xAI 授权状态存储暂不可用，请稍后重试")
         }
     }
 }
@@ -1411,41 +1426,71 @@ fn map_repository_error(error: GrokCredentialRepositoryError) -> ProviderAdminEr
 }
 
 fn map_refresh_error(error: GrokCredentialRefreshError) -> ProviderAdminError {
+    use crate::GrokRefreshFailure as Failure;
     use GrokCredentialRefreshError as Error;
-    match error {
-        Error::Repository(error) => map_repository_error(error),
-        Error::Lease(error) => map_provider_store_error(error),
-        Error::LeaseBusy => provider_error(ProviderAdminErrorKind::Conflict),
-        Error::InvalidRefreshResponse => provider_error(ProviderAdminErrorKind::Invalid),
-        Error::Preparation => provider_error(ProviderAdminErrorKind::Unavailable),
-        Error::ManualFailure(failure) => map_failure_class(match failure {
-            crate::GrokRefreshFailure::Transient => FailureClass::Transient,
-            crate::GrokRefreshFailure::Ambiguous => FailureClass::Ambiguous,
-            crate::GrokRefreshFailure::InvalidGrant
-            | crate::GrokRefreshFailure::Banned
-            | crate::GrokRefreshFailure::Rejected => FailureClass::CredentialPermanent,
-        }),
-    }
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match error {
+        Error::Repository(error) => return map_repository_error(error),
+        Error::Lease(error) => return map_provider_store_error(error),
+        Error::LeaseBusy => (Kind::Conflict, "令牌刷新繁忙，请等待当前刷新完成后重试"),
+        Error::InvalidRefreshResponse => (
+            Kind::Ambiguous,
+            "xAI 返回的刷新凭据无效，请先核对账号状态，不要立即重复刷新",
+        ),
+        Error::Preparation => (Kind::Unavailable, "xAI 令牌刷新服务尚未就绪，请稍后重试"),
+        Error::ManualFailure(failure) => match failure {
+            Failure::Transient => (
+                Kind::Unavailable,
+                "xAI 令牌刷新连接失败，请检查出站连接后重试",
+            ),
+            Failure::Ambiguous => (
+                Kind::Ambiguous,
+                "令牌刷新结果未知，请先核对账号状态，不要立即重复刷新",
+            ),
+            Failure::InvalidGrant => (Kind::Invalid, "刷新令牌已失效，请重新授权"),
+            Failure::Banned => (Kind::Invalid, "xAI 账号已被停用，请检查账号状态"),
+            Failure::Rejected => (
+                Kind::BadGateway,
+                "xAI 未能完成令牌刷新，请检查授权配置与上游服务",
+            ),
+        },
+    };
+    provider_error(kind).with_public_message(message)
 }
 
 fn map_quota_error(error: GrokQuotaError) -> ProviderAdminError {
     use GrokQuotaError as Error;
-    provider_error(match error {
-        Error::AccountUnavailable => ProviderAdminErrorKind::NotFound,
-        Error::StaleCredentialSnapshot => ProviderAdminErrorKind::Conflict,
-        Error::InvalidData => ProviderAdminErrorKind::Invalid,
-        Error::Upstream | Error::Store => ProviderAdminErrorKind::Unavailable,
-    })
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match error {
+        Error::AccountUnavailable => (Kind::NotFound, "没有可用于查询 xAI 额度的账号"),
+        Error::StaleCredentialSnapshot => {
+            (Kind::Conflict, "账号凭据已被更新，请刷新账号列表后重试")
+        }
+        Error::InvalidData => (Kind::Invalid, "xAI 额度数据无效，请检查账号授权"),
+        Error::Upstream => (
+            Kind::Unavailable,
+            "xAI 额度查询失败，请检查出站连接与上游服务",
+        ),
+        Error::Store => (Kind::Unavailable, "xAI 额度查询的依赖服务暂不可用"),
+    };
+    provider_error(kind).with_public_message(message)
 }
 
 fn map_catalog_error(error: GrokCredentialCatalogError) -> ProviderAdminError {
     use GrokCredentialCatalogError as Error;
-    provider_error(match error {
-        Error::InvalidCredentialData | Error::ConflictingModelFacts => {
-            ProviderAdminErrorKind::Invalid
+    use ProviderAdminErrorKind as Kind;
+    let (kind, message) = match error {
+        Error::InvalidCredentialData => (Kind::Invalid, "xAI 模型查询凭据无效，请检查账号授权"),
+        Error::ConflictingModelFacts => (Kind::Invalid, "xAI 模型目录信息不一致，请重新查询"),
+        Error::NoEligibleCredential => (Kind::NotFound, "没有可用于查询 xAI 模型的账号"),
+        Error::StaleCredentialSnapshot => {
+            (Kind::Conflict, "账号凭据已被更新，请刷新账号列表后重试")
         }
-        Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,
-        Error::StaleCredentialSnapshot => ProviderAdminErrorKind::Conflict,
-        Error::Upstream | Error::Cache | Error::Store => ProviderAdminErrorKind::Unavailable,
-    })
+        Error::Upstream => (
+            Kind::Unavailable,
+            "xAI 模型查询失败，请检查出站连接与上游服务",
+        ),
+        Error::Cache | Error::Store => (Kind::Unavailable, "xAI 模型查询的依赖服务暂不可用"),
+    };
+    provider_error(kind).with_public_message(message)
 }

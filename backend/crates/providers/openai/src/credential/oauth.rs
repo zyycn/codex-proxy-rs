@@ -398,7 +398,7 @@ impl AuthorizationCommitGuard for CodexOAuthAuthorizationCommitGuard {
             Ok(())
         } else {
             Err(AdminError::unavailable(
-                "OpenAI OAuth pending claim could not be released",
+                "OpenAI 授权处理状态暂时无法释放，请先检查授权状态",
             ))
         }
     }
@@ -897,7 +897,7 @@ fn map_authorization_settlement_error(error: CodexOAuthPendingStoreError) -> Adm
             AdminError::conflict("OpenAI OAuth pending claim conflicts with current state")
         }
         CodexOAuthPendingStoreError::Unavailable => {
-            AdminError::unavailable("OpenAI OAuth pending claim store is unavailable")
+            AdminError::unavailable("OpenAI 授权状态存储暂不可用，请稍后重试")
         }
     }
 }
