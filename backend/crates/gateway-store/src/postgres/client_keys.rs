@@ -978,6 +978,7 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     key: &NewClientApiKey,
 ) -> StoreResult<()> {
     key.validate()?;
+    ensure_client_key_name_available(transaction, &key.id, key.name.trim()).await?;
     sqlx::query(
         "insert into client_api_keys (
            id, name, label, key, enabled, max_concurrency, requests_per_minute,
@@ -985,7 +986,7 @@ pub(crate) async fn insert_client_api_key_in_transaction(
          ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric)",
     )
     .bind(&key.id)
-    .bind(&key.name)
+    .bind(key.name.trim())
     .bind(&key.label)
     .bind(&key.key)
     .bind(to_i64(key.max_concurrency)?)
@@ -1017,6 +1018,7 @@ pub(crate) async fn update_client_api_key_in_transaction(
     key: &UpdateClientApiKeyDetails,
 ) -> StoreResult<()> {
     key.validate()?;
+    ensure_client_key_name_available(transaction, &key.id, key.name.trim()).await?;
     let result = sqlx::query(
         "update client_api_keys
          set name = $2, label = $3, max_concurrency = $4,
@@ -1026,7 +1028,7 @@ pub(crate) async fn update_client_api_key_in_transaction(
          where id = $1",
     )
     .bind(&key.id)
-    .bind(&key.name)
+    .bind(key.name.trim())
     .bind(&key.label)
     .bind(to_i64(key.max_concurrency)?)
     .bind(to_i64(key.requests_per_minute)?)
@@ -1037,6 +1039,32 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .map_err(|_| postgres_unavailable("update client API key in transaction"))?;
     require_changed(result.rows_affected(), &key.id)?;
     replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await
+}
+
+async fn ensure_client_key_name_available(
+    transaction: &mut Transaction<'_, Postgres>,
+    id: &str,
+    name: &str,
+) -> StoreResult<()> {
+    // 调用方已通过递增配置版本持有控制面行锁，查重与写入在同一事务内串行执行。
+    // 不回填历史重名数据；创建和保存时统一校验，更新排除当前记录。
+    let duplicate: bool = sqlx::query_scalar(
+        "select exists(select 1 from client_api_keys
+         where lower(btrim(name)) = lower($1) and id <> $2)",
+    )
+    .bind(name)
+    .bind(id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("check client API key name"))?;
+    if duplicate {
+        return Err(StoreError::Conflict {
+            entity: ENTITY,
+            id: id.to_owned(),
+            kind: crate::ConflictKind::DuplicateName,
+        });
+    }
+    Ok(())
 }
 
 pub(crate) async fn set_client_api_key_enabled_in_transaction(
@@ -1208,9 +1236,6 @@ fn push_client_key_search(statement: &mut QueryBuilder<Postgres>, search: Option
         statement.push_bind(prefix.clone());
         statement.push(" escape '\\'");
         statement.push(" or lower(coalesce(label, '')) like ");
-        statement.push_bind(prefix.clone());
-        statement.push(" escape '\\'");
-        statement.push(" or lower(left(key, least(10, length(key) / 2))) like ");
         statement.push_bind(prefix);
         statement.push(" escape '\\'");
         statement.push(")");

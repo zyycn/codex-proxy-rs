@@ -151,6 +151,142 @@ fn generated_client_key_format_remains_valid() {
 }
 
 #[tokio::test]
+async fn client_key_names_are_checked_atomically_on_create_and_rename() {
+    use gateway_admin::{
+        model::{
+            MutationActor, MutationContext,
+            client_keys::{NewClientKey, UpdateClientKey},
+        },
+        ports::store::AdminStoreErrorKind,
+    };
+    use gateway_core::policy::RateLimits;
+
+    let Some(database) = TestDatabase::create("duplicate_key_names").await else {
+        return;
+    };
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "duplicate-name-test".to_owned(),
+    };
+    let create = |id: &str, name: &str| NewClientKey {
+        id: ClientApiKeyId::new(id).unwrap(),
+        name: name.to_owned(),
+        label: None,
+        group_ids: Vec::new(),
+        limits: RateLimits::unlimited(),
+        budget: Default::default(),
+        plaintext: format!("synthetic-credential-{id}"),
+    };
+    let update = |id: ClientApiKeyId, name: &str| UpdateClientKey {
+        id,
+        name: name.to_owned(),
+        label: None,
+        group_ids: Vec::new(),
+        limits: RateLimits::unlimited(),
+        daily_limit_usd: None,
+        weekly_limit_usd: None,
+    };
+    let (first, second) = tokio::join!(
+        store.create_client_key(create("key_name_first", "Production"), &context),
+        store.create_client_key(create("key_name_second", " production "), &context),
+    );
+    let (winner, conflict) = match (first, second) {
+        (Ok((_, record)), Err(error)) | (Err(error), Ok((_, record))) => (record, error),
+        results => panic!("expected one committed create: {results:?}"),
+    };
+    assert_eq!(conflict.kind(), AdminStoreErrorKind::DuplicateName);
+    assert_eq!(winner.name.trim(), winner.name);
+    let counts: (i64, i64) = sqlx::query_as(
+        "select (select count(*) from client_api_keys), (select count(*) from admin_audit_events)",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 1));
+
+    let (revision, _) = store
+        .update_client_key(update(winner.id.clone(), "PRODUCTION"), &context)
+        .await
+        .unwrap();
+    let (_, other) = store
+        .create_client_key(create("key_name_other", "Staging"), &context)
+        .await
+        .unwrap();
+    let error = store
+        .update_client_key(update(other.id.clone(), " production "), &context)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminStoreErrorKind::DuplicateName);
+    let unchanged = store.reveal_client_key(&other.id).await.unwrap().unwrap();
+    assert_eq!(unchanged.record.name, "Staging");
+    let persisted_revision: i64 =
+        sqlx::query_scalar("select config_revision from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(persisted_revision as u64, revision.get() + 1);
+
+    let (first, second) = tokio::join!(
+        store.update_client_key(update(winner.id, "Shared"), &context),
+        store.update_client_key(update(other.id, "SHARED"), &context),
+    );
+    assert_ne!(first.is_ok(), second.is_ok());
+    assert_eq!(
+        first.err().or_else(|| second.err()).unwrap().kind(),
+        AdminStoreErrorKind::DuplicateName
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn client_key_search_matches_names_and_labels_but_never_credential_values() {
+    let Some(database) = TestDatabase::create("key_name_search").await else {
+        return;
+    };
+    let generated = format!("sk_{}", "K".repeat(43));
+    for (id, name, key) in [
+        ("key_generated", "Production", generated.as_str()),
+        ("key_custom", "生产_%专用", "legacy-token+/123"),
+    ] {
+        sqlx::query(
+            "insert into client_api_keys (id, name, label, key, created_at, updated_at)
+            values ($1, $2, 'backend label', $3, now(), now())",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(key)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    }
+    let repository = PgClientApiKeyRepository::new(database.pool.clone());
+    for (search, expected) in [
+        ("PROD", 1),
+        ("生产_%", 1),
+        ("生产X", 0),
+        ("backend", 2),
+        (generated.as_str(), 0),
+        (&generated[..10], 0),
+        ("legacy-token+/123", 0),
+        ("legacy-", 0),
+    ] {
+        let page = repository
+            .list_client_api_keys(ClientApiKeyListQuery {
+                cursor: None,
+                page_size: 10,
+                search: Some(search.to_owned()),
+                sort: ClientApiKeySort::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, expected, "search: {search}");
+        assert_eq!(page.items.len() as u64, expected);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn client_key_list_uses_safe_keyset_search_and_filtered_total() {
     let Some(database) = TestDatabase::create("client_key_page").await else {
         return;

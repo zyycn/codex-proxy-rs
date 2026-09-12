@@ -70,9 +70,7 @@ impl ListClientKeysQuery {
         }
         let search = self.search.map(|search| search.trim().to_owned());
         if search.as_deref().is_some_and(|search| {
-            search.len() > MAX_SEARCH_BYTES
-                || search.chars().any(char::is_control)
-                || contains_client_key_material(search)
+            search.len() > MAX_SEARCH_BYTES || search.chars().any(char::is_control)
         }) {
             return Err(WireValidationError::new("search"));
         }
@@ -676,15 +674,6 @@ fn validate_optional_text(
         return Err(WireValidationError::new(field));
     }
     Ok(())
-}
-
-fn contains_client_key_material(value: &str) -> bool {
-    value.as_bytes().windows(46).any(|window| {
-        &window[..3] == b"sk_"
-            && window[3..]
-                .iter()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    })
 }
 
 /// 构造固定 GET/POST 且 ID 仅位于 query/body 的 Client API Key 路由。

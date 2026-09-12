@@ -331,7 +331,7 @@ async fn assert_usage_search_ids(
 }
 
 #[tokio::test]
-async fn usage_search_should_match_client_api_key_prefix() {
+async fn usage_and_error_search_match_key_names_instead_of_credentials() {
     let Some(database) = TestDatabase::create("usage_client_api_key_search").await else {
         return;
     };
@@ -342,7 +342,7 @@ async fn usage_search_should_match_client_api_key_prefix() {
     let plaintext_key = format!("sk_{}", "K".repeat(43));
     sqlx::query(
         "insert into client_api_keys (id, name, key, enabled, created_at, updated_at)
-         values ('key_observe', 'usage search', $1, true, $2, $2)",
+         values ('key_observe', 'Production_%专用', $1, true, $2, $2)",
     )
     .bind(&plaintext_key)
     .bind(now)
@@ -352,22 +352,53 @@ async fn usage_search_should_match_client_api_key_prefix() {
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
 
-    for search in [plaintext_key.as_str(), &plaintext_key[..10]] {
-        let page = observability_repository(&database.pool)
-            .list_usage_records(UsageRecordQuery {
-                range,
-                filter: UsageRecordFilter {
-                    search: Some(search.to_owned()),
-                    ..UsageRecordFilter::default()
-                },
-                current_page: 1,
-                page_size: ObservabilityPageSize::new(10).expect("page size"),
-            })
+    let repository = observability_repository(&database.pool);
+    for key in [plaintext_key.as_str(), "legacy-key+/123"] {
+        sqlx::query("update client_api_keys set key = $1 where id = 'key_observe'")
+            .bind(key)
+            .execute(&database.pool)
             .await
-            .expect("search usage by client API key");
+            .unwrap();
+        for (search, expected) in [
+            ("production", 1),
+            ("PRODUCTION_%", 1),
+            ("ProductionX", 0),
+            (key, 0),
+            (&key[..10], 0),
+        ] {
+            let page = repository
+                .list_usage_records(UsageRecordQuery {
+                    range,
+                    filter: UsageRecordFilter {
+                        search: Some(search.to_owned()),
+                        ..UsageRecordFilter::default()
+                    },
+                    current_page: 1,
+                    page_size: ObservabilityPageSize::new(10).expect("page size"),
+                })
+                .await
+                .expect("search usage by client API key name");
 
-        assert_eq!(page.total, 1);
-        assert_eq!(page.items[0].id, "req_observe_success");
+            assert_eq!(page.total, expected, "search: {search}");
+            assert_eq!(page.items.len() as u64, expected);
+            if expected == 1 {
+                assert_eq!(page.items[0].id, "req_observe_success");
+            }
+            let errors = repository
+                .list_ops_errors(OpsErrorQuery {
+                    range,
+                    filter: OpsErrorFilter {
+                        search: Some(search.to_owned()),
+                        ..Default::default()
+                    },
+                    current_page: 1,
+                    page_size: ObservabilityPageSize::new(10).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(errors.total, expected * 2, "error search: {search}");
+            assert_eq!(errors.items.len() as u64, expected * 2);
+        }
     }
     database.close().await;
 }

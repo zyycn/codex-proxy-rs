@@ -42,9 +42,9 @@ fn map_store_error(error: AdminStoreError, resource: &'static str) -> AdminError
     let kind = match error.kind() {
         AdminStoreErrorKind::Invalid => AdminErrorKind::Invalid,
         AdminStoreErrorKind::NotFound => AdminErrorKind::NotFound,
-        AdminStoreErrorKind::StaleRevision | AdminStoreErrorKind::Conflict => {
-            AdminErrorKind::Conflict
-        }
+        AdminStoreErrorKind::StaleRevision
+        | AdminStoreErrorKind::DuplicateName
+        | AdminStoreErrorKind::Conflict => AdminErrorKind::Conflict,
         AdminStoreErrorKind::Unavailable => AdminErrorKind::Unavailable,
     };
     tracing::warn!(resource, error_kind = ?error.kind(), "admin store operation failed");

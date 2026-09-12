@@ -21,6 +21,7 @@ use gateway_admin::{
 struct TestClientKeyStore {
     plaintexts: Mutex<Vec<String>>,
     create_error: Option<AdminStoreErrorKind>,
+    update_error: Option<AdminStoreErrorKind>,
 }
 
 #[async_trait]
@@ -77,6 +78,13 @@ impl ClientKeyStore for TestClientKeyStore {
         _: UpdateClientKey,
         _: &MutationContext,
     ) -> AdminStoreResult<(Revision, ClientKeyRecord)> {
+        if let Some(kind) = self.update_error {
+            return Err(AdminStoreError::new(
+                kind,
+                "client key",
+                "test update failure",
+            ));
+        }
         Err(unused())
     }
 
@@ -190,6 +198,43 @@ async fn duplicate_keys_return_actionable_conflicts_without_disclosing_the_key()
     assert_eq!(error.kind(), AdminErrorKind::Conflict);
     assert_eq!(error.message(), "API Key 已存在，请使用其他密钥");
     assert!(!format!("{error:?}").contains(key));
+}
+
+#[tokio::test]
+async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_update() {
+    let services = super::AdminHarness::new()
+        .client_keys(Arc::new(TestClientKeyStore {
+            create_error: Some(AdminStoreErrorKind::DuplicateName),
+            update_error: Some(AdminStoreErrorKind::DuplicateName),
+            ..Default::default()
+        }))
+        .build()
+        .await;
+    let created = services
+        .client_keys()
+        .create(&mutation_context(), create_command(None))
+        .await
+        .unwrap_err();
+    let updated = services
+        .client_keys()
+        .update(
+            &mutation_context(),
+            UpdateClientKey {
+                id: ClientApiKeyId::new("key_existing").unwrap(),
+                name: "Migration".to_owned(),
+                label: None,
+                group_ids: Vec::new(),
+                limits: RateLimits::unlimited(),
+                daily_limit_usd: None,
+                weekly_limit_usd: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    for error in [created, updated] {
+        assert_eq!(error.kind(), AdminErrorKind::Conflict);
+        assert_eq!(error.message(), "名称已存在");
+    }
 }
 
 fn create_command(key: Option<&str>) -> CreateClientKey {

@@ -18,7 +18,7 @@ use crate::{
             DeleteClientKey, NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
     },
-    ports::store::{AdminStoreErrorKind, ClientKeyStore},
+    ports::store::{AdminStoreError, AdminStoreErrorKind, ClientKeyStore},
 };
 
 use super::{map_store_error, publish_committed};
@@ -109,13 +109,7 @@ impl ClientKeyService for DefaultClientKeyService {
                 context,
             )
             .await
-            .map_err(|error| {
-                if error.kind() == AdminStoreErrorKind::Conflict {
-                    AdminError::conflict("API Key 已存在，请使用其他密钥")
-                } else {
-                    map_store_error(error, "client API key")
-                }
-            })?;
+            .map_err(map_client_key_write_error)?;
         publish_committed(self.snapshot.as_ref(), config_revision).await?;
         Ok(CreatedClientKey {
             config_revision,
@@ -133,7 +127,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .store
             .update_client_key(command, context)
             .await
-            .map_err(|error| map_store_error(error, "client API key"))?;
+            .map_err(map_client_key_write_error)?;
         publish_committed(self.snapshot.as_ref(), config_revision).await?;
         Ok(ClientKeyMutation {
             config_revision,
@@ -178,6 +172,14 @@ impl ClientKeyService for DefaultClientKeyService {
             record: None,
             id,
         })
+    }
+}
+
+fn map_client_key_write_error(error: AdminStoreError) -> AdminError {
+    match error.kind() {
+        AdminStoreErrorKind::DuplicateName => AdminError::conflict("名称已存在"),
+        AdminStoreErrorKind::Conflict => AdminError::conflict("API Key 已存在，请使用其他密钥"),
+        _ => map_store_error(error, "client API key"),
     }
 }
 

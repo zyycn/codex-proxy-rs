@@ -94,20 +94,23 @@ pub(crate) fn push_usage_filter(
             query.push(format!(" escape '\\' or {alias}.{column} like "));
             query.push_bind(pattern.clone());
         }
-        if value.starts_with("sk_") {
-            query.push(format!(
-                " escape '\\' or exists (
-                   select 1 from client_api_keys searched_client_key
-                    where searched_client_key.id = {alias}.client_api_key_ref
-                      and searched_client_key.key like "
-            ));
-            query.push_bind(pattern);
-            query.push(" escape '\\')");
-        } else {
-            query.push(" escape '\\'");
-        }
+        query.push(" escape '\\'");
+        push_client_key_name_search(query, &format!("{alias}.client_api_key_ref"), pattern);
         query.push(")");
     }
+}
+
+pub(crate) fn push_client_key_name_search(
+    query: &mut QueryBuilder<Postgres>,
+    key_ref: &str,
+    pattern: String,
+) {
+    query.push(format!(
+        " or exists (select 1 from client_api_keys searched_client_key
+         where searched_client_key.id = {key_ref} and searched_client_key.name ilike "
+    ));
+    query.push_bind(pattern);
+    query.push(" escape '\\')");
 }
 
 pub(crate) fn literal_prefix_pattern(value: &str) -> String {

@@ -91,8 +91,8 @@ function upstreamSendStateText(value: string | null | undefined) {
       <div class="min-w-0 flex-1">
         <BaseInput
           v-model="searchQuery"
-          placeholder="请求 ID、Key ID / 可见前缀或账号"
-          aria-label="搜索错误：请求 ID、Key ID / 可见前缀或账号"
+          placeholder="请求 ID、密钥名称或账号"
+          aria-label="搜索错误：请求 ID、密钥名称或账号"
           class="min-w-0 w-full lg:max-w-96"
         >
           <template #prefix>

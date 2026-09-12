@@ -24,7 +24,7 @@ const search = defineModel<string>('search', { required: true })
     aria-label="API Key 筛选与操作"
   >
     <div class="min-w-0 flex-1 md:w-96 md:flex-none">
-      <BaseInput v-model="search" placeholder="搜索名称、标签或 ID" class="w-full">
+      <BaseInput v-model="search" placeholder="搜索名称或标签" aria-label="搜索 API Key 名称或标签" class="w-full">
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>

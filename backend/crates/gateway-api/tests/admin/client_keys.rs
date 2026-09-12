@@ -128,10 +128,6 @@ fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
         "search": "a".repeat(257)
     }))
     .expect("deserialize oversized search");
-    let secret_search = serde_json::from_value::<ListClientKeysQuery>(json!({
-        "search": format!("sk_{}", "a".repeat(43))
-    }))
-    .expect("deserialize secret search");
     let invalid_sort = serde_json::from_value::<ListClientKeysQuery>(json!({
         "sortBy": "plaintextKey",
         "sortDirection": "asc"
@@ -154,13 +150,6 @@ fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
         oversized_search
             .into_command()
             .expect_err("reject oversized search")
-            .field(),
-        "search"
-    );
-    assert_eq!(
-        secret_search
-            .into_command()
-            .expect_err("reject full key in search")
             .field(),
         "search"
     );
@@ -203,6 +192,16 @@ fn client_key_queries_should_reject_unknown_zero_and_oversized_fields() {
             .get(),
         u16::MAX
     );
+}
+
+#[test]
+fn client_key_name_search_does_not_interpret_names_as_credentials() {
+    let name = format!("sk_{}", "a".repeat(43));
+    let command = serde_json::from_value::<ListClientKeysQuery>(json!({ "search": name }))
+        .unwrap()
+        .into_command()
+        .unwrap();
+    assert_eq!(command.search.as_deref(), Some(name.as_str()));
 }
 
 #[test]

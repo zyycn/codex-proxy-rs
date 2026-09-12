@@ -44,6 +44,7 @@ pub enum AdminStoreErrorKind {
     Invalid,
     NotFound,
     StaleRevision,
+    DuplicateName,
     Conflict,
     Unavailable,
 }
