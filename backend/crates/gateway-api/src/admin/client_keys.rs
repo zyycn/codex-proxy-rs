@@ -13,7 +13,7 @@ use gateway_admin::model::client_keys::{
 use gateway_core::{
     engine::budget::ClientBudgetLimits,
     metering::Decimal,
-    policy::{ClientApiKeyId, RateLimits},
+    policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits},
     routing::AccountGroupId,
 };
 use serde::{Deserialize, Serialize};
@@ -143,9 +143,10 @@ impl ClientKeySort {
 }
 
 /// 创建 Client Key 请求。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
+    custom_key: Option<String>,
     name: String,
     label: Option<String>,
     group_ids: Vec<String>,
@@ -153,6 +154,16 @@ pub struct CreateClientKeyRequest {
     requests_per_minute: u64,
     daily_limit_usd: Option<String>,
     weekly_limit_usd: Option<String>,
+}
+
+impl fmt::Debug for CreateClientKeyRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateClientKeyRequest")
+            .field("name", &self.name)
+            .field("custom_key", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 impl CreateClientKeyRequest {
@@ -164,6 +175,12 @@ impl CreateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(CreateClientKey {
+            custom_key: self
+                .custom_key
+                .filter(|key| !key.is_empty())
+                .map(PlaintextClientApiKey::new)
+                .transpose()
+                .map_err(|_| WireValidationError::new("customKey"))?,
             name: self.name,
             label: self.label,
             group_ids,

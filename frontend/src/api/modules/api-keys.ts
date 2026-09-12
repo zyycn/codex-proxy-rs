@@ -70,6 +70,10 @@ interface ApiKeyUpdateParam extends ApiKeyWriteParam {
   id: string
 }
 
+interface ApiKeyCreateParam extends ApiKeyWriteParam {
+  customKey?: string
+}
+
 interface ApiKeyIdParam {
   id: string
 }
@@ -83,7 +87,7 @@ export function getApiKeys(data: ApiKeyListParams, options: RequestOptions = {})
   })
 }
 
-export function createApiKey(data: ApiKeyWriteParam, options: RequestOptions = {}) {
+export function createApiKey(data: ApiKeyCreateParam, options: RequestOptions = {}) {
   return request<ApiKeyCreateResponse>({
     url: '/api/admin/client-keys/create',
     method: 'POST',

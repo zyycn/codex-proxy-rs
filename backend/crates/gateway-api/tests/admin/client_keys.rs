@@ -11,6 +11,71 @@ use serde_json::json;
 use super::{AdminTestFixture, AdminTestState};
 
 #[test]
+fn custom_client_keys_preserve_migrated_values_and_redact_debug() {
+    for value in [
+        "q".to_owned(),
+        "sk-old!@/key+=value".to_owned(),
+        "x".repeat(8192),
+    ] {
+        let request: CreateClientKeyRequest = serde_json::from_value(json!({
+            "name": "migration", "customKey": value, "groupIds": [],
+            "maxConcurrency": 2, "requestsPerMinute": 0
+        }))
+        .unwrap();
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[REDACTED]"));
+        let command = request.into_command().unwrap();
+        assert_eq!(command.custom_key.unwrap().expose_for_auth(), value);
+    }
+    let secret = "legacy-key-should-not-leak";
+    let request: CreateClientKeyRequest = serde_json::from_value(json!({
+        "name": "migration", "customKey": secret, "groupIds": [],
+        "maxConcurrency": 0, "requestsPerMinute": 0
+    }))
+    .unwrap();
+    assert!(!format!("{request:?}").contains(secret));
+    assert!(!format!("{:?}", request.into_command().unwrap()).contains(secret));
+}
+
+#[test]
+fn custom_client_key_is_optional_and_only_rejects_untransportable_values() {
+    let payload = json!({"name": "migration", "groupIds": [], "maxConcurrency": 0,
+        "requestsPerMinute": 0});
+    for value in [None, Some(json!(null)), Some(json!(""))] {
+        let mut payload = payload.clone();
+        if let Some(value) = value {
+            payload["customKey"] = value;
+        }
+        let command = serde_json::from_value::<CreateClientKeyRequest>(payload)
+            .unwrap()
+            .into_command()
+            .unwrap();
+        assert!(command.custom_key.is_none());
+    }
+    for value in [
+        " key",
+        "key ",
+        "key with spaces",
+        "key\n",
+        "key\tvalue",
+        "密钥",
+    ] {
+        let mut payload = payload.clone();
+        payload["customKey"] = json!(value);
+        let error = serde_json::from_value::<CreateClientKeyRequest>(payload)
+            .unwrap()
+            .into_command()
+            .unwrap_err();
+        assert_eq!(error.field(), "customKey");
+        assert!(!format!("{error:?}").contains(value));
+    }
+    let mut update = payload;
+    update["id"] = json!("key_existing");
+    update["customKey"] = json!("replacement-credential");
+    assert!(serde_json::from_value::<UpdateClientKeyRequest>(update).is_err());
+}
+
+#[test]
 fn budget_inputs_preserve_decimal_precision_and_omitted_updates() {
     let payload = json!({"name": "budget", "groupIds": [], "maxConcurrency": 3,
         "requestsPerMinute": 0, "dailyLimitUsd": "0.1234567891", "weeklyLimitUsd": "15"});

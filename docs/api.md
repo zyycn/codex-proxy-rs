@@ -14,6 +14,9 @@
 Authorization: Bearer sk_...
 ```
 
+自动生成的 Key 保持 `sk_` 格式；迁入的自定义 Key 使用保存时的原值，不限制前缀或固定长度。
+无论格式如何，只有已保存且启用的 Client Key 能通过鉴权。
+
 Codex 原生生图配置还会携带 `X-OpenAI-Actor-Authorization: proxy-managed`。
 它仅用于客户端识别服务端托管认证，不能代替 Client Key。网关和 OpenAI Provider 都会过滤该请求头，
 上游账号身份只由服务端选中的账号提供；不要把真实账号 token 放进该标记。
@@ -588,11 +591,35 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
-`dailyLimitUsd` 和 `weeklyLimitUsd`，更新请求再增加
+`dailyLimitUsd`、`weeklyLimitUsd` 和 `customKey`，更新请求增加
 `id`。`groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
 `routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
 `providerKinds`；Client Key 不再保存 `providerKind`。创建和 reveal 响应会返回完整明文 Key，调用方
 必须立即安全保存。
+
+`customKey` 仅用于创建：省略、`null` 或空字符串时继续自动生成；非空时按原值保存，不追加前缀、
+不截断、不修剪空白，也不要求固定长度。Key 须为 HTTP Bearer 可传输的非空可见 ASCII 字符，
+支持标点，空格、控制字符和非 ASCII 文本会返回 `400`。重复 Key 返回 `409`，包括并发创建时。
+应用不另设 Key 长度上限；创建请求和 `Authorization` 头仍受 Web 服务器及反向代理的通用大小限制。
+更新接口不接受 `customKey`，防止修改策略时意外替换正在使用的凭据。
+列表仅展示最多前 10 个字符，且至少隐藏一半字符；单字符 Key 的可见前缀为空。
+完整值仍只通过创建和显式 reveal 返回，不进入普通 Debug 或审计。
+
+迁移示例（其他创建字段同上）：
+
+```json
+{
+  "name": "迁入的客户端",
+  "customKey": "legacy-platform-key/example+=",
+  "groupIds": [],
+  "maxConcurrency": 2,
+  "requestsPerMinute": 0
+}
+```
+
+客户端沿用原 Key，将 Base URL 指向本平台即可。分组权限、日／周限额和并发规则按本平台配置执行，
+不会导入旧平台的历史用量。部署升级会新增 `0006_custom_client_keys.sql`，保留全部已有 Key，
+并以 SHA-256 唯一索引支持长 Key；鉴权仍校验完整原值。
 
 金额字段为非负十进制字符串，最多 10 位整数与 10 位小数，`"0"` 表示不限额。
 创建时省略金额字段默认为零；更新时省略或 `null` 保留当前值，修改限额不会清空已用金额。

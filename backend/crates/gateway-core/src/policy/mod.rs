@@ -53,11 +53,26 @@ impl PlaintextClientApiKey {
     ///
     /// # Errors
     ///
-    /// Key 为空、过长或包含控制字符时返回错误。
+    /// Key 为空或无法作为 HTTP Bearer 值发送时返回错误。
     pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
-        validate_text(&value, 512, false, None)?;
+        Self::validate(&value)?;
         Ok(Self(value))
+    }
+
+    /// 迁入的 Key 不限定前缀或长度；保持原值，仅校验 HTTP 可传输的非空可见 ASCII。
+    ///
+    /// # Errors
+    ///
+    /// Key 为空或包含空白、控制字符、非 ASCII 字符时返回错误。
+    pub fn validate(value: &str) -> Result<(), IdentifierError> {
+        if value.is_empty() {
+            return Err(IdentifierError::Empty);
+        }
+        if !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(IdentifierError::InvalidFormat);
+        }
+        Ok(())
     }
 
     /// 仅借给同步认证器做常量时间比较。

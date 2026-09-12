@@ -47,7 +47,6 @@ use crate::{
 use super::{ControlPlaneRepository, PgControlPlaneRepository};
 
 const ENTITY: &str = "client API key";
-const KEY_LENGTH: usize = 46;
 const CLIENT_API_KEY_LAST_USED_FLUSH_DELAY: Duration = Duration::from_secs(1);
 const CLIENT_API_KEY_LAST_USED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -355,7 +354,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         query.validate()?;
         let total = count_client_api_keys(&self.pool, query.search.as_deref()).await?;
         let mut statement = QueryBuilder::<Postgres>::new(
-            "select k.id, k.name, k.label, left(k.key, 10) as prefix, k.enabled,
+            "select k.id, k.name, k.label,
+                    left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, '[]'::jsonb as groups, '{}'::text[] as provider_kinds
              from client_api_keys k
@@ -414,7 +414,8 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
     async fn get_client_api_key(&self, id: &str) -> StoreResult<Option<ClientApiKeyRecord>> {
         require_nonempty(ENTITY, "id", id)?;
         let record = sqlx::query(
-            "select k.id, k.name, k.label, left(k.key, 10) as prefix, k.enabled,
+            "select k.id, k.name, k.label,
+                    left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, coalesce(groups.groups, '[]'::jsonb) as groups,
                     case
@@ -993,7 +994,20 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(key.budget.weekly_usd.canonical())
     .execute(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("insert client API key in transaction"))?;
+    .map_err(|error| {
+        if error.as_database_error().is_some_and(|database| {
+            database.is_unique_violation()
+                && database.constraint() == Some("client_api_keys_key_sha256_idx")
+        }) {
+            StoreError::Conflict {
+                entity: ENTITY,
+                id: key.id.clone(),
+                kind: crate::ConflictKind::InvalidTransition,
+            }
+        } else {
+            postgres_unavailable("insert client API key in transaction")
+        }
+    })?;
     replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await?;
     Ok(())
 }
@@ -1119,18 +1133,8 @@ fn validate_group_ids(group_ids: &[String]) -> StoreResult<()> {
 }
 
 fn validate_key(key: &str) -> StoreResult<()> {
-    let valid = key.len() == KEY_LENGTH
-        && key.starts_with("sk_")
-        && key[3..]
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
-    if valid {
-        Ok(())
-    } else {
-        Err(invalid(
-            "key must be sk_ followed by 43 URL-safe characters",
-        ))
-    }
+    PlaintextClientApiKey::validate(key)
+        .map_err(|_| invalid("key must contain nonempty visible ASCII characters"))
 }
 
 fn client_secret_from_row(
@@ -1206,7 +1210,7 @@ fn push_client_key_search(statement: &mut QueryBuilder<Postgres>, search: Option
         statement.push(" or lower(coalesce(label, '')) like ");
         statement.push_bind(prefix.clone());
         statement.push(" escape '\\'");
-        statement.push(" or lower(left(key, 10)) like ");
+        statement.push(" or lower(left(key, least(10, length(key) / 2))) like ");
         statement.push_bind(prefix);
         statement.push(" escape '\\'");
         statement.push(")");

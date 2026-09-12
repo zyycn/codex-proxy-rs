@@ -58,6 +58,29 @@ fn plaintext_client_key_debug_should_be_redacted() {
 }
 
 #[test]
+fn migrated_client_keys_keep_their_exact_value_without_prefix_or_length_limits() {
+    for value in [
+        "q".to_owned(),
+        "legacy-!@#$%^&*()[]{}:;,.?/+=~|\\".to_owned(),
+        "x".repeat(8192),
+    ] {
+        assert_eq!(plaintext(&value).expose_for_auth(), value);
+    }
+    for value in [
+        "",
+        " ",
+        " key",
+        "key ",
+        "key\n",
+        "key\tvalue",
+        "key\u{7f}",
+        "密钥",
+    ] {
+        assert!(PlaintextClientApiKey::new(value).is_err());
+    }
+}
+
+#[test]
 fn client_version_should_require_strict_semver() {
     assert!(CodexClientVersion::parse("0.152.0").is_ok());
     assert!(CodexClientVersion::parse("v0.152.0").is_err());

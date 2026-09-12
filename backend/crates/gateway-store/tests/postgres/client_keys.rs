@@ -21,8 +21,122 @@ use gateway_store::postgres::{
 
 use super::TestDatabase;
 
+#[tokio::test]
+async fn migrated_keys_persist_exactly_and_keep_short_keys_masked() {
+    use gateway_admin::model::{MutationActor, MutationContext, client_keys::NewClientKey};
+    use gateway_core::policy::RateLimits;
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+
+    let Some(database) = TestDatabase::create("migrated_keys").await else {
+        return;
+    };
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "migration-test".to_owned(),
+    };
+    let long_key: String = (0..160)
+        .map(|_| uuid::Uuid::new_v4().simple().to_string())
+        .collect();
+    let values = [
+        "q".to_owned(),
+        "abc".to_owned(),
+        "sk-legacy/key+value=:!@\\".to_owned(),
+        long_key,
+    ];
+    for (index, key) in values.iter().enumerate() {
+        let id = ClientApiKeyId::new(format!("key_migrated_{index}")).unwrap();
+        let (_, record) = store
+            .create_client_key(
+                NewClientKey {
+                    id: id.clone(),
+                    name: format!("Migrated {index}"),
+                    label: None,
+                    group_ids: Vec::new(),
+                    limits: RateLimits {
+                        max_concurrency: 3,
+                        requests_per_minute: 25,
+                    },
+                    budget: Default::default(),
+                    plaintext: key.clone(),
+                },
+                &context,
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.prefix.len(), 10.min(key.len() / 2));
+        assert_ne!(record.prefix, *key);
+        let revealed = store.reveal_client_key(&id).await.unwrap().unwrap();
+        assert_eq!(revealed.expose_for_response(), key);
+    }
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.client_api_keys.len(), values.len());
+    for key in &values {
+        let record = snapshot
+            .client_api_keys
+            .iter()
+            .find(|item| item.plaintext_key.expose_for_auth() == key)
+            .unwrap();
+        assert_eq!(record.limits.max_concurrency, 3);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn duplicate_migrated_keys_conflict_atomically_without_extra_audits() {
+    use gateway_admin::{
+        model::{MutationActor, MutationContext, client_keys::NewClientKey},
+        ports::store::AdminStoreErrorKind,
+    };
+    use gateway_core::policy::RateLimits;
+
+    let Some(database) = TestDatabase::create("duplicate_keys").await else {
+        return;
+    };
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "duplicate-test".to_owned(),
+    };
+    let key = "legacy-key-case-sensitive!";
+    let command = |id: &str| NewClientKey {
+        id: ClientApiKeyId::new(id).unwrap(),
+        name: id.to_owned(),
+        label: None,
+        group_ids: Vec::new(),
+        limits: RateLimits::unlimited(),
+        budget: Default::default(),
+        plaintext: key.to_owned(),
+    };
+    let (first, second) = tokio::join!(
+        store.create_client_key(command("key_first"), &context),
+        store.create_client_key(command("key_second"), &context)
+    );
+    assert_ne!(first.is_ok(), second.is_ok());
+    let error = first.err().or_else(|| second.err()).unwrap();
+    assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
+    assert!(!format!("{error:?}").contains(key));
+    let counts: (i64, i64) = sqlx::query_as(
+        "select (select count(*) from client_api_keys), (select count(*) from admin_audit_events)",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 1));
+    let mut different_case = command("key_case_sensitive");
+    different_case.plaintext = key.to_uppercase();
+    store
+        .create_client_key(different_case, &context)
+        .await
+        .unwrap();
+    database.close().await;
+}
+
 #[test]
-fn client_key_requires_the_frozen_plaintext_format() {
+fn generated_client_key_format_remains_valid() {
     let key = NewClientApiKey {
         budget: Default::default(),
         id: "key-1".to_owned(),

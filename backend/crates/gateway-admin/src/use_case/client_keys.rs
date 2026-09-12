@@ -18,7 +18,7 @@ use crate::{
             DeleteClientKey, NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
     },
-    ports::store::ClientKeyStore,
+    ports::store::{AdminStoreErrorKind, ClientKeyStore},
 };
 
 use super::{map_store_error, publish_committed};
@@ -87,9 +87,13 @@ impl ClientKeyService for DefaultClientKeyService {
     ) -> Result<CreatedClientKey, AdminError> {
         let id = ClientApiKeyId::new(format!("key_{}", Uuid::now_v7().simple()))
             .map_err(|_| AdminError::internal("创建 Client API Key ID 失败"))?;
-        let mut bytes = [0_u8; 32];
-        OsRng.fill_bytes(&mut bytes);
-        let plaintext = format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes));
+        let plaintext = if let Some(key) = command.custom_key {
+            key.expose_for_auth().to_owned()
+        } else {
+            let mut bytes = [0_u8; 32];
+            OsRng.fill_bytes(&mut bytes);
+            format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes))
+        };
         let (config_revision, record) = self
             .store
             .create_client_key(
@@ -105,7 +109,13 @@ impl ClientKeyService for DefaultClientKeyService {
                 context,
             )
             .await
-            .map_err(|error| map_store_error(error, "client API key"))?;
+            .map_err(|error| {
+                if error.kind() == AdminStoreErrorKind::Conflict {
+                    AdminError::conflict("API Key 已存在，请使用其他密钥")
+                } else {
+                    map_store_error(error, "client API key")
+                }
+            })?;
         publish_committed(self.snapshot.as_ref(), config_revision).await?;
         Ok(CreatedClientKey {
             config_revision,

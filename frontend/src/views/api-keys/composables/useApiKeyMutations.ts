@@ -17,6 +17,7 @@ import { useIdSet } from '@/composables/useIdSet'
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export interface ApiKeyFormValue {
+  customKey: string
   name: string
   label: string
   groupIds: string[]
@@ -61,6 +62,7 @@ export function useApiKeyMutations(options: {
   function openEdit(key: ApiKeyRow) {
     editingKey.value = key
     form.value = {
+      customKey: '',
       name: key.name,
       label: key.label ?? '',
       groupIds: key.groups.map(group => group.id),
@@ -107,7 +109,10 @@ export function useApiKeyMutations(options: {
           await updateApiKey({ id: current.id, ...payload })
         }
         else {
-          const result = await createApiKey(payload)
+          const result = await createApiKey({
+            ...payload,
+            customKey: form.value.customKey || undefined,
+          })
           createdKey.value = result.plaintextKey
           createdKeyName.value = payload.name
         }
@@ -137,6 +142,10 @@ export function useApiKeyMutations(options: {
     }
     if (!form.value.name.trim()) {
       toast.warning('请输入 API Key 名称')
+      return false
+    }
+    if (!editingKey.value && form.value.customKey && !/^[\x21-\x7E]+$/.test(form.value.customKey)) {
+      toast.warning('自定义 Key 只能包含 HTTP 可传输的可见字符，不能包含空格或换行')
       return false
     }
     for (const [label, value] of [
@@ -285,6 +294,7 @@ export function useApiKeyMutations(options: {
 
 function emptyForm(): ApiKeyFormValue {
   return {
+    customKey: '',
     name: '',
     label: '',
     groupIds: [],

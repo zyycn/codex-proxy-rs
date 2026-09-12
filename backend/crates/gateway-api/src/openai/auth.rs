@@ -86,7 +86,7 @@ impl ClientApiKeyAuthError {
 ///
 /// # Errors
 ///
-/// Header 缺失、Bearer 语法错误或不是网关 Client Key 前缀时返回稳定错误。
+/// Header 缺失、Bearer 语法错误或 Key 不能作为 HTTP Bearer 值时返回稳定错误。
 pub fn bearer_client_api_key(headers: &HeaderMap) -> Result<&str, ClientApiKeyAuthError> {
     let raw = headers
         .get(AUTHORIZATION)
@@ -100,7 +100,7 @@ pub fn bearer_client_api_key(headers: &HeaderMap) -> Result<&str, ClientApiKeyAu
     if token.is_empty() {
         return Err(ClientApiKeyAuthError::MalformedAuthorization);
     }
-    if !token.starts_with("sk_") {
+    if gateway_core::policy::PlaintextClientApiKey::validate(token).is_err() {
         return Err(ClientApiKeyAuthError::InvalidKeyFormat);
     }
     Ok(token)
