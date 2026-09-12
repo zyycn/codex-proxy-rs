@@ -1,6 +1,8 @@
 //! Admin 领域结果到安全 HTTP wire 的展示投影。
 
 use super::*;
+use gateway_admin::model::quota_forecast::{AccountQuotaForecast, AccountQuotaForecastReport};
+use gateway_admin::model::quota_forecast_sampling::QuotaForecastMethod;
 
 pub(super) fn account_page_data(
     result: AccountDirectoryPage,
@@ -120,6 +122,101 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         quota,
         usage: account_usage_view(usage, usage_period, now),
     }
+}
+
+impl From<AccountQuotaForecastReport> for AccountQuotaForecastData {
+    fn from(report: AccountQuotaForecastReport) -> Self {
+        Self {
+            account_id: report.account_id,
+            generated_at: china_rfc3339(&report.generated_at),
+            generated_at_display: china_datetime(&report.generated_at),
+            forecasts: report
+                .forecasts
+                .into_iter()
+                .map(quota_forecast_view)
+                .collect(),
+        }
+    }
+}
+
+fn quota_forecast_view(forecast: AccountQuotaForecast) -> AccountQuotaForecastView {
+    AccountQuotaForecastView {
+        period: match forecast.period {
+            AccountUsagePeriod::Weekly => "weekly",
+            AccountUsagePeriod::Monthly => "monthly",
+        },
+        target_days: forecast.target_seconds as f64 / 86_400.0,
+        extrapolated: forecast.extrapolated,
+        source: forecast.source.map(|source| QuotaForecastSourceView {
+            key: source.key,
+            label: source.label,
+            window_days: source.window_seconds as f64 / 86_400.0,
+            used_percent: source.used_percent,
+            used_percent_display: source
+                .used_percent
+                .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
+            observed_at: source.observed_at.map(|value| china_rfc3339(&value)),
+            observed_at_display: source
+                .observed_at
+                .map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
+            start_at: source.start_at.map(|value| china_rfc3339(&value)),
+            start_at_display: source
+                .start_at
+                .map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
+            reset_at: china_rfc3339(&source.reset_at),
+            reset_at_display: china_datetime(&source.reset_at),
+            request_count_display: format_number(source.request_count),
+            tokens_display: display_optional_tokens(source.tokens),
+            input_tokens_display: display_optional_tokens(source.input_tokens),
+            output_tokens_display: display_optional_tokens(source.output_tokens),
+            cached_tokens_display: display_optional_tokens(source.cached_tokens),
+            known_cost_count: source.known_cost_count,
+            known_cost_count_display: format_number(source.known_cost_count),
+            partial_cost_count: source.partial_cost_count,
+            partial_cost_count_display: format_number(source.partial_cost_count),
+            unavailable_cost_count: source.unavailable_cost_count,
+            unavailable_cost_count_display: format_number(source.unavailable_cost_count),
+            usd_display: forecast_usd_display(source.usd),
+            sample_start_at: source.sample_start_at.map(|value| china_rfc3339(&value)),
+            sample_start_at_display: source
+                .sample_start_at
+                .map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
+            baseline_percent: source.baseline_percent,
+            sampled_percent: source.sampled_percent,
+            sampled_percent_display: source
+                .sampled_percent
+                .map_or_else(|| "—".to_owned(), |value| format!("{value:.1} 个百分点")),
+            block_count: source.block_count,
+            observation_count: source.observation_count,
+            missing_token_count: source.missing_token_count,
+            excluded_request_count: source.excluded_request_count,
+            pending_request_count: source.pending_request_count,
+        }),
+        unavailable_reason: forecast.unavailable_reason,
+        low_sample: forecast.low_sample,
+        incomplete_cost: forecast.incomplete_cost,
+        incomplete_tokens: forecast.incomplete_tokens,
+        method: forecast.method.as_str(),
+        method_display: match forecast.method {
+            QuotaForecastMethod::Cumulative => "窗口累计估算",
+            QuotaForecastMethod::Incremental => "近期分段估算",
+        },
+        estimated_tokens: forecast.estimated_tokens,
+        estimated_tokens_display: display_optional_tokens(forecast.estimated_tokens),
+        estimated_usd: forecast.estimated_usd,
+        estimated_usd_display: forecast_usd_display(forecast.estimated_usd),
+        remaining_tokens: forecast.remaining_tokens,
+        remaining_tokens_display: display_optional_tokens(forecast.remaining_tokens),
+        remaining_usd: forecast.remaining_usd,
+        remaining_usd_display: forecast_usd_display(forecast.remaining_usd),
+    }
+}
+
+fn forecast_usd_display(value: Option<f64>) -> String {
+    value.map_or_else(
+        || "—".to_owned(),
+        |value| format_decimal_currency(&format!("{value:.10}"), "USD"),
+    )
 }
 
 pub(super) fn account_quota_view(

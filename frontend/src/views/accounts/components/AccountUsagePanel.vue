@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 
-import { Sigma } from '@lucide/vue'
-import { computed } from 'vue'
+import { ChartNoAxesCombined, Sigma } from '@lucide/vue'
+import { computed, ref } from 'vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { modelSuccessRateTextClass } from '../constants'
+import AccountQuotaForecastModal from './AccountQuotaForecastModal/index.vue'
 
 const props = defineProps<{
   account: AccountRow
 }>()
+
+const emit = defineEmits<{
+  accountUpdated: [account: AccountRow]
+}>()
+const forecastOpen = ref(false)
 
 type AccountModelUsage = AccountRow['usage']['models'][number]
 
@@ -75,9 +82,19 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
 
     <div class="min-w-0 pt-4 xl:flex xl:min-h-0 xl:flex-col xl:pt-0 xl:pl-4">
       <div class="mb-3 flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
-        <h3 class="m-0 shrink-0 text-cp-lg font-heavy text-cp-text">
-          模型使用排行
-        </h3>
+        <div class="flex shrink-0 items-center gap-1">
+          <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
+            模型使用排行
+          </h3>
+          <BaseIconButton
+            label="预测周/月额度"
+            size="sm"
+            aria-haspopup="dialog"
+            @click="forecastOpen = true"
+          >
+            <ChartNoAxesCombined class="size-3.5" :stroke-width="1.75" />
+          </BaseIconButton>
+        </div>
 
         <div class="ml-auto flex items-baseline gap-4">
           <div v-if="hasUsageSummary" class="flex items-baseline gap-1.5 whitespace-nowrap">
@@ -117,4 +134,10 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
       </div>
     </div>
   </section>
+
+  <AccountQuotaForecastModal
+    v-model="forecastOpen"
+    :account="account"
+    @account-updated="emit('accountUpdated', $event)"
+  />
 </template>

@@ -42,6 +42,7 @@ use gateway_admin::{
             ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
             QuotaLocalUsageAttribution,
         },
+        quota_forecast_sampling::{QuotaForecastHistory, QuotaForecastUsage},
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
             RuntimeSettings,
@@ -432,6 +433,21 @@ impl ProviderAdmin for FakeProviderAdmin {
         })
     }
 
+    fn quota_forecast_observation(
+        &self,
+        document: &ProviderDocument,
+        _: &ProviderQuotaWindow,
+    ) -> Option<gateway_admin::model::quota_forecast_sampling::QuotaForecastObservation> {
+        let fields = document.expose_to_provider().expose_to_provider();
+        Some(
+            gateway_admin::model::quota_forecast_sampling::QuotaForecastObservation {
+                used_percent: fields.get("percent")?.as_f64()?,
+                reset_at: fields.get("reset")?.as_str()?.parse().ok()?,
+                plan_type: fields.get("plan")?.as_str().map(str::to_owned),
+            },
+        )
+    }
+
     async fn models(
         &self,
         _: &ProviderAccountId,
@@ -472,6 +488,7 @@ pub(super) struct FakeAccountStore {
     import_settings: Mutex<Vec<Option<gateway_admin::model::accounts::AccountImportSettings>>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
     quota_window_queries: Mutex<Vec<AccountUsageWindowQuery>>,
+    quota_forecast_history: Mutex<QuotaForecastHistory>,
 }
 
 impl FakeAccountStore {
@@ -489,6 +506,7 @@ impl FakeAccountStore {
             import_settings: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
             quota_window_queries: Mutex::new(Vec::new()),
+            quota_forecast_history: Mutex::new(QuotaForecastHistory::default()),
         })
     }
 
@@ -638,6 +656,17 @@ impl AccountStore for FakeAccountStore {
             .lock()
             .expect("quota window usage")
             .clone())
+    }
+
+    async fn load_quota_forecast_history(
+        &self,
+        window: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<QuotaForecastHistory> {
+        self.quota_window_queries
+            .lock()
+            .unwrap()
+            .push(window.clone());
+        Ok(self.quota_forecast_history.lock().unwrap().clone())
     }
 
     async fn credential_details(
@@ -1708,6 +1737,174 @@ async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     assert_eq!(
         page.items.first().expect("account item").projection.status,
         gateway_admin::model::accounts::AccountStatus::Normal,
+    );
+}
+
+#[tokio::test]
+async fn quota_forecast_reads_raw_snapshot_and_limits_usage_to_observation_time() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let now = Utc::now();
+    let observed = now - TimeDelta::hours(1);
+    let reset = now + TimeDelta::days(1);
+    provider.set_quota(ProviderQuota {
+        observed_at: Some(observed),
+        limit_reached: true,
+        windows: vec![ProviderQuotaWindow {
+            key: "week".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "周额度".to_owned(),
+            limit_id: None,
+            limit_name: None,
+            role: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+            window_seconds: Some(7 * 86_400),
+            used_percent: Some(20.0),
+            reset_at: Some(reset),
+            limit_reached: true,
+            // Provider 自带的统计不保证与快照同一时间，预测必须重新采样。
+            local_usage: Some(quota_local_usage("acct_test", 999_999)),
+            provider_data: None,
+        }],
+        ..empty_quota()
+    });
+    let mut account = account_record("openai");
+    account.created_at = now - TimeDelta::days(60);
+    let store = FakeAccountStore::with_account(account, events());
+    store.set_quota_window_usage(vec![AccountUsageWindowResult {
+        account_id: "acct_test".to_owned(),
+        key: "week".to_owned(),
+        usage: quota_local_usage("acct_test", 1_000),
+    }]);
+    store.quota_forecast_history.lock().unwrap().usage = QuotaForecastUsage {
+        request_count: 10,
+        tokens: 1_000,
+        known_cost_count: 10,
+        ..Default::default()
+    };
+    let report = accounts_service(provider.clone(), store.clone())
+        .await
+        .accounts()
+        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .expect("quota forecast");
+    assert_eq!(report.account_id, "acct_test");
+    assert_eq!(report.forecasts[0].estimated_tokens, Some(5_000));
+    assert_eq!(
+        report.forecasts[0].source.as_ref().unwrap().observed_at,
+        Some(observed)
+    );
+    let queries = store.quota_window_queries();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].range.start, reset - TimeDelta::days(7));
+    assert_eq!(queries[0].range.end, observed);
+    let requests = provider.quota_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].refresh);
+    assert!(requests[0].rolling_usage.is_none());
+}
+
+#[tokio::test]
+async fn quota_forecast_does_not_query_usage_without_a_current_snapshot() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    let report = accounts_service(provider.clone(), store.clone())
+        .await
+        .accounts()
+        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .expect("empty forecast");
+    assert!(
+        report
+            .forecasts
+            .iter()
+            .all(|item| item.estimated_tokens.is_none())
+    );
+    assert!(store.quota_window_queries().is_empty());
+    assert!(!provider.quota_requests.lock().unwrap()[0].refresh);
+}
+
+#[tokio::test]
+async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_changed_bucket() {
+    use gateway_admin::model::quota_forecast_sampling::{
+        QuotaForecastHistoryPoint, QuotaForecastMethod,
+    };
+    let now = Utc::now();
+    let observed = now - TimeDelta::minutes(1);
+    let reset = now + TimeDelta::days(1);
+    let added = now - TimeDelta::hours(5);
+    let provider = FakeProviderAdmin::new("openai", events());
+    provider.set_quota(ProviderQuota {
+        plan_type: Some("pro".to_owned()),
+        observed_at: Some(observed),
+        windows: vec![ProviderQuotaWindow {
+            key: "week".to_owned(),
+            group: "shortTerm".to_owned(),
+            label: "周额度".to_owned(),
+            limit_id: None,
+            limit_name: None,
+            role: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+            window_seconds: Some(604_800),
+            used_percent: Some(40.0),
+            reset_at: Some(reset),
+            limit_reached: false,
+            local_usage: None,
+            provider_data: None,
+        }],
+        ..empty_quota()
+    });
+    let mut account = account_record("openai");
+    account.created_at = added;
+    let store = FakeAccountStore::with_account(account, events());
+    let make_point = |hours, percent, tokens, delta| {
+        QuotaForecastHistoryPoint {
+        started_at: now - TimeDelta::hours(hours) - TimeDelta::seconds(10),
+        completed_at: now - TimeDelta::hours(hours),
+        usage: QuotaForecastUsage { request_count: tokens / 100, tokens, ..Default::default() },
+        provider_observation: ProviderDocument::new(OpaqueProviderData::new(serde_json::json!({
+            "percent": percent, "reset": (reset + TimeDelta::seconds(delta)).to_rfc3339(), "plan": "pro",
+        }).as_object().unwrap().clone())),
+    }
+    };
+    *store.quota_forecast_history.lock().unwrap() = QuotaForecastHistory {
+        points: vec![
+            make_point(3, 20.0, 1_000, 1),
+            make_point(2, 30.0, 1_500, -1),
+        ],
+        usage: QuotaForecastUsage {
+            request_count: 20,
+            tokens: 2_000,
+            ..Default::default()
+        },
+        pending_request_count: 1,
+    };
+    let services = accounts_service(provider, store.clone()).await;
+    let result = services
+        .accounts()
+        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(result.forecasts[0].method, QuotaForecastMethod::Incremental);
+    assert_eq!(result.forecasts[0].estimated_tokens, Some(5_000));
+    assert_eq!(result.forecasts[0].remaining_tokens, Some(3_000));
+    assert_eq!(store.quota_window_queries()[0].range.start, added);
+    store
+        .quota_forecast_history
+        .lock()
+        .unwrap()
+        .points
+        .push(make_point(1, 35.0, 1_700, 3_600));
+    let result = services
+        .accounts()
+        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap();
+    assert!(result.forecasts[0].estimated_tokens.is_none());
+    assert!(
+        result.forecasts[0]
+            .unavailable_reason
+            .unwrap()
+            .contains("不连续")
     );
 }
 

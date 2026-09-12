@@ -137,6 +137,79 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
 }
 
 #[tokio::test]
+async fn quota_forecast_observation_reuses_protocol_parser_and_keeps_window_identity() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let provider = bundle.admin_provider();
+    let mut window = gateway_admin::model::provider_credentials::ProviderQuotaWindow {
+        key: "codex:604800s".to_owned(),
+        group: "shortTerm".to_owned(),
+        label: "周额度".to_owned(),
+        limit_id: Some("codex".to_owned()),
+        limit_name: None,
+        role: Some(ProviderQuotaWindowRole::Primary),
+        local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+        window_seconds: Some(604_800),
+        used_percent: Some(50.0),
+        reset_at: None,
+        limit_reached: false,
+        local_usage: None,
+        provider_data: None,
+    };
+    let document = ProviderDocument::new(OpaqueProviderData::new(
+        json!({
+            "requestSummary": {"ignored": true},
+            "rateLimitHeaders": [
+                ["x-codex-primary-used-percent", "32.5"],
+                ["x-codex-primary-window-minutes", "10080"],
+                ["x-codex-primary-reset-at", "1789805447"],
+                ["x-codex-secondary-used-percent", "4"],
+                ["x-codex-secondary-window-minutes", "300"],
+                ["x-codex-secondary-reset-at", "1789218647"],
+                ["x-codex-plan-type", "pro"]
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+    let observed = provider
+        .quota_forecast_observation(&document, &window)
+        .unwrap();
+    assert_eq!(observed.used_percent, 32.5);
+    assert_eq!(observed.plan_type.as_deref(), Some("pro"));
+    assert_eq!(observed.reset_at.timestamp(), 1_789_805_447);
+    window.role = Some(ProviderQuotaWindowRole::Secondary);
+    assert!(
+        provider
+            .quota_forecast_observation(&document, &window)
+            .is_none()
+    );
+    window.role = Some(ProviderQuotaWindowRole::Primary);
+    window.limit_id = Some("other_bucket".to_owned());
+    assert!(
+        provider
+            .quota_forecast_observation(&document, &window)
+            .is_none()
+    );
+    let malformed = ProviderDocument::new(OpaqueProviderData::new(
+        json!({
+            "rateLimitHeaders": "not-a-header-list"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+    assert!(
+        provider
+            .quota_forecast_observation(&malformed, &window)
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn initialized_provider_keeps_thread_spawn_transport_conversations_distinct() {
     let account_id = "acct_initialized_thread_spawn";
     let store = Arc::new(MemoryAccountStore::default());

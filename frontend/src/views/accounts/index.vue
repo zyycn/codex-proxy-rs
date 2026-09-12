@@ -291,14 +291,17 @@ const {
             </template>
 
             <template #expanded="{ row }">
-              <div class="grid items-stretch gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr] xl:min-h-[19.25rem]">
+              <div class="grid items-stretch gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr] xl:min-h-77">
                 <AccountQuotaPanel
                   :account="row"
                   :refreshing="refreshingQuotaAccountIds.has(row.id)"
                   @account-updated="void replaceAccount($event)"
                   @refresh-quota="handleRefreshQuota"
                 />
-                <AccountUsagePanel :account="row" />
+                <AccountUsagePanel
+                  :account="row"
+                  @account-updated="void replaceAccount($event)"
+                />
               </div>
             </template>
           </BaseTable>

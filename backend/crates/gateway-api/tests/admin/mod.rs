@@ -748,6 +748,13 @@ impl AccountStore for UnusedStore {
         Err(unavailable("account quota window usage"))
     }
 
+    async fn load_quota_forecast_history(
+        &self,
+        _: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<gateway_admin::model::quota_forecast_sampling::QuotaForecastHistory> {
+        Err(unavailable("quota forecast history"))
+    }
+
     async fn credential_details(
         &self,
         _: &ProviderKind,

@@ -23,6 +23,10 @@ where
         )
         .route("/api/admin/accounts/quota", get(account_quota::<S>))
         .route(
+            "/api/admin/accounts/quota-forecast",
+            get(account_quota_forecast::<S>),
+        )
+        .route(
             "/api/admin/accounts/profile-statistics",
             get(account_profile_statistics::<S>),
         )
@@ -362,6 +366,27 @@ where
         account: account_view(result, Utc::now()),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+async fn account_quota_forecast<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountIdQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let account_id = query.into_id().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .quota_forecast(&account_id)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountQuotaForecastData::from(result)),
+    ))
 }
 
 async fn account_profile_statistics<S>(

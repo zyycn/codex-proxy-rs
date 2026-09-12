@@ -21,6 +21,10 @@ use crate::model::provider_credentials::{
     ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaRequest,
     ProviderResetCreditResult, ProviderResetCredits, explicit_plan_type,
 };
+use crate::model::{
+    provider_credentials::{ProviderDocument, ProviderQuotaWindow},
+    quota_forecast_sampling::QuotaForecastObservation,
+};
 
 /// Provider 管理失败的稳定分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +174,15 @@ pub trait ProviderAdmin: Send + Sync {
         &self,
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
+
+    /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算。
+    fn quota_forecast_observation(
+        &self,
+        _document: &ProviderDocument,
+        _window: &ProviderQuotaWindow,
+    ) -> Option<QuotaForecastObservation> {
+        None
+    }
 
     /// 查询 Provider 官方个人资料统计；不支持该能力的 Provider 使用默认拒绝。
     async fn profile_statistics(

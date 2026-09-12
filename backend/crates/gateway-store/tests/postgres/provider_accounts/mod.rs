@@ -4,6 +4,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+mod quota_forecast;
+
 use chrono::{TimeDelta, Utc};
 use gateway_admin::{
     model::{

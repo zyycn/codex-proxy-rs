@@ -144,6 +144,68 @@ export interface Account {
   groups: AccountGroupRef[]
 }
 
+export interface AccountQuotaForecast {
+  period: 'weekly' | 'monthly'
+  targetDays: number
+  extrapolated: boolean
+  source: {
+    key: string
+    label: string
+    windowDays: number
+    usedPercent: number | null
+    usedPercentDisplay: string
+    observedAt: string | null
+    observedAtDisplay: string
+    startAt: string | null
+    startAtDisplay: string
+    resetAt: string
+    resetAtDisplay: string
+    requestCountDisplay: string
+    tokensDisplay: string
+    inputTokensDisplay: string
+    outputTokensDisplay: string
+    cachedTokensDisplay: string
+    knownCostCount: number
+    knownCostCountDisplay: string
+    partialCostCount: number
+    partialCostCountDisplay: string
+    unavailableCostCount: number
+    unavailableCostCountDisplay: string
+    usdDisplay: string
+    sampleStartAt: string | null
+    sampleStartAtDisplay: string
+    baselinePercent: number
+    sampledPercent: number | null
+    sampledPercentDisplay: string
+    blockCount: number
+    observationCount: number
+    missingTokenCount: number
+    excludedRequestCount: number
+    pendingRequestCount: number
+  } | null
+  unavailableReason: string | null
+  lowSample: boolean
+  incompleteCost: boolean
+  incompleteTokens: boolean
+  method: 'cumulative' | 'incremental'
+  methodDisplay: string
+  estimatedTokens: number | null
+  estimatedTokensDisplay: string
+  estimatedUsd: number | null
+  estimatedUsdDisplay: string
+  remainingTokens: number | null
+  remainingTokensDisplay: string
+  remainingUsd: number | null
+  remainingUsdDisplay: string
+}
+
+export interface AccountQuotaForecastResponse {
+  accountId: string
+  generatedAt: string
+  generatedAtDisplay: string
+  forecasts: AccountQuotaForecast[]
+}
+
 export interface AccountPageMeta {
   page: number
   pageSize: number
@@ -389,6 +451,15 @@ export function recoverAccount(data: AccountIdParam, options: RequestOptions = {
 export function getAccountProfileStatistics(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountProfileStatisticsResponse>({
     url: '/api/admin/accounts/profile-statistics',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function getAccountQuotaForecast(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountQuotaForecastResponse>({
+    url: '/api/admin/accounts/quota-forecast',
     method: 'GET',
     params: data,
     ...options,

@@ -34,6 +34,7 @@ use crate::model::{
         AuthorizationCommit, CredentialDetails, CredentialImportCommit, CredentialImportResult,
         CredentialMutationResult, CredentialRotationCommit, ProviderExportCredentialInput,
     },
+    quota_forecast_sampling::QuotaForecastHistory,
     settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
 };
 
@@ -108,6 +109,12 @@ pub trait AccountStore: Send + Sync {
         &self,
         windows: &[AccountUsageWindowQuery],
     ) -> AdminStoreResult<Vec<AccountUsageWindowResult>>;
+
+    /// 从同一数据库语句取得截止快照的累计用量和有界历史观测。
+    async fn load_quota_forecast_history(
+        &self,
+        window: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<QuotaForecastHistory>;
 
     async fn credential_details(
         &self,

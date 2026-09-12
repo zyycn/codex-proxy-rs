@@ -28,6 +28,8 @@ use crate::{
             ProviderQuotaWindow, ProviderResetCreditResult, ProviderResetCredits,
             QuotaLocalUsageAttribution,
         },
+        quota_forecast::{AccountQuotaForecastReport, account_quota_forecasts},
+        quota_forecast_sampling::{QuotaForecastPoint, select_forecast_sample},
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -82,6 +84,11 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
         refresh: bool,
     ) -> Result<AccountDirectoryItem, AdminError>;
+
+    async fn quota_forecast(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<AccountQuotaForecastReport, AdminError>;
 
     async fn profile_statistics(
         &self,
@@ -213,6 +220,7 @@ impl DefaultAccountsService {
                 quota
                     .windows
                     .iter()
+                    .filter(|window| window.local_usage.is_none())
                     .filter_map(|window| quota_usage_window(&item.account.id, window))
             })
             .collect::<Vec<_>>();
@@ -581,6 +589,97 @@ impl AccountsService for DefaultAccountsService {
         self.load_directory_item(account_id, refresh).await
     }
 
+    async fn quota_forecast(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<AccountQuotaForecastReport, AdminError> {
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        let quota = provider
+            .quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: false,
+                rolling_usage: None,
+            })
+            .await
+            .map_err(|error| map_provider_error(error, "forecast quota snapshot"))?;
+        let now = Utc::now();
+        let mut samples = Vec::new();
+        for (window, _) in quota.usage_windows() {
+            let (Some(mut query), Some(observed), Some(percent)) = (
+                quota_usage_window(account_id.as_str(), window),
+                quota.observed_at,
+                window.used_percent,
+            ) else {
+                continue;
+            };
+            query.range.start = query.range.start.max(stored.account.created_at);
+            if query.range.start >= observed
+                || observed > now
+                || now >= query.range.end
+                || !percent.is_finite()
+                || !(0.0..=100.0).contains(&percent)
+            {
+                continue;
+            }
+            let reset_at = query.range.end;
+            query.range.end = observed;
+            let history = self
+                .accounts
+                .load_quota_forecast_history(&query)
+                .await
+                .map_err(|error| map_store_error(error, "forecast paired usage"))?;
+            let mut points = Vec::new();
+            let mut interrupted = false;
+            for point in history.points {
+                let Some(fact) =
+                    provider.quota_forecast_observation(&point.provider_observation, window)
+                else {
+                    continue;
+                };
+                let same_plan = quota
+                    .plan_type
+                    .as_deref()
+                    .zip(fact.plan_type.as_deref())
+                    .is_some_and(|(current, previous)| current.eq_ignore_ascii_case(previous));
+                // 仅容纳已观测到的秒级量化抖动，不用宽时间容差合并实际重置。
+                // 不匹配的段截断基线；之后的有效观测可以重新积累。
+                if !same_plan || (fact.reset_at - reset_at).abs() > Duration::seconds(2) {
+                    points.clear();
+                    interrupted = true;
+                    continue;
+                }
+                points.push(QuotaForecastPoint {
+                    observed_at: point.completed_at,
+                    used_percent: fact.used_percent,
+                    usage: point.usage,
+                });
+            }
+            let mut sample = select_forecast_sample(
+                window.key.clone(),
+                query.range.start,
+                QuotaForecastPoint {
+                    observed_at: observed,
+                    used_percent: percent,
+                    usage: history.usage,
+                },
+                points,
+                history.pending_request_count,
+            );
+            if interrupted
+                && sample.method
+                    == crate::model::quota_forecast_sampling::QuotaForecastMethod::Cumulative
+            {
+                sample.discontinuous = true;
+            }
+            samples.push(sample);
+        }
+        Ok(AccountQuotaForecastReport {
+            account_id: account_id.to_string(),
+            generated_at: now,
+            forecasts: account_quota_forecasts(&quota, stored.account.created_at, now, &samples),
+        })
+    }
+
     async fn profile_statistics(
         &self,
         account_id: &ProviderAccountId,
@@ -762,14 +861,12 @@ fn quota_usage_window(
     account_id: &str,
     window: &ProviderQuotaWindow,
 ) -> Option<AccountUsageWindowQuery> {
-    if window.local_usage.is_some()
-        || window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide
-    {
+    if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide {
         return None;
     }
     let reset_at = window.reset_at?;
     let seconds = i64::try_from(window.window_seconds?).ok()?;
-    let start = reset_at.checked_sub_signed(Duration::seconds(seconds))?;
+    let start = reset_at.checked_sub_signed(Duration::try_seconds(seconds)?)?;
     let range = TimeRange::new(start, reset_at).ok()?;
     // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口。
     Some(AccountUsageWindowQuery {

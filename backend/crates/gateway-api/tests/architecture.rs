@@ -89,7 +89,9 @@ fn test_tree_should_match_frozen_rust_mirror() {
     actual.sort();
     let mut expected = vec![
         "tests/admin/account_groups.rs",
+        "tests/admin/accounts/handlers.rs",
         "tests/admin/accounts/mod.rs",
+        "tests/admin/accounts/presenter.rs",
         "tests/admin/auth.rs",
         "tests/admin/client_keys.rs",
         "tests/admin/errors.rs",

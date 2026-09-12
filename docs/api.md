@@ -226,6 +226,7 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
+| `GET` | `/api/admin/accounts/quota-forecast` | `accountId` | 按需读取周/月容量预测、源窗口剩余估算与采样依据，不刷新上游额度 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
 | `GET` | `/api/admin/accounts/profile-statistics` | `accountId` | 实时查询 OpenAI/Codex 官方个人资料中的累计活动与使用洞察 |
 | `GET` | `/api/admin/accounts/reset-credits` | `accountId` | 查询 OpenAI 上游主动额度重置卡，不读取本地库存 |
@@ -455,6 +456,52 @@ OAuth start 使用：
 - 账号页没有定时静默轮询。手工额度刷新只替换响应中的账号行并同步状态汇总，不触发整页 loading；若
   新状态不符合当前筛选，该行从当前页移除。请求驱动或后台任务产生的状态变化，需要下一次显式查询账号
   列表后才会显示。
+
+### 周/月额度预测
+
+`GET /api/admin/accounts/quota-forecast?accountId=...` 使用现有管理员鉴权，返回独立的预测结果，不向
+账号列表或详情附加预测字段。管理端从“模型使用排行”后的图标打开弹窗时查询；切换周/月仅切换本次结果，
+不轮询。关闭弹窗取消未完成的查询，重新打开重新采样。“刷新额度”仍调用现有
+`POST /api/admin/accounts/quota/refresh`，成功后替换账号行并重新查询预测。
+
+响应 `data` 包含 `accountId`、`generatedAt`、`generatedAtDisplay` 和 `forecasts`（`weekly`、`monthly`）：
+
+- `targetDays`、`extrapolated`：对应周期存在真实账号级窗口时采用实际时长；缺少对应窗口时，使用
+  可统计的周/月窗口按 7/30 天折算，明确标记 `extrapolated: true`。不把短期限流或模型专属桶当作账号容量。
+- `estimatedTokens` / `estimatedUsd` 及对应 `*Display`：完整目标周期的近似容量，
+  公式为 `样本用量 × 100 / sampledPercent × 目标窗口秒数 / 源窗口秒数`。
+- `remainingTokens` / `remainingUsd` 及对应 `*Display`：**额度快照时源窗口**的剩余估算，
+  公式为 `样本用量 × (100 - usedPercent) / sampledPercent`；不随目标周期折算，不代表当前可消费余额。
+- `method` / `methodDisplay`：`incremental` 为近期分段估算，`cumulative` 为窗口累计估算。
+  同一额度段内，以历史额度和截至相应完成时间的累计用量建立基线，每累计至少 5 个百分点形成一段，
+  使用最近 3 个完整段及未满一段的尾部。只对合并区间计算比值，不平均逐请求小分母比值。
+  重复读数不增加段数；大于 1 个百分点的回落或累计计数倒退会中断采样，不能静默跨越。
+- `source`：源窗口标识、实际天数、原始已用比例、窗口开始 / 额度快照 / 重置时间，
+  **选中采样区间**的请求数、总 Token、输入 / 输出 / 缓存命中构成、USD 费用与费用记录数。
+  `sampleStartAt` / `sampleStartAtDisplay` 为实际采样开始，`baselinePercent` 为基线已用比例，
+  `sampledPercent` / `sampledPercentDisplay` 为有效额度进度（百分点，而非时间进度）。
+  `blockCount` 是采用的完整进度段数，`observationCount` 是可供配对的历史点数，二者均不是独立统计样本数。
+  `missingTokenCount` 为不能由 total 或完整 input/output 确定 Token 的请求数；
+  `excludedRequestCount` 为选中区间内未进入成功用量口径的已结束请求数；
+  `pendingRequestCount` 为查询范围内在额度快照时尚未结束的请求数。
+  缓存命中属于输入，不重复相加。费用覆盖针对有效 USD 记录；其他币种或缺少有效金额均不能当成零 USD。
+- `unavailableReason`：不能估算时的说明，正常为 `null`。有效进度少于 5 个百分点不预测；
+  `lowSample` 表示有效进度不足 10 个百分点，或增量采样少于 2 个完整段，仅是质量提示，不承诺精度。
+  `incompleteCost` 仅抑制费用预测；`incompleteTokens` 仅抑制 Token 预测。未知值不按确定的零消耗外推。
+
+采样查询 `[max(resetAt - windowSeconds, accountAddedAt), observedAt)` 内开始的请求，
+仅把 `completedAt <= observedAt` 的完整交付用量计入当前分子；历史分子按各点的完成时间累计，
+同完成时间使用同一累计值。每个源窗口从同一数据库语句取得累计数值和最多 128 个按时间分桶的历史文档，
+不会因历史点抽样而丢弃其间的成功 Token，也不重新聚合模型排行；接口不返回原始 Provider 文档。
+
+OpenAI 复用已有限流协议解析器匹配额度桶、槽位、时长和明确的套餐。仅允许最多 2 秒的重置时间抖动，
+超出或套餐改变则截断历史基线；不将宽时间容差当作上游窗口身份。历史文档缺少独立额度观测时间，
+只能以请求完成时间近似配对，不证明上游扣额与本地完成同步。无法积累有效增量时，仅在账号于窗口开始前
+已加入且没有已知采样断点的情况下使用累计估算；中途加入账号可以在新基线之后积累，无需等待下次重置。
+
+预测没有独立持久化或调度状态，也不参与账单结算。站外消耗、历史日志清理、异步观测延迟、未成功交付的
+上游消耗和模型组合变化仍可能造成误差；等价 USD 费用不是官方订阅价格或固定额度承诺，
+30 天折算也不是自然月额度。记录覆盖率不等于预测准确率，不输出未经校准的置信区间。
 
 ### OpenAI 官方个人资料统计
 

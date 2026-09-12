@@ -884,28 +884,31 @@ impl ProviderQuota {
     /// Provider 投影顺序。没有符合条件的窗口时不回退到短期或历史累计。
     #[must_use]
     pub fn usage_window(&self) -> Option<(&ProviderQuotaWindow, AccountUsagePeriod)> {
-        self.windows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, window)| {
-                if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide
-                    || window.reset_at.is_none()
-                    || window.local_usage.is_none()
-                {
-                    return None;
-                }
-                let seconds = window.window_seconds?;
-                let period = if is_week_window(seconds) {
-                    AccountUsagePeriod::Weekly
-                } else if window.group == "monthly" && seconds >= 7 * 24 * 60 * 60 {
-                    AccountUsagePeriod::Monthly
-                } else {
-                    return None;
-                };
-                Some((index, window, period))
-            })
-            .min_by_key(|(index, _, period)| (*period, *index))
-            .map(|(_, window, period)| (window, period))
+        self.usage_windows()
+            .filter(|(window, _)| window.local_usage.is_some())
+            .min_by_key(|(_, period)| *period)
+    }
+
+    /// 统计与预测共用窗口归属规则，避免把模型专属桶或短期限流当作账号容量。
+    pub(crate) fn usage_windows(
+        &self,
+    ) -> impl Iterator<Item = (&ProviderQuotaWindow, AccountUsagePeriod)> {
+        self.windows.iter().filter_map(|window| {
+            if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide
+                || window.reset_at.is_none()
+            {
+                return None;
+            }
+            let seconds = window.window_seconds?;
+            let period = if is_week_window(seconds) {
+                AccountUsagePeriod::Weekly
+            } else if window.group == "monthly" && seconds >= 7 * 24 * 60 * 60 {
+                AccountUsagePeriod::Monthly
+            } else {
+                return None;
+            };
+            Some((window, period))
+        })
     }
 
     /// 返回 Dashboard 使用的代表性额度比例。

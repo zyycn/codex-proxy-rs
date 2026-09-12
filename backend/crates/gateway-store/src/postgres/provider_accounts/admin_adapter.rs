@@ -476,6 +476,13 @@ impl AccountStore for PgAdminAccountStore {
         self.usage_by_windows(windows).await
     }
 
+    async fn load_quota_forecast_history(
+        &self,
+        window: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<gateway_admin::model::quota_forecast_sampling::QuotaForecastHistory> {
+        super::quota_forecast::load_history(&self.pool, &self.query_budget, window).await
+    }
+
     async fn credential_details(
         &self,
         provider_kind: &ProviderKind,
