@@ -26,7 +26,6 @@ pub struct AccountQuotaForecast {
     pub low_sample: bool,
     pub incomplete_cost: bool,
     pub incomplete_tokens: bool,
-    pub method: QuotaForecastMethod,
     pub estimated_tokens: Option<u64>,
     pub estimated_usd: Option<f64>,
     /// 剩余估算始终属于源窗口，不随目标周期折算。
@@ -36,30 +35,12 @@ pub struct AccountQuotaForecast {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaForecastSource {
-    pub key: String,
     pub label: String,
-    pub window_seconds: u64,
     pub used_percent: Option<f64>,
     pub observed_at: Option<DateTime<Utc>>,
-    pub start_at: Option<DateTime<Utc>>,
     pub reset_at: DateTime<Utc>,
-    pub request_count: u64,
     pub tokens: Option<u64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
-    pub known_cost_count: u64,
-    pub partial_cost_count: u64,
-    pub unavailable_cost_count: u64,
     pub usd: Option<f64>,
-    pub sample_start_at: Option<DateTime<Utc>>,
-    pub baseline_percent: f64,
-    pub sampled_percent: Option<f64>,
-    pub block_count: usize,
-    pub observation_count: usize,
-    pub missing_token_count: u64,
-    pub excluded_request_count: u64,
-    pub pending_request_count: u64,
 }
 
 /// 优先预测真实的对应窗口；缺少对应周期时只给出明确标识的 7/30 天容量折算。
@@ -88,7 +69,6 @@ pub fn account_quota_forecasts(
             low_sample: false,
             incomplete_cost: false,
             incomplete_tokens: false,
-            method: QuotaForecastMethod::Cumulative,
             estimated_tokens: None,
             estimated_usd: None,
             remaining_tokens: None,
@@ -138,30 +118,12 @@ impl AccountQuotaForecast {
             .and_then(Duration::try_seconds)
             .and_then(|duration| reset_at.checked_sub_signed(duration));
         self.source = Some(QuotaForecastSource {
-            key: window.key.clone(),
             label: window.label.clone(),
-            window_seconds: seconds,
             used_percent: percent,
             observed_at,
-            start_at: start,
             reset_at,
-            request_count: usage.map_or(0, |usage| usage.request_count),
             tokens: usage.map(|usage| usage.tokens),
-            input_tokens: usage.map(|usage| usage.input_tokens),
-            output_tokens: usage.map(|usage| usage.output_tokens),
-            cached_tokens: usage.map(|usage| usage.cached_tokens),
-            known_cost_count: usage.map_or(0, |usage| usage.known_cost_count),
-            partial_cost_count: 0,
-            unavailable_cost_count: usage.map_or(0, |usage| usage.unavailable_cost_count),
             usd,
-            sample_start_at: sample.map(|sample| sample.start_at),
-            baseline_percent: sample.map_or(0.0, |sample| sample.baseline_percent),
-            sampled_percent: sample.map(|sample| sample.sampled_percent),
-            block_count: sample.map_or(0, |sample| sample.block_count),
-            observation_count: sample.map_or(0, |sample| sample.observation_count),
-            missing_token_count: usage.map_or(0, |usage| usage.missing_token_count),
-            excluded_request_count: usage.map_or(0, |usage| usage.excluded_request_count),
-            pending_request_count: sample.map_or(0, |sample| sample.pending_request_count),
         });
         self.incomplete_cost = usage.is_none_or(|usage| {
             usage.unavailable_cost_count > 0
@@ -169,7 +131,7 @@ impl AccountQuotaForecast {
                 || usage.known_cost_count != usage.request_count
         });
         self.incomplete_tokens = usage.is_some_and(|usage| usage.missing_token_count > 0);
-        self.method = sample.map_or(QuotaForecastMethod::Cumulative, |sample| sample.method);
+        let method = sample.map_or(QuotaForecastMethod::Cumulative, |sample| sample.method);
         let Some(start) = start.filter(|start| *start <= now && now < reset_at) else {
             self.unavailable_reason = Some("额度窗口已过期或边界无效，请刷新账号额度后重试。");
             return;
@@ -183,7 +145,7 @@ impl AccountQuotaForecast {
                 Some("额度观测出现回落或累计记录不连续，正在重新积累配对样本。");
             return;
         }
-        if account_added_at > start && self.method == QuotaForecastMethod::Cumulative {
+        if account_added_at > start && method == QuotaForecastMethod::Cumulative {
             self.unavailable_reason = Some(
                 "本周期开始时的记录不完整，正在积累至少 5 个百分点的配对观测，无需等待下次重置。",
             );
@@ -210,7 +172,7 @@ impl AccountQuotaForecast {
             return;
         };
         self.low_sample = sample.sampled_percent < LOW_SAMPLE_PERCENT
-            || (self.method == QuotaForecastMethod::Incremental && sample.block_count < 2);
+            || (method == QuotaForecastMethod::Incremental && sample.block_count < 2);
         // 预测是近似展示值；不复用为账单金额，也不把月折算当成自然月或额外余额。
         let capacity_factor = 100.0 / sample.sampled_percent;
         let factor = capacity_factor * self.target_seconds as f64 / seconds as f64;

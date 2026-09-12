@@ -149,46 +149,19 @@ export interface AccountQuotaForecast {
   targetDays: number
   extrapolated: boolean
   source: {
-    key: string
     label: string
-    windowDays: number
     usedPercent: number | null
     usedPercentDisplay: string
     observedAt: string | null
     observedAtDisplay: string
-    startAt: string | null
-    startAtDisplay: string
     resetAt: string
-    resetAtDisplay: string
-    requestCountDisplay: string
     tokensDisplay: string
-    inputTokensDisplay: string
-    outputTokensDisplay: string
-    cachedTokensDisplay: string
-    knownCostCount: number
-    knownCostCountDisplay: string
-    partialCostCount: number
-    partialCostCountDisplay: string
-    unavailableCostCount: number
-    unavailableCostCountDisplay: string
     usdDisplay: string
-    sampleStartAt: string | null
-    sampleStartAtDisplay: string
-    baselinePercent: number
-    sampledPercent: number | null
-    sampledPercentDisplay: string
-    blockCount: number
-    observationCount: number
-    missingTokenCount: number
-    excludedRequestCount: number
-    pendingRequestCount: number
   } | null
   unavailableReason: string | null
   lowSample: boolean
   incompleteCost: boolean
   incompleteTokens: boolean
-  method: 'cumulative' | 'incremental'
-  methodDisplay: string
   estimatedTokens: number | null
   estimatedTokensDisplay: string
   estimatedUsd: number | null
@@ -202,7 +175,6 @@ export interface AccountQuotaForecast {
 export interface AccountQuotaForecastResponse {
   accountId: string
   generatedAt: string
-  generatedAtDisplay: string
   forecasts: AccountQuotaForecast[]
 }
 

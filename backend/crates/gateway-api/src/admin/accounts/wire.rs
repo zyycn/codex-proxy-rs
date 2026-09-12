@@ -278,7 +278,6 @@ pub struct AccountView {
 pub struct AccountQuotaForecastData {
     pub account_id: String,
     pub generated_at: String,
-    pub generated_at_display: String,
     pub forecasts: Vec<AccountQuotaForecastView>,
 }
 
@@ -293,8 +292,6 @@ pub struct AccountQuotaForecastView {
     pub low_sample: bool,
     pub incomplete_cost: bool,
     pub incomplete_tokens: bool,
-    pub method: &'static str,
-    pub method_display: &'static str,
     pub estimated_tokens: Option<u64>,
     pub estimated_tokens_display: String,
     pub estimated_usd: Option<f64>,
@@ -308,39 +305,14 @@ pub struct AccountQuotaForecastView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaForecastSourceView {
-    pub key: String,
     pub label: String,
-    pub window_days: f64,
     pub used_percent: Option<f64>,
     pub used_percent_display: String,
     pub observed_at: Option<String>,
     pub observed_at_display: String,
-    pub start_at: Option<String>,
-    pub start_at_display: String,
     pub reset_at: String,
-    pub reset_at_display: String,
-    pub request_count_display: String,
     pub tokens_display: String,
-    pub input_tokens_display: String,
-    pub output_tokens_display: String,
-    pub cached_tokens_display: String,
-    pub known_cost_count: u64,
-    pub known_cost_count_display: String,
-    pub partial_cost_count: u64,
-    pub partial_cost_count_display: String,
-    pub unavailable_cost_count: u64,
-    pub unavailable_cost_count_display: String,
     pub usd_display: String,
-    pub sample_start_at: Option<String>,
-    pub sample_start_at_display: String,
-    pub baseline_percent: f64,
-    pub sampled_percent: Option<f64>,
-    pub sampled_percent_display: String,
-    pub block_count: usize,
-    pub observation_count: usize,
-    pub missing_token_count: u64,
-    pub excluded_request_count: u64,
-    pub pending_request_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

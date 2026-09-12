@@ -89,16 +89,6 @@ pub enum QuotaForecastMethod {
     Incremental,
 }
 
-impl QuotaForecastMethod {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Cumulative => "cumulative",
-            Self::Incremental => "incremental",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct QuotaForecastSample {
     pub key: String,

@@ -13,7 +13,6 @@ import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useAccountQuotaForecast } from '../../composables/useAccountQuotaForecast'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
 import ForecastCapacity from './ForecastCapacity.vue'
-import ForecastSample from './ForecastSample.vue'
 import ForecastSkeleton from './Skeleton.vue'
 
 const props = defineProps<{ account: AccountRow }>()
@@ -65,7 +64,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
     v-model="open"
     title="额度预测"
     description="按当前用量结构，估算完整周期的容量"
-    size="xl"
+    size="md"
     tone="info"
   >
     <template #icon>
@@ -93,13 +92,12 @@ function handleExplanationKeydown(event: KeyboardEvent) {
             </template>
           </BaseEmpty>
         </div>
-        <div v-else-if="forecast" class="grid items-start gap-4 md:items-stretch" :class="forecast.source ? 'md:grid-cols-[1.15fr_1fr]' : ''">
+        <template v-else-if="forecast">
           <div v-if="unavailableReason" class="grid rounded-cp-card bg-cp-fill-tertiary/70 [html[data-theme=light]_&]:bg-cp-fill-quaternary/70">
             <BaseEmpty title="暂时无法预测" :description="unavailableReason" :icon="ChartNoAxesCombined" surface="none" class="min-h-72 content-center" />
           </div>
           <ForecastCapacity v-else :forecast="forecast" />
-          <ForecastSample v-if="forecast.source" :source="forecast.source" :method-display="forecast.methodDisplay" />
-        </div>
+        </template>
       </div>
     </div>
 
@@ -121,40 +119,25 @@ function handleExplanationKeydown(event: KeyboardEvent) {
             </BaseButton>
           </template>
           <section :id="explanationId" role="tooltip" class="grid w-96 max-w-[calc(100vw-2rem)] gap-3 p-4 text-cp-xs leading-relaxed text-cp-text-secondary">
-            <div class="grid gap-1">
-              <h4 class="m-0 font-heavy text-cp-text">
-                计算方式
-              </h4>
-              <p class="m-0">
-                样本用量 ÷（有效额度进度 / 100）<span v-if="forecast?.extrapolated"> × {{ forecast.targetDays }}/{{ forecast.source?.windowDays }}</span>。
-              </p>
-              <p class="m-0">
-                优先使用最近 3 个完整进度段及尾部，每段至少 5 个百分点；不足时仅在本周期记录可用的情况下使用累计估算。
-              </p>
-              <p class="m-0">
-                历史额度以请求完成时间近似对齐，不能证明扣额同步。覆盖率表示记录完整度，不是预测准确率。
-              </p>
-            </div>
-            <div v-if="forecast?.extrapolated" class="grid gap-1">
-              <h4 class="m-0 font-heavy text-cp-text">
-                跨周期折算
-              </h4>
-              <p class="m-0">
-                不代表自然月额度或可一次用完的余额；剩余估算仍属于源窗口。
-              </p>
-            </div>
-            <div class="grid gap-1">
-              <h4 class="m-0 font-heavy text-cp-text">
-                仅供参考
-              </h4>
-              <p class="m-0">
-                非官方承诺额度。站外使用、日志清理、观测延迟及模型组合变化均会影响结果；等价费用不是订阅价格或账户余额。
-              </p>
-            </div>
+            <h4 class="m-0 font-heavy text-cp-text">
+              仅供参考
+            </h4>
+            <p class="m-0">
+              根据已记录用量估算，结果会随使用的模型和方式变化，并非官方承诺额度。
+            </p>
+            <p v-if="forecast?.lowSample" class="m-0">
+              目前数据还较少，结果可能有较大波动。
+            </p>
+            <p v-if="forecast?.extrapolated" class="m-0">
+              本页预测为折算值，剩余量仍按{{ forecast.source?.label ?? '当前周期' }}计算。
+            </p>
+            <p class="m-0">
+              剩余量以数据更新时间为准；等价费用不是实际账单或账户余额。
+            </p>
           </section>
         </BasePopover>
-        <span v-if="report" class="hidden text-cp-xs text-cp-text-tertiary sm:block">
-          查询于 {{ report.generatedAtDisplay }}
+        <span v-if="forecast?.source?.observedAt" class="hidden text-cp-xs text-cp-text-tertiary sm:block">
+          更新于 {{ forecast.source.observedAtDisplay }}
         </span>
       </div>
       <BaseButton variant="secondary" @click="open = false">

@@ -6114,6 +6114,56 @@ fn request_observation_reads_openai_metadata_without_changing_the_operation() {
 }
 
 #[test]
+fn request_observation_classifies_prewarm_from_generate_without_rewriting_the_payload() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let provider = provider(&store);
+    let client_key_id = ClientApiKeyId::new("key_prewarm_observation").expect("client key");
+    for (generate, request_kind, expected_kind) in [
+        (Some(json!(false)), None, Some("prewarm")),
+        (Some(json!(false)), Some("prewarm"), Some("prewarm")),
+        (Some(json!(false)), Some("review"), Some("prewarm")),
+        (Some(json!(true)), Some("prewarm"), None),
+        (None, Some("prewarm"), None),
+        (Some(json!(null)), Some("prewarm"), None),
+        (Some(json!("false")), Some("prewarm"), None),
+        (None, Some("review"), Some("review")),
+        (None, None, None),
+    ] {
+        let mut body = Map::from_iter([
+            ("model".to_owned(), json!("gpt-test")),
+            ("input".to_owned(), json!("hello")),
+            ("store".to_owned(), json!(false)),
+        ]);
+        if let Some(generate) = generate {
+            body.insert("generate".to_owned(), generate);
+        }
+        let payload = ProtocolPayload::json_object("openai", body.clone())
+            .expect("OpenAI payload")
+            .with_context(Map::from_iter([(
+                "turn_metadata".to_owned(),
+                Value::String(
+                    json!({"request_kind": request_kind, "subagent_kind": "worker"}).to_string(),
+                ),
+            )]));
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+
+        let observation = provider.request_observation(&operation, &client_key_id);
+
+        assert_eq!(
+            observation.request_kind.as_deref(),
+            expected_kind,
+            "generate={:?}, request_kind={request_kind:?}",
+            body.get("generate"),
+        );
+        assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
+        let Operation::Generate(generation) = operation else {
+            unreachable!();
+        };
+        assert_eq!(generation.protocol_payload().body(), &body);
+    }
+}
+
+#[test]
 fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_catalog() {
     let store = Arc::new(MemoryAccountStore::default());
     let provider = provider(&store);
