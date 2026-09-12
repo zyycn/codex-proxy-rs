@@ -36,9 +36,6 @@ pub mod openai;
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiConfig {
-    /// 显式允许管理员会话通过 HTTP 传输；默认仍签发 Secure Cookie。
-    #[serde(default)]
-    pub allow_insecure_http: bool,
     pub asset_directory: PathBuf,
     pub cors_allowed_origins: Vec<String>,
     pub request_timeout_seconds: Option<u64>,
@@ -130,7 +127,6 @@ pub fn initialize(
     let request_id_header = HeaderName::from_str(&config.request_id_header)
         .map_err(|_| ApiError::Config(ApiConfigError::InvalidRequestIdHeader))?;
     let state = ApiState {
-        allow_insecure_http: config.allow_insecure_http,
         admin,
         openai: OpenAiService::new(execution, lifecycle),
         health: HealthStatus::new(probes, worker_health),
@@ -212,7 +208,6 @@ pub enum ApiError {
 
 #[derive(Clone)]
 pub(crate) struct ApiState {
-    allow_insecure_http: bool,
     admin: AdminServices,
     openai: OpenAiService,
     health: HealthStatus,
@@ -233,10 +228,6 @@ impl ApiState {
 impl admin::AdminSessionState for ApiState {
     fn admin_services(&self) -> &AdminServices {
         &self.admin
-    }
-
-    fn allow_insecure_http(&self) -> bool {
-        self.allow_insecure_http
     }
 }
 

@@ -55,8 +55,6 @@ admin:
   default_password: ''
 
 api:
-  # 允许 HTTP 管理员登录；开启后会话 Cookie 不带 Secure。默认关闭。
-  allow_insecure_http: false
   # Docker 内由 CPR_WEB_DIST_DIR 覆盖。
   asset_directory: '../frontend/dist'
   cors_allowed_origins: []

@@ -73,28 +73,14 @@ async fn api_router_with_origins_and_worker_health(
     cors_allowed_origins: Vec<String>,
     worker_health: Arc<dyn WorkerHealthSource>,
 ) -> axum::Router {
-    api_router_with_config(
-        execution,
+    let admin = crate::admin::AdminTestFixture::new().await;
+    gateway_api::initialize(
         gateway_api::ApiConfig {
-            allow_insecure_http: false,
             asset_directory: std::env::temp_dir(),
             cors_allowed_origins,
             request_timeout_seconds: None,
             request_id_header: "x-request-id".to_owned(),
         },
-        worker_health,
-    )
-    .await
-}
-
-pub(crate) async fn api_router_with_config(
-    execution: Arc<dyn ExecutionService>,
-    config: gateway_api::ApiConfig,
-    worker_health: Arc<dyn WorkerHealthSource>,
-) -> axum::Router {
-    let admin = crate::admin::AdminTestFixture::new().await;
-    gateway_api::initialize(
-        config,
         execution,
         admin.services,
         Vec::new(),

@@ -10,30 +10,40 @@ use super::models::ModelsExecution;
 const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 #[tokio::test]
-async fn configured_http_admin_sessions_preserve_login_status_and_logout() {
+async fn browser_origin_controls_http_admin_sessions_without_configuration() {
     use axum::body::to_bytes;
     use serde_json::{Value, json};
-    use std::sync::Arc;
-
-    for setting in [None, Some(false), Some(true)] {
-        let mut config = json!({"asset_directory": std::env::temp_dir(),
-            "cors_allowed_origins": [], "request_timeout_seconds": null,
-            "request_id_header": "x-request-id"});
-        if let Some(value) = setting {
-            config["allow_insecure_http"] = json!(value);
-        }
-        let app = super::api_router_with_config(
-            ModelsExecution::new(),
-            serde_json::from_value(config).unwrap(),
-            Arc::new(super::EmptyWorkerHealth),
-        )
-        .await;
+    for (origins, secure) in [
+        (vec!["http://admin.example.test"], false),
+        (vec!["http://192.0.2.1:8080"], false),
+        (vec!["http://[::1]:8080"], false),
+        (vec!["https://admin.example.test"], true),
+        (vec![], true),
+        (vec!["null"], true),
+        (vec!["invalid-origin"], true),
+        (vec!["http://admin.example.test/path"], true),
+        (vec!["http://admin.example.test?https"], true),
+        (vec!["http://user@admin.example.test"], true),
+        (
+            vec!["http://admin.example.test", "https://admin.example.test"],
+            true,
+        ),
+    ] {
+        let app = api_router_with_origins(ModelsExecution::new(), Vec::new()).await;
+        let request = |path: &str| {
+            let mut builder = Request::post(path)
+                .header("content-type", "application/json")
+                .header("x-forwarded-proto", "http")
+                .header("forwarded", "proto=http");
+            for origin in &origins {
+                builder = builder.header("origin", *origin);
+            }
+            builder
+        };
         let response = app
             .clone()
             .oneshot(
-                Request::post("/api/admin/auth/login")
-                    .header("content-type", "application/json")
-                    .header("x-forwarded-proto", "http")
+                request("/api/admin/auth/login")
                     .body(Body::from(
                         json!({"username": "admin_1", "password": "strong-admin-password"})
                             .to_string(),
@@ -46,7 +56,7 @@ async fn configured_http_admin_sessions_preserve_login_status_and_logout() {
         let cookie = response.headers()["set-cookie"].to_str().unwrap();
         let session = cookie.split(';').next().unwrap().to_owned();
         let attrs: Vec<_> = cookie.split(';').map(str::trim).collect();
-        assert_eq!(attrs.contains(&"Secure"), setting != Some(true));
+        assert_eq!(attrs.contains(&"Secure"), secure);
         for attribute in ["Path=/", "HttpOnly", "SameSite=Lax"] {
             assert!(attrs.contains(&attribute));
         }
@@ -68,7 +78,7 @@ async fn configured_http_admin_sessions_preserve_login_status_and_logout() {
         let response = app
             .clone()
             .oneshot(
-                Request::post("/api/admin/auth/logout")
+                request("/api/admin/auth/logout")
                     .header("cookie", &session)
                     .body(Body::empty())
                     .unwrap(),
@@ -79,7 +89,7 @@ async fn configured_http_admin_sessions_preserve_login_status_and_logout() {
         let cookie = response.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("cpr_admin_session=;"));
         let attrs: Vec<_> = cookie.split(';').map(str::trim).collect();
-        assert_eq!(attrs.contains(&"Secure"), setting != Some(true));
+        assert_eq!(attrs.contains(&"Secure"), secure);
         for attribute in ["Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"] {
             assert!(attrs.contains(&attribute));
         }

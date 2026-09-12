@@ -81,29 +81,15 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置反向代理，
 不要把 PostgreSQL 或 Redis 暴露到公网。
 
-管理员会话默认使用 `Secure` Cookie，适用于浏览器通过 HTTPS 访问的部署。
-若需要通过 HTTP 登录，在现有 `deploy/config.yaml` 的 `api` 段添加：
+同源管理端可直接通过 HTTP 或 HTTPS 登录，无需增加应用配置项。
+登录和退出根据浏览器自动携带的 `Origin` 设置会话 Cookie：HTTP 来源省略 `Secure`，
+HTTPS 来源保留 `Secure`，两者都保留 `HttpOnly`、`SameSite=Lax` 和退出时的过期设置。
+因此 HTTPS 反向代理使用 HTTP 回源时，浏览器会话仍使用 `Secure` Cookie。
+缺失、`null` 或非法 `Origin` 时保留 `Secure`，不根据 `X-Forwarded-Proto` 等转发头降级。
+反向代理应原样保留 `Origin`，不要清除它或改写 Cookie 的 `Secure` 属性。
+HTTP 传输不加密，公网部署仍建议使用 HTTPS。
 
-```yaml
-api:
-  allow_insecure_http: true
-```
-
-保留该段已有的其他字段。默认值为 `false`，旧配置省略此项时行为不变。开启后，登录及退出的
-会话 Cookie 不再携带 `Secure`，仍保留 `HttpOnly`、`SameSite=Lax` 和退出时的过期设置。
-HTTP 传输不加密，请由部署者按访问环境自行选择；此项不影响上游 TLS 证书验证。
-HTTPS 反向代理即使使用 HTTP 连接容器，也应保持默认值，开关取决于浏览器访问的协议。
-HTTP 页面上的 Key 和配置文件复制会使用浏览器兼容路径；支持 Clipboard API 的环境继续优先使用该 API。
-
-配置在启动时读取。升级到包含此功能的镜像后，重新创建应用容器以加载修改后的配置文件：
-
-```bash
-docker compose -f deploy/compose.yaml up -d --no-deps --force-recreate codex-proxy-rs
-```
-
-无需调整 Compose 的配置挂载，也无需 Nginx 重写 Cookie。若此前配置了移除或强加 `Secure` 的
-Cookie 重写规则，应移除该规则，使应用开关生效。直接暴露应用端口时，可将应用的端口映射改为
-`0.0.0.0:8080:8080`；数据库和 Redis 的端口保持仅本机访问。
+HTTP 页面上的 Key 和配置文件复制使用 VueUse 内置兼容路径；支持 Clipboard API 时使用现代 API。
 
 反向代理需要保留 `Authorization`，支持 `/v1/responses` 的 WebSocket Upgrade，
 并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
