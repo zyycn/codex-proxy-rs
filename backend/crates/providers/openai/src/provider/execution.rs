@@ -2,6 +2,8 @@
 
 use gateway_core::metering::{CalculatedCost, Usage};
 
+use crate::transport::search::prepare_search_body;
+
 use super::*;
 
 impl CodexProvider {
@@ -77,7 +79,7 @@ impl CodexProvider {
             RawJsonEndpointRequest {
                 response_origin: self.search_url.clone(),
                 endpoint_path: CODEX_ALPHA_SEARCH_PATH,
-                body: search.payload().body().clone(),
+                body: prepare_search_body(search.payload().body()),
                 image_turn_id: None,
                 turn_metadata,
                 session_affinity,

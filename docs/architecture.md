@@ -175,8 +175,8 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
 
 Responses 按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
-的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search body 中的模型
-及其他字段保持原始 bytes 并由上游解释。
+的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search 的模型与业务
+字段由上游解释，只有下述顶层 `prompt_cache_key` 兼容处理在 OpenAI Provider 内完成。
 
 ## 5. Provider 与协议边界
 
@@ -184,7 +184,10 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport。
 
 - OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
-  Search 的业务正文按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
+  Search 的业务正文按原始字节转发，Search 请求仅有一项例外：发送前自动移除中间层可能误注入的
+  顶层 `prompt_cache_key`。移除时保留其他字段的顺序、重复键和原始字段值；无该字段时保持整包字节。
+  API/Core 仍传递原始载荷，搜索会话亲和仍使用已有身份规则，公共 JSON transport 不承担字段过滤。
+  canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
 - Responses 的业务扩展头保留原始多值字节；传输与反代请求头分类由 `gateway-protocol` 统一定义，
   API 入站与 OpenAI Provider 编码共同使用。下游链路元数据和压缩协商不跨越该边界，
   上游认证、请求画像与传输字段仍由 Provider 生成；响应方向的诊断头不受请求过滤规则影响。

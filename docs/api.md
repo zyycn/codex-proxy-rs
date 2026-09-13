@@ -143,7 +143,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
-| `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
+| `POST` | `/v1/alpha/search` | Codex standalone web search；自动移除请求顶层 `prompt_cache_key`，响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 请求与响应正文原样转发 |
 | `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
@@ -221,7 +221,12 @@ OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段
 假设 UUID 或固定长度；OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical
 观测结果重写。Images 请求不读取或重建 JSON，也不要求或映射模型字段；它固定使用 OpenAI Provider，
 只在原始字节之外完成账号选择、鉴权头替换和端点路由，成功与失败响应正文同样保持原始字节。
-`/v1/alpha/search` 使用相同的 OpenAI Provider 原生端点边界：body（包括 `model`）不解析、不映射，
+`/v1/alpha/search` 使用相同的 OpenAI Provider 原生端点边界，`model` 不映射。为兼容中间层误注入
+Responses 缓存字段的请求，OpenAI Provider 在发送前自动移除 JSON 对象顶层的所有 `prompt_cache_key`，
+无需配置，也不依赖 `input` 的存在或类型。字段名按 JSON 转义解码后匹配，嵌套同名字段保留。
+存在该字段时仅重建顶层对象结构，保留其他字段的顺序、重复键和字段值的原始 JSON；不存在时整包字节
+不变。非法 JSON 和非对象正文仍原样交由上游校验。此兼容不影响 Responses 的缓存键与会话亲和，
+也不改变 Images 的请求正文或搜索的成功、失败响应正文。
 `x-codex-turn-metadata` 在移除客户端账号身份并按当前 lease 重写 installation ID 后转发；上游账号
 Authorization、Cookie、account ID、originator 和 User-Agent 均由代理安全重建。xAI 是 Grok wire 与
 Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。

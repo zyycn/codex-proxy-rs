@@ -992,13 +992,13 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
         (
             ImageRequestKind::Generation,
             "/codex/images/generations",
-            br#"{ "model":"gpt-image-future", "prompt":"a lighthouse", "background":"transparent", "future_option":{"schema":2}, "future_integer":9007199254740993 }"#.as_slice(),
+            br#"{ "model":"gpt-image-future", "prompt":"a lighthouse", "background":"transparent", "future_option":{"schema":2}, "future_integer":9007199254740993, "prompt_cache_key":"image-passthrough" }"#.as_slice(),
             br#"{ "created": 1787212800, "data": [{"b64_json":"AAEC"}], "future": 9007199254740993 }"#.as_slice(),
         ),
         (
             ImageRequestKind::Edit,
             "/codex/images/edits",
-            br#"{"model":"gpt-image-2","images":[{"image_url":"data:image/png;base64,AAEC"}],"prompt":"add fog","prompt":"duplicate remains opaque"}"#.as_slice(),
+            br#"{"model":"gpt-image-2","images":[{"image_url":"data:image/png;base64,AAEC"}],"prompt":"add fog","prompt":"duplicate remains opaque","prompt_cache_key":"image-passthrough"}"#.as_slice(),
             br#"{"created":1787212801,"data":[{"b64_json":"AwQF"}],"quality":"high"}"#.as_slice(),
         ),
         (
@@ -1523,7 +1523,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let search = Operation::Search(StandaloneSearchRequest::from_raw_json(
         RawJsonPayload::new(
             "openai",
-            Bytes::from_static(br#"{ "id":"shared-root", "commands":{}, "future":1, "future":2 }"#),
+            Bytes::from_static(br#"{ "id":"shared-root", "commands":{}, "future":1, "future":2, "prompt_cache_key":"unrelated-cch-session" }"#),
         )
         .expect("search payload")
         .with_context(thread_id.map_or_else(Map::new, |thread_id| {
@@ -1768,6 +1768,157 @@ async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_select
         metadata.get("installation_id"),
         Some(&json!("client-installation"))
     );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn standalone_search_should_remove_only_top_level_prompt_cache_keys() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let response_body = br#"{ "encrypted_output":"ciphertext", "output":"search result" }"#;
+    let cases = [
+        (
+            r#"{ "id":"search-session", "model":"gpt-future", "input":[{"role":"user","content":"search"}], "commands":{"search_query":[{"q":"test"}]}, "prompt_cache_key":"cch-session" }"#,
+            r#"{"id":"search-session","model":"gpt-future","input":[{"role":"user","content":"search"}],"commands":{"search_query":[{"q":"test"}]}}"#,
+        ),
+        (
+            r#"{"prompt_cache_key":"cch","commands":{}}"#,
+            r#"{"commands":{}}"#,
+        ),
+        (
+            r#"{"id":"s","prompt_cache_key":null,"commands":{}}"#,
+            r#"{"id":"s","commands":{}}"#,
+        ),
+        (
+            r#"{"commands":{},"prompt_cache_key":42}"#,
+            r#"{"commands":{}}"#,
+        ),
+        (r#"{"prompt_cache_key":true}"#, "{}"),
+        (
+            r#"{"prompt_cache_key":[],"id":"s","prompt_cache_key":{},"commands":{},"prompt_cache_\u006bey":"escaped"}"#,
+            r#"{"id":"s","commands":{}}"#,
+        ),
+        (
+            r#"{ "prompt_cache_key":"cch", "future":1, "input":"literal prompt_cache_key", "future":2, "commands":{ "prompt_cache_key":"nested", "search_query":[{"q":"\\\"prompt_cache_key"}] }, "large":9007199254740993123456789, "decimal":1.2300e+04, "escaped":"\u0061" }"#,
+            r#"{"future":1,"input":"literal prompt_cache_key","future":2,"commands":{ "prompt_cache_key":"nested", "search_query":[{"q":"\\\"prompt_cache_key"}] },"large":9007199254740993123456789,"decimal":1.2300e+04,"escaped":"\u0061"}"#,
+        ),
+        (
+            r#"{ "commands":{ "prompt_cache_key":"nested" }, "future":1, "future":2 }"#,
+            r#"{ "commands":{ "prompt_cache_key":"nested" }, "future":1, "future":2 }"#,
+        ),
+    ];
+    Mock::given(method("POST"))
+        .and(path("/codex/alpha/search"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("upstream request JSON");
+            if body.get("prompt_cache_key").is_some() {
+                return ResponseTemplate::new(400).set_body_json(json!({
+                    "error": {
+                        "message": "Unknown parameter: 'prompt_cache_key'.",
+                        "type": "invalid_request_error",
+                        "param": "prompt_cache_key",
+                        "code": "unknown_parameter"
+                    }
+                }));
+            }
+            ResponseTemplate::new(200).set_body_raw(response_body.to_vec(), "application/json")
+        })
+        .expect(cases.len() as u64)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    for (index, (input, expected)) in cases.iter().enumerate() {
+        let payload = RawJsonPayload::new("openai", Bytes::from_static(input.as_bytes()))
+            .expect("search payload");
+        let operation = Operation::Search(StandaloneSearchRequest::from_raw_json(payload));
+        let mut stream = provider
+            .execute(
+                planned_provider_endpoint_request("openai", operation),
+                context(
+                    &format!("req_search_compat_{index}"),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("prepare search provider stream");
+        let mut raw_response = None;
+        let mut completed = false;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("compatible search must succeed upstream");
+            completed |= event
+                .canonical_facts()
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+            if let Some(raw) = event.wire_event().and_then(|wire| wire.raw_json_body()) {
+                assert!(raw_response.replace(raw.clone()).is_none());
+            }
+        }
+        assert!(completed, "case {index}");
+        assert_eq!(raw_response.as_deref(), Some(response_body.as_slice()));
+        let requests = server.received_requests().await.expect("received requests");
+        assert_eq!(requests.len(), index + 1);
+        assert_eq!(requests[index].body, expected.as_bytes(), "case {index}");
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn standalone_search_should_leave_invalid_and_non_object_bodies_to_upstream() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let response_body =
+        br#"{ "error":{"message":"invalid search body","type":"invalid_request_error"} }"#;
+    let bodies = [
+        r#"{"prompt_cache_key":"cch", "commands": }"#,
+        r#"{"prompt_cache_key":"cch"} trailing"#,
+        r#"{"prompt_cache_key":"cch"} {}"#,
+        r#"{"prompt_cache_key":"cch","commands":{},}"#,
+        r#"[{"prompt_cache_key":"nested"}]"#,
+        r#""prompt_cache_key""#,
+        "null",
+        "",
+    ];
+    Mock::given(method("POST"))
+        .and(path("/codex/alpha/search"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_raw(response_body.to_vec(), "application/json"),
+        )
+        .expect(bodies.len() as u64)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    for (index, body) in bodies.iter().enumerate() {
+        let payload = RawJsonPayload::new("openai", Bytes::from_static(body.as_bytes()))
+            .expect("search payload");
+        let operation = Operation::Search(StandaloneSearchRequest::from_raw_json(payload));
+        let mut stream = provider
+            .execute(
+                planned_provider_endpoint_request("openai", operation),
+                context(
+                    &format!("req_search_invalid_{index}"),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("prepare search provider stream");
+        let error = loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("upstream rejection must surface"),
+            }
+        };
+        let response = error
+            .client_visible_upstream_response()
+            .expect("upstream error");
+        assert_eq!(response.status(), 400);
+        assert_eq!(response.body().as_ref(), response_body);
+        let requests = server.received_requests().await.expect("received requests");
+        assert_eq!(requests.len(), index + 1);
+        assert_eq!(requests[index].body, body.as_bytes(), "case {index}");
+    }
     server.verify().await;
 }
 

@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod request;
 pub mod reset_credits;
 mod response_meta;
+pub(crate) mod search;
 pub(crate) mod session;
 mod time;
 pub mod tls;
