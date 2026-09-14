@@ -3,11 +3,14 @@
 use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{DateTime, Utc};
+use chrono_tz::America::New_York;
 use gateway_core::operation::GenerateRequest;
 use gateway_protocol::openai::{
     WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use roxmltree::Document;
 use serde::Serialize as _;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -20,6 +23,12 @@ const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
 const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
+const ENVIRONMENT_CONTEXT_CONTENT_KIND: &str = "environments.environment_context";
+// 请求中的地区画像以 PORTS 所在的 Piketon 为基准；epoch 时间戳仍保持绝对时间原值。
+const TARGET_COUNTRY: &str = "US";
+const TARGET_REGION: &str = "Ohio";
+const TARGET_CITY: &str = "Piketon";
+const TARGET_TIMEZONE: &str = "America/New_York";
 const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] = &["max_output_tokens", "temperature"];
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
@@ -113,6 +122,128 @@ fn adapt_codex_responses_body(body: &mut Map<String, Value>, upstream_model: &st
     for field in UNSUPPORTED_CODEX_RESPONSES_FIELDS {
         body.remove(*field);
     }
+    align_structured_location_fields(body, Utc::now());
+}
+
+fn align_structured_location_fields(body: &mut Map<String, Value>, now: DateTime<Utc>) {
+    let current_date = now.with_timezone(&New_York).format("%Y-%m-%d").to_string();
+    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
+        for item in input {
+            align_environment_context(item, &current_date);
+        }
+    }
+    if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools {
+            align_web_search_location(tool);
+        }
+    }
+}
+
+fn align_environment_context(item: &mut Value, current_date: &str) {
+    let Some(item) = item.as_object_mut() else {
+        return;
+    };
+    if item.get("role").and_then(Value::as_str) != Some("user") {
+        return;
+    }
+    let content_kinds = item
+        .get("internal_chat_message_metadata_passthrough")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("content_item_kinds"))
+        .and_then(Value::as_array)
+        .map(|kinds| {
+            kinds
+                .iter()
+                .map(|kind| kind.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        });
+    let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for (index, part) in content.iter_mut().enumerate() {
+        if content_kinds
+            .as_ref()
+            .and_then(|kinds| kinds.get(index))
+            .and_then(Option::as_deref)
+            != Some(ENVIRONMENT_CONTEXT_CONTENT_KIND)
+        {
+            continue;
+        }
+        let Some(part) = part.as_object_mut() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("input_text") {
+            continue;
+        }
+        let Some(Value::String(text)) = part.get_mut("text") else {
+            continue;
+        };
+        if let Some(aligned) = aligned_environment_context(text, current_date) {
+            *text = aligned;
+        }
+    }
+}
+
+fn aligned_environment_context(text: &str, current_date: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with("<environment_context>") || !trimmed.ends_with("</environment_context>")
+    {
+        return None;
+    }
+    let document = Document::parse(text).ok()?;
+    let root = document.root_element();
+    if !root.has_tag_name("environment_context") {
+        return None;
+    }
+    let mut replacements = root
+        .children()
+        .filter(|node| node.is_element())
+        .filter_map(|node| {
+            let replacement = match node.tag_name().name() {
+                "current_date" => format!("<current_date>{current_date}</current_date>"),
+                "timezone" => format!("<timezone>{TARGET_TIMEZONE}</timezone>"),
+                _ => return None,
+            };
+            Some((node.range(), replacement))
+        })
+        .collect::<Vec<_>>();
+    if replacements.is_empty() {
+        return None;
+    }
+    replacements.sort_unstable_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut aligned = text.to_owned();
+    for (range, replacement) in replacements {
+        aligned.replace_range(range, &replacement);
+    }
+    Some(aligned)
+}
+
+fn align_web_search_location(tool: &mut Value) {
+    let Some(tool) = tool.as_object_mut() else {
+        return;
+    };
+    let Some(tool_type) = tool.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    if tool_type != "web_search" && !tool_type.starts_with("web_search_") {
+        return;
+    }
+    tool.insert(
+        "user_location".to_owned(),
+        Value::Object(Map::from_iter([
+            ("type".to_owned(), Value::String("approximate".to_owned())),
+            (
+                "country".to_owned(),
+                Value::String(TARGET_COUNTRY.to_owned()),
+            ),
+            ("region".to_owned(), Value::String(TARGET_REGION.to_owned())),
+            ("city".to_owned(), Value::String(TARGET_CITY.to_owned())),
+            (
+                "timezone".to_owned(),
+                Value::String(TARGET_TIMEZONE.to_owned()),
+            ),
+        ])),
+    );
 }
 
 fn extract_request_context(request: &mut CodexResponsesRequest) {

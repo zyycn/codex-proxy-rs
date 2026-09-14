@@ -13,6 +13,7 @@ async-trait = "0.1.89"
 base64 = "0.23.0"
 bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
+chrono-tz = "0.10"
 cookie = "0.18.1"
 futures = "0.3.32"
 flate2 = "1.1.9"

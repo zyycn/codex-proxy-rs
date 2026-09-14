@@ -1,3 +1,5 @@
+use chrono::{Datelike as _, Utc};
+use chrono_tz::America::New_York;
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use serde_json::{Map, Value, json};
 
@@ -114,6 +116,120 @@ fn encoder_should_remove_unsupported_fields_from_upstream_body() {
             "input": "hello",
             "max_tokens": 256,
         })
+    );
+}
+
+#[test]
+fn encoder_should_align_structured_location_fields_without_rewriting_chat_text() {
+    let normal_chat = "<environment_context>\n  <current_date>2026-09-13</current_date>\n  \
+        <timezone>Asia/Shanghai</timezone>\n</environment_context>";
+    let body = json!({
+        "model": "client-model",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<environment_context>\n  <cwd>/Users/mike/Personal/workspace/PORTAL2</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-09-13</current_date>\n  <timezone>Asia/Shanghai</timezone>\n  <filesystem><file_system type=\"unrestricted\" /></filesystem>\n</environment_context>"
+                }],
+                "internal_chat_message_metadata_passthrough": {
+                    "create_time": 1789293131.822,
+                    "content_item_kinds": ["environments.environment_context"]
+                }
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": normal_chat}],
+                "internal_chat_message_metadata_passthrough": {
+                    "content_item_kinds": ["user.text"]
+                }
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": normal_chat}]
+            }
+        ],
+        "tools": [
+            {"type": "web_search"},
+            {
+                "type": "function",
+                "name": "remember_timezone",
+                "description": "Keep Asia/Shanghai unchanged"
+            }
+        ],
+        "client_metadata": {
+            "x-codex-turn-metadata": "{\"turn_started_at_unix_ms\":1789293131822}",
+            "x-codex-ws-stream-request-start-ms": "1789293132000"
+        }
+    })
+    .as_object()
+    .expect("request object")
+    .clone();
+    let before = Utc::now().with_timezone(&New_York);
+
+    let encoded = encode_generate_request(&request(body), "gpt-test").expect("encode");
+
+    let after = Utc::now().with_timezone(&New_York);
+    let encoded = Value::Object(encoded.body().clone());
+    let environment = encoded
+        .pointer("/input/0/content/0/text")
+        .and_then(Value::as_str)
+        .expect("environment context text");
+    let expected_dates = [
+        format!(
+            "{:04}-{:02}-{:02}",
+            before.year(),
+            before.month(),
+            before.day()
+        ),
+        format!(
+            "{:04}-{:02}-{:02}",
+            after.year(),
+            after.month(),
+            after.day()
+        ),
+    ];
+    assert!(
+        expected_dates
+            .iter()
+            .any(|date| environment.contains(&format!("<current_date>{date}</current_date>")))
+    );
+    assert!(environment.contains("<timezone>America/New_York</timezone>"));
+    assert_eq!(
+        encoded.pointer("/tools/0/user_location"),
+        Some(&json!({
+            "type": "approximate",
+            "country": "US",
+            "region": "Ohio",
+            "city": "Piketon",
+            "timezone": "America/New_York"
+        }))
+    );
+    assert_eq!(
+        encoded.pointer("/input/1/content/0/text"),
+        Some(&json!(normal_chat))
+    );
+    assert_eq!(
+        encoded.pointer("/input/2/content/0/text"),
+        Some(&json!(normal_chat))
+    );
+    assert_eq!(
+        encoded.pointer("/input/0/internal_chat_message_metadata_passthrough/create_time"),
+        Some(&json!(1789293131.822))
+    );
+    assert_eq!(
+        encoded.pointer("/tools/1/description"),
+        Some(&json!("Keep Asia/Shanghai unchanged"))
+    );
+    assert_eq!(
+        encoded.pointer("/client_metadata"),
+        Some(&json!({
+            "x-codex-turn-metadata": "{\"turn_started_at_unix_ms\":1789293131822}",
+            "x-codex-ws-stream-request-start-ms": "1789293132000"
+        }))
     );
 }
 
