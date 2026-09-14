@@ -5,6 +5,7 @@ use provider_openai::transport::{
 };
 
 mod diagnostics;
+mod fingerprint;
 mod metadata;
 
 fn rate_limit_event(used_percent: u64) -> String {

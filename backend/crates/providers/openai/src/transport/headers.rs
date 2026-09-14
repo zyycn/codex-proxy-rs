@@ -254,5 +254,32 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
 }
 
 pub(super) fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
-    header_pairs(headers)
+    let mut pairs = header_pairs(headers);
+    // WebSocket opening 的 HeaderMap 先由业务头构造，再被 tungstenite 插入协议头；
+    // 这里复现官方 HeaderMap 交给 tungstenite 时的迭代顺序，最终序列化后的
+    // 线级顺序由 fingerprint 测试锁定。未知扩展头仍保持相对顺序。
+    pairs.sort_by_key(|(name, _)| websocket_header_order(name));
+    pairs
+}
+
+fn websocket_header_order(name: &str) -> usize {
+    const OFFICIAL_INSERTION_ORDER: &[&str] = &[
+        "version",
+        "x-codex-beta-features",
+        "x-client-request-id",
+        "session-id",
+        "thread-id",
+        "x-codex-window-id",
+        "x-codex-turn-metadata",
+        "x-codex-routing-hint",
+        "openai-beta",
+        "originator",
+        "user-agent",
+        "authorization",
+        "chatgpt-account-id",
+    ];
+    OFFICIAL_INSERTION_ORDER
+        .iter()
+        .position(|candidate| name.eq_ignore_ascii_case(candidate))
+        .unwrap_or(OFFICIAL_INSERTION_ORDER.len())
 }
