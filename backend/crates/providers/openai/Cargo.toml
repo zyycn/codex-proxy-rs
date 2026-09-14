@@ -43,7 +43,7 @@ sha2 = "0.11.0"
 subtle = "2.6.1"
 thiserror = "2.0.18"
 tokio = { version = "=1.53.1", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
-tokio-rustls = { version = "=0.26.4", default-features = false }
+tokio-rustls = { version = "=0.26.5", default-features = false }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tower-service = "0.3.3"
 # 官方 Codex WebSocket 需要上游尚未发布的 proxy 与 permessage-deflate 实现，固定到已审计提交。
