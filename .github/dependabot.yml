@@ -26,11 +26,18 @@ updates:
       - dependency-name: aws-lc-rs
       - dependency-name: hyper
       - dependency-name: hyper-rustls
+      - dependency-name: hyper-tls
+      - dependency-name: hyper-util
+      - dependency-name: native-tls
+      - dependency-name: openssl
+      - dependency-name: openssl-src
+      - dependency-name: openssl-sys
       - dependency-name: reqwest
       - dependency-name: rustls
       - dependency-name: rustls-native-certs
       - dependency-name: rustls-pki-types
       - dependency-name: tokio
+      - dependency-name: tokio-native-tls
       - dependency-name: tokio-rustls
       - dependency-name: tokio-tungstenite
       - dependency-name: tungstenite

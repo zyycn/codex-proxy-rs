@@ -320,7 +320,6 @@ impl OpenAiTokenClient {
             return Ok(self.clone());
         };
         let builder = Client::builder()
-            .use_rustls_tls()
             .no_proxy()
             .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| TokenClientBuildError)?)
             .redirect(Policy::none())
@@ -418,7 +417,6 @@ pub fn openai_token_client(
 ) -> Result<OpenAiTokenClient, TokenClientBuildError> {
     ensure_rustls_provider();
     let builder = Client::builder()
-        .use_rustls_tls()
         .no_proxy()
         .redirect(Policy::none())
         .connect_timeout(TOKEN_CONNECT_TIMEOUT)

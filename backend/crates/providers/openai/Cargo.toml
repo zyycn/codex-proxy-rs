@@ -22,27 +22,30 @@ gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 hex = "0.4.3"
 # TLS 依赖按官方 Core 锁文件固定，包含用于约束传递依赖的直接声明。
+# hyper 受 workspace 的 SOCKS IPv6 修复补丁约束，保留补丁要求的兼容版本。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。
-aws-lc-rs = "=1.18.1"
+aws-lc-rs = "=1.16.2"
 hyper = { version = "=1.11.1", default-features = false }
 hyper-rustls = "=0.27.7"
 hyper-util = { version = "0.1.20", features = ["client-legacy", "http1", "tokio"] }
-# 与官方 Codex Desktop 一致：reqwest 不启用压缩特性，上游请求不带 accept-encoding。
-reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "http2", "socks"] }
+# 与官方 Codex Desktop 一致：HTTP 默认走 native-tls，rustls 保留给自定义 CA 回退；
+# vendored OpenSSL 固定 Linux 发布版的 TLS 画像，且不启用压缩特性。
+native-tls = "=0.2.14"
+reqwest = { version = "=0.12.28", features = ["json", "stream", "cookies", "rustls-tls-native-roots", "socks"] }
 roxmltree = "0.21.1"
 semver = "1.0.27"
 # 与官方 rustls 路径一致：aws-lc 支持 P-521，优先提供 X25519MLKEM768。
 # reqwest 的 roots feature 仍会编译 ring；实际 provider 由 TLS 初始化显式选择。
 rustls = { version = "=0.23.36", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std", "tls12"] }
-rustls-native-certs = "=0.8.4"
-rustls-pki-types = "=1.15.1"
+rustls-native-certs = "=0.8.3"
+rustls-pki-types = "=1.14.0"
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"
 subtle = "2.6.1"
 thiserror = "2.0.18"
-tokio = { version = "=1.53.1", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
+tokio = { version = "=1.52.3", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
 tokio-rustls = { version = "=0.26.4", default-features = false }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tower-service = "0.3.3"
@@ -55,6 +58,10 @@ uuid = { version = "1.23.3", features = ["v4", "v7"] }
 # 官方 Codex app-server 对 /v1/responses 请求体默认做 zstd 压缩（level 3），
 # 并携带 Content-Encoding: zstd；保持同版本同级别以对齐上游指纹。
 zstd = "=0.13.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = "=0.10.75"
+openssl-sys = { version = "=0.9.111", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

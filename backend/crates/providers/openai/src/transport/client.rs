@@ -70,7 +70,6 @@ pub fn build_account_http_client(
     }
 
     let mut builder = Client::builder()
-        .use_rustls_tls()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .pool_max_idle_per_host(4)
