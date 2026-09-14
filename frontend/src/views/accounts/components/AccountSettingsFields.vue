@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { AccountGroup } from '@/api'
-import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import AccountGroupCheckboxGrid from '@/components/business/AccountGroupCheckboxGrid.vue'
 import AccountProxyField from './AccountProxyField.vue'
 
 withDefaults(defineProps<{

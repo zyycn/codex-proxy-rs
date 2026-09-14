@@ -13,7 +13,7 @@ use gateway_core::{
     metering::Decimal,
     policy::ClientApiKeyId,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction, postgres::PgRow};
 
 use crate::{StoreResult, postgres_unavailable};
 
@@ -220,43 +220,16 @@ pub(super) async fn load_client_key_budgets(
         .iter()
         .map(|record| record.id.as_str())
         .collect::<Vec<_>>();
-    let rows = sqlx::query(
-        "select k.id, k.daily_limit_usd::text, k.weekly_limit_usd::text,
-        (case when w.daily_end > now() then w.daily_used_usd else 0 end)::text as daily_used,
-        (case when w.weekly_end > now() then w.weekly_used_usd else 0 end)::text as weekly_used,
-        case when w.daily_end > now() then w.daily_end end as daily_end,
-        case when w.weekly_end > now() then w.weekly_end end as weekly_end
-        from client_api_keys k left join client_key_budget_windows w on w.client_api_key_id = k.id
-        where k.id = any($1)",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| postgres_unavailable("load client budgets"))?;
+    let mut query = QueryBuilder::<Postgres>::new(BUDGET_PROJECTION);
+    query.push(" where k.id = any(").push_bind(ids).push(")");
+    let rows = query
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|_| postgres_unavailable("load client budgets"))?;
     let mut budgets = BTreeMap::new();
     for row in rows {
-        let parse = |field| -> StoreResult<Decimal> {
-            row.get::<String, _>(field)
-                .parse()
-                .map_err(|_| postgres_unavailable("decode client budget"))
-        };
-        budgets.insert(
-            row.get::<String, _>("id"),
-            ClientBudgetStatus {
-                limits: ClientBudgetLimits {
-                    daily_usd: parse("daily_limit_usd")?,
-                    weekly_usd: parse("weekly_limit_usd")?,
-                },
-                daily_used_usd: parse("daily_used")?,
-                weekly_used_usd: parse("weekly_used")?,
-                daily_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("daily_end")
-                    .map(Into::into),
-                weekly_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("weekly_end")
-                    .map(Into::into),
-            },
-        );
+        budgets.insert(row.get::<String, _>("id"), decode_budget(&row)?);
     }
     for record in records {
         record.budget = budgets
@@ -264,6 +237,77 @@ pub(super) async fn load_client_key_budgets(
             .ok_or_else(|| postgres_unavailable("load client budget policy"))?;
     }
     Ok(())
+}
+
+// 列表与 Client 自助查询共用有效窗口投影；`now()` 在单条语句内固定，
+// 读取不会推进尚未产生费用的窗口。
+const BUDGET_PROJECTION: &str = "select k.id, k.name, k.label,
+    left(k.key, least(10, length(k.key) / 2)) as prefix, k.last_used_at,
+    k.daily_limit_usd::text, k.weekly_limit_usd::text,
+    k.max_concurrency, k.requests_per_minute, now() as as_of,
+    (case when w.daily_end > now() then w.daily_used_usd else 0 end)::text as daily_used,
+    (case when w.weekly_end > now() then w.weekly_used_usd else 0 end)::text as weekly_used,
+    case when w.daily_end > now() then w.daily_end end as daily_end,
+    case when w.weekly_end > now() then w.weekly_end end as weekly_end
+    from client_api_keys k left join client_key_budget_windows w on w.client_api_key_id = k.id";
+
+fn decode_budget(row: &PgRow) -> StoreResult<ClientBudgetStatus> {
+    let parse = |field| -> StoreResult<Decimal> {
+        row.get::<String, _>(field)
+            .parse()
+            .map_err(|_| postgres_unavailable("decode client budget"))
+    };
+    Ok(ClientBudgetStatus {
+        limits: ClientBudgetLimits {
+            daily_usd: parse("daily_limit_usd")?,
+            weekly_usd: parse("weekly_limit_usd")?,
+        },
+        daily_used_usd: parse("daily_used")?,
+        weekly_used_usd: parse("weekly_used")?,
+        daily_resets_at: row
+            .get::<Option<DateTime<Utc>>, _>("daily_end")
+            .map(Into::into),
+        weekly_resets_at: row
+            .get::<Option<DateTime<Utc>>, _>("weekly_end")
+            .map(Into::into),
+    })
+}
+
+pub(crate) async fn load_client_usage_key(
+    pool: &PgPool,
+    id: &ClientApiKeyId,
+) -> StoreResult<Option<gateway_admin::model::client_usage::ClientUsageKey>> {
+    let mut query = QueryBuilder::<Postgres>::new(BUDGET_PROJECTION);
+    query
+        .push(" where k.id = ")
+        .push_bind(id.as_str())
+        .push(" and k.enabled");
+    let row = query
+        .build()
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| postgres_unavailable("load client usage key"))?;
+    row.map(|row| {
+        let limit = |field| {
+            u64::try_from(row.get::<i64, _>(field))
+                .map_err(|_| postgres_unavailable("decode client key limits"))
+        };
+        Ok(gateway_admin::model::client_usage::ClientUsageKey {
+            id: ClientApiKeyId::new(row.get::<String, _>("id"))
+                .map_err(|_| postgres_unavailable("decode client key ID"))?,
+            name: row.get("name"),
+            label: row.get("label"),
+            prefix: row.get("prefix"),
+            limits: gateway_core::policy::RateLimits {
+                max_concurrency: limit("max_concurrency")?,
+                requests_per_minute: limit("requests_per_minute")?,
+            },
+            budget: decode_budget(&row)?,
+            last_used_at: row.get("last_used_at"),
+            observed_at: row.get("as_of"),
+        })
+    })
+    .transpose()
 }
 
 fn unavailable() -> GatewayError {

@@ -8,7 +8,7 @@ import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useRequestDiagnostics } from '../composables/useRequestDiagnostics'
-import { requestDiagnosticsBundle } from '../utils/diagnosticsBundle'
+import { requestDiagnosticsBundle } from '../model/diagnosticsBundle'
 import RequestTransportFailure from './RequestTransportFailure.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 

@@ -10,7 +10,7 @@ import '@/plugins/echarts'
 const props = withDefaults(
   defineProps<{
     option: EChartsOption
-    height?: number
+    height?: number | 'auto'
   }>(),
   {
     height: 240,
@@ -23,7 +23,7 @@ const chart = shallowRef<EChartsType>()
 const pendingInitElement = shallowRef<HTMLElement>()
 
 const style = computed(() => ({
-  height: `${props.height}px`,
+  height: props.height === 'auto' ? 'auto' : `${props.height}px`,
 }))
 
 function elementHasSize(element: HTMLElement) {

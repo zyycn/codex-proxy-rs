@@ -1,7 +1,7 @@
-import type { UsageDisplayRecord, UsageViewModel } from '../utils/records'
+import type { UsageDisplayRecord, UsageViewModel } from '@/views/usage/model/records'
 import { shallowRef } from 'vue'
 import { getUsageRecordDetail } from '@/api'
-import { normalizeUsageRecord } from '../utils/records'
+import { normalizeUsageRecord } from '@/views/usage/model/records'
 
 export function useUsageRecordDetail() {
   const showDetailModal = shallowRef(false)

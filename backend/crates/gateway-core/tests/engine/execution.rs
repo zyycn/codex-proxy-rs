@@ -814,9 +814,10 @@ use gateway_core::engine::continuation::{
     NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError, PreviousResponseId,
 };
 use gateway_core::engine::execution::{
-    ClientApiKeyUsageSink, ClientTransport, DefaultExecutionService, ExecutionRequestMetadata,
-    ExecutionService, ExecutionSession, ProviderCircuitDecision, ProviderCircuitError,
-    ProviderCircuitPort, StartExecution, StartProviderExecution, provider_failure_affects_circuit,
+    ClientApiKeyUsageSink, ClientKeyVerifier, ClientTransport, DefaultExecutionService,
+    ExecutionRequestMetadata, ExecutionService, ExecutionSession, ProviderCircuitDecision,
+    ProviderCircuitError, ProviderCircuitPort, StartExecution, StartProviderExecution,
+    provider_failure_affects_circuit,
 };
 use gateway_core::engine::probe::{AccountProbe, AccountProbeErrorSource, AccountProbeRequest};
 use gateway_core::engine::provider::{
@@ -1231,6 +1232,27 @@ fn successful_authentication_should_record_client_key_usage() {
         .expect("successful authentication");
 
     assert_eq!(usage.recorded(), vec!["key_usage_test".to_owned()]);
+}
+
+#[test]
+fn client_key_verification_should_not_record_client_key_usage() {
+    let usage = Arc::new(RecordingClientApiKeyUsage::default());
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(client_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        usage.clone(),
+    );
+
+    let key_id = service
+        .verify_client_key("sk_usage_test")
+        .expect("client key verification");
+
+    assert_eq!(key_id.as_str(), "key_usage_test");
+    assert!(usage.recorded().is_empty());
 }
 
 #[test]

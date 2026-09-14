@@ -4,10 +4,15 @@ import { RefreshCw, Search } from '@lucide/vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 
-defineProps<{
+withDefaults(defineProps<{
   refreshing: boolean
   loading: boolean
-}>()
+  placeholder?: string
+  ariaLabel?: string
+}>(), {
+  placeholder: '请求、密钥名称、账号或模型',
+  ariaLabel: '搜索使用记录：请求、密钥名称、账号或模型',
+})
 
 const emit = defineEmits<{
   refresh: []
@@ -19,7 +24,7 @@ const search = defineModel<string>('search', { required: true })
 <template>
   <div class="flex w-full items-center gap-3" role="group" aria-label="使用记录筛选与操作">
     <div class="min-w-0 flex-1 sm:w-96 sm:flex-none">
-      <BaseInput v-model="search" placeholder="请求、密钥名称、账号或模型" aria-label="搜索使用记录：请求、密钥名称、账号或模型" class="w-full">
+      <BaseInput v-model="search" :placeholder="placeholder" :aria-label="ariaLabel" class="w-full">
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>

@@ -17,7 +17,7 @@ fn request(method: Method, path: &str, body: Option<Value>) -> Request<Body> {
     let mut builder = Request::builder()
         .method(method)
         .uri(path)
-        .header(header::COOKIE, "cpr_admin_session=valid-session")
+        .header(header::COOKIE, "cpr_session=valid-session")
         .header("x-request-id", "req_admin_settings");
     let body = if let Some(value) = body {
         builder = builder.header(header::CONTENT_TYPE, "application/json");
@@ -379,7 +379,7 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
     let unlabelled = Request::builder()
         .method(Method::GET)
         .uri("/api/admin/settings")
-        .header(header::COOKIE, "cpr_admin_session=valid-session")
+        .header(header::COOKIE, "cpr_session=valid-session")
         .body(Body::empty())
         .expect("build settings request");
 

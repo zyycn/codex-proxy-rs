@@ -24,6 +24,14 @@ mod model;
 mod use_case;
 
 #[test]
+fn client_config_should_default_to_a_one_day_session() {
+    assert_eq!(
+        gateway_admin::ClientConfig::default().session_ttl_minutes,
+        1440
+    );
+}
+
+#[test]
 fn revision_should_reject_zero() {
     assert!(Revision::new(0).is_err());
 }
@@ -88,7 +96,7 @@ fn admin_api_key_debug_should_redact_plaintext() {
 
 #[test]
 fn login_command_debug_should_redact_password() {
-    let command = LoginCommand {
+    let command = LoginCommand::Admin {
         username: None,
         password: "secret-password".to_owned(),
     };

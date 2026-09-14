@@ -7,13 +7,37 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/login/index.vue'),
   },
   {
+    path: '/key',
+    component: () => import('@/layout/AppLayout.vue'),
+    meta: { role: 'key' },
+    redirect: { name: 'key-overview' },
+    children: [
+      {
+        path: 'overview',
+        name: 'key-overview',
+        component: () => import('@/views/overview/index.vue'),
+      },
+      {
+        path: 'usage',
+        name: 'key-usage',
+        component: () => import('@/views/usage/index.vue'),
+      },
+      {
+        path: 'theme',
+        name: 'key-theme',
+        component: () => import('@/views/theme/index.vue'),
+      },
+    ],
+  },
+  {
     path: '/',
-    component: () => import('@/layout/index.vue'),
+    component: () => import('@/layout/AppLayout.vue'),
+    meta: { role: 'admin' },
     children: [
       {
         path: '',
         name: 'dashboard',
-        component: () => import('@/views/dashboard/index.vue'),
+        component: () => import('@/views/overview/index.vue'),
       },
       {
         path: 'accounts',
@@ -28,12 +52,12 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'account-groups',
         name: 'account-groups',
-        component: () => import('@/views/account-groups/index.vue'),
+        component: () => import('@/views/groups/index.vue'),
       },
       {
         path: 'api-keys',
         name: 'api-keys',
-        component: () => import('@/views/api-keys/index.vue'),
+        component: () => import('@/views/keys/index.vue'),
       },
       {
         path: 'usage',

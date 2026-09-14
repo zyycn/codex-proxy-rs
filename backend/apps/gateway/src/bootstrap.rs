@@ -14,6 +14,8 @@ pub struct GatewayConfig {
     host: HostConfig,
     store: gateway_store::StoreConfig,
     admin: gateway_admin::AdminConfig,
+    #[serde(default)]
+    client: gateway_admin::ClientConfig,
     api: gateway_api::ApiConfig,
     openai: provider_openai::OpenAiConfig,
     xai: provider_xai::XaiConfig,
@@ -34,6 +36,9 @@ impl LoadableConfig for GatewayConfig {
         self.admin
             .resolve_and_validate(source_dir)
             .map_err(|_| ConfigError::InvalidField("admin"))?;
+        self.client
+            .resolve_and_validate(source_dir)
+            .map_err(|_| ConfigError::InvalidField("client"))?;
         self.api
             .resolve_and_validate(source_dir)
             .map_err(|_| ConfigError::InvalidField("api"))?;
@@ -55,6 +60,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         host,
         store,
         admin,
+        client,
         api,
         openai,
         xai,
@@ -75,15 +81,17 @@ pub async fn run() -> Result<(), BootstrapError> {
     host.report_startup_ready("Core");
     let mut admin = gateway_admin::initialize(
         admin,
+        client,
         store.admin_ports(),
-        vec![openai.admin_provider(), xai.admin_provider()],
-        core.snapshot_control(),
-        (
-            core.account_probe(),
-            host.proxy_probe(provider_openai::build_reqwest_client_with_custom_ca),
-        ),
-        host.client_distribution_resolver(),
-        host.system_operations(),
+        gateway_admin::AdminRuntimePorts {
+            providers: vec![openai.admin_provider(), xai.admin_provider()],
+            snapshot: core.snapshot_control(),
+            account_probe: core.account_probe(),
+            proxy_probe: host.proxy_probe(provider_openai::build_reqwest_client_with_custom_ca),
+            client_distribution: host.client_distribution_resolver(),
+            system: host.system_operations(),
+            client_key_verifier: core.client_key_verifier(),
+        },
     )
     .await?;
     host.report_startup_ready("Admin");

@@ -103,7 +103,11 @@ pub(crate) async fn request_metrics(
     request_metrics_from_row(&row)
 }
 
-pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTotals> {
+pub(crate) async fn usage_totals(
+    pool: &PgPool,
+    filter: &UsageRecordFilter,
+) -> StoreResult<UsageTotals> {
+    filter.validate()?;
     // 卡片脚注的“总计”覆盖全部历史；只聚合页面实际展示的字段，避免重复计算
     // 当前区间指标所需的延迟分位数。
     let fact = completed_usage_fact_predicate("mr");
@@ -117,12 +121,13 @@ pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTota
            from model_requests mr
           where mr.recovered_at is null"
     ));
+    push_usage_filter(&mut query, filter, "mr");
     let row = query
         .build()
         .fetch_one(pool)
         .await
-        .map_err(|_| postgres_unavailable("load dashboard totals"))?;
-    Ok(DashboardTotals {
+        .map_err(|_| postgres_unavailable("load usage totals"))?;
+    Ok(UsageTotals {
         request_count: unsigned(&row, "request_count")?,
         input_tokens: unsigned(&row, "input_tokens")?,
         cached_tokens: unsigned(&row, "cached_tokens")?,

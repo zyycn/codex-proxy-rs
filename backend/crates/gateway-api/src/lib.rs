@@ -29,8 +29,11 @@ use crate::health::HealthStatus;
 use crate::openai::service::OpenAiService;
 
 pub mod admin;
+pub mod auth;
+mod client;
 mod health;
 pub mod openai;
+mod session_cookie;
 
 /// API-owned HTTP 与静态资源配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -136,6 +139,8 @@ pub fn initialize(
         .route("/healthz", get(health::healthz))
         .merge(openai::router::router())
         .merge(admin::router::<ApiState>())
+        .merge(auth::router::<ApiState>())
+        .merge(client::router::<ApiState>())
         .fallback_service(ServeDir::new(config.asset_directory).fallback(ServeFile::new(index)));
     if !config.cors_allowed_origins.is_empty() {
         let origins = config
@@ -225,7 +230,7 @@ impl ApiState {
     }
 }
 
-impl admin::AdminSessionState for ApiState {
+impl auth::SessionState for ApiState {
     fn admin_services(&self) -> &AdminServices {
         &self.admin
     }

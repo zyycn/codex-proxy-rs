@@ -4,7 +4,7 @@ import type { AccountGroup } from '@/api'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
-import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import ProviderIconGroup from '@/components/business/ProviderIconGroup.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'

@@ -5,6 +5,7 @@
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 
 use gateway_core::{
+    engine::execution::ClientKeyVerifier,
     engine::probe::AccountProbe,
     routing::ProviderKind,
     runtime::SnapshotControl,
@@ -24,8 +25,9 @@ mod use_case;
 pub use use_case::{
     account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
     backup::BackupService, client_distribution::ClientDistributionService,
-    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
-    proxies::ProxiesService, settings::SettingsService, system::SystemService, xai::XaiService,
+    client_keys::ClientKeyService, client_usage::ClientUsageService,
+    observability::ObservabilityService, openai::OpenAiService, proxies::ProxiesService,
+    settings::SettingsService, system::SystemService, xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
@@ -39,8 +41,9 @@ use use_case::{
     account_groups::DefaultAccountGroupService, accounts::DefaultAccountsService,
     auth::DefaultAuthService, backup::DefaultBackupService,
     client_distribution::DefaultClientDistributionService, client_keys::DefaultClientKeyService,
-    observability::DefaultObservabilityService, openai::DefaultOpenAiService,
-    settings::DefaultSettingsService, system::DefaultSystemService, xai::DefaultXaiService,
+    client_usage::DefaultClientUsageService, observability::DefaultObservabilityService,
+    openai::DefaultOpenAiService, settings::DefaultSettingsService, system::DefaultSystemService,
+    xai::DefaultXaiService,
 };
 
 const OPENAI_PROVIDER_KIND: &str = "openai";
@@ -58,6 +61,7 @@ const WEAK_INITIAL_PASSWORDS: &[&str] = &[
 ];
 
 const BACKUP_WORKER_OWNER: &str = "backup";
+const DEFAULT_CLIENT_SESSION_TTL_MINUTES: u64 = 24 * 60;
 
 /// 只用于首次幂等创建默认管理员的启动密码。
 #[derive(Clone, Deserialize)]
@@ -96,6 +100,35 @@ pub struct AdminConfig {
     pub session_ttl_minutes: u64,
     pub default_username: String,
     pub default_password: InitialAdminPassword,
+}
+
+/// Client 登录域的通用启动配置。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClientConfig {
+    pub session_ttl_minutes: u64,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            session_ttl_minutes: DEFAULT_CLIENT_SESSION_TTL_MINUTES,
+        }
+    }
+}
+
+impl ClientConfig {
+    /// 校验 Client session TTL；当前配置不含相对路径。
+    ///
+    /// # Errors
+    ///
+    /// 会话有效期为零或无法安全换算时返回错误。
+    pub fn resolve_and_validate(&mut self, _source_dir: &Path) -> Result<(), AdminConfigError> {
+        if self.session_ttl_minutes == 0 || i64::try_from(self.session_ttl_minutes).is_err() {
+            return Err(AdminConfigError::InvalidField("client.session_ttl_minutes"));
+        }
+        Ok(())
+    }
 }
 
 impl AdminConfig {
@@ -154,6 +187,7 @@ pub struct AdminServices {
     accounts: Arc<dyn AccountsService>,
     account_groups: Arc<dyn AccountGroupService>,
     client_keys: Arc<dyn ClientKeyService>,
+    client_usage: Arc<dyn ClientUsageService>,
     client_distribution: Arc<dyn ClientDistributionService>,
     observability: Arc<dyn ObservabilityService>,
     settings: Arc<dyn SettingsService>,
@@ -187,6 +221,11 @@ impl AdminServices {
     #[must_use]
     pub fn client_keys(&self) -> &dyn ClientKeyService {
         self.client_keys.as_ref()
+    }
+
+    #[must_use]
+    pub fn client_usage(&self) -> &dyn ClientUsageService {
+        self.client_usage.as_ref()
     }
 
     #[must_use]
@@ -243,6 +282,17 @@ impl AdminBundle {
     }
 }
 
+/// 组合根提供给控制面的运行能力；与配置和存储端口分别传入。
+pub struct AdminRuntimePorts {
+    pub providers: Vec<Arc<dyn ProviderAdmin>>,
+    pub snapshot: Arc<dyn SnapshotControl>,
+    pub account_probe: Arc<dyn AccountProbe>,
+    pub proxy_probe: Arc<dyn ports::proxy::ProxyProbe>,
+    pub client_distribution: Arc<dyn ClientDistributionResolver>,
+    pub system: Arc<dyn SystemOperations>,
+    pub client_key_verifier: Arc<dyn ClientKeyVerifier>,
+}
+
 /// 校验配置、建立动态 Provider 注册表并完成默认管理员幂等初始化。
 ///
 /// # Errors
@@ -250,15 +300,23 @@ impl AdminBundle {
 /// 配置非法、Provider 注册冲突/缺失或默认管理员初始化失败时返回错误。
 pub async fn initialize(
     mut config: AdminConfig,
+    mut client_config: ClientConfig,
     store: AdminStorePorts,
-    providers: Vec<Arc<dyn ProviderAdmin>>,
-    snapshot: Arc<dyn SnapshotControl>,
-    probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
-    client_distribution: Arc<dyn ClientDistributionResolver>,
-    system: Arc<dyn SystemOperations>,
+    runtime: AdminRuntimePorts,
 ) -> Result<AdminBundle, AdminError> {
-    let (probe, proxy_probe) = probes;
+    let AdminRuntimePorts {
+        providers,
+        snapshot,
+        account_probe: probe,
+        proxy_probe,
+        client_distribution,
+        system,
+        client_key_verifier,
+    } = runtime;
     config
+        .resolve_and_validate(Path::new("."))
+        .map_err(|error| AdminError::invalid(error.to_string()))?;
+    client_config
         .resolve_and_validate(Path::new("."))
         .map_err(|error| AdminError::invalid(error.to_string()))?;
     let registry = ProviderAdminRegistry::new(providers).map_err(map_provider_registry_error)?;
@@ -272,7 +330,9 @@ pub async fn initialize(
     let auth = Arc::new(DefaultAuthService::new(
         config.default_username,
         config.session_ttl_minutes,
+        client_config.session_ttl_minutes,
         store.auth(),
+        client_key_verifier,
     ));
     auth.ensure_default_admin(config.default_password.expose())
         .await?;
@@ -296,6 +356,12 @@ pub async fn initialize(
         backup_ports.dump(),
         backup_ports.object_store(),
     );
+    let observability = Arc::new(DefaultObservabilityService::new(
+        store.observability(),
+        store.accounts(),
+        store.settings(),
+        registry.clone(),
+    ));
     let services = AdminServices {
         proxies: Arc::new(use_case::proxies::DefaultProxiesService::new(
             store.proxies(),
@@ -303,7 +369,7 @@ pub async fn initialize(
             snapshot.clone(),
             registry.clone(),
         )),
-        auth,
+        auth: auth.clone(),
         accounts,
         account_groups: Arc::new(DefaultAccountGroupService::new(
             store.account_groups(),
@@ -314,13 +380,15 @@ pub async fn initialize(
             store.client_keys(),
             snapshot.clone(),
         )),
-        client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
-        observability: Arc::new(DefaultObservabilityService::new(
+        client_usage: Arc::new(DefaultClientUsageService::new(
+            auth,
+            store.client_usage(),
             store.observability(),
-            store.accounts(),
-            store.settings(),
-            registry,
+            observability.clone(),
+            registry.clone(),
         )),
+        client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
+        observability,
         settings: Arc::new(DefaultSettingsService::new(
             store.settings(),
             snapshot.clone(),

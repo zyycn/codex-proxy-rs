@@ -96,17 +96,19 @@ impl AdminErrorCode {
     pub const INVALID_TIME_RANGE: Self = Self(40002);
     /// 模型来源不合法。
     pub const INVALID_MODEL_SOURCE: Self = Self(40003);
-    /// 缺少管理员会话。
+    /// 缺少登录会话。
     pub const SESSION_REQUIRED: Self = Self(40101);
-    /// 管理员登录凭据错误。
+    /// 登录凭据错误。
     pub const INVALID_CREDENTIALS: Self = Self(40102);
     /// 管理 API Key 错误。
     pub const INVALID_API_KEY: Self = Self(40103);
+    /// 当前会话无权访问。
+    pub const FORBIDDEN: Self = Self(40301);
     /// 资源不存在。
     pub const NOT_FOUND: Self = Self(40401);
     /// 配置 revision 或资源状态冲突。
     pub const CONFLICT: Self = Self(40901);
-    /// 管理员登录尝试过多。
+    /// 登录尝试过多。
     pub const TOO_MANY_LOGIN_ATTEMPTS: Self = Self(42901);
     /// 设置持久化失败。
     pub const SETTINGS_PERSIST: Self = Self(50000);
@@ -165,6 +167,7 @@ impl AdminErrorBody {
 pub struct AdminError {
     status: StatusCode,
     body: AdminErrorBody,
+    retry_after_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -202,12 +205,12 @@ const INVALID_TIME_RANGE: AdminErrorSpec = AdminErrorSpec::new(
 const SESSION_REQUIRED: AdminErrorSpec = AdminErrorSpec::new(
     StatusCode::UNAUTHORIZED,
     AdminErrorCode::SESSION_REQUIRED,
-    "需要管理员登录",
+    "需要登录",
 );
 const INVALID_CREDENTIALS: AdminErrorSpec = AdminErrorSpec::new(
     StatusCode::UNAUTHORIZED,
     AdminErrorCode::INVALID_CREDENTIALS,
-    "管理员用户名或密码错误",
+    "登录凭据错误",
 );
 const INVALID_API_KEY: AdminErrorSpec = AdminErrorSpec::new(
     StatusCode::UNAUTHORIZED,
@@ -255,6 +258,7 @@ impl AdminError {
         Self {
             status,
             body: AdminErrorBody::new(code, message),
+            retry_after_seconds: None,
         }
     }
 
@@ -286,11 +290,11 @@ impl AdminError {
         Self::new(BAD_REQUEST.status, BAD_REQUEST.code, message)
     }
 
-    pub fn admin_session_required() -> Self {
+    pub fn session_required() -> Self {
         Self::from_spec(SESSION_REQUIRED)
     }
 
-    pub fn invalid_admin_credentials() -> Self {
+    pub fn invalid_credentials() -> Self {
         Self::from_spec(INVALID_CREDENTIALS)
     }
 
@@ -300,6 +304,10 @@ impl AdminError {
 
     pub fn too_many_login_attempts() -> Self {
         Self::from_spec(TOO_MANY_LOGIN_ATTEMPTS)
+    }
+
+    pub fn forbidden() -> Self {
+        Self::new(StatusCode::FORBIDDEN, AdminErrorCode::FORBIDDEN, "无权访问")
     }
 
     pub fn conflict(message: impl Into<String>) -> Self {
@@ -325,6 +333,12 @@ impl AdminError {
     pub fn service_unavailable() -> Self {
         Self::from_spec(SERVICE_UNAVAILABLE)
     }
+
+    #[must_use]
+    pub fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after_seconds = Some(seconds.max(1));
+        self
+    }
 }
 
 /// 把管理用例的稳定错误分类映射到既有 HTTP 错误 contract。
@@ -333,7 +347,8 @@ pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -
 
     let mut response = match error.kind() {
         AdminErrorKind::Invalid => AdminError::bad_request(error.message()),
-        AdminErrorKind::Unauthorized => AdminError::admin_session_required(),
+        AdminErrorKind::Forbidden => AdminError::forbidden(),
+        AdminErrorKind::Unauthorized => AdminError::session_required(),
         AdminErrorKind::NotFound => AdminError::not_found(error.message()),
         AdminErrorKind::Conflict => AdminError::conflict(error.message()),
         AdminErrorKind::RateLimited => AdminError::too_many_login_attempts(),
@@ -358,7 +373,15 @@ pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -
 
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
-        (self.status, Json(self.body)).into_response()
+        let mut response = (self.status, Json(self.body)).into_response();
+        if let Some(seconds) = self.retry_after_seconds
+            && let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string())
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+        response
     }
 }
 

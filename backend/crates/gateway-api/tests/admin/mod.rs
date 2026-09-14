@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use futures::future::BoxFuture;
 use gateway_admin::{
-    AdminConfig, AdminServices, InitialAdminPassword,
+    AdminConfig, AdminServices, ClientConfig, InitialAdminPassword,
     model::{
         MutationContext, Revision,
         account_groups::{
@@ -24,7 +24,7 @@ use gateway_admin::{
             AccountUpdateResult, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
             AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
-        auth::{AdminAuditEvent, AdminSession},
+        auth::{AdminAuditEvent, AuthSession},
         client_distribution::{
             ClientArchitecture, ClientDownloadPackage, ClientDownloadSource,
             CodexDesktopWindowsDownloads,
@@ -33,6 +33,7 @@ use gateway_admin::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
+        client_usage::ClientUsageKey,
         observability::{
             DashboardObservation, DecimalAmount, DiagnosticDimension, DiagnosticObservation,
             OpsError, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail,
@@ -58,7 +59,7 @@ use gateway_admin::{
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
             AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-            ClientKeyStore, ObservabilityStore, SettingsStore,
+            ClientKeyStore, ClientUsageStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -66,10 +67,13 @@ use gateway_admin::{
         },
     },
 };
-use gateway_api::admin::AdminSessionState;
+use gateway_api::auth::SessionState;
 use gateway_core::{
     account::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
-    engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
+    engine::{
+        execution::{ClientAuthenticationError, ClientKeyVerifier},
+        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
+    },
     policy::{ClientApiKeyId, RateLimits},
     routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId},
     runtime::SnapshotControl,
@@ -100,14 +104,46 @@ pub(super) struct AdminTestFixture {
     pub account: Arc<Mutex<Option<AccountPageItem>>>,
 }
 
+struct ClientTestPorts {
+    client_usage: Arc<dyn ClientUsageStore>,
+    observability: Arc<dyn ObservabilityStore>,
+    verifier: Arc<dyn ClientKeyVerifier>,
+}
+
 impl AdminTestFixture {
     pub async fn new() -> Self {
         Self::with_system(Arc::new(UnusedSystem)).await
     }
 
     pub async fn with_system(system: Arc<dyn SystemOperations>) -> Self {
+        Self::with_dependencies(system, None).await
+    }
+
+    pub async fn with_client(
+        client_usage: Arc<dyn ClientUsageStore>,
+        observability: Arc<dyn ObservabilityStore>,
+        verifier: Arc<dyn ClientKeyVerifier>,
+        system: Arc<dyn SystemOperations>,
+    ) -> Self {
+        Self::with_dependencies(
+            system,
+            Some(ClientTestPorts {
+                client_usage,
+                observability,
+                verifier,
+            }),
+        )
+        .await
+    }
+
+    async fn with_dependencies(
+        system: Arc<dyn SystemOperations>,
+        client: Option<ClientTestPorts>,
+    ) -> Self {
         let api_key = Arc::new(Mutex::new(None));
-        let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
+        let mut auth = MemoryAuthStore::new(api_key.clone());
+        auth.client_usage = client.as_ref().map(|ports| ports.client_usage.clone());
+        let auth = Arc::new(auth);
         let settings = Arc::new(MemorySettingsStore::new(api_key));
         let client_keys = Arc::new(MemoryClientKeyStore);
         let account_groups = Arc::new(MemoryAccountGroupStore::new());
@@ -128,6 +164,15 @@ impl AdminTestFixture {
             dashboard_summary_range: Arc::clone(&dashboard_summary_range),
             account: Arc::clone(&account),
         });
+        let ClientTestPorts {
+            client_usage,
+            observability,
+            verifier,
+        } = client.unwrap_or_else(|| ClientTestPorts {
+            client_usage: unused.clone(),
+            observability: unused.clone(),
+            verifier: Arc::new(UnusedClientKeyVerifier),
+        });
         let stores = AdminStorePorts::new(
             AdminAccountStorePorts::new(
                 unused.clone(),
@@ -137,7 +182,8 @@ impl AdminTestFixture {
             ),
             auth.clone(),
             client_keys.clone(),
-            unused,
+            client_usage,
+            observability,
             settings.clone(),
             gateway_admin::ports::backup::BackupStorePorts::disabled(),
         );
@@ -151,12 +197,17 @@ impl AdminTestFixture {
                 default_username: "admin_1".to_owned(),
                 default_password: InitialAdminPassword::new("strong-admin-password"),
             },
+            ClientConfig::default(),
             stores,
-            providers,
-            Arc::new(NoopSnapshot),
-            (Arc::new(NoopProbe), Arc::new(proxies::SuccessfulProbe)),
-            Arc::new(StaticClientDistribution),
-            system,
+            gateway_admin::AdminRuntimePorts {
+                providers,
+                snapshot: Arc::new(NoopSnapshot),
+                account_probe: Arc::new(NoopProbe),
+                proxy_probe: Arc::new(proxies::SuccessfulProbe),
+                client_distribution: Arc::new(StaticClientDistribution),
+                system,
+                client_key_verifier: verifier,
+            },
         )
         .await
         .expect("initialize test admin services");
@@ -207,15 +258,16 @@ impl ClientDistributionResolver for StaticClientDistribution {
 #[derive(Clone)]
 pub(super) struct AdminTestState(AdminServices);
 
-impl AdminSessionState for AdminTestState {
+impl SessionState for AdminTestState {
     fn admin_services(&self) -> &AdminServices {
         &self.0
     }
 }
 
 pub(super) struct MemoryAuthStore {
+    client_usage: Option<Arc<dyn ClientUsageStore>>,
     password_hash: Mutex<Option<String>>,
-    sessions: Mutex<BTreeMap<String, AdminSession>>,
+    sessions: Mutex<BTreeMap<String, AuthSession>>,
     audits: Mutex<Vec<AdminAuditEvent>>,
     api_key: Arc<Mutex<Option<AdminApiKey>>>,
     fail_audit: AtomicBool,
@@ -224,6 +276,7 @@ pub(super) struct MemoryAuthStore {
 impl MemoryAuthStore {
     fn new(api_key: Arc<Mutex<Option<AdminApiKey>>>) -> Self {
         Self {
+            client_usage: None,
             password_hash: Mutex::new(None),
             sessions: Mutex::new(BTreeMap::new()),
             audits: Mutex::new(Vec::new()),
@@ -235,8 +288,10 @@ impl MemoryAuthStore {
     pub fn insert_session(&self, session_id: &str) {
         self.sessions.lock().expect("sessions").insert(
             session_id.to_owned(),
-            AdminSession {
-                admin_user_id: "admin_1".to_owned(),
+            AuthSession {
+                subject: gateway_admin::model::auth::SessionSubject::Admin {
+                    admin_user_id: "admin_1".to_owned(),
+                },
                 expires_at: Utc::now() + Duration::hours(1),
             },
         );
@@ -282,7 +337,7 @@ impl AuthStore for MemoryAuthStore {
         Ok(self.api_key.lock().expect("API key").clone())
     }
 
-    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>> {
+    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>> {
         Ok(self
             .sessions
             .lock()
@@ -291,11 +346,7 @@ impl AuthStore for MemoryAuthStore {
             .cloned())
     }
 
-    async fn store_session(
-        &self,
-        session_id: &str,
-        session: &AdminSession,
-    ) -> AdminStoreResult<()> {
+    async fn store_session(&self, session_id: &str, session: &AuthSession) -> AdminStoreResult<()> {
         self.sessions
             .lock()
             .expect("sessions")
@@ -303,8 +354,28 @@ impl AuthStore for MemoryAuthStore {
         Ok(())
     }
 
-    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>> {
+    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>> {
         Ok(self.sessions.lock().expect("sessions").remove(session_id))
+    }
+
+    async fn client_key_enabled(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<bool> {
+        match &self.client_usage {
+            Some(store) => Ok(store.load_client_usage_key(id).await?.is_some()),
+            None => Ok(false),
+        }
+    }
+
+    async fn consume_login_attempt(
+        &self,
+        _: std::net::IpAddr,
+        _: u32,
+        _: u32,
+        _: std::time::Duration,
+    ) -> AdminStoreResult<Option<std::time::Duration>> {
+        Ok(None)
     }
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()> {
@@ -710,6 +781,31 @@ struct UnusedStore {
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
     dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     account: Arc<Mutex<Option<AccountPageItem>>>,
+}
+
+struct UnusedClientKeyVerifier;
+
+impl ClientKeyVerifier for UnusedClientKeyVerifier {
+    fn verify_client_key(&self, _: &str) -> Result<ClientApiKeyId, ClientAuthenticationError> {
+        Err(ClientAuthenticationError::InvalidKey)
+    }
+}
+
+#[async_trait]
+impl ClientUsageStore for UnusedStore {
+    async fn load_client_usage_totals(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageTotals> {
+        Err(unavailable("client usage totals"))
+    }
+
+    async fn load_client_usage_key(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientUsageKey>> {
+        Err(unavailable("client usage key"))
+    }
 }
 
 #[async_trait]

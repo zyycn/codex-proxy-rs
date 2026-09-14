@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { getUsageRecordInsightsOverview } from '@/api'
+import type { UsageInsightsPresentation, UsagePerformancePresentation } from '@/views/usage/model/state'
 
 import { computed, shallowRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -21,21 +21,23 @@ import {
   usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
-} from '../utils/chart'
-import { formatDuration, formatDurationAxis, formatPercent } from '../utils/format'
+} from '@/views/usage/model/chart'
+import { formatDuration, formatDurationAxis, formatPercent } from '@/views/usage/model/format'
 
-type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
+type Performance = UsagePerformancePresentation
 type PerformancePoint = Performance['points'][number]
-type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
+type Activity = UsageInsightsPresentation['health']['points']
 
 const props = withDefaults(
   defineProps<{
     performance: Performance
     activity: Activity
     loading?: boolean
+    showScheduling?: boolean
   }>(),
   {
     loading: false,
+    showScheduling: true,
   },
 )
 
@@ -47,12 +49,12 @@ const requestActivity = computed(() => requestActivityByBucket(
   props.activity,
 ))
 
-const viewOptions = [
+const viewOptions = computed(() => [
   { label: '总耗时', value: 'total' },
   { label: '首字', value: 'firstToken' },
   { label: '吞吐', value: 'throughput' },
-  { label: '调度', value: 'scheduling' },
-]
+  ...(props.showScheduling ? [{ label: '调度', value: 'scheduling' }] : []),
+])
 
 const seriesLabels = computed(() => {
   if (activeView.value === 'throughput')
@@ -188,10 +190,10 @@ function seriesValue(point: PerformancePoint, position: 'first' | 'second' | 'th
   }
   if (activeView.value === 'scheduling') {
     if (position === 'first')
-      return point.admissionDecisionP95Ms
+      return point.admissionDecisionP95Ms ?? null
     if (position === 'second')
-      return point.accountSelectionWaitP95Ms
-    return point.capacityUtilizationP95
+      return point.accountSelectionWaitP95Ms ?? null
+    return point.capacityUtilizationP95 ?? null
   }
   const prefix = activeView.value === 'firstToken' ? 'firstToken' : 'latency'
   const suffix = position === 'first' ? 'P50Ms' : position === 'second' ? 'P95Ms' : 'P99Ms'

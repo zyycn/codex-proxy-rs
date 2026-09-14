@@ -31,7 +31,7 @@ async fn personal_info_requires_admin_and_a_valid_account_query() {
             .uri(format!("/api/admin/accounts/personal-info{query}"))
             .header("x-request-id", "req_personal_info");
         if authenticated {
-            request = request.header(header::COOKIE, "cpr_admin_session=valid-session");
+            request = request.header(header::COOKIE, "cpr_session=valid-session");
         }
         let response = admin::router::<AdminTestState>()
             .with_state(fixture.state())
@@ -73,7 +73,7 @@ async fn quota_forecast_requires_admin_and_valid_account_query() {
             .uri(uri)
             .header("x-request-id", "req_forecast");
         if authenticated {
-            request = request.header(header::COOKIE, "cpr_admin_session=valid-session");
+            request = request.header(header::COOKIE, "cpr_session=valid-session");
         }
         let response = admin::router::<AdminTestState>()
             .with_state(fixture.state())

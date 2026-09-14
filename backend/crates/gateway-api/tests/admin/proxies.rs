@@ -184,7 +184,7 @@ async fn request(
         .uri(path)
         .method(if body.is_some() { "POST" } else { "GET" });
     if authenticated {
-        builder = builder.header(header::COOKIE, "cpr_admin_session=valid-session");
+        builder = builder.header(header::COOKIE, "cpr_session=valid-session");
     }
     let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
     let response = gateway_api::admin::proxies::router::<AdminTestState>()

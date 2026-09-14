@@ -207,6 +207,16 @@ pub trait ExecutionService: Send + Sync {
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
 }
 
+/// 只验证 Client API Key 并返回稳定 Key ID，不产生请求使用事实。
+///
+/// 管理侧登录等非数据面场景必须使用该端口，避免把认证本身误记为一次 Key 使用。
+pub trait ClientKeyVerifier: Send + Sync {
+    fn verify_client_key(
+        &self,
+        plaintext: &str,
+    ) -> Result<ClientApiKeyId, ClientAuthenticationError>;
+}
+
 /// 成功认证后的 API Key 使用事实接收器。
 ///
 /// 认证仍是同步快照读取；实现必须自行异步、去重地持久化，不得阻塞客户端请求。
@@ -302,6 +312,25 @@ impl DefaultExecutionService {
     pub fn with_budget(mut self, budget: Arc<dyn ClientBudgetPort>) -> Self {
         self.budget = Some(budget);
         self
+    }
+
+    fn authenticate_without_usage(
+        &self,
+        plaintext: &str,
+    ) -> Result<AuthenticatedClient, ClientAuthenticationError> {
+        let snapshot = self
+            .snapshots
+            .acquire()
+            .map_err(|_| ClientAuthenticationError::SnapshotUnavailable)?;
+        let policy = snapshot
+            .client_policies()
+            .filter(|policy| {
+                constant_time_equal(plaintext, policy.plaintext_key().expose_for_auth())
+            })
+            .find(|policy| policy.authorize().is_ok())
+            .cloned()
+            .ok_or(ClientAuthenticationError::InvalidKey)?;
+        Ok(AuthenticatedClient { snapshot, policy })
     }
 
     async fn start_inner(&self, request: StartExecution) -> Result<StartedExecution, GatewayError> {
@@ -904,20 +933,10 @@ impl ExecutionService for DefaultExecutionService {
         &self,
         plaintext: &str,
     ) -> Result<AuthenticatedClient, ClientAuthenticationError> {
-        let snapshot = self
-            .snapshots
-            .acquire()
-            .map_err(|_| ClientAuthenticationError::SnapshotUnavailable)?;
-        let policy = snapshot
-            .client_policies()
-            .filter(|policy| {
-                constant_time_equal(plaintext, policy.plaintext_key().expose_for_auth())
-            })
-            .find(|policy| policy.authorize().is_ok())
-            .cloned()
-            .ok_or(ClientAuthenticationError::InvalidKey)?;
-        self.client_api_key_usage.record_used(policy.key_id());
-        Ok(AuthenticatedClient { snapshot, policy })
+        let client = self.authenticate_without_usage(plaintext)?;
+        self.client_api_key_usage
+            .record_used(client.policy().key_id());
+        Ok(client)
     }
 
     fn public_models(&self, client: &AuthenticatedClient) -> Vec<PublicModelId> {
@@ -1017,6 +1036,16 @@ impl ExecutionService for DefaultExecutionService {
         request: StartProviderExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move { self.start_provider_endpoint_inner(request).await })
+    }
+}
+
+impl ClientKeyVerifier for DefaultExecutionService {
+    fn verify_client_key(
+        &self,
+        plaintext: &str,
+    ) -> Result<ClientApiKeyId, ClientAuthenticationError> {
+        self.authenticate_without_usage(plaintext)
+            .map(|client| client.policy().key_id().clone())
     }
 }
 

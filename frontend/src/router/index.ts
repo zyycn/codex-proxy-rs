@@ -8,30 +8,30 @@ export const router = createRouter({
   routes,
 })
 
-// 路由守卫
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+  const login = { name: 'login', query: { redirect: to.fullPath }, state: { loginType: to.meta.role === 'key' ? 'key' : 'admin' } }
 
-  // 登录页面不需要认证
-  if (to.path === '/login') {
-    // 如果已登录，重定向到首页
-    if (authStore.isAuthenticated) {
-      return '/'
+  if (!authStore.sessionChecked) {
+    try {
+      await authStore.checkAuth()
     }
+    catch {
+      // 暂时无法确认会话时不进入受保护页面，也不缓存成“已退出”。
+      return to.name === 'login' ? undefined : login
+    }
+  }
+
+  const identity = authStore.session?.type
+  if (to.name === 'login') {
+    if (identity)
+      return identity === 'key' ? { name: 'key-overview' } : { name: 'dashboard' }
     return
   }
 
-  // 其他页面需要认证
-  if (!authStore.isAuthenticated && !authStore.sessionChecked) {
-    // 尝试检查认证状态
-    const isAuth = await authStore.checkAuth()
-    if (!isAuth) {
-      // 未认证，跳转到登录页
-      return '/login'
-    }
-  }
+  if (!identity)
+    return login
 
-  if (!authStore.isAuthenticated) {
-    return '/login'
-  }
+  if (to.meta.role !== identity)
+    return identity === 'key' ? { name: 'key-overview' } : { name: 'dashboard' }
 })

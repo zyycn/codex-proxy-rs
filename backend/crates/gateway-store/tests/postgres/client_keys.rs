@@ -644,3 +644,35 @@ fn client_key_debug_redacts_plaintext() {
     };
     assert!(!format!("{key:?}").contains(&secret));
 }
+
+#[tokio::test]
+async fn session_key_status_checks_the_exact_current_enabled_record() {
+    let Some(database) = TestDatabase::create("session_key_status").await else {
+        return;
+    };
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let key = ClientApiKeyId::new("key-session-test").unwrap();
+    assert!(!store.is_enabled(&key).await.unwrap());
+    sqlx::query("insert into client_api_keys (id, name, key, enabled, created_at, updated_at) values ($1, 'Session test', 'synthetic-session-status-key', true, now(), now())")
+        .bind(key.as_str()).execute(&database.pool).await.unwrap();
+    assert!(store.is_enabled(&key).await.unwrap());
+    assert!(
+        !store
+            .is_enabled(&ClientApiKeyId::new("other-key").unwrap())
+            .await
+            .unwrap()
+    );
+    sqlx::query("update client_api_keys set enabled = false where id = $1")
+        .bind(key.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(!store.is_enabled(&key).await.unwrap());
+    sqlx::query("delete from client_api_keys where id = $1")
+        .bind(key.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(!store.is_enabled(&key).await.unwrap());
+    database.close().await;
+}

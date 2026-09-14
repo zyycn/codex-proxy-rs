@@ -32,6 +32,7 @@ const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
 
 const emit = defineEmits<{
   sortChange: [sort: BaseTableSort | undefined]
+  scroll: [position: { scrollTop: number, scrollLeft: number, scrollHeight: number, clientHeight: number }]
 }>()
 const slots = useSlots()
 const computedColumns = computed(() => resolveColumns(props.columns))
@@ -73,7 +74,14 @@ function handleTableScroll(payload: { scrollTop: number, scrollLeft: number }) {
   const range = Math.max(wrap.scrollWidth - wrap.clientWidth, 0)
   horizontalScrolled.value = payload.scrollLeft > 1
   horizontalCanScrollRight.value = payload.scrollLeft < range - 1
+  emit('scroll', { ...payload, scrollHeight: wrap.scrollHeight, clientHeight: wrap.clientHeight })
 }
+
+function scrollToTop() {
+  scrollbarRef.value?.scrollToTop()
+}
+
+defineExpose({ scrollToTop })
 
 onMounted(async () => {
   await nextTick()
@@ -305,6 +313,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
             </template>
           </tbody>
         </table>
+        <slot name="append" />
       </BaseScrollbar>
       <div v-else class="grid min-h-0 flex-1 place-items-center overflow-hidden px-4">
         <BaseEmpty v-if="!loading" :title="emptyText" surface="none" class="w-full max-w-80" />

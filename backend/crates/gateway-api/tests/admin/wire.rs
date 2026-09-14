@@ -175,12 +175,12 @@ mod response {
                 40001,
             ),
             (
-                AdminError::admin_session_required(),
+                AdminError::session_required(),
                 StatusCode::UNAUTHORIZED,
                 40101,
             ),
             (
-                AdminError::invalid_admin_credentials(),
+                AdminError::invalid_credentials(),
                 StatusCode::UNAUTHORIZED,
                 40102,
             ),

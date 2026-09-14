@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use super::presenter::{format_compact_number, format_decimal_currency, format_number};
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminQuery, AdminResponse, AdminSessionState,
-    WireValidationError, wire::map_admin_service_error,
+    AdminAuth, AdminEnvelope, AdminError, AdminQuery, AdminResponse, WireValidationError,
+    wire::map_admin_service_error,
 };
 
 mod presenter;

@@ -1,0 +1,21 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { usageClientIp } from '@/views/usage/model/records'
+
+const props = defineProps<{
+  record: { clientIp?: string | null }
+}>()
+
+const clientIp = computed(() => usageClientIp(props.record))
+</script>
+
+<template>
+  <span
+    class="inline-flex h-6 max-w-full items-center rounded-full bg-cp-blue-container px-2.5 font-mono text-cp-sm leading-none font-bold text-cp-blue-on-container"
+    :title="clientIp"
+  >
+    <span class="min-w-0 truncate">
+      {{ clientIp }}
+    </span>
+  </span>
+</template>

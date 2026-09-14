@@ -33,6 +33,7 @@ pub use admin_security_audit::*;
 pub use admission_recovery::*;
 pub use backup::*;
 pub use client_budgets::PgClientBudgetStore;
+pub(crate) use client_budgets::load_client_usage_key;
 pub use client_keys::*;
 pub use execution::*;
 pub use execution_buffer::*;

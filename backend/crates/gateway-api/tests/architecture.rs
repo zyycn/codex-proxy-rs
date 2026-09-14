@@ -54,6 +54,11 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/admin/settings.rs",
         "src/admin/system.rs",
         "src/admin/wire.rs",
+        "src/auth.rs",
+        "src/client/mod.rs",
+        "src/client/presenter.rs",
+        "src/client/system.rs",
+        "src/client/usage.rs",
         "src/health.rs",
         "src/lib.rs",
         "src/openai/auth.rs",
@@ -76,6 +81,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/search/http.rs",
         "src/openai/search/mod.rs",
         "src/openai/service.rs",
+        "src/session_cookie.rs",
     ];
     expected.sort_unstable();
 
@@ -104,6 +110,9 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/admin/system.rs",
         "tests/admin/wire.rs",
         "tests/architecture.rs",
+        "tests/auth.rs",
+        "tests/client/mod.rs",
+        "tests/client/usage.rs",
         "tests/health.rs",
         "tests/main.rs",
         "tests/openai/auth.rs",

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::{fmt, num::NonZeroU64, str::FromStr};
 
-use gateway_admin::model::auth::{AdminAuditEvent as AdminAuditModel, AdminSession};
+use gateway_admin::model::auth::{AdminAuditEvent as AdminAuditModel, AuthSession, SessionSubject};
 use gateway_admin::model::settings::{
     AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
     RotationStrategy as AdminRotationStrategy, RuntimeSettings as AdminRuntimeSettings,
@@ -16,7 +16,7 @@ use gateway_admin::model::{MutationActor, MutationContext, Revision as AdminRevi
 use gateway_admin::ports::backup::BackupStorePorts;
 use gateway_admin::ports::store::{
     AdminAccountStorePorts, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
-    AdminStoreResult, AuthStore, SettingsStore,
+    AdminStoreResult, AuthStore, ClientUsageStore, SettingsStore,
 };
 use gateway_core::CoreStorePorts;
 use gateway_core::health::{HealthProbe, HealthState};

@@ -9,7 +9,7 @@ use tower::ServiceExt as _;
 
 use super::{AdminTestFixture, AdminTestState, PRIMARY_GROUP_ID};
 
-const SESSION_COOKIE: &str = "cpr_admin_session=valid-session";
+const SESSION_COOKIE: &str = "cpr_session=valid-session";
 
 #[tokio::test]
 async fn list_route_should_keep_camel_case_group_and_page_wire() {

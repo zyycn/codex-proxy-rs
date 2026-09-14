@@ -1,3 +1,5 @@
+use crate::auth::SessionState;
+
 use axum::{
     Router,
     extract::State,
@@ -15,8 +17,7 @@ use gateway_admin::model::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
-    PageMeta,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, PageMeta,
     accounts::{AccountGroupRefView, AccountProxyUpdate},
 };
 
@@ -170,7 +171,7 @@ impl From<ProxyMutation> for MutationView {
 
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSessionState + Clone + Send + Sync + 'static,
+    S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/proxies", get(list::<S>))
@@ -203,7 +204,7 @@ async fn list<S>(
     AdminQuery(query): AdminQuery<ListQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -237,7 +238,7 @@ async fn list_accounts<S>(
     AdminQuery(query): AdminQuery<AccountsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -295,7 +296,7 @@ async fn create<S>(
     AdminJson(request): AdminJson<CreateRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let proxy = request
         .proxy_url
@@ -325,7 +326,7 @@ async fn remove_account<S>(
     AdminJson(request): AdminJson<RemoveAccountRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let revision = state
         .admin_services()
@@ -349,7 +350,7 @@ async fn update<S>(
     AdminJson(request): AdminJson<UpdateRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let proxy = request
         .proxy_url
@@ -385,7 +386,7 @@ async fn delete<S>(
     AdminJson(request): AdminJson<IdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -409,7 +410,7 @@ async fn probe<S>(
     AdminJson(request): AdminJson<ProbeRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let proxy = request
         .proxy_url
@@ -433,7 +434,7 @@ async fn test<S>(
     AdminJson(request): AdminJson<IdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()

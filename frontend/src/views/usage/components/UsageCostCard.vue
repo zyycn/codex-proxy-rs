@@ -24,13 +24,13 @@ import {
   usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
-} from '../utils/chart'
+} from '@/views/usage/model/chart'
 import {
   decimalDisplayNumber,
   formatPercent,
   formatUsd,
   formatUsdAxis,
-} from '../utils/format'
+} from '@/views/usage/model/format'
 
 type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
 type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']

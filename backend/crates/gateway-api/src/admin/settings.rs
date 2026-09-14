@@ -1,5 +1,7 @@
 //! Runtime settings、旧设置页聚合投影与明文 Admin API Key wire。
 
+use crate::auth::SessionState;
+
 use std::{collections::BTreeMap, fmt};
 
 use axum::{
@@ -21,7 +23,7 @@ use gateway_core::routing::{PublicModelId, UpstreamModelId};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse,
     WireValidationError, wire::map_admin_service_error,
 };
 
@@ -228,7 +230,7 @@ impl Default for DeletedAdminApiKey {
 /// 构造固定 GET/POST 设置路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSessionState + Clone + Send + Sync + 'static,
+    S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/settings", get(settings::<S>))
@@ -257,7 +259,7 @@ async fn codex_desktop_windows_downloads<S>(
     AdminQuery(query): AdminQuery<ClientDownloadsQuery>,
 ) -> impl IntoResponse
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let downloads = state
         .admin_services()
@@ -275,7 +277,7 @@ async fn settings<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -295,7 +297,7 @@ async fn update_settings<S>(
     AdminJson(request): AdminJson<UpdateRuntimeSettingsRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let command = request.into_command().map_err(map_wire_error)?;
     let result = state
@@ -315,7 +317,7 @@ async fn admin_api_key_status<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let exists = state
         .admin_services()
@@ -334,7 +336,7 @@ async fn regenerate_admin_api_key<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -355,7 +357,7 @@ async fn delete_admin_api_key<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     state
         .admin_services()

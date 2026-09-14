@@ -3,6 +3,7 @@ mod accounts;
 mod auth;
 mod backup;
 mod client_keys;
+mod client_usage;
 mod observability;
 mod openai;
 mod proxies;
@@ -19,7 +20,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use gateway_admin::{
-    AdminConfig, AdminServices, InitialAdminPassword,
+    AdminConfig, AdminServices, ClientConfig, InitialAdminPassword,
     model::{
         MutationContext, Revision,
         account_groups::{
@@ -31,17 +32,18 @@ use gateway_admin::{
             AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult, AccountsUpdateResult,
             BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
         },
-        auth::{AdminAuditEvent, AdminSession},
+        auth::{AdminAuditEvent, AuthSession},
         client_distribution::CodexDesktopWindowsDownloads,
         client_keys::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
+        client_usage::ClientUsageKey,
         observability::{
             DashboardDesktopRelease, DashboardObservation, DashboardWireAttribute,
             DashboardWireProfile, DashboardWireTarget, DesktopReleaseStatus, DiagnosticDimension,
             DiagnosticObservation, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange,
-            UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
+            UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery, UsageTotals,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -61,7 +63,7 @@ use gateway_admin::{
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
             AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-            ClientKeyStore, ObservabilityStore, SettingsStore,
+            ClientKeyStore, ClientUsageStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -71,7 +73,10 @@ use gateway_admin::{
 };
 use gateway_core::{
     account::ProviderAccountId,
-    engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
+    engine::{
+        execution::{ClientAuthenticationError, ClientKeyVerifier},
+        probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
+    },
     error::{GatewayError, GatewayErrorKind},
     policy::ClientApiKeyId,
     routing::{ConfigRevision, ProviderKind},
@@ -81,18 +86,21 @@ use gateway_core::{
 pub(super) struct AdminHarness {
     default_password: String,
     session_ttl_minutes: u64,
+    client_session_ttl_minutes: u64,
     accounts: Arc<dyn AccountStore>,
     proxies: Arc<dyn gateway_admin::ports::proxy::ProxyStore>,
     account_runtime: Arc<dyn AccountRuntimeStore>,
     account_groups: Arc<dyn AccountGroupStore>,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
+    client_usage: Arc<dyn ClientUsageStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
     providers: Vec<Arc<dyn ProviderAdmin>>,
     probe: Arc<dyn AccountProbe>,
     system: Arc<dyn SystemOperations>,
+    client_key_verifier: Arc<dyn ClientKeyVerifier>,
 }
 
 impl AdminHarness {
@@ -101,12 +109,14 @@ impl AdminHarness {
         Self {
             default_password: "strong-test-password".to_owned(),
             session_ttl_minutes: 60,
+            client_session_ttl_minutes: 1_440,
             accounts: unavailable.clone(),
             proxies: Arc::new(proxies::TestProxies::default()),
             account_runtime: unavailable.clone(),
             account_groups: Arc::new(UnavailableAccountGroupStore),
             auth: Arc::new(BootstrapAuthStore::default()),
             client_keys: unavailable.clone(),
+            client_usage: unavailable.clone(),
             observability: unavailable.clone(),
             settings: unavailable,
             backup: BackupStorePorts::disabled(),
@@ -116,6 +126,7 @@ impl AdminHarness {
             ],
             probe: Arc::new(UnavailableProbe),
             system: Arc::new(UnavailableSystem),
+            client_key_verifier: Arc::new(UnavailableClientKeyVerifier),
         }
     }
 
@@ -151,6 +162,21 @@ impl AdminHarness {
 
     pub(super) fn client_keys(mut self, store: Arc<dyn ClientKeyStore>) -> Self {
         self.client_keys = store;
+        self
+    }
+
+    pub(super) fn client_usage(mut self, store: Arc<dyn ClientUsageStore>) -> Self {
+        self.client_usage = store;
+        self
+    }
+
+    pub(super) fn client_session_ttl_minutes(mut self, minutes: u64) -> Self {
+        self.client_session_ttl_minutes = minutes;
+        self
+    }
+
+    pub(super) fn client_key_verifier(mut self, verifier: Arc<dyn ClientKeyVerifier>) -> Self {
+        self.client_key_verifier = verifier;
         self
     }
 
@@ -201,6 +227,9 @@ impl AdminHarness {
                 default_username: "admin".to_owned(),
                 default_password: InitialAdminPassword::new(self.default_password),
             },
+            ClientConfig {
+                session_ttl_minutes: self.client_session_ttl_minutes,
+            },
             AdminStorePorts::new(
                 AdminAccountStorePorts::new(
                     self.accounts,
@@ -210,15 +239,20 @@ impl AdminHarness {
                 ),
                 self.auth,
                 self.client_keys,
+                self.client_usage,
                 self.observability,
                 self.settings,
                 self.backup,
             ),
-            self.providers,
-            Arc::new(NoopSnapshot),
-            (self.probe, Arc::new(proxies::TestProxies::default())),
-            Arc::new(NoopClientDistribution),
-            self.system,
+            gateway_admin::AdminRuntimePorts {
+                providers: self.providers,
+                snapshot: Arc::new(NoopSnapshot),
+                account_probe: self.probe,
+                proxy_probe: Arc::new(proxies::TestProxies::default()),
+                client_distribution: Arc::new(NoopClientDistribution),
+                system: self.system,
+                client_key_verifier: self.client_key_verifier,
+            },
         )
         .await
         .expect("initialize admin test harness")
@@ -268,16 +302,33 @@ impl AuthStore for BootstrapAuthStore {
         Ok(None)
     }
 
-    async fn load_session(&self, _: &str) -> AdminStoreResult<Option<AdminSession>> {
+    async fn load_session(&self, _: &str) -> AdminStoreResult<Option<AuthSession>> {
         Ok(None)
     }
 
-    async fn store_session(&self, _: &str, _: &AdminSession) -> AdminStoreResult<()> {
+    async fn store_session(&self, _: &str, _: &AuthSession) -> AdminStoreResult<()> {
         Err(unavailable("admin session"))
     }
 
-    async fn delete_session(&self, _: &str) -> AdminStoreResult<Option<AdminSession>> {
+    async fn delete_session(&self, _: &str) -> AdminStoreResult<Option<AuthSession>> {
         Err(unavailable("admin session"))
+    }
+
+    async fn client_key_enabled(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn consume_login_attempt(
+        &self,
+        _: std::net::IpAddr,
+        _: u32,
+        _: u32,
+        _: std::time::Duration,
+    ) -> AdminStoreResult<Option<std::time::Duration>> {
+        Ok(None)
     }
 
     async fn append_audit_event(&self, _: AdminAuditEvent) -> AdminStoreResult<()> {
@@ -286,6 +337,28 @@ impl AuthStore for BootstrapAuthStore {
 }
 
 struct UnavailableStore;
+
+struct UnavailableClientKeyVerifier;
+
+impl ClientKeyVerifier for UnavailableClientKeyVerifier {
+    fn verify_client_key(&self, _: &str) -> Result<ClientApiKeyId, ClientAuthenticationError> {
+        Err(ClientAuthenticationError::InvalidKey)
+    }
+}
+
+#[async_trait]
+impl ClientUsageStore for UnavailableStore {
+    async fn load_client_usage_totals(&self, _: &ClientApiKeyId) -> AdminStoreResult<UsageTotals> {
+        Err(unavailable("client usage totals"))
+    }
+
+    async fn load_client_usage_key(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientUsageKey>> {
+        Err(unavailable("client usage key"))
+    }
+}
 
 struct UnavailableAccountGroupStore;
 

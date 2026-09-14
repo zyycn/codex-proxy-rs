@@ -176,7 +176,7 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
 
 /// Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计。
 const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
-    ("crates/gateway-api", &["admin", "openai"]),
+    ("crates/gateway-api", &["admin", "auth", "openai"]),
     (
         "crates/gateway-host",
         &[

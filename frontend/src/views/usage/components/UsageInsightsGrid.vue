@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type {
   getUsageRecordInsightsDiagnostics,
-  getUsageRecordInsightsOverview,
 } from '@/api'
+import type { UsageInsightsPresentation } from '@/views/usage/model/state'
 
 import UsageCostCard from './UsageCostCard.vue'
 import UsageDiagnosticCard from './UsageDiagnosticCard.vue'
@@ -11,12 +11,16 @@ import UsagePerformanceCard from './UsagePerformanceCard.vue'
 
 withDefaults(
   defineProps<{
-    overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>
+    overview: UsageInsightsPresentation
     diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
     loading?: boolean
+    diagnosticDimensionOptions?: Array<{ label: string, value: string }>
+    showScheduling?: boolean
   }>(),
   {
     loading: false,
+    diagnosticDimensionOptions: undefined,
+    showScheduling: true,
   },
 )
 
@@ -41,12 +45,14 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
       v-model:dimension="diagnosticDimension"
       :diagnostics="diagnostics"
       :loading="loading"
+      :dimension-options="diagnosticDimensionOptions"
     />
 
     <UsagePerformanceCard
       :performance="overview.performance"
       :activity="overview.health.points"
       :loading="loading"
+      :show-scheduling="showScheduling"
     />
 
     <UsageCostCard
