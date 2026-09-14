@@ -21,11 +21,20 @@ updates:
       day: monday
       time: '09:10'
       timezone: Asia/Shanghai
-    # 固定官方 Codex Desktop 的 TLS 指纹；升级前必须抓取握手并比对扩展顺序。
+    # 按官方 Codex 锁文件、协议指纹或已审计 fork 固定；完成对应核对与实测后再手动升级。
     ignore:
+      - dependency-name: aws-lc-rs
+      - dependency-name: hyper
       - dependency-name: hyper-rustls
       - dependency-name: reqwest
       - dependency-name: rustls
+      - dependency-name: rustls-native-certs
+      - dependency-name: rustls-pki-types
+      - dependency-name: tokio
+      - dependency-name: tokio-rustls
+      - dependency-name: tokio-tungstenite
+      - dependency-name: tungstenite
+      - dependency-name: zstd
     groups:
       minor-and-patch:
         update-types:
