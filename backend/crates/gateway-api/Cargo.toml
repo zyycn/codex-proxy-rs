@@ -30,7 +30,7 @@ tower-http = { version = "0.7.0", features = ["cors", "fs", "request-id", "timeo
 tracing = "0.1.44"
 url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v7"] }
-zstd = "=0.13.3"
+zstd = "=0.14.0"
 
 [dev-dependencies]
 async-trait = "0.1.89"

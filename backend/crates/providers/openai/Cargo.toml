@@ -54,7 +54,7 @@ url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v4", "v7"] }
 # 官方 Codex app-server 对 /v1/responses 请求体默认做 zstd 压缩（level 3），
 # 并携带 Content-Encoding: zstd；保持同版本同级别以对齐上游指纹。
-zstd = "=0.13.3"
+zstd = "=0.14.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"
