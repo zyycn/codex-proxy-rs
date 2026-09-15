@@ -144,6 +144,7 @@ const {
 const {
   showEditModal,
   editingAccount,
+  notes: editingNotes,
   schedulingEnabled,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
@@ -236,7 +237,7 @@ const {
             </template>
 
             <template #identity="{ row }">
-              <AccountIdentityCell :account="row" />
+              <AccountIdentityCell :account="row" show-notes />
             </template>
 
             <template #provider="{ row }">
@@ -349,6 +350,7 @@ const {
 
     <AccountEditModal
       v-model="showEditModal"
+      v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"

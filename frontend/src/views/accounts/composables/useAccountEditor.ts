@@ -16,6 +16,7 @@ export function useAccountEditor(options: {
 }) {
   const showEditModal = shallowRef(false)
   const editingAccountId = shallowRef<string | null>(null)
+  const notes = shallowRef('')
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -33,6 +34,7 @@ export function useAccountEditor(options: {
 
   function open(account: AccountRow) {
     editingAccountId.value = account.id
+    notes.value = account.notes ?? ''
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
@@ -59,6 +61,7 @@ export function useAccountEditor(options: {
     await saveAction.run(async () => {
       await updateAccount({
         accountId,
+        notes: notes.value,
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
@@ -75,6 +78,7 @@ export function useAccountEditor(options: {
     if (open || isSaving)
       return
     editingAccountId.value = null
+    notes.value = ''
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = true
@@ -86,6 +90,7 @@ export function useAccountEditor(options: {
   return {
     showEditModal,
     editingAccount,
+    notes,
     schedulingEnabled,
     concurrencyLimit,
     weight,

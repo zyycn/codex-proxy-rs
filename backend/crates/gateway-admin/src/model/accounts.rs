@@ -18,9 +18,10 @@ pub use gateway_core::account::{
     QuotaState, resolve_account_status,
 };
 
-/// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
+/// 导入时统一应用的账号备注、调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
+    pub notes: Option<String>,
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
@@ -86,6 +87,7 @@ pub struct AccountRecord {
     pub provider_kind: ProviderKind,
     pub groups: Vec<AccountGroupRef>,
     pub name: String,
+    pub notes: Option<String>,
     pub email: Option<String>,
     pub upstream_user_id: Option<String>,
     pub upstream_account_id: Option<String>,
@@ -217,6 +219,8 @@ pub struct AccountSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccount {
     pub account_id: String,
+    /// 缺省保留备注；空字符串清空备注。
+    pub notes: Option<String>,
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,

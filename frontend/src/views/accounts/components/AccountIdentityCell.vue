@@ -3,17 +3,19 @@ import type { getAccounts } from '@/api'
 import { computed } from 'vue'
 
 import { stablePresetVisualToneClass } from '../utils/visualTone'
+import AccountNotesPopover from './AccountNotesPopover.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
-  & Partial<Pick<AccountRow, 'accountId'>>
+  & Partial<Pick<AccountRow, 'accountId' | 'notes'>>
 
 const props = withDefaults(
   defineProps<{
     account: AccountIdentity
     size?: 'md' | 'lg'
     showPlan?: boolean
+    showNotes?: boolean
     titleMode?: 'local-part' | 'email'
     metaPosition?: 'title' | 'secondary'
     metaSize?: 'xs' | 'sm'
@@ -21,6 +23,7 @@ const props = withDefaults(
   {
     size: 'md',
     showPlan: false,
+    showNotes: false,
     titleMode: 'local-part',
     metaPosition: 'title',
     metaSize: 'sm',
@@ -36,8 +39,10 @@ const emailText = computed(() => {
   return String(props.account.id)
 })
 
+const visibleNotes = computed(() => props.showNotes ? props.account.notes : undefined)
+
 const displayTitle = computed(() =>
-  props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0],
+  visibleNotes.value || props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0],
 )
 
 const secondaryText = computed(() =>
@@ -74,7 +79,7 @@ const avatarToneClass = computed(() => {
     </span>
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
+        <span class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text" :title="displayTitle">
           {{ displayTitle }}
         </span>
         <span
@@ -94,6 +99,7 @@ const avatarToneClass = computed(() => {
         <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
+      <AccountNotesPopover v-else-if="visibleNotes" :notes="visibleNotes" class="mt-1" />
       <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
         {{ secondaryText }}
       </div>

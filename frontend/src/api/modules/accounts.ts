@@ -115,6 +115,7 @@ export interface Account {
   outboundProxyEndpoint: string | null
   id: string
   name: string
+  notes: string | null
   provider: string
   resourceRef: string
   email: string | null
@@ -344,6 +345,7 @@ interface AccountUpdateParam {
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
+  notes?: string
   enabled: boolean
   concurrencyLimit: number | null
   weight: number
@@ -366,6 +368,7 @@ interface AccountDeleteParams {
 }
 
 interface AccountImportSettings {
+  notes?: string
   enabled: boolean
   concurrencyLimit: number | null
   weight: number

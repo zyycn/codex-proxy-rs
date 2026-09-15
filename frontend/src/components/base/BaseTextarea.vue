@@ -12,12 +12,14 @@ const props = withDefaults(
     disabled?: boolean
     size?: TextareaSize
     rows?: number
+    resize?: 'none' | 'both' | 'horizontal' | 'vertical'
   }>(),
   {
     placeholder: '',
     disabled: false,
     size: 'md',
     rows: 5,
+    resize: 'vertical',
   },
 )
 
@@ -52,7 +54,7 @@ const sizeClasses: Record<TextareaSize, string> = {
 }
 
 const textareaClasses = computed(() => [
-  'cp-scrollbar w-full resize-none rounded-cp border-0 bg-[var(--cp-input-bg)] text-cp-text shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-160 placeholder:text-cp-text-quaternary motion-reduce:transition-none',
+  'cp-scrollbar w-full rounded-cp border-0 bg-[var(--cp-input-bg)] text-cp-text shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-160 placeholder:text-cp-text-quaternary motion-reduce:transition-none',
   'hover:bg-[var(--cp-input-hover-bg)] hover:shadow-cp-input-hover focus:bg-(--cp-input-active-bg) focus:shadow-cp-input-active',
   'disabled:cursor-not-allowed disabled:bg-cp-bg-container-disabled disabled:text-cp-text-disabled disabled:shadow-none',
   'leading-[1.55] font-emphasis',
@@ -68,6 +70,7 @@ const textareaClasses = computed(() => [
       :id="controlId"
       v-model="model"
       :class="textareaClasses"
+      :style="{ resize: disabled ? 'none' : resize }"
       :rows="rows"
       :placeholder="placeholder"
       :disabled="disabled"

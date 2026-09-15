@@ -1333,6 +1333,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                notes: None,
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
@@ -1370,6 +1371,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                notes: None,
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
@@ -2403,6 +2405,7 @@ fn quota_local_usage(account_id: &str, total_tokens: u64) -> AccountUsage {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        notes: None,
         outbound_proxy: None,
         id: "acct_test".to_owned(),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),
@@ -2736,6 +2739,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        notes: Some("团队备用".to_owned()),
         enabled: false,
         concurrency_limit: Some(
             gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),

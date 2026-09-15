@@ -407,6 +407,43 @@ mod batch_update {
     }
 }
 
+#[test]
+fn single_update_should_accept_optional_unicode_and_multiline_notes() {
+    use gateway_api::admin::accounts::UpdateAccountRequest;
+    use serde_json::json;
+    for notes in [
+        json!(null),
+        json!(""),
+        json!("团队备用\n第二行\t说明"),
+        json!("备".repeat(500)),
+    ] {
+        let request: UpdateAccountRequest = serde_json::from_value(json!({
+            "accountId": "acct_notes", "enabled": true, "concurrencyLimit": null,
+            "weight": 1, "groupIds": [], "notes": notes
+        }))
+        .unwrap();
+        request.validate().expect("accept bounded notes");
+    }
+}
+
+#[test]
+fn single_update_should_reject_oversized_notes_and_control_characters() {
+    use gateway_api::admin::accounts::UpdateAccountRequest;
+    use serde_json::json;
+    for notes in [
+        "备".repeat(501),
+        "备注\0".to_owned(),
+        "备注\u{001b}".to_owned(),
+    ] {
+        let request: UpdateAccountRequest = serde_json::from_value(json!({
+            "accountId": "acct_notes", "enabled": true, "concurrencyLimit": null,
+            "weight": 1, "groupIds": [], "notes": notes
+        }))
+        .unwrap();
+        assert_eq!(request.validate().unwrap_err().field(), "notes");
+    }
+}
+
 mod response {
     use gateway_api::admin::accounts::AccountUsageView;
     use gateway_api::admin::presenter::format_decimal_currency;
@@ -845,6 +882,9 @@ mod import_settings {
             ("weight", json!(0)),
             ("weight", json!(101)),
             ("groupIds", json!(["invalid-group"])),
+            ("notes", json!("备".repeat(501))),
+            ("notes", json!("备注\u{0000}")),
+            ("notes", json!("备注\u{001b}")),
         ] {
             let mut settings =
                 json!({"enabled": false, "concurrencyLimit": null, "weight": 1, "groupIds": []});
@@ -862,6 +902,25 @@ mod import_settings {
                 oauth.validate().expect_err("invalid settings").field(),
                 field
             );
+        }
+    }
+
+    #[test]
+    fn import_and_oauth_accept_optional_unicode_and_multiline_notes() {
+        for notes in [
+            json!(null),
+            json!(""),
+            json!("团队备用\n下月续费\t"),
+            json!("备".repeat(500)),
+        ] {
+            let settings = json!({"enabled": true, "concurrencyLimit": null, "weight": 1, "groupIds": [], "notes": notes});
+            let import: AccountImportRequest = serde_json::from_value(
+                json!({"provider": "openai", "data": {}, "settings": settings}),
+            )
+            .unwrap();
+            let oauth: CompleteAccountAuthorizationRequest = serde_json::from_value(json!({"provider": "xai", "flowId": "flow-test", "callbackUrl": "code", "settings": settings})).unwrap();
+            import.validate().expect("import notes");
+            oauth.validate().expect("OAuth notes");
         }
     }
 
