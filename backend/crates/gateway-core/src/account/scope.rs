@@ -47,6 +47,7 @@ impl fmt::Display for AccountGroupId {
 pub struct RuntimeAccount {
     provider_kind: ProviderKind,
     group_ids: Arc<BTreeSet<AccountGroupId>>,
+    model_access: super::AccountModelAccess,
 }
 
 impl RuntimeAccount {
@@ -55,7 +56,19 @@ impl RuntimeAccount {
         Self {
             provider_kind,
             group_ids: Arc::new(group_ids),
+            model_access: super::AccountModelAccess::all(),
         }
+    }
+
+    #[must_use]
+    pub fn with_model_access(mut self, model_access: super::AccountModelAccess) -> Self {
+        self.model_access = model_access;
+        self
+    }
+
+    #[must_use]
+    pub const fn model_access(&self) -> &super::AccountModelAccess {
+        &self.model_access
     }
 
     #[must_use]
@@ -264,6 +277,23 @@ impl FrozenAccountScope {
                 .iter()
                 .any(|group_id| enabled_group_ids.contains(group_id)),
         }
+    }
+
+    #[must_use]
+    pub fn allows_model(&self, account_id: &ProviderAccountId, upstream_model: &str) -> bool {
+        self.allows(account_id)
+            && self
+                .directory
+                .account(account_id)
+                .is_some_and(|account| account.model_access.allows(upstream_model))
+    }
+
+    /// 目录按整个授权账号池过滤，不能只看用于获取元数据的账号政策。
+    #[must_use]
+    pub fn allows_provider_model(&self, provider: &ProviderKind, upstream_model: &str) -> bool {
+        self.directory.accounts.iter().any(|(id, account)| {
+            account.provider_kind() == provider && self.allows_model(id, upstream_model)
+        })
     }
 
     #[must_use]

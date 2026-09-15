@@ -1049,6 +1049,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         .update_account(
             UpdateAccount {
                 notes: None,
+                model_access: Default::default(),
                 outbound_proxy: None,
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
@@ -1129,6 +1130,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     };
     let command = UpdateAccount {
         notes: None,
+        model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
         enabled: true,
         concurrency_limit: None,
@@ -1206,6 +1208,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         weight: gateway_core::account::AccountWeight::DEFAULT,
         group_ids: vec![],
         outbound_proxy: None,
+        model_access: None,
     };
     store
         .update_account(command.clone(), &context)
@@ -1240,10 +1243,11 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         .batch_update_accounts(
             BatchUpdateAccounts {
                 account_ids: vec!["acct_notes".to_owned()],
-                enabled: false,
-                concurrency_limit: None,
-                weight: gateway_core::account::AccountWeight::DEFAULT,
-                group_ids: vec![],
+                enabled: Some(false),
+                concurrency_limit: Some(None),
+                weight: Some(gateway_core::account::AccountWeight::DEFAULT),
+                group_ids: Some(vec![]),
+                model_access: None,
                 outbound_proxy: None,
             },
             &context,
@@ -1281,6 +1285,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],
+                model_access: None,
             }),
             outbound_proxy: None,
             audit: audit("audit_notes_reimport", "import", "acct_notes"),
@@ -1352,6 +1357,7 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],
                 outbound_proxy: None,
+                model_access: None,
             },
             &MutationContext {
                 actor: MutationActor::System,
@@ -1543,12 +1549,13 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
-                enabled: false,
-                concurrency_limit: gateway_core::account::AccountConcurrencyLimit::new(7),
-                weight: gateway_core::account::AccountWeight::new(25).expect("weight"),
-                group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
+                enabled: Some(false),
+                concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
+                weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
+                group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
             },
             &context,
         )
@@ -1579,15 +1586,16 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
-                enabled: true,
-                concurrency_limit: None,
-                weight: gateway_core::account::AccountWeight::DEFAULT,
-                group_ids: vec![
+                enabled: Some(true),
+                concurrency_limit: Some(None),
+                weight: Some(gateway_core::account::AccountWeight::DEFAULT),
+                group_ids: Some(vec![
                     AccountGroupId::new("grp_00000000000000000000000000000072")
                         .expect("missing group ID"),
-                ],
+                ]),
             },
             &context,
         )
@@ -1775,6 +1783,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
                     notes: Some("  OAuth 新建备注  ".to_owned()),
+                    model_access: Default::default(),
                     enabled: false,
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
@@ -1788,6 +1797,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     AuthorizationOwnerBinding::from_context(&context),
                 ),
                 credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
+                    model_access: Default::default(),
                     outbound_proxy: None,
                     account_id: ProviderAccountId::new("acct_authorization_candidate")
                         .expect("candidate account ID"),
@@ -1950,6 +1960,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(NewProviderAccount {
+            model_access: Default::default(),
             outbound_proxy: None,
             id: "acct_core_refresh".to_owned(),
             provider_kind: "xai".to_owned(),
@@ -2289,12 +2300,13 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
             notes: None,
+            model_access: Default::default(),
             outbound_proxy: None,
             account_ids: vec!["acct_admin_a".to_owned()],
-            enabled: false,
-            concurrency_limit: None,
-            weight: gateway_core::account::AccountWeight::DEFAULT,
-            group_ids: Vec::new(),
+            enabled: Some(false),
+            concurrency_limit: Some(None),
+            weight: Some(gateway_core::account::AccountWeight::DEFAULT),
+            group_ids: Some(Vec::new()),
             audit: audit("audit_account_disable", "disable", "acct_admin_a"),
         })
         .await
@@ -2656,6 +2668,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
 
 pub(super) fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
     NewProviderAccount {
+        model_access: Default::default(),
         outbound_proxy: None,
         id: id.to_owned(),
         provider_kind: "openai".to_owned(),
@@ -2856,6 +2869,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
         .update_account(
             UpdateAccount {
                 notes: None,
+                model_access: Default::default(),
                 account_id: id.as_str().to_owned(),
                 enabled: true,
                 concurrency_limit: None,
@@ -2913,6 +2927,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .expect("seed group");
     let settings = AccountImportSettings {
         notes: Some("  批量新建\n团队备用  ".to_owned()),
+        model_access: Default::default(),
         enabled: false,
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
         weight: AccountWeight::new(7).expect("weight"),
@@ -3018,5 +3033,90 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
             0
         );
     }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn model_access_only_batch_update_preserves_other_settings_and_survives_reimport() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    let Some(database) = TestDatabase::create("account_model_access").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut input = account("acct_model_access", "user-model-access");
+    input.weight = gateway_core::account::AccountWeight::new(23).expect("weight");
+    input.concurrency_limit = gateway_core::account::AccountConcurrencyLimit::new(7);
+    repository
+        .insert_provider_account(input.clone())
+        .await
+        .expect("insert");
+    let policy = AccountModelAccess::new(
+        AccountModelAccessMode::Allowlist,
+        vec!["test-luna".to_owned()],
+    )
+    .expect("policy");
+    let store = admin_account_store(&database.pool);
+    let command = BatchUpdateAccounts {
+        account_ids: vec![input.id.clone()],
+        enabled: None,
+        concurrency_limit: None,
+        weight: None,
+        group_ids: None,
+        outbound_proxy: None,
+        model_access: Some(policy.clone()),
+    };
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "request_model_access".to_owned(),
+    };
+    store
+        .batch_update_accounts(command.clone(), &context)
+        .await
+        .expect("update policy only");
+    let loaded = repository
+        .load_provider_account(&input.id)
+        .await
+        .expect("load")
+        .expect("account");
+    assert_eq!(loaded.summary.model_access, policy);
+    assert_eq!(loaded.summary.credential_revision.get(), 1);
+    assert_eq!(loaded.summary.weight, input.weight);
+    assert_eq!(loaded.summary.concurrency_limit, input.concurrency_limit);
+    assert_eq!(loaded.summary.enabled, input.enabled);
+    input.name = "reimported".to_owned();
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
+            outbound_proxy: None,
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            accounts: vec![input.clone()],
+            audit: audit("audit_model_access", "import", &input.id),
+        })
+        .await
+        .expect("reimport without policy");
+    let loaded = repository
+        .load_provider_account(&input.id)
+        .await
+        .expect("load")
+        .expect("account");
+    assert_eq!(loaded.summary.model_access, policy);
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                model_access: Some(AccountModelAccess::all()),
+                ..command
+            },
+            &context,
+        )
+        .await
+        .expect("explicit reset");
+    let loaded = repository
+        .load_provider_account(&input.id)
+        .await
+        .expect("load")
+        .expect("account");
+    assert_eq!(loaded.summary.model_access, AccountModelAccess::all());
     database.close().await;
 }

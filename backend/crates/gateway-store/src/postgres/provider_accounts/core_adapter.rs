@@ -43,6 +43,11 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             enabled: account.account.enabled(),
             concurrency_limit: account.account.concurrency_limit(),
             weight: account.account.weight(),
+            model_access: Some(
+                account
+                    .model_access
+                    .unwrap_or_else(|| account.account.model_access().clone()),
+            ),
             credential_state: account.account.credential_state(),
             credential_observed_at: Utc::now(),
         })

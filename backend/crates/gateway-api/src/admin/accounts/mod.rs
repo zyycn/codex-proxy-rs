@@ -75,8 +75,8 @@ pub(super) use presenter::quota_window_view;
 pub use wire::*;
 
 use credentials::{
-    AccountProvider, deserialize_required_nullable, parse_account_weight, parse_concurrency_limit,
-    provider_document_value, require_account_id, validate_wire_group_ids,
+    AccountProvider, parse_account_weight, parse_concurrency_limit, provider_document_value,
+    require_account_id, validate_wire_group_ids,
 };
 use presenter::*;
 use wire::BatchUpdatedAccountsData;

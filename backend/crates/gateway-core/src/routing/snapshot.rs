@@ -122,6 +122,7 @@ impl SnapshotAccountGroupFacts {
 pub struct SnapshotProviderAccountFacts {
     account_id: ProviderAccountId,
     provider_kind: String,
+    model_access: crate::account::AccountModelAccess,
 }
 
 impl SnapshotProviderAccountFacts {
@@ -130,7 +131,16 @@ impl SnapshotProviderAccountFacts {
         Self {
             account_id,
             provider_kind: provider_kind.into(),
+            model_access: crate::account::AccountModelAccess::all(),
         }
+    }
+}
+
+impl SnapshotProviderAccountFacts {
+    #[must_use]
+    pub fn with_model_access(mut self, model_access: crate::account::AccountModelAccess) -> Self {
+        self.model_access = model_access;
+        self
     }
 }
 
@@ -327,7 +337,8 @@ async fn compile_runtime_snapshot(
             || accounts
                 .insert(
                     account.account_id.clone(),
-                    RuntimeAccount::new(provider_kind, BTreeSet::new()),
+                    RuntimeAccount::new(provider_kind, BTreeSet::new())
+                        .with_model_access(account.model_access),
                 )
                 .is_some()
         {
@@ -352,7 +363,8 @@ async fn compile_runtime_snapshot(
         let account = accounts
             .get_mut(&account_id)
             .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
-        *account = RuntimeAccount::new(account.provider_kind().clone(), group_ids);
+        *account = RuntimeAccount::new(account.provider_kind().clone(), group_ids)
+            .with_model_access(account.model_access().clone());
     }
     let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
 
@@ -691,7 +703,13 @@ impl RuntimeSnapshot {
         scope
             .provider_kinds()
             .iter()
-            .flat_map(|provider| self.public_models_for_provider(provider))
+            .flat_map(|provider| {
+                self.public_models_for_provider(provider)
+                    .into_iter()
+                    .filter(|model| {
+                        scope.allows_provider_model(provider, &self.mapped_model(model.as_str()))
+                    })
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -706,6 +724,11 @@ impl RuntimeSnapshot {
         let mut profiles = BTreeMap::new();
         for provider in scope.provider_kinds() {
             for profile in self.public_model_profiles_for_provider(provider) {
+                if !scope
+                    .allows_provider_model(provider, &self.mapped_model(profile.model().as_str()))
+                {
+                    continue;
+                }
                 profiles
                     .entry(profile.model().clone())
                     .or_insert_with(|| profile.presentation().clone());
@@ -740,10 +763,10 @@ impl RuntimeSnapshot {
         public_model: &PublicModelId,
         scope: &FrozenAccountScope,
     ) -> bool {
-        scope
-            .provider_kinds()
-            .iter()
-            .any(|provider| self.contains_public_model_for_provider(public_model, provider))
+        scope.provider_kinds().iter().any(|provider| {
+            self.contains_public_model_for_provider(public_model, provider)
+                && scope.allows_provider_model(provider, &self.mapped_model(public_model.as_str()))
+        })
     }
 
     #[must_use]

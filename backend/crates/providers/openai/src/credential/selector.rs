@@ -364,6 +364,7 @@ impl CodexCredentialSelector {
         'capacity: loop {
             let diagnostic = request.attempt.is_diagnostic_required_account();
             let accounts = self.repository.list_for_provider().await?;
+            let mut model_access_rejected = 0_usize;
             let accounts = accounts
                 .into_iter()
                 .filter(|account| {
@@ -377,6 +378,12 @@ impl CodexCredentialSelector {
                             || match model_catalog_eligibility {
                                 ModelCatalogEligibility::NotApplicable => true,
                                 ModelCatalogEligibility::Required(upstream_model) => {
+                                    if !request.attempt.account_scope().is_some_and(|scope| {
+                                        scope.allows_model(account.id(), upstream_model)
+                                    }) {
+                                        model_access_rejected += 1;
+                                        return false;
+                                    }
                                     let observed_support = self
                                         .catalog
                                         .observed_model_support(account, upstream_model);
@@ -385,6 +392,12 @@ impl CodexCredentialSelector {
                             })
                 })
                 .collect::<Vec<_>>();
+            if model_access_rejected > 0 && request.attempt.trace().is_enabled() {
+                request.attempt.trace().record(
+                    "account.model_access",
+                    serde_json::json!({"rejectedCount": model_access_rejected}),
+                );
+            }
             if !diagnostic {
                 self.quota.prepare_scheduling(&accounts).await;
             }

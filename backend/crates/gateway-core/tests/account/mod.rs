@@ -1,3 +1,4 @@
+mod model_access;
 mod proxy;
 mod selection;
 mod selection_diagnostics;

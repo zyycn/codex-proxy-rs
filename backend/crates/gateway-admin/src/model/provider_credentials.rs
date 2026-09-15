@@ -99,6 +99,7 @@ impl fmt::Debug for PrepareCredentialImport {
 /// Provider 已验证、可由 Store 原子创建的一份 credential。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialCreate {
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub account_id: ProviderAccountId,
     pub provider_kind: ProviderKind,

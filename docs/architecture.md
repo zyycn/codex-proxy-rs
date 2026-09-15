@@ -157,7 +157,7 @@ sequenceDiagram
   E->>S: enqueue terminal observation and metering
 ```
 
-请求开始时冻结 `RuntimeSnapshot`、Client Key 的账号范围、模型映射、Codex 客户端最低版本、Provider
+请求开始时冻结 `RuntimeSnapshot`、Client Key 的账号范围及账号模型政策、模型映射、Codex 客户端最低版本、Provider
 候选顺序和调度策略。
 运行中的请求始终使用该快照，不拼接不同版本的配置，也不在热路径查询分组关系。
 
@@ -296,9 +296,14 @@ Client Key 与账号分组形成授权范围：
 - 分组可以包含多个 Provider，账号也可以属于多个分组。
 
 账号选择综合启停状态、credential/quota 事实、Redis cooldown、并发上限、权重、请求间隔和会话亲和。
-账号编辑在一个事务中替换完整调度事实。导入与首次 OAuth 可携带统一账号设置，由 Admin 传递给 Store，
+`account::AccountModelAccess` 拥有管理员模型政策的校验与精确匹配语义，存入账号行的 `model_access_json`，
+由 `RuntimeAccountDirectory` / `FrozenAccountScope` 随配置快照冻结。Provider 在额度、亲和与租约之前
+按映射后的上游模型筛选账号；重试和 fallback 使用同一冻结政策。上游目录和凭据不承载或改写该政策。
+客户端目录的政策过滤判断范围内整个候选池，原生模型对象仍由 Provider 独占解释。
+
+账号编辑在一个事务中更新调度事实，批量更新只应用显式提供的字段。导入与首次 OAuth 可携带统一账号设置，由 Admin 传递给 Store，
 与凭据在同一事务中提交；Provider 仍独占凭据解析。未附带设置的导入、重新授权和后台刷新保留已有分组、
-权重与并发设置。管理端导入和账号编辑共用设置表单，凭据输入独立于设置。
+权重、并发与模型政策。模型政策变更推进配置 revision，不推进 credential revision。管理端导入和账号编辑共用设置表单，凭据输入独立于设置。
 
 Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/交付边界约束：
 

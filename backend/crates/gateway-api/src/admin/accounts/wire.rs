@@ -64,11 +64,12 @@ pub struct BatchUpdateAccountsRequest {
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
-    pub enabled: bool,
-    #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub concurrency_limit: Option<u64>,
-    pub weight: u64,
-    pub group_ids: Vec<String>,
+    pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_nullable_limit")]
+    pub concurrency_limit: Option<Option<u64>>,
+    pub weight: Option<u64>,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
+    pub group_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +92,12 @@ impl From<AccountsUpdateResult> for BatchUpdatedAccountsData {
     }
 }
 
+fn deserialize_optional_nullable_limit<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<u64>>, D::Error> {
+    Option::<u64>::deserialize(deserializer).map(Some)
+}
+
 impl BatchUpdateAccountsRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         if self.account_ids.is_empty()
@@ -103,9 +110,23 @@ impl BatchUpdateAccountsRequest {
         {
             return Err(WireValidationError::new("accountIds"));
         }
-        validate_wire_group_ids(&self.group_ids)?;
-        parse_concurrency_limit(self.concurrency_limit)?;
-        parse_account_weight(self.weight)?;
+        if let Some(group_ids) = &self.group_ids {
+            validate_wire_group_ids(group_ids)?;
+        }
+        self.concurrency_limit
+            .map(parse_concurrency_limit)
+            .transpose()?;
+        self.weight.map(parse_account_weight).transpose()?;
+        if self.enabled.is_none()
+            && self.concurrency_limit.is_none()
+            && self.weight.is_none()
+            && self.group_ids.is_none()
+            && self.model_access.is_none()
+            && self.outbound_proxy_id.is_none()
+            && self.outbound_proxy_url.is_none()
+        {
+            return Err(WireValidationError::new("accountSettings"));
+        }
         Ok(())
     }
 
@@ -115,9 +136,17 @@ impl BatchUpdateAccountsRequest {
             outbound_proxy: proxy_selection(self.outbound_proxy_id, self.outbound_proxy_url)?,
             account_ids: self.account_ids,
             enabled: self.enabled,
-            concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
-            weight: parse_account_weight(self.weight)?,
-            group_ids: validate_wire_group_ids(&self.group_ids)?,
+            concurrency_limit: self
+                .concurrency_limit
+                .map(parse_concurrency_limit)
+                .transpose()?,
+            weight: self.weight.map(parse_account_weight).transpose()?,
+            model_access: self.model_access,
+            group_ids: self
+                .group_ids
+                .as_deref()
+                .map(validate_wire_group_ids)
+                .transpose()?,
         })
     }
 }
@@ -261,6 +290,7 @@ pub struct AccountView {
     pub enabled: bool,
     pub concurrency_limit: Option<u32>,
     pub weight: u16,
+    pub model_access: gateway_core::account::AccountModelAccess,
     pub access_token_expires_at: Option<String>,
     pub access_token_expires_at_display: Option<String>,
     pub refresh_token_expires_at: Option<String>,

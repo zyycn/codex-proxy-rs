@@ -112,6 +112,7 @@ impl GrokOAuthImportMetadata {
 
 /// OAuth 账号文档中的一个 xAI account。
 pub struct GrokOAuthImportEntry {
+    model_access: Option<gateway_core::account::AccountModelAccess>,
     name: String,
     email: Option<String>,
     outbound_proxy: Option<gateway_core::account::OutboundProxy>,
@@ -119,6 +120,11 @@ pub struct GrokOAuthImportEntry {
 }
 
 impl GrokOAuthImportEntry {
+    #[must_use]
+    pub fn model_access(&self) -> Option<&gateway_core::account::AccountModelAccess> {
+        self.model_access.as_ref()
+    }
+
     #[must_use]
     pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
         self.outbound_proxy.as_ref()
@@ -330,6 +336,11 @@ fn parse_account_entry(
         Some(_) => return Err(GrokOAuthImportError::InvalidField("outboundProxyUrl")),
     };
     Ok(Some(GrokOAuthImportEntry {
+        model_access: account
+            .get("modelAccess")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| GrokOAuthImportError::InvalidField("modelAccess"))?,
         name,
         email,
         outbound_proxy,

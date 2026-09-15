@@ -137,6 +137,7 @@ pub struct ProviderAccountSummary {
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
+    pub model_access: gateway_core::account::AccountModelAccess,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
     pub quota: QuotaState,
@@ -185,6 +186,7 @@ pub struct NewProviderAccount {
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
 }
@@ -318,10 +320,11 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub outbound_proxy: Option<gateway_admin::model::proxies::AccountProxySelection>,
     pub account_ids: Vec<String>,
     pub notes: Option<String>,
-    pub enabled: bool,
-    pub concurrency_limit: Option<AccountConcurrencyLimit>,
-    pub weight: AccountWeight,
-    pub group_ids: Vec<AccountGroupId>,
+    pub enabled: Option<bool>,
+    pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
+    pub weight: Option<AccountWeight>,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
+    pub group_ids: Option<Vec<AccountGroupId>>,
     pub audit: AdminAuditEvent,
 }
 
@@ -384,7 +387,7 @@ impl ProviderAccountStateUpdate {
 
 pub(crate) const ACCOUNT_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
@@ -392,7 +395,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select outbound_proxy_url, id, provider
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
@@ -402,7 +405,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select outbound_proxy_url, id, p
 
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at
@@ -475,6 +478,7 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_message,
     )
     .with_scheduling(summary.concurrency_limit, summary.weight)
+    .with_model_access(summary.model_access)
     .with_outbound_proxy(summary.outbound_proxy)
     .with_refresh_schedule(
         summary.has_refresh_token,
@@ -556,6 +560,11 @@ pub(crate) fn account_summary_from_row(
         enabled: get(&row, "enabled")?,
         concurrency_limit,
         weight,
+        model_access: get::<sqlx::types::Json<gateway_core::account::AccountModelAccess>>(
+            &row,
+            "model_access_json",
+        )?
+        .0,
         credential_state: parse_credential_state(&credential_state)?,
         credential_observed_at: get(&row, "credential_observed_at")?,
         quota,

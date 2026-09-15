@@ -568,6 +568,7 @@ impl CodexOAuthAdminService {
                 })
                 .map_err(map_admin_error)?;
             CompletedCodexOAuthCredential::Create(gateway_core::account::NewProviderAccount {
+                model_access: Default::default(),
                 account: prepared
                     .account
                     .with_outbound_proxy(mutation.outbound_proxy().cloned()),

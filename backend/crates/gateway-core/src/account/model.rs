@@ -669,6 +669,7 @@ pub struct ProviderAccount {
     enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
+    model_access: super::AccountModelAccess,
     credential_state: CredentialState,
     quota: QuotaState,
     last_error_reason: Option<AccountErrorReason>,
@@ -704,6 +705,7 @@ impl ProviderAccount {
             enabled: true,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
+            model_access: super::AccountModelAccess::all(),
             credential_state: CredentialState::Unknown,
             quota: QuotaState::unknown(),
             last_error_reason: None,
@@ -726,6 +728,17 @@ impl ProviderAccount {
         self.upstream_account_id = upstream_account_id;
         self.plan_type = plan_type;
         self
+    }
+
+    #[must_use]
+    pub fn with_model_access(mut self, model_access: super::AccountModelAccess) -> Self {
+        self.model_access = model_access;
+        self
+    }
+
+    #[must_use]
+    pub const fn model_access(&self) -> &super::AccountModelAccess {
+        &self.model_access
     }
 
     #[must_use]
@@ -1007,6 +1020,8 @@ impl ProviderRefreshQuery {
 #[derive(Clone, PartialEq)]
 pub struct NewProviderAccount {
     pub account: ProviderAccount,
+    /// 导入时显式提供的政策；省略时保留已有账号设置。
+    pub model_access: Option<super::AccountModelAccess>,
     pub credential: PlaintextCredential,
 }
 

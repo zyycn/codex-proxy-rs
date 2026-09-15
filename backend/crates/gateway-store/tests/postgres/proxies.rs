@@ -35,6 +35,7 @@ fn success() -> ProxyTestResult {
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
         notes: None,
+        model_access: Default::default(),
         account_id: account_id.to_owned(),
         enabled: true,
         concurrency_limit: None,
@@ -633,11 +634,12 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    model_access: Default::default(),
                     account_ids: vec!["acct_one".to_owned(), "acct_missing".to_owned()],
-                    enabled: false,
-                    concurrency_limit: None,
-                    weight: AccountWeight::DEFAULT,
-                    group_ids: vec![],
+                    enabled: Some(false),
+                    concurrency_limit: Some(None),
+                    weight: Some(AccountWeight::DEFAULT),
+                    group_ids: Some(vec![]),
                     outbound_proxy: Some(AccountProxySelection::Url(
                         OutboundProxy::parse("http://127.0.0.1:9090").unwrap()
                     )),

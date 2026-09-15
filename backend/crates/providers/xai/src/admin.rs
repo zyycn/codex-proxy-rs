@@ -444,6 +444,7 @@ impl ProviderAdmin for XaiAdminProvider {
         // 日志得知需要重新授权。
         let mut first_failure: Option<ProviderAdminError> = None;
         for entry in document.into_entries() {
+            let model_access = entry.model_access().cloned();
             let name = entry.name().to_owned();
             let email = entry.email().map(str::to_owned);
             let outbound_proxy = entry.outbound_proxy().cloned();
@@ -501,6 +502,7 @@ impl ProviderAdmin for XaiAdminProvider {
                 }
             };
             let prepared = NewProviderAccount {
+                model_access,
                 account: prepared.account.with_outbound_proxy(outbound_proxy),
                 credential: prepared.credential,
             };
@@ -838,6 +840,7 @@ impl XaiAdminProvider {
                     })
                     .map_err(map_repository_error)?;
                 let prepared = NewProviderAccount {
+                    model_access: Default::default(),
                     account: prepared
                         .account
                         .with_outbound_proxy(stored.mutation.outbound_proxy().cloned()),
@@ -921,9 +924,11 @@ fn prepared_create(
 ) -> Result<PreparedCredentialCreate, ProviderAdminError> {
     let NewProviderAccount {
         account,
+        model_access,
         credential,
     } = prepared;
     Ok(PreparedCredentialCreate {
+        model_access,
         account_id: account.id().clone(),
         provider_kind: account.provider().clone(),
         name: account.name().to_owned(),
@@ -1051,6 +1056,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.last_error_reason,
         account.last_error_message.clone(),
     )
+    .with_model_access(account.model_access.clone())
     .with_refresh_schedule(
         account.has_refresh_token,
         account.next_refresh_at.map(Into::into),

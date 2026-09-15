@@ -121,6 +121,7 @@ impl fmt::Debug for PreparedCodexAccountImport {
 }
 
 struct ParsedCodexImportAccount {
+    model_access: Option<gateway_core::account::AccountModelAccess>,
     name: Option<String>,
     email: Option<String>,
     authentication: ParsedCodexAuthentication,
@@ -220,6 +221,7 @@ impl fmt::Debug for CodexCprExportDocument {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodexCprExportCommon {
+    model_access: gateway_core::account::AccountModelAccess,
     id: String,
     email: Option<String>,
     account_id: Option<String>,
@@ -425,6 +427,7 @@ impl CodexCredentialAdmin {
             optional_time(input.next_refresh_at),
         );
         Ok(NewProviderAccount {
+            model_access: Default::default(),
             account,
             credential,
         })
@@ -485,6 +488,7 @@ impl CodexCredentialAdmin {
             optional_time(input.next_refresh_at),
         );
         Ok(NewProviderAccount {
+            model_access: Default::default(),
             account,
             credential,
         })
@@ -511,6 +515,7 @@ impl CodexCredentialAdmin {
             let data = CodexCredentialCodec::decode_complete(&item.current.credential)
                 .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
             let common = CodexCprExportCommon {
+                model_access: account.model_access().clone(),
                 id: account.id().as_str().to_owned(),
                 email: account.email().map(str::to_owned),
                 account_id: account.upstream_account_id().map(str::to_owned),
@@ -928,6 +933,7 @@ impl CodexCredentialAdminService {
                     enabled: true,
                 })?;
             accounts.push(NewProviderAccount {
+                model_access: candidate.model_access,
                 account: prepared
                     .account
                     .with_outbound_proxy(candidate.outbound_proxy),
@@ -1102,6 +1108,11 @@ fn parse_oauth_import_account(
 ) -> Result<ParsedCodexImportAccount, CodexCredentialAdminError> {
     let credentials = value.get("credentials").unwrap_or(value);
     Ok(ParsedCodexImportAccount {
+        model_access: value
+            .get("modelAccess")
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
         name: first_string(value, &["name", "label"]),
         email: first_string(value, &["email"]).or_else(|| first_string(credentials, &["email"])),
         authentication: parse_oauth_import_tokens(value)?,

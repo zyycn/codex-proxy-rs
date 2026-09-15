@@ -8,6 +8,7 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 import AccountImportFields from './AccountImportFields.vue'
 import AccountOAuthFields from './AccountOAuthFields.vue'
@@ -29,6 +30,7 @@ const open = defineModel<boolean>({ default: false })
 const form = defineModel<AccountCreateForm>('form', { required: true })
 const busy = computed(() => props.saving || props.oauthLoading)
 const proxyError = computed(() => accountProxyError(form.value))
+const modelError = computed(() => accountModelAccessError(form.value.modelAccess))
 const scheduling = computed(() => parseAccountSchedulingForm(form.value.concurrencyLimit, form.value.weight))
 const view = computed(() => resolveAccountCreatePresentation({
   form: form.value,
@@ -53,7 +55,7 @@ const importText = computed({
 })
 
 function continueToImport() {
-  if (form.value.provider && scheduling.value.valid && !props.groupsLoading && !proxyError.value && !busy.value)
+  if (form.value.provider && !modelError.value && scheduling.value.valid && !props.groupsLoading && !proxyError.value && !busy.value)
     form.value.step = 'import'
 }
 </script>

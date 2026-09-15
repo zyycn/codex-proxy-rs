@@ -27,9 +27,11 @@ const form = defineModel<AccountCreateForm>({ required: true })
       v-model:enabled="form.enabled"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
+      v-model:model-access="form.modelAccess"
       v-model:selected-group-ids="form.groupIds"
       v-model:proxy-mode="form.proxyMode"
       v-model:proxy-id="form.proxyId"
+      preserve-model-access
       :groups="groups"
       :groups-loading="groupsLoading"
       :preserve-proxy="false"

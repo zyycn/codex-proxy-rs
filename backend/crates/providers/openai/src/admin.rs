@@ -673,9 +673,11 @@ fn prepared_create(
 ) -> Result<PreparedCredentialCreate, ProviderAdminError> {
     let NewProviderAccount {
         account,
+        model_access,
         credential,
     } = prepared;
     Ok(PreparedCredentialCreate {
+        model_access,
         outbound_proxy: account.outbound_proxy().cloned(),
         account_id: account.id().clone(),
         provider_kind: account.provider().clone(),
@@ -793,6 +795,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.last_error_reason,
         account.last_error_message.clone(),
     )
+    .with_model_access(account.model_access.clone())
     .with_refresh_schedule(
         account.has_refresh_token,
         account.next_refresh_at.map(SystemTime::from),

@@ -55,6 +55,7 @@ pub struct SnapshotAccountGroupData {
 pub struct SnapshotProviderAccountData {
     pub id: String,
     pub provider_kind: String,
+    pub model_access: gateway_core::account::AccountModelAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,7 +179,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 .into_iter()
                 .map(|account| {
                     ProviderAccountId::new(account.id)
-                        .map(|id| SnapshotProviderAccountFacts::new(id, account.provider_kind))
+                        .map(|id| {
+                            SnapshotProviderAccountFacts::new(id, account.provider_kind)
+                                .with_model_access(account.model_access)
+                        })
                         .map_err(|_| SnapshotStoreError::unavailable())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -315,15 +319,26 @@ async fn load_account_groups(
 async fn load_provider_accounts(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotProviderAccountData>> {
-    sqlx::query_as::<_, (String, String)>(
-        "select id, provider_kind from provider_accounts order by id",
-    )
+    sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            sqlx::types::Json<gateway_core::account::AccountModelAccess>,
+        ),
+    >("select id, provider_kind, model_access_json from provider_accounts order by id")
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot provider accounts"))
     .map(|rows| {
         rows.into_iter()
-            .map(|(id, provider_kind)| SnapshotProviderAccountData { id, provider_kind })
+            .map(
+                |(id, provider_kind, model_access)| SnapshotProviderAccountData {
+                    id,
+                    provider_kind,
+                    model_access: model_access.0,
+                },
+            )
             .collect()
     })
 }

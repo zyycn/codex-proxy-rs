@@ -285,6 +285,7 @@ async fn repository_rejects_account_owned_by_another_provider() {
     object.insert("access_token".to_owned(), serde_json::json!("secret"));
     store
         .create_account(NewProviderAccount {
+            model_access: Default::default(),
             account,
             credential: PlaintextCredential::new(object),
         })
@@ -344,7 +345,7 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
     input.secret.scope =
         "openid profile email offline_access grok-cli:access api:access".to_owned();
     seed_input(&store, &input).await.expect("create account");
-    let loaded = store
+    let mut loaded = store
         .load_credential(
             &input.account_id,
             CredentialRevision::new(1).expect("revision"),
@@ -352,6 +353,12 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
         .await
         .expect("loaded credential");
 
+    let policy = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Denylist,
+        vec!["grok-test-model".to_owned()],
+    )
+    .expect("policy");
+    loaded.account = loaded.account.with_model_access(policy.clone());
     let export = GrokCredentialAdmin
         .export_oauth_bundle(&[loaded], Utc::now())
         .expect("export");
@@ -406,6 +413,11 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
         assert!(value["accounts"][0]["credentials"].get(field).is_none());
     }
     assert_eq!(value["proxies"], serde_json::json!([]));
+    let imported = provider_xai::GrokOAuthImportDocument::parse_json(
+        &serde_json::to_vec(&value).expect("JSON"),
+    )
+    .expect("re-import exported account");
+    assert_eq!(imported.into_entries()[0].model_access(), Some(&policy));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import type { AccountGroup } from '@/api'
+import type { AccountGroup, AccountModelAccess } from '@/api'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -26,6 +26,7 @@ const open = defineModel<boolean>({ required: true })
 const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
+const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
@@ -36,8 +37,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
   <BaseModal
     v-model="open"
     title="编辑账号"
-    description="维护账号备注，调整调度与所属分组。"
-    size="md"
+    size="lg"
     :dismissible="!saving"
   >
     <div v-if="account" class="grid gap-5">
@@ -62,6 +62,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         v-model:enabled="enabled"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
+        v-model:model-access="modelAccess"
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
         v-model:proxy-id="proxyId"

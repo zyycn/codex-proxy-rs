@@ -170,7 +170,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     account.authentication_kind, account.credential_revision, account.outbound_proxy_url,
                     account.has_refresh_token, account.access_token_expires_at,
                     account.next_refresh_at, account.enabled, account.concurrency_limit,
-                    account.weight, account.credential_state, account.quota_access_state,
+                    account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
                     account.quota_evidence, account.quota_access_observed_at,
                     account.quota_reset_at, account.last_error_reason,
                     account.last_error_message, account.credential_observed_at,

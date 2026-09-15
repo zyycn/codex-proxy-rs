@@ -654,3 +654,60 @@ fn alias_should_only_be_available_from_a_provider_with_its_mapped_model() {
         )
     );
 }
+
+#[test]
+fn account_model_access_filters_catalog_and_aliases_using_the_whole_frozen_pool() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    let provider = ProviderKind::new("openai").expect("provider");
+    let restricted =
+        AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-5.5".to_owned()])
+            .expect("policy");
+    let directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+        ProviderAccountId::new("acct_restricted").expect("id"),
+        RuntimeAccount::new(provider.clone(), BTreeSet::new())
+            .with_model_access(restricted.clone()),
+    )])));
+    let old_scope = FrozenAccountScope::new(directory, ClientRoutingScope::all_accounts());
+    let snapshot = snapshot();
+    assert_eq!(
+        snapshot
+            .public_models_for_scope(&old_scope)
+            .iter()
+            .map(PublicModelId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["grok-latest"]
+    );
+    assert!(!snapshot.contains_public_model_for_scope(
+        &PublicModelId::new("gpt-5.4").expect("alias"),
+        &old_scope
+    ));
+    let new_scope = FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
+            (
+                ProviderAccountId::new("acct_restricted").expect("id"),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new())
+                    .with_model_access(restricted),
+            ),
+            (
+                ProviderAccountId::new("acct_unrestricted").expect("id"),
+                RuntimeAccount::new(provider, BTreeSet::new()),
+            ),
+        ]))),
+        ClientRoutingScope::all_accounts(),
+    );
+    assert_eq!(
+        snapshot
+            .public_models_for_scope(&new_scope)
+            .iter()
+            .map(PublicModelId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["gpt-5.4", "gpt-5.5", "grok-latest"]
+    );
+    assert!(
+        !snapshot.contains_public_model_for_scope(
+            &PublicModelId::new("gpt-5.5").expect("model"),
+            &old_scope
+        ),
+        "a new policy must not alter an existing request scope"
+    );
+}

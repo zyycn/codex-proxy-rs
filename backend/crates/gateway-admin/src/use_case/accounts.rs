@@ -570,7 +570,7 @@ impl AccountsService for DefaultAccountsService {
             .await
             .map_err(|error| map_store_error(error, "provider accounts"))?;
         for (provider, provider_ids) in providers.values() {
-            if !enabled {
+            if enabled == Some(false) {
                 for account_id in provider_ids {
                     provider.account_unavailable(account_id).await;
                 }

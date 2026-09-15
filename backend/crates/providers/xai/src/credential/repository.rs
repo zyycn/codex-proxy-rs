@@ -176,6 +176,7 @@ impl GrokCredentialAdmin {
         )
         .with_refresh_schedule(true, None);
         Ok(NewProviderAccount {
+            model_access: Default::default(),
             account,
             credential: encode_secret(&input.secret, &input.account)?,
         })
@@ -276,6 +277,7 @@ impl GrokCredentialAdmin {
             }
             let mut exported = serde_json::json!({
                 "name": loaded.account.name(),
+                "modelAccess": loaded.account.model_access(),
                 "platform": "grok",
                 "type": "oauth",
                 "credentials": credentials,

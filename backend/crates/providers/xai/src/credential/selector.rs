@@ -110,7 +110,11 @@ impl GrokAccountSessionSelector {
             } else {
                 accounts
                     .into_iter()
-                    .filter(|account| request.account_scope().allows(account.id()))
+                    .filter(|account| {
+                        request
+                            .account_scope()
+                            .allows_model(account.id(), request.upstream_model().as_str())
+                    })
                     .collect()
             };
             let catalog_eligible = if diagnostic {

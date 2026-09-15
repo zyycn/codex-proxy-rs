@@ -453,12 +453,17 @@ async fn pat_auth_json_import_and_cpr_round_trip_preserve_a_token_without_email(
         }))
         .await
         .expect("official PAT auth.json");
+    let policy = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Allowlist,
+        vec!["test-luna".to_owned()],
+    )
+    .expect("policy");
     let prepared = imported.into_accounts().remove(0);
     assert!(prepared.account.email().is_none());
     let exported = CodexCredentialAdmin
         .format_cpr_export(vec![ExportManagedCodexCredential {
             current: LoadedCredential {
-                account: prepared.account,
+                account: prepared.account.with_model_access(policy.clone()),
                 credential: prepared.credential,
             },
             added_at: Utc::now(),
@@ -474,6 +479,7 @@ async fn pat_auth_json_import_and_cpr_round_trip_preserve_a_token_without_email(
         Some("pat-user")
     );
     assert!(!imported.accounts()[0].account.has_refresh_token());
+    assert_eq!(imported.accounts()[0].model_access.as_ref(), Some(&policy));
 }
 
 #[tokio::test]

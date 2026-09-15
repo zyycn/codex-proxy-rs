@@ -1,3 +1,5 @@
+import type { AccountModelAccess } from '@/api'
+import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
 export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
@@ -10,6 +12,7 @@ export interface AccountCreateForm {
   enabled: boolean
   concurrencyLimit: string
   weight: string
+  modelAccess?: AccountModelAccess
   groupIds: string[]
   step: 'settings' | 'import'
   mode: AccountImportMode
@@ -52,7 +55,11 @@ export function accountImportSettings(form: AccountCreateForm) {
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
+  const modelError = accountModelAccessError(form.modelAccess)
+  if (modelError)
+    throw new Error(modelError)
   return {
+    modelAccess: form.modelAccess,
     enabled: form.enabled,
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],

@@ -1,10 +1,11 @@
 import type { Ref } from 'vue'
-import type { getAccounts } from '@/api'
+import type { AccountModelAccess, getAccounts } from '@/api'
 
 import { ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -20,6 +21,9 @@ export function useAccountBatchEditor(options: {
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
+  const modelAccess = ref<AccountModelAccess | undefined>()
+  const updateScheduling = shallowRef(false)
+  const catalogAccountId = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
@@ -31,6 +35,9 @@ export function useAccountBatchEditor(options: {
     if (accounts.length === 0)
       return
 
+    modelAccess.value = undefined
+    updateScheduling.value = false
+    catalogAccountId.value = accounts[0]?.id
     schedulingEnabled.value = accounts.every(account => account.enabled)
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -43,8 +50,17 @@ export function useAccountBatchEditor(options: {
   async function save() {
     if (saving.value || options.selectedIds.value.size === 0)
       return
-    const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
-    if (proxyMode.value === 'proxy' && !proxyId.value.trim()) {
+    const modelError = accountModelAccessError(modelAccess.value)
+    if (modelError) {
+      toast.warning(modelError)
+      return
+    }
+    if (!updateScheduling.value && !modelAccess.value) {
+      toast.warning('请选择需要更新的设置')
+      return
+    }
+    const scheduling = parseAccountSchedulingForm(updateScheduling.value ? concurrencyLimit.value : '', updateScheduling.value ? weight.value : '1')
+    if (updateScheduling.value && proxyMode.value === 'proxy' && !proxyId.value.trim()) {
       toast.warning('请选择已通过测试的代理')
       return
     }
@@ -57,11 +73,16 @@ export function useAccountBatchEditor(options: {
       const accountIds = selectedAccounts().map(account => account.id)
       await batchUpdateAccounts({
         accountIds,
-        outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
-        enabled: schedulingEnabled.value,
-        concurrencyLimit: scheduling.values.concurrencyLimit,
-        weight: scheduling.values.weight,
-        groupIds: [...new Set(selectedGroupIds.value)],
+        modelAccess: modelAccess.value,
+        ...(updateScheduling.value
+          ? {
+              outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
+              enabled: schedulingEnabled.value,
+              concurrencyLimit: scheduling.values.concurrencyLimit,
+              weight: scheduling.values.weight,
+              groupIds: [...new Set(selectedGroupIds.value)],
+            }
+          : {}),
       })
       showBatchEditModal.value = false
       options.selectedIds.value = new Set()
@@ -110,6 +131,9 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled,
     concurrencyLimit,
     weight,
+    modelAccess,
+    updateScheduling,
+    catalogAccountId,
     proxyMode,
     proxyId,
     selectedGroupIds,

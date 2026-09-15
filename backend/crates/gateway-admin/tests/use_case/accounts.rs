@@ -1334,6 +1334,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
             &context("update-request"),
             UpdateAccount {
                 notes: None,
+                model_access: Default::default(),
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
@@ -1372,6 +1373,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
             &context("update-failure"),
             UpdateAccount {
                 notes: None,
+                model_access: Default::default(),
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
@@ -1414,12 +1416,13 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 outbound_proxy: None,
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
-                enabled: false,
-                concurrency_limit: None,
-                weight: gateway_core::account::AccountWeight::DEFAULT,
-                group_ids: Vec::new(),
+                enabled: Some(false),
+                concurrency_limit: Some(None),
+                weight: Some(gateway_core::account::AccountWeight::DEFAULT),
+                group_ids: Some(Vec::new()),
             },
         )
         .await
@@ -2406,6 +2409,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
         notes: None,
+        model_access: Default::default(),
         outbound_proxy: None,
         id: "acct_test".to_owned(),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),
@@ -2448,6 +2452,7 @@ fn prepared_create_with_id(
 ) -> PreparedCredentialCreate {
     let now = Utc::now();
     PreparedCredentialCreate {
+        model_access: Default::default(),
         outbound_proxy: None,
         account_id: ProviderAccountId::new(account_id).expect("prepared account ID"),
         provider_kind,
@@ -2740,6 +2745,7 @@ fn unsupported() -> ProviderAdminError {
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
         notes: Some("团队备用".to_owned()),
+        model_access: Default::default(),
         enabled: false,
         concurrency_limit: Some(
             gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),

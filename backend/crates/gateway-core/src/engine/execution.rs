@@ -1016,6 +1016,12 @@ impl ExecutionService for DefaultExecutionService {
                     .await?
                 else {
                     for profile in client.snapshot.public_model_profiles_for_provider(kind) {
+                        if !scope.allows_provider_model(
+                            kind,
+                            &client.snapshot.mapped_model(profile.model().as_str()),
+                        ) {
+                            continue;
+                        }
                         if seen.insert(profile.model().clone()) {
                             result.push(PublicModelDescriptor::Adapted(profile));
                         }
@@ -1029,6 +1035,9 @@ impl ExecutionService for DefaultExecutionService {
                     .collect::<std::collections::BTreeMap<_, _>>();
                 for entry in &models {
                     let target = client.snapshot.mapped_model(entry.model.as_str());
+                    if !scope.allows_provider_model(kind, &target) {
+                        continue;
+                    }
                     let Some(source) = by_id.get(target.as_str()) else {
                         continue;
                     };
@@ -1050,6 +1059,9 @@ impl ExecutionService for DefaultExecutionService {
                 }
                 for model in client.snapshot.public_models_for_provider(kind) {
                     let target = client.snapshot.mapped_model(model.as_str());
+                    if !scope.allows_provider_model(kind, &target) {
+                        continue;
+                    }
                     if target == model.as_str() || seen.contains(&model) {
                         continue;
                     }

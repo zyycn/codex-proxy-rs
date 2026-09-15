@@ -1304,6 +1304,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
         notes: None,
+        model_access: Default::default(),
         outbound_proxy: None,
         id: account.id().to_string(),
         provider_kind: account.provider().clone(),

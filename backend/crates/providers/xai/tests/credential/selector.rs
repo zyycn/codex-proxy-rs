@@ -1193,3 +1193,85 @@ async fn account_queue_cancel_reclaims_capacity_and_does_not_wait_for_upstream_c
         GrokSessionSelectorError::AccountCoolingDown { .. }
     ));
 }
+
+#[tokio::test]
+async fn model_access_excludes_a_required_xai_account_before_acquiring_a_lease() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    let fixture = SelectorFixture::new(&["model-restricted", "model-allowed"]).await;
+    let restricted = account_id("model-restricted");
+    let allowed = account_id("model-allowed");
+    let provider = gateway_core::routing::ProviderKind::new("xai").expect("provider");
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
+            (
+                restricted.clone(),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()).with_model_access(
+                    AccountModelAccess::new(
+                        AccountModelAccessMode::Denylist,
+                        vec!["grok-4.5".to_owned()],
+                    )
+                    .expect("policy"),
+                ),
+            ),
+            (
+                allowed.clone(),
+                RuntimeAccount::new(provider, BTreeSet::new()),
+            ),
+        ]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    for (required, succeeds) in [(Some(restricted), false), (None, true)] {
+        let request = GrokSessionSelection::new(
+            UpstreamModelId::new("grok-4.5").expect("model"),
+            BTreeSet::new(),
+            required,
+            AccountSelectionPolicy::new(
+                RotationStrategy::Smart,
+                std::num::NonZeroU32::new(2).expect("limit"),
+                Duration::ZERO,
+            )
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_secs(2),
+            }),
+            SystemTime::now() + Duration::from_secs(30),
+            Arc::clone(&scope),
+            ClientApiKeyId::new("key_xai_selector").expect("key"),
+        );
+        use futures::FutureExt;
+        if succeeds {
+            fixture
+                .coordinator
+                .denied
+                .lock()
+                .unwrap()
+                .insert(allowed.clone());
+        }
+        let mut pending = fixture.selector.select(request);
+        if succeeds {
+            assert!(pending.as_mut().now_or_never().is_none());
+            fixture.coordinator.denied.lock().unwrap().clear();
+        }
+        let result = pending.await;
+        if succeeds {
+            assert_eq!(
+                result.expect("select allowed account").account_id(),
+                &allowed
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(GrokSessionSelectorError::NoEligibleSession)
+            ));
+        }
+    }
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .iter()
+            .all(|lease| lease.account_id() == &allowed)
+    );
+}

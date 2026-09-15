@@ -319,31 +319,29 @@ mod batch_update {
     }
 
     #[test]
-    fn batch_update_should_require_enabled_and_reject_unknown_fields() {
+    fn batch_update_model_access_preserves_omitted_settings_and_rejects_unknown_fields() {
+        let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds": ["acct_test"], "modelAccess": {"mode":"allowlist","models":["test-luna"]}
+        }))
+        .expect("policy-only update");
+        request.validate().expect("valid update");
+        assert!(request.enabled.is_none());
+        assert!(request.weight.is_none());
+        assert!(request.group_ids.is_none());
+        assert!(request.concurrency_limit.is_none());
         assert!(
             serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
-            "accountIds": ["acct_test"],
-            "concurrencyLimit": null,
-            "weight": 1,
-            "groupIds": []
+                "accountIds": ["acct_test"], "enabled": true, "legacy": true
             }))
             .is_err()
         );
-        assert!(
-            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
-                "accountIds": ["acct_test"],
-                "enabled": true,
-                "concurrencyLimit": null,
-                "weight": 1,
-                "groupIds": [],
-                "legacy": true
-            }))
-            .is_err()
-        );
+        let empty: BatchUpdateAccountsRequest =
+            serde_json::from_value(json!({"accountIds":["acct_test"]})).expect("empty mutation");
+        assert!(empty.validate().is_err());
     }
 
     #[test]
-    fn batch_update_should_reject_invalid_scheduling_bounds_and_missing_fields() {
+    fn batch_update_should_reject_invalid_scheduling_bounds_and_distinguish_clear_from_preserve() {
         for (concurrency_limit, weight, field) in [
             (json!(0), json!(1), "concurrencyLimit"),
             (json!(4294967296_u64), json!(1), "concurrencyLimit"),
@@ -351,36 +349,20 @@ mod batch_update {
             (json!(null), json!(101), "weight"),
         ] {
             let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
-                "accountIds": ["acct_test"],
-                "enabled": true,
-                "concurrencyLimit": concurrency_limit,
-                "weight": weight,
-                "groupIds": []
-            }))
-            .expect("deserialize invalid scheduling");
+                "accountIds": ["acct_test"], "concurrencyLimit": concurrency_limit, "weight": weight,
+            })).expect("deserialize bounds");
             assert_eq!(
-                request.validate().expect_err("reject scheduling").field(),
+                request.validate().expect_err("reject bounds").field(),
                 field
             );
         }
-        assert!(
-            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
-                "accountIds": ["acct_test"],
-                "enabled": true,
-                "weight": 1,
-                "groupIds": []
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
-                "accountIds": ["acct_test"],
-                "enabled": true,
-                "concurrencyLimit": null,
-                "groupIds": []
-            }))
-            .is_err()
-        );
+        let cleared: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds": ["acct_test"], "concurrencyLimit": null
+        }))
+        .expect("clear concurrency override");
+        cleared.validate().expect("valid clear");
+        assert_eq!(cleared.concurrency_limit, Some(None));
+        assert!(cleared.weight.is_none());
     }
 
     #[test]

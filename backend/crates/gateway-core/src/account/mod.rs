@@ -2,6 +2,11 @@
 
 mod error;
 mod model;
+mod model_access;
+pub use model_access::{
+    AccountModelAccess, AccountModelAccessMode, InvalidAccountModelAccess,
+    MAX_ACCOUNT_ACCESS_MODELS,
+};
 mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;
