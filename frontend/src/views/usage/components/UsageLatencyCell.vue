@@ -6,7 +6,7 @@ import { usageLatencyDetails } from '../utils/records'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 
 const props = defineProps<{
-  record: UsageDisplayRecord
+  record: Pick<UsageDisplayRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'>
 }>()
 
 const latencyDetails = computed(() => usageLatencyDetails(props.record))

@@ -1,5 +1,7 @@
 //! 管理端 HTTP adapter、wire contract 与固定路由。
 
+use crate::auth::SessionState;
+
 use axum::{
     Router,
     http::{HeaderValue, header},
@@ -21,7 +23,7 @@ pub mod settings;
 pub mod system;
 pub mod wire;
 
-pub use auth::{AdminAuth, AdminSessionState};
+pub use auth::AdminAuth;
 pub use extract::{AdminJson, AdminQuery};
 pub use wire::{
     ADMIN_OK_CODE, ADMIN_OK_MESSAGE, AdminEnvelope, AdminError, AdminErrorBody, AdminErrorCode,
@@ -31,13 +33,12 @@ pub use wire::{
 /// 构造完整且固定的 `/api/admin` 路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSessionState + Clone + Send + Sync + 'static,
+    S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .merge(account_groups::router::<S>())
         .merge(proxies::router::<S>())
         .merge(accounts::router::<S>())
-        .merge(auth::router::<S>())
         .merge(backups::router::<S>())
         .merge(client_keys::router::<S>())
         .merge(observability::router::<S>())

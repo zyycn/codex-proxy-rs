@@ -395,7 +395,7 @@ async fn reveal_route_should_use_query_id_and_no_store_response() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/client-keys/reveal?id=key_1")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_reveal")
                 .body(Body::empty())
                 .expect("reveal request"),
@@ -436,7 +436,7 @@ async fn list_route_should_accept_the_full_nonzero_u16_page_size() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/client-keys?limit=65535")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_client_keys_max_page")
                 .body(Body::empty())
                 .expect("client key list request"),

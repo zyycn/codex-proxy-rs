@@ -2,7 +2,7 @@
 //!
 //! 端口按业务资源拆分，方法使用领域模型，不暴露连接池、事务或 Redis client。
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -20,7 +20,7 @@ use crate::model::{
         AccountUpdateResult, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
         AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
     },
-    auth::{AdminAuditEvent, AdminSession},
+    auth::{AdminAuditEvent, AuthSession},
     client_keys::{
         ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
         NewClientKey, SetClientKeyEnabled, UpdateClientKey,
@@ -195,7 +195,7 @@ pub trait AccountRuntimeStore: Send + Sync {
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
 }
 
-/// 管理员密码、会话和安全审计。
+/// 控制面凭据、统一会话、登录限流与管理员安全审计。
 #[async_trait]
 pub trait AuthStore: Send + Sync {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>>;
@@ -208,19 +208,38 @@ pub trait AuthStore: Send + Sync {
 
     async fn load_admin_api_key(&self) -> AdminStoreResult<Option<AdminApiKey>>;
 
-    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
+    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>>;
 
-    async fn store_session(&self, session_id: &str, session: &AdminSession)
-    -> AdminStoreResult<()>;
+    async fn store_session(&self, session_id: &str, session: &AuthSession) -> AdminStoreResult<()>;
 
-    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
+    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>>;
+
+    async fn client_key_enabled(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<bool>;
+
+    /// 原子消费来源桶与全局桶的一次登录尝试；被拒绝时返回建议重试间隔。
+    async fn consume_login_attempt(
+        &self,
+        source_ip: IpAddr,
+        source_limit: u32,
+        global_limit: u32,
+        window: Duration,
+    ) -> AdminStoreResult<Option<Duration>>;
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }
 
-/// Client API Key 管理写入。
+/// Client API Key 资料读取与管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    /// 按已验证的 ID 读取资料，不读取完整明文 Key。
+    async fn get_client_key(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>>;
+
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage>;
 
     async fn reveal_client_key(

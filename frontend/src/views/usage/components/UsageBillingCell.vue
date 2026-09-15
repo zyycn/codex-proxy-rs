@@ -6,7 +6,7 @@ import { usageBilling, usageBillingText } from '../utils/records'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 
 const props = defineProps<{
-  record: UsageDisplayRecord
+  record: Pick<UsageDisplayRecord, 'billing'>
 }>()
 
 const billing = computed(() => usageBilling(props.record))

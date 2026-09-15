@@ -26,6 +26,13 @@ struct TestClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for TestClientKeyStore {
+    async fn get_client_key(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>> {
+        Err(unused())
+    }
+
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         assert_eq!(query.page_size.get(), u16::MAX);
         Ok(ClientKeyPage {

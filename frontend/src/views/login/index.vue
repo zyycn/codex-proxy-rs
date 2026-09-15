@@ -1,52 +1,71 @@
 <script setup lang="ts">
-import { storeToRefs } from 'pinia'
 import { computed, shallowRef } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/modules/auth'
-import { useThemeStore } from '@/stores/modules/theme'
 
 import LoginBackground from './components/LoginBackground.vue'
 import LoginPanel from './components/LoginPanel.vue'
+import LoginThemeToggle from './components/LoginThemeToggle.vue'
 
+type LoginRealm = 'admin' | 'key'
+
+const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const themeStore = useThemeStore()
-const { effectiveTheme } = storeToRefs(themeStore)
-const { toggleTheme } = themeStore
 
+const realm = shallowRef<LoginRealm>(normalizeRealm(window.history.state?.loginMode))
 const username = shallowRef('')
 const password = shallowRef('')
+const apiKey = shallowRef('')
 const loginPending = shallowRef(false)
-const canSubmit = computed<boolean>(() => !!username.value.trim() && !!password.value.trim())
-const loginLoading = computed<boolean>(() => authStore.loading || loginPending.value)
-const submitDisabled = computed<boolean>(() => loginLoading.value || !canSubmit.value)
+
+const canSubmit = computed(() => realm.value === 'key'
+  ? Boolean(apiKey.value.trim())
+  : Boolean(username.value.trim() && password.value))
+const loginLoading = computed(() => authStore.loading || loginPending.value)
+const submitDisabled = computed(() => loginLoading.value || !canSubmit.value)
 
 async function handleSubmit(): Promise<void> {
-  if (!canSubmit.value || loginPending.value) {
+  if (!canSubmit.value || loginPending.value)
     return
-  }
 
   loginPending.value = true
-  const success = await authStore.login({
-    username: username.value.trim(),
-    password: password.value,
-  })
+  const selectedRealm = realm.value
+  const result = await authStore.login(selectedRealm === 'key'
+    ? { mode: 'key', apiKey: apiKey.value.trim() }
+    : {
+        mode: 'admin',
+        username: username.value.trim(),
+        password: password.value,
+      })
 
-  if (!success) {
+  if (!result) {
     loginPending.value = false
     return
   }
 
   try {
-    await router.push('/')
+    if (result.role === 'admin')
+      await router.push(resolveDestination())
+    else
+      await router.push('/key-usage')
   }
   finally {
-    // 成功时登录页会卸载；导航失败并停留当前页时才恢复按钮。
-    if (router.currentRoute.value.path === '/login') {
+    if (router.currentRoute.value.path === '/login')
       loginPending.value = false
-    }
   }
+}
+
+function normalizeRealm(value: unknown): LoginRealm {
+  return value === 'key' ? 'key' : 'admin'
+}
+
+function resolveDestination(): string {
+  const requested = route.query.redirect
+  if (typeof requested !== 'string' || !requested.startsWith('/') || requested.startsWith('//'))
+    return '/'
+  return requested
 }
 </script>
 
@@ -54,19 +73,25 @@ async function handleSubmit(): Promise<void> {
   <main class="login-page relative isolate min-h-dvh overflow-hidden text-(--cp-login-title-color)">
     <LoginBackground />
 
+    <div class="absolute top-5 right-5 z-20 max-[560px]:top-4 max-[560px]:right-4">
+      <LoginThemeToggle />
+    </div>
+
     <section
       class="grid min-h-dvh items-center justify-items-center px-5 py-[clamp(24px,5dvh,64px)] min-[980px]:justify-items-end min-[980px]:pr-[clamp(48px,17.3vw,332px)] max-[560px]:p-4.5"
       aria-label="Codex Proxy RS 登录"
     >
-      <LoginPanel
-        v-model:username="username"
-        v-model:password="password"
-        :loading="loginLoading"
-        :submit-disabled="submitDisabled"
-        :effective-theme="effectiveTheme"
-        @submit="handleSubmit"
-        @toggle-theme="toggleTheme"
-      />
+      <div class="min-h-120 w-[min(440px,100%)]">
+        <LoginPanel
+          v-model:realm="realm"
+          v-model:username="username"
+          v-model:password="password"
+          v-model:api-key="apiKey"
+          :loading="loginLoading"
+          :submit-disabled="submitDisabled"
+          @submit="handleSubmit"
+        />
+      </div>
     </section>
   </main>
 </template>

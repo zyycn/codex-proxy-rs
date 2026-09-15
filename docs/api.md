@@ -6,7 +6,7 @@
 
 ## 1. 鉴权与公共约定
 
-### 客户端接口
+### OpenAI 数据面客户端接口
 
 所有 `/v1/*` 请求都使用管理端创建的 Client Key：
 
@@ -49,9 +49,9 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 
 ### 管理接口
 
-除登录、会话状态和登出外，所有 `/api/admin/*` 请求都需要以下任一鉴权方式：
+所有 `/api/admin/*` 请求都需要以下任一鉴权方式：
 
-- 浏览器登录后得到的 `cpr_admin_session` Cookie；
+- 管理员登录后得到的 `cpr_session` Cookie（服务端会话身份必须为 `admin`）；
 - `x-api-key: <admin-api-key>`。
 
 同源管理端的登录和退出根据浏览器 `Origin` 自动设置会话 Cookie：HTTP 来源省略 `Secure`，
@@ -94,7 +94,8 @@ HTTPS 来源以及缺失、`null` 或非法来源保留 `Secure`。`HttpOnly`、
 | 400 | `40000` | 请求体不是合法 JSON |
 | 400 / 405 / 415 / 422 | `40001` | 通用请求、方法、Content-Type 或字段错误；HTTP 状态保留具体语义 |
 | 400 | `40002` | 时间范围不合法 |
-| 401 | `40101` / `40102` / `40103` | 缺少管理员会话 / 登录凭据错误 / 管理 API Key 错误 |
+| 401 | `40101` / `40102` / `40103` | 会话缺失、过期或吊销 / 登录凭据错误 / 管理 API Key 错误 |
+| 403 | `40301` | 有效会话的身份无权访问目标接口；不清除会话 |
 | 404 | `40401` | 资源或管理接口不存在 |
 | 409 | `40901` | 资源状态冲突 |
 | 429 | `42901` | 登录尝试过多 |
@@ -236,13 +237,73 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 明确额度耗尽继续走现有账号隔离与安全换号流程，
 包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待。
 
-## 4. 管理员认证
+## 4. 浏览器认证
+
+### 统一登录与会话
+
+管理员和密钥登录共用 `/api/auth/*`。登录模式 `mode` 只用于选择凭据验证方式，不直接授予权限；
+验证成功后，由后端写入身份和绑定 ID。一个浏览器只持有一份 `cpr_session` HttpOnly Cookie，
+原始 Key 不进入 URL、Pinia 或浏览器存储。登录页的切换只改变本地表单，不改变 URL。
+管理员进入管理端；Key 登录后进入 `/key-usage`，只读取当前会话绑定 Key 的数据。
 
 | 方法 | 路由 | 请求 | 说明 |
 | --- | --- | --- | --- |
-| `POST` | `/api/admin/auth/login` | `{ username?, password }` | 创建管理员会话并设置 Cookie |
-| `GET` | `/api/admin/auth/status` | 无 | 返回当前 Cookie 是否已认证 |
-| `POST` | `/api/admin/auth/logout` | 无 | 删除当前会话并清除 Cookie |
+| `POST` | `/api/auth/login` | `{ mode: "admin", username?, password }` 或 `{ mode: "key", apiKey }` | 验证凭据、创建会话；成功后撤销请求携带的旧会话 |
+| `GET` | `/api/auth/status` | 无 | 从 Cookie 恢复服务端身份，返回 `{ authenticated, session }` |
+| `POST` | `/api/auth/logout` | 无 | 删除当前会话并清除 Cookie；存储失败返回 503，不假装退出成功 |
+
+登录返回 `data: { role: "admin" | "key", expiresAt }`；status 已登录时的 `session` 使用同一结构，
+未登录时为 `{ authenticated: false, session: null }`。`role` 由服务端已验证身份推导，不接受客户端声明。
+不返回凭据或绑定 ID。
+
+Redis 统一保存身份（管理员 ID 或 Client Key ID）和绝对有效期，不保存密码或原始 Key。
+使用 `auth:v1` 命名空间，Cookie 属性为 `Path=/; HttpOnly; SameSite=Lax`，`Max-Age` /
+`Expires` 对齐固定有效期，`Secure` 沿用上述 Origin 规则。轮询不会续期。
+管理员有效期由 `admin.session_ttl_minutes` 控制；密钥有效期由 `client.session_ttl_minutes` 控制，默认 1440 分钟。
+
+每次恢复密钥会话时重新确认 Key 存在且启用；停用或删除后会话失效，重新启用不会恢复已撤销会话。
+依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录。
+原有管理员认证路由和 Cookie 不再接受，升级后需要重新登录。
+
+密钥会话访问管理接口返回 403，不清除仍然有效的会话。
+浏览器会话不能替代 `/v1/*` 的 Bearer Key，数据面 Key 也不能替代浏览器会话。
+
+所有 `/api/auth/*` 响应带 `Cache-Control: no-store`；未知路径和错误 method 返回 JSON，不落入 SPA。
+两种登录共享来源桶和全局桶，分别为每 60 秒 10 次 / 200 次；来源取连接 IP，不信任任意转发头。
+拒绝时使用 `42901` 和 `Retry-After`。
+
+认证错误共用 `40101`（会话失效）、`40102`（凭据错误）和 `40301`（权限不足）。
+前端只在明确的会话失效时统一退出，不按 URL 或每个接口上的身份标记分发。
+
+### Key 用量查询
+
+以下接口仅接受 Key 身份的 `cpr_session`，不接受 Bearer Key 或管理 API Key。管理员会话返回 `40301`；
+缺失、失效或已停用的 Key 会话返回 `40101`。所有响应带 `Cache-Control: no-store`，未知路径和错误方法返回 JSON。
+
+| 方法 | 路由 | 查询 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?` | 用量汇总、趋势、当前额度和北京时间今日健康时间线 |
+| `GET` | `/api/key-usage/records` | 同上，另含 `kind?`、`currentPage?`、`pageSize?` | 当前 Key 的成功请求或错误记录 |
+
+起止时间使用 RFC3339，开始必须早于结束，一次最多 31 天。模型按完整名称匹配；
+不接受 Key ID、账号、Provider 等范围参数或其他未知字段。页码默认 1，每页默认 20，允许 1–100 条；
+`kind` 为 `success`（默认）或 `error`。分页响应为 `{ items, currentPage, pageSize, total }`。
+
+overview 返回 `asOf`、`startTime`、`endTime`、`key`、`summary`、`trend`、`healthTimeline`。
+`key` 仅包含名称、掩码前缀、并发/RPM、日与七日限额、已用 USD 及重置时间；零限额表示不限，
+未启动窗口的重置时间为 null。额度使用现有结算账本，不受日志日期或模型筛选影响。
+健康时间线沿用管理端的 96 个北京时间日内桶与可用性语义，不受历史范围和模型筛选影响。
+
+汇总和趋势返回请求数、输入、输出、缓存读写、推理、总 Tokens 与 USD 成本；输入已包含缓存读写，
+推理为输出的明细，不得把缓存或推理重复计入总消耗。趋势另含 `time` 与 `bucketSeconds`。
+`costUsd` 为十进制字符串或 null；`costIncomplete` 表示部分请求计费不完整，不能把已知费用当作完整总费用。
+空请求范围的成本为 `"0"`，缺失定价保持 null。
+
+日志只返回时间、公开请求模型、推理强度、接口、上下游传输方式、当前请求的 IP / User-Agent、
+Token 明细、费用明细、用时/首字与状态。Token 和费用复用现有展示合同；延迟仅包含当前请求的首事件、
+首推理、首文本和总耗时，不含账号容量或调度诊断。
+成功记录的 `status` 为 `success`，不伪造未保存的 HTTP 状态；错误记录为 `error`，只返回客户端状态码，
+缺失的 Token/费用明细为 null。不返回账号资料、Key ID、上游模型或请求标识、原始错误正文或诊断内容。
 
 ## 5. 账号
 

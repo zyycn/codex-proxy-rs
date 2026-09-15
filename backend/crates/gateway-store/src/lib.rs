@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::{fmt, num::NonZeroU64, str::FromStr};
 
-use gateway_admin::model::auth::{AdminAuditEvent as AdminAuditModel, AdminSession};
+use gateway_admin::model::auth::{AdminAuditEvent as AdminAuditModel, AuthSession, SessionSubject};
 use gateway_admin::model::settings::{
     AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
     RotationStrategy as AdminRotationStrategy, RuntimeSettings as AdminRuntimeSettings,

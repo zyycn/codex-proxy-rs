@@ -279,6 +279,37 @@ fn config_loader_should_reject_admin_password_with_compose_interpolation() {
 }
 
 #[test]
+fn config_loader_should_reject_zero_client_session_ttl() {
+    let mut config = valid_config_document();
+    *config
+        .pointer_mut("/client/session_ttl_minutes")
+        .expect("example client session TTL") = serde_json::json!(0);
+    assert_rejected(config.to_string());
+}
+
+#[test]
+fn config_loader_should_default_missing_client_section() {
+    let mut config = valid_config_document();
+    config
+        .as_object_mut()
+        .expect("example config mapping")
+        .remove("client")
+        .expect("example client section");
+    parse_config(&config.to_string()).expect("client defaults when the section is omitted");
+}
+
+#[test]
+fn config_loader_should_reject_missing_client_session_ttl() {
+    let mut config = valid_config_document();
+    config["client"]
+        .as_object_mut()
+        .expect("example client mapping")
+        .remove("session_ttl_minutes")
+        .expect("example client session TTL");
+    assert_rejected(config.to_string());
+}
+
+#[test]
 fn config_loader_should_reject_removed_fingerprint_section() {
     assert_rejected(valid_config().replace(
         "openai:\n",
@@ -363,6 +394,18 @@ fn valid_config() -> String {
             "default_password: ''",
             &format!("default_password: '{ADMIN_PASSWORD}'"),
         )
+}
+
+fn valid_config_document() -> serde_json::Value {
+    // 按字段修改样例，避免注释或排版变化让测试输入悄悄失效；JSON 仍可由 YAML 文件入口加载。
+    config::Config::builder()
+        .add_source(config::File::from_str(
+            &valid_config(),
+            config::FileFormat::Yaml,
+        ))
+        .build()
+        .and_then(config::Config::try_deserialize)
+        .expect("example config document")
 }
 
 fn parse_config(config: &str) -> Result<(GatewayConfig, tempfile::TempDir), String> {

@@ -1,7 +1,5 @@
 use gateway_admin::model::auth::{LoginCommand, LoginError};
-use gateway_api::admin::auth::{
-    AdminLoginData, AdminLoginRequest, AdminLogoutData, AdminSessionStatusData,
-};
+use gateway_api::auth::LoginRequest;
 use serde_json::json;
 
 use super::AdminTestFixture;
@@ -9,39 +7,30 @@ use super::AdminTestFixture;
 #[test]
 fn login_request_should_deny_unknown_fields_and_redact_password_debug() {
     let password = "admin-password-must-not-leak";
-    let request = serde_json::from_value::<AdminLoginRequest>(json!({
+    let request = serde_json::from_value::<LoginRequest>(json!({
+        "mode": "admin",
         "username": "admin@example.invalid",
         "password": password
     }))
     .expect("deserialize login request");
 
     assert!(!format!("{request:?}").contains(password));
-    let (username, parsed_password) = request.into_parts();
+    let LoginCommand::Admin {
+        username,
+        password: parsed_password,
+    } = request.into()
+    else {
+        panic!("admin login expected")
+    };
     assert_eq!(username.as_deref(), Some("admin@example.invalid"));
     assert_eq!(parsed_password, password);
     assert!(
-        serde_json::from_value::<AdminLoginRequest>(json!({
+        serde_json::from_value::<LoginRequest>(json!({
+        "mode": "admin",
             "password": password,
             "rememberMe": true
         }))
         .is_err()
-    );
-}
-
-#[test]
-fn auth_responses_should_keep_stable_wire_shapes() {
-    assert_eq!(
-        serde_json::to_value(AdminLoginData::new("2026-07-18T08:00:00+08:00".to_owned()))
-            .expect("serialize login"),
-        json!({ "expiresAt": "2026-07-18T08:00:00+08:00" })
-    );
-    assert_eq!(
-        serde_json::to_value(AdminSessionStatusData::new(true)).expect("serialize status"),
-        json!({ "authenticated": true })
-    );
-    assert_eq!(
-        serde_json::to_value(AdminLogoutData::new()).expect("serialize logout"),
-        json!({ "message": "Logged out successfully" })
     );
 }
 
@@ -50,17 +39,22 @@ async fn default_auth_service_should_initialize_login_validate_and_logout() {
     let fixture = AdminTestFixture::new().await;
     let service = fixture.services.auth();
     let session = service
-        .login(LoginCommand {
-            username: Some("admin_1".to_owned()),
-            password: "strong-admin-password".to_owned(),
-        })
+        .login(
+            LoginCommand::Admin {
+                username: Some("admin_1".to_owned()),
+                password: "strong-admin-password".to_owned(),
+            },
+            std::net::Ipv4Addr::LOCALHOST.into(),
+            None,
+        )
         .await
         .expect("login succeeds");
     assert!(
         service
-            .validate_session(Some(&session.session_id))
+            .session(Some(&session.session_id))
             .await
             .expect("validate session")
+            .is_some()
     );
     assert_eq!(
         service
@@ -76,9 +70,10 @@ async fn default_auth_service_should_initialize_login_validate_and_logout() {
         .expect("logout session");
     assert!(
         !service
-            .validate_session(Some(&session.session_id))
+            .session(Some(&session.session_id))
             .await
             .expect("validate logged-out session")
+            .is_some()
     );
     assert_eq!(fixture.auth.audit_count(), 2);
 }
@@ -124,10 +119,14 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
         fixture
             .services
             .auth()
-            .login(LoginCommand {
-                username: None,
-                password: "strong-admin-password".to_owned(),
-            })
+            .login(
+                LoginCommand::Admin {
+                    username: None,
+                    password: "strong-admin-password".to_owned(),
+                },
+                std::net::Ipv4Addr::LOCALHOST.into(),
+                None
+            )
             .await
             .expect_err("audit failure rejects login"),
         LoginError::Unavailable

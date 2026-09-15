@@ -633,22 +633,39 @@ impl AuthStore for FakeAuthStore {
     async fn load_session(
         &self,
         _session_id: &str,
-    ) -> AdminStoreResult<Option<gateway_admin::model::auth::AdminSession>> {
+    ) -> AdminStoreResult<Option<gateway_admin::model::auth::AuthSession>> {
         Ok(None)
     }
     async fn store_session(
         &self,
         _session_id: &str,
-        _session: &gateway_admin::model::auth::AdminSession,
+        _session: &gateway_admin::model::auth::AuthSession,
     ) -> AdminStoreResult<()> {
         Ok(())
     }
     async fn delete_session(
         &self,
         _session_id: &str,
-    ) -> AdminStoreResult<Option<gateway_admin::model::auth::AdminSession>> {
+    ) -> AdminStoreResult<Option<gateway_admin::model::auth::AuthSession>> {
         Ok(None)
     }
+    async fn client_key_enabled(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn consume_login_attempt(
+        &self,
+        _: std::net::IpAddr,
+        _: u32,
+        _: u32,
+        _: std::time::Duration,
+    ) -> AdminStoreResult<Option<std::time::Duration>> {
+        Ok(None)
+    }
+
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()> {
         self.audit.lock().expect("audit").push(event);
         Ok(())

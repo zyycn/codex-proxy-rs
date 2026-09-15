@@ -52,6 +52,10 @@ admin:
   # 仅首次创建管理员时使用；至少 12 个字符且不能包含 `$`。
   default_password: ''
 
+client:
+  # 统一登录中密钥身份的固定会话有效期。
+  session_ttl_minutes: 1440
+
 api:
   # Docker 内由 CPR_WEB_DIST_DIR 覆盖。
   asset_directory: '../frontend/dist'

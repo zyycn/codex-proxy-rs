@@ -220,11 +220,11 @@ export function usageModelDisplay(record: UsageCommonRecord) {
   return { primary, secondary }
 }
 
-export function usageTokenDetails(record: UsageCommonRecord) {
+export function usageTokenDetails(record: Pick<UsageCommonRecord, 'tokenDetails'>) {
   return record.tokenDetails
 }
 
-export function usageLatencyDetails(record: UsageCommonRecord) {
+export function usageLatencyDetails(record: Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'>) {
   const latencyDetails = record.latencyDetails
   const firstTokenMs = durationValue(
     record.firstTokenLatencyMs ?? latencyDetails?.firstTokenMs,
@@ -291,11 +291,11 @@ export function usageLatencyDetails(record: UsageCommonRecord) {
   }
 }
 
-export function usageBilling(record: UsageCommonRecord) {
+export function usageBilling(record: Pick<UsageCommonRecord, 'billing'>) {
   return record.billing
 }
 
-export function usageBillingText(record: UsageCommonRecord) {
+export function usageBillingText(record: Pick<UsageCommonRecord, 'billing'>) {
   return usageBilling(record)?.totalAmountDisplay || '—'
 }
 

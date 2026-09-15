@@ -1,10 +1,12 @@
 //! 固定 `/api/admin` 观测路由与 handler。
 
+use crate::auth::SessionState;
+
 use super::*;
 
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSessionState + Clone + Send + Sync + 'static,
+    S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/dashboard/summary", get(dashboard_summary::<S>))
@@ -35,7 +37,7 @@ pub(crate) async fn dashboard_summary<S>(
     AdminQuery(query): AdminQuery<DashboardQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let kind = query.trend_kind().map_err(map_wire_error)?;
     // 概览默认按中国时区当日统计，与单独趋势接口保持同一口径。
@@ -59,7 +61,7 @@ pub(crate) async fn dashboard_trend<S>(
     AdminQuery(query): AdminQuery<DashboardQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let kind = query.trend_kind().map_err(map_wire_error)?;
     let range = dashboard_today_range(query.start_time.as_deref(), query.end_time.as_deref())
@@ -82,7 +84,7 @@ pub(crate) async fn usage_records<S>(
     AdminQuery(query): AdminQuery<UsageQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let command = usage_command(&query).map_err(map_wire_error)?;
     let result = state
@@ -101,7 +103,7 @@ pub(crate) async fn usage_record_detail<S>(
     AdminQuery(query): AdminQuery<DetailQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     query.validate().map_err(map_wire_error)?;
     let result = state
@@ -122,7 +124,7 @@ pub(crate) async fn usage_records_summary<S>(
     AdminQuery(query): AdminQuery<UsageQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
@@ -145,7 +147,7 @@ pub(crate) async fn usage_insights_overview<S>(
     AdminQuery(query): AdminQuery<UsageQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
@@ -168,7 +170,7 @@ pub(crate) async fn usage_insights_diagnostics<S>(
     AdminQuery(query): AdminQuery<DiagnosticsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let dimension = query.dimension().map_err(map_wire_error)?;
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
@@ -198,7 +200,7 @@ pub(crate) async fn ops_errors<S>(
     AdminQuery(query): AdminQuery<OpsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let command = ops_command(&query).map_err(map_wire_error)?;
     let result = state

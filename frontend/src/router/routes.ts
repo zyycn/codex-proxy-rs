@@ -7,6 +7,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/login/index.vue'),
   },
   {
+    path: '/key-usage',
+    name: 'key-usage',
+    component: () => import('@/views/key-usage/index.vue'),
+  },
+  {
     path: '/',
     component: () => import('@/layout/index.vue'),
     children: [
@@ -26,14 +31,14 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/proxies/index.vue'),
       },
       {
-        path: 'account-groups',
-        name: 'account-groups',
-        component: () => import('@/views/account-groups/index.vue'),
+        path: 'groups',
+        name: 'groups',
+        component: () => import('@/views/groups/index.vue'),
       },
       {
-        path: 'api-keys',
-        name: 'api-keys',
-        component: () => import('@/views/api-keys/index.vue'),
+        path: 'keys',
+        name: 'keys',
+        component: () => import('@/views/keys/index.vue'),
       },
       {
         path: 'usage',

@@ -245,7 +245,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         .oneshot(
             Request::builder()
                 .uri("/api/admin/dashboard/summary")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_dashboard_account_summary")
                 .body(Body::empty())
                 .expect("dashboard request"),
@@ -326,7 +326,7 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/dashboard/summary")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_dashboard_lifetime_totals")
                 .body(Body::empty())
                 .expect("dashboard request"),
@@ -391,7 +391,7 @@ async fn dashboard_summary_should_default_to_current_china_day() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/dashboard/summary")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_dashboard_today_range")
                 .body(Body::empty())
                 .expect("dashboard request"),
@@ -480,7 +480,7 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/usage/records/detail?id=req_detail")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_usage_detail_snapshot")
                 .body(Body::empty())
                 .expect("usage detail request"),
@@ -575,7 +575,7 @@ async fn zero_attempt_failure_detail_keeps_missing_upstream_facts_and_preparatio
         .oneshot(
             Request::builder()
                 .uri("/api/admin/usage/records/detail?id=req_early")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_zero_attempt_detail")
                 .body(Body::empty())
                 .unwrap(),
@@ -688,7 +688,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/operations/errors")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_ops_errors_snapshot")
                 .body(Body::empty())
                 .expect("ops errors request"),
@@ -781,7 +781,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/usage/insights/diagnostics?dimension=account")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_diagnostics_snapshot")
                 .body(Body::empty())
                 .expect("diagnostics request"),
@@ -913,7 +913,7 @@ async fn usage_route_should_forward_a_bounded_unknown_outcome_filter() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/usage/records?outcome=provider_future_state")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_usage_other_outcome")
                 .body(Body::empty())
                 .expect("usage request"),
@@ -1033,7 +1033,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .oneshot(
             Request::builder()
                 .uri("/api/admin/usage/records")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_usage_endpoint")
                 .body(Body::empty())
                 .expect("usage request"),

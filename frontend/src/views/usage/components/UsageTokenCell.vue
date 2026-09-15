@@ -7,7 +7,7 @@ import { usageTokenDetails } from '../utils/records'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 
 const props = defineProps<{
-  record: UsageDisplayRecord
+  record: Pick<UsageDisplayRecord, 'tokenDetails'>
 }>()
 
 const tokenDetails = computed(() => usageTokenDetails(props.record))

@@ -1,6 +1,9 @@
 //! 备份设置、计划、手动创建、记录、下载与删除路由。
+
 //!
 //! 路径统一位于 `/api/admin/settings/backups/*`，内部由独立 `BackupService` 承担业务。
+
+use crate::auth::SessionState;
 
 use axum::{
     Router,
@@ -19,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminPageData, AdminQuery, AdminResponse,
-    AdminSessionState, PageMeta, wire::map_admin_service_error,
+    PageMeta, wire::map_admin_service_error,
 };
 
 /// 备份设置视图；`secretAccessKey` 返回已保存的明文凭据，由前端掩码显示。
@@ -200,7 +203,7 @@ impl From<ConnectionTestResult> for ConnectionTestView {
 /// 构造固定 GET/POST 备份路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSessionState + Clone + Send + Sync + 'static,
+    S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/settings/backups", get(backup_settings::<S>))
@@ -239,7 +242,7 @@ async fn backup_settings<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let settings = state
         .admin_services()
@@ -259,7 +262,7 @@ async fn update_backup_storage<S>(
     AdminJson(request): AdminJson<UpdateBackupStorageRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let command = UpdateBackupStorageCommand {
         endpoint: request.endpoint,
@@ -287,7 +290,7 @@ async fn test_backup_storage<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -307,7 +310,7 @@ async fn update_backup_schedule<S>(
     AdminJson(request): AdminJson<UpdateBackupScheduleRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let command = UpdateBackupScheduleCommand {
         schedule_enabled: request.schedule_enabled,
@@ -334,7 +337,7 @@ async fn backup_records<S>(
     AdminQuery(query): AdminQuery<BackupRecordsQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let page_size = gateway_admin::model::PageSize::new(query.page_size.unwrap_or(20))
         .map_err(|_| AdminError::bad_request("pageSize 不合法"))?;
@@ -389,7 +392,7 @@ async fn create_backup<S>(
     body: Option<AdminJson<CreateBackupRequest>>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let expires_at = body
         .and_then(|body| body.0.expires_in_days)
@@ -420,7 +423,7 @@ async fn download_backup_url<S>(
     AdminJson(request): AdminJson<BackupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -440,7 +443,7 @@ async fn delete_backup<S>(
     AdminJson(request): AdminJson<BackupIdRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let record = state
         .admin_services()

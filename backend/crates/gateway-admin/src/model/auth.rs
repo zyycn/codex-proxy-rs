@@ -1,6 +1,7 @@
-//! 管理员认证、会话和安全审计事实。
+//! 控制面认证、统一会话和管理员安全审计事实。
 
 use chrono::{DateTime, Utc};
+use gateway_core::{engine::execution::ClientAuthenticationError, policy::ClientApiKeyId};
 
 use super::{MutationActor, MutationContext, Revision};
 
@@ -40,43 +41,82 @@ impl AdminRequestContext {
     }
 }
 
-/// 管理员登录命令。
+/// 登录方式只决定凭据验证流程，不能直接授予会话权限。
 #[derive(Clone, PartialEq, Eq)]
-pub struct LoginCommand {
-    pub username: Option<String>,
-    pub password: String,
+pub enum LoginCommand {
+    Admin {
+        username: Option<String>,
+        password: String,
+    },
+    Key {
+        api_key: String,
+    },
 }
 
 impl std::fmt::Debug for LoginCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("LoginCommand")
-            .field("username", &self.username)
-            .field("password", &"[REDACTED]")
-            .finish()
+        match self {
+            Self::Admin { username, .. } => formatter
+                .debug_struct("AdminLogin")
+                .field("username", username)
+                .field("password", &"[REDACTED]")
+                .finish(),
+            Self::Key { .. } => formatter
+                .debug_struct("KeyLogin")
+                .field("api_key", &"[REDACTED]")
+                .finish(),
+        }
     }
 }
 
 /// 登录成功后返回的会话事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LoginResult {
     pub session_id: String,
-    pub expires_at: DateTime<Utc>,
+    pub session: AuthSession,
+}
+
+impl std::fmt::Debug for LoginResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LoginResult")
+            .field("session_id", &"[REDACTED]")
+            .field("session", &self.session)
+            .finish()
+    }
 }
 
 /// 登录状态机可被 API 精确映射的失败类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LoginError {
-    #[error("invalid administrator credentials")]
+    #[error("invalid login credentials")]
     InvalidCredentials,
-    #[error("administrator authentication is unavailable")]
+    #[error("too many login attempts")]
+    TooManyAttempts { retry_after_seconds: u64 },
+    #[error("authentication is unavailable")]
     Unavailable,
 }
 
-/// Redis 中可恢复的管理员会话。
+impl From<ClientAuthenticationError> for LoginError {
+    fn from(error: ClientAuthenticationError) -> Self {
+        match error {
+            ClientAuthenticationError::InvalidKey => Self::InvalidCredentials,
+            ClientAuthenticationError::SnapshotUnavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// 服务端已验证的身份绑定，不保存密码或原始 API Key。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdminSession {
-    pub admin_user_id: String,
+pub enum SessionSubject {
+    Admin { admin_user_id: String },
+    Key { client_key_id: ClientApiKeyId },
+}
+
+/// 两种登录方式共用的固定有效期会话。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSession {
+    pub subject: SessionSubject,
     pub expires_at: DateTime<Utc>,
 }
 

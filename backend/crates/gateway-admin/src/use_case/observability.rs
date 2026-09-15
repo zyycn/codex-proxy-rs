@@ -852,7 +852,10 @@ impl DefaultObservabilityService {
 
 /// 按指定时刻计算中国自然日的 96 个 15 分钟健康桶。
 #[must_use]
-fn health_timeline_at(records: &[RequestMetricPoint], now: DateTime<Utc>) -> HealthTimeline {
+pub(super) fn health_timeline_at(
+    records: &[RequestMetricPoint],
+    now: DateTime<Utc>,
+) -> HealthTimeline {
     let current_slot = quarter_hour_start(now);
     let start = china_day_start(now);
     let mut buckets = (0..HEALTH_TIMELINE_SLOTS)

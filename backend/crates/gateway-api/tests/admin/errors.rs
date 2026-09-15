@@ -3,16 +3,18 @@ use axum::{
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode, header},
 };
-use gateway_api::admin;
+use gateway_api::auth::SessionState;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
 use super::{AdminTestFixture, AdminTestState};
 
-const SESSION_COOKIE: &str = "cpr_admin_session=valid-session";
+const SESSION_COOKIE: &str = "cpr_session=valid-session";
 
 fn app(state: AdminTestState) -> Router {
-    admin::router::<AdminTestState>().with_state(state)
+    crate::openai::api_router_with_admin(state.admin_services().clone()).layer(axum::Extension(
+        axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 41000))),
+    ))
 }
 
 fn request(method: Method, uri: &str, body: Body) -> Request<Body> {
@@ -44,7 +46,7 @@ async fn malformed_login_json_should_use_the_admin_error_envelope() {
     let fixture = AdminTestFixture::new().await;
     let mut request = request(
         Method::POST,
-        "/api/admin/auth/login",
+        "/api/auth/login",
         Body::from(r#"{"password":"secret""#),
     );
     request
@@ -77,8 +79,10 @@ async fn invalid_login_json_data_should_not_echo_the_submitted_value() {
     let submitted = "password-must-not-leak";
     let mut request = request(
         Method::POST,
-        "/api/admin/auth/login",
-        Body::from(json!({ "password": submitted, "rememberMe": true }).to_string()),
+        "/api/auth/login",
+        Body::from(
+            json!({ "mode": "admin", "password": submitted, "rememberMe": true }).to_string(),
+        ),
     );
     request
         .headers_mut()
@@ -111,8 +115,8 @@ async fn login_without_json_content_type_should_keep_415_with_an_admin_envelope(
     let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
-            "/api/admin/auth/login",
-            Body::from(json!({ "password": "secret" }).to_string()),
+            "/api/auth/login",
+            Body::from(json!({ "mode": "admin", "password": "secret" }).to_string()),
         ))
         .await
         .expect("missing JSON content type response");
@@ -229,11 +233,7 @@ async fn unknown_admin_path_should_not_fall_through_to_the_spa() {
 async fn unsupported_admin_method_should_keep_allow_and_return_an_envelope() {
     let fixture = AdminTestFixture::new().await;
     let response = app(fixture.state())
-        .oneshot(request(
-            Method::POST,
-            "/api/admin/auth/status",
-            Body::empty(),
-        ))
+        .oneshot(request(Method::POST, "/api/auth/status", Body::empty()))
         .await
         .expect("unsupported admin method response");
     let allow = response
@@ -280,8 +280,8 @@ async fn admin_auth_failures_should_use_stable_chinese_contracts() {
         .expect("invalid API key response");
     let mut invalid_login = request(
         Method::POST,
-        "/api/admin/auth/login",
-        Body::from(json!({ "password": "wrong-password" }).to_string()),
+        "/api/auth/login",
+        Body::from(json!({ "mode": "admin", "password": "wrong-password" }).to_string()),
     );
     invalid_login
         .headers_mut()
@@ -300,15 +300,11 @@ async fn admin_auth_failures_should_use_stable_chinese_contracts() {
     assert_eq!(
         actual.map(|(status, _, body)| (status, body["code"].clone(), body["message"].clone())),
         [
-            (
-                StatusCode::UNAUTHORIZED,
-                json!(40101),
-                json!("需要管理员登录")
-            ),
+            (StatusCode::UNAUTHORIZED, json!(40101), json!("需要登录")),
             (
                 StatusCode::UNAUTHORIZED,
                 json!(40102),
-                json!("管理员用户名或密码错误")
+                json!("登录凭据错误")
             ),
             (
                 StatusCode::UNAUTHORIZED,

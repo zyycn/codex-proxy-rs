@@ -77,7 +77,7 @@ function httpFallback(status: number) {
     case 400:
       return '请求参数不合法'
     case 401:
-      return '需要管理员登录'
+      return '需要登录'
     case 403:
       return '没有权限执行此操作'
     case 404:

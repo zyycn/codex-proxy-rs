@@ -2,10 +2,11 @@
 
 use super::*;
 
-pub(crate) struct AdminAuthStoreAdapter {
+pub(crate) struct AuthStoreAdapter {
     pub(crate) security: postgres::PgAdminSecurityAuditRepository,
     pub(crate) settings: postgres::PgRuntimeSettingsRepository,
-    pub(crate) state: redis::RedisAdminAuthStateRepository,
+    pub(crate) state: redis::RedisAuthStateRepository,
+    pub(crate) keys: postgres::PgAdminClientKeyStore,
 }
 
 pub(crate) struct AdminSettingsStoreAdapter {
@@ -194,7 +195,7 @@ pub(crate) fn store_model_mappings(
 }
 
 #[async_trait::async_trait]
-impl AuthStore for AdminAuthStoreAdapter {
+impl AuthStore for AuthStoreAdapter {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>> {
         postgres::AdminSecurityAuditRepository::password_hash(&self.security, admin_user_id)
             .await
@@ -222,45 +223,66 @@ impl AuthStore for AdminAuthStoreAdapter {
             .map_err(|error| admin_store_error("admin API key", error))
     }
 
-    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>> {
-        redis::AdminAuthStateRepository::load_admin_session(&self.state, session_id)
+    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>> {
+        redis::AuthStateRepository::load_session(&self.state, session_id)
             .await
-            .map(|session| {
-                session.map(|record| AdminSession {
-                    admin_user_id: record.admin_user_id,
-                    expires_at: record.expires_at,
-                })
-            })
-            .map_err(|error| admin_store_error("admin session", error))
+            .map_err(|error| admin_store_error("authentication session", error))?
+            .map(auth_session)
+            .transpose()
     }
 
-    async fn store_session(
-        &self,
-        session_id: &str,
-        session: &AdminSession,
-    ) -> AdminStoreResult<()> {
-        redis::AdminAuthStateRepository::store_admin_session(
+    async fn store_session(&self, session_id: &str, session: &AuthSession) -> AdminStoreResult<()> {
+        let subject = match &session.subject {
+            SessionSubject::Admin { admin_user_id } => redis::SessionSubjectRecord::Admin {
+                admin_user_id: admin_user_id.clone(),
+            },
+            SessionSubject::Key { client_key_id } => redis::SessionSubjectRecord::Key {
+                client_key_id: client_key_id.as_str().to_owned(),
+            },
+        };
+        redis::AuthStateRepository::store_session(
             &self.state,
             session_id,
-            &redis::AdminSessionRecord {
-                admin_user_id: session.admin_user_id.clone(),
+            &redis::AuthSessionRecord {
+                subject,
                 expires_at: session.expires_at,
             },
         )
         .await
-        .map_err(|error| admin_store_error("admin session", error))
+        .map_err(|error| admin_store_error("authentication session", error))
     }
 
-    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>> {
-        redis::AdminAuthStateRepository::delete_admin_session(&self.state, session_id)
+    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>> {
+        redis::AuthStateRepository::delete_session(&self.state, session_id)
             .await
-            .map(|session| {
-                session.map(|record| AdminSession {
-                    admin_user_id: record.admin_user_id,
-                    expires_at: record.expires_at,
-                })
-            })
-            .map_err(|error| admin_store_error("admin session", error))
+            .map_err(|error| admin_store_error("authentication session", error))?
+            .map(auth_session)
+            .transpose()
+    }
+
+    async fn client_key_enabled(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<bool> {
+        self.keys.is_enabled(id).await
+    }
+
+    async fn consume_login_attempt(
+        &self,
+        source_ip: std::net::IpAddr,
+        source_limit: u32,
+        global_limit: u32,
+        window: std::time::Duration,
+    ) -> AdminStoreResult<Option<std::time::Duration>> {
+        redis::AuthStateRepository::consume_login_attempt(
+            &self.state,
+            &source_ip.to_string(),
+            source_limit,
+            global_limit,
+            window,
+        )
+        .await
+        .map_err(|error| admin_store_error("login limit", error))
     }
 
     async fn append_audit_event(&self, event: AdminAuditModel) -> AdminStoreResult<()> {
@@ -308,4 +330,27 @@ impl AuthStore for AdminAuthStoreAdapter {
         .await
         .map_err(|error| admin_store_error("admin audit", error))
     }
+}
+
+fn auth_session(record: redis::AuthSessionRecord) -> AdminStoreResult<AuthSession> {
+    let subject = match record.subject {
+        redis::SessionSubjectRecord::Admin { admin_user_id } => {
+            SessionSubject::Admin { admin_user_id }
+        }
+        redis::SessionSubjectRecord::Key { client_key_id } => SessionSubject::Key {
+            client_key_id: gateway_core::policy::ClientApiKeyId::new(client_key_id).map_err(
+                |_| {
+                    AdminStoreError::new(
+                        AdminStoreErrorKind::Invalid,
+                        "authentication session",
+                        "client key ID is invalid",
+                    )
+                },
+            )?,
+        },
+    };
+    Ok(AuthSession {
+        subject,
+        expires_at: record.expires_at,
+    })
 }

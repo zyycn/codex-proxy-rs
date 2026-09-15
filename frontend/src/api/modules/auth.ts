@@ -1,43 +1,41 @@
-import type { RequestOptions } from '../request'
 import request from '../request'
 
-export interface LoginResponse {
+export interface AuthSession {
+  role: 'admin' | 'key'
   expiresAt: string
 }
 
+export type LoginParam
+  = | { mode: 'admin', username: string, password: string }
+    | { mode: 'key', apiKey: string }
+
 export interface AuthStatusResponse {
   authenticated: boolean
+  session: AuthSession | null
 }
 
 export interface LogoutResponse {
   message: string
 }
 
-interface LoginParam {
-  username: string
-  password: string
-}
-
 export function login(data: LoginParam) {
-  return request<LoginResponse>({
-    url: '/api/admin/auth/login',
+  return request<AuthSession>({
+    url: '/api/auth/login',
     method: 'POST',
     data,
   })
 }
 
-export function getAuthStatus(options: RequestOptions = {}) {
+export function getAuthStatus() {
   return request<AuthStatusResponse>({
-    url: '/api/admin/auth/status',
+    url: '/api/auth/status',
     method: 'GET',
-    ...options,
   })
 }
 
-export function logout(options: RequestOptions = {}) {
+export function logout() {
   return request<LogoutResponse>({
-    url: '/api/admin/auth/logout',
+    url: '/api/auth/logout',
     method: 'POST',
-    ...options,
   })
 }

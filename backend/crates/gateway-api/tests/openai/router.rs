@@ -29,7 +29,11 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
             true,
         ),
     ] {
-        let app = api_router_with_origins(ModelsExecution::new(), Vec::new()).await;
+        let app = api_router_with_origins(ModelsExecution::new(), Vec::new())
+            .await
+            .layer(axum::Extension(axum::extract::ConnectInfo(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 41000)),
+            )));
         let request = |path: &str| {
             let mut builder = Request::post(path)
                 .header("content-type", "application/json")
@@ -43,9 +47,9 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
         let response = app
             .clone()
             .oneshot(
-                request("/api/admin/auth/login")
+                request("/api/auth/login")
                     .body(Body::from(
-                        json!({"username": "admin_1", "password": "strong-admin-password"})
+                        json!({"mode": "admin", "username": "admin_1", "password": "strong-admin-password"})
                             .to_string(),
                     ))
                     .unwrap(),
@@ -64,7 +68,7 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
         let response = app
             .clone()
             .oneshot(
-                Request::get("/api/admin/auth/status")
+                Request::get("/api/auth/status")
                     .header("cookie", &session)
                     .body(Body::empty())
                     .unwrap(),
@@ -78,7 +82,7 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
         let response = app
             .clone()
             .oneshot(
-                request("/api/admin/auth/logout")
+                request("/api/auth/logout")
                     .header("cookie", &session)
                     .body(Body::empty())
                     .unwrap(),
@@ -87,7 +91,7 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let cookie = response.headers()["set-cookie"].to_str().unwrap();
-        assert!(cookie.starts_with("cpr_admin_session=;"));
+        assert!(cookie.starts_with("cpr_session=;"));
         let attrs: Vec<_> = cookie.split(';').map(str::trim).collect();
         assert_eq!(attrs.contains(&"Secure"), secure);
         for attribute in ["Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"] {
@@ -96,7 +100,7 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
 
         let response = app
             .oneshot(
-                Request::get("/api/admin/auth/status")
+                Request::get("/api/auth/status")
                     .header("cookie", &session)
                     .body(Body::empty())
                     .unwrap(),

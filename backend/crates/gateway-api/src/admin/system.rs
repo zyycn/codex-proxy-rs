@@ -1,6 +1,9 @@
 //! 系统管理接口的查询与请求 wire contract。
+
 //!
 //! 这里不依赖更新服务或进程控制；应用层通过窄端口提供系统操作事实。
+
+use crate::auth::SessionState;
 
 use std::convert::Infallible;
 
@@ -23,7 +26,7 @@ use gateway_admin::model::system::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse,
     wire::map_admin_service_error,
 };
 
@@ -214,7 +217,7 @@ struct SystemUpdateEventView {
 /// 构造固定 GET/POST 系统管理路由。
 pub fn router<S>() -> Router<S>
 where
-    S: AdminSessionState + Clone + Send + Sync + 'static,
+    S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/admin/system/version", get(version::<S>))
@@ -234,7 +237,7 @@ async fn version<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let version = state
         .admin_services()
@@ -254,7 +257,7 @@ async fn update_detail<S>(
     AdminQuery(query): AdminQuery<UpdateDetailQuery>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let detail = state
         .admin_services()
@@ -273,7 +276,7 @@ async fn update_event_stream<S>(
     State(state): State<S>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let stream = state
         .admin_services()
@@ -293,7 +296,7 @@ async fn perform_update<S>(
     payload: Option<AdminJson<UpdateRequest>>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -328,7 +331,7 @@ async fn update_status<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let status = state
         .admin_services()
@@ -347,7 +350,7 @@ async fn rollback<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()
@@ -378,7 +381,7 @@ async fn restart<S>(
     State(state): State<S>,
 ) -> Result<impl IntoResponse, AdminError>
 where
-    S: AdminSessionState + Send + Sync,
+    S: SessionState + Send + Sync,
 {
     let result = state
         .admin_services()

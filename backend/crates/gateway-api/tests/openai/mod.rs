@@ -49,6 +49,32 @@ pub(super) async fn api_router(execution: Arc<dyn ExecutionService>) -> axum::Ro
     api_router_with_origins(execution, Vec::new()).await
 }
 
+pub(super) fn api_router_with_admin(admin: gateway_admin::AdminServices) -> axum::Router {
+    gateway_api::initialize(
+        gateway_api::ApiConfig {
+            asset_directory: std::env::temp_dir(),
+            cors_allowed_origins: Vec::new(),
+            request_timeout_seconds: None,
+            request_id_header: "x-request-id".to_owned(),
+        },
+        Arc::new(DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(snapshot("unused-client-route-key", "openai")),
+            Arc::new(UnusedExecutionStore),
+            ProviderRegistry::default(),
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(IgnoredClientApiKeyUsage),
+        )),
+        admin,
+        Vec::new(),
+        Arc::new(EmptyWorkerHealth),
+        Arc::new(TestLifecycle::default()),
+    )
+    .expect("API bundle")
+    .router()
+}
+
 pub(super) async fn api_router_with_worker_health(
     execution: Arc<dyn ExecutionService>,
     worker_health: Arc<dyn WorkerHealthSource>,

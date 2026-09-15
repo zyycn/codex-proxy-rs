@@ -45,7 +45,7 @@ async fn update_event_stream_should_preserve_event_id_and_download_progress_perc
         .oneshot(
             Request::builder()
                 .uri("/api/admin/system/update/events")
-                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header(header::COOKIE, "cpr_session=valid-session")
                 .header("x-request-id", "req_system_update_events")
                 .body(Body::empty())
                 .expect("update event request"),

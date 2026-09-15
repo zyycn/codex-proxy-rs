@@ -10,6 +10,7 @@ Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时�
 
 - 面向客户端的 OpenAI Responses、Images、standalone Search 和模型目录协议；
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端；
+- 面向 Key 持有者的 `/api/key-usage/*` 只读用量接口和独立 `/key-usage` 页面；
 - OpenAI 与 xAI 两个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
 
@@ -57,13 +58,13 @@ flowchart LR
 | `backend/apps/gateway` | 读取顶层配置、连接 Bundle、注册 Provider 与 Worker |
 | `gateway-protocol` | 跨层共享的 OpenAI wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
 | `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
-| `gateway-admin` | 管理领域、用例、Provider/Store 端口、审计语义和备份策略 |
-| `gateway-api` | HTTP/WS/SSE 解码与交付、Admin wire、静态管理端；不直接访问 Store 或具体 Provider |
+| `gateway-admin` | 管理领域、Key 用量查询、Provider/Store 端口、审计语义和备份策略 |
+| `gateway-api` | HTTP/WS/SSE 解码与交付、Admin 与 Key 用量 wire、静态 Web UI；不直接访问 Store 或具体 Provider |
 | `gateway-store` | PostgreSQL、Redis、S3/R2、`pg_dump` 适配器；不拥有业务策略 |
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督和系统更新 |
 | `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images/Search transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
-| `frontend` | Vue 管理端，仅通过 Admin API 读写状态 |
+| `frontend` | Vue 管理端与 Key 用量页，仅通过各自身份允许的控制面 API 访问状态 |
 
 依赖方向遵守四条规则：
 
@@ -276,6 +277,15 @@ API 模块按 `url`、`method`、`data`（POST）或 `params: data`（GET）排�
 批量操作的部分成功汇总、不可逆操作的结果未知等必要业务处理先将对应请求静默，再由业务 owner 提供
 一次有上下文的反馈；不得为普通失败重新维护一套消息或业务码映射。
 
+管理员和密钥登录共用 `/api/auth/*`、AuthService、Redis 会话结构和 `cpr_session` Cookie。
+登录类型只选择凭据校验方式，权限来自服务端保存的身份。管理入口只接受管理员身份或原有部署级管理 API Key；
+AuthService 每次恢复 Key 会话时重新检查 Key 是否存在且启用；Key 会话不能访问管理员页面和管理接口。
+前端只维护一份 Auth Store，不在每个 API 请求上标记身份；401 会话失效、403 权限不足和 503 依赖故障分别处理。
+成功登录替换旧会话，登出必须确认服务端撤销；旧管理员会话路径不保留兼容读取。
+KeyUsageService 从 AuthService 的服务端身份确定唯一查询范围，复用 ClientKeyStore 的额度账本投影和
+ObservabilityStore 的范围查询；API 只输出单页所需的字段白名单，不复用管理员的宽响应。
+前端 `/key-usage` 独立于管理布局，不挂载管理员菜单或请求管理接口。
+
 ## 6. 路由、账号范围与 continuation
 
 Client Key 与账号分组形成授权范围：
@@ -372,6 +382,7 @@ PostgreSQL 周期对账才是正确性基础。
 | 账号、credential、分组、Client Key、设置、审计、请求与备份记录 | PostgreSQL | 业务持久化事实 |
 | Client Key 金额窗口与费用事件 | PostgreSQL | 准入与幂等结算的权威账本，独立于请求观测与日志保留策略 |
 | admission、lease、cooldown、circuit、会话亲和、continuation、OAuth pending、目录 cache | Redis | 可重建、可过期的协调状态 |
+| 控制面统一登录会话与登录限流桶 | Redis | AuthService 唯一拥有；保存 Admin / Key 身份、绑定 ID、绝对有效期和计数，不保存原始凭据 |
 | 日志、OAuth 恢复记录、在线更新状态、备份暂存 | `.runtime/` | 部署节点本地运行文件 |
 | 重置卡库存与消费结果 | OpenAI upstream | 后端不建立本地卡库存；前端按账号保留当前浏览器会话的最近查询、未决消费幂等键与发送锁，展开行卸载不会清空 |
 | Provider 公开模型与请求画像 | Provider/runtime cache | 由官方目录或发布源刷新，不写成第二份业务配置 |
