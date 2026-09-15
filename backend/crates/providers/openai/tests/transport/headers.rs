@@ -94,7 +94,7 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
     let mut request = encode_generate_request(
         &GenerateRequest::from_protocol_payload(payload),
         "gpt-routed",
-        &Default::default(),
+        None,
     )
     .expect("opaque request headers");
     request.use_websocket = use_websocket;

@@ -2,10 +2,11 @@
 import type { CSSProperties } from 'vue'
 
 import { Check, ChevronDown } from '@lucide/vue'
-import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
+import { onClickOutside, useEventListener, useThrottleFn } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, inject, nextTick, ref, useAttrs, useId, watch } from 'vue'
 import { formFieldKey } from './BaseForm/context'
+import BaseScrollbar from './BaseScrollbar.vue'
 
 type SelectSize = 'sm' | 'md' | 'lg'
 
@@ -43,9 +44,12 @@ const field = inject(formFieldKey, null)
 const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
 const popoverRef = ref<HTMLElement | null>(null)
+const listboxRef = ref<HTMLElement | null>(null)
+const scrollbarRef = ref<InstanceType<typeof BaseScrollbar> | null>(null)
 const open = ref(false)
 const activeIndex = ref(-1)
 const popoverStyle = ref<CSSProperties>({})
+const popoverMaxHeight = ref('244px')
 const selectId = `base-select-${useId()}`
 const controlId = computed(() => (typeof attrs.id === 'string' ? attrs.id : (field?.controlId.value ?? selectId)))
 const invalid = computed(() =>
@@ -109,11 +113,6 @@ const triggerClasses = computed(() => [
           ],
 ])
 
-const popoverClasses = computed(() => [
-  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-elevated p-1 shadow-cp',
-  props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
-])
-
 function optionId(index: number) {
   return `${selectId}-option-${index}`
 }
@@ -137,31 +136,46 @@ function setActiveToSelected() {
 }
 
 function updatePopoverPosition() {
-  if (!open.value || !triggerRef.value)
+  if (!open.value || !triggerRef.value || !listboxRef.value)
     return
 
   const rect = triggerRef.value.getBoundingClientRect()
   const gap = 6
-  const estimatedMenuHeight = clamp(props.options.length * 34 + 8, 42, 244)
-  const belowSpace = window.innerHeight - rect.bottom - gap
-  const aboveSpace = rect.top - gap
-  const placeAbove = belowSpace < estimatedMenuHeight && aboveSpace > belowSpace
-  const availableHeight = Math.max(placeAbove ? aboveSpace : belowSpace, 120)
-  const maxHeight = clamp(estimatedMenuHeight, 0, availableHeight)
+  const menuHeight = Math.min(listboxRef.value.scrollHeight, 244)
+  const belowSpace = window.innerHeight - rect.bottom - gap - 8
+  const aboveSpace = rect.top - gap - 8
+  const placeAbove = belowSpace < menuHeight && aboveSpace > belowSpace
+  const availableHeight = Math.max(placeAbove ? aboveSpace : belowSpace, 0)
+  const maxHeight = Math.min(menuHeight, availableHeight)
   const top = placeAbove
     ? Math.max(8, rect.top - maxHeight - gap)
     : Math.min(rect.bottom + gap, window.innerHeight - maxHeight - 8)
   const left = clamp(rect.left, 8, window.innerWidth - rect.width - 8)
 
+  popoverMaxHeight.value = `${maxHeight}px`
   popoverStyle.value = {
     left: `${left}px`,
     top: `${top}px`,
     width: `${rect.width}px`,
-    maxHeight: `${maxHeight}px`,
   }
 }
 
 const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
+
+function scrollActiveIntoView() {
+  const wrap = scrollbarRef.value?.wrapRef
+  const option = listboxRef.value?.children[activeIndex.value]
+  if (!open.value || !wrap || !option)
+    return
+
+  // 只滚动菜单自身，避免键盘定位选项时带动弹窗或页面滚动。
+  const wrapRect = wrap.getBoundingClientRect()
+  const optionRect = option.getBoundingClientRect()
+  if (optionRect.top < wrapRect.top)
+    wrap.scrollTop -= wrapRect.top - optionRect.top
+  else if (optionRect.bottom > wrapRect.bottom)
+    wrap.scrollTop += optionRect.bottom - wrapRect.bottom
+}
 
 async function openMenu() {
   if (props.disabled || open.value)
@@ -171,6 +185,8 @@ async function openMenu() {
   setActiveToSelected()
   await nextTick()
   updatePopoverPosition()
+  await nextTick()
+  scrollActiveIntoView()
 }
 
 function closeMenu() {
@@ -254,7 +270,7 @@ function handleTriggerKeydown(event: KeyboardEvent) {
 
 function optionClasses(option: SelectOption, index: number) {
   return [
-    'flex w-full touch-manipulation items-center gap-2 rounded-cp-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
+    'flex w-full shrink-0 touch-manipulation items-center gap-2 rounded-cp-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
     sizeConfig[props.size].option,
     option.disabled
       ? 'cursor-not-allowed bg-transparent text-cp-text-disabled'
@@ -266,17 +282,18 @@ function optionClasses(option: SelectOption, index: number) {
   ]
 }
 
-whenever(open, async () => {
-  await nextTick()
-  updatePopoverPosition()
-})
+watch(activeIndex, scrollActiveIntoView, { flush: 'post' })
 
 watch(
-  () => [props.options, model.value],
-  () => {
+  () => [props.options, props.size, model.value],
+  async () => {
     if (!open.value)
       return
     setActiveToSelected()
+    await nextTick()
+    updatePopoverPosition()
+    await nextTick()
+    scrollActiveIntoView()
   },
 )
 
@@ -310,7 +327,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       <span
         v-if="selectedOption?.description"
         :title="selectedOption.description"
-        class="min-w-0 flex-1 truncate text-xs font-normal"
+        class="min-w-0 flex-1 truncate font-normal"
         :class="disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
       >
         {{ selectedOption.description }}
@@ -335,51 +352,58 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       >
         <div
           v-if="open"
-          :id="`${selectId}-listbox`"
           ref="popoverRef"
-          :class="popoverClasses"
+          class="fixed z-50 rounded-cp-lg border-0 bg-cp-bg-elevated shadow-cp"
           :style="popoverStyle"
-          role="listbox"
-          :aria-labelledby="controlId"
         >
-          <div
-            v-if="options.length === 0"
-            class="flex h-8.5 items-center rounded-cp-sm px-3 text-cp leading-none font-emphasis text-cp-text-quaternary"
-          >
-            {{ emptyText }}
-          </div>
-
-          <template v-else>
-            <button
-              v-for="(option, index) in options"
-              :id="optionId(index)"
-              :key="option.value"
-              type="button"
-              role="option"
-              :aria-selected="option.value === model"
-              :disabled="option.disabled"
-              :class="optionClasses(option, index)"
-              @mouseenter="activeIndex = option.disabled ? activeIndex : index"
-              @focus="activeIndex = option.disabled ? activeIndex : index"
-              @mousedown.prevent
-              @click="chooseOption(option, index)"
+          <BaseScrollbar ref="scrollbarRef" :max-height="popoverMaxHeight" class="rounded-cp-lg">
+            <div
+              :id="`${selectId}-listbox`"
+              ref="listboxRef"
+              class="flex flex-col gap-1 p-1"
+              role="listbox"
+              :aria-labelledby="controlId"
             >
-              <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
-              <span
-                v-if="option.description"
-                :title="option.description"
-                class="min-w-0 flex-1 truncate text-xs font-normal"
-                :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+              <div
+                v-if="options.length === 0"
+                class="flex h-8.5 shrink-0 items-center rounded-cp-sm px-3 text-cp leading-none font-emphasis text-cp-text-quaternary"
               >
-                {{ option.description }}
-              </span>
-              <Check
-                v-if="option.value === model"
-                class="shrink-0 text-cp-primary-text"
-                :size="size === 'sm' ? 13 : size === 'lg' ? 17 : 15"
-              />
-            </button>
-          </template>
+                {{ emptyText }}
+              </div>
+
+              <template v-else>
+                <button
+                  v-for="(option, index) in options"
+                  :id="optionId(index)"
+                  :key="option.value"
+                  type="button"
+                  role="option"
+                  :aria-selected="option.value === model"
+                  :disabled="option.disabled"
+                  :class="optionClasses(option, index)"
+                  @mouseenter="activeIndex = option.disabled ? activeIndex : index"
+                  @focus="activeIndex = option.disabled ? activeIndex : index"
+                  @mousedown.prevent
+                  @click="chooseOption(option, index)"
+                >
+                  <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
+                  <span
+                    v-if="option.description"
+                    :title="option.description"
+                    class="min-w-0 flex-1 truncate font-normal"
+                    :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+                  >
+                    {{ option.description }}
+                  </span>
+                  <Check
+                    v-if="option.value === model"
+                    class="shrink-0 text-cp-primary-text"
+                    :size="size === 'sm' ? 13 : size === 'lg' ? 17 : 15"
+                  />
+                </button>
+              </template>
+            </div>
+          </BaseScrollbar>
         </div>
       </Transition>
     </Teleport>

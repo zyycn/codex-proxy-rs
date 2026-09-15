@@ -17,6 +17,7 @@ pub(crate) fn admin_account_record(
         })?,
         groups: Vec::new(),
         name: summary.name,
+        notes: summary.notes,
         email: summary.email,
         upstream_user_id: summary.upstream_user_id,
         upstream_account_id: summary.upstream_account_id,

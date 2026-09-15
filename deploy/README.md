@@ -50,7 +50,9 @@ Linux 上应用容器以 `10001:10001` 运行。上述命令将应用数据和�
 模板不重复列出这些默认项。运行后，Provider 检查官方版本并更新运行时请求画像，
 不回写 `config.yaml`；检查失败时继续使用上一份有效画像。版本检查不等于重新核验 TLS。
 
-`openai.wire_profile.location` 集中配置请求地区，省略时默认为 `US / Ohio / Piketon / America/New_York`。
+`openai.wire_profile.location` 可选覆盖请求地区。省略、留空（`location:`）或设为 `null` 时，
+透传客户端原有的 Web Search `user_location`、环境日期和时区；客户端未提供的字段也不会补写。
+模板显式填写 `US / Ohio / Piketon / America/New_York`，需要透传时清空或删除该配置项。
 自定义时完整填写 `country`（两位大写国家代码）、`region`、`city` 和 `timezone`（IANA 时区）；修改后重启生效。
 它统一 Responses 的 Web Search 地区与带环境标记的日期、时区，不修改普通聊天内容或 epoch 时间戳，
 也不替代 `residency` 约束或随官方版本检查变化。
@@ -332,7 +334,13 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
 > 以下命令只适用于同一大版本内的升级，不支持跨大版本在线升级。跨大版本请使用全新的
 > `.runtime/` 数据目录重新部署，并重新导入或重新授权 Provider 账号与客户端 Key。
 
-Docker 安装从安装目录拉取发布镜像并重建应用容器：
+每个 Release 独立提供 `config.example.yaml`、默认镜像固定到该版本的 `compose.yaml` 和校验和；
+各平台归档也包含 `deploy/config.example.yaml`。配置模板来自构建该版本的同一提交。
+使用二进制归档手动部署时，将模板中的 `api.asset_directory` 改为 `../web/dist`，指向归档内的静态资源。
+升级时先阅读目标版本说明，下载同一 Release 的部署附件，对比模板并合并必要配置，保留已有凭据
+和 Compose 自定义项。不要用模板覆盖 `config.yaml`，也不要从 `main` 下载模板搭配旧镜像。
+
+更新部署文件后，从安装目录拉取目标版本镜像并重建应用容器：
 
 ```bash
 docker compose -f deploy/compose.yaml pull codex-proxy-rs

@@ -9,12 +9,9 @@ use provider_openai::transport::profile::CodexRequestLocation;
 use serde_json::json;
 
 #[test]
-fn openai_location_defaults_should_match_the_existing_request_profile() {
+fn openai_location_should_default_to_passthrough() {
     let profile = OpenAiConfig::default().wire_profile_state().snapshot();
-    assert_eq!(profile.location.country, "US");
-    assert_eq!(profile.location.region, "Ohio");
-    assert_eq!(profile.location.city, "Piketon");
-    assert_eq!(profile.location.timezone.name(), "America/New_York");
+    assert_eq!(profile.location, None);
 }
 
 #[test]
@@ -24,11 +21,14 @@ fn openai_config_should_preserve_a_custom_location_in_the_runtime_profile() {
     }))
     .expect("location configuration");
     let mut config = valid_config();
-    config.wire_profile.location = location.clone();
+    config.wire_profile.location = Some(location.clone());
     config
         .resolve_and_validate(Path::new("/srv/gateway"))
         .expect("valid location");
-    assert_eq!(config.wire_profile_state().snapshot().location, location);
+    assert_eq!(
+        config.wire_profile_state().snapshot().location,
+        Some(location)
+    );
 }
 
 #[test]
@@ -41,19 +41,17 @@ fn openai_config_should_reject_invalid_location_fields() {
         ("city", ""),
     ] {
         let mut config = valid_config();
+        let location = config
+            .wire_profile
+            .location
+            .insert(CodexRequestLocation::default());
         let (target, expected) = match field {
             "country" => (
-                &mut config.wire_profile.location.country,
+                &mut location.country,
                 "openai.wire_profile.location.country",
             ),
-            "region" => (
-                &mut config.wire_profile.location.region,
-                "openai.wire_profile.location.region",
-            ),
-            _ => (
-                &mut config.wire_profile.location.city,
-                "openai.wire_profile.location.city",
-            ),
+            "region" => (&mut location.region, "openai.wire_profile.location.region"),
+            _ => (&mut location.city, "openai.wire_profile.location.city"),
         };
         *target = value.to_owned();
         assert_eq!(

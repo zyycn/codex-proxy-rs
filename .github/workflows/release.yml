@@ -315,6 +315,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.release-info.outputs.version }}
+          DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
         run: |
           set -euo pipefail
           ruby <<'RUBY' > release-platforms.json
@@ -349,7 +350,18 @@ jobs:
 
           shutil.rmtree(release_dir, ignore_errors=True)
           release_dir.mkdir(parents=True)
-          archives = []
+          config_template = pathlib.Path("deploy/config.example.yaml")
+          shutil.copy2(config_template, release_dir / config_template.name)
+          compose = pathlib.Path("deploy/compose.yaml").read_text()
+          image = f"{os.environ['REGISTRY']}/{os.environ['IMAGE_NAME']}"
+          default_image = "${CPR_IMAGE:-" + image + ":latest}"
+          if compose.count(default_image) != 1:
+              raise SystemExit("Expected exactly one default application image in deploy/compose.yaml")
+          # 发布附件固定镜像版本，防止后续 pull 与随包配置模板脱节。
+          versioned_image = "${CPR_IMAGE:-" + f"{image}:{os.environ['DOCKER_VERSION']}" + "}"
+          compose = compose.replace(default_image, versioned_image)
+          (release_dir / "compose.yaml").write_text(compose)
+          assets = [release_dir / config_template.name, release_dir / "compose.yaml"]
 
           for platform in platforms:
               platform_name = f"{platform['os']}-{platform['arch']}"
@@ -367,6 +379,9 @@ jobs:
               shutil.copy2(binary_src, binary_dest)
               binary_dest.chmod(0o755)
               shutil.copytree(frontend_dir, web_dist, dirs_exist_ok=True)
+              deploy_dir = package_root / "deploy"
+              deploy_dir.mkdir()
+              shutil.copy2(config_template, deploy_dir / config_template.name)
 
               archive_name = f"{APP_NAME}_{version}_{platform['os']}_{platform['arch']}.{platform['archive']}"
               archive_path = release_dir / archive_name
@@ -375,12 +390,12 @@ jobs:
                       archive.add(package_root, arcname=APP_NAME)
               else:
                   raise SystemExit(f"Unsupported archive format: {platform['archive']}")
-              archives.append(archive_path)
+              assets.append(archive_path)
 
           checksum_path = release_dir / "checksums.txt"
           with checksum_path.open("w", encoding="utf-8") as file:
-              for archive in archives:
-                  file.write(f"{sha256(archive)}  {archive.name}\n")
+              for asset in assets:
+                  file.write(f"{sha256(asset)}  {asset.name}\n")
           PY
 
       - name: Generate release asset provenance
@@ -655,25 +670,27 @@ jobs:
         env:
           INSTALLATION_NOTES: |
             > [!WARNING]
-            > **Upgrading across major versions?** Online upgrades across major versions are not supported. Deploy the new major fresh with a new `.runtime/` data directory, then re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
+            > **跨大版本升级：** 不支持跨大版本在线升级。请使用全新的 `.runtime/` 数据目录重新部署，再重新导入或重新授权服务商账号，并重新导入客户端密钥。详见[升级说明](https://github.com/${{ github.repository }}/blob/${{ needs.release-info.outputs.tag }}/deploy/README.md#镜像升级与源码构建)。
 
-            ## 📥 Installation
+            ## 📥 安装
 
-            **Docker:**
+            **Docker 部署：**
             ```bash
-            # GitHub Container Registry
+            # 从 GitHub 容器镜像仓库拉取
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.docker_version }}
             ```
 
-            **Manual download:**
-            Download the appropriate archive for your platform from the assets below.
+            请从本版本附件下载 `compose.yaml` 和 `config.example.yaml`。Compose 默认固定到本版本镜像；升级前请对比模板与已有配置。
 
-            Release archives are covered by GitHub artifact attestations. Docker images are published with SBOM/provenance attestations and keyless cosign signatures.
+            **手动下载：**
+            请从下方附件中下载适合当前平台的归档包。
 
-            ## 📚 Documentation
+            发布归档提供 GitHub 构建产物证明。Docker 镜像附带软件物料清单（SBOM）、构建来源证明和 cosign 无密钥签名。
 
-            - [GitHub Repository](https://github.com/${{ github.repository }})
-            - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
+            ## 📚 文档
+
+            - [GitHub 仓库](https://github.com/${{ github.repository }})
+            - [部署指南](https://github.com/${{ github.repository }}/blob/${{ needs.release-info.outputs.tag }}/deploy/README.md)
         run: |
           python3 <<'PY'
           import os

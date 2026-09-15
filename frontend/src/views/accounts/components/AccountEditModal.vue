@@ -3,7 +3,9 @@ import type { AccountRow } from '../constants'
 import type { AccountGroup } from '@/api'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
@@ -21,6 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const open = defineModel<boolean>({ required: true })
+const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -33,7 +36,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
   <BaseModal
     v-model="open"
     title="编辑账号"
-    description="查看账号信息，并调整调度与所属分组。"
+    description="维护账号备注，调整调度与所属分组。"
     size="md"
     :dismissible="!saving"
   >
@@ -68,6 +71,16 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />
+
+      <BaseFormItem label="备注">
+        <BaseTextarea
+          v-model="notes"
+          :rows="3"
+          :maxlength="500"
+          placeholder="最多 500 字，留空可清除备注。"
+          :disabled="saving"
+        />
+      </BaseFormItem>
     </div>
 
     <template #footer>

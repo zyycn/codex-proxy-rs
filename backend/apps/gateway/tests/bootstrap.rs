@@ -342,7 +342,7 @@ fn config_loader_should_reject_invalid_desktop_profile_fields() {
 }
 
 #[test]
-fn config_loader_should_accept_default_and_custom_request_locations() {
+fn config_loader_should_accept_empty_and_custom_request_locations() {
     let original = valid_config();
     let omitted = original
         .lines()
@@ -350,7 +350,14 @@ fn config_loader_should_accept_default_and_custom_request_locations() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_ne!(original, omitted);
-    parse_config(&omitted).expect("location defaults when omitted");
+    parse_config(&omitted).expect("location passthrough when omitted");
+    let location_line = original
+        .lines()
+        .find(|line| line.trim_start().starts_with("location:"))
+        .expect("example location");
+    for empty in ["    location:", "    location: null", "    location: ~"] {
+        parse_config(&original.replace(location_line, empty)).expect("empty YAML location");
+    }
     let custom = original.replace(
         "location: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' }",
         "location: { country: 'NZ', region: 'Auckland', city: 'Auckland', timezone: 'Pacific/Auckland' }",

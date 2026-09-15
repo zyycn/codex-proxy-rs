@@ -21,7 +21,7 @@
 
 ## 快速开始
 
-使用 Docker Compose 部署发布镜像 `ghcr.io/zyycn/codex-proxy-rs:latest`，同时启动 PostgreSQL 和 Redis。
+使用 Docker Compose 部署版本固定的发布镜像，同时启动 PostgreSQL 和 Redis。
 以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL。已有部署请先看
 [升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置。
 
@@ -30,15 +30,21 @@
 ```bash
 mkdir -p codex-proxy-rs/deploy && cd codex-proxy-rs
 
-curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/compose.yaml \
+# 只解析一次最新正式版本，确保两个文件来自同一 Release。
+CPR_RELEASE_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/zyycn/codex-proxy-rs/releases/latest)"
+CPR_RELEASE_TAG="${CPR_RELEASE_URL##*/}"
+curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/compose.yaml" \
   -o deploy/compose.yaml
-curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/config.example.yaml \
+curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/config.example.yaml" \
   -o deploy/config.example.yaml
 
 install -d -m 0750 .runtime/postgres .runtime/redis
 sudo install -d -m 0770 -o "$(id -u)" -g 10001 .runtime/data .runtime/logs
 sudo install -m 0640 -o "$(id -u)" -g 10001 deploy/config.example.yaml deploy/config.yaml
 ```
+
+也可将 `CPR_RELEASE_TAG` 设置为指定的发布标签。Release 附带的 `compose.yaml` 默认使用该版本镜像，
+配置模板和部署文件均包含在 `checksums.txt` 中；不要混用 `main` 分支模板与已发布镜像。
 
 分别生成数据库和 Redis 密码：
 

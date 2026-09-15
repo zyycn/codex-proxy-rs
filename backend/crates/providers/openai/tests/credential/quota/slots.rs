@@ -562,6 +562,102 @@ async fn an_unknown_slot_establishes_a_baseline_before_it_can_recover() {
 }
 
 #[tokio::test]
+async fn weekly_usage_falling_back_within_the_same_window_recovers_after_two_observations() {
+    // 滑动周窗口的用量可以在同一窗口内回落：reset 不滚动、用量从 100% 降到
+    // 正常水平。此时"reset 前进 + 低用量"永远不会成立，解除依赖连续两次
+    // 观测都未触顶；单次观测无法排除耗尽后立刻拉到的旧快照，保持锁定。
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_weekly_fallout").await;
+    let account = store.account("acct_weekly_fallout").expect("account");
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let mut old = usage((100, SHORT_RESET), (100, WEEK_RESET));
+    old["rate_limit"]["allowed"] = json!(false);
+    old["rate_limit"]["limit_reached"] = json!(true);
+    mount_usage(&server, old).await;
+    service
+        .refresh_account(account.id())
+        .await
+        .expect("seed exhausted quota");
+
+    // 5h 窗口滚动前进，周窗口 reset 不变但用量回落到正常水平：只标记候选。
+    let mut first_observation = usage((0, SHORT_RESET + 18_000), (18, WEEK_RESET));
+    first_observation["rate_limit"]["allowed"] = json!(true);
+    mount_usage(&server, first_observation).await;
+    let first = service
+        .refresh_account(account.id())
+        .await
+        .expect("first fallout observation");
+    assert!(first.quota().is_exhausted());
+
+    // 第二次连续观测仍未触顶：解除周窗口。
+    let mut second_observation = usage((9, SHORT_RESET + 36_000), (18, WEEK_RESET));
+    second_observation["rate_limit"]["allowed"] = json!(true);
+    mount_usage(&server, second_observation).await;
+    let second = service
+        .refresh_account(account.id())
+        .await
+        .expect("second fallout observation");
+    assert_eq!(second.quota().access(), QuotaAccessState::Allowed);
+}
+
+#[tokio::test]
+async fn a_single_same_window_fallout_observation_cannot_break_the_reset_baseline() {
+    // 连续性中断（观测到重新触顶）后必须重新积累两次未触顶证据。
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_weekly_fallout_gap").await;
+    let account = store.account("acct_weekly_fallout_gap").expect("account");
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let mut old = usage((100, SHORT_RESET), (100, WEEK_RESET));
+    old["rate_limit"]["allowed"] = json!(false);
+    mount_usage(&server, old).await;
+    service
+        .refresh_account(account.id())
+        .await
+        .expect("seed exhausted quota");
+
+    mount_usage(&server, usage((0, SHORT_RESET + 18_000), (18, WEEK_RESET))).await;
+    assert!(
+        service
+            .refresh_account(account.id())
+            .await
+            .expect("first candidate")
+            .quota()
+            .is_exhausted()
+    );
+    // 观测到重新触顶，候选证据清零。
+    mount_usage(&server, usage((0, SHORT_RESET + 36_000), (100, WEEK_RESET))).await;
+    assert!(
+        service
+            .refresh_account(account.id())
+            .await
+            .expect("reached again")
+            .quota()
+            .is_exhausted()
+    );
+    mount_usage(&server, usage((0, SHORT_RESET + 54_000), (18, WEEK_RESET))).await;
+    assert!(
+        service
+            .refresh_account(account.id())
+            .await
+            .expect("candidate restarts")
+            .quota()
+            .is_exhausted()
+    );
+    mount_usage(&server, usage((0, SHORT_RESET + 72_000), (18, WEEK_RESET))).await;
+    assert_eq!(
+        service
+            .refresh_account(account.id())
+            .await
+            .expect("second consecutive observation")
+            .quota()
+            .access(),
+        QuotaAccessState::Allowed
+    );
+}
+
+#[tokio::test]
 async fn monthly_and_arbitrary_periods_use_the_same_recovery_rule() {
     for seconds in [18_000, 86_400, 604_800, 864_000, 2_592_000, 7_776_000] {
         let store = Arc::new(MemoryAccountStore::default());

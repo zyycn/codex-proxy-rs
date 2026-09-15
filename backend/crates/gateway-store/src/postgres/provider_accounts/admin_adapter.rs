@@ -226,9 +226,12 @@ impl PgAdminAccountStore {
             .collect::<StoreResult<Vec<_>>>()
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut changed_fields = vec!["credentials".to_owned()];
-        if settings.is_some() {
+        if let Some(settings) = &settings {
             changed_fields
                 .extend(["enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
+            if settings.notes.is_some() {
+                changed_fields.push("notes".to_owned());
+            }
         }
         let imported = self
             .accounts
@@ -670,10 +673,14 @@ impl AccountStore for PgAdminAccountStore {
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
+        if command.notes.is_some() {
+            changed_fields.push("notes".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 account_ids: vec![command.account_id.clone()],
+                notes: command.notes,
                 enabled: command.enabled,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
@@ -767,6 +774,7 @@ impl AccountStore for PgAdminAccountStore {
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 account_ids: command.account_ids,
+                notes: None,
                 enabled: command.enabled,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,

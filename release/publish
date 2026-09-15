@@ -16,8 +16,9 @@ Usage:
 Example:
   release/publish 0.1.4
 
-Before publishing, replace release/notes.md with the new version's notes and
-commit it. Its first line must be "# v<version>".
+Before publishing, replace release/notes.md with the new version's notes,
+starting with "# v<version>". Leave the notes uncommitted; this command commits
+them together with release/version.yaml. Commit other tracked changes first.
 USAGE
 }
 
@@ -94,11 +95,11 @@ remote_url="$(git remote get-url "$remote")" || die "failed to resolve remote UR
 repository="$(gh repo view "$remote_url" --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)" ||
   die "failed to resolve GitHub repository for $remote_url"
 
-if ! git diff --quiet --ignore-submodules --; then
-  die "tracked files have unstaged changes; commit or stash them first"
+if ! git diff --quiet --ignore-submodules -- . ":(exclude)$NOTES_FILE"; then
+  die "tracked files other than $NOTES_FILE have unstaged changes; commit or stash them first"
 fi
-if ! git diff --cached --quiet --ignore-submodules --; then
-  die "index has staged changes; commit or unstage them first"
+if ! git diff --cached --quiet --ignore-submodules -- . ":(exclude)$NOTES_FILE"; then
+  die "index has staged changes outside $NOTES_FILE; commit or unstage them first"
 fi
 
 current_version="$(read_version_key version)"
@@ -108,6 +109,9 @@ current_version="${current_version#v}"
 tag="${TAG_PREFIX}${version}"
 
 git ls-files --error-unmatch "$NOTES_FILE" >/dev/null 2>&1 || die "$NOTES_FILE is not tracked"
+if git diff HEAD --quiet -- "$NOTES_FILE"; then
+  die "$NOTES_FILE must have uncommitted changes so notes and version are committed together"
+fi
 ruby - "$NOTES_FILE" "$tag" <<'RUBY'
 path, tag = ARGV
 lines = File.readlines(path)
@@ -141,9 +145,9 @@ fi
 
 update_version_file "$version"
 
-git add "$VERSION_FILE"
+git add -- "$VERSION_FILE" "$NOTES_FILE"
 git commit \
-  -m "chore: bump version to $version" \
+  -m "chore(release): prepare $tag" \
   -m "$SIGNATURE"
 
 git tag -a "$tag" -m "$tag"

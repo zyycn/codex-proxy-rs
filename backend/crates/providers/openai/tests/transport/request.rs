@@ -30,7 +30,8 @@ fn encoder_should_use_the_configured_location_for_tools_and_environment_dates() 
         .with_timezone(&location.timezone)
         .format("%Y-%m-%d")
         .to_string();
-    let encoded = encode_generate_request(&request(body), "gpt-test", &location).expect("encode");
+    let encoded =
+        encode_generate_request(&request(body), "gpt-test", Some(&location)).expect("encode");
     let after = Utc::now()
         .with_timezone(&location.timezone)
         .format("%Y-%m-%d")
@@ -67,6 +68,31 @@ fn request(body: Map<String, Value>) -> GenerateRequest {
 }
 
 #[test]
+fn encoder_should_preserve_location_fields_when_no_override_is_configured() {
+    let body = json!({
+        "input": [{
+            "role": "user",
+            "content": [{"type": "input_text", "text": "<environment_context><current_date>2020-01-01</current_date><timezone>Asia/Shanghai</timezone></environment_context>"}],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["environments.environment_context"],
+                "create_time": 1789293131.822
+            }
+        }],
+        "tools": [
+            {"type": "web_search", "user_location": {"type": "approximate", "country": "CN", "region": "Shanghai", "city": "Shanghai", "timezone": "Asia/Shanghai"}},
+            {"type": "web_search_preview", "user_location": null},
+            {"type": "web_search_preview_2025_03_11"},
+            {"type": "function", "name": "keep_timezone", "parameters": {}}
+        ]
+    }).as_object().expect("request object").clone();
+    let encoded = encode_generate_request(&request(body.clone()), "gpt-test", None)
+        .expect("encode without location override");
+    assert_eq!(encoded.body().get("input"), body.get("input"));
+    assert_eq!(encoded.body().get("tools"), body.get("tools"));
+    assert_eq!(encoded.body().get("model"), Some(&json!("gpt-test")));
+}
+
+#[test]
 fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_identity() {
     let body = Map::from_iter([
         ("model".to_owned(), json!("client-model")),
@@ -87,8 +113,8 @@ fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_
     ]);
     let request = request(body);
 
-    let encoded = encode_generate_request(&request, "gpt-routed", &Default::default())
-        .expect("encode wire payload");
+    let encoded =
+        encode_generate_request(&request, "gpt-routed", None).expect("encode wire payload");
 
     assert_eq!(encoded.body().get("model"), Some(&json!("gpt-routed")));
     assert!(encoded.body().get("stream").is_none());
@@ -121,8 +147,8 @@ fn encoder_should_never_hash_prompt_content_into_an_accountless_pool_identity() 
     };
 
     for input in ["private stable prompt", "different private prompt"] {
-        let encoded = encode_generate_request(&request(input), "gpt-routed", &Default::default())
-            .expect("encoded request");
+        let encoded =
+            encode_generate_request(&request(input), "gpt-routed", None).expect("encoded request");
         assert!(encoded.local_conversation_id.is_none());
     }
 }
@@ -143,8 +169,7 @@ fn encoder_should_patch_model_and_preserve_supported_generate_semantics() {
         ),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
     assert_eq!(encoded.body().get("model"), Some(&json!("gpt-test")));
     assert!(encoded.body().get("stream").is_none());
     assert_eq!(encoded.body().get("store"), Some(&json!(false)));
@@ -164,8 +189,7 @@ fn encoder_should_remove_unsupported_fields_from_upstream_body() {
         ("temperature".to_owned(), json!(0.2)),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(
         Value::Object(encoded.body().clone()),
@@ -228,8 +252,12 @@ fn encoder_should_align_structured_location_fields_without_rewriting_chat_text()
     .clone();
     let before = Utc::now().with_timezone(&New_York);
 
-    let encoded =
-        encode_generate_request(&request(body), "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(
+        &request(body),
+        "gpt-test",
+        Some(&CodexRequestLocation::default()),
+    )
+    .expect("encode");
 
     let after = Utc::now().with_timezone(&New_York);
     let encoded = Value::Object(encoded.body().clone());
@@ -300,8 +328,7 @@ fn encoder_should_preserve_client_store_intent() {
         ("store".to_owned(), json!(true)),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(encoded.body().get("store"), Some(&json!(true)));
 }
@@ -314,8 +341,7 @@ fn encoder_should_forward_the_client_prompt_cache_key() {
         ("prompt_cache_key".to_owned(), json!("cache-route")),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(
         encoded.body().get("prompt_cache_key"),
@@ -331,8 +357,7 @@ fn encoder_should_restore_conversation_fallback_after_body_and_context_values() 
         ("prompt_cache_key".to_owned(), json!("cache-conversation")),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(
         encoded.client_conversation_id.as_deref(),
@@ -383,8 +408,7 @@ fn encoder_should_accept_metadata_session_and_thread_ids_but_ignore_legacy_conte
         ),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(
         (
@@ -430,8 +454,7 @@ fn encoder_should_extract_official_websocket_context_projection() {
         ),
     ]));
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(encoded.turn_state.as_deref(), Some("metadata-turn-state"));
     assert_eq!(encoded.client_turn_id.as_deref(), Some("metadata-turn-id"));
@@ -472,8 +495,7 @@ fn header_context_should_win_over_body_topline_aliases() {
     ]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(encoded.turn_state.as_deref(), Some("header-turn-state"));
     assert_eq!(
@@ -499,8 +521,7 @@ fn encoder_should_preserve_downstream_websocket_connection_identity_outside_wire
     )]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(
         encoded.downstream_websocket_connection_id.as_deref(),
@@ -530,8 +551,7 @@ fn body_topline_alias_should_only_fill_an_absent_header_context() {
     )]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(encoded.turn_state.as_deref(), Some("body-turn-state"));
     assert_eq!(
@@ -556,8 +576,7 @@ fn encoder_should_project_explicit_websocket_transport_without_touching_body() {
     )]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert!(encoded.use_websocket);
     assert!(!encoded.force_http_sse);
@@ -580,8 +599,7 @@ fn encoder_should_project_explicit_http_transport_without_touching_body() {
     )]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert!(!encoded.use_websocket);
     assert!(encoded.force_http_sse);
@@ -607,8 +625,8 @@ fn encoder_should_preserve_opaque_provider_options_without_interpreting_them() {
     .expect("OpenAI payload");
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded = encode_generate_request(&request, "gpt-test", &Default::default())
-        .expect("opaque options encode");
+    let encoded =
+        encode_generate_request(&request, "gpt-test", None).expect("opaque options encode");
 
     assert_eq!(
         encoded.body().get("provider_options"),
@@ -645,8 +663,7 @@ fn encoder_should_project_lite_and_memgen_options_to_transport_state_only() {
     ]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let encoded =
-        encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
+    let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
 
     assert_eq!(encoded.responses_lite.as_deref(), Some("true"));
     assert_eq!(encoded.memgen_request.as_deref(), Some("true"));
@@ -670,7 +687,7 @@ fn observability_semantics_should_reuse_codex_turn_metadata() {
     )]));
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let semantics = encode_generate_request(&request, "observability", &Default::default())
+    let semantics = encode_generate_request(&request, "observability", None)
         .expect("observability request should encode")
         .semantics();
 
@@ -689,9 +706,8 @@ fn encoder_should_extract_subagent_kind_from_wire_or_turn_metadata() {
             json!({"x-openai-subagent": "review"}),
         ),
     ]));
-    let metadata_encoded =
-        encode_generate_request(&metadata_request, "gpt-test", &Default::default())
-            .expect("encode metadata request");
+    let metadata_encoded = encode_generate_request(&metadata_request, "gpt-test", None)
+        .expect("encode metadata request");
     assert_eq!(metadata_encoded.subagent_kind().as_deref(), Some("review"));
 
     let turn_metadata_payload = ProtocolPayload::json_object(
@@ -707,9 +723,8 @@ fn encoder_should_extract_subagent_kind_from_wire_or_turn_metadata() {
         Value::String(r#"{"subagent_kind":"worker"}"#.to_owned()),
     )]));
     let turn_metadata_request = GenerateRequest::from_protocol_payload(turn_metadata_payload);
-    let turn_metadata_encoded =
-        encode_generate_request(&turn_metadata_request, "gpt-test", &Default::default())
-            .expect("encode turn metadata request");
+    let turn_metadata_encoded = encode_generate_request(&turn_metadata_request, "gpt-test", None)
+        .expect("encode turn metadata request");
     assert_eq!(
         turn_metadata_encoded.subagent_kind().as_deref(),
         Some("worker")
@@ -742,7 +757,7 @@ fn observability_semantics_should_use_the_transparent_openai_payload() {
     .expect("OpenAI payload");
     let request = GenerateRequest::from_protocol_payload(payload);
 
-    let semantics = encode_generate_request(&request, "observability", &Default::default())
+    let semantics = encode_generate_request(&request, "observability", None)
         .expect("transparent OpenAI request should encode")
         .semantics();
 

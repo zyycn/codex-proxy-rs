@@ -53,8 +53,9 @@ description: 准备或执行当前仓库发版，维护中文发布说明。用�
 ## 执行正式发版
 
 调用入口前重新核对当前脚本的副作用、目标版本和待推送提交，保留无关工作区内容，不自动清理或暂存用户文件。
-当前脚本要求先提交 `release/notes.md`，再由脚本更新 `release/version.yaml` 并创建版本提交，
-不要提前把版本文件改成目标版本，否则脚本会判定该版本已设置。
+先编辑 `release/notes.md`，保留为未提交改动（已暂存或未暂存均可）；其他已跟踪文件的改动应先单独提交。
+脚本会更新 `release/version.yaml`，将它与最终工作区中的发布说明一起提交为 `chore(release): prepare vX.Y.Z`。
+不要提前单独提交说明或把版本文件改成目标版本；脚本要求说明相对 HEAD 有改动，并自行更新版本号。
 本任务需要的提交按贡献文档保留英文 Conventional Commits 与相应署名。
 
 在准备完成且用户已授权正式发布后，将 `release_version` 设为已确定的版本，执行：
@@ -63,7 +64,7 @@ description: 准备或执行当前仓库发版，维护中文发布说明。用�
 release/publish "$release_version"
 ```
 
-该命令会创建版本提交与 annotated tag，原子推送分支和 tag，再从长期分支手动触发 `release.yml`。
+该命令会创建包含版本号和发布说明的单次提交与 annotated tag，原子推送分支和 tag，再从长期分支手动触发 `release.yml`。
 它没有只读预演模式；不能为了检查或演练而执行。发布工作流读取 tag 中的说明，修改 tag 之后的本地文件不会改变该次构建。
 
 ## 恢复与验收

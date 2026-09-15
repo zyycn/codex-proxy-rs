@@ -469,6 +469,7 @@ mod provider {
         };
         AccountPageItem {
             account: AccountRecord {
+                notes: None,
                 id: "acct_error_test".to_owned(),
                 provider_kind: ProviderKind::new(provider).unwrap(),
                 groups: Vec::new(),

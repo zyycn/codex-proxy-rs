@@ -108,7 +108,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
-            "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
+            "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
@@ -504,6 +504,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &settings.group_ids,
                 )
                 .await?;
+                if let Some(notes) = settings.notes.as_deref() {
+                    update_provider_account_notes_in_transaction(
+                        &mut transaction,
+                        &unique_ids,
+                        notes,
+                    )
+                    .await?;
+                }
             }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
@@ -591,6 +599,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &command.group_ids,
             )
             .await?;
+            if let Some(notes) = command.notes.as_deref() {
+                update_provider_account_notes_in_transaction(
+                    &mut transaction,
+                    &command.account_ids,
+                    notes,
+                )
+                .await?;
+            }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
             Ok(revision)
@@ -676,6 +692,20 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         .await;
         finish_admin_transaction(transaction, result, "provider account admin deletion").await
     }
+}
+
+async fn update_provider_account_notes_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    notes: &str,
+) -> StoreResult<()> {
+    sqlx::query("update provider_accounts set notes = nullif($2, '') where id = any($1::text[])")
+        .bind(account_ids)
+        .bind(notes.trim())
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("update provider account notes"))?;
+    Ok(())
 }
 
 async fn replace_account_group_assignments_in_transaction(

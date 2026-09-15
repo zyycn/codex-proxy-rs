@@ -78,7 +78,8 @@ openai:
     terminal: 'unknown'
     # 部署选择的 US residency；省略或 null 时使用官方无地域约束的默认分支。
     residency: us
-    # 请求地区画像；省略 location 时使用以下默认值。时区同时用于环境日期，不改变 epoch 时间戳。
+    # 请求地区覆盖；省略或留空（location: / location: null）时透传客户端原值。
+    # 配置时完整填写四个字段；时区同时用于环境日期，不改变 epoch 时间戳。
     location: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' }
     verified_at: '2026-09-06T11:26:12.084+08:00'
 

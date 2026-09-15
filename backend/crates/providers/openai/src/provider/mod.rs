@@ -141,7 +141,7 @@ pub struct CodexProvider {
     quota: Arc<CodexCredentialQuotaService>,
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
-    location: CodexRequestLocation,
+    location: Option<CodexRequestLocation>,
     responses_url: Url,
     image_generations_url: Url,
     image_edits_url: Url,
@@ -256,7 +256,8 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let Ok(encoded) = encode_generate_request(request, "observability", &self.location) else {
+        let Ok(encoded) = encode_generate_request(request, "observability", self.location.as_ref())
+        else {
             return ProviderRequestObservation::default();
         };
         let semantics = encoded.semantics();
@@ -358,7 +359,7 @@ impl Provider for CodexProvider {
         let previous_session = decode_openai_session_state(generate);
         let continuation_requested = generate.native_continuation_requested();
         let mut upstream_request =
-            encode_generate_request(generate, upstream_model.as_str(), &self.location)
+            encode_generate_request(generate, upstream_model.as_str(), self.location.as_ref())
                 .map_err(map_request_error)?;
         if let Some(conversation_id) = previous_session
             .as_ref()

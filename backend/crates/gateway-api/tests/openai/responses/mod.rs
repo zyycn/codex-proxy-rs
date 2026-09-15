@@ -667,6 +667,87 @@ fn transparent_encoder_should_use_identical_json_for_sse_and_websocket() {
 }
 
 #[test]
+fn transparent_encoder_should_translate_error_wire_to_response_failed_for_websocket() {
+    // codex 的 WS 端点只消费带 status 的包装错误帧；上游缺少 status 的裸
+    // `error` 帧会被静默忽略，客户端只能空等到 idle 超时。WS 边界与 SSE
+    // 边界一致投影成 `response.failed`，codex 将其映射为可重试错误并立即
+    // 重试，而不是把失败原因拖到流 EOF。
+    let response_id = "resp_ws_error";
+    let started = openai_wire_event(
+        Vec::new(),
+        "response.created",
+        json!({
+            "type": "response.created",
+            "response": {"id": response_id, "status": "in_progress"}
+        }),
+    );
+    let error = openai_wire_event(
+        Vec::new(),
+        "error",
+        json!({
+            "type": "error",
+            "error": {
+                "type": "service_unavailable_error",
+                "code": "server_is_overloaded",
+                "message": "Our servers are currently overloaded. Please try again later."
+            },
+            "sequence_number": 2
+        }),
+    );
+
+    let mut websocket_encoder = OpenAiResponsesEncoder::new();
+    websocket_encoder.push_websocket(&started);
+    let messages = websocket_encoder.push_websocket(&error);
+
+    assert_eq!(messages.len(), 1);
+    assert!(websocket_encoder.has_wire_failure());
+    let payload: Value = serde_json::from_str(&messages[0]).expect("response.failed is valid JSON");
+    assert_eq!(payload["type"], "response.failed");
+    assert_eq!(payload["response"]["id"], response_id);
+    assert_eq!(payload["response"]["status"], "failed");
+    assert_eq!(payload["response"]["error"]["code"], "server_is_overloaded");
+
+    // 与 SSE 边界投影到同一份 data 负载，两条客户端通道行为一致。
+    let mut sse_encoder = OpenAiResponsesEncoder::new();
+    sse_encoder.push_sse(&started);
+    let frames = sse_encoder.push_sse(&error);
+    let sse_text = String::from_utf8(
+        frames
+            .iter()
+            .flat_map(|frame| frame.as_ref().iter().copied())
+            .collect(),
+    )
+    .expect("SSE is UTF-8");
+    let sse_data = parse_sse_events(&sse_text)
+        .expect("SSE parses")
+        .into_iter()
+        .map(|event| event.data)
+        .collect::<Vec<_>>();
+    assert_eq!(sse_data, messages);
+
+    // 带非 2xx status 的包装错误帧是 codex 可直接消费的形状，必须原样透传。
+    let mut passthrough_encoder = OpenAiResponsesEncoder::new();
+    passthrough_encoder.push_websocket(&started);
+    let wrapped = openai_wire_event(
+        Vec::new(),
+        "error",
+        json!({
+            "type": "error",
+            "status": 429,
+            "headers": {"x-request-id": "req_raw"},
+            "error": {"type": "custom_type", "code": "custom_code", "message": "raw marker"},
+            "future": {"keep": true}
+        }),
+    );
+    let wrapped_messages = passthrough_encoder.push_websocket(&wrapped);
+    assert_eq!(
+        wrapped_messages,
+        vec![wrapped.wire_event().expect("wire").data().to_string()]
+    );
+    assert!(passthrough_encoder.has_wire_failure());
+}
+
+#[test]
 fn transparent_encoder_should_follow_wire_when_canonical_identity_changes() {
     let mut encoder = OpenAiResponsesEncoder::new();
     let started = openai_wire_event(
