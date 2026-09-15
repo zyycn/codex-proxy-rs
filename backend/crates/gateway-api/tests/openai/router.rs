@@ -49,7 +49,7 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
             .oneshot(
                 request("/api/auth/login")
                     .body(Body::from(
-                        json!({"type": "admin", "username": "admin_1", "password": "strong-admin-password"})
+                        json!({"mode": "admin", "username": "admin_1", "password": "strong-admin-password"})
                             .to_string(),
                     ))
                     .unwrap(),

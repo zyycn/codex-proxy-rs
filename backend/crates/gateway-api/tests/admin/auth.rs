@@ -8,7 +8,7 @@ use super::AdminTestFixture;
 fn login_request_should_deny_unknown_fields_and_redact_password_debug() {
     let password = "admin-password-must-not-leak";
     let request = serde_json::from_value::<LoginRequest>(json!({
-        "type": "admin",
+        "mode": "admin",
         "username": "admin@example.invalid",
         "password": password
     }))
@@ -26,7 +26,7 @@ fn login_request_should_deny_unknown_fields_and_redact_password_debug() {
     assert_eq!(parsed_password, password);
     assert!(
         serde_json::from_value::<LoginRequest>(json!({
-        "type": "admin",
+        "mode": "admin",
             "password": password,
             "rememberMe": true
         }))

@@ -14,9 +14,9 @@ use serde::Serialize;
 use crate::admin::observability::{
     BillingView, DashboardWireProfileView, DiagnosticDimension as WireDiagnosticDimension,
     DiagnosticsView, HealthTimelineView, OverviewCostView, OverviewHealthView,
-    OverviewPerformancePointView, OverviewPerformanceView, TokenDetailsView, china_datetime,
-    diagnostics_view, health_timeline_view, usage_insights_view, usage_list_record_view,
-    usage_summary_view, wire_profile_view,
+    OverviewPerformanceView, TokenDetailsView, china_datetime, diagnostics_view,
+    health_timeline_view, usage_insights_view, usage_list_record_view, usage_summary_view,
+    wire_profile_view,
 };
 
 #[derive(Debug, Serialize)]
@@ -161,41 +161,8 @@ impl From<UsageSummary> for ClientUsageSummaryData {
 pub(super) struct ClientUsageInsightsData {
     granularity: String,
     health: OverviewHealthView,
-    performance: ClientUsagePerformanceData,
+    performance: OverviewPerformanceView,
     cost: OverviewCostView,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientUsagePerformanceData {
-    latency_p50_ms: Option<f64>,
-    latency_p95_ms: Option<f64>,
-    latency_p99_ms: Option<f64>,
-    first_token_p50_ms: Option<f64>,
-    first_token_p95_ms: Option<f64>,
-    first_token_p99_ms: Option<f64>,
-    output_throughput_p10: Option<u64>,
-    output_throughput_p50: Option<u64>,
-    output_throughput_p90: Option<u64>,
-    latency_coverage: f64,
-    first_token_coverage: f64,
-    points: Vec<ClientUsagePerformancePointData>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientUsagePerformancePointData {
-    bucket: DateTime<Utc>,
-    label: String,
-    latency_p50_ms: Option<f64>,
-    latency_p95_ms: Option<f64>,
-    latency_p99_ms: Option<f64>,
-    first_token_p50_ms: Option<f64>,
-    first_token_p95_ms: Option<f64>,
-    first_token_p99_ms: Option<f64>,
-    output_throughput_p10: Option<u64>,
-    output_throughput_p50: Option<u64>,
-    output_throughput_p90: Option<u64>,
 }
 
 impl From<UsageInsights> for ClientUsageInsightsData {
@@ -204,49 +171,8 @@ impl From<UsageInsights> for ClientUsageInsightsData {
         Self {
             granularity: view.granularity,
             health: view.health,
-            performance: ClientUsagePerformanceData::from(view.performance),
+            performance: view.performance,
             cost: view.cost,
-        }
-    }
-}
-
-impl From<OverviewPerformanceView> for ClientUsagePerformanceData {
-    fn from(performance: OverviewPerformanceView) -> Self {
-        Self {
-            latency_p50_ms: performance.latency_p50_ms,
-            latency_p95_ms: performance.latency_p95_ms,
-            latency_p99_ms: performance.latency_p99_ms,
-            first_token_p50_ms: performance.first_token_p50_ms,
-            first_token_p95_ms: performance.first_token_p95_ms,
-            first_token_p99_ms: performance.first_token_p99_ms,
-            output_throughput_p10: performance.output_throughput_p10,
-            output_throughput_p50: performance.output_throughput_p50,
-            output_throughput_p90: performance.output_throughput_p90,
-            latency_coverage: performance.latency_coverage,
-            first_token_coverage: performance.first_token_coverage,
-            points: performance
-                .points
-                .into_iter()
-                .map(ClientUsagePerformancePointData::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<OverviewPerformancePointView> for ClientUsagePerformancePointData {
-    fn from(point: OverviewPerformancePointView) -> Self {
-        Self {
-            bucket: point.bucket,
-            label: point.label,
-            latency_p50_ms: point.latency_p50_ms,
-            latency_p95_ms: point.latency_p95_ms,
-            latency_p99_ms: point.latency_p99_ms,
-            first_token_p50_ms: point.first_token_p50_ms,
-            first_token_p95_ms: point.first_token_p95_ms,
-            first_token_p99_ms: point.first_token_p99_ms,
-            output_throughput_p10: point.output_throughput_p10,
-            output_throughput_p50: point.output_throughput_p50,
-            output_throughput_p90: point.output_throughput_p90,
         }
     }
 }

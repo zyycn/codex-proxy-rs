@@ -1,6 +1,5 @@
 import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from '@/views/usage/composables/useUsageTimeRange'
-import type { UsageDisplayRecord } from '@/views/usage/model/records'
 import { watchDebounced } from '@vueuse/core'
 
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
@@ -10,7 +9,8 @@ import {
   getUsageRecords,
   getUsageRecordSummary,
 } from '@/api'
-import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
+import { withMinimumDuration } from '@/utils/async'
 import { emptyUsageInsights, emptyUsageSummary } from '@/views/usage/model/state'
 
 interface UseUsageRecordsTableOptions {
@@ -27,25 +27,17 @@ export interface UsageLoadOptions {
 }
 
 export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
-  const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
-  const records = shallowRef<UsageDisplayRecord[]>([])
   const summary = shallowRef(emptyUsageSummary())
   const insights = shallowRef(emptyUsageInsights())
-  const currentPage = shallowRef(1)
-  const pageSize = shallowRef(10)
-  const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
   const search = computed(() => searchQuery.value.trim() || undefined)
   const providerQuery = shallowRef('')
   let tableParams = snapshot()
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
-  const tableError = shallowRef('')
-  let tableRequestId = 0
   let analyticsRequestId = 0
   let diagnosticRequestId = 0
-  let tableController: AbortController | undefined
   let analyticsController: AbortController | undefined
   let diagnosticController: AbortController | undefined
   let disposed = false
@@ -53,10 +45,18 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
     ...options.timeRangeParams.value,
     ...(providerQuery.value ? { provider: providerQuery.value } : {}),
   })
+  const query = useStablePagedQuery({
+    initialPageSize: 10,
+    load: (pagination, requestOptions) => getUsageRecords({
+      ...pagination,
+      ...tableParams,
+    }, requestOptions),
+  })
+  const { currentPage, pageSize, loading, items: records, error: tableError } = query
   const usagePagination = computed(() => ({
     currentPage: currentPage.value,
     pageSize: pageSize.value,
-    total: totalRecords.value,
+    total: query.total.value,
   }))
 
   function snapshot() {
@@ -67,54 +67,18 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
     }
   }
 
-  function resetPagination() {
-    currentPage.value = 1
-    totalRecords.value = 0
-  }
-
   async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {
     const { scope = 'all', background = false } = loadOptions
     const globalParams = scopedParams()
-    if (scope === 'all') {
-      resetPagination()
+    if (scope === 'all')
       tableParams = snapshot()
-    }
 
     await Promise.all([
-      ...(options.active.value ? [loadUsagePage(background)] : []),
+      ...(options.active.value
+        ? [scope === 'all' ? query.reloadFromStart({ background }) : query.execute(currentPage.value, { background })]
+        : []),
       ...(scope === 'all' ? [loadUsageAnalytics(globalParams, background)] : []),
     ])
-  }
-
-  async function loadUsagePage(background: boolean) {
-    const requestId = ++tableRequestId
-    tableController?.abort()
-    tableController = new AbortController()
-    loading.value = !background
-    tableError.value = ''
-    try {
-      const result = await getUsageRecords({
-        currentPage: currentPage.value,
-        pageSize: pageSize.value,
-        ...tableParams,
-      }, { signal: tableController.signal })
-      if (requestId !== tableRequestId)
-        return
-
-      records.value = result.items
-      pageSize.value = result.pageSize
-      totalRecords.value = result.total
-      currentPage.value = result.currentPage
-    }
-    catch (cause: unknown) {
-      if (requestId === tableRequestId && !tableController.signal.aborted)
-        tableError.value = errorMessage(cause)
-    }
-    finally {
-      if (requestId === tableRequestId) {
-        loading.value = false
-      }
-    }
   }
 
   async function loadUsageAnalytics(globalParams: ReturnType<typeof scopedParams>, background: boolean) {
@@ -190,8 +154,7 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
 
   function reloadLatestTable() {
     tableParams = snapshot()
-    resetPagination()
-    return loadUsageRecords({ scope: 'table' })
+    return query.reloadFromStart()
   }
 
   function handlePageChange(nextPage: number) {
@@ -199,8 +162,7 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
       void reloadLatestTable()
       return
     }
-    currentPage.value = nextPage
-    void loadUsageRecords({ scope: 'table' })
+    void query.execute(nextPage)
   }
 
   function handlePageSizeChange(nextPageSize: number) {
@@ -209,8 +171,7 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
       void reloadLatestTable()
       return
     }
-    resetPagination()
-    void loadUsageRecords({ scope: 'table' })
+    void query.reloadFromStart()
   }
 
   onMounted(() => {
@@ -230,8 +191,7 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
       void reloadLatestTable()
     }
     else {
-      tableRequestId += 1
-      tableController?.abort()
+      query.invalidate()
     }
   })
 
@@ -246,10 +206,8 @@ export function useAdminUsageSource(options: UseUsageRecordsTableOptions) {
 
   onScopeDispose(() => {
     disposed = true
-    tableRequestId += 1
     analyticsRequestId += 1
     diagnosticRequestId += 1
-    tableController?.abort()
     analyticsController?.abort()
     diagnosticController?.abort()
   })

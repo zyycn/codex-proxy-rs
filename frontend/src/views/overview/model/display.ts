@@ -1,4 +1,12 @@
 import type { Component } from 'vue'
+import type { DashboardAccountUsage, DashboardCapacityInfo, DashboardPoolSummary } from '@/api/modules/dashboard'
+
+export interface AccountOverviewView {
+  accounts: DashboardAccountUsage[]
+  pool: DashboardPoolSummary | null
+  capacity: DashboardCapacityInfo | null
+  rotationStrategy: string | null
+}
 
 export type MetricTone = 'normal' | 'info' | 'success' | 'warning' | 'danger'
 

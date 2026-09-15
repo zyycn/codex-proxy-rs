@@ -55,7 +55,7 @@ async fn client_auth_should_issue_restore_and_clear_an_unified_cookie() {
         .oneshot(json_request(
             Method::POST,
             "/api/auth/login",
-            json!({ "type": "key", "apiKey": RAW_KEY }),
+            json!({ "mode": "key", "apiKey": RAW_KEY }),
         ))
         .await
         .expect("client login response");
@@ -78,7 +78,7 @@ async fn client_auth_should_issue_restore_and_clear_an_unified_cookie() {
         .expect("cookie pair")
         .to_owned();
     let login_body = response_json(login).await;
-    assert_eq!(login_body["data"]["type"], "key");
+    assert_eq!(login_body["data"]["role"], "key");
     assert!(login_body["data"].get("key").is_none());
     assert!(!login_body.to_string().contains(RAW_KEY));
 
@@ -90,7 +90,7 @@ async fn client_auth_should_issue_restore_and_clear_an_unified_cookie() {
     assert_eq!(status.status(), StatusCode::OK);
     let status_body = response_json(status).await;
     assert_eq!(status_body["data"]["authenticated"], true);
-    assert_eq!(status_body["data"]["session"]["type"], "key");
+    assert_eq!(status_body["data"]["session"]["role"], "key");
 
     let logout = app
         .clone()
@@ -127,7 +127,7 @@ async fn client_usage_should_require_a_session_and_expose_only_the_session_key_p
         .oneshot(json_request(
             Method::POST,
             "/api/auth/login",
-            json!({ "type": "key", "apiKey": RAW_KEY }),
+            json!({ "mode": "key", "apiKey": RAW_KEY }),
         ))
         .await
         .expect("client login response");
@@ -182,7 +182,7 @@ async fn invalid_client_login_should_use_a_stable_error_without_echoing_the_key(
         .oneshot(json_request(
             Method::POST,
             "/api/auth/login",
-            json!({ "type": "key", "apiKey": RAW_KEY }),
+            json!({ "mode": "key", "apiKey": RAW_KEY }),
         ))
         .await
         .expect("invalid login response");
@@ -226,7 +226,7 @@ async fn client_version_should_restore_from_cookie_and_only_expose_current_versi
         .oneshot(json_request(
             Method::POST,
             "/api/auth/login",
-            json!({ "type": "key", "apiKey": RAW_KEY }),
+            json!({ "mode": "key", "apiKey": RAW_KEY }),
         ))
         .await
         .expect("client login response");
@@ -422,6 +422,7 @@ pub(super) struct ClientRouteStore {
     pub(super) unavailable: AtomicBool,
     key: Mutex<ClientUsageKey>,
     filters: Mutex<Vec<UsageFilter>>,
+    scheduling_metrics: Mutex<RequestMetrics>,
 }
 
 impl ClientRouteStore {
@@ -446,6 +447,7 @@ impl ClientRouteStore {
                 observed_at,
             }),
             filters: Mutex::new(Vec::new()),
+            scheduling_metrics: Mutex::new(RequestMetrics::default()),
         }
     }
 
@@ -510,7 +512,11 @@ impl ObservabilityStore for ClientRouteStore {
                 success_count: 6,
                 failure_count: 1,
                 total_tokens: 1_000,
-                ..RequestMetrics::default()
+                ..self
+                    .scheduling_metrics
+                    .lock()
+                    .expect("scheduling metrics")
+                    .clone()
             },
             cost_coverage: CostCoverage::default(),
             costs: vec![usd_cost("1.25")],
@@ -558,7 +564,11 @@ impl ObservabilityStore for ClientRouteStore {
                 output_tokens: 200,
                 cached_tokens: 400,
                 total_tokens: 1_000,
-                ..RequestMetrics::default()
+                ..self
+                    .scheduling_metrics
+                    .lock()
+                    .expect("scheduling metrics")
+                    .clone()
             },
             attempts: AttemptMetrics {
                 attempt_count: 7,

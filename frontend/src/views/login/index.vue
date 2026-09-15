@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/modules/auth'
@@ -14,7 +14,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const realm = shallowRef<LoginRealm>(normalizeRealm(window.history.state?.loginType))
+const realm = shallowRef<LoginRealm>(normalizeRealm(window.history.state?.loginMode))
 const username = shallowRef('')
 const password = shallowRef('')
 const apiKey = shallowRef('')
@@ -26,17 +26,6 @@ const canSubmit = computed(() => realm.value === 'key'
 const loginLoading = computed(() => authStore.loading || loginPending.value)
 const submitDisabled = computed(() => loginLoading.value || !canSubmit.value)
 
-watch(realm, (value, previous) => {
-  if (value === previous)
-    return
-
-  // 两种凭据不共用字段；切换后立即清掉离开的敏感输入。
-  if (value === 'key')
-    password.value = ''
-  else
-    apiKey.value = ''
-})
-
 async function handleSubmit(): Promise<void> {
   if (!canSubmit.value || loginPending.value)
     return
@@ -44,9 +33,9 @@ async function handleSubmit(): Promise<void> {
   loginPending.value = true
   const selectedRealm = realm.value
   const result = await authStore.login(selectedRealm === 'key'
-    ? { type: 'key', apiKey: apiKey.value.trim() }
+    ? { mode: 'key', apiKey: apiKey.value.trim() }
     : {
-        type: 'admin',
+        mode: 'admin',
         username: username.value.trim(),
         password: password.value,
       })
@@ -56,12 +45,8 @@ async function handleSubmit(): Promise<void> {
     return
   }
 
-  // 原始 Key 用完即从组件状态移除；后续请求只携带 HttpOnly 会话 Cookie。
-  apiKey.value = ''
-  password.value = ''
-
   try {
-    await router.push(resolveDestination(result.type))
+    await router.push(resolveDestination())
   }
   finally {
     if (router.currentRoute.value.path === '/login')
@@ -73,14 +58,10 @@ function normalizeRealm(value: unknown): LoginRealm {
   return value === 'key' ? 'key' : 'admin'
 }
 
-function resolveDestination(selectedRealm: LoginRealm): string {
-  const fallback = selectedRealm === 'key' ? '/key/overview' : '/'
+function resolveDestination(): string {
   const requested = route.query.redirect
   if (typeof requested !== 'string' || !requested.startsWith('/') || requested.startsWith('//'))
-    return fallback
-  const resolved = router.resolve(requested)
-  if (!resolved.matched.some(record => record.meta.role === selectedRealm))
-    return fallback
+    return '/'
   return requested
 }
 </script>

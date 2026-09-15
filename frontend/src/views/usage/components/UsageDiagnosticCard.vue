@@ -126,7 +126,7 @@ function diagnosticNameDisplay(name: string) {
         label="诊断维度"
         :options="dimensionOptions"
         :disabled="loading"
-        class="w-full min-w-0 lg:w-80"
+        class="w-full min-w-0 lg:w-auto"
       />
     </template>
 

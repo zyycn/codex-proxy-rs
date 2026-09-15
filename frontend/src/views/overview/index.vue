@@ -16,15 +16,11 @@ const {
   trendError,
   fatalError,
   healthTimeline,
-  accountUsage,
+  accountOverview,
   wireProfiles,
   budget,
   limits,
   usageRecords,
-  poolSummary,
-  capacityInfo,
-  rotationStrategy,
-  showAccountOverview,
   usageColumns,
   refresh,
   loadTrend,
@@ -50,15 +46,11 @@ const {
     :trend-loading="trendLoading"
     :trend-error="trendError"
     :health-timeline="healthTimeline"
-    :account-usage="accountUsage"
+    :account-overview="accountOverview"
     :wire-profiles="wireProfiles"
     :budget="budget"
     :limits="limits"
     :usage-records="usageRecords"
-    :pool-summary="poolSummary"
-    :capacity-info="capacityInfo"
-    :rotation-strategy="rotationStrategy"
-    :show-account-overview="showAccountOverview"
     :usage-columns="usageColumns"
     @refresh="refresh"
     @trend-change="loadTrend"

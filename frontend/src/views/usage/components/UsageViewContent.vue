@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type {
   UsageDiagnosticsResponse,
+  UsageInsightsOverviewResponse,
   UsageSummaryResponse,
 } from '@/api'
 import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import type { UsageDisplayRecord } from '@/views/usage/model/records'
-import type { UsageInsightsPresentation } from '@/views/usage/model/state'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -20,7 +20,7 @@ const props = withDefaults(defineProps<{
   timeRangeOptions: Array<{ label: string, value: string }>
   summary: UsageSummaryResponse
   insights: {
-    overview: UsageInsightsPresentation
+    overview: UsageInsightsOverviewResponse
     diagnostics: UsageDiagnosticsResponse
   }
   columns: BaseTableColumn<UsageDisplayRecord>[]
@@ -33,7 +33,6 @@ const props = withDefaults(defineProps<{
   searchPlaceholder?: string
   searchAriaLabel?: string
   diagnosticDimensionOptions?: Array<{ label: string, value: string }>
-  showScheduling?: boolean
 }>(), {
   loading: false,
   analyticsLoading: false,
@@ -42,7 +41,6 @@ const props = withDefaults(defineProps<{
   searchPlaceholder: '请求、密钥名称、账号或模型',
   searchAriaLabel: '搜索使用记录：请求、密钥名称、账号或模型',
   diagnosticDimensionOptions: undefined,
-  showScheduling: true,
 })
 
 const emit = defineEmits<{
@@ -78,7 +76,6 @@ const recordViewOptions = [
       :diagnostics="insights.diagnostics"
       :loading="analyticsLoading"
       :diagnostic-dimension-options="diagnosticDimensionOptions"
-      :show-scheduling="showScheduling"
     />
 
     <BaseCard class="mt-5 flex flex-col">

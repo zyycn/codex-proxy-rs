@@ -20,13 +20,12 @@ interface UseUsageOptions {
 /** 页面只消费统一状态，身份差异收敛在数据源和字段配置。 */
 export function useUsage(options: UseUsageOptions) {
   const authStore = useAuthStore()
-  if (authStore.session?.type === 'key') {
+  if (authStore.isKey) {
     return {
       ...useKeyUsageSource(options),
       isAdmin: false as const,
       columns: keyUsageRecordColumns,
       diagnosticDimensionOptions: keyDiagnosticDimensionOptions,
-      showScheduling: false,
       searchPlaceholder: '搜索模型',
       searchAriaLabel: '按模型搜索使用记录',
     }
@@ -37,7 +36,6 @@ export function useUsage(options: UseUsageOptions) {
     isAdmin: true as const,
     columns: usageRecordColumns,
     diagnosticDimensionOptions: undefined,
-    showScheduling: true,
     searchPlaceholder: '请求、密钥名称、账号或模型',
     searchAriaLabel: '搜索使用记录：请求、密钥名称、账号或模型',
   }

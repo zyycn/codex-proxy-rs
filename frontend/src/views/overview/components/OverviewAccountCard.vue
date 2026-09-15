@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '@/views/overview/model/admin'
-import type { MetricTone } from '@/views/overview/model/display'
+import type { AccountOverviewView, MetricTone } from '@/views/overview/model/display'
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 
 import { computed } from 'vue'
@@ -14,14 +13,7 @@ import {
 } from '@/views/overview/model/display'
 import OverviewAccountIdentity from './OverviewAccountIdentity.vue'
 
-type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
-
-const props = defineProps<{
-  accounts: DashboardSnapshot['accountUsage']
-  pool?: DashboardSnapshot['poolSummary']
-  capacity?: DashboardSnapshot['capacityInfo']
-  rotationStrategy?: string | null
-}>()
+const props = defineProps<AccountOverviewView>()
 
 const scheduleStats = computed(() => {
   const cap = props.capacity

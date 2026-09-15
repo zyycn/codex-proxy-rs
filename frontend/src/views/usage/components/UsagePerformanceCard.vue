@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { UsageInsightsPresentation, UsagePerformancePresentation } from '@/views/usage/model/state'
+import type { UsageInsightsOverviewResponse, UsageOverviewPerformance } from '@/api'
 
 import { computed, shallowRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -24,20 +24,18 @@ import {
 } from '@/views/usage/model/chart'
 import { formatDuration, formatDurationAxis, formatPercent } from '@/views/usage/model/format'
 
-type Performance = UsagePerformancePresentation
+type Performance = UsageOverviewPerformance
 type PerformancePoint = Performance['points'][number]
-type Activity = UsageInsightsPresentation['health']['points']
+type Activity = UsageInsightsOverviewResponse['health']['points']
 
 const props = withDefaults(
   defineProps<{
     performance: Performance
     activity: Activity
     loading?: boolean
-    showScheduling?: boolean
   }>(),
   {
     loading: false,
-    showScheduling: true,
   },
 )
 
@@ -49,12 +47,12 @@ const requestActivity = computed(() => requestActivityByBucket(
   props.activity,
 ))
 
-const viewOptions = computed(() => [
+const viewOptions = [
   { label: '总耗时', value: 'total' },
   { label: '首字', value: 'firstToken' },
   { label: '吞吐', value: 'throughput' },
-  ...(props.showScheduling ? [{ label: '调度', value: 'scheduling' }] : []),
-])
+  { label: '调度', value: 'scheduling' },
+]
 
 const seriesLabels = computed(() => {
   if (activeView.value === 'throughput')
@@ -251,7 +249,7 @@ function formatThroughput(value: number | null) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66 gap-3">
+      <div class="grid min-h-66 gap-3" :class="{ 'flex-1': !hasData }">
         <div v-if="hasData" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
           <div v-for="metric in summaryMetrics" :key="metric.label" class="grid min-w-0 gap-1 px-2">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ metric.label }}</span>
@@ -275,7 +273,7 @@ function formatThroughput(value: number | null) {
                   ? '当前范围没有调度或容量样本'
                   : '当前范围没有总耗时样本'
           "
-          class="h-52.5 place-content-center"
+          class="place-content-center"
         />
       </div>
     </template>

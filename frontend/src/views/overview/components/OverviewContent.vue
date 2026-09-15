@@ -1,37 +1,36 @@
 <script setup lang="ts">
-import type { ClientOverviewResponse } from '@/api'
-import type { DashboardTrendKind } from '@/api/modules/dashboard'
+import type { ClientOverviewResponse, DashboardWireProfile } from '@/api'
 import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
-import type { dashboardSnapshotView, dashboardTrendView } from '@/views/overview/model/admin'
+import type {
+  AccountOverviewView,
+  MetricCardView,
+  RequestTrendKind,
+  RequestTrendPoint,
+  RequestTrendSummaryItem,
+} from '@/views/overview/model/display'
+import type { HealthTimeline } from '@/views/overview/model/health'
 import type { UsageDisplayRecord } from '@/views/usage/model/records'
 import OverviewAccountCard from './OverviewAccountCard.vue'
 import OverviewHealthTimelineCard from './OverviewHealthTimelineCard.vue'
 import OverviewSummary from './OverviewSummary.vue'
 import OverviewUsageRecordCard from './OverviewUsageRecordCard.vue'
 
-type DashboardSnapshotView = ReturnType<typeof dashboardSnapshotView>
-type DashboardTrendView = ReturnType<typeof dashboardTrendView>
-
 withDefaults(
   defineProps<{
     loading?: boolean
     refreshing?: boolean
     lastRefreshedAt?: string
-    metrics: DashboardSnapshotView['metrics']
-    trendPoints: DashboardTrendView['points']
-    trendSummary: DashboardTrendView['summary']
+    metrics: MetricCardView[]
+    trendPoints: RequestTrendPoint[]
+    trendSummary: RequestTrendSummaryItem[]
     trendLoading?: boolean
     trendError?: string
-    healthTimeline: DashboardSnapshotView['healthTimeline']
-    accountUsage: DashboardSnapshotView['accountUsage']
-    wireProfiles: DashboardSnapshotView['wireProfiles']
+    healthTimeline: HealthTimeline
+    accountOverview?: AccountOverviewView | null
+    wireProfiles: DashboardWireProfile[]
     budget?: ClientOverviewResponse['budget'] | null
     limits?: ClientOverviewResponse['limits'] | null
     usageRecords: UsageDisplayRecord[]
-    poolSummary: DashboardSnapshotView['poolSummary']
-    capacityInfo: DashboardSnapshotView['capacityInfo']
-    rotationStrategy: DashboardSnapshotView['rotationStrategy']
-    showAccountOverview?: boolean
     usageColumns: BaseTableColumn<UsageDisplayRecord>[]
   }>(),
   {
@@ -40,7 +39,7 @@ withDefaults(
     lastRefreshedAt: '',
     trendLoading: false,
     trendError: '',
-    showAccountOverview: false,
+    accountOverview: null,
     budget: null,
     limits: null,
   },
@@ -48,10 +47,10 @@ withDefaults(
 
 const emit = defineEmits<{
   refresh: []
-  trendChange: [kind: DashboardTrendKind]
+  trendChange: [kind: RequestTrendKind]
 }>()
 
-const trendKind = defineModel<DashboardTrendKind>('trendKind', { required: true })
+const trendKind = defineModel<RequestTrendKind>('trendKind', { required: true })
 </script>
 
 <template>
@@ -72,11 +71,8 @@ const trendKind = defineModel<DashboardTrendKind>('trendKind', { required: true 
     @trend-change="emit('trendChange', $event)"
   >
     <OverviewAccountCard
-      v-if="showAccountOverview"
-      :accounts="accountUsage"
-      :pool="poolSummary"
-      :capacity="capacityInfo"
-      :rotation-strategy="rotationStrategy"
+      v-if="accountOverview"
+      v-bind="accountOverview"
       class="mt-6"
     />
 

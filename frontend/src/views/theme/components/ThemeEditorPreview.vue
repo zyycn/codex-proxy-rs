@@ -4,6 +4,7 @@ import type { ThemeEditorPreview } from '../composables/useThemeEditor'
 import type { ThemeName } from '@/theme'
 
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { useAuthStore } from '@/stores/modules/auth'
 
 import ThemeComponentPreview from './ThemeComponentPreview.vue'
 import ThemeDashboardPreview from './ThemeDashboardPreview.vue'
@@ -15,6 +16,7 @@ defineProps<{
 }>()
 
 const preview = defineModel<ThemeEditorPreview>({ required: true })
+const authStore = useAuthStore()
 
 const previewOptions = [
   { label: '首页画板', value: 'page' },
@@ -37,7 +39,7 @@ const previewOptions = [
       :theme="theme"
       :style="style"
     >
-      <ThemeDashboardPreview v-if="preview === 'page'" />
+      <ThemeDashboardPreview v-if="preview === 'page'" :is-key="authStore.isKey" />
       <ThemeComponentPreview v-else />
     </ThemePreviewCanvas>
   </section>

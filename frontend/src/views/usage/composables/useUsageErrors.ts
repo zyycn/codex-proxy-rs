@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
 import { watchDebounced } from '@vueuse/core'
+import { storeToRefs } from 'pinia'
 
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getClientOpsErrors, getOpsErrors } from '@/api'
@@ -26,7 +27,7 @@ interface ErrorQuerySnapshot {
 
 export function useUsageErrors(options: UseUsageErrorsOptions) {
   const authStore = useAuthStore()
-  const isAdmin = authStore.session?.type === 'admin'
+  const { isAdmin } = storeToRefs(authStore)
   const refreshing = shallowRef(false)
   const searchQuery = shallowRef('')
   const search = computed(() => searchQuery.value.trim() || undefined)
@@ -36,7 +37,7 @@ export function useUsageErrors(options: UseUsageErrorsOptions) {
   function snapshot(): ErrorQuerySnapshot {
     return {
       ...options.latestTimeRangeParams(),
-      provider: isAdmin ? options.provider.value || undefined : undefined,
+      provider: isAdmin.value ? options.provider.value || undefined : undefined,
       search: search.value,
     }
   }
@@ -44,7 +45,7 @@ export function useUsageErrors(options: UseUsageErrorsOptions) {
   const query = useStablePagedQuery({
     initialPageSize: 10,
     async load({ currentPage, pageSize }, requestOptions) {
-      if (isAdmin) {
+      if (isAdmin.value) {
         const result = await getOpsErrors({
           currentPage,
           pageSize,

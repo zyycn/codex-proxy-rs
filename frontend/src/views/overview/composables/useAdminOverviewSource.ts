@@ -29,12 +29,9 @@ export function useAdminOverviewSource() {
 
   const metrics = computed(() => snapshot.value.metrics)
   const healthTimeline = computed(() => snapshot.value.healthTimeline)
-  const accountUsage = computed(() => snapshot.value.accountUsage)
+  const accountOverview = computed(() => snapshot.value.accountOverview)
   const wireProfiles = computed(() => snapshot.value.wireProfiles)
   const usageRecords = computed(() => snapshot.value.usageRecords)
-  const poolSummary = computed(() => snapshot.value.poolSummary)
-  const capacityInfo = computed(() => snapshot.value.capacityInfo)
-  const rotationStrategy = computed(() => snapshot.value.rotationStrategy)
   const trendView = computed(() => dashboardTrendView(
     trend.value?.kind === activeTrendKind.value ? trend.value : null,
   ))
@@ -165,15 +162,11 @@ export function useAdminOverviewSource() {
     trendError,
     fatalError,
     healthTimeline,
-    accountUsage,
+    accountOverview,
     wireProfiles,
     budget: null,
     limits: null,
     usageRecords,
-    poolSummary,
-    capacityInfo,
-    rotationStrategy,
-    showAccountOverview: true,
     usageColumns: overviewUsageColumns,
     refresh: refreshDashboardData,
     loadTrend,

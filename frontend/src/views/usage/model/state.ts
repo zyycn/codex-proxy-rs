@@ -1,43 +1,8 @@
 import type {
   UsageDiagnosticsResponse,
   UsageInsightsOverviewResponse,
-  UsageOverviewPerformance,
-  UsageOverviewPerformancePoint,
   UsageSummaryResponse,
 } from '@/api'
-
-type SchedulingPerformanceKey
-  = | 'admissionDecisionP50Ms'
-    | 'admissionDecisionP95Ms'
-    | 'accountSelectionWaitP50Ms'
-    | 'accountSelectionWaitP95Ms'
-    | 'capacityUtilization'
-    | 'capacityUtilizationP95'
-    | 'admissionDecisionCoverage'
-    | 'accountSelectionWaitCoverage'
-    | 'capacityCoverage'
-
-type SchedulingPointKey
-  = | 'admissionDecisionP50Ms'
-    | 'admissionDecisionP95Ms'
-    | 'accountSelectionWaitP50Ms'
-    | 'accountSelectionWaitP95Ms'
-    | 'capacityUtilization'
-    | 'capacityUtilizationP95'
-
-export type UsagePerformancePresentation
-  = Omit<UsageOverviewPerformance, SchedulingPerformanceKey | 'points'>
-    & Partial<Pick<UsageOverviewPerformance, SchedulingPerformanceKey>>
-    & {
-      points: Array<
-        Omit<UsageOverviewPerformancePoint, SchedulingPointKey>
-        & Partial<Pick<UsageOverviewPerformancePoint, SchedulingPointKey>>
-      >
-    }
-
-export interface UsageInsightsPresentation extends Omit<UsageInsightsOverviewResponse, 'performance'> {
-  performance: UsagePerformancePresentation
-}
 
 export function emptyUsageSummary(): UsageSummaryResponse {
   return {
@@ -52,7 +17,7 @@ export function emptyUsageSummary(): UsageSummaryResponse {
 }
 
 export function emptyUsageInsights(): {
-  overview: UsageInsightsPresentation
+  overview: UsageInsightsOverviewResponse
   diagnostics: UsageDiagnosticsResponse
 } {
   return {

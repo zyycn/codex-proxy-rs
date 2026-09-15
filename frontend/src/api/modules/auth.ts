@@ -1,13 +1,13 @@
 import request from '../request'
 
 export interface AuthSession {
-  type: 'admin' | 'key'
+  role: 'admin' | 'key'
   expiresAt: string
 }
 
 export type LoginParam
-  = | { type: 'admin', username: string, password: string }
-    | { type: 'key', apiKey: string }
+  = | { mode: 'admin', username: string, password: string }
+    | { mode: 'key', apiKey: string }
 
 export interface AuthStatusResponse {
   authenticated: boolean

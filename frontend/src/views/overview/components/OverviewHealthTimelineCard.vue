@@ -21,6 +21,8 @@ const healthPopoverArrowSurfaceClasses = {
 const timelineGrid = useTemplateRef<HTMLElement>('timelineGrid')
 const preferredMotion = usePreferredReducedMotion()
 const points = computed(() => props.timeline.points)
+// 保留完整的 96 格布局；缺少的格子只作视觉占位，不伪造采样点。
+const placeholderCount = computed(() => Math.max(0, 96 - points.value.length))
 
 const activePoint = shallowRef<HealthTimelinePoint>()
 const activeAnchor = shallowRef<HTMLElement | null>(null)
@@ -255,6 +257,14 @@ onBeforeUnmount(() => {
                   ]"
                 />
               </button>
+              <span
+                v-for="index in placeholderCount"
+                :key="`placeholder-${index}`"
+                aria-hidden="true"
+                class="flex h-5 w-full min-w-0.5 items-center"
+              >
+                <span class="block h-3.5 w-full rounded-xs" :class="healthStatusMeta.no_data.cellClass" />
+              </span>
             </div>
           </template>
 

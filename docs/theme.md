@@ -312,7 +312,7 @@ Alias 算法，避免主题配置逐渐退化成一份无法维护的完整 CSS 
 [`ThemePreviewScope.vue`](../frontend/src/views/theme/components/ThemePreviewScope.vue) 创建开放 Shadow Root，复制应用
 样式，并把预览内容 Teleport 到影子根中。预览可独立切换浅色和深色，不受外层主题影响。
 
-- **首页画板**复用真实 `DashboardContent` 和固定 fixture，不请求接口，也不启动自动刷新。
+- **首页画板**复用真实 `OverviewContent`，按当前登录身份选择固定 fixture：管理员预览账号与调度，Key 用户预览额度与用量。预览不请求接口，也不启动自动刷新。
 - **组件概览**展示基础组件、表格、空状态、骨架、浮层和菜单等关键状态。
 - 画板固定为 `1600 × 1808`，使用 CSS `zoom` 重排，不使用 `transform: scale()` 长期缩放文字。
 - 空白区域可拖拽，滚轮以指针为锚点缩放，并提供缩小、100%、放大和适应画板操作。

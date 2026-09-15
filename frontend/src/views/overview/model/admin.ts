@@ -1,5 +1,6 @@
 import type { getDashboardSummary, getDashboardTrend } from '@/api'
 import type {
+  AccountOverviewView,
   MetricCardView,
   MetricTone,
   RequestTrendPoint,
@@ -49,24 +50,19 @@ const emptyCards: DashboardSummary['cards'] = {
   },
 }
 
-const emptyCapacityInfo = {
-  maxConcurrentPerAccount: null,
-  totalSlots: null,
-  usedSlots: null,
-  availableSlots: null,
-}
-
 export function dashboardSnapshotView(summary: DashboardSummary | null) {
   const trendPoints = summary?.trend.points ?? []
   return {
     metrics: metricCards(summary?.cards ?? emptyCards, trendPoints),
     healthTimeline: summary?.healthTimeline ?? emptyHealthTimeline,
-    accountUsage: (summary?.accountUsage ?? []),
+    accountOverview: {
+      accounts: summary?.accountUsage ?? [],
+      pool: summary?.poolSummary ?? null,
+      capacity: summary?.capacityInfo ?? null,
+      rotationStrategy: summary?.rotationStrategy ?? null,
+    } satisfies AccountOverviewView,
     wireProfiles: summary?.wireProfiles ?? [],
     usageRecords: summary?.usageRecords ?? [],
-    poolSummary: summary?.poolSummary ?? null,
-    capacityInfo: summary?.capacityInfo ?? emptyCapacityInfo,
-    rotationStrategy: summary?.rotationStrategy ?? null,
   }
 }
 

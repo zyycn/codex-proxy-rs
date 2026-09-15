@@ -27,7 +27,7 @@ pub trait SessionState {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
 pub enum LoginRequest {
     Admin {
         username: Option<String>,
@@ -67,15 +67,14 @@ impl From<LoginRequest> for LoginCommand {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionData {
-    #[serde(rename = "type")]
-    kind: &'static str,
+    role: &'static str,
     expires_at: String,
 }
 
 impl From<&AuthSession> for SessionData {
     fn from(session: &AuthSession) -> Self {
         Self {
-            kind: match session.subject {
+            role: match session.subject {
                 SessionSubject::Admin { .. } => "admin",
                 SessionSubject::Key { .. } => "key",
             },

@@ -35,7 +35,6 @@ const realmOptions = [
 
 const isKeyRealm = computed(() => realm.value === 'key')
 const realmCaption = computed(() => isKeyRealm.value ? 'KEY REALM' : 'ADMIN REALM')
-const title = computed(() => isKeyRealm.value ? '用量概览' : '控制台登录')
 const secretType = computed<SecretInputType>(() => (isSecretVisible.value ? 'text' : 'password'))
 const secretToggleLabel = computed(() => {
   const target = isKeyRealm.value ? 'API Key' : '密码'
@@ -98,7 +97,7 @@ function toggleSecretVisible(): void {
         id="login-title"
         class="m-0 text-[34px] leading-[1.02] font-semibold text-(--cp-login-title-color) max-[560px]:text-[30px]"
       >
-        {{ title }}
+        控制台登录
       </h1>
       <p class="m-0 -ml-2 text-sm leading-[1.45] font-normal text-(--cp-login-description-color)">
         「 欢迎回来，登录以开始您的数据之旅 」

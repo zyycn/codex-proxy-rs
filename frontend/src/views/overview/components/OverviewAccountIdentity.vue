@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView } from '@/views/overview/model/admin'
+import type { DashboardAccountUsage } from '@/api/modules/dashboard'
 import { Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
 
@@ -7,11 +7,8 @@ import { formatProviderLabel } from '@/utils/providers'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
 
-type DashboardSnapshot = ReturnType<typeof dashboardSnapshotView>
-type DashboardAccount = DashboardSnapshot['accountUsage'][number]
-
 const props = defineProps<{
-  account: DashboardAccount
+  account: DashboardAccountUsage
 }>()
 
 const email = computed(() => props.account.email?.trim() || String(props.account.id))

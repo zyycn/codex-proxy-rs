@@ -1,5 +1,4 @@
 import type { Ref } from 'vue'
-import type { ClientUsageRecord } from '@/api'
 import type { UsageTimeRangeParams } from '@/views/usage/composables/useUsageTimeRange'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
@@ -10,7 +9,8 @@ import {
   getClientUsageRecords,
   getClientUsageSummary,
 } from '@/api'
-import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
+import { withMinimumDuration } from '@/utils/async'
 import { emptyUsageInsights, emptyUsageSummary } from '@/views/usage/model/state'
 
 export function useKeyUsageSource(options: {
@@ -18,33 +18,33 @@ export function useKeyUsageSource(options: {
   latestTimeRangeParams: () => UsageTimeRangeParams
   active: Readonly<Ref<boolean>>
 }) {
-  const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
-  const records = shallowRef<ClientUsageRecord[]>([])
   const summary = shallowRef(emptyUsageSummary())
   const insights = shallowRef(emptyUsageInsights())
-  const currentPage = shallowRef(1)
-  const pageSize = shallowRef(10)
-  const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
   const providerQuery = shallowRef('')
   const search = computed(() => searchQuery.value.trim() || undefined)
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
-  const tableError = shallowRef('')
   let tableParams = snapshot()
-  let tableRequestId = 0
   let analyticsRequestId = 0
   let diagnosticRequestId = 0
-  let tableController: AbortController | undefined
   let analyticsController: AbortController | undefined
   let diagnosticController: AbortController | undefined
   let disposed = false
 
+  const query = useStablePagedQuery({
+    initialPageSize: 10,
+    load: (pagination, requestOptions) => getClientUsageRecords({
+      ...pagination,
+      ...tableParams,
+    }, requestOptions),
+  })
+  const { currentPage, pageSize, loading, items: records, error: tableError } = query
   const usagePagination = computed(() => ({
     currentPage: currentPage.value,
     pageSize: pageSize.value,
-    total: totalRecords.value,
+    total: query.total.value,
   }))
 
   function snapshot() {
@@ -54,51 +54,16 @@ export function useKeyUsageSource(options: {
     }
   }
 
-  function resetPagination() {
-    currentPage.value = 1
-    totalRecords.value = 0
-  }
-
   async function loadUsageRecords(loadOptions: { scope?: 'all' | 'table', background?: boolean } = {}) {
     const { scope = 'all', background = false } = loadOptions
-    if (scope === 'all') {
-      resetPagination()
+    if (scope === 'all')
       tableParams = snapshot()
-    }
     await Promise.all([
-      ...(options.active.value ? [loadUsagePage(background)] : []),
+      ...(options.active.value
+        ? [scope === 'all' ? query.reloadFromStart({ background }) : query.execute(currentPage.value, { background })]
+        : []),
       ...(scope === 'all' ? [loadUsageAnalytics(options.timeRangeParams.value, background)] : []),
     ])
-  }
-
-  async function loadUsagePage(background: boolean) {
-    const requestId = ++tableRequestId
-    tableController?.abort()
-    const controller = new AbortController()
-    tableController = controller
-    loading.value = !background
-    tableError.value = ''
-    try {
-      const result = await getClientUsageRecords({
-        currentPage: currentPage.value,
-        pageSize: pageSize.value,
-        ...tableParams,
-      }, { signal: controller.signal })
-      if (requestId !== tableRequestId)
-        return
-      records.value = result.items
-      pageSize.value = result.pageSize
-      totalRecords.value = result.total
-      currentPage.value = result.currentPage
-    }
-    catch (cause: unknown) {
-      if (requestId === tableRequestId && !controller.signal.aborted)
-        tableError.value = errorMessage(cause)
-    }
-    finally {
-      if (requestId === tableRequestId)
-        loading.value = false
-    }
   }
 
   async function loadUsageAnalytics(range: UsageTimeRangeParams, background: boolean) {
@@ -166,8 +131,7 @@ export function useKeyUsageSource(options: {
 
   function reloadLatestTable() {
     tableParams = snapshot()
-    resetPagination()
-    return loadUsageRecords({ scope: 'table' })
+    return query.reloadFromStart()
   }
 
   function handlePageChange(nextPage: number) {
@@ -175,8 +139,7 @@ export function useKeyUsageSource(options: {
       void reloadLatestTable()
       return
     }
-    currentPage.value = nextPage
-    void loadUsageRecords({ scope: 'table' })
+    void query.execute(nextPage)
   }
 
   function handlePageSizeChange(nextPageSize: number) {
@@ -185,8 +148,7 @@ export function useKeyUsageSource(options: {
       void reloadLatestTable()
       return
     }
-    resetPagination()
-    void loadUsageRecords({ scope: 'table' })
+    void query.reloadFromStart()
   }
 
   onMounted(() => void loadUsageRecords())
@@ -205,17 +167,14 @@ export function useKeyUsageSource(options: {
       void reloadLatestTable()
     }
     else {
-      tableRequestId += 1
-      tableController?.abort()
+      query.invalidate()
     }
   })
 
   onScopeDispose(() => {
     disposed = true
-    tableRequestId += 1
     analyticsRequestId += 1
     diagnosticRequestId += 1
-    tableController?.abort()
     analyticsController?.abort()
     diagnosticController?.abort()
   })

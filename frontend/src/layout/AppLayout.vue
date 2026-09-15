@@ -31,18 +31,18 @@ const adminNavItems = [
 ]
 
 const keyNavItems = [
-  { label: '概览', icon: LayoutDashboard, path: '/key/overview' },
-  { label: '使用统计', icon: ChartNoAxesColumn, path: '/key/usage' },
-  { label: '主题设置', icon: Palette, path: '/key/theme' },
+  { label: '概览', icon: LayoutDashboard, path: '/' },
+  { label: '使用统计', icon: ChartNoAxesColumn, path: '/usage' },
+  { label: '主题设置', icon: Palette, path: '/theme' },
 ]
 
 const authStore = useAuthStore()
+const { isAdmin } = storeToRefs(authStore)
 const systemUpdateStore = useSystemUpdateStore()
 const { hasUpdate, loadedOnce, version: adminVersion } = storeToRefs(systemUpdateStore)
 const keyVersion = shallowRef('')
 const systemUpdateOpen = shallowRef(false)
 const systemUpdateOpening = shallowRef(false)
-const isAdmin = computed(() => authStore.session?.type === 'admin')
 const navItems = computed(() => isAdmin.value ? adminNavItems : keyNavItems)
 const version = computed(() => isAdmin.value ? adminVersion.value?.version ?? '' : keyVersion.value)
 const gitSha = computed(() => isAdmin.value ? adminVersion.value?.gitSha ?? '' : '')

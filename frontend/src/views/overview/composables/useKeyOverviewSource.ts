@@ -1,28 +1,28 @@
 import type { ClientOverviewResponse } from '@/api'
 import type { RequestTrendKind } from '@/views/overview/model/display'
 import { useIntervalFn } from '@vueuse/core'
-import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
+import { computed, onMounted, shallowRef } from 'vue'
 
 import { getClientOverview } from '@/api'
-import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { useRequestState } from '@/composables/useRequestState'
+import { withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
-import { dashboardSnapshotView } from '@/views/overview/model/admin'
+import { emptyHealthTimeline } from '@/views/overview/model/health'
 import { keyOverviewMetrics, keyOverviewTrend } from '@/views/overview/model/key'
 import { keyUsageRecordColumns } from '@/views/usage/model/columns'
 
 export function useKeyOverviewSource() {
   const data = shallowRef<ClientOverviewResponse | null>(null)
   const activeTrendKind = shallowRef<RequestTrendKind>('usage')
-  const loading = shallowRef(false)
-  const refreshing = shallowRef(false)
-  const error = shallowRef('')
+  const request = useRequestState()
+  const { error } = request
+  const loading = computed(() => request.loading.value && data.value === null)
+  const refreshing = computed(() => request.loading.value && data.value !== null)
   const lastRefreshedAt = shallowRef('')
-  let controller: AbortController | undefined
 
   const metrics = computed(() => keyOverviewMetrics(data.value))
   const trend = computed(() => keyOverviewTrend(data.value, activeTrendKind.value))
-  const emptyAdminData = dashboardSnapshotView(null)
-  const healthTimeline = computed(() => data.value?.healthTimeline ?? emptyAdminData.healthTimeline)
+  const healthTimeline = computed(() => data.value?.healthTimeline ?? emptyHealthTimeline)
   const wireProfiles = computed(() => data.value?.wireProfiles ?? [])
   const budget = computed(() => data.value?.budget ?? null)
   const limits = computed(() => data.value?.limits ?? null)
@@ -39,32 +39,27 @@ export function useKeyOverviewSource() {
   }
 
   async function load(silent = false) {
-    controller?.abort()
-    controller = new AbortController()
+    const requestId = request.start()
     const initial = data.value === null
-    if (initial)
-      loading.value = true
-    else
-      refreshing.value = true
-    error.value = ''
     try {
-      data.value = await withMinimumDuration(
-        getClientOverview({ silent, signal: controller.signal }),
+      const result = await withMinimumDuration(
+        getClientOverview({ silent, signal: request.signal }),
         initial ? 220 : 0,
       )
+      if (!request.isCurrent(requestId))
+        return
+      data.value = result
       lastRefreshedAt.value = formatDateTime()
     }
     catch (cause: unknown) {
-      if (!controller.signal.aborted)
-        error.value = errorMessage(cause)
+      request.fail(requestId, cause)
     }
     finally {
-      loading.value = false
-      refreshing.value = false
+      request.finish(requestId)
     }
   }
 
-  const { pause: stopAutoRefresh, resume: startAutoRefresh } = useIntervalFn(
+  const { resume: startAutoRefresh } = useIntervalFn(
     () => void load(true),
     30_000,
     { immediate: false },
@@ -73,11 +68,6 @@ export function useKeyOverviewSource() {
   onMounted(() => {
     void load()
     startAutoRefresh()
-  })
-
-  onScopeDispose(() => {
-    stopAutoRefresh()
-    controller?.abort()
   })
 
   return {
@@ -92,15 +82,11 @@ export function useKeyOverviewSource() {
     trendError: error,
     fatalError,
     healthTimeline,
-    accountUsage: emptyAdminData.accountUsage,
+    accountOverview: null,
     wireProfiles,
     budget,
     limits,
     usageRecords,
-    poolSummary: emptyAdminData.poolSummary,
-    capacityInfo: emptyAdminData.capacityInfo,
-    rotationStrategy: emptyAdminData.rotationStrategy,
-    showAccountOverview: false,
     usageColumns: keyUsageRecordColumns,
     refresh: () => load(),
     loadTrend,

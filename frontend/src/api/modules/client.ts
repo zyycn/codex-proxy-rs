@@ -3,10 +3,8 @@ import type { DashboardHealthTimeline, DashboardWireProfile } from './dashboard'
 import type {
   UsageBilling,
   UsageDiagnosticsResponse,
+  UsageInsightsOverviewResponse,
   UsageLatencyDetails,
-  UsageOverviewCost,
-  UsageOverviewHealth,
-  UsageOverviewPerformancePoint,
   UsageSummaryResponse,
   UsageTokenDetails,
 } from './usage'
@@ -84,40 +82,7 @@ export interface ClientOpsErrorsResponse {
   total: number
 }
 
-export interface ClientUsagePerformancePoint extends Pick<
-  UsageOverviewPerformancePoint,
-  | 'bucket'
-  | 'label'
-  | 'latencyP50Ms'
-  | 'latencyP95Ms'
-  | 'latencyP99Ms'
-  | 'firstTokenP50Ms'
-  | 'firstTokenP95Ms'
-  | 'firstTokenP99Ms'
-  | 'outputThroughputP10'
-  | 'outputThroughputP50'
-  | 'outputThroughputP90'
-> {}
-
-export interface ClientUsageInsightsResponse {
-  granularity: string
-  health: UsageOverviewHealth
-  performance: {
-    latencyP50Ms: number | null
-    latencyP95Ms: number | null
-    latencyP99Ms: number | null
-    firstTokenP50Ms: number | null
-    firstTokenP95Ms: number | null
-    firstTokenP99Ms: number | null
-    outputThroughputP10: number | null
-    outputThroughputP50: number | null
-    outputThroughputP90: number | null
-    latencyCoverage: number
-    firstTokenCoverage: number
-    points: ClientUsagePerformancePoint[]
-  }
-  cost: UsageOverviewCost
-}
+export type ClientUsageInsightsResponse = UsageInsightsOverviewResponse
 
 export interface ClientKeySummary {
   name: string

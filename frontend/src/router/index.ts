@@ -10,7 +10,15 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  const login = { name: 'login', query: { redirect: to.fullPath }, state: { loginType: to.meta.role === 'key' ? 'key' : 'admin' } }
+
+  // 登录页不依赖会话恢复；只使用当前已知身份决定是否跳转。
+  if (to.name === 'login') {
+    if (authStore.isAuthenticated)
+      return { name: 'dashboard' }
+    return
+  }
+
+  const login = { name: 'login', query: { redirect: to.fullPath } }
 
   if (!authStore.sessionChecked) {
     try {
@@ -18,20 +26,13 @@ router.beforeEach(async (to) => {
     }
     catch {
       // 暂时无法确认会话时不进入受保护页面，也不缓存成“已退出”。
-      return to.name === 'login' ? undefined : login
+      return login
     }
   }
 
-  const identity = authStore.session?.type
-  if (to.name === 'login') {
-    if (identity)
-      return identity === 'key' ? { name: 'key-overview' } : { name: 'dashboard' }
-    return
-  }
-
-  if (!identity)
+  if (!authStore.isAuthenticated)
     return login
 
-  if (to.meta.role !== identity)
-    return identity === 'key' ? { name: 'key-overview' } : { name: 'dashboard' }
+  if (to.meta.role === 'admin' && !authStore.isAdmin)
+    return { name: 'dashboard' }
 })

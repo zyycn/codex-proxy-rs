@@ -241,18 +241,20 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 
 ### 统一登录与会话
 
-管理员和密钥登录共用 `/api/auth/*`。登录类型只用于选择凭据验证方式，不直接授予权限；
+管理员和密钥登录共用 `/api/auth/*`。登录模式 `mode` 只用于选择凭据验证方式，不直接授予权限；
 验证成功后，由后端写入身份和绑定 ID。一个浏览器只持有一份 `cpr_session` HttpOnly Cookie，
 原始 Key 不进入 URL、Pinia 或浏览器存储。登录页的切换只改变本地表单，不改变 URL。
+两种身份共用概览 `/`、使用统计 `/usage` 和主题 `/theme`；账号、密钥与系统设置等管理页面仅对管理员开放。
 
 | 方法 | 路由 | 请求 | 说明 |
 | --- | --- | --- | --- |
-| `POST` | `/api/auth/login` | `{ type: "admin", username?, password }` 或 `{ type: "key", apiKey }` | 验证凭据、创建会话；成功后撤销请求携带的旧会话 |
+| `POST` | `/api/auth/login` | `{ mode: "admin", username?, password }` 或 `{ mode: "key", apiKey }` | 验证凭据、创建会话；成功后撤销请求携带的旧会话 |
 | `GET` | `/api/auth/status` | 无 | 从 Cookie 恢复服务端身份，返回 `{ authenticated, session }` |
 | `POST` | `/api/auth/logout` | 无 | 删除当前会话并清除 Cookie；存储失败返回 503，不假装退出成功 |
 
-登录返回 `data: { type: "admin" | "key", expiresAt }`；status 已登录时的 `session` 使用同一结构，
-未登录时为 `{ authenticated: false, session: null }`。不返回凭据或绑定 ID，Key 的名称和掩码只在用量响应中返回。
+登录返回 `data: { role: "admin" | "key", expiresAt }`；status 已登录时的 `session` 使用同一结构，
+未登录时为 `{ authenticated: false, session: null }`。`role` 由服务端已验证身份推导，不接受客户端声明。
+不返回凭据或绑定 ID，Key 的名称和掩码只在用量响应中返回。
 
 Redis 统一保存身份（管理员 ID 或 Client Key ID）和绝对有效期，不保存密码或原始 Key。
 使用 `auth:v1` 命名空间，Cookie 属性为 `Path=/; HttpOnly; SameSite=Lax`，`Max-Age` /
@@ -290,6 +292,9 @@ Client IP 和 User-Agent 等当前 Key 可见事实。错误记录只返回错�
 
 `dimension` 只接受 `model`、`transport` 或 `failureClass`。所有时间范围采用开始包含、结束不包含的
 绝对时间；所有查询的 Key 都由服务端会话确定，不接受客户端指定 Key、账号或 Provider 范围。
+
+洞察响应的 `performance` 包含当前 Key 请求的准入判定、账号选择等待分位、容量利用率及采样覆盖率，
+`points` 返回对应时间桶趋势。未采集的指标保持 `null`，不返回账号身份或原始容量槽位信息。
 
 所有 `/api/auth/*` 和 `/api/client/*` 响应带 `Cache-Control: no-store`；
 未知路径和错误 method 返回 JSON，不落入 SPA。两种登录共享来源桶和全局桶，分别为每 60 秒

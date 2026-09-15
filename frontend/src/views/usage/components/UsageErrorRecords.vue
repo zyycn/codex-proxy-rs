@@ -2,7 +2,7 @@
 import type { UsageTimeRangeParams } from '../composables/useUsageTimeRange'
 import type { UsageErrorRecord } from '../model/errors'
 import { Eye, RefreshCw, Search } from '@lucide/vue'
-import { shallowRef, toRef } from 'vue'
+import { computed, shallowRef, toRef } from 'vue'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -39,7 +39,7 @@ const {
   active: toRef(props, 'active'),
 })
 
-const columns = isAdmin ? opsErrorColumns : keyOpsErrorColumns
+const columns = computed(() => isAdmin.value ? opsErrorColumns : keyOpsErrorColumns)
 const selectedRecord = shallowRef<UsageErrorRecord | null>(null)
 const detailOpen = shallowRef(false)
 const upstreamSendStateLabels: Record<string, string> = {

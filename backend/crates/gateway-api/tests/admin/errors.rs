@@ -81,7 +81,7 @@ async fn invalid_login_json_data_should_not_echo_the_submitted_value() {
         Method::POST,
         "/api/auth/login",
         Body::from(
-            json!({ "type": "admin", "password": submitted, "rememberMe": true }).to_string(),
+            json!({ "mode": "admin", "password": submitted, "rememberMe": true }).to_string(),
         ),
     );
     request
@@ -116,7 +116,7 @@ async fn login_without_json_content_type_should_keep_415_with_an_admin_envelope(
         .oneshot(request(
             Method::POST,
             "/api/auth/login",
-            Body::from(json!({ "type": "admin", "password": "secret" }).to_string()),
+            Body::from(json!({ "mode": "admin", "password": "secret" }).to_string()),
         ))
         .await
         .expect("missing JSON content type response");
@@ -281,7 +281,7 @@ async fn admin_auth_failures_should_use_stable_chinese_contracts() {
     let mut invalid_login = request(
         Method::POST,
         "/api/auth/login",
-        Body::from(json!({ "type": "admin", "password": "wrong-password" }).to_string()),
+        Body::from(json!({ "mode": "admin", "password": "wrong-password" }).to_string()),
     );
     invalid_login
         .headers_mut()

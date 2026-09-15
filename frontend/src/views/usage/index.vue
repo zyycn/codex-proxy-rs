@@ -20,7 +20,6 @@ const {
   isAdmin,
   columns,
   diagnosticDimensionOptions,
-  showScheduling,
   searchPlaceholder,
   searchAriaLabel,
   currentPage,
@@ -71,7 +70,6 @@ watch(timeRange, () => {
     :refreshing="refreshingList"
     :table-error="tableError"
     :diagnostic-dimension-options="diagnosticDimensionOptions"
-    :show-scheduling="showScheduling"
     :search-placeholder="searchPlaceholder"
     :search-aria-label="searchAriaLabel"
     @refresh="refreshUsageRecords"

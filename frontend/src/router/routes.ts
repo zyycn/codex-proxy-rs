@@ -7,32 +7,8 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/login/index.vue'),
   },
   {
-    path: '/key',
-    component: () => import('@/layout/AppLayout.vue'),
-    meta: { role: 'key' },
-    redirect: { name: 'key-overview' },
-    children: [
-      {
-        path: 'overview',
-        name: 'key-overview',
-        component: () => import('@/views/overview/index.vue'),
-      },
-      {
-        path: 'usage',
-        name: 'key-usage',
-        component: () => import('@/views/usage/index.vue'),
-      },
-      {
-        path: 'theme',
-        name: 'key-theme',
-        component: () => import('@/views/theme/index.vue'),
-      },
-    ],
-  },
-  {
     path: '/',
     component: () => import('@/layout/AppLayout.vue'),
-    meta: { role: 'admin' },
     children: [
       {
         path: '',
@@ -42,21 +18,25 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'accounts',
         name: 'accounts',
+        meta: { role: 'admin' },
         component: () => import('@/views/accounts/index.vue'),
       },
       {
         path: 'proxies',
         name: 'proxies',
+        meta: { role: 'admin' },
         component: () => import('@/views/proxies/index.vue'),
       },
       {
         path: 'account-groups',
         name: 'account-groups',
+        meta: { role: 'admin' },
         component: () => import('@/views/groups/index.vue'),
       },
       {
         path: 'api-keys',
         name: 'api-keys',
+        meta: { role: 'admin' },
         component: () => import('@/views/keys/index.vue'),
       },
       {
@@ -72,11 +52,13 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'settings',
         name: 'settings',
+        meta: { role: 'admin' },
         component: () => import('@/views/settings/index.vue'),
       },
       {
         path: 'settings/backup',
         name: 'settings-backup',
+        meta: { role: 'admin' },
         component: () => import('@/views/settings/index.vue'),
       },
     ],
