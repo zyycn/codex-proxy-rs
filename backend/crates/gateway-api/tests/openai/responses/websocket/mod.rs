@@ -914,6 +914,14 @@ impl ExecutionStore for SettlementPorts {
 }
 
 impl ClientAdmissionPort for SettlementPorts {
+    fn abandon(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+    ) {
+        let _ = futures::FutureExt::now_or_never(self.release(key, request));
+    }
+
     fn admit(
         &self,
         _: ClientAdmissionRequest,

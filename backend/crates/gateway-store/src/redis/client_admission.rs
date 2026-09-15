@@ -26,11 +26,11 @@ if now_ms + lease_ttl_ms > tonumber(ARGV[5]) then return 3 end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', cutoff)
 
-if tonumber(ARGV[3]) > 0 and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
-  return 2
-end
 if tonumber(ARGV[4]) > 0 and redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[4]) then
   return 1
+end
+if tonumber(ARGV[6]) == 0 or (tonumber(ARGV[3]) > 0 and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3])) then
+  return 2
 end
 
 redis.call('ZADD', KEYS[1], now_ms + lease_ttl_ms, ARGV[1])
@@ -122,6 +122,7 @@ pub struct ClientAdmissionRequest {
     pub model_request_id: String,
     pub client_api_key_ref: String,
     pub lease_ttl: Duration,
+    pub allow_concurrency_acquire: bool,
     pub limits: ClientAdmissionLimits,
 }
 
@@ -276,6 +277,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
             .arg(request.limits.max_concurrency)
             .arg(request.limits.requests_per_minute)
             .arg(MAX_REDIS_EXACT_INTEGER)
+            .arg(u8::from(request.allow_concurrency_acquire))
             .invoke_async::<i64>(&mut connection)
             .await
             .map_err(|_| redis_unavailable("admit client request"))?;
@@ -372,6 +374,23 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
 }
 
 impl ClientAdmissionPort for RedisClientAdmissionRepository {
+    fn abandon(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+    ) {
+        let repository = self.clone();
+        let key = key.clone();
+        let request = request.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn(async move {
+                if let Err(error) = repository.release(&key, &request).await {
+                    tracing::warn!(%error, "已取消准入的租约释放失败，依赖 TTL 收敛");
+                }
+            }));
+        }
+    }
+
     fn admit(
         &self,
         request: CoreAdmissionRequest,
@@ -381,6 +400,7 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
                 model_request_id: request.model_request_id.as_str().to_owned(),
                 client_api_key_ref: request.client_api_key_id.as_str().to_owned(),
                 lease_ttl: request.lease_ttl,
+                allow_concurrency_acquire: request.allow_concurrency_acquire,
                 limits: ClientAdmissionLimits {
                     max_concurrency: request.limits.max_concurrency,
                     requests_per_minute: request.limits.requests_per_minute,

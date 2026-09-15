@@ -111,6 +111,25 @@ fn rate_limited_error_should_map_to_openai_retryable_status() {
 }
 
 #[test]
+fn queue_rejections_keep_distinct_retryable_http_codes() {
+    for (kind, code) in [
+        (
+            GatewayErrorKind::ConcurrencyQueueFull,
+            "concurrency_queue_full",
+        ),
+        (
+            GatewayErrorKind::ConcurrencyQueueTimeout,
+            "concurrency_queue_timeout",
+        ),
+    ] {
+        assert_eq!(
+            gateway_error_contract(kind),
+            (StatusCode::TOO_MANY_REQUESTS, "rate_limit_error", code),
+        );
+    }
+}
+
+#[test]
 fn upstream_unavailable_error_should_map_to_bad_gateway() {
     assert_eq!(
         gateway_error_contract(GatewayErrorKind::UpstreamUnavailable),

@@ -37,6 +37,9 @@ pub struct RuntimeSettingsView {
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
     pub request_interval_ms: u64,
+    pub max_waiting_per_key: u32,
+    pub max_waiting_per_account: u32,
+    pub concurrency_wait_timeout_seconds: u32,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -55,6 +58,9 @@ pub struct UpdateRuntimeSettingsRequest {
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
     pub request_interval_ms: u64,
+    pub max_waiting_per_key: u32,
+    pub max_waiting_per_account: u32,
+    pub concurrency_wait_timeout_seconds: u32,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -67,6 +73,17 @@ impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数。
     pub fn validate(&self) -> Result<(), WireValidationError> {
         validate_model_mappings(&self.model_mappings)?;
+        for (value, field) in [
+            (self.max_waiting_per_key, "maxWaitingPerKey"),
+            (self.max_waiting_per_account, "maxWaitingPerAccount"),
+        ] {
+            if value > 1_000 {
+                return Err(WireValidationError::new(field));
+            }
+        }
+        if !(1..=120).contains(&self.concurrency_wait_timeout_seconds) {
+            return Err(WireValidationError::new("concurrencyWaitTimeoutSeconds"));
+        }
         for (value, field) in [
             (self.refresh_margin_seconds, "refreshMarginSeconds"),
             (self.refresh_concurrency, "refreshConcurrency"),
@@ -104,6 +121,9 @@ impl UpdateRuntimeSettingsRequest {
             max_concurrent_per_account: u32::try_from(self.max_concurrent_per_account)
                 .map_err(|_| WireValidationError::new("settingsMaxConcurrencyOverflow"))?,
             request_interval_ms: self.request_interval_ms,
+            max_waiting_per_key: self.max_waiting_per_key,
+            max_waiting_per_account: self.max_waiting_per_account,
+            concurrency_wait_timeout_seconds: self.concurrency_wait_timeout_seconds,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             min_codex_desktop_version: self.min_codex_desktop_version,
@@ -126,6 +146,9 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             refresh_concurrency: u64::from(settings.refresh_concurrency),
             max_concurrent_per_account: u64::from(settings.max_concurrent_per_account),
             request_interval_ms: settings.request_interval_ms,
+            max_waiting_per_key: settings.max_waiting_per_key,
+            max_waiting_per_account: settings.max_waiting_per_account,
+            concurrency_wait_timeout_seconds: settings.concurrency_wait_timeout_seconds,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
             min_codex_desktop_version: settings.min_codex_desktop_version,
             min_codex_cli_version: settings.min_codex_cli_version,

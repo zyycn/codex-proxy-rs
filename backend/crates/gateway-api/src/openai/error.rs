@@ -247,6 +247,16 @@ pub const fn gateway_error_contract(
             "server_error",
             "provider_infrastructure_unavailable",
         ),
+        GatewayErrorKind::ConcurrencyQueueFull => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "concurrency_queue_full",
+        ),
+        GatewayErrorKind::ConcurrencyQueueTimeout => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "concurrency_queue_timeout",
+        ),
         GatewayErrorKind::RateLimited => (
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limit_error",

@@ -77,6 +77,13 @@ impl BufferedClientAdmissionPort {
 }
 
 impl ClientAdmissionPort for BufferedClientAdmissionPort {
+    fn abandon(&self, key: &ClientApiKeyId, request: &ModelRequestId) {
+        self.enqueue(AdmissionRelease {
+            client_api_key_id: key.clone(),
+            model_request_id: request.clone(),
+        });
+    }
+
     fn admit(
         &self,
         request: ClientAdmissionRequest,

@@ -9,6 +9,9 @@ export interface RuntimeSettings {
   refreshConcurrency: number
   maxConcurrentPerAccount: number
   requestIntervalMs: number
+  maxWaitingPerKey: number
+  maxWaitingPerAccount: number
+  concurrencyWaitTimeoutSeconds: number
   rotationStrategy: RotationStrategy
   minCodexDesktopVersion: string | null
   minCodexCliVersion: string | null

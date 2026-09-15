@@ -34,6 +34,8 @@ pub enum ProviderErrorKind {
     QuotaExhausted,
     /// 仍有符合条件的账号，但它们暂时没有可调度容量。
     AccountCapacityUnavailable,
+    ConcurrencyQueueFull,
+    ConcurrencyQueueTimeout,
     /// Provider 已确认当前请求无法选出可用账号。
     NoEligibleAccount,
     /// Provider 的账号存储、租约协调或本地凭据数据不可用。
@@ -67,6 +69,8 @@ impl ProviderErrorKind {
             Self::RateLimited => "rate_limited",
             Self::QuotaExhausted => "quota_exhausted",
             Self::AccountCapacityUnavailable => "account_capacity_unavailable",
+            Self::ConcurrencyQueueFull => "concurrency_queue_full",
+            Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::NoEligibleAccount => "no_eligible_account",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
             Self::Timeout => "timeout",
@@ -960,6 +964,8 @@ pub enum GatewayErrorKind {
     NoAvailableProvider,
     /// 符合条件的上游账号暂时没有调度容量。
     AccountCapacityUnavailable,
+    ConcurrencyQueueFull,
+    ConcurrencyQueueTimeout,
     /// Provider 的本地账号基础设施不可用。
     ProviderInfrastructureUnavailable,
     /// 上游限流。
@@ -986,6 +992,8 @@ impl GatewayErrorKind {
             Self::ModelNotFound => "model_not_found",
             Self::NoAvailableProvider => "no_available_provider",
             Self::AccountCapacityUnavailable => "account_capacity_unavailable",
+            Self::ConcurrencyQueueFull => "concurrency_queue_full",
+            Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
             Self::RateLimited => "rate_limited",
             Self::UpstreamUnavailable => "upstream_unavailable",
@@ -1071,6 +1079,14 @@ impl GatewayError {
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted => Self::new(
                 GatewayErrorKind::RateLimited,
                 "upstream capacity is temporarily unavailable",
+            ),
+            ProviderErrorKind::ConcurrencyQueueFull => Self::new(
+                GatewayErrorKind::ConcurrencyQueueFull,
+                "concurrency wait queue is full",
+            ),
+            ProviderErrorKind::ConcurrencyQueueTimeout => Self::new(
+                GatewayErrorKind::ConcurrencyQueueTimeout,
+                "concurrency wait deadline elapsed",
             ),
             ProviderErrorKind::AccountCapacityUnavailable => Self::new(
                 GatewayErrorKind::AccountCapacityUnavailable,

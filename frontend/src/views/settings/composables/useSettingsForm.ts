@@ -20,6 +20,10 @@ export function useSettingsForm() {
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
     requestIntervalMs: null as number | null,
+    maxWaitingPerKey: null as number | null,
+    maxWaitingPerAccount: null as number | null,
+    concurrencyWaitTimeoutSeconds: null as number | null,
+
     rotationStrategy: '' as RotationStrategy | '',
     minCodexDesktopVersion: '',
     minCodexCliVersion: '',
@@ -28,7 +32,7 @@ export function useSettingsForm() {
     auditRetentionDays: 90,
   })
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -46,6 +50,10 @@ export function useSettingsForm() {
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
+  const maxWaitingPerKeyValue = numericModel('maxWaitingPerKey')
+  const maxWaitingPerAccountValue = numericModel('maxWaitingPerAccount')
+  const concurrencyWaitTimeoutSecondsValue = numericModel('concurrencyWaitTimeoutSeconds')
+
   const minCodexDesktopVersionError = computed(() => versionError(form.minCodexDesktopVersion))
   const minCodexCliVersionError = computed(() => versionError(form.minCodexCliVersion))
 
@@ -59,6 +67,10 @@ export function useSettingsForm() {
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
     form.requestIntervalMs = data.requestIntervalMs
+    form.maxWaitingPerKey = data.maxWaitingPerKey
+    form.maxWaitingPerAccount = data.maxWaitingPerAccount
+    form.concurrencyWaitTimeoutSeconds = data.concurrencyWaitTimeoutSeconds
+
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
@@ -120,9 +132,14 @@ export function useSettingsForm() {
   async function saveSettings() {
     if (saving.value || loading.value)
       return
-    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy } = form
-    if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy) {
+    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds } = form
+    if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
       toast.warning('请完整填写运行参数和调度策略')
+      return
+    }
+    if (![maxWaitingPerKey, maxWaitingPerAccount].every(value => Number.isInteger(value) && value >= 0 && value <= 1000)
+      || !Number.isInteger(concurrencyWaitTimeoutSeconds) || concurrencyWaitTimeoutSeconds < 1 || concurrencyWaitTimeoutSeconds > 120) {
+      toast.warning('最大排队数应为 0～1000 的整数，最长排队时间应为 1～120 秒的整数')
       return
     }
     if (minCodexDesktopVersionError.value || minCodexCliVersionError.value) {
@@ -136,6 +153,9 @@ export function useSettingsForm() {
         refreshConcurrency,
         maxConcurrentPerAccount,
         requestIntervalMs,
+        maxWaitingPerKey,
+        maxWaitingPerAccount,
+        concurrencyWaitTimeoutSeconds,
         rotationStrategy,
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,
@@ -166,6 +186,9 @@ export function useSettingsForm() {
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
     requestIntervalMsValue,
+    maxWaitingPerKeyValue,
+    maxWaitingPerAccountValue,
+    concurrencyWaitTimeoutSecondsValue,
     minCodexDesktopVersionError,
     minCodexCliVersionError,
     saveSettings,

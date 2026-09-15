@@ -318,6 +318,7 @@ pub struct RequestAttemptContext {
     client_api_key_ref: ClientApiKeyId,
     timing_started_at: Instant,
     trace: crate::diagnostics::TraceContext,
+    concurrency_wait_budget: crate::concurrency::ConcurrencyWaitBudget,
 }
 
 impl RequestAttemptContext {
@@ -328,12 +329,23 @@ impl RequestAttemptContext {
             client_api_key_ref,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
+            concurrency_wait_budget: crate::concurrency::ConcurrencyWaitBudget::default(),
         }
     }
 
     #[must_use]
     pub fn with_trace(mut self, trace: crate::diagnostics::TraceContext) -> Self {
         self.trace = trace;
+        self
+    }
+
+    /// 传递本次请求已经消耗的排队预算，不能在新 attempt 中重置。
+    #[must_use]
+    pub fn with_concurrency_wait_budget(
+        mut self,
+        budget: crate::concurrency::ConcurrencyWaitBudget,
+    ) -> Self {
+        self.concurrency_wait_budget = budget;
         self
     }
 
@@ -452,6 +464,12 @@ impl AttemptContext {
     #[must_use]
     pub const fn deadline(&self) -> SystemTime {
         self.deadline
+    }
+
+    /// 返回密钥准入、账号选择与重试共用的排队预算。
+    #[must_use]
+    pub const fn concurrency_wait_budget(&self) -> &crate::concurrency::ConcurrencyWaitBudget {
+        &self.request.concurrency_wait_budget
     }
 
     #[must_use]

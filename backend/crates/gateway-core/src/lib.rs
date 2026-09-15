@@ -4,6 +4,7 @@
 //! 具体客户端协议和具体 Provider 都通过外层 adapter 接入。
 
 pub mod account;
+pub mod concurrency;
 pub mod diagnostics;
 pub mod engine;
 pub mod error;

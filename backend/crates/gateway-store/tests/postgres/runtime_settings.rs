@@ -14,6 +14,9 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,
         request_interval_ms: 50,
+        max_waiting_per_key: 0,
+        max_waiting_per_account: 0,
+        concurrency_wait_timeout_seconds: 30,
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
@@ -188,4 +191,50 @@ async fn account_refresh_facts(pool: &sqlx::PgPool, account_id: &str) -> Account
 
 fn timestamp_micros(value: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp_micros(value.timestamp_micros()).expect("valid test timestamp")
+}
+
+#[tokio::test]
+async fn concurrency_queue_settings_round_trip_into_the_runtime_snapshot() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("queue_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        (
+            before.max_waiting_per_key,
+            before.max_waiting_per_account,
+            before.concurrency_wait_timeout_seconds
+        ),
+        (0, 0, 30)
+    );
+    let mut update = settings_with_margin(3600);
+    update.max_waiting_per_key = 5;
+    update.max_waiting_per_account = 7;
+    update.concurrency_wait_timeout_seconds = 12;
+    repository.update_runtime_settings(update).await.unwrap();
+    let settings = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        (
+            settings.max_waiting_per_key,
+            settings.max_waiting_per_account,
+            settings.concurrency_wait_timeout_seconds
+        ),
+        (5, 7, 12)
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            snapshot.settings.max_waiting_per_key,
+            snapshot.settings.max_waiting_per_account,
+            snapshot.settings.concurrency_wait_timeout_seconds
+        ),
+        (5, 7, 12)
+    );
+    assert!(snapshot.config_revision > before.config_revision);
+    database.close().await;
 }

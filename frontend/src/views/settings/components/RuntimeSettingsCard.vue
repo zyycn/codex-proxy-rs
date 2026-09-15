@@ -10,6 +10,9 @@ const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', {
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
 const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
+const maxWaitingPerKey = defineModel<string>('maxWaitingPerKey', { required: true })
+const maxWaitingPerAccount = defineModel<string>('maxWaitingPerAccount', { required: true })
+const concurrencyWaitTimeoutSeconds = defineModel<string>('concurrencyWaitTimeoutSeconds', { required: true })
 </script>
 
 <template>
@@ -77,6 +80,19 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
           </template>
         </BaseInput>
       </BaseFormItem>
+      <div class="col-span-full grid gap-4 pt-4 sm:grid-cols-2">
+        <BaseFormItem label="每个密钥最大排队数" description="所有密钥使用此上限，各自独立计数；0 表示不排队">
+          <BaseInput v-model="maxWaitingPerKey" aria-label="每个密钥最大排队数" type="number" min="0" max="1000" step="1" />
+        </BaseFormItem>
+
+        <BaseFormItem label="单账号最大排队数" description="所有账号使用此上限，各自独立计数；0 表示不排队">
+          <BaseInput v-model="maxWaitingPerAccount" aria-label="单账号最大排队数" type="number" min="0" max="1000" step="1" />
+        </BaseFormItem>
+
+        <BaseFormItem label="最长排队秒数" description="密钥和账号共用此时限，从首次入队开始计时，范围 1～120 秒">
+          <BaseInput v-model="concurrencyWaitTimeoutSeconds" aria-label="最长排队秒数" type="number" min="1" max="120" step="1" />
+        </BaseFormItem>
+      </div>
     </BaseForm>
   </BaseCard>
 </template>

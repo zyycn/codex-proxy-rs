@@ -8,6 +8,7 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 
 use crate::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
+use crate::concurrency::ConcurrencyQueuePolicy;
 use crate::operation::Operation;
 use crate::policy::{
     ClientApiKeyId, ClientPolicy, CodexClientMinVersions, CodexClientVersion,
@@ -28,6 +29,9 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
     max_concurrent_per_account: u32,
+    max_waiting_per_key: u32,
+    max_waiting_per_account: u32,
+    concurrency_wait_timeout_seconds: u32,
     request_interval_ms: u64,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
@@ -36,6 +40,19 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_concurrency_queues(
+        mut self,
+        max_waiting_per_key: u32,
+        max_waiting_per_account: u32,
+        timeout_seconds: u32,
+    ) -> Self {
+        self.max_waiting_per_key = max_waiting_per_key;
+        self.max_waiting_per_account = max_waiting_per_account;
+        self.concurrency_wait_timeout_seconds = timeout_seconds;
+        self
+    }
+
     #[must_use]
     pub fn new(
         max_concurrent_per_account: u32,
@@ -47,6 +64,9 @@ impl SnapshotSettingsFacts {
     ) -> Self {
         Self {
             max_concurrent_per_account,
+            max_waiting_per_key: 0,
+            max_waiting_per_account: 0,
+            concurrency_wait_timeout_seconds: 30,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             model_mappings,
@@ -336,6 +356,18 @@ async fn compile_runtime_snapshot(
     }
     let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
 
+    if facts.settings.max_waiting_per_key > 1_000
+        || facts.settings.max_waiting_per_account > 1_000
+        || !(1..=120).contains(&facts.settings.concurrency_wait_timeout_seconds)
+    {
+        return Err(RuntimeSnapshotCompileError::InvalidData);
+    }
+    let queue_timeout =
+        Duration::from_secs(u64::from(facts.settings.concurrency_wait_timeout_seconds));
+    let client_queue_policy = ConcurrencyQueuePolicy {
+        max_waiting: facts.settings.max_waiting_per_key,
+        timeout: queue_timeout,
+    };
     let model_mappings = facts.settings.model_mappings;
     let min_client_versions = CodexClientMinVersions::new(
         facts
@@ -360,7 +392,11 @@ async fn compile_runtime_snapshot(
         NonZeroU32::new(facts.settings.max_concurrent_per_account)
             .ok_or(RuntimeSnapshotCompileError::InvalidData)?,
         Duration::from_millis(facts.settings.request_interval_ms),
-    );
+    )
+    .with_queue(ConcurrencyQueuePolicy {
+        max_waiting: facts.settings.max_waiting_per_account,
+        timeout: queue_timeout,
+    });
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
         let account_scope = if policy.group_ids.is_empty() {
@@ -414,6 +450,7 @@ async fn compile_runtime_snapshot(
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
     .map(|snapshot| {
         snapshot
+            .with_client_queue_policy(client_queue_policy)
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
             .with_known_provider_catalogs(known_provider_catalogs)
@@ -425,6 +462,7 @@ async fn compile_runtime_snapshot(
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
     revision: ConfigRevision,
+    client_queue_policy: ConcurrencyQueuePolicy,
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
     provider_models: Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>>,
@@ -439,6 +477,17 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub const fn client_queue_policy(&self) -> ConcurrencyQueuePolicy {
+        self.client_queue_policy
+    }
+
+    #[must_use]
+    pub const fn with_client_queue_policy(mut self, policy: ConcurrencyQueuePolicy) -> Self {
+        self.client_queue_policy = policy;
+        self
+    }
+
     /// 校验 Provider、实时模型目录和 Client API Key，并构建快照。
     pub fn new(
         revision: ConfigRevision,
@@ -509,6 +558,7 @@ impl RuntimeSnapshot {
         Ok(Self {
             revision,
             account_selection_policy,
+            client_queue_policy: ConcurrencyQueuePolicy::default(),
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
             provider_model_presentations: Arc::new(presentation_map),

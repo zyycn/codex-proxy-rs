@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::concurrency::ConcurrencyQueuePolicy;
 use crate::identity::ProviderKind;
 
 use super::{AccountStatus, ProviderAccount, ProviderAccountId};
@@ -49,6 +50,7 @@ pub struct AccountSelectionPolicy {
     strategy: RotationStrategy,
     max_concurrent_per_account: NonZeroU32,
     request_interval: Duration,
+    queue_policy: ConcurrencyQueuePolicy,
 }
 
 impl AccountSelectionPolicy {
@@ -62,7 +64,22 @@ impl AccountSelectionPolicy {
             strategy,
             max_concurrent_per_account,
             request_interval,
+            queue_policy: ConcurrencyQueuePolicy {
+                max_waiting: 0,
+                timeout: Duration::ZERO,
+            },
         }
+    }
+
+    #[must_use]
+    pub const fn with_queue(mut self, policy: ConcurrencyQueuePolicy) -> Self {
+        self.queue_policy = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn queue_policy(self) -> ConcurrencyQueuePolicy {
+        self.queue_policy
     }
 
     #[must_use]
@@ -588,6 +605,38 @@ impl AccountSelector {
             candidate,
             preferred,
         })
+    }
+
+    /// 只有本地并发/调度间隔可等待；账号权限、失效、额度与上游冷却仍立即排除。
+    #[must_use]
+    pub fn wait_candidates(
+        &self,
+        candidates: &[AccountCandidate],
+        context: &AccountSelectionContext,
+    ) -> Vec<ProviderAccountId> {
+        let mut candidates = candidates
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    self.scheduling_blocker(candidate, context),
+                    None | Some(
+                        AccountSchedulingBlocker::ConcurrencyLimit
+                            | AccountSchedulingBlocker::RequestInterval
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| {
+            (
+                context.preferred_account.as_ref() != Some(candidate.account.id()),
+                Reverse(candidate.account.weight()),
+                candidate.account.id().clone(),
+            )
+        });
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.account.id().clone())
+            .collect()
     }
 
     pub(crate) fn scheduling_blocker(

@@ -45,6 +45,9 @@ fn update_body() -> Value {
         "refreshConcurrency": 4,
         "maxConcurrentPerAccount": 5,
         "requestIntervalMs": 25,
+        "maxWaitingPerKey": 0,
+        "maxWaitingPerAccount": 0,
+        "concurrencyWaitTimeoutSeconds": 30,
         "rotationStrategy": "round_robin",
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
@@ -104,6 +107,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         refresh_concurrency: 4,
         max_concurrent_per_account: 5,
         request_interval_ms: 25,
+        max_waiting_per_key: 0,
+        max_waiting_per_account: 0,
+        concurrency_wait_timeout_seconds: 30,
         rotation_strategy: RotationStrategy::RoundRobin,
         min_codex_desktop_version: Some("26.825.6671".to_owned()),
         min_codex_cli_version: Some("0.40.0".to_owned()),
@@ -128,6 +134,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "refreshConcurrency": 4,
             "maxConcurrentPerAccount": 5,
             "requestIntervalMs": 25,
+            "maxWaitingPerKey": 0,
+            "maxWaitingPerAccount": 0,
+            "concurrencyWaitTimeoutSeconds": 30,
             "rotationStrategy": "round_robin",
             "minCodexDesktopVersion": "26.825.6671",
             "minCodexCliVersion": "0.40.0",
@@ -176,6 +185,9 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         refresh_concurrency: u32::try_from(request.refresh_concurrency).expect("u32"),
         max_concurrent_per_account: u32::try_from(request.max_concurrent_per_account).expect("u32"),
         request_interval_ms: request.request_interval_ms,
+        max_waiting_per_key: 0,
+        max_waiting_per_account: 0,
+        concurrency_wait_timeout_seconds: 30,
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),
         min_codex_desktop_version: request.min_codex_desktop_version,
@@ -386,4 +398,27 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
     let response = app.oneshot(unlabelled).await.expect("settings response");
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[test]
+fn concurrency_queue_fields_validate_bounds_and_accept_disabled_queues() {
+    for (field, invalid) in [
+        ("maxWaitingPerKey", 1001),
+        ("maxWaitingPerAccount", 1001),
+        ("concurrencyWaitTimeoutSeconds", 0),
+        ("concurrencyWaitTimeoutSeconds", 121),
+    ] {
+        let mut body = update_body();
+        body[field] = json!(invalid);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(request.validate().unwrap_err().field(), field);
+    }
+    let mut body = update_body();
+    body["maxWaitingPerKey"] = json!(0);
+    body["maxWaitingPerAccount"] = json!(1000);
+    body["concurrencyWaitTimeoutSeconds"] = json!(120);
+    serde_json::from_value::<UpdateRuntimeSettingsRequest>(body)
+        .unwrap()
+        .validate()
+        .unwrap();
 }

@@ -686,6 +686,12 @@ PostgreSQL 或 Redis。
 `response.create`；空闲连接不占名额，内部重试不重复占用。
 修改 Key 策略对既有 WebSocket 连接的下一次请求同样生效，已开始的请求保持原有快照。
 
+运行设置可以分别启用 Key 与账号的有界排队。Key 并发满时按 Key 等待；账号先使用其它可调度候选，
+适用账号均暂时满载后按账号等待。RPM、金额限额、失效账号和上游冷却不通过排队绕过。
+队列满返回 `429` / `concurrency_queue_full`，排队超时返回 `429` / `concurrency_queue_timeout`；
+WebSocket 使用对应错误事件。等待期间不发送上游请求，取消后释放等待位置，排队重查不重复计入 RPM。
+SSE 在取得有效执行前不发送保活帧，因此此阶段保留 HTTP 错误状态；已开始交付的失败沿用流内错误合同。
+
 任一已结算金额达到限额后拒绝新请求，已准入请求可完成并使金额超过阈值。
 HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly_budget_exceeded`，
 并附 `Retry-After`；WebSocket 每次 `response.create` 执行相同检查并返回协议错误事件。
@@ -714,6 +720,9 @@ modelMappings
 refreshMarginSeconds
 refreshConcurrency
 maxConcurrentPerAccount
+maxWaitingPerKey
+maxWaitingPerAccount
+concurrencyWaitTimeoutSeconds
 requestIntervalMs
 rotationStrategy
 minCodexDesktopVersion
@@ -722,6 +731,13 @@ usageRetentionDays
 opsEventRetentionDays
 auditRetentionDays
 ```
+
+`maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的排队容量，取值 0～1,000，默认 0（关闭）；
+每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，
+该对象最多容纳 5 个执行请求与 5 个等待请求。Key 并发为 0（不限）时跳过 Key 排队。
+`concurrencyWaitTimeoutSeconds` 取值 1～120，默认 30，从首次入队开始计时，密钥与账号两层共享该等待时限；
+切换账号或内部重试不重新计时，等待同时计入请求总超时。该时限不用于中断已开始的上游生成。
+设置更新请求须包含这三个字段，新请求使用更新后的快照。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。

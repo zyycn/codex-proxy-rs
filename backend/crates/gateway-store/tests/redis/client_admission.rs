@@ -252,6 +252,7 @@ fn admission_request(
     lease_ttl: Duration,
 ) -> ClientAdmissionRequest {
     ClientAdmissionRequest {
+        allow_concurrency_acquire: true,
         model_request_id: model_request_id.to_owned(),
         client_api_key_ref: client_api_key_ref.to_owned(),
         lease_ttl,
@@ -356,4 +357,34 @@ async fn pttl(connection: &mut ConnectionManager, key: &str) -> i64 {
         .query_async(connection)
         .await
         .expect("read admission TTL")
+}
+
+#[tokio::test]
+async fn queued_admission_checks_rpm_without_consuming_it_or_overtaking_the_head() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let mut request = admission_request("waiting", "key_queue", Duration::from_secs(30));
+    request.limits.requests_per_minute = 1;
+    request.allow_concurrency_acquire = false;
+    for _ in 0..3 {
+        assert_eq!(
+            repository.admit_client_request(&request).await.unwrap(),
+            ClientAdmissionDecision::Rejected(ClientAdmissionRejection::ConcurrencyLimited)
+        );
+    }
+    assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
+    request.allow_concurrency_acquire = true;
+    assert_eq!(
+        repository.admit_client_request(&request).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    let mut later = request.clone();
+    later.model_request_id = "later".to_owned();
+    later.allow_concurrency_acquire = false;
+    assert_eq!(
+        repository.admit_client_request(&later).await.unwrap(),
+        ClientAdmissionDecision::Rejected(ClientAdmissionRejection::RateLimited)
+    );
+    delete_namespace_keys(&mut connection, &namespace).await;
 }

@@ -1078,3 +1078,118 @@ async fn bare_402_cooldown_expires_and_account_recovers_without_persisted_exhaus
         .expect("account recovers after cooldown expiry");
     assert_eq!(recovered.account_id(), &selected);
 }
+
+fn queue_request(fixture: &SelectorFixture, timeout: Duration) -> GrokSessionSelection {
+    let request = fixture.request(BTreeSet::new());
+    GrokSessionSelection::new(
+        request.upstream_model().clone(),
+        BTreeSet::new(),
+        None,
+        request.account_selection_policy().with_queue(
+            gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout,
+            },
+        ),
+        request.deadline(),
+        request.account_scope().clone(),
+        request.client_api_key_id().clone(),
+    )
+}
+
+#[tokio::test]
+async fn saturated_account_snapshot_queues_and_rechecks_live_capacity() {
+    use futures::FutureExt;
+    let fixture = SelectorFixture::new(&["queue"]).await;
+    let id = account_id("queue");
+    fixture
+        .coordinator
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .in_flight = 2;
+    let mut first = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)));
+    assert!(first.as_mut().now_or_never().is_none());
+    assert!(
+        fixture.coordinator.requests.lock().unwrap().is_empty(),
+        "a full snapshot must wait before attempting a lease"
+    );
+    let rejected = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        rejected,
+        GrokSessionSelectorError::QueueRejected(gateway_core::concurrency::QueueRejection::Full)
+    ));
+    fixture
+        .coordinator
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .in_flight = 0;
+    let selected = first.await.unwrap();
+    assert_eq!(selected.account_id(), &id);
+}
+
+#[tokio::test]
+async fn account_queue_cancel_reclaims_capacity_and_does_not_wait_for_upstream_cooldown() {
+    use futures::FutureExt;
+    let fixture = SelectorFixture::new(&["queue-cancel"]).await;
+    let id = account_id("queue-cancel");
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .unwrap();
+    fixture
+        .coordinator
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .in_flight = 2;
+    let mut pending = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)));
+    assert!(pending.as_mut().now_or_never().is_none());
+    drop(pending);
+    let timeout = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_millis(20)))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        timeout,
+        GrokSessionSelectorError::QueueRejected(gateway_core::concurrency::QueueRejection::Timeout)
+    ));
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            },
+        )
+        .await;
+    let error = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        GrokSessionSelectorError::AccountCoolingDown { .. }
+    ));
+}

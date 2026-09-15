@@ -19,6 +19,14 @@ struct Admissions {
 }
 
 impl ClientAdmissionPort for Admissions {
+    fn abandon(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+    ) {
+        let _ = futures::FutureExt::now_or_never(self.release(key, request));
+    }
+
     fn admit(
         &self,
         request: ClientAdmissionRequest,
@@ -1647,6 +1655,14 @@ impl ExecutionStore for TrackingExecutionStore {
 struct UnusedAdmissions;
 
 impl ClientAdmissionPort for UnusedAdmissions {
+    fn abandon(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+    ) {
+        let _ = futures::FutureExt::now_or_never(self.release(key, request));
+    }
+
     fn admit(
         &self,
         _: ClientAdmissionRequest,
@@ -1901,4 +1917,302 @@ fn start_operation_for_model(model: &str) -> Operation {
         ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
             .expect("OpenAI payload"),
     ))
+}
+
+#[derive(Default)]
+struct BoundedAdmissions {
+    active: Mutex<BTreeSet<ModelRequestId>>,
+    granted: AtomicUsize,
+    rpm_exhausted: AtomicBool,
+    hold_acquisition: AtomicBool,
+}
+
+#[derive(Default)]
+struct QueuedAccountProvider {
+    waiting: gateway_core::concurrency::ConcurrencyWaitQueue<&'static str>,
+}
+
+#[async_trait]
+impl Provider for QueuedAccountProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        _: ProviderRequest,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let mut waiting = gateway_core::concurrency::CapacityWait::new(
+            &self.waiting,
+            gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_secs(5),
+            },
+            context.deadline(),
+            context.concurrency_wait_budget(),
+        );
+        loop {
+            waiting.wait(&["account"]).await.map_err(|error| {
+                ProviderError::new(error.provider_kind(), UpstreamSendState::NotSent)
+            })?;
+        }
+    }
+}
+
+#[test]
+fn account_wait_inherits_the_budget_spent_during_client_admission() {
+    use futures::FutureExt;
+    block_on(async {
+        let admissions = Arc::new(BoundedAdmissions::default());
+        let snapshot = start_snapshot_with_policy(
+            1,
+            true,
+            RateLimits {
+                max_concurrency: 1,
+                requests_per_minute: 0,
+            },
+        )
+        .with_client_queue_policy(gateway_core::concurrency::ConcurrencyQueuePolicy {
+            max_waiting: 1,
+            timeout: Duration::from_secs(1),
+        });
+        let service = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(snapshot),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::new(
+                [Arc::new(QueuedAccountProvider::default()) as Arc<dyn Provider>],
+            )
+            .unwrap(),
+            admissions.clone(),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let running = service
+            .start(request(&service, ClientTransport::HttpSse))
+            .await
+            .unwrap();
+        let started_at = Instant::now();
+        let mut queued = service.start(request(&service, ClientTransport::HttpSse));
+        assert!(queued.as_mut().now_or_never().is_none());
+        futures_timer::Delay::new(Duration::from_millis(200)).await;
+        drop(running);
+        let mut started = queued.await.unwrap();
+        let error = started.session.collect_uncommitted().await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EngineError::Provider(ref error)
+                    if error.kind() == ProviderErrorKind::ConcurrencyQueueTimeout
+            ),
+            "{error:?}"
+        );
+        assert!(
+            started_at.elapsed() < Duration::from_secs(3),
+            "账号层不能重新获得自己的 5 秒预算，实际耗时 {:?}",
+            started_at.elapsed()
+        );
+        assert!(admissions.active.lock().unwrap().is_empty());
+    });
+}
+
+impl ClientAdmissionPort for BoundedAdmissions {
+    fn abandon(&self, _: &ClientApiKeyId, id: &ModelRequestId) {
+        self.active.lock().unwrap().remove(id);
+    }
+
+    fn admit(
+        &self,
+        request: ClientAdmissionRequest,
+    ) -> BoxFuture<'_, Result<ClientAdmissionDecision, ClientAdmissionError>> {
+        Box::pin(async move {
+            use gateway_core::engine::admission::ClientAdmissionRejection;
+            if self.rpm_exhausted.load(Ordering::SeqCst) {
+                return Ok(ClientAdmissionDecision::Rejected(
+                    ClientAdmissionRejection::RateLimited,
+                ));
+            }
+            {
+                let mut active = self.active.lock().unwrap();
+                if !request.allow_concurrency_acquire
+                    || (request.limits.max_concurrency > 0
+                        && active.len() as u64 >= request.limits.max_concurrency)
+                {
+                    return Ok(ClientAdmissionDecision::Rejected(
+                        ClientAdmissionRejection::ConcurrencyLimited,
+                    ));
+                }
+                active.insert(request.model_request_id);
+            }
+            self.granted.fetch_add(1, Ordering::SeqCst);
+            if self.hold_acquisition.load(Ordering::SeqCst) {
+                futures::future::pending::<()>().await;
+            }
+            Ok(ClientAdmissionDecision::Granted)
+        })
+    }
+
+    fn release<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        id: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        Box::pin(async move { Ok(self.active.lock().unwrap().remove(id)) })
+    }
+
+    fn restore(
+        &self,
+        _: ClientAdmissionRecovery,
+    ) -> BoxFuture<'_, Result<ClientAdmissionRestoreResult, ClientAdmissionError>> {
+        Box::pin(async { Ok(ClientAdmissionRestoreResult::default()) })
+    }
+}
+
+fn queue_service(
+    max_concurrency: u64,
+    max_waiting: u32,
+    timeout: Duration,
+) -> (DefaultExecutionService, Arc<BoundedAdmissions>) {
+    let admissions = Arc::new(BoundedAdmissions::default());
+    let snapshot = start_snapshot_with_policy(
+        1,
+        true,
+        RateLimits {
+            max_concurrency,
+            requests_per_minute: 0,
+        },
+    )
+    .with_client_queue_policy(gateway_core::concurrency::ConcurrencyQueuePolicy {
+        max_waiting,
+        timeout,
+    });
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        admissions.clone(),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    (service, admissions)
+}
+
+#[test]
+fn client_queue_allows_five_running_five_waiting_and_rejects_the_eleventh() {
+    use futures::FutureExt;
+    block_on(async {
+        let (service, admissions) = queue_service(5, 5, Duration::from_secs(2));
+        let mut running = Vec::new();
+        for _ in 0..5 {
+            running.push(
+                service
+                    .start(request(&service, ClientTransport::HttpSse))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let mut waiting = Vec::new();
+        for _ in 0..5 {
+            let mut future = service.start(request(&service, ClientTransport::HttpSse));
+            assert!(future.as_mut().now_or_never().is_none());
+            waiting.push(future);
+        }
+        let rejected = service
+            .start(request(&service, ClientTransport::HttpSse))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(rejected.kind(), GatewayErrorKind::ConcurrencyQueueFull);
+        assert_eq!(
+            admissions.granted.load(Ordering::SeqCst),
+            5,
+            "waiting must not consume admission/RPM"
+        );
+        drop(running.remove(0));
+        let first = waiting.remove(0).await.unwrap();
+        assert_eq!(admissions.active.lock().unwrap().len(), 5);
+        assert_eq!(admissions.granted.load(Ordering::SeqCst), 6);
+        assert!(waiting[0].as_mut().now_or_never().is_none());
+        drop((first, waiting, running));
+        assert!(admissions.active.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn cancelled_waiter_releases_its_place_and_new_requests_do_not_overtake_fifo() {
+    use futures::FutureExt;
+    block_on(async {
+        let (service, admissions) = queue_service(1, 2, Duration::from_secs(2));
+        let running = service
+            .start(request(&service, ClientTransport::WebSocket))
+            .await
+            .unwrap();
+        let mut first = service.start(request(&service, ClientTransport::WebSocket));
+        let mut cancelled = service.start(request(&service, ClientTransport::WebSocket));
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(cancelled.as_mut().now_or_never().is_none());
+        drop(cancelled);
+        drop(running);
+        let mut later = service.start(request(&service, ClientTransport::WebSocket));
+        assert!(
+            later.as_mut().now_or_never().is_none(),
+            "a newly freed slot belongs to the existing queue head"
+        );
+        let first = first.await.unwrap();
+        assert_eq!(admissions.granted.load(Ordering::SeqCst), 2);
+        drop(first);
+        let later = later.await.unwrap();
+        drop(later);
+        assert!(admissions.active.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn queue_timeout_and_rpm_rejection_leave_no_new_admission() {
+    block_on(async {
+        let (service, admissions) = queue_service(1, 1, Duration::from_millis(20));
+        let running = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .unwrap();
+        let timeout = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(timeout.kind(), GatewayErrorKind::ConcurrencyQueueTimeout);
+        admissions.rpm_exhausted.store(true, Ordering::SeqCst);
+        let limited = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(limited.kind(), GatewayErrorKind::RateLimited);
+        assert_eq!(admissions.granted.load(Ordering::SeqCst), 1);
+        drop(running);
+    });
+}
+
+#[test]
+fn cancelling_pending_admission_cleans_up_a_slot_acquired_before_the_reply() {
+    use futures::FutureExt;
+    let (service, admissions) = queue_service(1, 1, Duration::from_secs(2));
+    admissions.hold_acquisition.store(true, Ordering::SeqCst);
+    let mut pending = service.start(request(&service, ClientTransport::HttpSse));
+    assert!(pending.as_mut().now_or_never().is_none());
+    assert_eq!(admissions.active.lock().unwrap().len(), 1);
+    drop(pending);
+    assert!(admissions.active.lock().unwrap().is_empty());
 }

@@ -49,6 +49,10 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   requestIntervalMsValue,
+  maxWaitingPerKeyValue,
+  maxWaitingPerAccountValue,
+  concurrencyWaitTimeoutSecondsValue,
+
   minCodexDesktopVersionError,
   minCodexCliVersionError,
   saveSettings,
@@ -127,6 +131,9 @@ watch(
         v-model:refresh-margin-seconds="refreshMarginSecondsValue"
         v-model:refresh-concurrency="refreshConcurrencyValue"
         v-model:request-interval-ms="requestIntervalMsValue"
+        v-model:max-waiting-per-key="maxWaitingPerKeyValue"
+        v-model:max-waiting-per-account="maxWaitingPerAccountValue"
+        v-model:concurrency-wait-timeout-seconds="concurrencyWaitTimeoutSecondsValue"
       />
 
       <ClientVersionSettings

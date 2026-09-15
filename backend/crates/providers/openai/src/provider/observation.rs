@@ -755,6 +755,9 @@ pub(super) fn map_request_error(error: CodexRequestEncodeError) -> ProviderError
 
 pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
     match error {
+        CredentialSelectionError::QueueRejected(error) => {
+            provider_error(error.provider_kind(), UpstreamSendState::NotSent)
+        }
         CredentialSelectionError::CapacityUnavailable { retry_after } => {
             let error = provider_error(
                 ProviderErrorKind::AccountCapacityUnavailable,

@@ -24,6 +24,9 @@ pub struct SnapshotRuntimeSettings {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
+    pub max_waiting_per_key: u32,
+    pub max_waiting_per_account: u32,
+    pub concurrency_wait_timeout_seconds: u32,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
@@ -147,6 +150,11 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.model_mappings,
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
+            )
+            .with_concurrency_queues(
+                data.settings.max_waiting_per_key,
+                data.settings.max_waiting_per_account,
+                data.settings.concurrency_wait_timeout_seconds,
             );
             let client_policies = data
                 .client_api_keys
@@ -228,12 +236,13 @@ async fn load_settings(
             sqlx::types::Json<BTreeMap<String, String>>,
             Option<String>,
             Option<String>,
+            i64, i64, i64,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
-                min_codex_cli_version
+                min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -254,6 +263,9 @@ async fn load_settings(
             model_mappings: row.6.0,
             min_codex_desktop_version: row.7,
             min_codex_cli_version: row.8,
+            max_waiting_per_key: to_u32(row.9)?,
+            max_waiting_per_account: to_u32(row.10)?,
+            concurrency_wait_timeout_seconds: to_u32(row.11)?,
         },
     ))
 }

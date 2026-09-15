@@ -237,6 +237,7 @@ pub struct GrokSessionSelection {
     deadline: SystemTime,
     account_scope: Arc<FrozenAccountScope>,
     client_api_key_id: ClientApiKeyId,
+    concurrency_wait_budget: gateway_core::concurrency::ConcurrencyWaitBudget,
 }
 
 impl GrokSessionSelection {
@@ -261,6 +262,7 @@ impl GrokSessionSelection {
             deadline,
             account_scope,
             client_api_key_id,
+            concurrency_wait_budget: gateway_core::concurrency::ConcurrencyWaitBudget::default(),
         }
     }
 
@@ -269,6 +271,22 @@ impl GrokSessionSelection {
     pub fn with_affinity(mut self, affinity: Option<GrokSessionAffinityKey>) -> Self {
         self.affinity = affinity;
         self
+    }
+
+    /// 延续 Core 的请求级排队预算。
+    #[must_use]
+    pub(crate) fn with_concurrency_wait_budget(
+        mut self,
+        budget: gateway_core::concurrency::ConcurrencyWaitBudget,
+    ) -> Self {
+        self.concurrency_wait_budget = budget;
+        self
+    }
+
+    pub(crate) const fn concurrency_wait_budget(
+        &self,
+    ) -> &gateway_core::concurrency::ConcurrencyWaitBudget {
+        &self.concurrency_wait_budget
     }
 
     /// 为固定账号的管理端诊断指定本地可用性判定策略。
@@ -409,6 +427,8 @@ pub trait GrokSessionSelector: Send + Sync {
 /// 不含密钥的选择器失败。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GrokSessionSelectorError {
+    #[error(transparent)]
+    QueueRejected(#[from] gateway_core::concurrency::QueueRejection),
     /// 没有会话同时满足模型、状态与排除约束。
     #[error("no eligible Grok Build session is available")]
     NoEligibleSession,

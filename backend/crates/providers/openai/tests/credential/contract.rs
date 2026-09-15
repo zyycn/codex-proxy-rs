@@ -1548,3 +1548,83 @@ fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() 
         QuotaAccessState::Exhausted
     );
 }
+
+fn queued_attempt(timeout: Duration) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_queue_contract").unwrap(),
+            ClientApiKeyId::new("key_codex_contract").unwrap(),
+        ),
+        NonZeroU32::new(1).unwrap(),
+        SystemTime::now() + Duration::from_secs(5),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            NonZeroU32::new(2).unwrap(),
+            Duration::ZERO,
+        )
+        .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+            max_waiting: 1,
+            timeout,
+        }),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+}
+
+#[test]
+fn account_queue_is_bounded_and_resumes_after_capacity_is_released() {
+    use futures::FutureExt;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-queue-test");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    *leases.busy.lock().unwrap() = true;
+    let selector = selector(&store, leases.clone());
+    let attempt = queued_attempt(Duration::from_secs(2));
+    let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let request = SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url: &url,
+        attempt: &attempt,
+        session_affinity_key: None,
+    };
+    let mut first = Box::pin(selector.select(&request));
+    assert!(first.as_mut().now_or_never().is_none());
+    let rejected = block_on(selector.select(&request)).unwrap_err();
+    assert!(matches!(
+        rejected,
+        CredentialSelectionError::QueueRejected(gateway_core::concurrency::QueueRejection::Full)
+    ));
+    *leases.busy.lock().unwrap() = false;
+    let selected = block_on(first).unwrap();
+    assert_eq!(selected.account_id().as_str(), "acct_primary");
+}
+
+#[test]
+fn account_queue_cancellation_releases_wait_capacity_and_timeout_is_local() {
+    use futures::FutureExt;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-queue-test");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    *leases.busy.lock().unwrap() = true;
+    let selector = selector(&store, leases.clone());
+    let attempt = queued_attempt(Duration::from_millis(20));
+    let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let request = SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url: &url,
+        attempt: &attempt,
+        session_affinity_key: None,
+    };
+    let mut cancelled = Box::pin(selector.select(&request));
+    assert!(cancelled.as_mut().now_or_never().is_none());
+    drop(cancelled);
+    let timeout = block_on(selector.select(&request)).unwrap_err();
+    assert!(matches!(
+        timeout,
+        CredentialSelectionError::QueueRejected(gateway_core::concurrency::QueueRejection::Timeout)
+    ));
+    *leases.busy.lock().unwrap() = false;
+    assert!(block_on(selector.select(&request)).is_ok());
+}

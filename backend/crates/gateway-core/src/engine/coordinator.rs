@@ -1,5 +1,6 @@
 //! 唯一的账号重试、发送与下游 commit barrier owner。
 
+use crate::concurrency::ConcurrencyWaitBudget;
 use crate::diagnostics::TraceContext;
 use serde_json::json;
 
@@ -166,6 +167,7 @@ where
             engine: Arc::clone(&self.engine),
             request_id,
             client_api_key_ref,
+            concurrency_wait_budget: ConcurrencyWaitBudget::default(),
             observation: ResponseObservation::new(timing_started_at),
             budget_prior_attempts_usd: Decimal::ZERO,
             budget_attempt_already_counted: false,
@@ -270,6 +272,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
+    concurrency_wait_budget: ConcurrencyWaitBudget,
     observation: ResponseObservation,
     budget_prior_attempts_usd: Decimal,
     budget_attempt_already_counted: bool,
@@ -334,6 +337,12 @@ impl<S: ?Sized> ResponseExecutionSession<S>
 where
     S: ExecutionStore + 'static,
 {
+    /// 首次驱动前接入密钥准入使用的预算，所有账号尝试随后共享它。
+    pub(crate) fn with_concurrency_wait_budget(mut self, budget: ConcurrencyWaitBudget) -> Self {
+        self.concurrency_wait_budget = budget;
+        self
+    }
+
     /// 当前请求共享的诊断上下文。
     pub fn trace(&self) -> TraceContext {
         self.trace.clone()
@@ -779,6 +788,7 @@ where
         }));
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_trace(self.trace.clone()),
             next_attempt,
@@ -848,6 +858,8 @@ where
                         ProviderErrorKind::AccountCapacityUnavailable
                             | ProviderErrorKind::NoEligibleAccount
                             | ProviderErrorKind::ProviderInfrastructureUnavailable
+                            | ProviderErrorKind::ConcurrencyQueueFull
+                            | ProviderErrorKind::ConcurrencyQueueTimeout
                     ) && error.send_state() == UpstreamSendState::NotSent
                         && matches!(
                             self.continuation_attempt,
@@ -861,6 +873,8 @@ where
                         error.kind(),
                         ProviderErrorKind::AccountCapacityUnavailable
                             | ProviderErrorKind::NoEligibleAccount
+                            | ProviderErrorKind::ConcurrencyQueueFull
+                            | ProviderErrorKind::ConcurrencyQueueTimeout
                     ) && let Some(last_failure) = self.last_retryable_failure.take()
                     {
                         let send_state = self.current_send_state();
@@ -882,6 +896,8 @@ where
                         ProviderErrorKind::AccountCapacityUnavailable
                             | ProviderErrorKind::NoEligibleAccount
                             | ProviderErrorKind::ProviderInfrastructureUnavailable
+                            | ProviderErrorKind::ConcurrencyQueueFull
+                            | ProviderErrorKind::ConcurrencyQueueTimeout
                     ) && error.send_state() == UpstreamSendState::NotSent)
                     {
                         self.record_provider_failure(candidate.provider().clone(), error.kind());

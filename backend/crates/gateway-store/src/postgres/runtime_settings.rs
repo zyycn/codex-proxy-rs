@@ -24,6 +24,9 @@ pub struct RuntimeSettings {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
+    pub max_waiting_per_key: u32,
+    pub max_waiting_per_account: u32,
+    pub concurrency_wait_timeout_seconds: u32,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
@@ -69,6 +72,9 @@ pub struct RuntimeSettingsUpdate {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
+    pub max_waiting_per_key: u32,
+    pub max_waiting_per_account: u32,
+    pub concurrency_wait_timeout_seconds: u32,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
@@ -97,6 +103,9 @@ impl RuntimeSettingsUpdate {
         if self.refresh_margin_seconds == 0
             || self.refresh_concurrency == 0
             || self.max_concurrent_per_account == 0
+            || self.max_waiting_per_key > 1_000
+            || self.max_waiting_per_account > 1_000
+            || !(1..=120).contains(&self.concurrency_wait_timeout_seconds)
             || self.usage_retention_days < 31
             || self.ops_event_retention_days == 0
             || self.audit_retention_days == 0
@@ -164,7 +173,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, updated_at
+                    min_codex_cli_version, updated_at, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -203,7 +212,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, updated_at
+                min_codex_cli_version, updated_at, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -238,6 +247,9 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 audit_retention_days = $10,
 	                 min_codex_desktop_version = $11,
 	                 min_codex_cli_version = $12,
+                     max_waiting_per_key = $13,
+                     max_waiting_per_account = $14,
+                     concurrency_wait_timeout_seconds = $15,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -254,6 +266,9 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.audit_retention_days))
     .bind(update.min_codex_desktop_version.as_deref())
     .bind(update.min_codex_cli_version.as_deref())
+    .bind(i64::from(update.max_waiting_per_key))
+    .bind(i64::from(update.max_waiting_per_account))
+    .bind(i64::from(update.concurrency_wait_timeout_seconds))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -301,39 +316,46 @@ pub(crate) async fn update_admin_api_key_in_transaction(
     Ok(())
 }
 
-type RuntimeSettingsRow = (
-    i64,
-    Option<String>,
-    i64,
-    i64,
-    i64,
-    i64,
-    String,
-    sqlx::types::Json<BTreeMap<String, String>>,
-    i64,
-    i64,
-    i64,
-    Option<String>,
-    Option<String>,
-    DateTime<Utc>,
-);
+#[derive(sqlx::FromRow)]
+struct RuntimeSettingsRow {
+    config_revision: i64,
+    admin_api_key: Option<String>,
+    refresh_margin_seconds: i64,
+    refresh_concurrency: i64,
+    max_concurrent_per_account: i64,
+    request_interval_ms: i64,
+    rotation_strategy: String,
+    model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
+    usage_retention_days: i64,
+    ops_event_retention_days: i64,
+    audit_retention_days: i64,
+    min_codex_desktop_version: Option<String>,
+    min_codex_cli_version: Option<String>,
+    updated_at: DateTime<Utc>,
+    max_waiting_per_key: i64,
+    max_waiting_per_account: i64,
+    concurrency_wait_timeout_seconds: i64,
+}
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
-        config_revision: Revision::new(to_u64(row.0)?)?,
-        admin_api_key: row.1,
-        refresh_margin_seconds: to_u64(row.2)?,
-        refresh_concurrency: to_u32(row.3)?,
-        max_concurrent_per_account: to_u32(row.4)?,
-        request_interval_ms: to_u64(row.5)?,
-        rotation_strategy: row.6,
-        model_mappings: row.7.0,
-        usage_retention_days: to_u32(row.8)?,
-        ops_event_retention_days: to_u32(row.9)?,
-        audit_retention_days: to_u32(row.10)?,
-        min_codex_desktop_version: row.11,
-        min_codex_cli_version: row.12,
-        updated_at: row.13,
+        config_revision: Revision::new(to_u64(row.config_revision)?)?,
+        admin_api_key: row.admin_api_key,
+        refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
+        refresh_concurrency: to_u32(row.refresh_concurrency)?,
+        max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
+        request_interval_ms: to_u64(row.request_interval_ms)?,
+        rotation_strategy: row.rotation_strategy,
+        model_mappings: row.model_mappings_json.0,
+        usage_retention_days: to_u32(row.usage_retention_days)?,
+        ops_event_retention_days: to_u32(row.ops_event_retention_days)?,
+        audit_retention_days: to_u32(row.audit_retention_days)?,
+        min_codex_desktop_version: row.min_codex_desktop_version,
+        min_codex_cli_version: row.min_codex_cli_version,
+        updated_at: row.updated_at,
+        max_waiting_per_key: to_u32(row.max_waiting_per_key)?,
+        max_waiting_per_account: to_u32(row.max_waiting_per_account)?,
+        concurrency_wait_timeout_seconds: to_u32(row.concurrency_wait_timeout_seconds)?,
     })
 }
 
