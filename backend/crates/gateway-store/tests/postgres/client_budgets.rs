@@ -64,6 +64,44 @@ fn context() -> MutationContext {
 }
 
 #[tokio::test]
+async fn key_usage_profile_reuses_current_budget_without_revealing_or_advancing_it() {
+    let Some(database) = TestDatabase::create("key_usage_profile").await else {
+        return;
+    };
+    let keys = PgAdminClientKeyStore::new(database.pool.clone());
+    let id = key_id("profile");
+    assert!(keys.get_client_key(&id).await.unwrap().is_none());
+    seed(&database, "profile", "1", "5").await;
+    let initial = keys.get_client_key(&id).await.unwrap().unwrap();
+    assert_eq!(initial.budget.limits.daily_usd.canonical(), "1");
+    assert!(initial.budget.daily_resets_at.is_none());
+    let budgets = PgClientBudgetStore::new(database.pool.clone());
+    budgets
+        .settle(charge("profile", "profile-charge", "0.640001"))
+        .await
+        .unwrap();
+    let current = keys.get_client_key(&id).await.unwrap().unwrap();
+    assert_eq!(current.budget, status(&database, "profile").await);
+    assert_eq!(current.budget.daily_used_usd.canonical(), "0.640001");
+    assert!(!format!("{current:?}").contains(&format!("sk_{:a<43}", "profile")));
+    sqlx::query("update client_key_budget_windows set daily_end = now() - interval '1 second' where client_api_key_id = 'profile'")
+        .execute(&database.pool).await.unwrap();
+    let after_reset = keys.get_client_key(&id).await.unwrap().unwrap();
+    assert_eq!(after_reset.budget.daily_used_usd.canonical(), "0");
+    assert_eq!(after_reset.budget.weekly_used_usd.canonical(), "0.640001");
+    let persisted: String = sqlx::query_scalar("select daily_used_usd::text from client_key_budget_windows where client_api_key_id = 'profile'")
+        .fetch_one(&database.pool).await.unwrap();
+    assert_eq!(
+        persisted
+            .parse::<gateway_core::metering::Decimal>()
+            .unwrap()
+            .canonical(),
+        "0.640001"
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn budgets_settle_exactly_once_and_enforce_each_threshold_across_store_instances() {
     let Some(database) = TestDatabase::create("budgets_exact").await else {
         return;

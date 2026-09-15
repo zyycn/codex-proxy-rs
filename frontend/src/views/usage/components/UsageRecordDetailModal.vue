@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { UsageViewModel } from '@/views/usage/model/records'
+import type { UsageViewModel } from '../utils/records'
 
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -10,7 +10,8 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
-import { formatDuration } from '@/views/usage/model/format'
+import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
+import { formatDuration } from '../utils/format'
 import {
   usageAccountText,
   usageBilling,
@@ -24,8 +25,7 @@ import {
   usageUserAgent,
   visibleRequestText,
   visibleResponseText,
-} from '@/views/usage/model/records'
-import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../model/detail'
+} from '../utils/records'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'

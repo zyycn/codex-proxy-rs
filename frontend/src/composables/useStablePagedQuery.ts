@@ -15,11 +15,6 @@ interface PageRequest {
   pageSize: number
 }
 
-interface PageExecution {
-  silent?: boolean
-  background?: boolean
-}
-
 export function useStablePagedQuery<Result extends PageResult>(options: {
   initialPageSize: number
   load: (pagination: PageRequest, options: RequestOptions) => Promise<Result>
@@ -33,11 +28,8 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
   const request = useRequestState(options.onError)
   const { loading, error, invalidate } = request
 
-  async function execute(targetPage = currentPage.value, execution: PageExecution = {}) {
+  async function execute(targetPage = currentPage.value, execution: { silent?: boolean } = {}) {
     const requestId = request.start(execution.silent)
-    // 后台换页保留列表，不展示骨架；错误提示仍由 silent 单独决定。
-    if (execution.background)
-      loading.value = false
 
     try {
       const result = await options.load({
@@ -63,7 +55,7 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
     }
   }
 
-  function reloadFromStart(execution: PageExecution = {}) {
+  function reloadFromStart(execution: { silent?: boolean } = {}) {
     currentPage.value = 1
     total.value = 0
     return execute(1, execution)

@@ -4,7 +4,7 @@ import type { AccountGroup } from '@/api'
 import { AlertTriangle, CircleCheck, Grid2X2, Users } from '@lucide/vue'
 import { computed } from 'vue'
 
-import { formatUsd } from '@/views/usage/model/format'
+import { formatUsd } from '@/views/usage/utils/format'
 
 type MetricKind = 'accounts' | 'capacity' | 'usage'
 type MetricTone = 'primary' | 'secondary' | 'success' | 'warning' | 'active'

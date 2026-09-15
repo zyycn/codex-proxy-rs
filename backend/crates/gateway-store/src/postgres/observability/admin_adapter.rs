@@ -134,7 +134,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
         let (totals, (provider_accounts, _)) = futures::try_join!(
             self.query_budget.run(
                 "load dashboard lifetime totals",
-                usage_totals(&self.pool, &filter)
+                dashboard_totals(&self.pool)
             ),
             self.account_status_snapshot(observed_at),
         )?;

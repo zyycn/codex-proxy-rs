@@ -293,7 +293,7 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
     };
     use chrono::{Duration, Utc};
     use gateway_admin::model::observability::{
-        AccountPoolMetrics, DashboardObservation, TimeRange, UsageTotals,
+        AccountPoolMetrics, DashboardObservation, DashboardTotals, TimeRange,
     };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
@@ -308,7 +308,7 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
-        totals: UsageTotals {
+        totals: DashboardTotals {
             request_count: 42,
             input_tokens: 800,
             cached_tokens: 200,

@@ -1,9 +1,9 @@
 mod account_groups;
 mod accounts;
 mod auth;
+mod auth_key;
 mod backup;
 mod client_keys;
-mod client_usage;
 mod observability;
 mod openai;
 mod proxies;
@@ -38,12 +38,11 @@ use gateway_admin::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
-        client_usage::ClientUsageKey,
         observability::{
             DashboardDesktopRelease, DashboardObservation, DashboardWireAttribute,
             DashboardWireProfile, DashboardWireTarget, DesktopReleaseStatus, DiagnosticDimension,
             DiagnosticObservation, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange,
-            UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery, UsageTotals,
+            UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
         },
         provider_credentials::{
             AuthorizationCommit, AuthorizationStarted, CompleteAuthorization, CredentialDetails,
@@ -63,7 +62,7 @@ use gateway_admin::{
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
             AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-            ClientKeyStore, ClientUsageStore, ObservabilityStore, SettingsStore,
+            ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -93,7 +92,6 @@ pub(super) struct AdminHarness {
     account_groups: Arc<dyn AccountGroupStore>,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
-    client_usage: Arc<dyn ClientUsageStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
@@ -116,7 +114,6 @@ impl AdminHarness {
             account_groups: Arc::new(UnavailableAccountGroupStore),
             auth: Arc::new(BootstrapAuthStore::default()),
             client_keys: unavailable.clone(),
-            client_usage: unavailable.clone(),
             observability: unavailable.clone(),
             settings: unavailable,
             backup: BackupStorePorts::disabled(),
@@ -162,11 +159,6 @@ impl AdminHarness {
 
     pub(super) fn client_keys(mut self, store: Arc<dyn ClientKeyStore>) -> Self {
         self.client_keys = store;
-        self
-    }
-
-    pub(super) fn client_usage(mut self, store: Arc<dyn ClientUsageStore>) -> Self {
-        self.client_usage = store;
         self
     }
 
@@ -239,7 +231,6 @@ impl AdminHarness {
                 ),
                 self.auth,
                 self.client_keys,
-                self.client_usage,
                 self.observability,
                 self.settings,
                 self.backup,
@@ -343,20 +334,6 @@ struct UnavailableClientKeyVerifier;
 impl ClientKeyVerifier for UnavailableClientKeyVerifier {
     fn verify_client_key(&self, _: &str) -> Result<ClientApiKeyId, ClientAuthenticationError> {
         Err(ClientAuthenticationError::InvalidKey)
-    }
-}
-
-#[async_trait]
-impl ClientUsageStore for UnavailableStore {
-    async fn load_client_usage_totals(&self, _: &ClientApiKeyId) -> AdminStoreResult<UsageTotals> {
-        Err(unavailable("client usage totals"))
-    }
-
-    async fn load_client_usage_key(
-        &self,
-        _: &ClientApiKeyId,
-    ) -> AdminStoreResult<Option<ClientUsageKey>> {
-        Err(unavailable("client usage key"))
     }
 }
 
@@ -553,6 +530,13 @@ impl AccountRuntimeStore for UnavailableStore {
 
 #[async_trait]
 impl ClientKeyStore for UnavailableStore {
+    async fn get_client_key(
+        &self,
+        _: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>> {
+        Err(unavailable("client key"))
+    }
+
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         Err(unavailable("client key list"))
     }

@@ -10,7 +10,7 @@ import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
-import { formatDuration, formatPercent, formatUsd } from '@/views/usage/model/format'
+import { formatDuration, formatPercent, formatUsd } from '../utils/format'
 
 type Diagnostics = Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
 
@@ -18,22 +18,22 @@ const props = withDefaults(
   defineProps<{
     diagnostics: Diagnostics
     loading?: boolean
-    dimensionOptions?: Array<{ label: string, value: string }>
   }>(),
   {
     loading: false,
-    dimensionOptions: () => [
-      { label: '模型', value: 'model' },
-      { label: '账号', value: 'account' },
-      { label: '密钥', value: 'apiKey' },
-      { label: '上游', value: 'provider' },
-      { label: '传输', value: 'transport' },
-      { label: '错误', value: 'failureClass' },
-    ],
   },
 )
 
 const dimension = defineModel('dimension', { type: String, required: true })
+
+const dimensionOptions = [
+  { label: '模型', value: 'model' },
+  { label: '账号', value: 'account' },
+  { label: '密钥', value: 'apiKey' },
+  { label: '上游', value: 'provider' },
+  { label: '传输', value: 'transport' },
+  { label: '错误', value: 'failureClass' },
+]
 
 const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
   {
@@ -70,12 +70,12 @@ const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
 ])
 
 const selectedDimensionLabel = computed(
-  () => props.dimensionOptions.find(option => option.value === dimension.value)?.label ?? '维度',
+  () => dimensionOptions.find(option => option.value === dimension.value)?.label ?? '维度',
 )
 
 const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
 const resultDimensionLabel = computed(
-  () => props.dimensionOptions.find(option => option.value === resultDimension.value)?.label ?? '维度',
+  () => dimensionOptions.find(option => option.value === resultDimension.value)?.label ?? '维度',
 )
 
 const sortedItems = computed(() =>
@@ -126,7 +126,7 @@ function diagnosticNameDisplay(name: string) {
         label="诊断维度"
         :options="dimensionOptions"
         :disabled="loading"
-        class="w-full min-w-0 lg:w-auto"
+        class="w-full min-w-0 lg:w-80"
       />
     </template>
 

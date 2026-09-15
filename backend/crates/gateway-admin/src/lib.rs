@@ -22,12 +22,13 @@ pub mod model;
 pub mod ports;
 mod use_case;
 
+pub use use_case::key_usage::KeyUsageService;
+
 pub use use_case::{
     account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
     backup::BackupService, client_distribution::ClientDistributionService,
-    client_keys::ClientKeyService, client_usage::ClientUsageService,
-    observability::ObservabilityService, openai::OpenAiService, proxies::ProxiesService,
-    settings::SettingsService, system::SystemService, xai::XaiService,
+    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
+    proxies::ProxiesService, settings::SettingsService, system::SystemService, xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
@@ -41,9 +42,8 @@ use use_case::{
     account_groups::DefaultAccountGroupService, accounts::DefaultAccountsService,
     auth::DefaultAuthService, backup::DefaultBackupService,
     client_distribution::DefaultClientDistributionService, client_keys::DefaultClientKeyService,
-    client_usage::DefaultClientUsageService, observability::DefaultObservabilityService,
-    openai::DefaultOpenAiService, settings::DefaultSettingsService, system::DefaultSystemService,
-    xai::DefaultXaiService,
+    observability::DefaultObservabilityService, openai::DefaultOpenAiService,
+    settings::DefaultSettingsService, system::DefaultSystemService, xai::DefaultXaiService,
 };
 
 const OPENAI_PROVIDER_KIND: &str = "openai";
@@ -184,10 +184,10 @@ pub enum AdminConfigError {
 pub struct AdminServices {
     proxies: Arc<dyn ProxiesService>,
     auth: Arc<dyn AuthService>,
+    key_usage: Arc<dyn KeyUsageService>,
     accounts: Arc<dyn AccountsService>,
     account_groups: Arc<dyn AccountGroupService>,
     client_keys: Arc<dyn ClientKeyService>,
-    client_usage: Arc<dyn ClientUsageService>,
     client_distribution: Arc<dyn ClientDistributionService>,
     observability: Arc<dyn ObservabilityService>,
     settings: Arc<dyn SettingsService>,
@@ -198,6 +198,11 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn key_usage(&self) -> &dyn KeyUsageService {
+        self.key_usage.as_ref()
+    }
+
     #[must_use]
     pub fn proxies(&self) -> &dyn ProxiesService {
         self.proxies.as_ref()
@@ -221,11 +226,6 @@ impl AdminServices {
     #[must_use]
     pub fn client_keys(&self) -> &dyn ClientKeyService {
         self.client_keys.as_ref()
-    }
-
-    #[must_use]
-    pub fn client_usage(&self) -> &dyn ClientUsageService {
-        self.client_usage.as_ref()
     }
 
     #[must_use]
@@ -356,20 +356,20 @@ pub async fn initialize(
         backup_ports.dump(),
         backup_ports.object_store(),
     );
-    let observability = Arc::new(DefaultObservabilityService::new(
+    let key_usage = Arc::new(use_case::key_usage::DefaultKeyUsageService::new(
+        auth.clone(),
+        store.client_keys(),
         store.observability(),
-        store.accounts(),
-        store.settings(),
-        registry.clone(),
     ));
     let services = AdminServices {
+        key_usage,
         proxies: Arc::new(use_case::proxies::DefaultProxiesService::new(
             store.proxies(),
             proxy_probe,
             snapshot.clone(),
             registry.clone(),
         )),
-        auth: auth.clone(),
+        auth,
         accounts,
         account_groups: Arc::new(DefaultAccountGroupService::new(
             store.account_groups(),
@@ -380,15 +380,13 @@ pub async fn initialize(
             store.client_keys(),
             snapshot.clone(),
         )),
-        client_usage: Arc::new(DefaultClientUsageService::new(
-            auth,
-            store.client_usage(),
-            store.observability(),
-            observability.clone(),
-            registry.clone(),
-        )),
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
-        observability,
+        observability: Arc::new(DefaultObservabilityService::new(
+            store.observability(),
+            store.accounts(),
+            store.settings(),
+            registry,
+        )),
         settings: Arc::new(DefaultSettingsService::new(
             store.settings(),
             snapshot.clone(),

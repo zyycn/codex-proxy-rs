@@ -30,8 +30,8 @@ use crate::openai::service::OpenAiService;
 
 pub mod admin;
 pub mod auth;
-mod client;
 mod health;
+mod key_usage;
 pub mod openai;
 mod session_cookie;
 
@@ -140,7 +140,7 @@ pub fn initialize(
         .merge(openai::router::router())
         .merge(admin::router::<ApiState>())
         .merge(auth::router::<ApiState>())
-        .merge(client::router::<ApiState>())
+        .merge(key_usage::router::<ApiState>())
         .fallback_service(ServeDir::new(config.asset_directory).fallback(ServeFile::new(index)));
     if !config.cors_allowed_origins.is_empty() {
         let origins = config

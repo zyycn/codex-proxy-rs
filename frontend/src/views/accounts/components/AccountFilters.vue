@@ -6,7 +6,7 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import ProviderFilterSegmented from '@/components/business/ProviderFilterSegmented.vue'
+import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
 import { accountStatusFilterOptions } from '../constants'
 
 const props = defineProps<{

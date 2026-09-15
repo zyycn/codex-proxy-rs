@@ -16,7 +16,7 @@ use gateway_admin::model::{MutationActor, MutationContext, Revision as AdminRevi
 use gateway_admin::ports::backup::BackupStorePorts;
 use gateway_admin::ports::store::{
     AdminAccountStorePorts, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
-    AdminStoreResult, AuthStore, ClientUsageStore, SettingsStore,
+    AdminStoreResult, AuthStore, SettingsStore,
 };
 use gateway_core::CoreStorePorts;
 use gateway_core::health::{HealthProbe, HealthState};

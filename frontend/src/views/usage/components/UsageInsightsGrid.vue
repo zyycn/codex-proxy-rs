@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type {
   getUsageRecordInsightsDiagnostics,
-  UsageInsightsOverviewResponse,
+  getUsageRecordInsightsOverview,
 } from '@/api'
 
 import UsageCostCard from './UsageCostCard.vue'
@@ -11,14 +11,12 @@ import UsagePerformanceCard from './UsagePerformanceCard.vue'
 
 withDefaults(
   defineProps<{
-    overview: UsageInsightsOverviewResponse
+    overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>
     diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
     loading?: boolean
-    diagnosticDimensionOptions?: Array<{ label: string, value: string }>
   }>(),
   {
     loading: false,
-    diagnosticDimensionOptions: undefined,
   },
 )
 
@@ -43,7 +41,6 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
       v-model:dimension="diagnosticDimension"
       :diagnostics="diagnostics"
       :loading="loading"
-      :dimension-options="diagnosticDimensionOptions"
     />
 
     <UsagePerformanceCard

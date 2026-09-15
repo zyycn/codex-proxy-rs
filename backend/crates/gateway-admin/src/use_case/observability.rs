@@ -852,7 +852,7 @@ impl DefaultObservabilityService {
 
 /// 按指定时刻计算中国自然日的 96 个 15 分钟健康桶。
 #[must_use]
-pub(crate) fn health_timeline_at(
+pub(super) fn health_timeline_at(
     records: &[RequestMetricPoint],
     now: DateTime<Utc>,
 ) -> HealthTimeline {

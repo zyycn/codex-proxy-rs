@@ -100,7 +100,7 @@ pub(crate) fn admin_dashboard_observation(
     } = observation;
     Ok(admin_observability::DashboardObservation {
         range: admin_range(range),
-        totals: admin_usage_totals(totals)?,
+        totals: admin_dashboard_totals(totals)?,
         provider_accounts: admin_account_pool_metrics(provider_accounts),
         trend: trend
             .into_iter()
@@ -117,10 +117,10 @@ pub(crate) fn admin_dashboard_observation(
     })
 }
 
-pub(crate) fn admin_usage_totals(
-    totals: UsageTotals,
-) -> AdminStoreResult<admin_observability::UsageTotals> {
-    Ok(admin_observability::UsageTotals {
+pub(crate) fn admin_dashboard_totals(
+    totals: DashboardTotals,
+) -> AdminStoreResult<admin_observability::DashboardTotals> {
+    Ok(admin_observability::DashboardTotals {
         request_count: totals.request_count,
         input_tokens: totals.input_tokens,
         cached_tokens: totals.cached_tokens,

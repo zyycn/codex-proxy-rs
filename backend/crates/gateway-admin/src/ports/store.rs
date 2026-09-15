@@ -25,11 +25,10 @@ use crate::model::{
         ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
         NewClientKey, SetClientKeyEnabled, UpdateClientKey,
     },
-    client_usage::ClientUsageKey,
     observability::{
         DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
         OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageCalculatedBillingFact,
-        UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery, UsageTotals,
+        UsageDetail, UsageFilter, UsageOverview, UsagePage, UsageQuery,
     },
     provider_credentials::{
         AuthorizationCommit, CredentialDetails, CredentialImportCommit, CredentialImportResult,
@@ -232,9 +231,15 @@ pub trait AuthStore: Send + Sync {
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }
 
-/// Client API Key 管理写入。
+/// Client API Key 资料读取与管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    /// 按已验证的 ID 读取资料，不读取完整明文 Key。
+    async fn get_client_key(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>>;
+
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage>;
 
     async fn reveal_client_key(
@@ -265,20 +270,6 @@ pub trait ClientKeyStore: Send + Sync {
         command: DeleteClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
-}
-
-/// Client Key 自助用量的 Key 与累计事实。
-#[async_trait]
-pub trait ClientUsageStore: Send + Sync {
-    async fn load_client_usage_totals(
-        &self,
-        key_id: &gateway_core::policy::ClientApiKeyId,
-    ) -> AdminStoreResult<UsageTotals>;
-
-    async fn load_client_usage_key(
-        &self,
-        id: &gateway_core::policy::ClientApiKeyId,
-    ) -> AdminStoreResult<Option<ClientUsageKey>>;
 }
 
 /// Provider-neutral account group management transactions.
@@ -439,7 +430,6 @@ pub struct AdminStorePorts {
     accounts: AdminAccountStorePorts,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
-    client_usage: Arc<dyn ClientUsageStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
@@ -451,7 +441,6 @@ impl AdminStorePorts {
         accounts: AdminAccountStorePorts,
         auth: Arc<dyn AuthStore>,
         client_keys: Arc<dyn ClientKeyStore>,
-        client_usage: Arc<dyn ClientUsageStore>,
         observability: Arc<dyn ObservabilityStore>,
         settings: Arc<dyn SettingsStore>,
         backup: BackupStorePorts,
@@ -460,7 +449,6 @@ impl AdminStorePorts {
             accounts,
             auth,
             client_keys,
-            client_usage,
             observability,
             settings,
             backup,
@@ -495,11 +483,6 @@ impl AdminStorePorts {
     #[must_use]
     pub fn client_keys(&self) -> Arc<dyn ClientKeyStore> {
         self.client_keys.clone()
-    }
-
-    #[must_use]
-    pub fn client_usage(&self) -> Arc<dyn ClientUsageStore> {
-        self.client_usage.clone()
     }
 
     #[must_use]

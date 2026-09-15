@@ -115,10 +115,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             state: redis::RedisAuthStateRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
         }),
         Arc::new(postgres::PgAdminClientKeyStore::new(pool.clone())),
-        Arc::new(ClientUsageStoreAdapter {
-            pool: pool.clone(),
-            query_budget: observability_query_budget.clone(),
-        }),
         Arc::new(postgres::PgAdminObservabilityStore::new(
             pool.clone(),
             Some(credential_leases.clone()),

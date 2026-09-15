@@ -690,6 +690,18 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn get_client_key(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<AdminClientKeyRecord>> {
+        self.keys
+            .get_client_api_key(id.as_str())
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))?
+            .map(admin_client_key_record)
+            .transpose()
+    }
+
     async fn list_client_keys(
         &self,
         query: AdminClientKeyListQuery,

@@ -46,7 +46,10 @@ async function handleSubmit(): Promise<void> {
   }
 
   try {
-    await router.push(resolveDestination())
+    if (result.role === 'admin')
+      await router.push(resolveDestination())
+    else
+      await router.push('/key-usage')
   }
   finally {
     if (router.currentRoute.value.path === '/login')

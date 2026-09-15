@@ -31,7 +31,7 @@ const mistGradientId = `${id}-brand-mist`
       </radialGradient>
     </defs>
 
-    <rect class="fill-(--cp-brand-mark-bg)" x="48" y="48" width="416" height="416" rx="88" />
+    <rect class="fill-[var(--cp-brand-mark-bg)]" x="48" y="48" width="416" height="416" rx="88" />
     <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="36">
       <path d="M156 307A112 112 0 0 1 307 156" />
       <path d="M356 205A112 112 0 0 1 205 356" />

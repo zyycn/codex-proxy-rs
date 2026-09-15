@@ -33,7 +33,6 @@ use gateway_admin::{
             ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
             NewClientKey, SetClientKeyEnabled, UpdateClientKey,
         },
-        client_usage::ClientUsageKey,
         observability::{
             DashboardObservation, DecimalAmount, DiagnosticDimension, DiagnosticObservation,
             OpsError, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail,
@@ -59,7 +58,7 @@ use gateway_admin::{
         store::{
             AccountGroupStore, AccountRuntimeStore, AccountStore, AdminAccountStorePorts,
             AdminStoreError, AdminStoreErrorKind, AdminStorePorts, AdminStoreResult, AuthStore,
-            ClientKeyStore, ClientUsageStore, ObservabilityStore, SettingsStore,
+            ClientKeyStore, ObservabilityStore, SettingsStore,
         },
         system::{
             SystemOperationError, SystemOperationErrorKind, SystemOperations,
@@ -92,6 +91,8 @@ mod wire;
 
 pub(super) struct AdminTestFixture {
     pub services: AdminServices,
+    pub client_key: Arc<Mutex<Option<ClientKeyRecord>>>,
+    pub observations: Arc<Mutex<MemoryObservations>>,
     pub auth: Arc<MemoryAuthStore>,
     pub settings: Arc<MemorySettingsStore>,
     pub usage_records: Arc<Mutex<Vec<UsageListRecord>>>,
@@ -104,12 +105,6 @@ pub(super) struct AdminTestFixture {
     pub account: Arc<Mutex<Option<AccountPageItem>>>,
 }
 
-struct ClientTestPorts {
-    client_usage: Arc<dyn ClientUsageStore>,
-    observability: Arc<dyn ObservabilityStore>,
-    verifier: Arc<dyn ClientKeyVerifier>,
-}
-
 impl AdminTestFixture {
     pub async fn new() -> Self {
         Self::with_system(Arc::new(UnusedSystem)).await
@@ -119,33 +114,23 @@ impl AdminTestFixture {
         Self::with_dependencies(system, None).await
     }
 
-    pub async fn with_client(
-        client_usage: Arc<dyn ClientUsageStore>,
-        observability: Arc<dyn ObservabilityStore>,
+    pub async fn with_key_verifier(
         verifier: Arc<dyn ClientKeyVerifier>,
         system: Arc<dyn SystemOperations>,
     ) -> Self {
-        Self::with_dependencies(
-            system,
-            Some(ClientTestPorts {
-                client_usage,
-                observability,
-                verifier,
-            }),
-        )
-        .await
+        Self::with_dependencies(system, Some(verifier)).await
     }
 
     async fn with_dependencies(
         system: Arc<dyn SystemOperations>,
-        client: Option<ClientTestPorts>,
+        verifier: Option<Arc<dyn ClientKeyVerifier>>,
     ) -> Self {
         let api_key = Arc::new(Mutex::new(None));
-        let mut auth = MemoryAuthStore::new(api_key.clone());
-        auth.client_usage = client.as_ref().map(|ports| ports.client_usage.clone());
-        let auth = Arc::new(auth);
+        let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
         let settings = Arc::new(MemorySettingsStore::new(api_key));
-        let client_keys = Arc::new(MemoryClientKeyStore);
+        let client_key = Arc::new(Mutex::new(None));
+        let client_keys = Arc::new(MemoryClientKeyStore(client_key.clone()));
+        let observations = Arc::new(Mutex::new(MemoryObservations::default()));
         let account_groups = Arc::new(MemoryAccountGroupStore::new());
         let usage_records = Arc::new(Mutex::new(Vec::new()));
         let usage_detail = Arc::new(Mutex::new(None));
@@ -156,6 +141,7 @@ impl AdminTestFixture {
         let provider_error = Arc::new(Mutex::new(None));
         let account = Arc::new(Mutex::new(None));
         let unused = Arc::new(UnusedStore {
+            observations: observations.clone(),
             usage_records: Arc::clone(&usage_records),
             usage_detail: Arc::clone(&usage_detail),
             diagnostics: Arc::clone(&diagnostics),
@@ -163,15 +149,6 @@ impl AdminTestFixture {
             dashboard_observation: Arc::clone(&dashboard_observation),
             dashboard_summary_range: Arc::clone(&dashboard_summary_range),
             account: Arc::clone(&account),
-        });
-        let ClientTestPorts {
-            client_usage,
-            observability,
-            verifier,
-        } = client.unwrap_or_else(|| ClientTestPorts {
-            client_usage: unused.clone(),
-            observability: unused.clone(),
-            verifier: Arc::new(UnusedClientKeyVerifier),
         });
         let stores = AdminStorePorts::new(
             AdminAccountStorePorts::new(
@@ -182,8 +159,7 @@ impl AdminTestFixture {
             ),
             auth.clone(),
             client_keys.clone(),
-            client_usage,
-            observability,
+            unused,
             settings.clone(),
             gateway_admin::ports::backup::BackupStorePorts::disabled(),
         );
@@ -206,13 +182,15 @@ impl AdminTestFixture {
                 proxy_probe: Arc::new(proxies::SuccessfulProbe),
                 client_distribution: Arc::new(StaticClientDistribution),
                 system,
-                client_key_verifier: verifier,
+                client_key_verifier: verifier.unwrap_or_else(|| Arc::new(UnusedClientKeyVerifier)),
             },
         )
         .await
         .expect("initialize test admin services");
         Self {
             services: bundle.services(),
+            client_key,
+            observations,
             auth,
             settings,
             usage_records,
@@ -265,7 +243,8 @@ impl SessionState for AdminTestState {
 }
 
 pub(super) struct MemoryAuthStore {
-    client_usage: Option<Arc<dyn ClientUsageStore>>,
+    pub(super) enabled: AtomicBool,
+    pub(super) unavailable: AtomicBool,
     password_hash: Mutex<Option<String>>,
     sessions: Mutex<BTreeMap<String, AuthSession>>,
     audits: Mutex<Vec<AdminAuditEvent>>,
@@ -276,7 +255,8 @@ pub(super) struct MemoryAuthStore {
 impl MemoryAuthStore {
     fn new(api_key: Arc<Mutex<Option<AdminApiKey>>>) -> Self {
         Self {
-            client_usage: None,
+            enabled: AtomicBool::new(false),
+            unavailable: AtomicBool::new(false),
             password_hash: Mutex::new(None),
             sessions: Mutex::new(BTreeMap::new()),
             audits: Mutex::new(Vec::new()),
@@ -362,10 +342,10 @@ impl AuthStore for MemoryAuthStore {
         &self,
         id: &gateway_core::policy::ClientApiKeyId,
     ) -> AdminStoreResult<bool> {
-        match &self.client_usage {
-            Some(store) => Ok(store.load_client_usage_key(id).await?.is_some()),
-            None => Ok(false),
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(unavailable("key status"));
         }
+        Ok(id.as_str() == "key-42" && self.enabled.load(Ordering::SeqCst))
     }
 
     async fn consume_login_attempt(
@@ -466,7 +446,17 @@ impl SettingsStore for MemorySettingsStore {
     }
 }
 
-pub(super) struct MemoryClientKeyStore;
+pub(super) struct MemoryClientKeyStore(Arc<Mutex<Option<ClientKeyRecord>>>);
+
+#[derive(Default)]
+pub(super) struct MemoryObservations {
+    pub summary: Option<UsageOverview>,
+    pub trend: Option<Vec<RequestMetricPoint>>,
+    pub summaries: Vec<(TimeRange, UsageFilter)>,
+    pub trends: Vec<(TimeRange, UsageFilter)>,
+    pub records: Vec<UsageQuery>,
+    pub errors: Vec<OpsErrorQuery>,
+}
 
 pub(super) const PRIMARY_GROUP_ID: &str = "grp_11111111111111111111111111111111";
 pub(super) const SECONDARY_GROUP_ID: &str = "grp_22222222222222222222222222222222";
@@ -707,6 +697,18 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn get_client_key(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>> {
+        Ok(self
+            .0
+            .lock()
+            .expect("client key")
+            .clone()
+            .filter(|key| &key.id == id))
+    }
+
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         Ok(ClientKeyPage {
             config_revision: Revision::new(1).expect("revision"),
@@ -774,6 +776,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
 }
 
 struct UnusedStore {
+    observations: Arc<Mutex<MemoryObservations>>,
     usage_records: Arc<Mutex<Vec<UsageListRecord>>>,
     usage_detail: Arc<Mutex<Option<UsageDetail>>>,
     diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
@@ -788,23 +791,6 @@ struct UnusedClientKeyVerifier;
 impl ClientKeyVerifier for UnusedClientKeyVerifier {
     fn verify_client_key(&self, _: &str) -> Result<ClientApiKeyId, ClientAuthenticationError> {
         Err(ClientAuthenticationError::InvalidKey)
-    }
-}
-
-#[async_trait]
-impl ClientUsageStore for UnusedStore {
-    async fn load_client_usage_totals(
-        &self,
-        _: &ClientApiKeyId,
-    ) -> AdminStoreResult<gateway_admin::model::observability::UsageTotals> {
-        Err(unavailable("client usage totals"))
-    }
-
-    async fn load_client_usage_key(
-        &self,
-        _: &ClientApiKeyId,
-    ) -> AdminStoreResult<Option<ClientUsageKey>> {
-        Err(unavailable("client usage key"))
     }
 }
 
@@ -981,10 +967,12 @@ impl ObservabilityStore for UnusedStore {
 
     async fn usage_trend(
         &self,
-        _: TimeRange,
-        _: UsageFilter,
+        range: TimeRange,
+        filter: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>> {
-        Err(unavailable("usage trend"))
+        let mut data = self.observations.lock().expect("observations");
+        data.trends.push((range, filter));
+        data.trend.clone().ok_or_else(|| unavailable("usage trend"))
     }
 
     fn usage_calculated_billing_facts(
@@ -998,6 +986,11 @@ impl ObservabilityStore for UnusedStore {
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
+        self.observations
+            .lock()
+            .expect("observations")
+            .records
+            .push(query.clone());
         let items = self.usage_records.lock().expect("usage records").clone();
         Ok(UsagePage {
             current_page: query.current_page,
@@ -1015,8 +1008,17 @@ impl ObservabilityStore for UnusedStore {
             .ok_or_else(|| unavailable("usage detail"))
     }
 
-    async fn usage_summary(&self, _: TimeRange, _: UsageFilter) -> AdminStoreResult<UsageOverview> {
-        Err(unavailable("usage summary"))
+    async fn usage_summary(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<UsageOverview> {
+        let mut data = self.observations.lock().expect("observations");
+        data.summaries.push((range, filter));
+        data.summary
+            .clone()
+            .map(|summary| UsageOverview { range, ..summary })
+            .ok_or_else(|| unavailable("usage summary"))
     }
 
     async fn usage_diagnostics(
@@ -1029,6 +1031,11 @@ impl ObservabilityStore for UnusedStore {
     }
 
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {
+        self.observations
+            .lock()
+            .expect("observations")
+            .errors
+            .push(query.clone());
         let items = self.ops_errors.lock().expect("ops errors").clone();
         Ok(OpsErrorPage {
             current_page: query.current_page,

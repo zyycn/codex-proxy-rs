@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
-import type { UsageInsightsOverviewResponse, UsageOverviewPerformance } from '@/api'
+import type { getUsageRecordInsightsOverview } from '@/api'
 
 import { computed, shallowRef } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -21,12 +21,12 @@ import {
   usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
-} from '@/views/usage/model/chart'
-import { formatDuration, formatDurationAxis, formatPercent } from '@/views/usage/model/format'
+} from '../utils/chart'
+import { formatDuration, formatDurationAxis, formatPercent } from '../utils/format'
 
-type Performance = UsageOverviewPerformance
+type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
 type PerformancePoint = Performance['points'][number]
-type Activity = UsageInsightsOverviewResponse['health']['points']
+type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
 
 const props = withDefaults(
   defineProps<{
@@ -188,10 +188,10 @@ function seriesValue(point: PerformancePoint, position: 'first' | 'second' | 'th
   }
   if (activeView.value === 'scheduling') {
     if (position === 'first')
-      return point.admissionDecisionP95Ms ?? null
+      return point.admissionDecisionP95Ms
     if (position === 'second')
-      return point.accountSelectionWaitP95Ms ?? null
-    return point.capacityUtilizationP95 ?? null
+      return point.accountSelectionWaitP95Ms
+    return point.capacityUtilizationP95
   }
   const prefix = activeView.value === 'firstToken' ? 'firstToken' : 'latency'
   const suffix = position === 'first' ? 'P50Ms' : position === 'second' ? 'P95Ms' : 'P99Ms'
@@ -249,7 +249,7 @@ function formatThroughput(value: number | null) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66 gap-3" :class="{ 'flex-1': !hasData }">
+      <div class="grid min-h-66 gap-3">
         <div v-if="hasData" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
           <div v-for="metric in summaryMetrics" :key="metric.label" class="grid min-w-0 gap-1 px-2">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ metric.label }}</span>
@@ -273,7 +273,7 @@ function formatThroughput(value: number | null) {
                   ? '当前范围没有调度或容量样本'
                   : '当前范围没有总耗时样本'
           "
-          class="place-content-center"
+          class="h-52.5 place-content-center"
         />
       </div>
     </template>

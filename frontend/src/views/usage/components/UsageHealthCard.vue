@@ -21,8 +21,8 @@ import {
   usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
-} from '@/views/usage/model/chart'
-import { formatPercent } from '@/views/usage/model/format'
+} from '../utils/chart'
+import { formatPercent } from '../utils/format'
 
 type Health = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']
 type HealthPoint = Health['points'][number]

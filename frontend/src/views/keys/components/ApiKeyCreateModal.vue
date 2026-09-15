@@ -4,13 +4,13 @@ import type { AccountGroup } from '@/api'
 import { Copy, DollarSign, KeyRound, Upload } from '@lucide/vue'
 import { computed } from 'vue'
 
+import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
-import AccountGroupCheckboxGrid from '@/components/business/AccountGroupCheckboxGrid.vue'
 
 const props = defineProps<{
   groups: AccountGroup[]

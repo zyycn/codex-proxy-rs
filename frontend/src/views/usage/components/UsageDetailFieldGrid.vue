@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { displayValue, fieldLabelClass, fieldValueClass } from '../model/detail'
+import { displayValue, fieldLabelClass, fieldValueClass } from '../utils/detail'
 
 // 详情弹窗的两列字段网格：label + 值（可选等宽字体），空值以“—”占位。
 defineProps<{

@@ -80,7 +80,7 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。
 Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配置反向代理，
 不要把 PostgreSQL 或 Redis 暴露到公网。
 
-同源 Web UI 的管理员与 API Key 自助入口都支持 HTTP 和 HTTPS 登录。反向代理应原样保留浏览器的 `Origin`，
+同源登录页的管理员与 API Key 登录都支持 HTTP 和 HTTPS 登录。反向代理应原样保留浏览器的 `Origin`，
 不要清除它或改写 Cookie 的 `Secure` 属性；HTTPS 反代可以使用 HTTP 回源。
 HTTP 传输不加密，公网部署仍建议使用 HTTPS。
 会话 Cookie 合同见 [管理接口鉴权](../docs/api.md#管理接口)。

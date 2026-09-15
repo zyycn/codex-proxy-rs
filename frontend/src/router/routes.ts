@@ -7,36 +7,37 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/login/index.vue'),
   },
   {
+    path: '/key-usage',
+    name: 'key-usage',
+    component: () => import('@/views/key-usage/index.vue'),
+  },
+  {
     path: '/',
-    component: () => import('@/layout/AppLayout.vue'),
+    component: () => import('@/layout/index.vue'),
     children: [
       {
         path: '',
         name: 'dashboard',
-        component: () => import('@/views/overview/index.vue'),
+        component: () => import('@/views/dashboard/index.vue'),
       },
       {
         path: 'accounts',
         name: 'accounts',
-        meta: { role: 'admin' },
         component: () => import('@/views/accounts/index.vue'),
       },
       {
         path: 'proxies',
         name: 'proxies',
-        meta: { role: 'admin' },
         component: () => import('@/views/proxies/index.vue'),
       },
       {
-        path: 'account-groups',
-        name: 'account-groups',
-        meta: { role: 'admin' },
+        path: 'groups',
+        name: 'groups',
         component: () => import('@/views/groups/index.vue'),
       },
       {
-        path: 'api-keys',
-        name: 'api-keys',
-        meta: { role: 'admin' },
+        path: 'keys',
+        name: 'keys',
         component: () => import('@/views/keys/index.vue'),
       },
       {
@@ -52,13 +53,11 @@ export const routes: RouteRecordRaw[] = [
       {
         path: 'settings',
         name: 'settings',
-        meta: { role: 'admin' },
         component: () => import('@/views/settings/index.vue'),
       },
       {
         path: 'settings/backup',
         name: 'settings-backup',
-        meta: { role: 'admin' },
         component: () => import('@/views/settings/index.vue'),
       },
     ],

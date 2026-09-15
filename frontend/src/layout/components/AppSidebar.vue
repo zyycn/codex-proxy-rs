@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import type { Component } from 'vue'
 import {
   ArrowUpCircle,
+  ChartNoAxesColumn,
+  FolderTree,
   Info,
+  KeyRound,
+  LayoutDashboard,
   LogOut,
   Moon,
+  Network,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
   Sun,
+  Users,
 } from '@lucide/vue'
 import { usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
 import { gsap } from 'gsap'
@@ -20,27 +27,17 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { useAuthStore } from '@/stores/modules/auth'
+import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useThemeStore } from '@/stores/modules/theme'
 
 const props = withDefaults(
   defineProps<{
     collapsed?: boolean
-    hasUpdate?: boolean
     mobile?: boolean
-    navItems: ReadonlyArray<{
-      label: string
-      icon: Component
-      path: string
-    }>
-    systemUpdateEnabled?: boolean
-    version?: string
   }>(),
   {
     collapsed: false,
-    hasUpdate: false,
     mobile: false,
-    systemUpdateEnabled: false,
-    version: '',
   },
 )
 const emit = defineEmits<{
@@ -53,10 +50,23 @@ const emit = defineEmits<{
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const systemUpdateStore = useSystemUpdateStore()
 const themeStore = useThemeStore()
+const { version, hasUpdate } = storeToRefs(systemUpdateStore)
 const { effectiveTheme } = storeToRefs(themeStore)
 const { toggleTheme } = themeStore
 const preferredMotion = usePreferredReducedMotion()
+
+const navItems = [
+  { label: '概览', icon: LayoutDashboard, path: '/' },
+  { label: '账号管理', icon: Users, path: '/accounts' },
+  { label: '代理管理', icon: Network, path: '/proxies' },
+  { label: '分组管理', icon: FolderTree, path: '/groups' },
+  { label: 'API 密钥', icon: KeyRound, path: '/keys' },
+  { label: '使用统计', icon: ChartNoAxesColumn, path: '/usage' },
+  { label: '主题设置', icon: Palette, path: '/theme' },
+  { label: '系统设置', icon: Settings, path: '/settings' },
+]
 
 function isActive(path: string) {
   if (path === '/')
@@ -65,7 +75,7 @@ function isActive(path: string) {
 }
 
 const activeNavIndex = computed(() => {
-  const index = props.navItems.findIndex(item => isActive(item.path))
+  const index = navItems.findIndex(item => isActive(item.path))
   return Math.max(0, index)
 })
 const activeNavIndicatorStyle = computed(() => ({
@@ -112,10 +122,10 @@ const expandedSidebarWidth = 251
 const sidebarWidth = computed(() => (isCollapsed.value ? collapsedSidebarWidth : expandedSidebarWidth))
 const brandLabelVisible = shallowRef(!isCollapsed.value)
 const themeToggleLabel = computed(() => (effectiveTheme.value === 'dark' ? '切换浅色模式' : '切换暗黑模式'))
-const versionText = computed(() => props.version.trim().replace(/^v/i, ''))
+const versionText = computed(() => version.value?.version.trim() ?? '')
 const hasVersionLabel = computed(() => versionText.value.length > 0)
 const versionLabel = computed(() => `v${versionText.value}`)
-const updateButtonLabel = computed(() => (props.hasUpdate ? '发现新版本，打开系统更新' : '打开系统更新'))
+const updateButtonLabel = computed(() => (hasUpdate.value ? '发现新版本，打开系统更新' : '打开系统更新'))
 
 function prefersReducedMotion() {
   return preferredMotion.value === 'reduce'
@@ -331,7 +341,7 @@ onBeforeUnmount(() => {
         <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
           <span class="shrink-0 text-xs leading-none font-emphasis text-cp-text-secondary"> Rust build </span>
           <button
-            v-if="hasVersionLabel && systemUpdateEnabled"
+            v-if="hasVersionLabel"
             type="button"
             class="inline-flex h-4.5 min-w-0 cursor-pointer items-center gap-1 rounded-cp-sm border-0 px-1.5 font-mono text-[10px] leading-none font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
             :class="[
@@ -345,12 +355,6 @@ onBeforeUnmount(() => {
             <span>{{ versionLabel }}</span>
             <ArrowUpCircle v-if="hasUpdate" class="size-3 shrink-0 text-cp-success" />
           </button>
-          <span
-            v-else-if="hasVersionLabel"
-            class="inline-flex h-4.5 min-w-0 items-center rounded-cp-sm bg-cp-fill-quaternary px-1.5 font-mono text-[10px] leading-none font-bold text-cp-text-quaternary"
-          >
-            {{ versionLabel }}
-          </span>
         </span>
       </span>
     </div>
@@ -411,7 +415,7 @@ onBeforeUnmount(() => {
 
         <div class="flex items-center" :class="isCollapsed ? 'grid gap-1' : 'gap-1'">
           <BaseIconButton
-            v-if="isCollapsed && systemUpdateEnabled && hasUpdate"
+            v-if="isCollapsed && hasUpdate"
             variant="success"
             size="md"
             :label="updateButtonLabel"

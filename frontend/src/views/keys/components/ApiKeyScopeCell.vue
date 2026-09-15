@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ApiKey } from '@/api'
 
-import AccountGroupMarks from '@/components/business/AccountGroupMarks.vue'
+import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 
 defineProps<{
   apiKey: ApiKey

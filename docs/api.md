@@ -244,7 +244,7 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 管理员和密钥登录共用 `/api/auth/*`。登录模式 `mode` 只用于选择凭据验证方式，不直接授予权限；
 验证成功后，由后端写入身份和绑定 ID。一个浏览器只持有一份 `cpr_session` HttpOnly Cookie，
 原始 Key 不进入 URL、Pinia 或浏览器存储。登录页的切换只改变本地表单，不改变 URL。
-两种身份共用概览 `/`、使用统计 `/usage` 和主题 `/theme`；账号、密钥与系统设置等管理页面仅对管理员开放。
+管理员进入管理端；Key 登录后进入 `/key-usage`，只读取当前会话绑定 Key 的数据。
 
 | 方法 | 路由 | 请求 | 说明 |
 | --- | --- | --- | --- |
@@ -254,7 +254,7 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 
 登录返回 `data: { role: "admin" | "key", expiresAt }`；status 已登录时的 `session` 使用同一结构，
 未登录时为 `{ authenticated: false, session: null }`。`role` 由服务端已验证身份推导，不接受客户端声明。
-不返回凭据或绑定 ID，Key 的名称和掩码只在用量响应中返回。
+不返回凭据或绑定 ID。
 
 Redis 统一保存身份（管理员 ID 或 Client Key ID）和绝对有效期，不保存密码或原始 Key。
 使用 `auth:v1` 命名空间，Cookie 属性为 `Path=/; HttpOnly; SameSite=Lax`，`Max-Age` /
@@ -262,51 +262,48 @@ Redis 统一保存身份（管理员 ID 或 Client Key ID）和绝对有效期�
 管理员有效期由 `admin.session_ttl_minutes` 控制；密钥有效期由 `client.session_ttl_minutes` 控制，默认 1440 分钟。
 
 每次恢复密钥会话时重新确认 Key 存在且启用；停用或删除后会话失效，重新启用不会恢复已撤销会话。
-依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录和查询。
-原有两套认证路由和 Cookie 不再接受，升级后需要重新登录。
+依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录。
+原有管理员认证路由和 Cookie 不再接受，升级后需要重新登录。
 
-### API Key 自助用量
-
-密钥会话只能访问以下只读接口；管理员会话访问它们返回 403，密钥会话访问管理接口同样返回 403。
+密钥会话访问管理接口返回 403，不清除仍然有效的会话。
 浏览器会话不能替代 `/v1/*` 的 Bearer Key，数据面 Key 也不能替代浏览器会话。
 
-| 方法 | 路由 | Query | 说明 |
-| --- | --- | --- | --- |
-| `GET` | `/api/client/overview` | 无 | 当前会话 Key 的系统概览 |
-| `GET` | `/api/client/usage/records` | 必填 `startTime`、`endTime`；可选 `currentPage`、`pageSize`、`model` | 成功使用记录分页 |
-| `GET` | `/api/client/usage/records/summary` | 必填 `startTime`、`endTime` | 选定时间范围内的汇总 |
-| `GET` | `/api/client/usage/insights/overview` | 必填 `startTime`、`endTime` | 健康、性能与费用洞察 |
-| `GET` | `/api/client/usage/insights/diagnostics` | 必填 `startTime`、`endTime`、`dimension` | 按模型、传输或错误分类聚合诊断 |
-| `GET` | `/api/client/operations/errors` | 必填 `startTime`、`endTime`；可选 `currentPage`、`pageSize`、`model` | 错误记录分页 |
-| `GET` | `/api/client/system/version` | 无 | 仅返回 `{ version }`，不返回管理部署或更新信息 |
-
-概览响应包含预算与限制、北京时间当日统计、当前 Key 历史累计、趋势、请求健康时间线、
-上游请求身份和最近 10 条成功使用记录。额度来自预算账本；`limitUsd: "0"` 表示不限额，
-此时 `remainingUsd` 为 `null`。历史累计不受当日窗口或使用统计页的筛选范围限制。
-
-记录响应的 `data` 为 `{ items, currentPage, pageSize, total }`，按请求时间倒序；`pageSize`
-范围为 1–100。成功记录只返回路由、模型、推理参数、传输方式、Token、费用、延迟、时间、
-Client IP 和 User-Agent 等当前 Key 可见事实。错误记录只返回错误分类、状态、模型、传输、延迟、
-时间、Client IP、User-Agent 和安全错误消息。两类记录均不返回账号、平台、认证类型、账号选择、
-容量信息、上游凭据、请求正文或原始诊断转储；缺失的 Token、耗时或费用保留空值语义。
-
-`dimension` 只接受 `model`、`transport` 或 `failureClass`。所有时间范围采用开始包含、结束不包含的
-绝对时间；所有查询的 Key 都由服务端会话确定，不接受客户端指定 Key、账号或 Provider 范围。
-
-洞察响应的 `performance` 包含当前 Key 请求的准入判定、账号选择等待分位、容量利用率及采样覆盖率，
-`points` 返回对应时间桶趋势。未采集的指标保持 `null`，不返回账号身份或原始容量槽位信息。
-
-所有 `/api/auth/*` 和 `/api/client/*` 响应带 `Cache-Control: no-store`；
-未知路径和错误 method 返回 JSON，不落入 SPA。两种登录共享来源桶和全局桶，分别为每 60 秒
-10 次 / 200 次；来源取连接 IP，不信任任意转发头。拒绝时使用 `42901` 和 `Retry-After`。
+所有 `/api/auth/*` 响应带 `Cache-Control: no-store`；未知路径和错误 method 返回 JSON，不落入 SPA。
+两种登录共享来源桶和全局桶，分别为每 60 秒 10 次 / 200 次；来源取连接 IP，不信任任意转发头。
+拒绝时使用 `42901` 和 `Retry-After`。
 
 认证错误共用 `40101`（会话失效）、`40102`（凭据错误）和 `40301`（权限不足）。
 前端只在明确的会话失效时统一退出，不按 URL 或每个接口上的身份标记分发。
 
-用量响应的金额均为十进制字符串，日期为 RFC3339，预算显示时区为 `Asia/Shanghai`。
-洞察响应的 `cost.coverage` 同时返回
-`providerReportedCount`、`calculatedCount`、`partialCount`、`unavailableCount` 和
-`notBillableCount`。服务端从会话强制注入 Client Key ID，接口不接受调用方指定其他 Key。
+### Key 用量查询
+
+以下接口仅接受 Key 身份的 `cpr_session`，不接受 Bearer Key 或管理 API Key。管理员会话返回 `40301`；
+缺失、失效或已停用的 Key 会话返回 `40101`。所有响应带 `Cache-Control: no-store`，未知路径和错误方法返回 JSON。
+
+| 方法 | 路由 | 查询 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?` | 用量汇总、趋势、当前额度和北京时间今日健康时间线 |
+| `GET` | `/api/key-usage/records` | 同上，另含 `kind?`、`currentPage?`、`pageSize?` | 当前 Key 的成功请求或错误记录 |
+
+起止时间使用 RFC3339，开始必须早于结束，一次最多 31 天。模型按完整名称匹配；
+不接受 Key ID、账号、Provider 等范围参数或其他未知字段。页码默认 1，每页默认 20，允许 1–100 条；
+`kind` 为 `success`（默认）或 `error`。分页响应为 `{ items, currentPage, pageSize, total }`。
+
+overview 返回 `asOf`、`startTime`、`endTime`、`key`、`summary`、`trend`、`healthTimeline`。
+`key` 仅包含名称、掩码前缀、并发/RPM、日与七日限额、已用 USD 及重置时间；零限额表示不限，
+未启动窗口的重置时间为 null。额度使用现有结算账本，不受日志日期或模型筛选影响。
+健康时间线沿用管理端的 96 个北京时间日内桶与可用性语义，不受历史范围和模型筛选影响。
+
+汇总和趋势返回请求数、输入、输出、缓存读写、推理、总 Tokens 与 USD 成本；输入已包含缓存读写，
+推理为输出的明细，不得把缓存或推理重复计入总消耗。趋势另含 `time` 与 `bucketSeconds`。
+`costUsd` 为十进制字符串或 null；`costIncomplete` 表示部分请求计费不完整，不能把已知费用当作完整总费用。
+空请求范围的成本为 `"0"`，缺失定价保持 null。
+
+日志只返回时间、公开请求模型、推理强度、接口、上下游传输方式、当前请求的 IP / User-Agent、
+Token 明细、费用明细、用时/首字与状态。Token 和费用复用现有展示合同；延迟仅包含当前请求的首事件、
+首推理、首文本和总耗时，不含账号容量或调度诊断。
+成功记录的 `status` 为 `success`，不伪造未保存的 HTTP 状态；错误记录为 `error`，只返回客户端状态码，
+缺失的 Token/费用明细为 null。不返回账号资料、Key ID、上游模型或请求标识、原始错误正文或诊断内容。
 
 ## 5. 账号
 

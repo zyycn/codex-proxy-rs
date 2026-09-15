@@ -13,11 +13,6 @@ pub(crate) struct AdminSettingsStoreAdapter {
     pub(crate) control_plane: postgres::PgControlPlaneRepository,
 }
 
-pub(crate) struct ClientUsageStoreAdapter {
-    pub(crate) pool: sqlx::PgPool,
-    pub(crate) query_budget: postgres::ObservabilityQueryBudget,
-}
-
 #[async_trait::async_trait]
 impl SettingsStore for AdminSettingsStoreAdapter {
     async fn load_runtime_settings(&self) -> AdminStoreResult<AdminRuntimeSettings> {
@@ -325,37 +320,6 @@ impl AuthStore for AuthStoreAdapter {
         )
         .await
         .map_err(|error| admin_store_error("admin audit", error))
-    }
-}
-
-#[async_trait::async_trait]
-impl ClientUsageStore for ClientUsageStoreAdapter {
-    async fn load_client_usage_totals(
-        &self,
-        key_id: &gateway_core::policy::ClientApiKeyId,
-    ) -> AdminStoreResult<gateway_admin::model::observability::UsageTotals> {
-        let filter = postgres::UsageRecordFilter {
-            client_api_key_ref: Some(key_id.as_str().to_owned()),
-            ..postgres::UsageRecordFilter::default()
-        };
-        let totals = self
-            .query_budget
-            .run(
-                "client usage totals",
-                postgres::usage_totals(&self.pool, &filter),
-            )
-            .await
-            .map_err(|error| admin_store_error("client usage totals", error))?;
-        postgres::admin_usage_totals(totals)
-    }
-
-    async fn load_client_usage_key(
-        &self,
-        id: &gateway_core::policy::ClientApiKeyId,
-    ) -> AdminStoreResult<Option<gateway_admin::model::client_usage::ClientUsageKey>> {
-        postgres::load_client_usage_key(&self.pool, id)
-            .await
-            .map_err(|error| admin_store_error("client usage key", error))
     }
 }
 
