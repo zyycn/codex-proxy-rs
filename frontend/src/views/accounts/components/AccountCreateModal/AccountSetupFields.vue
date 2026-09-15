@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
 
@@ -34,5 +36,14 @@ const form = defineModel<AccountCreateForm>({ required: true })
       :disabled="disabled"
       :proxy-error="proxyError"
     />
+    <BaseFormItem label="备注">
+      <BaseTextarea
+        v-model="form.notes"
+        :rows="3"
+        :maxlength="500"
+        placeholder="最多 500 字，可不填。"
+        :disabled="disabled"
+      />
+    </BaseFormItem>
   </div>
 </template>

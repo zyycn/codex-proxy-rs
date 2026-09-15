@@ -124,6 +124,7 @@ pub struct ProviderAccountSummary {
     pub id: String,
     pub provider_kind: String,
     pub name: String,
+    pub notes: Option<String>,
     pub email: Option<String>,
     pub upstream_user_id: Option<String>,
     pub upstream_account_id: Option<String>,
@@ -316,6 +317,7 @@ impl fmt::Debug for RotateProviderAccount {
 pub struct BatchUpdateProviderAccountsAdmin {
     pub outbound_proxy: Option<gateway_admin::model::proxies::AccountProxySelection>,
     pub account_ids: Vec<String>,
+    pub notes: Option<String>,
     pub enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
@@ -380,7 +382,7 @@ impl ProviderAccountStateUpdate {
     }
 }
 
-pub(crate) const ACCOUNT_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
+pub(crate) const ACCOUNT_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
@@ -388,7 +390,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select outbound_proxy_url, id, provider
             credential_observed_at, quota_observed_at, created_at, updated_at
      from provider_accounts where id = $1";
 
-pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
+pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
@@ -398,7 +400,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select outbound_proxy_url, id, p
      where id = any($1::text[]) and provider_kind = $2
      order by id";
 
-pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
+pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
@@ -541,6 +543,7 @@ pub(crate) fn account_summary_from_row(
         id: get(&row, "id")?,
         provider_kind: get(&row, "provider_kind")?,
         name: get(&row, "name")?,
+        notes: get(&row, "notes")?,
         email: get(&row, "email")?,
         upstream_user_id: get(&row, "upstream_user_id")?,
         upstream_account_id: get(&row, "upstream_account_id")?,

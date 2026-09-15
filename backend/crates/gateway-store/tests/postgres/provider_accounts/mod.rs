@@ -1048,6 +1048,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                notes: None,
                 outbound_proxy: None,
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
@@ -1127,6 +1128,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        notes: None,
         account_id: "acct_proxy".to_owned(),
         enabled: true,
         concurrency_limit: None,
@@ -1178,6 +1180,208 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
             .await
             .unwrap();
     assert!(!serde_json::to_string(&audits).unwrap().contains("secret"));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
+    let Some(database) = TestDatabase::create("account_notes").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_notes", "notes-user"))
+        .await
+        .unwrap();
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "notes-edit".to_owned(),
+    };
+    let command = UpdateAccount {
+        account_id: "acct_notes".to_owned(),
+        notes: Some("  团队备用\n下月续费  ".to_owned()),
+        enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        group_ids: vec![],
+        outbound_proxy: None,
+    };
+    store
+        .update_account(command.clone(), &context)
+        .await
+        .unwrap();
+    let record = store
+        .load_account("acct_notes", AccountRuntimeSnapshot::default())
+        .await
+        .unwrap()
+        .unwrap()
+        .account;
+    assert_eq!(record.notes.as_deref(), Some("团队备用\n下月续费"));
+    assert_eq!(record.credential_revision.get(), 1);
+    let changed_fields: Vec<String> =
+        sqlx::query_scalar("select changed_fields from admin_audit_events")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(changed_fields.iter().any(|field| field == "notes"));
+
+    store
+        .update_account(
+            UpdateAccount {
+                notes: None,
+                ..command.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                account_ids: vec!["acct_notes".to_owned()],
+                enabled: false,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                group_ids: vec![],
+                outbound_proxy: None,
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            accounts: vec![account("acct_notes", "notes-user")],
+            settings: None,
+            outbound_proxy: None,
+            audit: audit("audit_notes_import", "import", "acct_notes"),
+        })
+        .await
+        .unwrap();
+    let records = repository.list_provider_accounts(None, true).await.unwrap();
+    assert_eq!(records[0].notes.as_deref(), Some("团队备用\n下月续费"));
+    let audits: String = sqlx::query_scalar("select json_agg(a)::text from admin_audit_events a")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert!(!audits.contains("团队备用"));
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            accounts: vec![account("acct_notes", "notes-user")],
+            settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                notes: None,
+                enabled: true,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                group_ids: vec![],
+            }),
+            outbound_proxy: None,
+            audit: audit("audit_notes_reimport", "import", "acct_notes"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_provider_account("acct_notes")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .notes
+            .as_deref(),
+        Some("团队备用\n下月续费")
+    );
+
+    store
+        .update_account(
+            UpdateAccount {
+                notes: Some(" \n\t ".to_owned()),
+                ..command
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_account("acct_notes", AccountRuntimeSnapshot::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .account
+            .notes,
+        None
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
+    let Some(database) = TestDatabase::create("account_notes_rollback").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_notes", "notes-user"))
+        .await
+        .unwrap();
+    let before = repository
+        .load_provider_account("acct_notes")
+        .await
+        .unwrap()
+        .unwrap();
+    let revision: i64 =
+        sqlx::query_scalar("select config_revision from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let result = admin_account_store(&database.pool)
+        .update_account(
+            UpdateAccount {
+                account_id: "acct_notes".to_owned(),
+                notes: Some("备".repeat(501)),
+                enabled: false,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                group_ids: vec![],
+                outbound_proxy: None,
+            },
+            &MutationContext {
+                actor: MutationActor::System,
+                request_id: "notes-rejected".to_owned(),
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        repository
+            .load_provider_account("acct_notes")
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select config_revision from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap(),
+        revision
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select count(*) from admin_audit_events")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap(),
+        0
+    );
     database.close().await;
 }
 
@@ -1547,7 +1751,8 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
     let Some(database) = TestDatabase::create("provider_account_authorization_upsert").await else {
         return;
     };
-    PgProviderAccountRepository::new(database.pool.clone())
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
         .insert_provider_account(account(
             "acct_authorization_existing",
             "user-authorization-upsert",
@@ -1569,6 +1774,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         .commit_authorization(
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    notes: Some("  OAuth 新建备注  ".to_owned()),
                     enabled: false,
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
@@ -1617,6 +1823,17 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
     );
     let settings: (bool, Option<i64>, i16) = sqlx::query_as("select enabled, concurrency_limit, weight from provider_accounts where id = 'acct_authorization_existing'").fetch_one(&database.pool).await.expect("OAuth settings");
     assert_eq!(settings, (false, None, 9));
+    assert_eq!(
+        repository
+            .load_provider_account("acct_authorization_existing")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .notes
+            .as_deref(),
+        Some("OAuth 新建备注")
+    );
     database.close().await;
 }
 
@@ -2071,6 +2288,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            notes: None,
             outbound_proxy: None,
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: false,
@@ -2637,6 +2855,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                notes: None,
                 account_id: id.as_str().to_owned(),
                 enabled: true,
                 concurrency_limit: None,
@@ -2693,6 +2912,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .await
     .expect("seed group");
     let settings = AccountImportSettings {
+        notes: Some("  批量新建\n团队备用  ".to_owned()),
         enabled: false,
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
         weight: AccountWeight::new(7).expect("weight"),
@@ -2725,51 +2945,78 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .expect("saved settings");
         assert_eq!(row, (false, Some(3), 7));
         assert_eq!(account_group_ids(&database.pool, id).await, [GROUP_ID]);
+        assert_eq!(
+            repository
+                .load_provider_account(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .summary
+                .notes
+                .as_deref(),
+            Some("批量新建\n团队备用")
+        );
     }
     let before = repository
         .load_provider_account("acct_existing_settings")
         .await
         .expect("existing account");
-    let failed = repository
-        .import_provider_accounts(ImportProviderAccounts {
-            outbound_proxy: None,
-            settings: Some(AccountImportSettings {
-                group_ids: vec![
-                    AccountGroupId::new("grp_00000000000000000000000000000092")
-                        .expect("missing group"),
-                ],
-                ..settings
-            }),
-            scope: ProviderAccountAdminScope {
-                provider_kind: "openai".to_owned(),
-            },
-            accounts: vec![
-                account("acct_rollback_settings", "rollback-settings-user"),
-                account("acct_rollback_candidate", "existing-settings-user"),
+    for invalid_settings in [
+        AccountImportSettings {
+            group_ids: vec![
+                AccountGroupId::new("grp_00000000000000000000000000000092").expect("missing group"),
             ],
-            audit: audit(
-                "audit_import_settings_failed",
-                "import",
-                "provider_accounts",
-            ),
-        })
-        .await;
-    assert!(failed.is_err());
-    assert_eq!(current_revision(&database.pool).await, 2);
-    assert_eq!(
-        account_count(&database.pool, "acct_rollback_settings").await,
-        0
-    );
-    assert_eq!(
-        repository
-            .load_provider_account("acct_existing_settings")
+            ..settings.clone()
+        },
+        AccountImportSettings {
+            notes: Some("备".repeat(501)),
+            ..settings
+        },
+    ] {
+        let failed = repository
+            .import_provider_accounts(ImportProviderAccounts {
+                outbound_proxy: None,
+                settings: Some(invalid_settings),
+                scope: ProviderAccountAdminScope {
+                    provider_kind: "openai".to_owned(),
+                },
+                accounts: vec![
+                    account("acct_rollback_settings", "rollback-settings-user"),
+                    account("acct_rollback_candidate", "existing-settings-user"),
+                ],
+                audit: audit(
+                    "audit_import_settings_failed",
+                    "import",
+                    "provider_accounts",
+                ),
+            })
+            .await;
+        assert!(failed.is_err());
+        assert_eq!(current_revision(&database.pool).await, 2);
+        assert_eq!(
+            account_count(&database.pool, "acct_rollback_settings").await,
+            0
+        );
+        assert_eq!(
+            repository
+                .load_provider_account("acct_existing_settings")
+                .await
+                .expect("unchanged account"),
+            before
+        );
+        assert_eq!(
+            account_group_ids(&database.pool, "acct_existing_settings").await,
+            [GROUP_ID]
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from admin_audit_events where id = 'audit_import_settings_failed'"
+            )
+            .fetch_one(&database.pool)
             .await
-            .expect("unchanged account"),
-        before
-    );
-    assert_eq!(
-        account_group_ids(&database.pool, "acct_existing_settings").await,
-        [GROUP_ID]
-    );
+            .unwrap(),
+            0
+        );
+    }
     database.close().await;
 }

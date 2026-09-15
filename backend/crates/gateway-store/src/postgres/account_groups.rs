@@ -165,7 +165,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
             .collect::<Vec<_>>();
         let rows = sqlx::query(
             "select membership.account_group_id,
-                    account.id, account.provider_kind, account.name, account.email,
+                    account.id, account.provider_kind, account.name, account.notes, account.email,
                     account.upstream_user_id, account.upstream_account_id, account.plan_type,
                     account.authentication_kind, account.credential_revision, account.outbound_proxy_url,
                     account.has_refresh_token, account.access_token_expires_at,

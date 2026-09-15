@@ -64,9 +64,12 @@ export function useAccountsQuery() {
   }
 
   async function replaceAccount(updated: AccountRow) {
-    // 状态变更可能影响筛选、排序及全局概览，统一回读并复用分页查询的末页回退。
+    // 先取消旧查询并应用接口返回的账号，避免旧响应覆盖最新行数据。
     query.invalidate()
-    if (!await query.execute())
+    query.items.value = query.items.value.map(account => account.id === updated.id ? updated : account)
+
+    // 筛选、排序、概览和末页回退仍由回读校准，但不触发整表加载。
+    if (!await query.execute({ background: true }))
       return true // 回读失败或被新查询取代时，不依据旧页面取消选择。
     return query.items.value.some(account => account.id === updated.id)
   }
