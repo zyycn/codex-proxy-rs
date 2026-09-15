@@ -7,6 +7,7 @@ use axum::{
 };
 
 use super::{
+    chat_completions::chat_completions,
     images::{image_edits, image_generations},
     models::{model_detail, models},
     responses::{responses, responses_websocket},
@@ -18,6 +19,7 @@ use crate::ApiState;
 /// 构造 OpenAI 客户端协议路由。
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/images/generations", post(image_generations))
         .route("/v1/images/edits", post(image_edits))
         .route("/v1/alpha/search", post(standalone_search))

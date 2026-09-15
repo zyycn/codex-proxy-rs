@@ -187,6 +187,10 @@ fn encoder_should_remove_unsupported_fields_from_upstream_body() {
         ("max_output_tokens".to_owned(), json!(512)),
         ("max_tokens".to_owned(), json!(256)),
         ("temperature".to_owned(), json!(0.2)),
+        ("top_p".to_owned(), json!(0.9)),
+        ("prompt_cache_retention".to_owned(), json!("24h")),
+        ("prompt_cache_key".to_owned(), json!("keep-cache")),
+        ("service_tier".to_owned(), json!("auto")),
     ]));
 
     let encoded = encode_generate_request(&request, "gpt-test", None).expect("encode");
@@ -197,6 +201,8 @@ fn encoder_should_remove_unsupported_fields_from_upstream_body() {
             "model": "gpt-test",
             "input": "hello",
             "max_tokens": 256,
+            "prompt_cache_key": "keep-cache",
+            "service_tier": "auto",
         })
     );
 }

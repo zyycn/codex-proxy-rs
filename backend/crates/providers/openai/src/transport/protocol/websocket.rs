@@ -142,7 +142,15 @@ fn json_value_as_string(value: &Value) -> Option<String> {
 ///
 /// 该值不参与客户端 wire 的可交付性判断；无法读取时只是不记录连接内续接状态。
 pub fn websocket_response_completed_id(value: &Value) -> Option<String> {
-    if value.get("type").and_then(Value::as_str) != Some("response.completed") {
+    if !matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("response.completed" | "response.done")
+    ) || (value.get("type").and_then(Value::as_str) == Some("response.done")
+        && matches!(
+            value.pointer("/response/status").and_then(Value::as_str),
+            Some("incomplete" | "failed" | "cancelled")
+        ))
+    {
         return None;
     }
     value

@@ -142,7 +142,7 @@ impl OpenAiResponsesEncoder {
         }
         if matches!(
             effective_type,
-            Some("response.completed" | "response.incomplete")
+            Some("response.completed" | "response.done" | "response.incomplete")
         ) {
             self.wire_terminal = wire.data().get("response").cloned();
         } else if matches!(effective_type, Some("response.failed" | "error")) {

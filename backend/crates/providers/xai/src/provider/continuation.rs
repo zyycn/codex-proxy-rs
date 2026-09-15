@@ -317,7 +317,7 @@ pub(super) fn capture_output_item(event: &ProviderEvent, capture: &mut GrokSessi
     }
     if matches!(
         event_type,
-        Some("response.completed" | "response.incomplete")
+        Some("response.completed" | "response.done" | "response.incomplete")
     ) && let Some(output) = wire
         .data()
         .get("response")

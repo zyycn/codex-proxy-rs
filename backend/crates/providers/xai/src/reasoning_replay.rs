@@ -176,7 +176,11 @@ impl GrokReasoningReplayCapture {
                     .unwrap_or_else(|| u32::try_from(self.output_items.len()).unwrap_or(u32::MAX));
                 self.capture_item(index, item);
             }
-            if event_type == Some("response.completed") {
+            if event_type == Some("response.completed")
+                || (event_type == Some("response.done")
+                    && payload.pointer("/response/status").and_then(Value::as_str)
+                        == Some("completed"))
+            {
                 capture_terminal_output(payload, self);
                 completed = true;
             }

@@ -13,7 +13,9 @@ use gateway_core::event::{
 };
 use gateway_core::metering::Usage;
 use gateway_core::upstream::UpstreamSendState;
-use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
+use gateway_protocol::openai::events::{
+    ResponsesUsageTracker, TokenUsage, billable_usage_is_complete, extract_usage,
+};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder, SseFrame, sse_frame_is_done};
 use serde_json::Value;
 use thiserror::Error;
@@ -43,6 +45,8 @@ pub struct CodexCanonicalDecoder {
     text_output_seen: BTreeSet<u32>,
     reasoning_output_seen: BTreeSet<u32>,
     usage_emitted: bool,
+    usage_tracker: ResponsesUsageTracker,
+    additional_tool_billing_seen: bool,
     semantic_output_seen: bool,
     requested_service_tier: Option<String>,
     response_service_tier: Option<String>,
@@ -140,6 +144,8 @@ impl CodexCanonicalDecoder {
             text_output_seen: BTreeSet::new(),
             reasoning_output_seen: BTreeSet::new(),
             usage_emitted: false,
+            usage_tracker: ResponsesUsageTracker::default(),
+            additional_tool_billing_seen: false,
             semantic_output_seen: false,
             requested_service_tier: None,
             response_service_tier: None,
@@ -288,9 +294,26 @@ impl CodexCanonicalDecoder {
             return Ok(());
         }
         self.observe_response_service_tier(&value);
+        self.usage_tracker.observe(&value);
+        if let Some(response) = value.get("response") {
+            self.additional_tool_billing_seen |= billable_tool_calls(response) != Some((0, 0))
+                || response.get("tool_usage").is_some_and(|usage| {
+                    !usage.is_null() && !usage.as_object().is_some_and(serde_json::Map::is_empty)
+                });
+        }
+        if let Some(item) = value.get("item") {
+            self.additional_tool_billing_seen |=
+                billable_output_tool_calls(std::slice::from_ref(item)) != Some((0, 0));
+        }
         let signals = response_event_signals(event_type, &value);
         self.merge_timing_signals(signals);
-        if matches!(event_type, Some("response.failed" | "error")) {
+        if matches!(event_type, Some("response.failed" | "error"))
+            || (event_type == Some("response.done")
+                && matches!(
+                    value.pointer("/response/status").and_then(Value::as_str),
+                    Some("failed" | "cancelled")
+                ))
+        {
             let failure = ResponsesSseFailure::from_raw_event(
                 event_type.unwrap_or_default(),
                 &event.data,
@@ -428,7 +451,7 @@ impl CodexCanonicalDecoder {
             "response.reasoning_summary_part.done" | "response.reasoning_part.done" => {
                 self.reasoning_part_done(value, output)
             }
-            "response.completed" | "response.incomplete" => {
+            "response.completed" | "response.done" | "response.incomplete" => {
                 self.complete(event_type, value, output)
             }
             "response.failed" | "error" => Err(protocol_error_marker()),
@@ -848,7 +871,8 @@ impl CodexCanonicalDecoder {
                 self.complete_output_item(item, output_index, output)?;
             }
         }
-        let usage = extract_usage(response);
+        let usage_response = self.usage_tracker.response(value, response);
+        let usage = extract_usage(&usage_response);
         if !self.usage_emitted
             && let Some(usage) = usage
         {
@@ -865,7 +889,12 @@ impl CodexCanonicalDecoder {
         let service_tier = self.requested_service_tier.as_deref();
         let tool_calls = billable_tool_calls(response);
         if let Some(breakdown) = usage
-            .filter(|usage| billable_usage_is_complete(response, *usage))
+            // 回退的 token 快照不能证明早期工具费用完整，禁止把小计作为总价。
+            .filter(|_| {
+                response.get("usage").is_some_and(|usage| !usage.is_null())
+                    || !self.additional_tool_billing_seen
+            })
+            .filter(|usage| billable_usage_is_complete(&usage_response, *usage))
             .and_then(|usage| {
                 let (web_search_calls, file_search_calls) = tool_calls?;
                 openai_billing_breakdown(
@@ -1000,12 +1029,16 @@ fn core_usage(usage: TokenUsage) -> Usage {
 }
 
 fn billable_tool_calls(response: &Value) -> Option<(u64, u64)> {
-    let mut web = 0_u64;
-    let mut file = 0_u64;
     let items = match response.get("output") {
         Some(value) => value.as_array()?.as_slice(),
         None => &[],
     };
+    billable_output_tool_calls(items)
+}
+
+fn billable_output_tool_calls(items: &[Value]) -> Option<(u64, u64)> {
+    let mut web = 0_u64;
+    let mut file = 0_u64;
     for item in items {
         match item.get("type").and_then(Value::as_str)? {
             "web_search_call" => match item.pointer("/action/type").and_then(Value::as_str) {

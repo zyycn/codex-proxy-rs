@@ -1380,6 +1380,39 @@ async fn websocket_execute_response_create_request_should_forward_completed_with
 }
 
 #[tokio::test]
+async fn websocket_execute_response_create_request_should_finish_on_done_alias() {
+    for status in ["completed", "incomplete"] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let terminal = json!({"type":"response.done","response":{"id":"resp_alias","status":status,"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}});
+        let expected = terminal.to_string();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            let _message = websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Text(terminal.to_string().into()))
+                .await
+                .unwrap();
+            websocket.close(None).await.unwrap();
+        });
+        let request = codex_request("gpt-5.5", "be brief", Vec::new());
+        let prepared = CodexWebSocketConnection::responses_create_request(
+            &format!("http://{addr}"),
+            "dGhlIHNhbXBsZSBub25jZQ==",
+            vec![("authorization".to_owned(), "Bearer access-token".to_owned())],
+            &request,
+        )
+        .unwrap();
+        let exchange = execute_response_create_request(&prepared).await.unwrap();
+        server.await.unwrap();
+        assert!(exchange.body.contains("event: response.done"));
+        assert!(exchange.body.contains(&expected));
+        assert!(exchange.usage.is_some());
+    }
+}
+
+#[tokio::test]
 async fn websocket_execute_response_create_request_should_return_error_terminal_as_sse_fact() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

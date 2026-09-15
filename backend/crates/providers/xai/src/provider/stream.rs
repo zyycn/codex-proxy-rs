@@ -332,7 +332,7 @@ impl CompactionFacts {
             {
                 self.created_response = response;
             }
-            Some("response.completed" | "response.incomplete")
+            Some("response.completed" | "response.done" | "response.incomplete")
                 if self.terminal_response.is_none() =>
             {
                 self.terminal_response = response;

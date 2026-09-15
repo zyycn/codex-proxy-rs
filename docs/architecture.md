@@ -8,13 +8,13 @@
 
 Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时提供：
 
-- 面向客户端的 OpenAI Responses、Images、standalone Search 和模型目录协议；
+- 面向客户端的 OpenAI Responses、Chat Completions、Images、standalone Search 和模型目录协议；
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端；
 - OpenAI 与 xAI 两个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
 
-系统不提供 `/v1/chat/completions`，不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本
-扩容。Client Key 限定账号分组，而不是绑定某个 Provider；一次请求的 Provider 候选由账号范围、模型
+系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本扩容。
+Client Key 限定账号分组，而不是绑定某个 Provider；一次请求的 Provider 候选由账号范围、模型
 能力和运行时健康共同决定。
 
 ## 2. 运行拓扑
@@ -185,6 +185,14 @@ Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参�
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport。
 
+- Chat Completions 是 `gateway-api` 的私有协议适配模块：有界解压后把已支持的 Chat 字段转换为
+  Responses 输入，再复用同一 `Generate` 执行、鉴权、模型路由、日周预算、并发准入、计量与终结流程。
+  消息和函数调用按原顺序转换，各协议对象只投影已知字段并忽略客户端扩展，不递归过滤正文、工具参数
+  或 Schema。常用控制映射后复用 Provider 限制；不能兑现的已知控制返回明确错误。旧函数历史按调用
+  配对，拒绝历史保留为完整输出消息，公开思考文本仅作为普通历史文本。Responses 形状请求复用原解码器，
+  不在 Chat 边界重建其业务字段；两种输入同时存在时拒绝歧义。
+  输出从同一 Responses wire 事件转换为 Chat JSON/SSE，复用共享 HTTP driver 的提交、断连取消和
+  drain 生命周期；不新增 Core operation、Provider 端点或独立计费路径。
 - OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
   Search 的业务正文按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
 - Responses 的业务扩展头保留原始多值字节；传输与反代请求头分类由 `gateway-protocol` 统一定义，

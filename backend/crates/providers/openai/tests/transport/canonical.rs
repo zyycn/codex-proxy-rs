@@ -9,6 +9,132 @@ use serde_json::json;
 const METADATA_PREFIX_FIXTURE: &str = include_str!("fixtures/metadata_only_prefix.sse");
 
 #[test]
+fn fallback_usage_cannot_hide_earlier_tool_costs() {
+    for tool in [
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","action":{"type":"search"}}}),
+        json!({"type":"response.in_progress","response":{"tool_usage":{"image_gen":{"input_tokens":10,"output_tokens":5}}}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"image_generation_call"}}),
+    ] {
+        let values = [
+            json!({"type":"response.created","response":{"id":"resp_tools"}}),
+            tool,
+            json!({"type":"response.in_progress","usage":{"input_tokens":20,"output_tokens":5}}),
+            json!({"type":"response.done","response":{"id":"resp_tools","model":"gpt-5.4","status":"completed","output":[]}}),
+        ];
+        let body = values
+            .iter()
+            .map(|value| format!("data: {value}\n\n"))
+            .collect::<String>();
+        let events = CodexCanonicalDecoder::new("gpt-5.4")
+            .push(body.as_bytes())
+            .expect("tool usage fallback");
+        let facts = canonical_facts(&events);
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Usage(_)))
+        );
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+        );
+        assert!(
+            !facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+        );
+    }
+}
+
+#[test]
+fn reordered_partial_terminal_tools_still_complete_and_bill() {
+    let values = [
+        json!({"type":"response.created","response":{"id":"resp_tools"}}),
+        json!({"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"a","arguments":""}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":2,"call_id":"call_a","delta":"{raw"}),
+        json!({"type":"response.output_item.added","output_index":4,"item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"b","arguments":""}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":4,"call_id":"call_b","delta":"{}"}),
+        json!({"type":"response.done","response":{"id":"resp_tools","status":"completed","model":"gpt-5.4","output":[{"type":"function_call","id":"fc_b","call_id":"call_b","name":"b","arguments":""},{"type":"function_call","id":"fc_a","call_id":"call_a","name":"a"}],"usage":{"input_tokens":20,"output_tokens":5}}}),
+    ];
+    let body = values
+        .iter()
+        .map(|value| format!("data: {value}\n\n"))
+        .collect::<String>();
+    let events = CodexCanonicalDecoder::new("gpt-5.4")
+        .push(body.as_bytes())
+        .expect("partial tool completion");
+    let facts = canonical_facts(&events);
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+    );
+}
+
+#[test]
+fn failed_done_alias_is_an_upstream_failure() {
+    for status in ["failed", "cancelled"] {
+        let body = format!(
+            "data: {{\"type\":\"response.done\",\"response\":{{\"id\":\"resp_failed\",\"status\":\"{status}\"}}}}\n\n"
+        );
+        CodexCanonicalDecoder::new("gpt-5.4")
+            .push(body.as_bytes())
+            .expect_err("failed alias must fail");
+    }
+}
+
+#[test]
+fn done_alias_and_usage_fallback_emit_canonical_usage_and_cost_without_rewriting_wire() {
+    for early in [false, true] {
+        let usage = json!({"prompt_tokens":20,"completion_tokens":5,"cached_tokens":4});
+        let created =
+            json!({"type":"response.created","response":{"id":"resp_compat","model":"gpt-5.4"}});
+        let progress =
+            json!({"type":"response.in_progress","response":{"id":"resp_compat"},"usage":usage});
+        let mut terminal = json!({"type":"response.done","response":{"id":"resp_compat","model":"gpt-5.4","status":"completed","output":[]}});
+        if !early {
+            terminal["usage"] = usage;
+        }
+        let prefix = if early {
+            format!("event: response.in_progress\ndata: {progress}\n\n")
+        } else {
+            String::new()
+        };
+        let body = format!(
+            "event: response.created\ndata: {created}\n\n{prefix}event: response.done\ndata: {terminal}\n\n"
+        );
+        let mut decoder = CodexCanonicalDecoder::new("gpt-5.4").with_raw_sse_passthrough();
+        let events = decoder
+            .push(body.as_bytes())
+            .expect("done alias completion");
+        let facts = canonical_facts(&events);
+        assert!(facts.iter().any(|fact| matches!(fact, GatewayEvent::Usage(usage) if usage.input_tokens == Some(20) && usage.output_tokens == Some(5))));
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+        );
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+        );
+        let wire = events.last().unwrap().wire_event().unwrap();
+        assert_eq!(wire.data(), &terminal);
+        assert_eq!(
+            wire.raw_sse_frame().unwrap().as_ref(),
+            format!("event: response.done\ndata: {terminal}\n\n").as_bytes()
+        );
+    }
+}
+
+#[test]
 fn decoder_should_not_forward_codex_rate_limit_metadata_fixture_as_openai_wire() {
     let events = CodexCanonicalDecoder::new("fallback")
         .with_raw_sse_passthrough()

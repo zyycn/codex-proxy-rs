@@ -5,6 +5,153 @@ use gateway_core::policy::ClientApiKeyId;
 use gateway_protocol::openai::sse::{encode_sse_event, encode_sse_event_with_metadata};
 use serde_json::Value;
 
+#[test]
+fn done_alias_uses_top_level_or_earlier_complete_usage_for_cost() {
+    for early in [false, true] {
+        let usage = serde_json::json!({"prompt_tokens":20,"completion_tokens":5,"cached_tokens":4});
+        let created = serde_json::json!({"type":"response.created","response":{"id":"resp_compat","model":"grok-4.6"}});
+        let progress = serde_json::json!({"type":"response.in_progress","response":{"id":"resp_compat"},"usage":usage});
+        let mut terminal = serde_json::json!({"type":"response.done","response":{"id":"resp_compat","model":"grok-4.6","status":"completed","output":[]}});
+        if !early {
+            terminal["usage"] = usage;
+        }
+        let prefix = if early {
+            format!("event: response.in_progress\ndata: {progress}\n\n")
+        } else {
+            String::new()
+        };
+        let body = format!(
+            "event: response.created\ndata: {created}\n\n{prefix}event: response.done\ndata: {terminal}\n\n"
+        );
+        let facts = decode_canonical(body.as_bytes()).unwrap();
+        assert!(facts.iter().any(|fact| matches!(fact, GatewayEvent::Usage(usage) if usage.input_tokens == Some(20) && usage.output_tokens == Some(5))));
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+        );
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+        );
+    }
+}
+
+#[test]
+fn usage_fallback_preserves_provider_cost_and_ignores_internal_frames() {
+    for early in [false, true] {
+        let usage =
+            serde_json::json!({"input_tokens":20,"output_tokens":5,"cost_in_usd_ticks":37756000});
+        let mut terminal = serde_json::json!({"type":"response.done","response":{"id":"resp_cost","status":"completed"}});
+        let prefix = if early {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"type":"response.in_progress","usage":usage})
+            )
+        } else {
+            terminal["usage"] = usage;
+            String::new()
+        };
+        let body = format!(
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_cost\"}}}}\n\n{prefix}data: {{\"type\":\"response.doom_loop_check\",\"usage\":{{\"input_tokens\":999,\"output_tokens\":999,\"cost_in_usd_ticks\":1}}}}\n\ndata: {terminal}\n\n"
+        );
+        let facts = decode_canonical(body.as_bytes()).unwrap();
+        assert!(facts.iter().any(
+            |fact| matches!(fact, GatewayEvent::Usage(usage) if usage.input_tokens == Some(20))
+        ));
+        assert!(facts.iter().any(|fact| matches!(fact, GatewayEvent::ProviderCost(cost) if cost.total().amount().scaled() == 37_756_000)));
+        assert!(
+            !facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+        );
+    }
+}
+
+#[test]
+fn failed_done_alias_must_not_complete_successfully() {
+    for status in ["failed", "cancelled"] {
+        let body = format!(
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_fail\"}}}}\n\ndata: {{\"type\":\"response.done\",\"response\":{{\"id\":\"resp_fail\",\"status\":\"{status}\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":1}}}}}}\n\n"
+        );
+        assert!(decode_canonical(body.as_bytes()).is_err());
+    }
+}
+
+#[test]
+fn fallback_server_tool_usage_cannot_be_priced_as_tokens_only() {
+    for early in [false, true] {
+        let usage =
+            serde_json::json!({"input_tokens":20,"output_tokens":5,"num_server_side_tool_calls":1});
+        let mut terminal = serde_json::json!({"type":"response.done","response":{"id":"resp_tool_cost","model":"grok-4.6","status":"completed"}});
+        let prefix = if early {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({"type":"response.in_progress","usage":usage})
+            )
+        } else {
+            terminal["usage"] = usage;
+            String::new()
+        };
+        let body = format!(
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_tool_cost\"}}}}\n\n{prefix}data: {terminal}\n\n"
+        );
+        let facts = decode_canonical(body.as_bytes()).unwrap();
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Usage(_)))
+        );
+        assert!(
+            !facts
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+        );
+    }
+}
+
+#[test]
+fn untyped_visible_usage_frame_is_shared_with_terminal_billing() {
+    let body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_untyped\"}}\n\n",
+        "data: {\"usage\":{\"input_tokens\":20,\"output_tokens\":5}}\n\n",
+        "data: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_untyped\",\"model\":\"grok-4.6\",\"status\":\"completed\"}}\n\n",
+    );
+    let facts = decode_canonical(body.as_bytes()).unwrap();
+    assert!(facts.iter().any(|fact| matches!(fact, GatewayEvent::Usage(usage) if usage.input_tokens == Some(20) && usage.output_tokens == Some(5))));
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+    );
+}
+
+#[test]
+fn untyped_tool_facts_prevent_token_only_fallback_cost() {
+    let body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_untyped\"}}\n\n",
+        "data: {\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":5},\"tool_usage\":{\"image_gen\":{\"input_tokens\":10,\"output_tokens\":5}}}}\n\n",
+        "data: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_untyped\",\"model\":\"grok-4.6\",\"status\":\"completed\"}}\n\n",
+    );
+    let facts = decode_canonical(body.as_bytes()).unwrap();
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::Usage(_)))
+    );
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::CalculatedCost(_)))
+    );
+}
+
 use provider_xai::{
     GrokCanonicalDecoder, GrokResponsesRequest, grok_billing_breakdown,
     grok_billing_breakdown_with_tier,

@@ -1,4 +1,5 @@
 mod auth;
+mod chat_completions;
 mod endpoint;
 mod error;
 mod images;

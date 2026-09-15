@@ -1,8 +1,10 @@
 //! OpenAI 客户端协议 adapter。
 
 pub mod auth;
+mod chat_completions;
 mod endpoint;
 pub mod error;
+mod http;
 pub mod images;
 pub mod models;
 pub mod responses;

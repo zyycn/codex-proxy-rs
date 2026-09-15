@@ -6,6 +6,33 @@ use gateway_protocol::openai::events::{
 use serde_json::json;
 
 #[test]
+fn response_usage_tracker_preserves_complete_snapshots_and_explicit_terminal_authority() {
+    use gateway_protocol::openai::events::ResponsesUsageTracker;
+    let mut tracker = ResponsesUsageTracker::default();
+    tracker.observe(&json!({"usage":{"input_tokens":5}}));
+    assert!(tracker.selected(&json!({})).is_none());
+    tracker.observe(&json!({"usage":{"prompt_tokens":7,"completion_tokens":3,"cached_tokens":2}}));
+    let terminal = json!({"response":{"status":"completed"}});
+    let supplemented = tracker.response(&terminal, &terminal["response"]);
+    let usage = extract_usage(&supplemented).unwrap();
+    assert_eq!(
+        (usage.input_tokens, usage.output_tokens, usage.cached_tokens),
+        (7, 3, 2)
+    );
+    assert!(billable_usage_is_complete(&supplemented, usage));
+    assert!(terminal["response"].get("usage").is_none());
+    for raw in [
+        json!({"input_tokens":0,"output_tokens":0}),
+        json!({"input_tokens":9}),
+        json!({"input_tokens":1,"output_tokens":2,"total_tokens":99}),
+    ] {
+        let explicit =
+            json!({"response":{"usage":raw},"usage":{"input_tokens":100,"output_tokens":100}});
+        assert_eq!(tracker.selected(&explicit), Some(&raw));
+    }
+}
+
+#[test]
 fn billable_usage_should_validate_cache_writes_totals_and_overflow() {
     for (raw, expected) in [
         (

@@ -72,13 +72,23 @@ pub(super) fn reduce_websocket_event(
     });
 
     let event = websocket_event_type(&value);
-    if event == Some("response.completed")
+    if matches!(event, Some("response.completed" | "response.done"))
         && let Some(response_id) = websocket_response_completed_id(&value)
     {
         continuation.record_completed(response_id);
     }
 
     let terminal = match event {
+        Some("response.done") => Some(
+            match value
+                .pointer("/response/status")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("incomplete") => WebSocketTerminalKind::Incomplete,
+                Some("failed" | "cancelled") => WebSocketTerminalKind::Failed,
+                _ => WebSocketTerminalKind::Completed,
+            },
+        ),
         Some("response.completed") => Some(WebSocketTerminalKind::Completed),
         Some("response.incomplete") => Some(WebSocketTerminalKind::Incomplete),
         Some("response.failed" | "error") => Some(WebSocketTerminalKind::Failed),

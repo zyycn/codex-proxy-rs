@@ -6,14 +6,16 @@ mod request;
 mod response;
 pub mod websocket;
 
+pub(super) use super::http::PendingExecution;
+pub use super::http::{collect_execution_response, stream_execution_response};
 pub use error::{ProtocolError, ProtocolErrorBody, RequestDecodeError, ResponseEncodeError};
+pub(super) use http::request_client_context;
 pub(crate) use http::responses;
-pub(super) use http::{PendingExecution, request_client_context};
-pub use http::{collect_execution_response, stream_execution_response};
 pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,
 };
+pub(super) use request::{RequestDecodeSource, decode_request_object, decompress_request_body};
 pub use response::OpenAiResponsesEncoder;
 pub(crate) use websocket::responses_websocket;
 pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};

@@ -14,7 +14,9 @@ use gateway_core::metering::{
     CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
 };
 use gateway_core::upstream::UpstreamSendState;
-use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
+use gateway_protocol::openai::events::{
+    ResponsesUsageTracker, TokenUsage, billable_usage_is_complete, extract_usage,
+};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use serde_json::Value;
 
@@ -174,6 +176,7 @@ pub struct GrokCanonicalDecoder {
     content: BTreeMap<u32, ContentKind>,
     tool_arguments_seen: BTreeSet<u32>,
     usage_emitted: bool,
+    usage_tracker: ResponsesUsageTracker,
     output_start_seen: bool,
     response_service_tier: Option<String>,
     requires_provider_cost: bool,
@@ -191,6 +194,7 @@ impl GrokCanonicalDecoder {
             content: BTreeMap::new(),
             tool_arguments_seen: BTreeSet::new(),
             usage_emitted: false,
+            usage_tracker: ResponsesUsageTracker::default(),
             output_start_seen: false,
             response_service_tier: None,
             requires_provider_cost: false,
@@ -293,6 +297,16 @@ impl GrokCanonicalDecoder {
             if body_type == Some("response.doom_loop_check") {
                 continue;
             }
+            // 工具转换可能隐藏注入的调用，计费事实必须从转换前的上游事件读取。
+            if let Some(response) = value.get("response") {
+                if let Some(tier) = response.get("service_tier").and_then(Value::as_str) {
+                    self.response_service_tier = Some(tier.trim().to_owned());
+                }
+                self.requires_provider_cost |= !token_only_response(response);
+            }
+            if let Some(item) = value.get("item") {
+                self.requires_provider_cost |= !token_only_output(item);
+            }
             let Some(event_type) = body_type.or(event.event.as_deref()) else {
                 let transformed = self
                     .response_transform
@@ -300,6 +314,7 @@ impl GrokCanonicalDecoder {
                     .map_err(|_| protocol_error_marker())?;
                 for (index, transformed) in transformed.into_iter().enumerate() {
                     let mut value = transformed.into_value();
+                    self.usage_tracker.observe(&value);
                     self.response_transform.resequence_stream_value(&mut value);
                     let wire = ProtocolWireEvent::json_with_sse_metadata(
                         "openai",
@@ -314,16 +329,6 @@ impl GrokCanonicalDecoder {
                 continue;
             };
             let event_type = event_type.to_owned();
-            // 工具转换可能隐藏注入的调用，计费事实必须从转换前的上游事件读取。
-            if let Some(response) = value.get("response") {
-                if let Some(tier) = response.get("service_tier").and_then(Value::as_str) {
-                    self.response_service_tier = Some(tier.trim().to_owned());
-                }
-                self.requires_provider_cost |= !token_only_response(response);
-            }
-            if let Some(item) = value.get("item") {
-                self.requires_provider_cost |= !token_only_output(item);
-            }
             // 转换失败必须终止，不能丢弃工具参数后仍向客户端报告成功。
             let transformed = self
                 .response_transform
@@ -340,6 +345,7 @@ impl GrokCanonicalDecoder {
                     "response.created" | "response.in_progress" | "response.failed" | "error"
                 );
                 let mut value = transformed.into_value();
+                self.usage_tracker.observe(&value);
                 self.response_transform.resequence_stream_value(&mut value);
                 let mut canonical = Vec::new();
                 // 终态事件（completed/incomplete）fail-closed：用量/计费校验失败即断流。
@@ -348,7 +354,7 @@ impl GrokCanonicalDecoder {
                 // 真·上游错误（response.failed/error）为非 Protocol 类别，按终态传播。
                 let terminal_event = matches!(
                     transformed_type.as_str(),
-                    "response.completed" | "response.incomplete"
+                    "response.completed" | "response.done" | "response.incomplete"
                 );
                 match self.decode_event(&transformed_type, &value, &mut canonical) {
                     Ok(()) => {}
@@ -409,7 +415,7 @@ impl GrokCanonicalDecoder {
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
                 self.tool_delta(value, output)
             }
-            "response.completed" | "response.incomplete" => {
+            "response.completed" | "response.done" | "response.incomplete" => {
                 self.complete(event_type, value, output)
             }
             "response.failed" | "error" => Err(upstream_event_error(value)),
@@ -634,11 +640,20 @@ impl GrokCanonicalDecoder {
     ) -> Result<(), ProviderError> {
         self.require_started()?;
         let response = response_object(value).ok_or_else(protocol_error_marker)?;
+        if event_type == "response.done"
+            && matches!(
+                response.get("status").and_then(Value::as_str),
+                Some("failed" | "cancelled")
+            )
+        {
+            return Err(upstream_event_error(value));
+        }
         let response_id = required_text(response, "id")?;
         if self.response_id.as_deref() != Some(response_id.as_str()) {
             return Err(protocol_error_marker());
         }
-        let usage = extract_usage(response);
+        let usage_response = self.usage_tracker.response(value, response);
+        let usage = extract_usage(&usage_response);
         if !self.usage_emitted
             && let Some(usage) = usage
         {
@@ -651,11 +666,12 @@ impl GrokCanonicalDecoder {
             .filter(|model| !model.is_empty())
             .unwrap_or(&self.fallback_model)
             .to_owned();
-        if let Some(cost) = provider_reported_cost(response)? {
+        if let Some(cost) = provider_reported_cost(&usage_response)? {
             output.push(GatewayEvent::ProviderCost(cost));
         } else if !self.requires_provider_cost
+            && token_only_response(&usage_response)
             && let Some(cost) = usage.and_then(|usage| {
-                calculated_cost(response, &model, usage, self.response_service_tier())
+                calculated_cost(&usage_response, &model, usage, self.response_service_tier())
             })
         {
             output.push(GatewayEvent::CalculatedCost(cost));

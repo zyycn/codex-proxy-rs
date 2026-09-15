@@ -5,6 +5,53 @@ use serde_json::Value;
 
 use super::sse::{SseError, parse_sse_events};
 
+/// 保存最近一份完整用量事实；终态显式用量始终优先，不跨事件拼接字段。
+#[derive(Debug, Default)]
+pub struct ResponsesUsageTracker {
+    latest: Option<Value>,
+}
+
+impl ResponsesUsageTracker {
+    /// 只记忆可完整校验的用量快照，不将缺字段补零当成计费事实。
+    pub fn observe(&mut self, event: &Value) {
+        if let Some(raw) = explicit_response_usage(event) {
+            let response = serde_json::json!({"usage": raw});
+            if extract_usage(&response)
+                .is_some_and(|usage| billable_usage_is_complete(&response, usage))
+            {
+                self.latest = Some(raw.clone());
+            }
+        }
+    }
+
+    /// 选择嵌套终态、顶层事件或最后完整快照；非法显式值不会被旧事实掩盖。
+    #[must_use]
+    pub fn selected<'a>(&'a self, event: &'a Value) -> Option<&'a Value> {
+        explicit_response_usage(event).or(self.latest.as_ref())
+    }
+
+    /// 为 canonical 计价补充相同用量来源；原始 wire event 始终保持不变。
+    #[must_use]
+    pub fn response<'a>(&self, event: &Value, response: &'a Value) -> std::borrow::Cow<'a, Value> {
+        if response.get("usage").is_some_and(|value| !value.is_null()) {
+            return std::borrow::Cow::Borrowed(response);
+        }
+        if let Some(usage) = self.selected(event) {
+            let mut supplemented = response.clone();
+            supplemented["usage"] = usage.clone();
+            return std::borrow::Cow::Owned(supplemented);
+        }
+        std::borrow::Cow::Borrowed(response)
+    }
+}
+
+fn explicit_response_usage(event: &Value) -> Option<&Value> {
+    event
+        .pointer("/response/usage")
+        .filter(|value| !value.is_null())
+        .or_else(|| event.get("usage").filter(|value| !value.is_null()))
+}
+
 /// 从 Codex/OpenAI usage 结构中提取出的标准化 token 用量。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

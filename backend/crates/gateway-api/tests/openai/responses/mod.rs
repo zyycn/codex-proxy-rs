@@ -22,6 +22,25 @@ fn decode_request(body: &[u8]) -> Result<DecodedResponsesRequest, RequestDecodeE
     decode_request_with_headers(body, &HeaderMap::new())
 }
 
+#[test]
+fn done_alias_preserves_wire_and_buffered_response() {
+    let response = json!({"id":"resp_done","status":"completed","output":[]});
+    let event = openai_wire_event(
+        Vec::new(),
+        "response.done",
+        json!({"type":"response.done","response":response}),
+    );
+    let mut encoder = OpenAiResponsesEncoder::default();
+    let frames = encoder.push_sse(&event);
+    assert!(
+        String::from_utf8(frames.concat())
+            .unwrap()
+            .contains("event: response.done")
+    );
+    assert!(encoder.is_completed());
+    assert_eq!(encoder.finish().unwrap(), response);
+}
+
 fn decode_response_create(
     payload: &str,
 ) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {

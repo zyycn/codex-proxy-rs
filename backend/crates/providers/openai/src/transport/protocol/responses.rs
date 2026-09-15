@@ -284,7 +284,7 @@ pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> Respon
                 merge_output_signals(&mut signals, output_item_signals(part));
             }
         }
-        Some("response.completed" | "response.incomplete") => {
+        Some("response.completed" | "response.done" | "response.incomplete") => {
             if let Some(items) = value.pointer("/response/output").and_then(Value::as_array) {
                 merge_output_signals(&mut signals, output_items_signals(items));
             }

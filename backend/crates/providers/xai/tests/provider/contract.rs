@@ -2625,6 +2625,36 @@ async fn reasoning_replay_is_reused_only_for_the_same_explicit_session() {
 }
 
 #[tokio::test]
+async fn reasoning_replay_should_capture_successful_done_alias() {
+    let encrypted_content = replay_ciphertext(0);
+    let body = String::from_utf8(stateful_sse(&encrypted_content))
+        .unwrap()
+        .replace("response.completed", "response.done")
+        .into_bytes();
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(body),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    for content in ["first", "next"] {
+        execute_successfully(
+            &provider,
+            reasoning_replay_operation(
+                "session-done",
+                json!([{"type":"message","role":"user","content":content}]),
+            ),
+        )
+        .await;
+    }
+    let requests = transport.requests.lock().expect("requests");
+    let replayed: serde_json::Value = serde_json::from_slice(requests[1].body()).unwrap();
+    assert_eq!(
+        replayed.pointer("/input/0/encrypted_content"),
+        Some(&json!(encrypted_content))
+    );
+}
+
+#[tokio::test]
 async fn reasoning_replay_should_pair_context_scoped_custom_call_with_its_output() {
     let encrypted_content = replay_ciphertext(4);
     let transport = StubInferenceTransport::sequence([

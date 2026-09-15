@@ -273,6 +273,17 @@ fn websocket_completed_id_should_preserve_an_empty_opaque_id() {
 }
 
 #[test]
+fn websocket_done_alias_should_only_record_successful_continuation() {
+    for status in ["completed", "incomplete", "failed", "cancelled"] {
+        let event = json!({"type":"response.done","response":{"id":"resp_alias","status":status}});
+        assert_eq!(
+            websocket_response_completed_id(&event),
+            (status == "completed").then(|| "resp_alias".to_owned())
+        );
+    }
+}
+
+#[test]
 fn websocket_typed_events_should_remain_transparent_without_schema_filtering() {
     let malformed_delta = json!({
         "type": "response.output_text.delta",

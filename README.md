@@ -17,7 +17,8 @@
 </div>
 
 > [!NOTE]
-> 本项目提供 Responses API，不支持 `/v1/chat/completions`。接入前请确认客户端支持 Responses 协议。
+> 本项目提供 Responses API，也支持 Chat Completions 的文本、图片输入和函数工具调用。
+> Chat 参数支持范围见 [API 参考](docs/api.md#chat-completions)，接入前请核对客户端使用的参数。
 
 ## 快速开始
 
@@ -87,7 +88,7 @@ curl -i http://127.0.0.1:8080/healthz
 **Codex CLI / 桌面端**：在「使用密钥」中按操作系统复制配置，或通过 CCSwitch 导入。
 合并到客户端配置后重启 Codex。完整步骤、生图配置与排障见[客户端配置](deploy/README.md#客户端配置)。
 
-**其他 Responses API 客户端**：填写以下信息。
+**其他 Responses / Chat Completions 客户端**：填写以下信息。
 
 | 配置 | 值 |
 | --- | --- |

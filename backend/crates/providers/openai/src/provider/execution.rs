@@ -297,7 +297,7 @@ pub(super) fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]
         .or_else(|| wire.data().get("type").and_then(Value::as_str));
     matches!(
         event_type,
-        Some("response.completed" | "response.incomplete")
+        Some("response.completed" | "response.done" | "response.incomplete")
     )
     .then(|| {
         wire.data()

@@ -21,7 +21,7 @@ const DOWNSTREAM_WEBSOCKET_CONNECTION_ID_CONTEXT_KEY: &str = "downstream_websock
 
 /// Responses 请求进入共享解码内核时的下游传输来源。
 #[derive(Clone, Copy)]
-pub(super) enum RequestDecodeSource {
+pub(in crate::openai) enum RequestDecodeSource {
     /// 单次 HTTP 请求，请求头与正文属于同一请求。
     Http,
     /// 复用连接上的 WebSocket `response.create` 帧。
@@ -339,7 +339,7 @@ const MAX_DECOMPRESSED_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// 未压缩与 `identity` 借用原始正文；压缩正文在读取过程中限制展开大小，
 /// 避免先完整分配再检查。只接受单一编码，重复头和叠加编码不能只解释第一项。
-fn decompress_request_body<'a>(
+pub(in crate::openai) fn decompress_request_body<'a>(
     body: &'a [u8],
     headers: &HeaderMap,
 ) -> Result<Cow<'a, [u8]>, RequestDecodeError> {
@@ -419,7 +419,7 @@ pub(super) fn decode_request_inner(
 }
 
 /// 解码已解析的顶层 object；按下游传输来源恢复连接级协议上下文。
-pub(super) fn decode_request_object(
+pub(in crate::openai) fn decode_request_object(
     mut object: Map<String, Value>,
     request_headers: &OpenAiRequestHeaders,
     source: RequestDecodeSource,
