@@ -1045,13 +1045,15 @@ impl Provider for NativeCatalogProvider {
                 .into_iter()
                 .map(|id| gateway_core::routing::ProviderModelDescriptor {
                     model: UpstreamModelId::new(id).expect("id"),
-                    payload: RawJsonPayload::new(
-                        "codex",
-                        serde_json::to_vec(&json!({"slug":id,"future":null}))
-                            .expect("JSON")
-                            .into(),
-                    )
-                    .expect("payload"),
+                    content: gateway_core::routing::ProviderModelContent::Native(
+                        RawJsonPayload::new(
+                            "codex",
+                            serde_json::to_vec(&json!({"slug":id,"future":null}))
+                                .expect("JSON")
+                                .into(),
+                        )
+                        .expect("payload"),
+                    ),
                 })
                 .collect(),
         ))

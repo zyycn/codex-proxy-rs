@@ -6900,7 +6900,11 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
         .expect("native catalog")
         .expect("supported");
     let original: Value = serde_json::from_slice(OFFICIAL_FIXTURE).expect("fixture");
-    let document: Value = serde_json::from_slice(native[0].payload.body()).expect("document");
+    let document: Value = serde_json::from_slice(match &native[0].content {
+        gateway_core::routing::ProviderModelContent::Native(payload) => payload.body(),
+        _ => panic!("expected native model"),
+    })
+    .expect("document");
     assert_eq!(document, original["models"][0]);
     assert!(
         server
@@ -7518,4 +7522,184 @@ async fn connection_limit_payload_survives_exhausted_retry_budget() {
         observation.request_id().map(|id| id.as_str()),
         Some("req-limit-final")
     );
+}
+
+#[tokio::test]
+async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentication() {
+    for prefix in ["", "/v1", "/custom/v2"] {
+        let upstream = MockServer::start().await;
+        let oauth = MockServer::start().await;
+        let store = Arc::new(MemoryAccountStore::default());
+        store
+            .seed_api_key(
+                "acct_provider_contract",
+                format!("{}{prefix}", upstream.uri()),
+                provider_openai::credential::ApiKeyTransport::Http,
+            )
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/models")))
+            .and(header("authorization", "Bearer sk-api-test-only"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"gpt-5.4"}]})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{prefix}/responses")))
+            .and(header("authorization", "Bearer sk-api-test-only"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let (provider, quota) = provider_and_quota_with_affinity_and_base_url_and_leases(
+            &store,
+            Arc::new(MemorySessionAffinity::default()),
+            oauth.uri(),
+            Arc::new(TestLeaseCoordinator::default()),
+            DEFAULT_STREAM_MAX_RETRIES as u32,
+        );
+        provider
+            .query_model_capabilities()
+            .await
+            .expect("standard API catalog");
+        let catalog = provider
+            .query_client_model_catalog(&contract_account_scope(), "codex", "1.0.0")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert!(matches!(
+            catalog[0].content,
+            gateway_core::routing::ProviderModelContent::Adapted(_)
+        ));
+        let mut stream = provider
+            .execute(
+                planned_request("openai", generate_operation()),
+                context("req_api_http", CancellationToken::new()),
+            )
+            .await
+            .expect("scheduled API account");
+        while let Some(event) = stream.next().await {
+            event.expect("completed API response");
+        }
+        quota.synchronize().await.expect("skip API account quota");
+        assert!(oauth.received_requests().await.unwrap().is_empty());
+        let requests = upstream.received_requests().await.unwrap();
+        let request = requests
+            .iter()
+            .find(|request| request.method == "POST")
+            .unwrap();
+        assert!(!request.headers.contains_key("content-encoding"));
+        for header in [
+            "cookie",
+            "chatgpt-account-id",
+            "originator",
+            "version",
+            "x-codex-routing-hint",
+        ] {
+            assert!(!request.headers.contains_key(header), "unexpected {header}");
+        }
+        let body: Value = serde_json::from_slice(&request.body).expect("ordinary JSON");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["model"], "gpt-5.4");
+    }
+}
+
+#[tokio::test]
+async fn api_key_http_account_is_rejected_before_websocket_warmup_or_old_revision_continuation() {
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_provider_contract",
+            upstream.uri(),
+            provider_openai::credential::ApiKeyTransport::Http,
+        )
+        .await;
+    let provider = provider(&store);
+    let warmup = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4","input":[],"store":false,"generate":false})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap(),
+    ));
+    assert!(
+        provider
+            .execute(
+                planned_request("openai", warmup),
+                diagnostic_context("req_api_warmup", "acct_provider_contract")
+            )
+            .await
+            .is_err()
+    );
+    let Operation::Generate(generate) = generate_operation() else {
+        panic!("generate")
+    };
+    let stale = generate.with_provider_session_state(ProviderSessionState::new("openai", json!({"account_id":"acct_provider_contract","conversation_id":"old","credential_revision":9,"continuation_scope":"persisted"}).as_object().unwrap().clone()).unwrap());
+    assert!(
+        provider
+            .execute(
+                planned_request("openai", Operation::Generate(stale)),
+                diagnostic_context("req_api_stale", "acct_provider_contract")
+            )
+            .await
+            .is_err()
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/custom/v2", listener.local_addr().unwrap());
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_provider_contract",
+            base,
+            provider_openai::credential::ApiKeyTransport::PreferWebsocket,
+        )
+        .await;
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut websocket =
+            crate::transport::accept_codex_test_websocket_with(stream, |request, _| {
+                assert_eq!(request.uri().path(), "/custom/v2/responses");
+                assert_eq!(
+                    request.headers()["authorization"],
+                    "Bearer sk-api-test-only"
+                );
+                assert!(!request.headers().contains_key("chatgpt-account-id"));
+                assert!(!request.headers().contains_key("cookie"));
+                assert!(!request.headers().contains_key("originator"));
+            })
+            .await;
+        let frame = websocket.next().await.unwrap().unwrap();
+        let payload: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        assert_eq!(payload["type"], "response.create");
+        websocket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp_api_ws","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}).to_string().into())).await.unwrap();
+    });
+    let provider = provider(&store);
+    let mut stream = provider
+        .execute(
+            planned_request("openai", generate_operation()),
+            diagnostic_context("req_api_ws", "acct_provider_contract"),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.expect("API WebSocket completion");
+    }
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

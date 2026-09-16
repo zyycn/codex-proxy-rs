@@ -56,6 +56,6 @@ const boxClasses = computed(() => [
         :class="!indeterminate && model ? 'opacity-100' : 'opacity-0'"
       />
     </span>
-    <span v-if="showLabel" class="text-cp leading-none font-emphasis">{{ label }}</span>
+    <span v-if="showLabel" class="min-w-0 text-cp leading-none font-emphasis"><slot name="label">{{ label }}</slot></span>
   </label>
 </template>

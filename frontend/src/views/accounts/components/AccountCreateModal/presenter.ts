@@ -1,5 +1,6 @@
 import type { AccountRow } from '../../constants'
 import type { AccountCreateForm, AccountCreateProvider } from './model'
+import { apiKeyAccountError } from '../../utils/upstreamApiKey'
 
 interface AccountCreatePresentationInput {
   form: AccountCreateForm
@@ -12,6 +13,7 @@ interface AccountCreatePresentationInput {
 const modeOptions = {
   openai: [
     { label: 'OAuth', value: 'oauth' },
+    { label: 'API Key', value: 'api_key' },
     { label: 'AT', value: 'access_token' },
     { label: 'RT', value: 'refresh_token' },
     { label: '账号文件', value: 'json' },
@@ -78,6 +80,8 @@ function resolveModal(
     description = '通过浏览器授权导入 xAI 账号'
   else if (provider === 'xai')
     description = '粘贴或上传 xAI 账号文件，匹配已有账号时更新凭据'
+  else if (input.form.mode === 'api_key')
+    description = '接入 OpenAI Responses 兼容上游'
   else if (input.form.mode === 'oauth')
     description = '通过浏览器授权导入 OpenAI 账号'
   else if (input.form.mode === 'access_token')
@@ -143,7 +147,7 @@ function resolveImportInput(
   }
   return {
     label: '账号文件',
-    placeholder: '粘贴包含 accessToken 或 refreshToken（可含 idToken）的 JSON 内容',
+    placeholder: '粘贴 OAuth 或 API Key 账号 JSON 内容',
     uploadable: true,
   }
 }
@@ -168,6 +172,8 @@ function canSubmit(
 ) {
   if (!provider || input.saving || input.oauthLoading)
     return false
+  if (input.form.mode === 'api_key')
+    return !apiKeyAccountError(input.form.apiKey)
   if (input.form.mode !== 'oauth')
     return input.form.importTexts[input.form.mode].trim().length > 0
   return Boolean(

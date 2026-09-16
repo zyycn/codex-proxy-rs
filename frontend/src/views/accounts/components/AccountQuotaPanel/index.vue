@@ -3,6 +3,7 @@ import type { AccountRow } from '../../constants'
 import { RefreshCw, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef } from 'vue'
+import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
@@ -34,10 +35,11 @@ const profileOpen = shallowRef(false)
           账号额度
         </h3>
         <p
+          v-if="account.authenticationKind !== 'api_key'"
           class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
         >
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
-          <template v-if="account.provider === 'openai'">
+          <template v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'">
             <span>·</span>
             <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
           </template>
@@ -45,9 +47,9 @@ const profileOpen = shallowRef(false)
           <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>
         </p>
       </div>
-      <div class="flex shrink-0 items-center gap-0.5">
+      <div v-if="account.authenticationKind !== 'api_key'" class="flex shrink-0 items-center gap-0.5">
         <BaseIconButton
-          v-if="account.provider === 'openai'"
+          v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
           label="查看个人信息"
           size="sm"
           variant="ghost"
@@ -57,7 +59,7 @@ const profileOpen = shallowRef(false)
           <UserRound class="size-3.5" />
         </BaseIconButton>
         <AccountResetCredits
-          v-if="account.provider === 'openai'"
+          v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
           :account="account"
           @account-updated="emit('accountUpdated', $event)"
         />
@@ -77,7 +79,10 @@ const profileOpen = shallowRef(false)
       </div>
     </div>
 
-    <div class="grid min-h-0 gap-3">
+    <div v-if="account.authenticationKind === 'api_key'" class="grid flex-1 place-items-center">
+      <BaseEmpty title="暂不支持查询上游额度" surface="none" />
+    </div>
+    <div v-else class="grid min-h-0 gap-3">
       <AccountQuotaPanelEntry
         v-for="entry in quotaEntries"
         :key="entry.key"
@@ -91,7 +96,7 @@ const profileOpen = shallowRef(false)
   </section>
 
   <AccountProfileModal
-    v-if="account.provider === 'openai'"
+    v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
     v-model="profileOpen"
     :account="account"
   />

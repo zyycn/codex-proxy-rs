@@ -9,6 +9,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useRequestState } from '@/composables/useRequestState'
 import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
@@ -135,27 +136,31 @@ watch(search, () => {
       <p v-if="inputError" class="m-0 text-cp-xs text-cp-error-text" role="alert">
         {{ inputError }}
       </p>
-      <div v-if="models.length" class="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto p-1 -m-1 sm:grid-cols-3" role="group" aria-label="选择模型" :aria-busy="loading || undefined">
-        <BaseCheckbox
-          v-for="item in models"
-          :key="item.id"
-          class="min-h-11 min-w-0 rounded-cp px-3 py-2.5 wrap-anywhere transition-colors duration-150 motion-reduce:transition-none"
-          :class="model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
-          :model-value="model?.models.includes(item.id) ?? false"
-          :label="item.id"
-          :title="item.unavailable && accountId ? '当前目录未返回' : undefined"
-          show-label
-          :disabled="disabled"
-          @update:model-value="select(item.id, $event)"
-        />
-      </div>
+      <BaseScrollbar v-if="models.length" max-height="15rem" class="min-w-0 -m-1">
+        <div class="grid grid-cols-2 gap-2 p-1 sm:grid-cols-3" role="group" aria-label="选择模型" :aria-busy="loading || undefined">
+          <BaseCheckbox
+            v-for="item in models"
+            :key="item.id"
+            class="min-h-11 min-w-0 rounded-cp px-3 py-2.5 transition-colors duration-150 motion-reduce:transition-none"
+            :class="model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
+            :model-value="model?.models.includes(item.id) ?? false"
+            :label="item.id"
+            :title="item.unavailable && accountId ? `${item.id}（当前目录未返回）` : item.id"
+            show-label
+            :disabled="disabled"
+            @update:model-value="select(item.id, $event)"
+          >
+            <template #label>
+              <span class="block truncate">{{ item.id }}</span>
+            </template>
+          </BaseCheckbox>
+        </div>
+      </BaseScrollbar>
       <p v-else-if="loading" class="m-0 py-4 text-center text-cp-sm text-cp-text-tertiary" role="status">
         加载模型中…
       </p>
       <BaseEmpty v-else-if="!error" :title="search ? '无匹配模型' : '暂无模型'" :icon="search ? Search : undefined" size="sm" surface="none" />
-      <p v-if="error" class="m-0 text-cp-xs text-cp-error-text" role="alert">
-        模型列表加载失败，请重试
-      </p>
+      <BaseEmpty v-if="error" title="模型列表加载失败" description="请刷新后重试" size="sm" surface="none" role="alert" />
     </template>
   </div>
 </template>

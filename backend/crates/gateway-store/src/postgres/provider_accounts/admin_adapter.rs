@@ -281,6 +281,7 @@ impl PgAdminAccountStore {
     async fn commit_prepared_rotation(
         &self,
         prepared: PreparedCredentialRotationFacts,
+        settings: Option<UpdateAccount>,
         context: &MutationContext,
         action: &str,
     ) -> AdminStoreResult<CredentialMutationResult> {
@@ -288,9 +289,24 @@ impl PgAdminAccountStore {
         let scope = ProviderAccountAdminScope {
             provider_kind: prepared.provider_kind.as_str().to_owned(),
         };
+        let mut changed_fields = vec!["credentials".to_owned()];
+        if let Some(settings) = &settings {
+            changed_fields
+                .extend(["enabled", "concurrency_limit", "weight", "groups"].map(str::to_owned));
+            if settings.model_access.is_some() {
+                changed_fields.push("model_access".to_owned());
+            }
+            if settings.outbound_proxy.is_some() {
+                changed_fields.push("outbound_proxy".to_owned());
+            }
+            if settings.notes.is_some() {
+                changed_fields.push("notes".to_owned());
+            }
+        }
         let rotation = self
             .accounts
             .rotate_provider_account(RotateProviderAccount {
+                settings,
                 scope,
                 profile: UpdateProviderAccount {
                     id: account_id.as_str().to_owned(),
@@ -313,7 +329,7 @@ impl PgAdminAccountStore {
                     action,
                     "provider_account",
                     account_id.as_str(),
-                    vec!["credentials".to_owned()],
+                    changed_fields,
                 ),
             })
             .await
@@ -637,7 +653,7 @@ impl AccountStore for PgAdminAccountStore {
                         "reauthorization cannot change account settings",
                     ));
                 }
-                self.commit_prepared_rotation(prepared, context, "reauthorize")
+                self.commit_prepared_rotation(prepared, None, context, "reauthorize")
                     .await
             }
         }
@@ -648,8 +664,13 @@ impl AccountStore for PgAdminAccountStore {
         command: CredentialRotationCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult> {
-        self.commit_prepared_rotation(command.prepared, context, "rotate_credential")
-            .await
+        self.commit_prepared_rotation(
+            command.prepared,
+            command.settings,
+            context,
+            "rotate_credential",
+        )
+        .await
     }
 
     async fn commit_credential_refresh(
@@ -657,7 +678,14 @@ impl AccountStore for PgAdminAccountStore {
         command: CredentialRotationCommit,
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult> {
-        self.commit_prepared_rotation(command.prepared, context, "refresh_credential")
+        if command.settings.is_some() {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                ENTITY,
+                "credential refresh cannot change account settings",
+            ));
+        }
+        self.commit_prepared_rotation(command.prepared, None, context, "refresh_credential")
             .await
     }
 

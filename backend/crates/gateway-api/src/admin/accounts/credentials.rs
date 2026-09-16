@@ -319,9 +319,13 @@ impl AccountDeletionRequest {
 pub struct RotateAccountRequest {
     pub provider: String,
     pub account_id: String,
-    pub access_token: String,
+    pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub id_token: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub transport: Option<String>,
+    pub settings: Option<UpdateAccountRequest>,
 }
 
 impl RotateAccountRequest {
@@ -330,11 +334,40 @@ impl RotateAccountRequest {
             return Err(WireValidationError::new("provider"));
         }
         require_account_id(&self.account_id, "accountId")?;
-        validate_oauth_material(
-            &self.access_token,
-            self.refresh_token.as_deref(),
-            self.id_token.as_deref(),
-        )
+        if let Some(settings) = &self.settings {
+            settings.validate()?;
+            if settings.account_id != self.account_id {
+                return Err(WireValidationError::new("settings.accountId"));
+            }
+        }
+        if let Some(base_url) = &self.base_url {
+            if self.access_token.is_some()
+                || self.refresh_token.is_some()
+                || self.id_token.is_some()
+                || base_url.is_empty()
+                || base_url.len() > 2048
+                || !matches!(self.transport.as_deref(), Some("http" | "prefer_websocket"))
+                || self.api_key.as_ref().is_some_and(|key| {
+                    key.is_empty()
+                        || key.len() > 16 * 1024
+                        || !key.bytes().all(|byte| byte.is_ascii_graphic())
+                })
+            {
+                return Err(WireValidationError::new("credential"));
+            }
+            Ok(())
+        } else {
+            if self.api_key.is_some() || self.transport.is_some() {
+                return Err(WireValidationError::new("credential"));
+            }
+            validate_oauth_material(
+                self.access_token
+                    .as_deref()
+                    .ok_or_else(|| WireValidationError::new("accessToken"))?,
+                self.refresh_token.as_deref(),
+                self.id_token.as_deref(),
+            )
+        }
     }
 
     pub(super) fn into_command(
@@ -343,16 +376,34 @@ impl RotateAccountRequest {
     ) -> Result<RotateCredential, WireValidationError> {
         self.validate()?;
         let mut material = Map::new();
-        material.insert("access_token".to_owned(), Value::String(self.access_token));
-        material.insert(
-            "refresh_token".to_owned(),
-            self.refresh_token.map_or(Value::Null, Value::String),
-        );
-        material.insert(
-            "id_token".to_owned(),
-            self.id_token.map_or(Value::Null, Value::String),
-        );
+        if let Some(base_url) = self.base_url {
+            material.insert("base_url".to_owned(), Value::String(base_url));
+            material.insert(
+                "transport".to_owned(),
+                self.transport.map_or(Value::Null, Value::String),
+            );
+            if let Some(key) = self.api_key {
+                material.insert("api_key".to_owned(), Value::String(key));
+            }
+        } else {
+            material.insert(
+                "access_token".to_owned(),
+                self.access_token.map_or(Value::Null, Value::String),
+            );
+            material.insert(
+                "refresh_token".to_owned(),
+                self.refresh_token.map_or(Value::Null, Value::String),
+            );
+            material.insert(
+                "id_token".to_owned(),
+                self.id_token.map_or(Value::Null, Value::String),
+            );
+        }
         Ok(RotateCredential {
+            settings: self
+                .settings
+                .map(UpdateAccountRequest::into_command)
+                .transpose()?,
             mutation: CredentialMutation {
                 context,
                 account_id: ProviderAccountId::new(self.account_id)

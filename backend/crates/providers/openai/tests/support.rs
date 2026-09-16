@@ -62,6 +62,49 @@ impl MemoryAccountStore {
             .expect("seed test OAuth credential");
     }
 
+    pub(crate) async fn seed_api_key(
+        &self,
+        id: &str,
+        base_url: String,
+        transport: provider_openai::credential::ApiKeyTransport,
+    ) {
+        let credential = provider_openai::credential::CodexCredentialCodec::encode_complete(
+            provider_openai::credential::CodexCredentialData::ApiKey(
+                provider_openai::credential::ApiKeyCredentialData {
+                    schema_version: 1,
+                    installation_id: uuid::Uuid::new_v4().to_string(),
+                    base_url,
+                    api_key: "sk-api-test-only".to_owned(),
+                    transport,
+                },
+            ),
+        )
+        .expect("API Key schema");
+        let account = ProviderAccount::new(
+            ProviderAccountId::new(id).expect("id"),
+            ProviderKind::new("openai").expect("kind"),
+            id.to_owned(),
+            None,
+            "api_key".to_owned(),
+            CredentialRevision::new(1).expect("revision"),
+            None,
+        )
+        .with_account_facts(
+            true,
+            CredentialState::Ready,
+            QuotaState::unknown(),
+            None,
+            None,
+        );
+        self.create_account(NewProviderAccount {
+            account,
+            credential,
+            model_access: None,
+        })
+        .await
+        .expect("seed API account");
+    }
+
     pub(crate) fn account(&self, id: &str) -> Option<ProviderAccount> {
         let id = ProviderAccountId::new(id).ok()?;
         self.accounts

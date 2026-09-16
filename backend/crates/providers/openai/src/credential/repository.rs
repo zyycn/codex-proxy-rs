@@ -75,7 +75,12 @@ impl CodexCredentialRepository {
             next_refresh_at,
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
-        .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
+        .with_account_state(
+            oauth_account_state(account, CredentialState::Ready),
+            SystemTime::now(),
+            None,
+            None,
+        );
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
@@ -144,6 +149,10 @@ impl CodexCredentialRepository {
         loaded: &LoadedCredential,
     ) -> Result<CodexRuntimeCredential, CredentialRepositoryError> {
         if loaded.account.provider().as_str() != PROVIDER_NAME {
+            return Err(CredentialRepositoryError::InvalidCredentialData);
+        }
+        let data = CodexCredentialCodec::decode_complete(&loaded.credential)?;
+        if data.authentication_kind() != loaded.account.authentication_kind() {
             return Err(CredentialRepositoryError::InvalidCredentialData);
         }
         CodexCredentialCodec::decode(&loaded.credential).map_err(Into::into)
@@ -230,6 +239,7 @@ impl CodexCredentialRepository {
         if !account.enabled() {
             return Ok(());
         }
+        let credential_state = oauth_account_state(account, credential_state);
         let message = message.filter(|value| !value.trim().is_empty());
         let error_reason = if credential_state == CredentialState::Ready {
             message.as_ref().and(error_reason)
@@ -293,5 +303,16 @@ impl From<gateway_core::error::StoreError> for CredentialRepositoryError {
 impl From<CodexCredentialDataError> for CredentialRepositoryError {
     fn from(_: CodexCredentialDataError) -> Self {
         Self::InvalidCredentialData
+    }
+}
+
+/// OAuth 未取得用户身份时保留未验证状态；通用账号层不解释认证类型。
+fn oauth_account_state(account: &ProviderAccount, observed: CredentialState) -> CredentialState {
+    if account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_OAUTH
+        && account.upstream_user_id().is_none()
+    {
+        CredentialState::Unknown
+    } else {
+        observed
     }
 }

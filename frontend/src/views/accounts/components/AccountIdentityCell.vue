@@ -8,7 +8,7 @@ import AccountPlanBadge from './AccountPlanBadge.vue'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
-  & Partial<Pick<AccountRow, 'accountId' | 'notes'>>
+  & Partial<Pick<AccountRow, 'accountId' | 'notes' | 'name' | 'authenticationKind'>>
 
 const props = withDefaults(
   defineProps<{
@@ -31,6 +31,8 @@ const props = withDefaults(
 )
 
 const emailText = computed(() => {
+  if (props.account.authenticationKind === 'api_key' && props.account.name)
+    return props.account.name
   const email = props.account.email?.trim()
   if (email)
     return email
@@ -42,11 +44,11 @@ const emailText = computed(() => {
 const visibleNotes = computed(() => props.showNotes ? props.account.notes : undefined)
 
 const displayTitle = computed(() =>
-  visibleNotes.value || props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0],
+  visibleNotes.value || props.titleMode === 'email' || props.account.authenticationKind === 'api_key' ? emailText.value : emailText.value.split('@')[0],
 )
 
 const secondaryText = computed(() =>
-  props.titleMode === 'email' ? null : emailText.value,
+  props.titleMode === 'email' || props.account.authenticationKind === 'api_key' ? null : emailText.value,
 )
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
@@ -88,7 +90,7 @@ const avatarToneClass = computed(() => {
           :class="metaGapClass"
         >
           <slot name="meta" />
-          <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
+          <AccountPlanBadge v-if="showPlan" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
         </span>
       </div>
       <div
@@ -97,9 +99,9 @@ const avatarToneClass = computed(() => {
         :class="metaGapClass"
       >
         <slot name="meta" />
-        <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
+        <AccountPlanBadge v-if="showPlan" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
-      <AccountNotesPopover v-else-if="visibleNotes" :notes="visibleNotes" class="mt-1" />
+      <AccountNotesPopover v-else-if="visibleNotes" :notes="visibleNotes" class="mt-0.5" />
       <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
         {{ secondaryText }}
       </div>

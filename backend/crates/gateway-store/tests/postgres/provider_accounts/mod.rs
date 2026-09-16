@@ -164,6 +164,7 @@ async fn provider_account_should_allow_missing_upstream_user_id() {
     let mut pending = account("acct_pending_identity", "unused");
     pending.upstream_user_id = None;
     pending.email = None;
+    pending.authentication_kind = "api_key".to_owned();
     pending.credential_state = CredentialState::Ready;
     repository
         .insert_provider_account(pending)
@@ -180,7 +181,7 @@ async fn provider_account_should_allow_missing_upstream_user_id() {
             stored.summary.upstream_user_id,
             stored.summary.credential_state,
         ),
-        (None, CredentialState::Unknown)
+        (None, CredentialState::Ready)
     );
 
     database.close().await;
@@ -2198,6 +2199,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     };
     let wrong_scope_error = repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope: wrong_scope,
             profile: profile("acct_admin_a", "wrong scope"),
             replacement_identity: None,
@@ -2227,6 +2229,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let rotation = repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope: scope.clone(),
             profile: profile("acct_admin_a", "rotated account"),
             replacement_identity: Some(ProviderAccountIdentity::new(
@@ -2259,6 +2262,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let identity_conflict = repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope: scope.clone(),
             profile: profile("acct_admin_a", "must roll back"),
             replacement_identity: Some(ProviderAccountIdentity::new(
@@ -2344,6 +2348,137 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 }
 
 #[tokio::test]
+async fn credential_rotation_and_settings_share_one_transaction() {
+    use gateway_admin::model::proxies::AccountProxySelection;
+    use gateway_core::account::{AccountConcurrencyLimit, AccountWeight};
+
+    const ACCOUNT_ID: &str = "acct_combined_save";
+    const GROUP_ID: &str = "grp_00000000000000000000000000000091";
+    let Some(database) = TestDatabase::create("combined_account_save").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account(ACCOUNT_ID, "combined-save-user"))
+        .await
+        .expect("seed account");
+    sqlx::query(
+        "insert into account_groups (id, name, color, created_at, updated_at)
+         values ($1, 'Combined save', '#2563EBFF', now(), now())",
+    )
+    .bind(GROUP_ID)
+    .execute(&database.pool)
+    .await
+    .expect("seed group");
+    let settings = UpdateAccount {
+        account_id: ACCOUNT_ID.to_owned(),
+        notes: Some("统一保存".to_owned()),
+        enabled: false,
+        concurrency_limit: Some(AccountConcurrencyLimit::new(3).unwrap()),
+        weight: AccountWeight::new(7).unwrap(),
+        group_ids: vec![AccountGroupId::new(GROUP_ID).unwrap()],
+        model_access: None,
+        outbound_proxy: Some(AccountProxySelection::Direct),
+    };
+    let scope = ProviderAccountAdminScope {
+        provider_kind: "openai".to_owned(),
+    };
+    let result = repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope: scope.clone(),
+            profile: profile(ACCOUNT_ID, "combined save"),
+            replacement_identity: None,
+            credential: credential_update(ACCOUNT_ID, 1, "combined-secret"),
+            settings: Some(settings.clone()),
+            audit: audit("audit_combined_save", "rotate", ACCOUNT_ID),
+        })
+        .await
+        .expect("save credentials and settings");
+    assert_eq!(result.config_revision.get(), 2);
+    assert_eq!(result.credential_revision.get(), 2);
+    let before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(account) from provider_accounts account where id = $1")
+            .bind(ACCOUNT_ID)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        before["provider_credentials_json"]["access_token"],
+        "combined-secret"
+    );
+    assert_eq!(before["enabled"], false);
+    assert_eq!(before["concurrency_limit"], 3);
+    assert_eq!(before["weight"], 7);
+    assert_eq!(before["notes"], "统一保存");
+    assert_eq!(
+        account_group_ids(&database.pool, ACCOUNT_ID).await,
+        [GROUP_ID]
+    );
+
+    for (case, expected_revision, invalid_settings) in [
+        (
+            "missing_group",
+            2,
+            UpdateAccount {
+                enabled: true,
+                group_ids: vec![
+                    AccountGroupId::new("grp_00000000000000000000000000000092").unwrap(),
+                ],
+                ..settings.clone()
+            },
+        ),
+        (
+            "missing_proxy",
+            2,
+            UpdateAccount {
+                outbound_proxy: Some(AccountProxySelection::Saved("missing_proxy".to_owned())),
+                ..settings.clone()
+            },
+        ),
+        (
+            "stale_credential",
+            1,
+            UpdateAccount {
+                enabled: true,
+                notes: Some("must not persist".to_owned()),
+                ..settings.clone()
+            },
+        ),
+    ] {
+        repository
+            .rotate_provider_account(RotateProviderAccount {
+                scope: scope.clone(),
+                profile: profile(ACCOUNT_ID, "must not persist"),
+                replacement_identity: None,
+                credential: credential_update(ACCOUNT_ID, expected_revision, "must-not-persist"),
+                settings: Some(invalid_settings),
+                audit: audit(&format!("audit_{case}"), "rotate", ACCOUNT_ID),
+            })
+            .await
+            .expect_err("failed combined save must roll back all mutations");
+        let after: serde_json::Value = sqlx::query_scalar(
+            "select to_jsonb(account) from provider_accounts account where id = $1",
+        )
+        .bind(ACCOUNT_ID)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(after, before, "{case}");
+        assert_eq!(
+            account_group_ids(&database.pool, ACCOUNT_ID).await,
+            [GROUP_ID]
+        );
+        assert_eq!(current_revision(&database.pool).await, 2);
+        let audit_count: i64 = sqlx::query_scalar("select count(*) from admin_audit_events")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(audit_count, 1, "{case}");
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn provider_account_import_and_reauthorization_preserve_existing_memberships() {
     const GROUP_ID: &str = "grp_00000000000000000000000000000091";
     let Some(database) = TestDatabase::create("provider_account_group_assignment").await else {
@@ -2422,6 +2557,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
     let revision_before_reauthorization = current_revision(&database.pool).await;
     let reauthorized = repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope,
             profile: profile("acct_grouped_import", "reauthorized"),
             replacement_identity: None,
@@ -2480,7 +2616,8 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
         })
         .await
         .expect("import exhausted account");
-    let observed_at = SystemTime::now();
+    // 模拟应用与数据库的微小时钟偏差，轮换不能把更新时间倒退到已有额度观测之前。
+    let observed_at = SystemTime::now() + Duration::from_secs(3);
     repository
         .apply_quota_access(QuotaAccessChange {
             account_id: ProviderAccountId::new("acct_rotation_quota").expect("account ID"),
@@ -2492,6 +2629,7 @@ async fn verified_credential_rotation_preserves_quota_exhaustion() {
 
     repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope,
             profile: profile("acct_rotation_quota", "reauthorized account"),
             replacement_identity: None,
@@ -2637,6 +2775,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
         .expect("disabled state write is a no-op");
     repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope,
             profile: profile(account_id.as_str(), "refreshed disabled account"),
             replacement_identity: None,

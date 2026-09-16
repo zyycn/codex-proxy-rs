@@ -30,10 +30,7 @@ const props = withDefaults(
 
 const model = defineModel<string>({ required: true })
 
-const activeIndex = computed(() => {
-  const index = props.options.findIndex(option => option.value === model.value)
-  return index >= 0 ? index : 0
-})
+const activeIndex = computed(() => props.options.findIndex(option => option.value === model.value))
 const optionCount = computed(() => clamp(props.options.length, 1, Number.POSITIVE_INFINITY))
 const gridStyle = computed(() => ({
   gridTemplateColumns: `repeat(${optionCount.value}, minmax(0, 1fr))`,
@@ -104,7 +101,7 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
     :aria-disabled="disabled || undefined"
   >
     <span
-      v-if="options.length > 0"
+      v-if="activeIndex >= 0"
       class="pointer-events-none absolute inset-y-0.75 left-0.75 rounded-cp bg-cp-bg-container shadow-cp-tertiary transition-transform duration-200 ease-out motion-reduce:transition-none"
       :style="indicatorStyle"
     />
@@ -123,7 +120,7 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
       :aria-checked="model === option.value"
       :aria-label="display === 'icon' ? option.label : undefined"
       :title="display === 'icon' ? option.label : undefined"
-      :tabindex="model === option.value || (activeIndex === index && !model) ? 0 : -1"
+      :tabindex="model === option.value || (activeIndex < 0 && index === 0) ? 0 : -1"
       :disabled="disabled || option.disabled"
       @click="selectOption(index)"
       @keydown="handleKeydown($event, index)"

@@ -87,6 +87,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
             模型使用排行
           </h3>
           <BaseIconButton
+            v-if="account.authenticationKind !== 'api_key'"
             label="预测周/月额度"
             size="sm"
             aria-haspopup="dialog"
@@ -136,6 +137,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
   </section>
 
   <AccountQuotaForecastModal
+    v-if="account.authenticationKind !== 'api_key'"
     v-model="forecastOpen"
     :account="account"
     @account-updated="emit('accountUpdated', $event)"

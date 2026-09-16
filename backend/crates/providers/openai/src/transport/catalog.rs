@@ -19,13 +19,14 @@ const MAX_SERVICE_TIER_ID_BYTES: usize = 64;
 const MAX_ETAG_BYTES: usize = 256;
 
 /// 上游目录对一项能力给出的明确证据。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum CodexCatalogCapabilityEvidence {
     /// 上游明确声明原生支持。
     DeclaredNative,
     /// 上游明确声明不支持。
     DeclaredUnsupported,
     /// 上游没有提供可依赖的声明。
+    #[default]
     Unknown,
 }
 
@@ -40,7 +41,7 @@ impl CodexCatalogCapabilityEvidence {
 }
 
 /// Codex 目录中允许进入控制面的能力证据。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexCatalogCapabilities {
     responses_api: CodexCatalogCapabilityEvidence,
     reasoning: CodexCatalogCapabilityEvidence,
@@ -110,7 +111,7 @@ impl CodexCatalogCapabilities {
 }
 
 /// Codex 目录中明确声明的模型限制。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexCatalogLimits {
     context_window_tokens: Option<NonZeroU64>,
     max_context_window_tokens: Option<NonZeroU64>,
@@ -131,7 +132,7 @@ impl CodexCatalogLimits {
 }
 
 /// Codex 目录中允许持久化的原始元数据白名单。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexCatalogMetadata {
     description: Option<String>,
     priority: Option<i32>,
@@ -584,4 +585,67 @@ fn validate_etag(value: &str) -> Result<String, CodexModelCatalogError> {
         return Err(CodexModelCatalogError::InvalidEtag);
     }
     Ok(value.to_owned())
+}
+
+/// 标准 API 模型 ID 遵循核心 ID 合同，不套用 Codex slug 语法或推断原生画像。
+pub(crate) fn parse_api_model_catalog(
+    body: &[u8],
+    etag: Option<&str>,
+) -> Result<CodexModelCatalogSnapshot, CodexModelCatalogError> {
+    #[derive(Deserialize)]
+    struct ApiModels {
+        data: Vec<ApiModel>,
+    }
+    #[derive(Deserialize)]
+    struct ApiModel {
+        id: String,
+        display_name: Option<String>,
+    }
+    if body.len() > MAX_CODEX_MODEL_CATALOG_BYTES {
+        return Err(CodexModelCatalogError::ResponseTooLarge);
+    }
+    let wire: ApiModels =
+        serde_json::from_slice(body).map_err(|_| CodexModelCatalogError::InvalidWire)?;
+    if wire.data.is_empty() {
+        return Err(CodexModelCatalogError::EmptySnapshot);
+    }
+    if wire.data.len() > MAX_CATALOG_MODELS {
+        return Err(CodexModelCatalogError::TooManyModels);
+    }
+    let mut seen = BTreeSet::new();
+    let mut models = Vec::with_capacity(wire.data.len());
+    for item in wire.data {
+        if item.id.trim() != item.id {
+            return Err(CodexModelCatalogError::InvalidModelSlug);
+        }
+        let request_model =
+            UpstreamModelId::new(item.id).map_err(|_| CodexModelCatalogError::InvalidModelSlug)?;
+        let display_name = item
+            .display_name
+            .unwrap_or_else(|| request_model.as_str().to_owned());
+        validate_public_text(&display_name, MAX_DISPLAY_NAME_BYTES, false)?;
+        let document = RawJsonPayload::new(
+            "openai",
+            Bytes::from(
+                serde_json::to_vec(&serde_json::json!({"id": request_model.as_str()}))
+                    .map_err(|_| CodexModelCatalogError::InvalidWire)?,
+            ),
+        )
+        .map_err(|_| CodexModelCatalogError::InvalidWire)?;
+        if !seen.insert(request_model.clone()) {
+            return Err(CodexModelCatalogError::DuplicateModelSlug);
+        }
+        models.push(CodexCatalogModel {
+            document,
+            request_model,
+            display_name,
+            capabilities: CodexCatalogCapabilities::default(),
+            limits: CodexCatalogLimits::default(),
+            metadata: CodexCatalogMetadata::default(),
+        });
+    }
+    Ok(CodexModelCatalogSnapshot {
+        models,
+        etag: etag.map(validate_etag).transpose()?,
+    })
 }

@@ -1957,6 +1957,52 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
 }
 
 #[tokio::test]
+async fn api_key_list_and_detail_should_accumulate_local_usage_without_subscription_windows() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let mut account = account_record("openai");
+    account.authentication_kind = "api_key".to_owned();
+    account.created_at = Utc::now() - TimeDelta::days(60);
+    let added_at = account.created_at;
+    let store = FakeAccountStore::with_account(account, events());
+    store.set_quota_window_usage(vec![AccountUsageWindowResult {
+        account_id: "acct_test".to_owned(),
+        key: "account-lifetime".to_owned(),
+        usage: quota_local_usage("acct_test", 4_330_000),
+    }]);
+    let services = accounts_service(provider, store.clone()).await;
+    let page = services
+        .accounts()
+        .list(AccountListQuery {
+            page: 1,
+            page_size: gateway_admin::model::PageSize::new(20).unwrap(),
+            provider_kind: None,
+            group_filter: None,
+            search: None,
+            status: None,
+            sort: None,
+        })
+        .await
+        .unwrap();
+    assert!(page.items[0].quota.windows.is_empty());
+    assert_eq!(
+        page.items[0].usage.as_ref().unwrap().total_tokens,
+        Some(4_330_000)
+    );
+    let queries = store.quota_window_queries();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].range.start, added_at);
+    assert!(queries[0].range.end > added_at + TimeDelta::days(59));
+    let detail = services
+        .accounts()
+        .quota(&ProviderAccountId::new("acct_test").unwrap(), false)
+        .await
+        .unwrap();
+    assert_eq!(detail.usage, page.items[0].usage);
+    assert!(detail.quota.windows.is_empty());
+    assert_eq!(store.quota_window_queries()[0].range.start, added_at);
+}
+
+#[tokio::test]
 async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);

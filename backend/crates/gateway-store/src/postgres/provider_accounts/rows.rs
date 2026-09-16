@@ -295,6 +295,7 @@ impl ImportProviderAccounts {
 
 #[derive(Clone)]
 pub struct RotateProviderAccount {
+    pub settings: Option<gateway_admin::model::accounts::UpdateAccount>,
     pub scope: ProviderAccountAdminScope,
     pub profile: UpdateProviderAccount,
     pub replacement_identity: Option<ProviderAccountIdentity>,
@@ -306,6 +307,7 @@ impl fmt::Debug for RotateProviderAccount {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RotateProviderAccount")
+            .field("settings", &self.settings)
             .field("scope", &self.scope)
             .field("profile", &self.profile)
             .field("replacement_identity", &self.replacement_identity)

@@ -65,6 +65,7 @@ const emit = defineEmits<{
             测试连接
           </BaseMenuItem>
           <BaseMenuItem
+            v-if="account.authenticationKind === 'oauth'"
             :loading="refreshing"
             :disabled="refreshing"
             @click.stop="(close(), emit('refresh', account.id))"
@@ -77,7 +78,7 @@ const emit = defineEmits<{
             </template>
             刷新令牌
           </BaseMenuItem>
-          <BaseMenuItem @click.stop="(close(), emit('reauthorize', account))">
+          <BaseMenuItem v-if="account.authenticationKind === 'oauth'" @click.stop="(close(), emit('reauthorize', account))">
             <template #icon>
               <KeyRound class="size-3.5 text-cp-text-quaternary" />
             </template>

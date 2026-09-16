@@ -1991,3 +1991,78 @@ mod errors {
         }
     }
 }
+
+#[tokio::test]
+async fn api_key_admin_exposes_only_configuration_and_preserves_key_when_rotating_address() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_api_admin",
+            "https://first.example/v1".to_owned(),
+            provider_openai::credential::ApiKeyTransport::Http,
+        )
+        .await;
+    let account = store.account("acct_api_admin").unwrap();
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let admin = bundle.admin_provider();
+    let configuration = admin
+        .account_configuration(account.id())
+        .await
+        .unwrap()
+        .unwrap();
+    let configuration = configuration.expose_to_provider().expose_to_provider();
+    assert_eq!(configuration.len(), 2);
+    assert_eq!(
+        configuration.get("base_url"),
+        Some(&json!("https://first.example/v1"))
+    );
+    assert!(!configuration.contains_key("api_key"));
+    let prepared = admin
+        .prepare_rotation(PrepareCredentialRotation {
+            account: account_record(&account),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                json!({"base_url":"https://second.example/root", "transport":"prefer_websocket"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )),
+        })
+        .await
+        .unwrap();
+    let material = prepared
+        .facts()
+        .provider_material
+        .expose_to_provider()
+        .expose_to_provider();
+    assert_eq!(material.get("api_key"), Some(&json!("sk-api-test-only")));
+    assert_eq!(
+        material.get("base_url"),
+        Some(&json!("https://second.example/root"))
+    );
+    assert!(!prepared.facts().has_refresh_token);
+    assert_eq!(prepared.facts().account_id, *account.id());
+    assert_eq!(
+        admin
+            .prepare_refresh(PrepareCredentialRefresh {
+                account: account_record(&account)
+            })
+            .await
+            .unwrap_err()
+            .kind(),
+        ProviderAdminErrorKind::Unsupported
+    );
+    assert_eq!(
+        admin.subscription(account.id()).await.unwrap_err().kind(),
+        ProviderAdminErrorKind::Unsupported
+    );
+    assert_eq!(
+        admin.reset_credits(account.id()).await.unwrap_err().kind(),
+        ProviderAdminErrorKind::Unsupported
+    );
+}

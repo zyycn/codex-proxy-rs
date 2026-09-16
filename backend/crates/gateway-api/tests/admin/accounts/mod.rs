@@ -600,6 +600,44 @@ mod actions {
     }
 
     #[test]
+    fn api_key_rotation_settings_must_target_the_same_account_and_remain_valid() {
+        let mut request = json!({
+            "provider": "openai",
+            "accountId": "acct_api",
+            "baseUrl": "https://api.example.invalid/v1",
+            "transport": "http",
+            "settings": {
+                "accountId": "acct_api",
+                "enabled": true,
+                "concurrencyLimit": null,
+                "weight": 1,
+                "groupIds": []
+            }
+        });
+        serde_json::from_value::<RotateAccountRequest>(request.clone())
+            .expect("decode combined save")
+            .validate()
+            .expect("blank replacement key preserves the existing key");
+        request["settings"]["accountId"] = json!("acct_other");
+        assert_eq!(
+            serde_json::from_value::<RotateAccountRequest>(request.clone())
+                .unwrap()
+                .validate()
+                .unwrap_err()
+                .field(),
+            "settings.accountId"
+        );
+        request["settings"]["accountId"] = json!("acct_api");
+        request["settings"]["concurrencyLimit"] = json!(0);
+        assert!(
+            serde_json::from_value::<RotateAccountRequest>(request)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn credential_recovery_requests_should_not_accept_client_revision_fences() {
         let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
             "provider": "openai",

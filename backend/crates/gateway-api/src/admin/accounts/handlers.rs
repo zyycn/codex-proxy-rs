@@ -120,8 +120,15 @@ where
         .quota(&account_id, false)
         .await
         .map_err(map_service_error)?;
-    let data = AccountQuotaData {
+    let configuration = state
+        .admin_services()
+        .accounts()
+        .account_configuration(&account_id)
+        .await
+        .map_err(map_service_error)?;
+    let data = AccountDetailData {
         account: account_view(result, Utc::now()),
+        credential_configuration: configuration.map(provider_document_value),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

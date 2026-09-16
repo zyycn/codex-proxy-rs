@@ -76,8 +76,29 @@ impl CodexWebSocketConnection {
         business_headers: Vec<(String, String)>,
         request: &CodexResponsesRequest,
     ) -> Result<CodexWebSocketRequest, serde_json::Error> {
+        Self::responses_create_request_for_path(
+            base_url,
+            CODEX_RESPONSES_PATH,
+            websocket_key,
+            business_headers,
+            request,
+        )
+    }
+
+    pub(crate) fn responses_create_request_for_path(
+        base_url: &str,
+        path: &str,
+        websocket_key: &str,
+        business_headers: Vec<(String, String)>,
+        request: &CodexResponsesRequest,
+    ) -> Result<CodexWebSocketRequest, serde_json::Error> {
+        let mut connection = Self::responses(base_url, websocket_key, business_headers);
+        let endpoint = crate::transport::endpoint_url(base_url, path);
+        connection.endpoint = endpoint
+            .replacen("https://", "wss://", 1)
+            .replacen("http://", "ws://", 1);
         Ok(CodexWebSocketRequest {
-            connection: Self::responses(base_url, websocket_key, business_headers),
+            connection,
             payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
         })
