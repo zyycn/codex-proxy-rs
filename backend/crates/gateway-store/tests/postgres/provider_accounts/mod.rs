@@ -528,6 +528,7 @@ async fn quota_plan_changes_survive_inflight_background_and_manual_token_refresh
     credential.preserve_profile = true;
     repository
         .rotate_provider_account(RotateProviderAccount {
+            settings: None,
             scope: ProviderAccountAdminScope {
                 provider_kind: "openai".to_owned(),
             },
