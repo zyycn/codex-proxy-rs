@@ -1065,6 +1065,7 @@ pub struct CredentialCasUpdateParts {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
     pub profile: ProviderAccountUpdate,
+    pub preserve_profile: bool,
     pub credential: PlaintextCredential,
     pub has_refresh_token: bool,
     pub access_token_expires_at: Option<SystemTime>,
@@ -1078,6 +1079,7 @@ pub struct CredentialCasUpdate {
     account_id: ProviderAccountId,
     expected_revision: CredentialRevision,
     profile: ProviderAccountUpdate,
+    preserve_profile: bool,
     credential: PlaintextCredential,
     has_refresh_token: bool,
     access_token_expires_at: Option<SystemTime>,
@@ -1092,6 +1094,7 @@ impl fmt::Debug for CredentialCasUpdate {
             .field("account_id", &self.account_id)
             .field("expected_revision", &self.expected_revision)
             .field("profile", &self.profile)
+            .field("preserve_profile", &self.preserve_profile)
             .field("credential", &self.credential)
             .field("has_refresh_token", &self.has_refresh_token)
             .field("access_token_expires_at", &self.access_token_expires_at)
@@ -1126,12 +1129,20 @@ impl CredentialCasUpdate {
             account_id,
             expected_revision,
             profile,
+            preserve_profile: false,
             credential,
             has_refresh_token,
             access_token_expires_at,
             next_refresh_at,
             account_state: None,
         })
+    }
+
+    /// 仅轮换凭据，保留提交时的账号资料，避免覆盖并发额度观测更新的套餐。
+    #[must_use]
+    pub const fn preserving_profile(mut self) -> Self {
+        self.preserve_profile = true;
+        self
     }
 
     /// 将刷新调度与账号错误事实放入同一个 revision CAS。
@@ -1199,6 +1210,7 @@ impl CredentialCasUpdate {
             account_id: self.account_id,
             expected_revision: self.expected_revision,
             profile: self.profile,
+            preserve_profile: self.preserve_profile,
             credential: self.credential,
             has_refresh_token: self.has_refresh_token,
             access_token_expires_at: self.access_token_expires_at,
@@ -1221,6 +1233,8 @@ pub struct QuotaObservation {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
     pub quota: OpaqueProviderData,
+    /// Provider 确认的账号套餐，与额度原子写入；`None` 保留已有套餐。
+    pub plan_type: Option<String>,
     /// Provider 原始 quota document 的观察时间；不代表访问结论发生变化。
     pub observed_at: SystemTime,
     /// Provider 已从私有 JSON 归一化出的额度访问事实。
@@ -1234,6 +1248,7 @@ impl fmt::Debug for QuotaObservation {
             .field("account_id", &self.account_id)
             .field("expected_revision", &self.expected_revision)
             .field("quota", &self.quota)
+            .field("plan_type", &self.plan_type)
             .field("observed_at", &self.observed_at)
             .field("state", &self.state)
             .finish()

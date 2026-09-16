@@ -1235,6 +1235,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
     });
     let observed_at = SystemTime::now();
     let outcome = block_on(store.compare_and_swap_quota(QuotaObservation {
+        plan_type: None,
         account_id: original.id().clone(),
         expected_revision: original.revision(),
         quota: OpaqueProviderData::new(quota.as_object().expect("quota object").clone()),

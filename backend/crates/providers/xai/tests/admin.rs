@@ -433,6 +433,7 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
     assert!(quota.windows.is_empty());
     store
         .compare_and_swap_quota(gateway_core::account::QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(

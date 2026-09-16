@@ -495,6 +495,7 @@ async fn stored_weekly_exhaustion_ignores_the_old_primary_only_account_reset() {
     old["rate_limit"]["allowed"] = json!(false);
     store
         .compare_and_swap_quota(gateway_core::account::QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: gateway_core::account::OpaqueProviderData::new(

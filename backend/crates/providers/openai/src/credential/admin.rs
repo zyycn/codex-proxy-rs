@@ -737,7 +737,8 @@ impl CodexCredentialAdmin {
             optional_time(access_token_expires_at),
             optional_time(next_refresh_at),
         )
-        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?
+        .preserving_profile();
         Ok(PreparedCodexCredentialRotation {
             profile,
             credential,

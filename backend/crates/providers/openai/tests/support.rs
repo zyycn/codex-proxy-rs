@@ -278,6 +278,7 @@ impl ProviderAccountStore for MemoryAccountStore {
             account_id,
             expected_revision,
             profile,
+            preserve_profile,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -320,7 +321,11 @@ impl ProviderAccountStore for MemoryAccountStore {
                 access_token_expires_at,
                 has_refresh_token,
                 next_refresh_at,
-                profile: Some((profile.name, profile.email, profile.plan_type)),
+                profile: (!preserve_profile).then_some((
+                    profile.name,
+                    profile.email,
+                    profile.plan_type,
+                )),
             },
         );
         stored.credential = credential;
@@ -362,11 +367,16 @@ impl ProviderAccountStore for MemoryAccountStore {
             return Ok(QuotaWriteOutcome::Conflict);
         }
         let quota = observation.state;
+        let mut replacement = AccountRebuild::preserving(&stored.account).with_quota(quota);
+        if let Some(plan_type) = &observation.plan_type {
+            replacement.profile = Some((
+                stored.account.name().to_owned(),
+                stored.account.email().map(str::to_owned),
+                Some(plan_type.clone()),
+            ));
+        }
         stored.quota = Some(observation);
-        stored.account = rebuild_account(
-            &stored.account,
-            AccountRebuild::preserving(&stored.account).with_quota(quota),
-        );
+        stored.account = rebuild_account(&stored.account, replacement);
         Ok(QuotaWriteOutcome::Updated)
     }
 

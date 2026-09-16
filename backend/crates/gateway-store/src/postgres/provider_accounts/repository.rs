@@ -28,6 +28,7 @@ pub trait ProviderAccountRepository: Send + Sync {
         quota: JsonObject,
         observed_at: DateTime<Utc>,
         state: QuotaState,
+        plan_type: Option<&str>,
     ) -> StoreResult<bool>;
     async fn touch_provider_quota_observation(
         &self,
@@ -302,6 +303,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         quota: JsonObject,
         observed_at: DateTime<Utc>,
         state: QuotaState,
+        plan_type: Option<&str>,
     ) -> StoreResult<bool> {
         require_nonempty(ENTITY, "account_id", account_id)?;
         validate_object_size("provider_quota_json", &quota, QUOTA_MAX_BYTES)?;
@@ -309,6 +311,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let result = sqlx::query(
             "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,
+                 plan_type = coalesce($9, plan_type),
                  quota_access_state = case
                    when $7::timestamptz is not null
                      and (quota_access_observed_at is null or quota_access_observed_at <= $7)
@@ -337,6 +340,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(state.evidence().map(QuotaEvidence::as_str))
         .bind(access_observed_at)
         .bind(state.reset_at().map(DateTime::<Utc>::from))
+        .bind(plan_type)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("compare and swap provider quota"))?;
@@ -904,9 +908,9 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     // 事务时间可能早于应用写入的额度观测，保留既有时间下界，避免轮换破坏时间约束。
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
-         set name = $4,
-             email = $5,
-             plan_type = $6,
+         set name = case when $14 then name else $4 end,
+             email = case when $14 then email else $5 end,
+             plan_type = case when $14 then plan_type else $6 end,
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
              has_refresh_token = $8,
@@ -943,6 +947,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(replace_identity)
     .bind(upstream_user_id)
     .bind(upstream_account_id)
+    .bind(update.preserve_profile)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {
