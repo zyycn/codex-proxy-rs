@@ -53,7 +53,10 @@ fn logging_requires_at_least_one_sink() {
 
     assert!(
         config
-            .resolve_and_validate(std::path::Path::new("/tmp"))
+            .resolve_and_validate(
+                std::path::Path::new("/tmp"),
+                std::path::Path::new("/tmp/web/dist"),
+            )
             .is_err()
     );
 }

@@ -1,0 +1,143 @@
+name: 常规问题反馈
+description: 管理端页面、账号导入、安装部署、升级或其他非客户端 API 问题
+body:
+  - type: markdown
+    attributes:
+      value: |
+        客户端调用模型、搜索等 API 的问题请选择“接口问题反馈”；新增能力或体验改进请选择“功能建议”。
+        请提供最小复现信息。请求、日志和截图发布前请移除密钥、令牌、Cookie、代理认证及私人内容。
+
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: 问题类型
+      options:
+        - 页面或交互异常
+        - 配置或部署异常
+        - 升级异常
+        - 其他问题
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 说明发生了什么、实际结果以及出现的频率。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 服务版本
+      description: 填写实际运行的完整版本号，不要只写“最新”或 latest；源码运行填写提交号。服务无法启动时填写准备运行的版本。
+      placeholder: 完整版本号或提交号
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - 其他容器部署
+        - 二进制运行
+        - 源码运行
+        - 其他方式（请在环境信息中说明）
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 填写操作系统与版本，并补充与问题相关的浏览器、访问方式或资源信息。
+      placeholder: |
+        操作系统与版本：
+        浏览器与版本（页面问题）：
+        页面访问方式（HTTP / HTTPS，localhost / IP / 域名，无需真实地址）：
+        CPU 核数与内存、容器资源限制（部署或性能问题）：
+        Docker / Compose 版本（容器部署问题）：
+    validations:
+      required: true
+
+  - type: dropdown
+    id: intermediary
+    attributes:
+      label: 是否经过中转或反向代理
+      description: |
+        指客户端或浏览器到本服务之间的链路。API 中转包括 New API、One API、CCH 等；反向代理或 CDN 包括 Nginx、Caddy、Cloudflare Tunnel 等。
+        如有中转，请在下方填写链路详情；本服务到上游的出站代理请在补充信息中说明。
+      options:
+        - 否，直接连接本服务
+        - 是，仅经过 API 中转服务
+        - 是，仅经过反向代理或 CDN
+        - 是，同时经过 API 中转和反向代理或 CDN
+        - 不确定
+        - 不适用（例如服务尚未启动）
+    validations:
+      required: true
+
+  - type: textarea
+    id: request-chain
+    attributes:
+      label: 请求链路
+      description: |
+        按调用顺序填写中间服务的名称与版本，例如：浏览器 → Cloudflare → Nginx → 本服务。不确定时填写已知部分。
+        如果已测试过直连本服务，请说明是否仍能复现；未测试可注明，不要求先完成对照测试。
+      placeholder: |
+        调用顺序与各中间服务版本：
+        是否启用请求参数或请求头改写（如已知）：
+        直连本服务的对照结果（如已测试）：
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 描述触发问题的操作；批量操作补充数量，升级问题说明升级方式。无法稳定复现时，说明已知触发条件。
+      placeholder: |
+        1. 使用什么配置或输入
+        2. 执行什么操作
+        3. 出现什么结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 预期行为
+      description: 说明原本期望得到的结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 错误信息与日志
+      description: |
+        提供脱敏后的页面提示、浏览器控制台错误或相关启动、升级日志；如有失败请求，补充状态码与响应片段。
+        可以在此上传诊断包或日志附件；粘贴日志时请使用 Markdown 代码块。不要上传完整配置或请求转储。
+      placeholder: |
+        发生时间与时区：
+        页面提示或终端错误：
+        浏览器控制台 / 服务日志：
+        失败请求的状态码与响应片段（如有）：
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏
+      description: 页面或交互问题可在此拖入相关截图、录屏，并说明对应的操作。
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: 最近有升级时填写升级前后版本及前后端是否同步更新；网络问题补充出站代理、系统代理、TUN 和自定义证书等相关环境。
+      placeholder: |
+        升级前版本 → 当前版本（如有）：
+        前后端是否同步更新（如有升级）：
+        最近的配置变更：
+        其他相关环境：

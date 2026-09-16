@@ -571,3 +571,25 @@ export function completeAccountOAuth(data: AccountOAuthCompleteParam) {
     data,
   })
 }
+
+export interface ApiKeyConfiguration {
+  base_url: string
+  transport: 'http' | 'prefer_websocket'
+}
+
+export function getAccountDetail(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<{ account: Account, credentialConfiguration?: ApiKeyConfiguration }>({
+    url: '/api/admin/accounts/detail',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function updateAccountApiKey(data: { accountId: string, baseUrl: string, transport: ApiKeyConfiguration['transport'], apiKey?: string, settings?: AccountUpdateParam }) {
+  return request<{ accountId: string }>({
+    url: '/api/admin/accounts/rotate',
+    method: 'POST',
+    data: { provider: 'openai', ...data },
+  })
+}

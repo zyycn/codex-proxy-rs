@@ -2,6 +2,7 @@
 
 mod admin;
 mod affinity;
+mod api_key;
 mod catalog;
 mod cookie;
 mod oauth;
@@ -22,6 +23,11 @@ pub(crate) use affinity::{
 };
 pub(crate) use oauth::oauth_owner_ref;
 pub(crate) use types::parse_access_token_expiration;
+
+pub use api_key::{
+    ApiKeyAuthentication, ApiKeyConfiguration, ApiKeyCredentialData, ApiKeyTransport,
+    CODEX_AUTHENTICATION_KIND_API_KEY,
+};
 
 pub use admin::{
     CodexCprExportDocument, CodexCredentialAdmin, CodexCredentialAdminError,

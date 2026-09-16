@@ -323,13 +323,13 @@ fn rate_limited_projection_carries_only_the_active_cooldown_deadline() {
 }
 
 #[test]
-fn account_without_upstream_identity_should_stay_unknown_and_not_schedulable() {
+fn account_without_upstream_identity_preserves_provider_credential_state() {
     let account = ProviderAccount::new(
         ProviderAccountId::new("acct_pending_identity").expect("valid account"),
         ProviderKind::new("openai").expect("valid provider"),
         "pending identity".to_owned(),
         None,
-        "oauth".to_owned(),
+        "api_key".to_owned(),
         CredentialRevision::new(1).expect("valid revision"),
         Some(SystemTime::now() + Duration::from_secs(3600)),
     )
@@ -346,7 +346,18 @@ fn account_without_upstream_identity_should_stay_unknown_and_not_schedulable() {
             account.credential_state(),
             account.status_projection(SystemTime::now(), None).status
         ),
-        (CredentialState::Unknown, AccountStatus::Error)
+        (CredentialState::Ready, AccountStatus::Normal)
+    );
+    let pending = account.with_account_facts(
+        true,
+        CredentialState::Unknown,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
+    assert_eq!(
+        pending.status_projection(SystemTime::now(), None).status,
+        AccountStatus::Error
     );
 }
 

@@ -550,7 +550,7 @@ async fn update_should_remove_stale_file_lock_and_continue() {
 }
 
 #[tokio::test]
-async fn update_should_replace_local_release_files_with_latest_asset() {
+async fn update_and_rollback_should_use_the_default_api_asset_directory() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
     fixture
@@ -561,8 +561,21 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
             ChecksumKind::Valid,
         )
         .await;
-    fixture
-        .service(&server)
+    let mut host: gateway_host::HostConfig = serde_json::from_value(serde_json::json!({
+        "listen": { "host": "127.0.0.1", "port": 8080 },
+        "runtime_data_dir": "../.runtime/data",
+        "logging": {
+            "level": "info", "stdout": true,
+            "file": { "enabled": false, "directory": "../.runtime/logs", "max_file_size_mb": 20 }
+        }
+    }))
+    .expect("binary host config");
+    host.system_update = fixture.config(&format!("{}/repos", server.uri()));
+    host.system_update.web_dist_dir = None;
+    host.resolve_and_validate(&fixture.root.path().join("deploy"), &fixture.web())
+        .expect("inherit API asset directory");
+    let service = ProcessSystemOperations::new(CancellationToken::new(), host.system_update);
+    service
         .perform_update(Some(TARGET_VERSION.to_owned()))
         .await
         .expect("update");
@@ -574,6 +587,16 @@ async fn update_should_replace_local_release_files_with_latest_asset() {
     assert_eq!(
         fs::read(fixture.web().join("index.html")).expect("web"),
         b"new-web"
+    );
+
+    service.rollback().await.expect("rollback");
+    assert_eq!(
+        fs::read(fixture.executable()).expect("binary"),
+        b"old-binary"
+    );
+    assert_eq!(
+        fs::read(fixture.web().join("index.html")).expect("web"),
+        b"old-web"
     );
 }
 
@@ -593,17 +616,18 @@ async fn update_should_replace_web_assets_across_filesystems() {
         )
         .await;
     let mut config = fixture.config(&format!("{}/repos", server.uri()));
-    config.web_dist_dir = external.path().join("dist");
-    fs::create_dir_all(&config.web_dist_dir).expect("web dir");
-    fs::write(config.web_dist_dir.join("index.html"), "old-web").expect("web");
-    let service = ProcessSystemOperations::new(CancellationToken::new(), config.clone());
+    let web_dist = external.path().join("dist");
+    config.web_dist_dir = Some(web_dist.clone());
+    fs::create_dir_all(&web_dist).expect("web dir");
+    fs::write(web_dist.join("index.html"), "old-web").expect("web");
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
     service
         .perform_update(Some(TARGET_VERSION.to_owned()))
         .await
         .expect("update");
 
     assert_eq!(
-        fs::read(config.web_dist_dir.join("index.html")).expect("web"),
+        fs::read(web_dist.join("index.html")).expect("web"),
         b"new-web"
     );
 }
@@ -726,7 +750,7 @@ impl Fixture {
             update_repository: Some("owner/repository".to_owned()),
             github_api_base: api_base.to_owned(),
             executable_path: Some(self.executable()),
-            web_dist_dir: self.web(),
+            web_dist_dir: Some(self.web()),
             update_state_file: self.state(),
             update_lock_file: self.lock(),
             update_temp_dir: self.root.path().join("tmp"),

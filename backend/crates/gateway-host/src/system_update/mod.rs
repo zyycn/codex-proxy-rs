@@ -43,7 +43,6 @@ use self::swap::{replace_release_files, rollback_release};
 pub use self::release::validate_download_url;
 
 const APP_BINARY_NAME: &str = "codex-proxy-rs";
-const DEFAULT_WEB_DIST_DIR: &str = "/app/web/dist";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com/repos";
 const DEFAULT_UPDATE_REPOSITORY: &str = "zyycn/codex-proxy-rs";
 
@@ -62,7 +61,8 @@ pub struct SystemUpdateConfig {
     pub update_repository: Option<String>,
     pub github_api_base: String,
     pub executable_path: Option<PathBuf>,
-    pub web_dist_dir: PathBuf,
+    /// 未显式指定时，由组合根传入 API 实际使用的静态资源目录。
+    pub web_dist_dir: Option<PathBuf>,
     pub update_state_file: PathBuf,
     pub update_lock_file: PathBuf,
     pub update_temp_dir: PathBuf,
@@ -107,9 +107,7 @@ impl Default for SystemUpdateConfig {
             github_api_base: environment_value("CPR_GITHUB_API_BASE")
                 .unwrap_or_else(|| DEFAULT_GITHUB_API_BASE.to_owned()),
             executable_path,
-            web_dist_dir: environment_value("CPR_WEB_DIST_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(DEFAULT_WEB_DIST_DIR)),
+            web_dist_dir: None,
             update_state_file,
             update_lock_file,
             update_temp_dir,
@@ -124,8 +122,15 @@ impl SystemUpdateConfig {
         &mut self,
         source_dir: &Path,
         runtime_data_dir: &Path,
+        asset_directory: &Path,
     ) -> Result<(), ConfigError> {
-        for path in [self.executable_path.as_mut(), Some(&mut self.web_dist_dir)]
+        let web_dist_dir = self
+            .web_dist_dir
+            .get_or_insert_with(|| asset_directory.to_path_buf());
+        if web_dist_dir.as_os_str().is_empty() {
+            return Err(ConfigError::InvalidField("host.system_update.web_dist_dir"));
+        }
+        for path in [self.executable_path.as_mut(), self.web_dist_dir.as_mut()]
             .into_iter()
             .flatten()
         {
@@ -174,6 +179,9 @@ impl SystemUpdateConfig {
         if let Err(error) = release::validate_api_base(&self.github_api_base) {
             return Some(error);
         }
+        if let Err(error) = self.web_dist_dir() {
+            return Some(error.to_string());
+        }
         None
     }
 
@@ -196,6 +204,13 @@ impl SystemUpdateConfig {
         env::current_exe()
             .and_then(fs::canonicalize)
             .map_err(|error| internal(format!("failed to resolve executable: {error}")))
+    }
+
+    pub(crate) fn web_dist_dir(&self) -> Result<&Path, OperationError> {
+        self.web_dist_dir
+            .as_deref()
+            .filter(|path| !path.as_os_str().is_empty())
+            .ok_or_else(|| conflict("web assets directory is not configured"))
     }
 }
 
@@ -395,7 +410,7 @@ impl ProcessSystemOperations {
             .info(Some(operation_id), Some("replace"), "正在替换应用文件");
         replace_release_files(
             &self.config.executable_path()?,
-            &self.config.web_dist_dir,
+            self.config.web_dist_dir()?,
             extracted,
         )?;
         self.events

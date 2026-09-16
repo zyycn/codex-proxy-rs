@@ -189,6 +189,17 @@ impl OpenAiService for DefaultOpenAiService {
     ) -> Result<CredentialMutationResult, AdminError> {
         let context = command.mutation.context;
         let account_id = command.mutation.account_id;
+        if command
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.account_id != account_id.as_str())
+        {
+            return Err(AdminError::invalid("凭据和账号设置的目标不一致"));
+        }
+        let disable_account = command
+            .settings
+            .as_ref()
+            .is_some_and(|settings| !settings.enabled);
         let details = required_credential(
             self.accounts.as_ref(),
             self.provider.provider_kind(),
@@ -209,10 +220,14 @@ impl OpenAiService for DefaultOpenAiService {
         let result = commit_credential_rotation(
             self.accounts.as_ref(),
             prepared,
+            command.settings,
             &context,
             "OpenAI credential rotation",
         )
         .await?;
+        if disable_account {
+            self.provider.account_unavailable(&account_id).await;
+        }
         self.provider
             .account_facts_changed(std::slice::from_ref(&result.account_id))
             .await;

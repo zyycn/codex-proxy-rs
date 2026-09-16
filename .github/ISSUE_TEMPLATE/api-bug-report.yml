@@ -1,0 +1,174 @@
+name: 接口问题反馈
+description: 客户端调用模型、搜索等 API 时的报错、断流、超时或响应异常
+body:
+  - type: markdown
+    attributes:
+      value: |
+        管理端页面、账号导入或服务部署的问题请选择“常规问题反馈”；新增能力请选择“功能建议”。
+        请提供最小复现信息。请求、日志和截图发布前请移除密钥、令牌、Cookie、代理认证及私人内容。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 说明发生了什么、实际结果以及出现的频率；已有正常账号、模型或客户端的对照结果也可说明。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 服务版本
+      description: 填写实际运行的完整版本号，不要只写“最新”或 latest；源码运行填写提交号。
+      placeholder: 完整版本号或提交号
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - 其他容器部署
+        - 二进制运行
+        - 源码运行
+        - 其他方式（请在环境信息中说明）
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 填写服务端与客户端的操作系统及版本；性能或超时问题可补充 CPU、内存和容器资源限制。
+      placeholder: |
+        服务端操作系统与版本：
+        客户端操作系统与版本：
+        相关资源限制（如有）：
+    validations:
+      required: true
+
+  - type: input
+    id: client-name
+    attributes:
+      label: 客户端名称
+      description: 区分 CLI、桌面端、编辑器扩展、SDK 或自编脚本。
+      placeholder: 例如 Codex CLI、Codex Desktop 或某个编辑器扩展
+    validations:
+      required: true
+
+  - type: input
+    id: client-version
+    attributes:
+      label: 客户端版本
+      description: 填写完整版本号；Codex CLI 可填写 codex --version 的输出。无法取得时说明原因。
+      placeholder: 完整版本号或相关 SDK 版本
+    validations:
+      required: true
+
+  - type: input
+    id: client-source
+    attributes:
+      label: 客户端安装来源与启动方式
+      description: 说明安装来源，以及是否通过包装脚本、启动器或第三方修改版运行；不确定时填写已知部分。
+      placeholder: 例如通过 npm 安装 @openai/codex，直接执行 codex
+    validations:
+      required: true
+
+  - type: input
+    id: endpoint
+    attributes:
+      label: 请求方法与端点
+      description: 填写发生异常的请求方法与路径，无需真实域名；不清楚端点时说明客户端当时执行的具体操作。
+      placeholder: 例如 POST /v1/responses、POST /v1/alpha/search 或 WebSocket /v1/responses
+    validations:
+      required: true
+
+  - type: dropdown
+    id: intermediary
+    attributes:
+      label: 是否经过中转或反向代理
+      description: |
+        指客户端到本服务之间的链路。API 中转包括 New API、One API、CCH 等；反向代理或 CDN 包括 Nginx、Caddy、Cloudflare Tunnel 等。
+        如有中转，请在下方填写链路详情；本服务到上游的出站代理请在补充信息中说明。
+      options:
+        - 否，直接连接本服务
+        - 是，仅经过 API 中转服务
+        - 是，仅经过反向代理或 CDN
+        - 是，同时经过 API 中转和反向代理或 CDN
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: request-chain
+    attributes:
+      label: 请求链路
+      description: |
+        按调用顺序填写中间服务的名称与版本，例如：Codex → New API → Nginx → 本服务。不确定时填写已知部分。
+        如果已测试过直连本服务，请说明是否仍能复现；未测试可注明，不要求先完成对照测试。
+      placeholder: |
+        调用顺序与各中间服务版本：
+        是否启用请求参数或请求头改写（如已知）：
+        直连本服务的对照结果（如已测试）：
+
+  - type: textarea
+    id: account-model
+    attributes:
+      label: 平台、账号类型与模型
+      description: 填写与失败请求相关的信息，不要提供账号凭据；不涉及模型或无法确认的信息请注明。
+      placeholder: |
+        平台与认证类型：
+        账号套餐（如相关）：
+        请求模型与映射后的上游模型（如已知）：
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 描述触发问题的操作；无法稳定复现时，说明已知触发条件。
+      placeholder: |
+        1. 使用什么配置或输入
+        2. 执行什么操作
+        3. 出现什么结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 预期行为
+      description: 说明原本期望得到的结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: request-response
+    attributes:
+      label: 请求、响应与诊断附件
+      description: |
+        提供脱敏后的最小请求、网关实际状态/响应片段和客户端显示，区分上游、中转、网关与客户端的错误来源。
+        可在此直接上传管理端默认诊断包并检查其缺失说明；原始错误与日志片段需另行审阅脱敏，粘贴时请使用 Markdown 代码块。
+        按部署文档的“请求错误排查”检查关联 ID、错误详情与 application 日志，不默认开启完整 dump；无法取得的信息请注明。
+      placeholder: |
+        发生时间与时区：
+        传输（HTTP JSON / SSE / WebSocket）：
+        脱敏后的最小请求：
+        网关关联 ID（x-gateway-request-id；配置的入口头请单独注明）：
+        上游关联 ID（x-request-id / x-oai-request-id，注明来源）：
+        网关实际状态、Content-Type 与响应片段：
+        中转服务的状态与错误（如有）：
+        客户端显示的错误：
+        诊断包或无法取得的信息：
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: 最近有升级时填写升级前后版本及前后端是否同步更新；网络问题补充出站代理、系统代理、TUN 和自定义证书等相关环境。
+      placeholder: |
+        服务或客户端升级前版本 → 当前版本（如有）：
+        服务前后端是否同步更新（如有升级）：
+        最近的配置变更：
+        其他相关环境：

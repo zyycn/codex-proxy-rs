@@ -186,6 +186,13 @@ Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参�
 Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 canonical event，不读取 Provider SDK
 类型。Provider 独占 credential schema、OAuth、账号选择、模型目录、额度投影和上游 transport。
 
+OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL、密钥和传输策略属于 Provider 凭据 JSON，
+随 credential revision 更新；普通详情只投影非敏感连接设置。API Key 目录按账号和凭据版本隔离，标准 API 模型列表
+通过通用画像输出客户端目录，OAuth 原生对象保留。通用账号层按 Provider 提交的 credential state 调度，不以是否存在
+上游用户 ID 推断可用性；OAuth 未完成身份投影时由 Provider 保持 `unknown`。状态恢复和未补齐身份的凭据轮换保留 `unknown`。
+API Key 默认 HTTP/SSE，可选 WS 优先；选号先验证传输资格，WS pool 与 continuation 按凭据版本隔离。
+
+
 - OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
   Search 的业务正文按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
 - Responses 的业务扩展头保留原始多值字节；传输与反代请求头分类由 `gateway-protocol` 统一定义，

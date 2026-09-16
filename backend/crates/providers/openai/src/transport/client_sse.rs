@@ -60,6 +60,7 @@ impl CodexBackendClient {
             outbound_proxy: None,
             egress_key: String::new(),
             base_url,
+            protocol: OpenAiUpstreamProtocol::Codex,
             profile,
             websocket_pool: None,
             websocket_origin_breaker: WebSocketOriginBreaker::default(),
@@ -87,7 +88,7 @@ impl CodexBackendClient {
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
         let headers_started_at = Instant::now();
-        // 与官方 Codex app-server 一致：/v1/responses 请求体默认 zstd 压缩。
+        // OAuth 请求遵循 Codex 压缩合同；API Key 上游使用普通 JSON。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
         // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
@@ -95,7 +96,7 @@ impl CodexBackendClient {
         upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         let body =
             serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
-        let endpoint = endpoint_url(&self.base_url, CODEX_RESPONSES_PATH);
+        let endpoint = endpoint_url(&self.base_url, self.protocol.responses_path());
         let trace = context
             .trace
             .cloned()
@@ -111,16 +112,15 @@ impl CodexBackendClient {
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         trace.capture("upstream.request.body", &body);
-        let body = zstd::stream::encode_all(std::io::Cursor::new(body), 3)
-            .map_err(CodexClientError::RequestCompression)?;
-        let response = self
-            .client
-            .post(endpoint)
-            .headers(headers)
-            .header(CONTENT_ENCODING, HeaderValue::from_static("zstd"))
-            .body(body)
-            .send()
-            .await?;
+        let mut outbound = self.client.post(endpoint).headers(headers);
+        let body = if self.protocol == OpenAiUpstreamProtocol::Codex {
+            outbound = outbound.header(CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+            zstd::stream::encode_all(std::io::Cursor::new(body), 3)
+                .map_err(CodexClientError::RequestCompression)?
+        } else {
+            body
+        };
+        let response = outbound.body(body).send().await?;
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
         let http_version = http_version_name(response.version()).to_string();
         let status = response.status();
@@ -251,8 +251,9 @@ impl CodexBackendClient {
 
         let websocket_request = websocket_upstream_request(request);
         let headers = self.request_headers_for_websocket_response(&websocket_request, context)?;
-        let mut websocket_create = CodexWebSocketConnection::responses_create_request(
+        let mut websocket_create = CodexWebSocketConnection::responses_create_request_for_path(
             &self.base_url,
+            self.protocol.responses_path(),
             &generate_key(),
             websocket_header_pairs(&headers),
             &websocket_request,
@@ -501,19 +502,23 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         client_version: Option<&str>,
     ) -> CodexClientResult<CodexModelCatalogSnapshot> {
-        let endpoint = endpoint_url(&self.base_url, "codex/models");
+        let path = match self.protocol {
+            OpenAiUpstreamProtocol::Codex => "codex/models",
+            OpenAiUpstreamProtocol::ResponsesApi => "models",
+        };
         let profile = self.profile.snapshot();
         let headers = self.model_request_headers(&profile, context)?;
-        let response = self
+        let mut request = self
             .client
-            .get(endpoint)
-            .query(&[(
+            .get(endpoint_url(&self.base_url, path))
+            .headers(headers);
+        if self.protocol == OpenAiUpstreamProtocol::Codex {
+            request = request.query(&[(
                 "client_version",
                 client_version.unwrap_or(profile.codex_version.as_str()),
-            )])
-            .headers(headers)
-            .send()
-            .await?;
+            )]);
+        }
+        let response = request.send().await?;
         let status = response.status();
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
@@ -540,7 +545,12 @@ impl CodexBackendClient {
                 send_phase: CodexUpstreamSendPhase::AfterPayload,
             });
         }
-        Ok(parse_codex_model_catalog(&body, etag.as_deref())?)
+        Ok(match self.protocol {
+            OpenAiUpstreamProtocol::Codex => parse_codex_model_catalog(&body, etag.as_deref())?,
+            OpenAiUpstreamProtocol::ResponsesApi => {
+                super::catalog::parse_api_model_catalog(&body, etag.as_deref())?
+            }
+        })
     }
 }
 

@@ -1,5 +1,6 @@
 //! Codex 明文 credential JSON 的 schema 校验与日志脱敏边界。
 
+use super::api_key::ApiKeyAuthentication;
 use gateway_core::account::PlaintextCredential;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
@@ -40,11 +41,16 @@ impl std::fmt::Debug for CodexRuntimeCredential {
 
 pub enum CodexRuntimeAuthentication {
     OAuth(CodexOAuthSecret),
+    ApiKey(ApiKeyAuthentication),
 }
 
 impl CodexRuntimeAuthentication {
     pub fn authorization_header(&self) -> Result<SecretString, CodexCredentialDataError> {
         match self {
+            Self::ApiKey(auth) => Ok(SecretString::from(format!(
+                "Bearer {}",
+                auth.secret.expose_secret()
+            ))),
             Self::OAuth(secret) => Ok(SecretString::from(format!(
                 "Bearer {}",
                 secret.access_token.expose_secret()
@@ -56,6 +62,7 @@ impl CodexRuntimeAuthentication {
     pub const fn oauth(&self) -> Option<&CodexOAuthSecret> {
         match self {
             Self::OAuth(secret) => Some(secret),
+            Self::ApiKey(_) => None,
         }
     }
 }
@@ -64,6 +71,7 @@ impl std::fmt::Debug for CodexRuntimeAuthentication {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OAuth(secret) => secret.fmt(formatter),
+            Self::ApiKey(auth) => auth.fmt(formatter),
         }
     }
 }
@@ -166,6 +174,17 @@ impl CodexCredentialCodec {
         validate(&data)?;
         let (authentication, principal, installation_id, cookies, oauth_client_id, oauth_scope) =
             match data {
+                CodexCredentialData::ApiKey(data) => (
+                    CodexRuntimeAuthentication::ApiKey(ApiKeyAuthentication {
+                        configuration: data.configuration(),
+                        secret: SecretString::from(data.api_key),
+                    }),
+                    None,
+                    data.installation_id,
+                    Vec::new(),
+                    None,
+                    None,
+                ),
                 CodexCredentialData::OAuth(data) => (
                     CodexRuntimeAuthentication::OAuth(CodexOAuthSecret {
                         access_token: SecretString::from(data.access_token),
@@ -220,13 +239,25 @@ impl CodexCredentialCodec {
             (CodexCredentialData::OAuth(incoming), CodexCredentialData::OAuth(existing)) => {
                 incoming.installation_id = existing.installation_id;
             }
+            (CodexCredentialData::ApiKey(incoming), CodexCredentialData::ApiKey(existing)) => {
+                incoming.installation_id = existing.installation_id;
+            }
+            _ => return Err(CodexCredentialDataError::Invalid),
         }
         Self::encode_complete(incoming)
     }
 }
 
 fn validate(data: &CodexCredentialData) -> Result<(), CodexCredentialDataError> {
+    if let CodexCredentialData::ApiKey(data) = data {
+        return if data.validate() && valid_installation_id(&data.installation_id) {
+            Ok(())
+        } else {
+            Err(CodexCredentialDataError::Invalid)
+        };
+    }
     let (installation_id, cookies) = match data {
+        CodexCredentialData::ApiKey(_) => return Err(CodexCredentialDataError::Invalid),
         CodexCredentialData::OAuth(data) => {
             if data.schema_version != CODEX_CREDENTIAL_SCHEMA_VERSION {
                 return Err(CodexCredentialDataError::Invalid);

@@ -27,6 +27,24 @@ pub fn endpoint_url(base_url: &str, endpoint_path: &str) -> String {
     )
 }
 
+/// 上游启动配置与账号地址共用同一校验，HTTP 仅允许本机联调。
+pub(crate) fn valid_upstream_base_url(value: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    let loopback = match url.host() {
+        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
+    ((url.scheme() == "https" && url.host_str().is_some()) || (url.scheme() == "http" && loopback))
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
 /// 返回与 base path 对应的唯一 usage endpoint。
 pub fn usage_endpoint_url(base_url: &str) -> String {
     account_endpoint_url(base_url, "usage")

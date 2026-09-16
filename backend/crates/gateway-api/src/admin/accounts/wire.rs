@@ -684,6 +684,14 @@ pub struct AccountQuotaData {
     pub account: AccountView,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDetailData {
+    pub account: AccountView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_configuration: Option<serde_json::Value>,
+}
+
 /// 个人资料、累计统计与订阅的统一响应。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

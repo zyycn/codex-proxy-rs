@@ -2,6 +2,7 @@
 import type { AccountCreateProvider } from './model'
 import { Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
 
 withDefaults(
@@ -35,22 +36,22 @@ const providers = [
     icon: Xai,
   },
 ]
+
+function selectProvider(value: string) {
+  const provider = providers.find(provider => provider.value === value)
+  if (provider)
+    emit('select', provider.value)
+}
 </script>
 
 <template>
-  <div class="grid grid-cols-3 gap-3" role="group" aria-label="选择账号平台">
-    <button
-      v-for="provider in providers"
-      :key="provider.value"
-      type="button"
-      class="flex min-w-0 cursor-pointer flex-col items-center gap-3 rounded-cp border-0 px-2 py-4 text-cp font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:opacity-55 motion-reduce:transition-none"
-      :class="selected === provider.value ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
-      :disabled="disabled"
-      :aria-pressed="selected === provider.value"
-      @click="emit('select', provider.value)"
-    >
-      <component :is="provider.icon" :width="24" :height="24" aria-hidden="true" />
-      <span>{{ provider.label }}</span>
-    </button>
-  </div>
+  <BaseSegmented
+    :model-value="selected ?? ''"
+    label="选择账号平台"
+    :options="providers"
+    :disabled="disabled"
+    display="icon"
+    class="w-31"
+    @update:model-value="selectProvider"
+  />
 </template>

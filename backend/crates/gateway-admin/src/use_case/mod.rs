@@ -345,12 +345,19 @@ async fn commit_authorization(
 async fn commit_credential_rotation(
     accounts: &dyn AccountStore,
     prepared: PreparedCredentialRotation,
+    settings: Option<crate::model::accounts::UpdateAccount>,
     context: &MutationContext,
     resource: &'static str,
 ) -> Result<CredentialMutationResult, AdminError> {
     let (facts, guard) = prepared.into_parts();
     match accounts
-        .commit_credential_rotation(CredentialRotationCommit { prepared: facts }, context)
+        .commit_credential_rotation(
+            CredentialRotationCommit {
+                prepared: facts,
+                settings,
+            },
+            context,
+        )
         .await
     {
         Ok(result) => {
@@ -372,7 +379,13 @@ async fn commit_credential_refresh(
 ) -> Result<CredentialMutationResult, AdminError> {
     let (facts, guard) = prepared.into_parts();
     match accounts
-        .commit_credential_refresh(CredentialRotationCommit { prepared: facts }, context)
+        .commit_credential_refresh(
+            CredentialRotationCommit {
+                prepared: facts,
+                settings: None,
+            },
+            context,
+        )
         .await
     {
         Ok(result) => {

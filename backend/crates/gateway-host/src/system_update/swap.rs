@@ -81,6 +81,7 @@ pub(crate) fn replace_release_files(
 }
 
 pub(crate) fn rollback_release(config: &SystemUpdateConfig) -> Result<(), OperationError> {
+    let web_dist = config.web_dist_dir()?;
     let executable = config.executable_path()?;
     let binary_backup = backup_path_for(&executable);
     if !binary_backup.exists() {
@@ -89,9 +90,9 @@ pub(crate) fn rollback_release(config: &SystemUpdateConfig) -> Result<(), Operat
     swap_file(&executable, &binary_backup)
         .map_err(|error| internal(format!("binary rollback failed: {error}")))?;
 
-    let web_backup = backup_path_for(&config.web_dist_dir);
+    let web_backup = backup_path_for(web_dist);
     if web_backup.exists()
-        && let Err(error) = swap_dir(&config.web_dist_dir, &web_backup)
+        && let Err(error) = swap_dir(web_dist, &web_backup)
     {
         let mut rollback = Vec::new();
         collect_rollback_error(
