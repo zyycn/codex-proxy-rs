@@ -6,8 +6,10 @@ import { Eye, RefreshCw, Search } from '@lucide/vue'
 import { shallowRef, toRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseTableColumnSettings from '@/components/base/BaseTable/BaseTableColumnSettings.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
@@ -42,6 +44,7 @@ const {
 
 const selectedRecord = shallowRef<OpsError | null>(null)
 const detailOpen = shallowRef(false)
+const { visibleColumns, columnOptions, setColumnVisible, resetColumns } = useTableColumns(opsErrorColumns, 'ops-errors')
 
 const upstreamSendStateLabels: Record<string, string> = {
   sent: '已发送',
@@ -102,6 +105,11 @@ function upstreamSendStateText(value: string | null | undefined) {
       </div>
 
       <div class="flex shrink-0 self-end items-center justify-end gap-2 lg:ml-auto">
+        <BaseTableColumnSettings
+          :options="columnOptions"
+          @change="setColumnVisible"
+          @reset="resetColumns"
+        />
         <BaseIconButton
           variant="ghost"
           size="md"
@@ -125,7 +133,7 @@ function upstreamSendStateText(value: string | null | undefined) {
       <BaseTable
         v-else
         class="min-h-0 flex-1"
-        :columns="opsErrorColumns"
+        :columns="visibleColumns"
         :rows="records"
         :loading="loading"
         empty-text="当前时段没有错误"

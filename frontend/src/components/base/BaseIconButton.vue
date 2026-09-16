@@ -2,7 +2,7 @@
 import { LoaderCircle } from '@lucide/vue'
 import { computed } from 'vue'
 
-type IconButtonVariant = 'primary' | 'secondary' | 'success' | 'ghost' | 'destructive'
+type IconButtonVariant = 'primary' | 'secondary' | 'filled' | 'success' | 'ghost' | 'destructive'
 type IconButtonSize = 'sm' | 'md' | 'lg'
 
 const props = withDefaults(
@@ -35,6 +35,8 @@ const variantClasses: Record<IconButtonVariant, string> = {
     'bg-(--cp-button-primary-bg) text-(--cp-button-primary-color) shadow-cp-tertiary hover:bg-(--cp-button-primary-hover-bg) active:bg-(--cp-button-primary-active-bg)',
   secondary:
     'bg-cp-bg-container text-cp-text-secondary shadow-cp-tertiary hover:bg-cp-bg-text-hover hover:text-cp-text active:bg-cp-bg-text-active',
+  filled:
+    'bg-cp-fill-tertiary text-cp-text-secondary shadow-none hover:bg-cp-bg-text-hover hover:text-cp-text active:bg-cp-fill-secondary aria-pressed:bg-cp-bg-text-active',
   success:
     'bg-cp-success-container text-cp-success-on-container shadow-none hover:bg-cp-success-container-hover active:bg-cp-success-container-active',
   ghost:

@@ -112,15 +112,21 @@ const groupOptions = computed(() => [
         </template>
         导出选中 ({{ selectedCount }})
       </BaseButton>
-      <BaseButton
-        variant="primary"
-        class="whitespace-nowrap xl:w-auto"
-        :class="selectedCount > 0 ? 'col-span-2 w-full' : 'col-span-2 justify-self-end'"
-        @click="emit('create')"
+      <div
+        class="col-span-2 flex min-w-0 items-center justify-end gap-2"
+        :class="selectedCount > 0 ? 'w-full xl:w-auto' : 'justify-self-end'"
       >
-        <Upload class="size-4" />
-        导入账号
-      </BaseButton>
+        <slot name="actions" />
+        <BaseButton
+          variant="primary"
+          class="whitespace-nowrap"
+          :class="selectedCount > 0 ? 'flex-1 xl:flex-none' : undefined"
+          @click="emit('create')"
+        >
+          <Upload class="size-4" />
+          导入账号
+        </BaseButton>
+      </div>
     </div>
   </div>
 </template>

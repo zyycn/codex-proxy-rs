@@ -26,7 +26,8 @@ const search = defineModel<string>('search', { required: true })
       </BaseInput>
     </div>
 
-    <div class="ml-auto flex shrink-0 items-center justify-end">
+    <div class="ml-auto flex shrink-0 items-center justify-end gap-2">
+      <slot name="actions" />
       <BaseIconButton
         variant="ghost"
         size="md"
