@@ -62,11 +62,16 @@ impl ApiConfig {
                 return Err(ApiConfigError::InvalidAssetDirectory);
             }
         }
-        if self.asset_directory.as_os_str().is_empty() {
-            return Err(ApiConfigError::InvalidAssetDirectory);
-        }
+        self.validate()?;
         if self.asset_directory.is_relative() {
             self.asset_directory = source_dir.join(&self.asset_directory);
+        }
+        Ok(())
+    }
+
+    fn validate(&mut self) -> Result<(), ApiConfigError> {
+        if self.asset_directory.as_os_str().is_empty() {
+            return Err(ApiConfigError::InvalidAssetDirectory);
         }
         if self.request_timeout_seconds == Some(0) {
             return Err(ApiConfigError::InvalidRequestTimeout);
@@ -124,9 +129,8 @@ pub fn initialize(
     worker_health: Arc<dyn WorkerHealthSource>,
     lifecycle: Arc<dyn ConnectionLifecycle>,
 ) -> Result<ApiBundle, ApiError> {
-    config
-        .resolve_and_validate(Path::new("."))
-        .map_err(ApiError::Config)?;
+    // 配置加载已解析环境变量与相对路径，初始化只校验，避免覆盖最终目录。
+    config.validate().map_err(ApiError::Config)?;
     let request_id_header = HeaderName::from_str(&config.request_id_header)
         .map_err(|_| ApiError::Config(ApiConfigError::InvalidRequestIdHeader))?;
     let state = ApiState {
