@@ -82,8 +82,7 @@ const groupOptions = computed(() => [
     </div>
 
     <div
-      class="grid w-full gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
-      :class="hasImportTasks || selectedCount > 0 ? 'grid-cols-2' : 'grid-cols-1'"
+      class="grid w-full grid-cols-2 gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
     >
       <BaseButton
         v-if="selectedCount > 0"
@@ -116,18 +115,25 @@ const groupOptions = computed(() => [
         </template>
         导出选中 ({{ selectedCount }})
       </BaseButton>
-      <BaseButton v-if="hasImportTasks" variant="secondary" class="whitespace-nowrap" @click="emit('importTasks')">
-        <ListTodo class="size-4" />
-        导入任务 <span v-if="activeImportCount" class="font-mono text-cp-link">{{ activeImportCount }}</span>
-      </BaseButton>
-      <BaseButton
-        variant="primary"
-        class="whitespace-nowrap xl:w-auto"
-        @click="emit('create')"
+      <div
+        class="col-span-2 flex min-w-0 items-center justify-end gap-2"
+        :class="selectedCount > 0 ? 'w-full xl:w-auto' : 'justify-self-end'"
       >
-        <Upload class="size-4" />
-        导入账号
-      </BaseButton>
+        <BaseButton v-if="hasImportTasks" variant="secondary" class="whitespace-nowrap" @click="emit('importTasks')">
+          <ListTodo class="size-4" />
+          导入任务 <span v-if="activeImportCount" class="font-mono text-cp-link">{{ activeImportCount }}</span>
+        </BaseButton>
+        <slot name="actions" />
+        <BaseButton
+          variant="primary"
+          class="whitespace-nowrap"
+          :class="selectedCount > 0 ? 'flex-1 xl:flex-none' : undefined"
+          @click="emit('create')"
+        >
+          <Upload class="size-4" />
+          导入账号
+        </BaseButton>
+      </div>
     </div>
   </div>
 </template>

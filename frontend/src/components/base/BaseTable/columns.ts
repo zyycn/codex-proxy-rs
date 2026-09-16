@@ -27,6 +27,10 @@ export interface BaseTableColumn<Row extends TableRow = TableRow> {
   fixedWidth?: boolean
   align?: TableColumnAlign
   sortable?: boolean | string
+  /** 列设置中是否允许隐藏；false 时始终保留。 */
+  hideable?: boolean
+  /** 未保存用户偏好时，列设置使用此默认值。 */
+  defaultHidden?: boolean
   format?: (value: unknown, row: Row) => unknown
   emptyText?: string
 }
@@ -52,6 +56,7 @@ export interface BaseTableProps<Row extends TableRow> {
 interface ColumnRecipe {
   size: TableColumnSize
   basisWidth?: number
+  fixedWidth?: boolean
   align: TableColumnAlign
   truncate: boolean
   contentClass?: string
@@ -112,6 +117,7 @@ const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
   },
   index: {
     size: 'xs',
+    fixedWidth: true,
     align: 'center',
     truncate: false,
     contentClass: 'font-mono tabular-nums text-cp-text-secondary',
@@ -119,6 +125,7 @@ const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
   selection: {
     size: 'xs',
     basisWidth: 48,
+    fixedWidth: true,
     align: 'center',
     truncate: false,
     paddingClass: 'px-2',
@@ -127,6 +134,7 @@ const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
   expander: {
     size: 'xs',
     basisWidth: 40,
+    fixedWidth: true,
     align: 'center',
     truncate: false,
     paddingClass: 'px-2',
@@ -134,6 +142,7 @@ const columnRecipes: Record<TableColumnKind, ColumnRecipe> = {
   },
   actions: {
     size: 'md',
+    fixedWidth: true,
     align: 'left',
     truncate: false,
     paddingClass: 'px-3',
@@ -150,6 +159,7 @@ export interface ResolvedTableColumn<Row extends TableRow = TableRow>
   extends BaseTableColumn<Row> {
   kind: TableColumnKind
   basisWidth: number
+  fixedWidth: boolean
   align: TableColumnAlign
   truncate: boolean
   contentClass?: string
@@ -174,6 +184,7 @@ export function resolveColumns<Row extends TableRow>(
       ...column,
       kind,
       basisWidth,
+      fixedWidth: column.fixedWidth ?? recipe.fixedWidth ?? false,
       align: column.align ?? recipe.align,
       truncate: recipe.truncate,
       contentClass: recipe.contentClass,
@@ -206,6 +217,9 @@ export function minimumTableWidth<Row extends TableRow>(columns: ResolvedTableCo
 }
 
 export function tableStyle<Row extends TableRow>(columns: ResolvedTableColumn<Row>[]) {
+  // 全部列都固定时按总宽度展示，避免浏览器再次均分剩余空间。
+  if (columns.every(column => column.fixedWidth))
+    return { width: `${minimumTableWidth(columns)}px` }
   return { width: `max(100%, ${minimumTableWidth(columns)}px)` }
 }
 
@@ -220,7 +234,8 @@ export function columnStyle<Row extends TableRow>(
   return {
     width: column.fixedWidth
       ? `${column.basisWidth}px`
-      : `${ratio * 100}%`,
+      // 用容器宽度分配剩余空间；col 的百分比 calc 会被固定表格布局忽略。
+      : `max(${column.basisWidth}px, calc(${ratio * 100}cqw - ${fixedWidth * ratio}px))`,
     minWidth: `${column.basisWidth}px`,
   }
 }
