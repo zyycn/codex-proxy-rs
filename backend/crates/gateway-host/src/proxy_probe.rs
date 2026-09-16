@@ -21,7 +21,8 @@ type ProxyClientBuilder =
 
 impl Default for HttpProxyProbe {
     fn default() -> Self {
-        Self::new("https://api.ipify.org?format=json")
+        // 使用双栈端点，避免仅有 IPv6 出口的代理被 IPv4 专用检测服务误判为不可用。
+        Self::new("https://api64.ipify.org?format=json")
     }
 }
 

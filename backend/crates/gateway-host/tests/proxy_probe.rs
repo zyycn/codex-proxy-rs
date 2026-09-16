@@ -8,20 +8,33 @@ use wiremock::{
 };
 
 #[tokio::test]
-async fn proxy_probe_sends_authentication_through_explicit_proxy() {
-    let proxy_server = MockServer::start().await;
-    Mock::given(header("proxy-authorization", "Basic dXNlcjpwYXNzd29yZA=="))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ip": "203.0.113.8"})))
-        .expect(1)
-        .mount(&proxy_server)
-        .await;
-    let proxy =
-        OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address())).unwrap();
-    let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
-        .test(&proxy)
-        .await;
-    assert!(result.success);
-    assert_eq!(result.exit_ip.unwrap().to_string(), "203.0.113.8");
+async fn proxy_probe_supports_ipv4_and_ipv6_proxies_and_exit_addresses() {
+    for (listen_address, exit_ip) in [
+        ("127.0.0.1:0", "203.0.113.8"),
+        ("127.0.0.1:0", "2001:db8::8"),
+        ("[::1]:0", "203.0.113.8"),
+        ("[::1]:0", "2001:db8::8"),
+    ] {
+        let listener = std::net::TcpListener::bind(listen_address).unwrap();
+        let proxy_server = MockServer::builder().listener(listener).start().await;
+        Mock::given(header("proxy-authorization", "Basic dXNlcjpwYXNzd29yZA=="))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ip": exit_ip})))
+            .expect(1)
+            .mount(&proxy_server)
+            .await;
+        let proxy =
+            OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address()))
+                .unwrap();
+        let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
+            .test(&proxy)
+            .await;
+        assert!(
+            result.success,
+            "{listen_address} -> {exit_ip}: {}",
+            result.message
+        );
+        assert_eq!(result.exit_ip.unwrap().to_string(), exit_ip);
+    }
 }
 
 #[tokio::test]
