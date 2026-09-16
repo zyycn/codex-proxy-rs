@@ -52,7 +52,12 @@ pub struct HostConfig {
 }
 
 impl HostConfig {
-    pub fn resolve_and_validate(&mut self, source_dir: &Path) -> Result<(), ConfigError> {
+    /// 解析 Host 配置；在线更新默认沿用已解析的 API 静态资源目录。
+    pub fn resolve_and_validate(
+        &mut self,
+        source_dir: &Path,
+        asset_directory: &Path,
+    ) -> Result<(), ConfigError> {
         if let Some(host) = optional_environment_value(SERVER_HOST_ENV)? {
             self.listen.host = host;
         }
@@ -82,8 +87,11 @@ impl HostConfig {
         }
         resolve_relative_path(source_dir, &mut self.runtime_data_dir);
         self.logging.resolve_and_validate(source_dir)?;
-        self.system_update
-            .resolve_and_validate(source_dir, &self.runtime_data_dir)?;
+        self.system_update.resolve_and_validate(
+            source_dir,
+            &self.runtime_data_dir,
+            asset_directory,
+        )?;
         Ok(())
     }
 

@@ -685,7 +685,10 @@ impl CodexCredentialQuotaService {
     }
 
     pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
-        let accounts = self.repository.list_for_provider().await?;
+        let mut accounts = self.repository.list_for_provider().await?;
+        accounts.retain(|account| {
+            account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        });
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
         let initial = self.initial_quota_sync_accounts(&accounts, now).await?;
@@ -863,7 +866,9 @@ impl CodexCredentialQuotaService {
         account: &ProviderAccount,
         rate_limits: &[ParsedRateLimits],
     ) -> Result<bool, CodexCredentialQuotaError> {
-        if rate_limits.is_empty() {
+        if account.authentication_kind() != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+            || rate_limits.is_empty()
+        {
             return Ok(false);
         }
         let has_quota_facts = rate_limits.iter().any(|observation| {
@@ -1056,6 +1061,9 @@ impl CodexCredentialQuotaService {
             .await?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialQuotaError::NotFound)?;
+        if account.authentication_kind() != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH {
+            return Err(CodexCredentialQuotaError::NotFound);
+        }
         let observed_at = SystemTime::now();
         if !access_token_is_current(&account, observed_at) {
             return Err(CodexCredentialQuotaError::CredentialRefreshRequired);

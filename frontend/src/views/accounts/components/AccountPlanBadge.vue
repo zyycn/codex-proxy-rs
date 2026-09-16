@@ -6,6 +6,7 @@ import { stableVisualIndex } from '../utils/visualTone'
 const props = withDefaults(
   defineProps<{
     planType?: string | null
+    authenticationKind?: string
     planTypeDisplay: string
     size?: 'xs' | 'sm' | 'md'
   }>(),
@@ -28,7 +29,8 @@ const fallbackPalettes = [
   'bg-cp-orange-container text-cp-orange-on-container',
 ] as const
 
-const rawPlanType = computed(() => props.planType?.trim() || '')
+const rawPlanType = computed(() => props.authenticationKind === 'api_key' ? 'api' : props.planType?.trim() || '')
+const displayText = computed(() => props.authenticationKind === 'api_key' ? 'API' : props.planTypeDisplay)
 
 const sizeClass = computed(() => {
   if (props.size === 'xs')
@@ -54,6 +56,6 @@ const paletteClass = computed(() => {
     :class="[sizeClass, paletteClass]"
     :title="rawPlanType || undefined"
   >
-    <span>{{ planTypeDisplay }}</span>
+    <span>{{ displayText }}</span>
   </span>
 </template>

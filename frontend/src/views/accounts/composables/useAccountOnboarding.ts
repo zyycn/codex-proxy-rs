@@ -4,6 +4,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import {
   completeAccountOAuth,
   createAccountImportTask,
+  importAccounts,
   startAccountOAuth,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
@@ -12,6 +13,7 @@ import { isRecord } from '@/utils/object'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
 import { generateRequestId } from '@/utils/uuid'
 import { accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
+import { apiKeyAccountError, emptyApiKeyAccountForm } from '../utils/upstreamApiKey'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type ImportProvider = 'openai' | 'xai'
@@ -68,6 +70,23 @@ export function useAccountOnboarding(options: {
         const mode = createForm.value.mode
         if (mode === 'oauth')
           throw new Error('请选择凭据导入方式')
+        if (mode === 'api_key') {
+          const provider = requireImportProvider(createForm.value.provider)
+          if (provider !== 'openai')
+            throw new Error('当前平台不支持 API Key 账号')
+          const form = createForm.value.apiKey
+          const error = apiKeyAccountError(form)
+          if (error)
+            throw new Error(error)
+          await importAccounts({
+            provider,
+            settings: accountImportSettings(createForm.value),
+            outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+            data: { provider, authentication_kind: 'api_key', name: form.name.trim(), base_url: form.base_url.trim(), api_key: form.apiKey, transport: form.transport },
+          })
+          await finishCreate('API Key 账号已添加')
+          return
+        }
         const documents = createForm.value.provider === 'batch'
           ? parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
           : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
@@ -161,7 +180,7 @@ export function useAccountOnboarding(options: {
   }
 
   function openReauthorizeAccount(account: AccountRow) {
-    if (account.provider !== 'openai' && account.provider !== 'xai')
+    if (account.authenticationKind !== 'oauth' || (account.provider !== 'openai' && account.provider !== 'xai'))
       return
     reauthorizingAccount.value = account
     createForm.value = {
@@ -194,6 +213,7 @@ export function useAccountOnboarding(options: {
       createForm.value = {
         ...createForm.value,
         mode: createForm.value.provider === 'batch' ? 'json' : 'oauth',
+        apiKey: emptyApiKeyAccountForm(),
         importTexts: { access_token: '', refresh_token: '', json: '' },
         oauthFlowId: '',
         oauthAuthUrl: '',

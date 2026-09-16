@@ -10,6 +10,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
+import AccountApiKeyFields from '../AccountApiKeyFields.vue'
 import AccountImportFields from './AccountImportFields.vue'
 import AccountOAuthFields from './AccountOAuthFields.vue'
 import AccountSetupFields from './AccountSetupFields.vue'
@@ -47,9 +48,9 @@ const mode = computed({
   },
 })
 const importText = computed({
-  get: () => form.value.mode === 'oauth' ? '' : form.value.importTexts[form.value.mode],
+  get: () => form.value.mode === 'oauth' || form.value.mode === 'api_key' ? '' : form.value.importTexts[form.value.mode],
   set: (value: string) => {
-    if (form.value.mode !== 'oauth')
+    if (form.value.mode !== 'oauth' && form.value.mode !== 'api_key')
       form.value.importTexts[form.value.mode] = value
   },
 })
@@ -109,6 +110,7 @@ function continueToImport() {
           :disabled="busy"
           @regenerate="emit('generateOauth')"
         />
+        <AccountApiKeyFields v-else-if="mode === 'api_key'" v-model="form.apiKey" :disabled="busy" />
         <AccountImportFields
           v-else
           :key="mode"

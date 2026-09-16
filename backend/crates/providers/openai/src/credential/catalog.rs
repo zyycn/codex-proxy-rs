@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
+use futures::{StreamExt, stream};
 use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
 };
@@ -31,7 +32,8 @@ const PLAN_CATALOG_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_CATALOG_FETCH_ATTEMPTS: usize = 3;
 const MAX_PLAN_CATALOG_MODELS: usize = 2_048;
 const MAX_CLIENT_CATALOGS: usize = 32;
-const CLIENT_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
+const MODEL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_CONCURRENT_API_CATALOGS: usize = 4;
 const CLIENT_CATALOG_ERROR_TTL: Duration = Duration::from_secs(5);
 
 /// OpenAI 以套餐划分的模型目录作用域。
@@ -41,6 +43,15 @@ pub struct CodexCatalogScope(ProviderCatalogScope);
 impl CodexCatalogScope {
     /// 从账号已验证的套餐事实构造目录作用域。
     pub fn for_account(account: &ProviderAccount) -> Result<Self, CodexCredentialCatalogError> {
+        if account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY {
+            return ProviderCatalogScope::new(format!(
+                "account:{}:{}",
+                account.id(),
+                account.revision().get()
+            ))
+            .map(Self)
+            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData);
+        }
         let plan = account
             .plan_type()
             .map(str::trim)
@@ -265,6 +276,47 @@ impl CodexCredentialCatalogService {
         accounts
             .retain(|account| scope.allows(account.id()) && eligible_catalog_account(account, now));
         accounts.sort_by(|left, right| left.id().cmp(right.id()));
+        let mut adapted = BTreeMap::new();
+        let (api_accounts, mut accounts): (Vec<_>, Vec<_>) =
+            accounts.into_iter().partition(|account| {
+                account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY
+            });
+        let mut catalogs = stream::iter(api_accounts)
+            .map(|account| async move {
+                let result = self.cached_or_refresh_account_catalog(&account).await;
+                (account, result)
+            })
+            .buffer_unordered(MAX_CONCURRENT_API_CATALOGS);
+        // 所有 API 账号共享等待预算；慢上游不能逐个耗尽超时或阻塞 OAuth 目录。
+        let deadline = Instant::now() + MODEL_CATALOG_TIMEOUT;
+        while let Ok(Some((account, result))) =
+            tokio::time::timeout_at(deadline, catalogs.next()).await
+        {
+            if let Ok(catalog) = result {
+                for id in catalog.models() {
+                    if account.model_access().allows(id) {
+                        let model = gateway_core::routing::UpstreamModelId::new(id.clone())
+                            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+                        adapted
+                            .entry(id.clone())
+                            .or_insert(ProviderModelDescriptor {
+                                model,
+                                content: gateway_core::routing::ProviderModelContent::Adapted(
+                                    gateway_core::routing::ModelPresentation::new(
+                                        Some(id.clone()),
+                                        None,
+                                    )
+                                    .with_agent_tools(true, false),
+                                ),
+                            });
+                    }
+                }
+            }
+        }
+        drop(catalogs);
+        accounts.retain(|account| {
+            account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_OAUTH
+        });
         let mut last_error = CodexCredentialCatalogError::NoEligibleCredential;
         for account in accounts.iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
             let profile = self.profile.snapshot();
@@ -310,25 +362,21 @@ impl CodexCredentialCatalogService {
                         self.base_url.clone(),
                         CodexWireProfileState::new(profile),
                     );
-                    let result = tokio::time::timeout(
-                        CLIENT_CATALOG_TIMEOUT,
-                        self.fetch_account_models(&client, account, Some(client_version)),
-                    )
-                    .await
-                    .map_err(|_| CodexCredentialCatalogError::Upstream {
-                        detail: "client model catalog timed out".to_owned(),
-                    })
-                    .and_then(|result| result)
-                    .map(|fetched| {
-                        fetched
-                            .models
-                            .into_iter()
-                            .map(|model| ProviderModelDescriptor {
-                                model: model.request_model().clone(),
-                                payload: model.document().clone(),
-                            })
-                            .collect()
-                    });
+                    let result = self
+                        .fetch_account_models(&client, account, Some(client_version))
+                        .await
+                        .map(|fetched| {
+                            fetched
+                                .models
+                                .into_iter()
+                                .map(|model| ProviderModelDescriptor {
+                                    model: model.request_model().clone(),
+                                    content: gateway_core::routing::ProviderModelContent::Native(
+                                        model.document().clone(),
+                                    ),
+                                })
+                                .collect()
+                        });
                     CachedClientCatalog {
                         completed_at: Instant::now(),
                         result,
@@ -336,11 +384,24 @@ impl CodexCredentialCatalogService {
                 })
                 .await;
             match &result.result {
-                Ok(models) => return Ok(models.clone()),
+                Ok(models) => {
+                    for model in models {
+                        adapted.remove(model.model.as_str());
+                    }
+                    return Ok(models
+                        .iter()
+                        .cloned()
+                        .chain(adapted.into_values())
+                        .collect());
+                }
                 Err(error) => last_error = error.clone(),
             }
         }
-        Err(last_error)
+        if adapted.is_empty() {
+            Err(last_error)
+        } else {
+            Ok(adapted.into_values().collect())
+        }
     }
 
     #[must_use]
@@ -473,8 +534,15 @@ impl CodexCredentialCatalogService {
         let mut union_order = Vec::new();
         let mut scope_models = BTreeMap::new();
         let mut etags = Vec::new();
+        let mut last_error = None;
         for (scope, candidates) in groups {
-            let fetched = self.fetch_scope_models(&client, candidates).await?;
+            let fetched = match self.fetch_scope_models(&client, candidates).await {
+                Ok(fetched) => fetched,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
             let entitlement = model_ids(&fetched.models);
             self.replace_plan_catalog(&CodexPlanCatalog::new(
                 scope.clone(),
@@ -489,11 +557,23 @@ impl CodexCredentialCatalogService {
                         union_order.push(entry.key().clone());
                         entry.insert(model.clone());
                     }
-                    Entry::Occupied(_) => {}
+                    Entry::Occupied(mut entry) => {
+                        // 原生目录含完整能力证据，同名 API ID 不能覆盖它，也不能跨来源拼字段。
+                        if model.document().protocol() == "codex"
+                            && entry.get().document().protocol() != "codex"
+                        {
+                            entry.insert(model.clone());
+                        }
+                    }
                 }
             }
             scope_models.insert(scope, entitlement);
             etags.extend(fetched.etag);
+        }
+        if union.is_empty()
+            && let Some(error) = last_error
+        {
+            return Err(error);
         }
         let observed_at = SystemTime::now();
         let snapshot = CodexCredentialCatalogSnapshot {
@@ -562,38 +642,45 @@ impl CodexCredentialCatalogService {
         account: &ProviderAccount,
         client_version: Option<&str>,
     ) -> Result<FetchedAccountModels, CodexCredentialCatalogError> {
-        let credential = self
-            .repository
-            .load_runtime_credential(account)
-            .await
-            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-        let request_id = format!("catalog_{}", Uuid::now_v7().simple());
-        let authorization = credential
-            .authentication
-            .authorization_header()
-            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-        let result = client
-            .for_account(account)
-            .map_err(|error| CodexCredentialCatalogError::Upstream {
+        tokio::time::timeout(MODEL_CATALOG_TIMEOUT, async {
+            let credential = self
+                .repository
+                .load_runtime_credential(account)
+                .await
+                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+            let request_id = format!("catalog_{}", Uuid::now_v7().simple());
+            let authorization = credential
+                .authentication
+                .authorization_header()
+                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+            let result = client
+                .for_account(account)
+                .map_err(|error| CodexCredentialCatalogError::Upstream {
+                    detail: error.to_string(),
+                })?
+                .with_authentication(&credential.authentication)
+                .fetch_models_with_context(
+                    CodexRequestContext::auxiliary(
+                        authorization.expose_secret(),
+                        account.upstream_account_id(),
+                        &request_id,
+                        None,
+                    ),
+                    client_version,
+                )
+                .await;
+            let snapshot = result.map_err(|error| CodexCredentialCatalogError::Upstream {
                 detail: error.to_string(),
-            })?
-            .fetch_models_with_context(
-                CodexRequestContext::auxiliary(
-                    authorization.expose_secret(),
-                    account.upstream_account_id(),
-                    &request_id,
-                    None,
-                ),
-                client_version,
-            )
-            .await;
-        let snapshot = result.map_err(|error| CodexCredentialCatalogError::Upstream {
-            detail: error.to_string(),
-        })?;
-        Ok(FetchedAccountModels {
-            models: snapshot.models().to_vec(),
-            etag: snapshot.etag().map(str::to_owned),
+            })?;
+            Ok(FetchedAccountModels {
+                models: snapshot.models().to_vec(),
+                etag: snapshot.etag().map(str::to_owned),
+            })
         })
+        .await
+        .map_err(|_| CodexCredentialCatalogError::Upstream {
+            detail: "model catalog timed out".to_owned(),
+        })?
     }
 
     pub fn invalidate(&self) -> Result<(), CodexCredentialCatalogError> {

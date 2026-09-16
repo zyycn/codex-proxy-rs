@@ -837,3 +837,116 @@ async fn pat_import_uses_account_proxy_without_direct_fallback() {
         );
     }
 }
+
+#[tokio::test]
+async fn api_key_import_export_preserves_target_without_oauth_exchange() {
+    use gateway_core::account::LoadedCredential;
+    use provider_openai::credential::{
+        CodexCredentialAdmin, CodexCredentialData, ExportManagedCodexCredential,
+    };
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    let imported = service.prepare_import_document(serde_json::json!({
+        "provider": "openai", "authentication_kind": "api_key", "name": "relay", "base_url": "https://relay.example/custom/v2", "api_key": "sk-test-only"
+    })).await.expect("import API account").into_accounts().pop().expect("one account");
+    assert_eq!(imported.account.authentication_kind(), "api_key");
+    assert!(!imported.account.has_refresh_token());
+    assert_eq!(imported.account.upstream_account_id(), None);
+    assert!(
+        !format!(
+            "{:?}",
+            CodexCredentialCodec::decode(&imported.credential).unwrap()
+        )
+        .contains("sk-test-only")
+    );
+    let now = Utc::now();
+    let document = CodexCredentialAdmin
+        .format_cpr_export(vec![ExportManagedCodexCredential {
+            current: LoadedCredential {
+                account: imported.account,
+                credential: imported.credential,
+            },
+            added_at: now,
+            updated_at: now,
+        }])
+        .expect("export")
+        .into_json()
+        .expect("JSON");
+    let restored = service
+        .prepare_import_document(document)
+        .await
+        .expect("reimport")
+        .into_accounts()
+        .pop()
+        .unwrap();
+    let CodexCredentialData::ApiKey(data) =
+        CodexCredentialCodec::decode_complete(&restored.credential).unwrap()
+    else {
+        panic!("API credential")
+    };
+    assert_eq!(data.base_url, "https://relay.example/custom/v2");
+    assert_eq!(data.api_key, "sk-test-only");
+    assert_eq!(
+        data.transport,
+        provider_openai::credential::ApiKeyTransport::Http
+    );
+}
+
+#[tokio::test]
+async fn api_key_import_rejects_unsafe_urls_and_empty_keys() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    for (url, key) in [
+        ("http://remote.example/v1", "sk-test"),
+        ("https://user:password@example.com", "sk-test"),
+        ("https://example.com?token=secret", "sk-test"),
+        ("https://example.com/#fragment", "sk-test"),
+        ("https://example.com", ""),
+        ("https://example.com", "sk-test\r\nx-header: value"),
+    ] {
+        assert!(service.prepare_import_document(serde_json::json!({"authentication_kind":"api_key","base_url":url,"api_key":key})).await.is_err());
+    }
+    let prepared = service.prepare_import_document(serde_json::json!({"platform":"openai","type":"apikey","credentials":{"base_url":"https://example.com","api_key":"sk-test"}})).await.unwrap();
+    let value = prepared.accounts()[0].credential.expose_to_provider();
+    assert_eq!(
+        value.get("base_url"),
+        Some(&serde_json::json!("https://example.com/v1"))
+    );
+}
+
+#[tokio::test]
+async fn sub2api_api_key_import_preserves_versioned_and_explicit_responses_paths() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    for (base, expected) in [
+        ("https://example.com", "https://example.com/v1"),
+        (
+            "https://example.com/custom/v4",
+            "https://example.com/custom/v4",
+        ),
+        (
+            "https://example.com/custom/responses",
+            "https://example.com/custom",
+        ),
+        ("https://example.com/v1beta", "https://example.com/v1beta"),
+    ] {
+        let prepared = service.prepare_import_document(serde_json::json!({"platform":"openai","type":"apikey","credentials":{"base_url":base,"api_key":"sk-test","model_mapping":{}}})).await.unwrap();
+        assert_eq!(
+            prepared.accounts()[0]
+                .credential
+                .expose_to_provider()
+                .get("base_url"),
+            Some(&serde_json::json!(expected))
+        );
+    }
+    assert!(service.prepare_import_document(serde_json::json!({"platform":"openai","type":"apikey","credentials":{"api_key":"sk-test"},"extra":{"openai_api_key_responses_websockets_v2_mode":"http_bridge"}})).await.is_err());
+}

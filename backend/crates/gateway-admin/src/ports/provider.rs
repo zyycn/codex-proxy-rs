@@ -170,6 +170,14 @@ pub trait ProviderAdmin: Send + Sync {
         command: PrepareCredentialRefresh,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError>;
 
+    /// 可公开的账号连接设置；实现只能显式投影非敏感字段，不能返回凭据原文。
+    async fn account_configuration(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<Option<ProviderDocument>, ProviderAdminError> {
+        Ok(None)
+    }
+
     async fn quota(
         &self,
         request: ProviderQuotaRequest,

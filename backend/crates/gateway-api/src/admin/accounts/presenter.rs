@@ -71,6 +71,10 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     let added_at = china_rfc3339(&account.created_at);
     let updated_at = china_rfc3339(&account.updated_at);
     let usage_period = quota.usage_window().map(|(_, period)| period);
+    let mut usage = account_usage_view(usage, usage_period, now);
+    if account.authentication_kind == "api_key" {
+        usage.window_label_display = "通用额度".to_owned();
+    }
     let (quota, refresh_token_expires_at) = account_quota_view(quota, rate_limited_until, now);
     AccountView {
         id: account.id.clone(),
@@ -121,7 +125,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         updated_at,
         updated_at_display: china_datetime(&account.updated_at),
         quota,
-        usage: account_usage_view(usage, usage_period, now),
+        usage,
     }
 }
 

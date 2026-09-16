@@ -762,11 +762,8 @@ impl ProviderAccount {
         last_error_message: Option<String>,
     ) -> Self {
         self.enabled = enabled;
-        self.credential_state = if self.upstream_user_id.is_some() {
-            credential_state
-        } else {
-            CredentialState::Unknown
-        };
+        // 凭据是否可用由 Provider 判断；API Key 等认证不要求上游用户身份。
+        self.credential_state = credential_state;
         self.quota = quota;
         self.last_error_reason = last_error_reason;
         self.last_error_message = last_error_message;

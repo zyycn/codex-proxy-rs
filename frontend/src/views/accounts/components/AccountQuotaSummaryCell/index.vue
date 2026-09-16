@@ -30,7 +30,20 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
 
 <template>
   <div class="box-border grid min-h-16.5 w-full min-w-0 content-center gap-1.5 py-1.5">
-    <template v-if="summaryEntries.length > 0">
+    <template v-if="account.authenticationKind === 'api_key'">
+      <span
+        class="flex min-w-0 items-baseline gap-1 font-mono tabular-nums"
+        title="本地累计总 Token"
+      >
+        <strong class="truncate text-cp-xs font-heavy text-cp-text">{{ account.usage.totalTokensDisplay }}</strong>
+        <span class="shrink-0 text-[9px] font-emphasis tracking-[0.02em] text-cp-text-quaternary">Tokens</span>
+      </span>
+      <div class="grid min-w-0 gap-1.5">
+        <span class="text-[10px] leading-3 font-bold text-cp-text-quaternary">{{ account.usage.windowLabelDisplay }}</span>
+        <div class="h-1 w-full rounded-full bg-cp-success" title="上游额度未提供；绿色条不表示剩余额度" aria-hidden="true" />
+      </div>
+    </template>
+    <template v-else-if="summaryEntries.length > 0">
       <div
         v-if="hasUsage"
         class="flex min-w-0 items-baseline justify-between gap-2 leading-none"

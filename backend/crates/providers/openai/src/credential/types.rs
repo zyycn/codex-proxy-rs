@@ -322,11 +322,12 @@ impl fmt::Debug for CodexOAuthCredentialData {
     }
 }
 
-/// OpenAI Provider 的规范化 OAuth 凭据形态。
+/// OpenAI Provider 的规范化凭据形态。
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CodexCredentialData {
     OAuth(CodexOAuthCredentialData),
+    ApiKey(super::api_key::ApiKeyCredentialData),
 }
 
 impl CodexCredentialData {
@@ -334,6 +335,7 @@ impl CodexCredentialData {
     pub const fn authentication_kind(&self) -> &'static str {
         match self {
             Self::OAuth(_) => CODEX_AUTHENTICATION_KIND_OAUTH,
+            Self::ApiKey(_) => super::api_key::CODEX_AUTHENTICATION_KIND_API_KEY,
         }
     }
 
@@ -341,6 +343,7 @@ impl CodexCredentialData {
     pub fn installation_id(&self) -> &str {
         match self {
             Self::OAuth(data) => &data.installation_id,
+            Self::ApiKey(data) => &data.installation_id,
         }
     }
 
@@ -348,12 +351,14 @@ impl CodexCredentialData {
     pub fn cookies(&self) -> &[CodexCookie] {
         match self {
             Self::OAuth(data) => &data.cookies,
+            Self::ApiKey(_) => &[],
         }
     }
 
-    pub fn cookies_mut(&mut self) -> &mut Vec<CodexCookie> {
+    pub fn cookies_mut(&mut self) -> Option<&mut Vec<CodexCookie>> {
         match self {
-            Self::OAuth(data) => &mut data.cookies,
+            Self::OAuth(data) => Some(&mut data.cookies),
+            Self::ApiKey(_) => None,
         }
     }
 
@@ -361,12 +366,14 @@ impl CodexCredentialData {
     pub fn oauth(&self) -> Option<&CodexOAuthCredentialData> {
         match self {
             Self::OAuth(data) => Some(data),
+            Self::ApiKey(_) => None,
         }
     }
 
     pub fn oauth_mut(&mut self) -> Option<&mut CodexOAuthCredentialData> {
         match self {
             Self::OAuth(data) => Some(data),
+            Self::ApiKey(_) => None,
         }
     }
 
@@ -381,6 +388,7 @@ impl fmt::Debug for CodexCredentialData {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OAuth(data) => data.fmt(formatter),
+            Self::ApiKey(data) => data.fmt(formatter),
         }
     }
 }

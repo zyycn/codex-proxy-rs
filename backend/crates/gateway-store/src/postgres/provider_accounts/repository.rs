@@ -128,11 +128,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
 
     async fn insert_provider_account(&self, account: NewProviderAccount) -> StoreResult<()> {
         account.validate()?;
-        let credential_state = if account.upstream_user_id.is_some() {
-            account.credential_state
-        } else {
-            CredentialState::Unknown
-        };
+        let credential_state = account.credential_state;
         let mut transaction = self
             .pool
             .begin()
@@ -255,19 +251,19 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let result = sqlx::query(
             "update provider_accounts
              set credential_state = case
-                     when enabled and upstream_user_id is not null then $3
+                     when enabled then $3
                      else credential_state
                  end,
                  credential_observed_at = case
-                     when enabled and upstream_user_id is not null then $4
+                     when enabled then $4
                      else credential_observed_at
                  end,
                  last_error_reason = case
-                     when enabled and upstream_user_id is not null then $5
+                     when enabled then $5
                      else last_error_reason
                  end,
                  last_error_message = case
-                     when enabled and upstream_user_id is not null then $6
+                     when enabled then $6
                      else last_error_message
                  end,
                  updated_at = case when enabled then greatest(now(), $4) else updated_at end
@@ -543,6 +539,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             return Err(invalid("rotated profile and credential account IDs differ"));
         }
         validate_credential_update(&command.credential)?;
+        if let Some(settings) = &command.settings {
+            if settings.account_id != command.profile.id {
+                return Err(invalid(
+                    "rotated credential and account settings IDs differ",
+                ));
+            }
+            validate_batch_update_group_ids(&settings.group_ids)?;
+        }
         let mut transaction = self
             .pool
             .begin()
@@ -558,6 +562,30 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &command.credential,
             )
             .await?;
+            // 凭据 CAS、普通设置和审计共享事务，任何设置失败都回滚凭据更新。
+            if let Some(settings) = &command.settings {
+                let ids = std::slice::from_ref(&settings.account_id);
+                update_provider_accounts_scheduling_in_transaction(
+                    &mut transaction,
+                    ids,
+                    Some(settings.enabled),
+                    Some(settings.concurrency_limit),
+                    Some(settings.weight),
+                    settings.model_access.as_ref(),
+                    settings.outbound_proxy.as_ref(),
+                )
+                .await?;
+                replace_account_group_assignments_in_transaction(
+                    &mut transaction,
+                    ids,
+                    &settings.group_ids,
+                )
+                .await?;
+                if let Some(notes) = settings.notes.as_deref() {
+                    update_provider_account_notes_in_transaction(&mut transaction, ids, notes)
+                        .await?;
+                }
+            }
             append_admin_audit_event_in_transaction(
                 &mut transaction,
                 command.audit,
@@ -637,7 +665,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             let recovered = sqlx::query_scalar::<_, String>(
                 "update provider_accounts
                  set enabled = true,
-                     credential_state = 'ready',
+                     credential_state = case when credential_state = 'unknown' then 'unknown' else 'ready' end,
                      credential_observed_at = now(),
                      access_token_expires_at = case
                          when access_token_expires_at <= now() then null
@@ -767,11 +795,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     account: &NewProviderAccount,
 ) -> StoreResult<String> {
     account.validate()?;
-    let credential_state = if account.upstream_user_id.is_some() {
-        account.credential_state
-    } else {
-        CredentialState::Unknown
-    };
+    let credential_state = account.credential_state;
     let proxy_id = match account.outbound_proxy.as_ref() {
         Some(proxy) => Some(
             super::super::proxies::ensure_proxy_for_url(transaction, proxy, None)
@@ -877,6 +901,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
     let upstream_account_id =
         replacement_identity.and_then(ProviderAccountIdentity::upstream_account_id);
+    // 事务时间可能早于应用写入的额度观测，保留既有时间下界，避免轮换破坏时间约束。
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
          set name = $4,
@@ -891,7 +916,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
              credential_state = case
                  when not enabled then credential_state
-                 when coalesce($12::text, upstream_user_id) is not null then 'ready'
+                 when $11::boolean or credential_state <> 'unknown' then 'ready'
                  else 'unknown'
              end,
              credential_observed_at = case
@@ -900,7 +925,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              end,
              last_error_reason = case when enabled then null else last_error_reason end,
              last_error_message = case when enabled then null else last_error_message end,
-             updated_at = now()
+             updated_at = greatest(now(), updated_at)
          where id = $1 and provider_kind = $2
            and credential_revision = $3
          returning credential_revision",

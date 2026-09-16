@@ -328,6 +328,10 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if pending.provider_kind() != &self.provider_kind {
             return Err(provider_admin_error(ProviderAdminErrorKind::Invalid));
         }
+        if let gateway_admin::model::provider_credentials::AuthorizationMutationTarget::Reauthorize { account_id } = pending.target()
+            && self.account(account_id).await?.authentication_kind() != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         let started = self
             .oauth
             .start_authorization(StartCodexOAuthAuthorization { mutation: pending })
@@ -412,6 +416,17 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return Err(provider_admin_error(ProviderAdminErrorKind::Conflict)
                 .with_public_message("账号凭据已被更新，请刷新账号列表后重试"));
         }
+        if current.account.authentication_kind()
+            == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY
+        {
+            let prepared = CodexCredentialAdmin
+                .prepare_api_key_rotation(
+                    current,
+                    Value::Object(command.provider_material.into_provider_data().into_inner()),
+                )
+                .map_err(map_credential_admin_error)?;
+            return prepared_rotation(prepared, command.account.provider_kind);
+        }
         let mut secret = rotation_secret(command.provider_material)?;
         if secret.id_token.is_none() {
             let runtime = CodexCredentialCodec::decode(&current.credential)
@@ -433,6 +448,10 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         command: PrepareCredentialRefresh,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        if command.account.authentication_kind != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         validate_account_record(&command.account, &self.provider_kind)?;
         let account_id = ProviderAccountId::new(command.account.id.clone())
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
@@ -453,6 +472,36 @@ impl ProviderAdmin for OpenAiAdminProvider {
         prepared_rotation(prepared, command.account.provider_kind)
     }
 
+    async fn account_configuration(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Option<ProviderDocument>, ProviderAdminError> {
+        let account = self.account(account_id).await?;
+        if account.authentication_kind() != crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY {
+            return Ok(None);
+        }
+        let current = self
+            .accounts
+            .load_current_credential(account_id)
+            .await
+            .map_err(map_store_error)?;
+        let crate::credential::CodexCredentialData::ApiKey(data) =
+            CodexCredentialCodec::decode_complete(&current.credential)
+                .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?
+        else {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Invalid));
+        };
+        let value = serde_json::to_value(data.configuration())
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+        let object = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+        Ok(Some(ProviderDocument::new(
+            gateway_core::account::OpaqueProviderData::new(object),
+        )))
+    }
+
     async fn quota(
         &self,
         request: ProviderQuotaRequest,
@@ -463,6 +512,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
             rolling_usage: _,
         } = request;
         let mut account = self.account(&account_id).await?;
+        if account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY {
+            if refresh {
+                return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+            }
+            return Ok(project_quota(None, &account));
+        }
         let snapshot = if refresh {
             let snapshot = Some(
                 self.quota
@@ -517,7 +572,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<Option<ProviderSubscription>, ProviderAdminError> {
-        self.account(account_id).await?;
+        if self.account(account_id).await?.authentication_kind()
+            != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         self.profile_statistics
             .subscription(account_id)
             .await
@@ -538,7 +597,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<ProviderProfileStatistics, ProviderAdminError> {
-        self.account(account_id).await?;
+        if self.account(account_id).await?.authentication_kind()
+            != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         let statistics = self
             .profile_statistics
             .profile_statistics(account_id)
@@ -551,7 +614,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<ProviderProfileAvatar, ProviderAdminError> {
-        self.account(account_id).await?;
+        if self.account(account_id).await?.authentication_kind()
+            != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         self.profile_statistics
             .profile_avatar(account_id)
             .await
@@ -563,7 +630,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<ProviderResetCredits, ProviderAdminError> {
-        self.account(account_id).await?;
+        if self.account(account_id).await?.authentication_kind()
+            != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         self.quota
             .list_reset_credits(account_id)
             .await
@@ -575,7 +646,14 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         command: ConsumeProviderResetCredit,
     ) -> Result<ProviderResetCreditResult, ProviderAdminError> {
-        self.account(&command.account_id).await?;
+        if self
+            .account(&command.account_id)
+            .await?
+            .authentication_kind()
+            != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported));
+        }
         self.quota
             .consume_reset_credit(
                 &command.account_id,

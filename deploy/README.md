@@ -314,7 +314,7 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
    按配置的保留窗口及组织的数据处理要求管理已生成文件。不要为普通请求排查开启 OAuth 恢复记录，
    也不要直接上传整个日志目录或完整转储。
 
-反馈入口见 [Issue 表单](../.github/ISSUE_TEMPLATE/bug_report.yml)；错误诊断与查询合同见
+请求问题反馈使用 [接口问题反馈表单](../.github/ISSUE_TEMPLATE/api-bug-report.yml)；错误诊断与查询合同见
 [API 文档](../docs/api.md#10-dashboard用量与错误)。
 
 ## 密码语义
@@ -337,6 +337,7 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
 每个 Release 独立提供 `config.example.yaml`、默认镜像固定到该版本的 `compose.yaml` 和校验和；
 各平台归档也包含 `deploy/config.example.yaml`。配置模板来自构建该版本的同一提交。
 使用二进制归档手动部署时，将模板中的 `api.asset_directory` 改为 `../web/dist`，指向归档内的静态资源。
+在线更新默认使用同一目录；如显式设置 `host.system_update.web_dist_dir`，应确保它指向实际提供页面的目录。
 升级时先阅读目标版本说明，下载同一 Release 的部署附件，对比模板并合并必要配置，保留已有凭据
 和 Compose 自定义项。不要用模板覆盖 `config.yaml`，也不要从 `main` 下载模板搭配旧镜像。
 
@@ -375,7 +376,8 @@ Compose 已显式装配正式发布构建所需的运行参数：
 - `CPR_UPDATE_REPOSITORY`：只接受 `owner/repository`；默认 `zyycn/codex-proxy-rs`。
 - `CPR_GITHUB_API_BASE`：正式环境必须为 `https://api.github.com/repos`。
 - `CPR_UPDATE_CHANNEL`：`stable` 会拒绝 prerelease。
-- `CPR_UPDATE_EXE_PATH`、`CPR_WEB_DIST_DIR`：分别指向容器内二进制和前端静态目录。
+- `CPR_UPDATE_EXE_PATH`、`CPR_WEB_DIST_DIR`：分别指向容器内二进制和前端静态目录；
+  `CPR_WEB_DIST_DIR` 同时供页面服务与更新器使用，相对路径以 `deploy/config.yaml` 所在目录为基准。
 - 更新临时目录、状态文件和锁文件默认由 `host.runtime_data_dir` 派生；
   `CPR_UPDATE_TEMP_DIR`、`CPR_UPDATE_STATE_FILE`、`CPR_UPDATE_LOCK_FILE` 仅用于显式覆盖。
 - `CPR_ENABLE_SELF_RESTART=true`：更新或回滚完成后允许管理端请求重启；Docker 进程退出后由

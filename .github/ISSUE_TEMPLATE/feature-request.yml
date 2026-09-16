@@ -1,0 +1,39 @@
+name: 功能建议
+description: 说明使用场景、当前不便和期望行为，提出新能力或体验改进
+body:
+  - type: markdown
+    attributes:
+      value: |
+        如果已有功能无法正常使用，请选择对应的故障模板。提交前可搜索已有 Issues，相关讨论请附链接。
+        每个 Issue 尽量围绕一个使用场景；截图和示例请移除密钥、令牌、Cookie、代理认证及私人内容。
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 使用场景与当前不便
+      description: 说明你希望完成什么任务、目前如何操作，以及现有能力有什么不足。
+      placeholder: |
+        希望完成的任务：
+        当前做法与不便：
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 期望行为
+      description: 描述改进后希望如何使用，最好给出一个具体例子；不要求先设计技术方案。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已尝试的替代方案
+      description: 如果已有配置、操作方式或其他工具能部分满足需求，说明仍缺少什么；未尝试可留空。
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 补充信息
+      description: 可附当前使用的具体版本、相关 Issue、截图或参考链接；引用其他项目时说明希望借鉴的具体行为。

@@ -5,8 +5,9 @@ description: 整理与提交 GitHub Issue（问题反馈 / 功能建议）。用
 
 # 整理与提交 Issue
 
-本仓库流程见 [贡献与审查](../../../CONTRIBUTING.md)，问题反馈使用当前的
-[YAML Issue Form](../../../.github/ISSUE_TEMPLATE/bug_report.yml)。从表单读取字段与必填项，不在技能中复制一份字段清单。
+本仓库流程见 [贡献与审查](../../../CONTRIBUTING.md)，按场景选择当前的
+[接口问题反馈](../../../.github/ISSUE_TEMPLATE/api-bug-report.yml)、[常规问题反馈](../../../.github/ISSUE_TEMPLATE/general-bug-report.yml)
+或 [功能建议](../../../.github/ISSUE_TEMPLATE/feature-request.yml) 表单。从表单读取字段与必填项，不在技能中复制一份字段清单。
 用户指定其他仓库时，使用该仓库当前的贡献规则与 Issue 模板，不能把这里的表单套过去。
 
 ## 确定目标和动作
@@ -21,7 +22,7 @@ description: 整理与提交 GitHub Issue（问题反馈 / 功能建议）。用
 ## 证据与去重
 
 1. 读取目标仓库实际 Issue 模板和配置，区分缺陷、功能建议与协作规则提案。
-   本仓库后两类允许普通 Issue；其他仓库按其配置选择入口。
+   本仓库功能建议有独立表单，协作规则提案允许普通 Issue；其他仓库按其配置选择入口。
 2. 先搜索 open 和 closed Issues，结合关键词、错误信息与触发条件检查重复，而不只比较标题。
    同时核对相关 PR 与发布记录，关联已有修复及其发布版本；仅主分支已修复时明确尚未发布。
    同一问题已有记录且没有新增证据时返回已有链接；用户仍明确要求新建时按其要求处理。

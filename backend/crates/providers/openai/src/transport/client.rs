@@ -642,12 +642,28 @@ pub struct CodexBackendJsonResponse {
 // CodexBackendClient
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OpenAiUpstreamProtocol {
+    Codex,
+    ResponsesApi,
+}
+
+impl OpenAiUpstreamProtocol {
+    pub(super) const fn responses_path(self) -> &'static str {
+        match self {
+            Self::Codex => super::endpoints::CODEX_RESPONSES_PATH,
+            Self::ResponsesApi => "/responses",
+        }
+    }
+}
+
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
     pub(super) client: Client,
     pub(super) direct_client: Client,
     pub(super) base_url: String,
+    pub(super) protocol: OpenAiUpstreamProtocol,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
     pub(super) websocket_origin_breaker: WebSocketOriginBreaker,
@@ -657,6 +673,22 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_authentication(
+        mut self,
+        authentication: &crate::credential::CodexRuntimeAuthentication,
+    ) -> Self {
+        if let crate::credential::CodexRuntimeAuthentication::ApiKey(auth) = authentication {
+            self.base_url = auth.configuration.base_url.trim_end_matches('/').to_owned();
+            self.protocol = OpenAiUpstreamProtocol::ResponsesApi;
+            self.websocket_origin_key = format!(
+                "{}:{}",
+                websocket_origin_key(&self.base_url),
+                self.egress_key
+            );
+        }
+        self
+    }
+
     pub fn for_account(
         &self,
         account: &gateway_core::account::ProviderAccount,
@@ -664,6 +696,11 @@ impl CodexBackendClient {
         let mut client = self.clone();
         client.outbound_proxy = account.outbound_proxy().cloned();
         client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
+        if account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_API_KEY {
+            client
+                .egress_key
+                .push_str(&format!(":revision:{}", account.revision().get()));
+        }
         client.websocket_origin_key = format!(
             "{}:{}",
             websocket_origin_key(&self.base_url),

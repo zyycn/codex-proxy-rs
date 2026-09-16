@@ -585,6 +585,7 @@ pub struct CredentialDeletionResult {
 pub struct RotateCredential {
     pub mutation: CredentialMutation,
     pub provider_material: ProviderDocument,
+    pub settings: Option<super::accounts::UpdateAccount>,
 }
 
 /// Provider 校验手工轮换材料时所需的非事务输入。
@@ -664,6 +665,7 @@ impl fmt::Debug for PreparedCredentialRotation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialRotationCommit {
     pub prepared: PreparedCredentialRotationFacts,
+    pub settings: Option<super::accounts::UpdateAccount>,
 }
 
 impl fmt::Debug for RotateCredential {
@@ -672,6 +674,7 @@ impl fmt::Debug for RotateCredential {
             .debug_struct("RotateCredential")
             .field("mutation", &self.mutation)
             .field("provider_material", &self.provider_material)
+            .field("settings", &self.settings)
             .finish()
     }
 }

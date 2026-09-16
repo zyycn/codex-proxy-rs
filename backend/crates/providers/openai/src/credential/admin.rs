@@ -24,6 +24,7 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
+use super::api_key::{ApiKeyCredentialData, ApiKeyTransport, CODEX_AUTHENTICATION_KIND_API_KEY};
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
 use super::token_client::{
@@ -128,13 +129,19 @@ struct ParsedCodexImportAccount {
     outbound_proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
-struct ParsedCodexAuthentication {
+#[derive(Debug)]
+enum ParsedCodexAuthentication {
+    OAuth(ParsedOAuthAuthentication),
+    ApiKey(ApiKeyCredentialData),
+}
+
+struct ParsedOAuthAuthentication {
     access_token: Option<String>,
     refresh_token: Option<String>,
     id_token: Option<String>,
 }
 
-impl fmt::Debug for ParsedCodexAuthentication {
+impl fmt::Debug for ParsedOAuthAuthentication {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OAuth")
@@ -188,7 +195,7 @@ impl fmt::Debug for ExportManagedCodexCredential {
 #[serde(rename_all = "camelCase")]
 pub struct CodexCprExportDocument {
     source_format: &'static str,
-    accounts: Vec<CodexCprOAuthExportAccount>,
+    accounts: Vec<CodexCprExportAccount>,
 }
 
 impl CodexCprExportDocument {
@@ -233,6 +240,24 @@ struct CodexCprExportCommon {
     updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     outbound_proxy_url: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum CodexCprExportAccount {
+    OAuth(CodexCprOAuthExportAccount),
+    ApiKey(CodexCprApiKeyExportAccount),
+}
+
+#[derive(Serialize)]
+struct CodexCprApiKeyExportAccount {
+    #[serde(flatten)]
+    common: CodexCprExportCommon,
+    provider: &'static str,
+    authentication_kind: &'static str,
+    base_url: String,
+    api_key: String,
+    transport: ApiKeyTransport,
 }
 
 #[derive(Serialize)]
@@ -383,6 +408,94 @@ impl CodexCredentialAdminError {
 pub struct CodexCredentialAdmin;
 
 impl CodexCredentialAdmin {
+    fn prepare_api_key(
+        &self,
+        account_id: String,
+        name: String,
+        data: ApiKeyCredentialData,
+    ) -> Result<NewProviderAccount, CodexCredentialAdminError> {
+        if name.trim().is_empty() {
+            return Err(CodexCredentialAdminError::InvalidInput);
+        }
+        let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::ApiKey(data))
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let account = ProviderAccount::new(
+            ProviderAccountId::new(account_id)
+                .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
+            ProviderKind::new(PROVIDER_NAME)
+                .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
+            name,
+            None,
+            CODEX_AUTHENTICATION_KIND_API_KEY.to_owned(),
+            CredentialRevision::new(1).map_err(|_| CodexCredentialAdminError::InvalidCredential)?,
+            None,
+        )
+        .with_account_facts(
+            true,
+            CredentialState::Ready,
+            QuotaState::unknown(),
+            None,
+            None,
+        );
+        Ok(NewProviderAccount {
+            account,
+            credential,
+            model_access: None,
+        })
+    }
+
+    pub(crate) fn prepare_api_key_rotation(
+        &self,
+        current: LoadedCredential,
+        material: Value,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Rotation {
+            base_url: String,
+            transport: ApiKeyTransport,
+            api_key: Option<String>,
+        }
+        let rotation: Rotation = serde_json::from_value(material)
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
+        let CodexCredentialData::ApiKey(mut data) =
+            CodexCredentialCodec::decode_complete(&current.credential)
+                .map_err(|_| CodexCredentialAdminError::InvalidCredential)?
+        else {
+            return Err(CodexCredentialAdminError::InvalidCredential);
+        };
+        data.base_url = rotation.base_url;
+        data.transport = rotation.transport;
+        if let Some(api_key) = rotation.api_key {
+            data.api_key = api_key;
+        }
+        let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::ApiKey(data))
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let profile = ProviderAccountUpdate {
+            account_id: current.account.id().clone(),
+            name: current.account.name().to_owned(),
+            email: None,
+            plan_type: None,
+        };
+        let credential = CredentialCasUpdate::new(
+            current.account.id().clone(),
+            current.account.revision(),
+            profile.clone(),
+            credential,
+            false,
+            None,
+            None,
+        )
+        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?
+        .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
+        Ok(PreparedCodexCredentialRotation {
+            profile,
+            credential,
+            replacement_identity: None,
+            refresh_guards: None,
+        })
+    }
+
     pub fn prepare_import(
         &self,
         input: ImportCodexOAuthCredential,
@@ -530,13 +643,27 @@ impl CodexCredentialAdmin {
                     .map(|proxy| proxy.expose_url().to_owned()),
             };
             let exported = match data {
+                CodexCredentialData::ApiKey(data) => {
+                    if account.authentication_kind() != CODEX_AUTHENTICATION_KIND_API_KEY {
+                        return Err(CodexCredentialAdminError::InvalidCredential);
+                    }
+                    CodexCprExportAccount::ApiKey(CodexCprApiKeyExportAccount {
+                        common,
+                        provider: PROVIDER_NAME,
+                        authentication_kind: CODEX_AUTHENTICATION_KIND_API_KEY,
+                        base_url: data.base_url,
+                        api_key: data.api_key,
+                        transport: data.transport,
+                    })
+                }
+
                 CodexCredentialData::OAuth(data) => {
                     if account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
                         || account.has_refresh_token() != data.refresh_token.is_some()
                     {
                         return Err(CodexCredentialAdminError::InvalidCredential);
                     }
-                    CodexCprOAuthExportAccount {
+                    CodexCprExportAccount::OAuth(CodexCprOAuthExportAccount {
                         common,
                         access_token: data.access_token,
                         refresh_token: data.refresh_token,
@@ -545,7 +672,7 @@ impl CodexCredentialAdmin {
                             .access_token_expires_at()
                             .map(DateTime::<Utc>::from)
                             .map(|value| value.to_rfc3339()),
-                    }
+                    })
                 }
             };
             accounts.push(exported);
@@ -862,14 +989,32 @@ impl CodexCredentialAdminService {
         let mut accounts = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let account_id = format!("acct_{}", uuid::Uuid::now_v7().simple());
+            let authentication = match candidate.authentication {
+                ParsedCodexAuthentication::ApiKey(data) => {
+                    let mut prepared = CodexCredentialAdmin.prepare_api_key(
+                        account_id,
+                        candidate
+                            .name
+                            .unwrap_or_else(|| "OpenAI API Key".to_owned()),
+                        data,
+                    )?;
+                    prepared.model_access = candidate.model_access;
+                    prepared.account = prepared
+                        .account
+                        .with_outbound_proxy(candidate.outbound_proxy);
+                    accounts.push(prepared);
+                    continue;
+                }
+                ParsedCodexAuthentication::OAuth(authentication) => authentication,
+            };
             let typed_account_id = ProviderAccountId::new(account_id.clone())
                 .map_err(|_| CodexCredentialAdminError::InvalidInput)?;
             let (mut secret, mut access_token_expires_at) = self
                 .resolve_import_tokens(
                     &typed_account_id,
-                    candidate.authentication.access_token.clone(),
-                    candidate.authentication.refresh_token.clone(),
-                    candidate.authentication.id_token.clone(),
+                    authentication.access_token.clone(),
+                    authentication.refresh_token.clone(),
+                    authentication.id_token.clone(),
                     candidate.outbound_proxy.as_ref(),
                 )
                 .await?;
@@ -1086,10 +1231,10 @@ fn parse_import_document(
         .unwrap_or(payload);
     let mut accounts = Vec::new();
     for value in import_account_values(payload)? {
-        if !is_openai_oauth_candidate(value) {
+        if !is_codex_import_candidate(value) {
             continue;
         }
-        let mut account = parse_oauth_import_account(value)?;
+        let mut account = parse_codex_import_account(value)?;
         account.outbound_proxy = if ["outboundProxyUrl", "outbound_proxy_url", "proxy_key"]
             .iter()
             .any(|field| value.get(field).is_some())
@@ -1103,7 +1248,7 @@ fn parse_import_document(
     Ok(accounts)
 }
 
-fn parse_oauth_import_account(
+fn parse_codex_import_account(
     value: &Value,
 ) -> Result<ParsedCodexImportAccount, CodexCredentialAdminError> {
     let credentials = value.get("credentials").unwrap_or(value);
@@ -1115,7 +1260,11 @@ fn parse_oauth_import_account(
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?,
         name: first_string(value, &["name", "label"]),
         email: first_string(value, &["email"]).or_else(|| first_string(credentials, &["email"])),
-        authentication: parse_oauth_import_tokens(value)?,
+        authentication: if is_api_key_import(value) {
+            ParsedCodexAuthentication::ApiKey(parse_api_key_import(value)?)
+        } else {
+            ParsedCodexAuthentication::OAuth(parse_oauth_import_tokens(value)?)
+        },
         outbound_proxy: None,
     })
 }
@@ -1214,7 +1363,7 @@ fn import_account_values(payload: &Value) -> Result<Vec<&Value>, CodexCredential
 
 fn parse_oauth_import_tokens(
     value: &Value,
-) -> Result<ParsedCodexAuthentication, CodexCredentialAdminError> {
+) -> Result<ParsedOAuthAuthentication, CodexCredentialAdminError> {
     let mut access_token = None;
     let mut refresh_token = None;
     let mut id_token = None;
@@ -1247,14 +1396,14 @@ fn parse_oauth_import_tokens(
     if access_token.is_none() && refresh_token.is_none() {
         return Err(CodexCredentialAdminError::InvalidCredential);
     }
-    Ok(ParsedCodexAuthentication {
+    Ok(ParsedOAuthAuthentication {
         access_token,
         refresh_token,
         id_token,
     })
 }
 
-fn is_openai_oauth_candidate(value: &Value) -> bool {
+fn is_codex_import_candidate(value: &Value) -> bool {
     let Some(account) = value.as_object() else {
         return false;
     };
@@ -1272,6 +1421,8 @@ fn is_openai_oauth_candidate(value: &Value) -> bool {
             kind.eq_ignore_ascii_case("openai")
                 || kind.eq_ignore_ascii_case("codex")
                 || kind.eq_ignore_ascii_case("oauth")
+                || kind.eq_ignore_ascii_case("api_key")
+                || kind.eq_ignore_ascii_case("apikey")
         })
 }
 
@@ -1281,4 +1432,114 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn is_api_key_import(value: &Value) -> bool {
+    value
+        .get("authentication_kind")
+        .or_else(|| value.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|kind| matches!(kind, "api_key" | "apikey"))
+}
+
+fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCredentialAdminError> {
+    let credentials = value.get("credentials").unwrap_or(value);
+    let external = value.get("type").and_then(Value::as_str) == Some("apikey");
+    let mut base_url = first_string(credentials, &["base_url"])
+        .or_else(|| external.then(|| "https://api.openai.com/v1".to_owned()))
+        .ok_or(CodexCredentialAdminError::InvalidInput)?;
+    if external {
+        if !crate::transport::valid_upstream_base_url(&base_url) {
+            return Err(CodexCredentialAdminError::InvalidInput);
+        }
+        // sub2api 接受服务根、版本前缀或完整 Responses 端点；仅在导入边界归一化。
+        base_url = base_url.trim_end_matches('/').to_owned();
+        if let Some(prefix) = base_url.strip_suffix("/responses") {
+            base_url = prefix.to_owned();
+        } else if !sub2api_version_suffix(&base_url) {
+            base_url.push_str("/v1");
+        }
+        // 不静默丢失会改变协议、身份请求头或模型映射的外部设置。
+        for field in [
+            "model_mapping",
+            "compact_model_mapping",
+            "custom_headers",
+            "header_overrides",
+            "force_model",
+            "responses_websockets",
+            "api_base_urls",
+        ] {
+            if credentials.get(field).is_some_and(external_option_enabled) {
+                return Err(CodexCredentialAdminError::InvalidInput);
+            }
+        }
+        if credentials
+            .get("api_protocol")
+            .and_then(Value::as_str)
+            .is_some_and(|protocol| !protocol.is_empty() && protocol != "responses")
+        {
+            return Err(CodexCredentialAdminError::InvalidInput);
+        }
+        if value
+            .get("extra")
+            .and_then(Value::as_object)
+            .is_some_and(|extra| {
+                extra.iter().any(|(key, value)| {
+                    (key.starts_with("openai_") || key == "header_overrides")
+                        && external_option_enabled(value)
+                })
+            })
+        {
+            return Err(CodexCredentialAdminError::InvalidInput);
+        }
+    }
+    let data = ApiKeyCredentialData {
+        schema_version: 1,
+        installation_id: uuid::Uuid::new_v4().to_string(),
+        base_url,
+        api_key: first_string(credentials, &["api_key"])
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?,
+        transport: credentials
+            .get("transport")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|_| CodexCredentialAdminError::InvalidInput)?
+            .unwrap_or_default(),
+    };
+    if !data.validate() {
+        return Err(CodexCredentialAdminError::InvalidCredential);
+    }
+    Ok(data)
+}
+
+fn external_option_enabled(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(false) => false,
+        Value::Object(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::String(value) => !matches!(value.as_str(), "" | "off"),
+        _ => true,
+    }
+}
+
+fn sub2api_version_suffix(base_url: &str) -> bool {
+    let Some(segment) = base_url.rsplit('/').next() else {
+        return false;
+    };
+    let segment = segment.to_ascii_lowercase();
+    let Some(version) = segment.strip_prefix('v') else {
+        return false;
+    };
+    let digits = version.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return false;
+    }
+    let suffix = &version[digits..];
+    suffix.is_empty()
+        || ["alpha", "beta", "preview"]
+            .iter()
+            .any(|prefix| suffix.starts_with(prefix))
+        || suffix.strip_prefix('.').is_some_and(|minor| {
+            !minor.is_empty() && minor.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
