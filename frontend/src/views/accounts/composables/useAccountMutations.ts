@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { getAccounts } from '@/api'
+import type { AccountImportTask, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
 import dayjs from 'dayjs'
 import { ref, watch } from 'vue'
@@ -23,6 +23,7 @@ type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export function useAccountMutations(options: {
   accounts: Ref<AccountRow[]>
   selectedIds: Ref<Set<string>>
+  onImportTaskCreated: (task: AccountImportTask) => void
   reload: () => Promise<unknown>
   replaceAccount: (account: AccountRow) => Promise<boolean>
 }) {
@@ -30,6 +31,7 @@ export function useAccountMutations(options: {
   const { downloadJson } = useDownload()
   const onboarding = useAccountOnboarding({
     reload: loadAccounts,
+    onImportTaskCreated: options.onImportTaskCreated,
   })
   const selectedAccountsById = new Map<string, AccountRow>()
   const showDeleteModal = ref(false)

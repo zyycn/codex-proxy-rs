@@ -18,6 +18,7 @@ import AccountCreateModal from './components/AccountCreateModal/index.vue'
 import AccountEditModal from './components/AccountEditModal.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
+import AccountImportTasks from './components/AccountImportTasks/index.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
@@ -28,6 +29,7 @@ import AccountUsagePanel from './components/AccountUsagePanel.vue'
 import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
 import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
 import { useAccountEditor } from './composables/useAccountEditor'
+import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
@@ -58,6 +60,20 @@ const {
   loadGroups,
 } = useAccountGroupCatalog()
 
+const importTasks = useAccountImportTasks({
+  reload: () => Promise.all([loadAccounts(), loadGroups()]),
+})
+const {
+  open: showImportTasks,
+  tasks: recentImportTasks,
+  selectedId: importTaskId,
+  detail: importTaskDetail,
+  loading: loadingImportTasks,
+  stopping: stoppingImportTask,
+  error: importTaskError,
+  activeCount: activeImportCount,
+} = importTasks
+
 const {
   showCreateModal,
   showDeleteModal,
@@ -85,6 +101,7 @@ const {
   handleRefresh,
   handleRefreshQuota,
 } = useAccountMutations({
+  onImportTaskCreated: importTasks.created,
   accounts,
   selectedIds,
   reload: () => Promise.all([loadAccounts(), loadGroups()]),
@@ -189,6 +206,9 @@ const {
           :selected-count="selectedIds.size"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
+          :has-import-tasks="recentImportTasks.length > 0"
+          :active-import-count="activeImportCount"
+          @import-tasks="showImportTasks = true"
           @delete-selected="showDeleteModal = true"
           @export-selected="handleExportAccounts"
           @create="openCreateAccount"
@@ -337,6 +357,20 @@ const {
       :status-view="connectionTestStatusView"
       @refresh-models="handleRefreshConnectionTestModels()"
       @test="handleTestConnection()"
+    />
+
+    <AccountImportTasks
+      v-model="showImportTasks"
+      :tasks="recentImportTasks"
+      :selected-id="importTaskId"
+      :detail="importTaskDetail"
+      :loading="loadingImportTasks"
+      :stopping="stoppingImportTask"
+      :error="importTaskError"
+      @select="importTasks.select"
+      @refresh="importTasks.refresh"
+      @stop="importTasks.stop"
+      @view-accounts="showImportTasks = false; loadAccounts()"
     />
 
     <AccountCreateModal

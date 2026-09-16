@@ -67,6 +67,7 @@ pub(super) struct FakeProviderAdmin {
     kind: ProviderKind,
     events: EventLog,
     failure: Mutex<Option<ProviderAdminError>>,
+    import_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     quota_failure: Mutex<Option<ProviderAdminErrorKind>>,
     pending: Arc<Mutex<Option<PendingAuthorizationMutation>>>,
     retry_authorization_after_abort: Mutex<bool>,
@@ -90,6 +91,7 @@ impl FakeProviderAdmin {
             kind: ProviderKind::new(kind).expect("provider kind"),
             events,
             failure: Mutex::new(None),
+            import_gate: Mutex::new(None),
             quota_failure: Mutex::new(None),
             pending: Arc::new(Mutex::new(None)),
             retry_authorization_after_abort: Mutex::new(false),
@@ -106,6 +108,12 @@ impl FakeProviderAdmin {
             subscription_result: Mutex::new(Ok(None)),
             personal_info_barrier: Mutex::new(None),
         })
+    }
+
+    pub(super) fn block_imports(&self) -> Arc<tokio::sync::Semaphore> {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        *self.import_gate.lock().expect("import gate") = Some(gate.clone());
+        gate
     }
 
     pub(super) fn fail_next(&self, kind: ProviderAdminErrorKind) {
@@ -332,6 +340,10 @@ impl ProviderAdmin for FakeProviderAdmin {
         _command: PrepareCredentialImport,
     ) -> Result<PreparedCredentialImport, ProviderAdminError> {
         self.record("provider.prepare_import");
+        let gate = self.import_gate.lock().expect("import gate").clone();
+        if let Some(gate) = gate {
+            gate.acquire().await.expect("import permit").forget();
+        }
         self.require_available()?;
         let account_ids = self
             .import_account_ids

@@ -1,14 +1,15 @@
 import type { Account, AccountResetCredit } from '@/api'
 import { computed, shallowReactive, shallowRef, watch } from 'vue'
-
 import {
   consumeAccountResetCredit,
   getAccountResetCredits,
   refreshAccountQuota,
 } from '@/api'
+
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { generateRequestId } from '@/utils/uuid'
 
 interface PendingResetCreditOperation {
   accountId: string
@@ -172,7 +173,7 @@ export function useAccountResetCredits(options: {
           accountId: target.accountId,
           creditId: credit?.id,
           credit,
-          redeemRequestId: generateRedeemRequestId(),
+          redeemRequestId: generateRequestId(),
           hasTransportFailure: false,
         }
       : null)
@@ -275,15 +276,6 @@ export function useAccountResetCredits(options: {
     cancelConsume,
     confirmConsume,
   }
-}
-
-function generateRedeemRequestId() {
-  // 普通 HTTP 管理端没有 randomUUID；getRandomValues 仍可生成密码学安全的 UUIDv4。
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6] & 0x0F) | 0x40
-  bytes[8] = (bytes[8] & 0x3F) | 0x80
-  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function isAmbiguousConsumeError(error: unknown) {

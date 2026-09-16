@@ -1,16 +1,16 @@
-import type { getAccounts } from '@/api'
+import type { AccountImportTask, getAccounts } from '@/api'
 
 import { computed, ref, shallowRef, watch } from 'vue'
 import {
   completeAccountOAuth,
-  importAccounts,
+  createAccountImportTask,
   startAccountOAuth,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { errorMessage } from '@/utils/async'
 import { isRecord } from '@/utils/object'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
+import { generateRequestId } from '@/utils/uuid'
 import { accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -27,6 +27,7 @@ const MAX_TOKEN_IMPORT_COUNT = 200
 
 export function useAccountOnboarding(options: {
   reload: () => Promise<unknown>
+  onImportTaskCreated: (task: AccountImportTask) => void
 }) {
   const createModalOpen = shallowRef(false)
   const reauthorizingAccount = shallowRef<AccountRow | null>(null)
@@ -35,6 +36,10 @@ export function useAccountOnboarding(options: {
   const creatingAccount = creatingAccountAction.loading
   const authorizingOAuth = authorizingOAuthAction.loading
   const createForm = ref(emptyAccountCreateForm())
+  let submissionId: string | undefined
+  watch(createForm, () => {
+    submissionId = undefined
+  }, { deep: true, flush: 'sync' })
 
   const showCreateModal = computed({
     get: () => createModalOpen.value,
@@ -60,10 +65,27 @@ export function useAccountOnboarding(options: {
         const proxyError = accountProxyError(createForm.value)
         if (proxyError)
           throw new Error(proxyError)
-        const message = createForm.value.provider === 'batch'
-          ? await importMixedAccountDocument()
-          : await importAccountDocument()
-        await finishCreate(message)
+        const mode = createForm.value.mode
+        if (mode === 'oauth')
+          throw new Error('请选择凭据导入方式')
+        const documents = createForm.value.provider === 'batch'
+          ? parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
+          : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
+        if (documents.length > MAX_TOKEN_IMPORT_COUNT)
+          throw new Error(`单次最多导入 ${MAX_TOKEN_IMPORT_COUNT} 个条目`)
+        submissionId ??= generateRequestId()
+        const task = await createAccountImportTask({
+          submissionId,
+          items: documents.map(entry => ({
+            provider: entry.provider,
+            data: entry.document,
+            settings: accountImportSettings(createForm.value),
+            outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+          })),
+        })
+        showCreateModal.value = false
+        options.onImportTaskCreated(task)
+        toast.success('导入任务已创建')
       },
     )
   }
@@ -160,60 +182,6 @@ export function useAccountOnboarding(options: {
     }
   }
 
-  async function importAccountDocument() {
-    const provider = requireImportProvider(createForm.value.provider)
-    const mode = createForm.value.mode
-    if (mode === 'oauth')
-      throw new Error('请选择凭据导入方式')
-    const documents = accountImportDocuments(
-      provider,
-      mode,
-      createForm.value.importTexts[mode],
-    )
-    let importedCount = 0
-    for (const entry of documents) {
-      const result = await importAccounts({
-        provider,
-        settings: accountImportSettings(createForm.value),
-        outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
-        data: entry.document,
-      })
-      importedCount += result.importedCount
-    }
-    return `${formatProviderLabel(provider)} 账号已导入 ${importedCount} 个`
-  }
-
-  async function importMixedAccountDocument() {
-    const documents = parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
-    let importedCount = 0
-    const failures: string[] = []
-
-    for (const entry of documents) {
-      try {
-        const result = await importAccounts({
-          provider: entry.provider,
-          settings: accountImportSettings(createForm.value),
-          outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
-          data: entry.document,
-        }, { silent: true })
-        importedCount += result.importedCount
-      }
-      catch (error) {
-        const message = errorMessage(error, '导入失败')
-        failures.push(`${formatProviderLabel(entry.provider, 'OpenAI')}：${message}`)
-      }
-    }
-
-    if (importedCount === 0) {
-      throw new Error(failures.length > 0 ? `批量导入失败：${failures.join('、')}` : '批量文件没有可导入的账号')
-    }
-
-    if (failures.length > 0) {
-      return `已导入 ${importedCount} 个账号，${failures.length} 个文档失败：${failures.join('、')}`
-    }
-    return `已导入 ${importedCount} 个账号`
-  }
-
   async function finishCreate(message: string) {
     showCreateModal.value = false
     await options.reload()
@@ -282,10 +250,7 @@ function accountImportDocuments(
   value: string,
 ): MixedImportDocument[] {
   if (provider === 'openai' && isOpenAiTokenImportMode(mode)) {
-    return [{
-      provider,
-      document: parseOpenAiTokenImport(value, mode),
-    }]
+    return parseOpenAiTokenImport(value, mode).map(document => ({ provider, document }))
   }
   return providerImportDocuments(parseImportJson(value), provider)
 }
@@ -303,9 +268,7 @@ function parseOpenAiTokenImport(value: string, mode: OpenAiTokenImportMode) {
     throw new Error(`单次最多导入 ${MAX_TOKEN_IMPORT_COUNT} 个 ${label}`)
 
   const credentialKey = mode === 'access_token' ? 'accessToken' : 'refreshToken'
-  return {
-    accounts: tokens.map(token => ({ [credentialKey]: token })),
-  }
+  return tokens.map(token => ({ accounts: [{ [credentialKey]: token }] }))
 }
 
 function isOpenAiTokenImportMode(value: string): value is OpenAiTokenImportMode {

@@ -27,8 +27,9 @@ pub use use_case::key_usage::KeyUsageService;
 pub use use_case::{
     account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
     backup::BackupService, client_distribution::ClientDistributionService,
-    client_keys::ClientKeyService, observability::ObservabilityService, openai::OpenAiService,
-    proxies::ProxiesService, settings::SettingsService, system::SystemService, xai::XaiService,
+    client_keys::ClientKeyService, import_tasks::ImportTasksService,
+    observability::ObservabilityService, openai::OpenAiService, proxies::ProxiesService,
+    settings::SettingsService, system::SystemService, xai::XaiService,
 };
 
 use model::{AdminError, AdminErrorKind};
@@ -195,9 +196,15 @@ pub struct AdminServices {
     openai: Arc<dyn OpenAiService>,
     xai: Arc<dyn XaiService>,
     backups: Arc<dyn BackupService>,
+    import_tasks: Arc<dyn ImportTasksService>,
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn import_tasks(&self) -> &dyn ImportTasksService {
+        self.import_tasks.as_ref()
+    }
+
     #[must_use]
     pub fn key_usage(&self) -> &dyn KeyUsageService {
         self.key_usage.as_ref()
@@ -276,7 +283,7 @@ impl AdminBundle {
         self.services.clone()
     }
 
-    /// 取出 Backup Worker 贡献；只能调用一次，与其它 Bundle 的贡献一并交给 Host。
+    /// 取出 Admin Worker 贡献；只能调用一次，与其它 Bundle 的贡献一并交给 Host。
     pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
         std::mem::take(&mut self.worker_contributions)
     }
@@ -361,6 +368,21 @@ pub async fn initialize(
         store.client_keys(),
         store.observability(),
     ));
+    let openai = Arc::new(DefaultOpenAiService::new(
+        openai,
+        store.accounts(),
+        store.proxies(),
+        snapshot.clone(),
+    ));
+    let xai = Arc::new(DefaultXaiService::new(
+        xai,
+        store.accounts(),
+        store.proxies(),
+        snapshot.clone(),
+    ));
+    let import_tasks =
+        use_case::import_tasks::DefaultImportTasksService::new(openai.clone(), xai.clone());
+    let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
     let services = AdminServices {
         key_usage,
         proxies: Arc::new(use_case::proxies::DefaultProxiesService::new(
@@ -392,21 +414,25 @@ pub async fn initialize(
             snapshot.clone(),
         )),
         system: Arc::new(DefaultSystemService::new(system)),
-        openai: Arc::new(DefaultOpenAiService::new(
-            openai,
-            store.accounts(),
-            store.proxies(),
-            snapshot.clone(),
-        )),
-        xai: Arc::new(DefaultXaiService::new(
-            xai,
-            store.accounts(),
-            store.proxies(),
-            snapshot.clone(),
-        )),
+        openai,
+        xai,
+        import_tasks,
         backups,
     };
-    let worker_contributions = backup_worker_contribution(backup_task)?;
+    let mut worker_contributions = backup_worker_contribution(backup_task)?;
+    let id = WorkerId::try_new(WorkerKind::AccountImport, "admin")
+        .map_err(|_| AdminError::internal("导入 Worker ID 不合法"))?;
+    let restart = DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
+        .map_err(|_| AdminError::internal("导入 Worker 重启策略不合法"))?;
+    let registration = WorkerRegistration::try_new(
+        id,
+        WorkerRunnable::Daemon {
+            restart,
+            task: Box::new(import_task),
+        },
+    )
+    .map_err(|_| AdminError::internal("导入 Worker 注册信息不合法"))?;
+    worker_contributions.push(WorkerContribution::Registration(registration));
     Ok(AdminBundle {
         services,
         worker_contributions,
