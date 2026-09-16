@@ -187,6 +187,7 @@ async fn persisted_provider_quota_projects_dynamic_windows_without_network_io() 
     });
     let outcome = store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
@@ -232,6 +233,7 @@ async fn expired_window_remains_the_last_observation_until_refresh() {
     });
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
@@ -270,6 +272,7 @@ async fn persisted_access_fact_survives_limit_without_percent_or_reset() {
     });
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
@@ -319,6 +322,7 @@ async fn persisted_codex_alias_keeps_the_top_level_rate_limit_canonical() {
     });
     let outcome = store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
@@ -376,6 +380,7 @@ async fn persisted_quota_orders_core_window_before_additional_limit() {
     });
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
@@ -440,6 +445,7 @@ async fn code_review_limit_projects_as_one_snapshot_per_limit_id() {
     });
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),

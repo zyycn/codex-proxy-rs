@@ -706,6 +706,7 @@ fn prepared_rotation(
         account_id,
         expected_revision,
         profile: credential_profile,
+        preserve_profile,
         credential,
         has_refresh_token,
         access_token_expires_at,
@@ -726,6 +727,7 @@ fn prepared_rotation(
             name: profile.name,
             email: profile.email,
             plan_type: profile.plan_type,
+            preserve_profile,
             provider_material: ProviderDocument::new(OpaqueProviderData::new(
                 credential.into_inner(),
             )),

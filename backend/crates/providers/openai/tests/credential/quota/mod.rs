@@ -388,6 +388,188 @@ async fn websocket_additional_rate_limit_resolves_by_name_without_touching_core(
 }
 
 #[tokio::test]
+async fn quota_refresh_synchronizes_plan_changes_without_losing_subtypes() {
+    for (current_plan, observed_plan, expected) in [
+        ("plus", Some("pro"), "pro"),
+        ("pro", Some("plus"), "plus"),
+        ("plus", Some("free"), "free"),
+        ("unknown", Some("pro"), "pro"),
+        ("plus", Some("  PRO  "), "pro"),
+        ("pro", None, "pro"),
+        ("pro", Some("unknown"), "pro"),
+        ("pro", Some("  "), "pro"),
+        (
+            "self_serve_business_prolite",
+            Some("team"),
+            "self_serve_business_prolite",
+        ),
+        (
+            "self_serve_business_usage_based",
+            Some("team"),
+            "self_serve_business_usage_based",
+        ),
+        (
+            "enterprise_cbp_usage_based",
+            Some("business"),
+            "enterprise_cbp_usage_based",
+        ),
+        ("edu_plus", Some("edu"), "edu_plus"),
+        ("self_serve_business_prolite", Some("pro"), "pro"),
+        (
+            "team",
+            Some("self_serve_business_prolite"),
+            "self_serve_business_prolite",
+        ),
+        ("plus", Some("future_plan"), "future_plan"),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_plan_refresh";
+        let mut verified_account = profile("chatgpt-plan-refresh");
+        verified_account.plan_type = Some(current_plan.to_owned());
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: account_id.to_owned(),
+                name: account_id.to_owned(),
+                secret: secret("plan-refresh-token"),
+                verified_account,
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+        let before = store.account(account_id).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "plan_type": observed_plan,
+                "rate_limit": { "allowed": true, "primary_window": {"used_percent": 12} }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let service = quota_service_with_base_url(
+            &store,
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            server.uri(),
+        );
+        service
+            .refresh_account(before.id())
+            .await
+            .expect("refresh plan and quota");
+        let after = store.account(account_id).unwrap();
+        assert_eq!(
+            after.plan_type(),
+            Some(expected),
+            "{current_plan} -> {observed_plan:?}"
+        );
+        assert_eq!(after.revision(), before.revision());
+        assert_eq!(after.email(), before.email());
+        assert_eq!(after.upstream_user_id(), before.upstream_user_id());
+        assert_eq!(after.upstream_account_id(), before.upstream_account_id());
+    }
+}
+
+#[tokio::test]
+async fn passive_plan_observations_update_account_without_replaying_stale_plan() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_plan").await;
+    let original = store.account("acct_passive_plan").unwrap();
+    let service = quota_service(&store);
+    service
+        .synchronize_passive_headers(
+            &original,
+            &[
+                ("x-codex-plan-type".to_owned(), "plus".to_owned()),
+                ("x-codex-primary-used-percent".to_owned(), "5".to_owned()),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.account("acct_passive_plan").unwrap().plan_type(),
+        Some("plus")
+    );
+    let upgrade = parse_rate_limits_event(&json!({
+        "type": "codex.rate_limits",
+        "plan_type": "pro",
+        "rate_limits": {"primary": {"used_percent": 5, "window_minutes": 300, "reset_at": 1900000000}}
+    })).unwrap();
+    service
+        .synchronize_passive_rate_limits(&original, &[upgrade])
+        .await
+        .unwrap();
+    assert_eq!(
+        store.account("acct_passive_plan").unwrap().plan_type(),
+        Some("pro")
+    );
+    service
+        .synchronize_passive_headers(
+            &original,
+            &[("x-codex-primary-used-percent".to_owned(), "6".to_owned())],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.account("acct_passive_plan").unwrap().plan_type(),
+        Some("pro")
+    );
+    assert_eq!(
+        store.account("acct_passive_plan").unwrap().revision(),
+        original.revision()
+    );
+    let state = exhausted_quota(None);
+    persist_quota_state(&store, &original, state).await;
+    // 仅有套餐的新观察不能清除既有额度耗尽结论。
+    service
+        .synchronize_passive_headers(
+            &original,
+            &[("x-codex-plan-type".to_owned(), "plus".to_owned())],
+        )
+        .await
+        .unwrap();
+    let changed = store.account("acct_passive_plan").unwrap();
+    assert_eq!(changed.plan_type(), Some("plus"));
+    assert_eq!(changed.quota(), state);
+    // 后台 RT 刷新拿着旧账号快照返回时，仍要提交新 token 并保留刚观测的套餐。
+    store
+        .repository()
+        .rotate_refreshed_oauth_secret(
+            &original,
+            secret("rotated-after-plan-update"),
+            original.access_token_expires_at(),
+            None,
+        )
+        .await
+        .expect("quota changes must not invalidate credential rotation");
+    assert_eq!(
+        store.account("acct_passive_plan").unwrap().plan_type(),
+        Some("plus")
+    );
+}
+
+#[tokio::test]
+async fn initial_quota_worker_synchronizes_account_plan() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_worker_plan").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plan_type": "plus", "rate_limit": {"allowed": true, "primary_window": {"used_percent": 10}}
+        })))
+        .expect(1).mount(&server).await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    );
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    assert_eq!(
+        store.account("acct_worker_plan").unwrap().plan_type(),
+        Some("plus")
+    );
+}
+
+#[tokio::test]
 async fn quota_refresh_persists_explicit_provider_denial() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_explicit_quota_denial";

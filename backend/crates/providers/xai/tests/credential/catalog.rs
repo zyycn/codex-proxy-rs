@@ -1025,6 +1025,7 @@ async fn quota_read_rejects_corrupt_provider_document() {
     document.insert("config".to_owned(), serde_json::json!([]));
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account_id("corrupt"),
             expected_revision: CredentialRevision::new(1).expect("revision"),
             quota: OpaqueProviderData::new(document),

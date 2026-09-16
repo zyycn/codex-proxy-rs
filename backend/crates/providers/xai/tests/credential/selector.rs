@@ -267,6 +267,7 @@ impl SelectorFixture {
         let outcome = self
             .store
             .compare_and_swap_quota(QuotaObservation {
+                plan_type: None,
                 account_id: id.clone(),
                 expected_revision: CredentialRevision::new(1).expect("revision"),
                 quota: OpaqueProviderData::new(document.as_object().expect("quota object").clone()),

@@ -25,6 +25,7 @@ async fn persist_snapshot(
     let account = store.account(id).expect("created account");
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(
