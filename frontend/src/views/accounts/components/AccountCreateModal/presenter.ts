@@ -64,10 +64,9 @@ function resolveModal(
   }
 
   if (input.reauthorizing) {
-    const providerName = provider === 'xai' ? 'xAI' : 'OpenAI'
     return {
       title: '重新授权账号',
-      description: `${input.account?.email || input.account?.name || providerName} · 完成授权后更新账号凭据`,
+      description: '完成授权后更新账号凭据',
       tone: 'info' as const,
       size: 'md' as const,
     }
