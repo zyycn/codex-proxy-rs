@@ -5,6 +5,56 @@ use serde_json::Value;
 
 use super::sse::{SseError, parse_sse_events};
 
+/// 单次 Responses 流明确声明的模型；终态优先，缺失时不使用请求模型补齐。
+#[derive(Debug, Default)]
+pub struct ResponseModelObservation {
+    model: Option<String>,
+    terminal: bool,
+}
+
+impl ResponseModelObservation {
+    /// 从原始事件读取响应模型，避免工具转换或 canonical 兜底改写观测事实。
+    pub fn observe(&mut self, event_type: Option<&str>, value: &Value) {
+        let terminal = matches!(
+            event_type,
+            Some(
+                "response.completed"
+                    | "response.done"
+                    | "response.incomplete"
+                    | "response.failed"
+                    | "response.cancelled"
+                    | "response.canceled"
+            )
+        );
+        if self.terminal || (self.model.is_some() && !terminal) {
+            return;
+        }
+        let Some(model) = value
+            .pointer("/response/model")
+            .and_then(Value::as_str)
+            .and_then(observed_model_name)
+        else {
+            return;
+        };
+        self.model = Some(model.to_owned());
+        self.terminal = terminal;
+    }
+
+    /// 返回原始响应声明，未声明时保持未知。
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+}
+
+/// 规范化可展示的上游模型名，非法值不影响响应交付。
+#[must_use]
+pub fn observed_model_name(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control))
+        .then_some(value)
+}
+
 /// 从 Codex/OpenAI usage 结构中提取出的标准化 token 用量。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

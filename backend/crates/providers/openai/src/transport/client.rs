@@ -33,7 +33,7 @@ use super::response_meta::CodexResponseMetadata;
 use super::tls::{CustomCaError, build_reqwest_client_with_custom_ca, custom_ca_env_cache_key};
 use super::websocket::{
     CodexWebSocketExchangeError, CodexWebSocketPool, CodexWebSocketPoolKey,
-    CodexWebSocketRateLimitUpdates, CodexWebSocketRequest, CodexWebSocketTurnStateUpdate,
+    CodexWebSocketRateLimitUpdates, CodexWebSocketRequest, CodexWebSocketResponseMetadataUpdates,
     PreparedWebSocket, WebSocketOriginBreaker, WebSocketPoolDecision,
 };
 
@@ -589,8 +589,8 @@ pub struct CodexTransportMetrics {
 /// 响应头之后在 live 流中采集的结构化限流更新。
 pub type CodexRateLimitUpdates = CodexWebSocketRateLimitUpdates;
 
-/// 响应头之后在 live 流中采集的 turn state 更新。
-pub type CodexTurnStateUpdate = CodexWebSocketTurnStateUpdate;
+/// 响应头之后在 live 流中采集的请求级 metadata 更新。
+pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
 
 /// Codex Responses 上游 live SSE 响应。
 pub struct CodexBackendStreamingResponse {
@@ -608,8 +608,8 @@ pub struct CodexBackendStreamingResponse {
     pub rate_limit_headers: Vec<(String, String)>,
     /// live stream 期间捕获的结构化限流更新。
     pub rate_limit_updates: Option<CodexRateLimitUpdates>,
-    /// live stream 期间捕获的 turn-state 更新。
-    pub turn_state_update: Option<CodexTurnStateUpdate>,
+    /// live stream 期间捕获的请求级 metadata 更新。
+    pub response_metadata_updates: Option<CodexResponseMetadataUpdates>,
     /// WebSocket 连接池决策。
     pub websocket_pool_decision: Option<WebSocketPoolDecision>,
     /// 上游诊断元数据。

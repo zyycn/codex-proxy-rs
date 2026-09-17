@@ -33,6 +33,7 @@ pub(super) struct OpenAiResponseObservationState {
     stream: bool,
     requested_service_tier: Option<String>,
     upstream_service_tier: Option<String>,
+    upstream_response_model: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
     timings: ProviderResponseTimings,
     terminal: Option<OpenAiResponseTerminal>,
@@ -79,6 +80,7 @@ impl OpenAiResponseObservationState {
             stream: request.stream(),
             requested_service_tier: normalize_service_tier(request.service_tier()),
             upstream_service_tier: None,
+            upstream_response_model: response.response_metadata.effective_model.clone(),
             rate_limit_headers: selected_observation_headers(&response.rate_limit_headers),
             timings: openai_response_timings(
                 &response.transport_metrics,
@@ -121,7 +123,21 @@ impl OpenAiResponseObservationState {
         if let Some(service_tier) = &self.requested_service_tier {
             observation = observation.with_service_tier_if_valid(service_tier.clone());
         }
+        if let Some(model) = &self.upstream_response_model {
+            observation = observation.with_upstream_response_model_if_valid(model);
+        }
         Some(observation)
+    }
+
+    pub(super) fn observe_upstream_response_model(&mut self, model: Option<&str>) -> bool {
+        let Some(model) = model else {
+            return false;
+        };
+        if self.upstream_response_model.as_deref() == Some(model) {
+            return false;
+        }
+        self.upstream_response_model = Some(model.to_owned());
+        true
     }
 
     pub(super) fn observe_stream_chunk(&mut self, chunk: &[u8], started_at: Instant) -> bool {

@@ -252,6 +252,10 @@ pub(super) fn cold_compaction_http_sse_stream(
             }
         }
 
+        if let Some(model) = canonical.response_model() {
+            observation = observation.with_upstream_response_model_if_valid(model);
+            yield ProviderEvent::observation(observation.clone());
+        }
         if let Some(tier) = canonical.response_service_tier() {
             observation = observation.with_service_tier_if_valid(tier.to_owned());
             yield ProviderEvent::observation(observation);
@@ -534,6 +538,14 @@ pub(super) fn cold_http_sse_stream(
                         }),
                 );
             }
+            if let Some(model) = decoder.response_model()
+                && observation.upstream_response_model() != Some(model)
+            {
+                observation = observation.with_upstream_response_model_if_valid(model);
+                yield ProviderEvent::observation(observation.clone().with_timings(
+                    ProviderResponseTimings { first_token_ms, ..base_timings },
+                ));
+            }
             if let Some(tier) = decoder.response_service_tier()
                 && observation.service_tier() != Some(tier)
             {
@@ -593,6 +605,14 @@ pub(super) fn cold_http_sse_stream(
                         ..base_timings
                     }),
             );
+        }
+        if let Some(model) = decoder.response_model()
+            && observation.upstream_response_model() != Some(model)
+        {
+            observation = observation.with_upstream_response_model_if_valid(model);
+            yield ProviderEvent::observation(observation.clone().with_timings(
+                ProviderResponseTimings { first_token_ms, ..base_timings },
+            ));
         }
         if let Some(tier) = decoder.response_service_tier()
             && observation.service_tier() != Some(tier)

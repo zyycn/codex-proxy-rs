@@ -20,8 +20,9 @@ use super::super::{
 use super::io::{next_websocket_message, reused_stream_receive_error};
 use super::reducer::{ExchangeAction, WebSocketTerminalKind, reduce_websocket_event};
 use super::{
-    CodexWebSocketExchangeError, CodexWebSocketRateLimitUpdates, CodexWebSocketStreamingExchange,
-    CodexWebSocketTurnStateUpdate, WEBSOCKET_STREAM_BUFFER, reusable_websocket_metadata,
+    CodexWebSocketExchangeError, CodexWebSocketRateLimitUpdates,
+    CodexWebSocketResponseMetadataUpdate, CodexWebSocketResponseMetadataUpdates,
+    CodexWebSocketStreamingExchange, WEBSOCKET_STREAM_BUFFER, reusable_websocket_metadata,
 };
 
 pub(in crate::transport::websocket) struct WebSocketStreamPoolReturn {
@@ -69,8 +70,11 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     let response_metadata = metadata.clone();
     let rate_limit_updates = Arc::new(Mutex::new(Vec::new()));
     let rate_limit_updates_for_task = Arc::clone(&rate_limit_updates);
-    let turn_state_update = Arc::new(Mutex::new(metadata.turn_state.clone()));
-    let turn_state_update_for_task = Arc::clone(&turn_state_update);
+    let response_metadata_updates = Arc::new(Mutex::new(CodexWebSocketResponseMetadataUpdate {
+        turn_state: metadata.turn_state.clone(),
+        reported_model: None,
+    }));
+    let response_metadata_updates_for_task = Arc::clone(&response_metadata_updates);
     let (tx, rx) = mpsc::channel(WEBSOCKET_STREAM_BUFFER);
     let (task_tracker, shutdown) = pool_return
         .as_ref()
@@ -89,7 +93,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
             trace,
             shutdown,
             rate_limit_updates: rate_limit_updates_for_task,
-            turn_state_update: turn_state_update_for_task,
+            response_metadata_updates: response_metadata_updates_for_task,
             tx,
         })
         .await;
@@ -111,7 +115,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         set_cookie_headers: response_metadata.set_cookie_headers,
         rate_limit_headers: response_metadata.rate_limit_headers,
         rate_limit_updates,
-        turn_state_update,
+        response_metadata_updates,
         pool_decision: None,
         connection_local_continuation: false,
         diagnostics: response_metadata.diagnostics,
@@ -128,7 +132,7 @@ struct WebSocketStreamForwardState {
     stream_idle_timeout: Option<Duration>,
     shutdown: CancellationToken,
     rate_limit_updates: CodexWebSocketRateLimitUpdates,
-    turn_state_update: CodexWebSocketTurnStateUpdate,
+    response_metadata_updates: CodexWebSocketResponseMetadataUpdates,
     tx: mpsc::Sender<Result<Bytes, CodexWebSocketExchangeError>>,
 }
 
@@ -142,7 +146,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         stream_idle_timeout,
         shutdown,
         rate_limit_updates,
-        turn_state_update,
+        response_metadata_updates,
         tx,
     } = state;
     let mut pool_return = pool_return;
@@ -298,10 +302,13 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             last_event_type = Some(event_type);
         }
         if let Some(turn_state) = reduced.turn_state_update {
-            let mut pending = turn_state_update.lock().await;
-            if pending.is_none() {
-                *pending = Some(turn_state);
+            let mut pending = response_metadata_updates.lock().await;
+            if pending.turn_state.is_none() {
+                pending.turn_state = Some(turn_state);
             }
+        }
+        if let Some(model) = metadata.response_metadata.effective_model.as_ref() {
+            response_metadata_updates.lock().await.reported_model = Some(model.clone());
         }
         let (frame, terminal) = match reduced.action {
             ExchangeAction::RateLimits(rate_limits) => {

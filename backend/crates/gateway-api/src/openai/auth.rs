@@ -143,7 +143,7 @@ pub(crate) fn client_access_error_response(error: ClientAccessError) -> Response
     }
 }
 
-/// Desktop 优先于其内嵌的 CLI/Core 标记；未知客户端保持兼容并返回 `None`。
+/// Desktop 优先于内嵌 CLI/Core；未知客户端及未提供应用版本的手机远程客户端返回 `None`。
 #[must_use]
 pub fn identify_codex_client(headers: &HeaderMap) -> Option<IdentifiedCodexClient> {
     const MAXIMUM_HEADER_LENGTH: usize = 4096;
@@ -154,11 +154,21 @@ pub fn identify_codex_client(headers: &HeaderMap) -> Option<IdentifiedCodexClien
         || user_agent.is_some_and(|value| contains_ascii_case_insensitive(value, "Codex Desktop"));
     if is_desktop {
         let explicit_version = bounded_ascii_header(headers, "version", MAXIMUM_HEADER_LENGTH);
+        let user_agent_version = user_agent.and_then(desktop_version_from_user_agent);
+        // 手机远程初始化会覆盖进程级 UA 后缀，保留的 Desktop/Core 前缀不代表应用版本。
+        // 仅缺失版本信息时免于门禁；已提供的版本即使非法，也继续按 Desktop 校验。
+        if !headers.contains_key("version")
+            && user_agent_version.is_none()
+            && headers
+                .get("user-agent")
+                .is_some_and(|value| value.as_bytes().len() <= MAXIMUM_HEADER_LENGTH)
+            && user_agent.is_some_and(has_chatgpt_remote_user_agent_suffix)
+        {
+            return None;
+        }
         let version = match explicit_version {
             Some(value) => CodexClientVersion::parse(value).ok(),
-            None => user_agent
-                .and_then(desktop_version_from_user_agent)
-                .and_then(|value| CodexClientVersion::parse(value).ok()),
+            None => user_agent_version.and_then(|value| CodexClientVersion::parse(value).ok()),
         };
         return Some(IdentifiedCodexClient {
             kind: CodexClientKind::Desktop,
@@ -206,11 +216,34 @@ fn bounded_ascii_header<'a>(
 fn desktop_version_from_user_agent(user_agent: &str) -> Option<&str> {
     let marker = "Codex Desktop;";
     let start = find_ascii_case_insensitive(user_agent, marker)? + marker.len();
-    let version = user_agent[start..]
+    // 空候选也代表已提供应用版本，不能被手机远程的缺失版本规则放行。
+    user_agent[start..]
         .trim_start()
         .split([')', ' ', ';', ','])
-        .next()?;
-    (!version.is_empty()).then_some(version)
+        .next()
+}
+
+fn has_chatgpt_remote_user_agent_suffix(user_agent: &str) -> bool {
+    let Some((_, suffix)) = user_agent
+        .strip_suffix(')')
+        .and_then(|value| value.rsplit_once(" ("))
+    else {
+        return false;
+    };
+    let Some((name, version)) = suffix.split_once("; ") else {
+        return false;
+    };
+    let Some(platform) = name
+        .strip_prefix("codex_chatgpt_")
+        .and_then(|value| value.strip_suffix("_remote"))
+    else {
+        return false;
+    };
+    [platform, version].into_iter().all(|value| {
+        !value.is_empty()
+            && !value.contains(['(', ')', ';'])
+            && !value.bytes().any(|byte| byte.is_ascii_whitespace())
+    })
 }
 
 fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {

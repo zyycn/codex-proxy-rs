@@ -63,6 +63,9 @@ pub(super) fn reduce_websocket_event(
         &mut metadata.response_metadata,
         websocket_metadata_headers(&value),
     );
+    if let Some(model) = response_meta::reported_model_from_event(&value) {
+        metadata.response_metadata.effective_model = Some(model.to_owned());
+    }
     let turn_state_update = websocket_metadata_turn_state(&value).and_then(|turn_state| {
         if metadata.turn_state.is_some() {
             return None;

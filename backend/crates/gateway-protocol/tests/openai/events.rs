@@ -6,6 +6,50 @@ use gateway_protocol::openai::events::{
 use serde_json::json;
 
 #[test]
+fn response_model_observation_keeps_first_declaration_until_terminal() {
+    use gateway_protocol::openai::events::ResponseModelObservation;
+
+    let mut observed = ResponseModelObservation::default();
+    observed.observe(
+        Some("response.created"),
+        &json!({"response": {"model": " first "}}),
+    );
+    observed.observe(
+        Some("response.in_progress"),
+        &json!({"response": {"model": "intermediate"}}),
+    );
+    assert_eq!(observed.model(), Some("first"));
+    observed.observe(
+        Some("response.completed"),
+        &json!({"response": {"model": "final"}}),
+    );
+    observed.observe(
+        Some("response.in_progress"),
+        &json!({"response": {"model": "late"}}),
+    );
+    assert_eq!(observed.model(), Some("final"));
+    assert_eq!(ResponseModelObservation::default().model(), None);
+}
+
+#[test]
+fn response_model_observation_ignores_missing_and_invalid_values() {
+    use gateway_protocol::openai::events::ResponseModelObservation;
+
+    for response in [
+        json!({}),
+        json!({"model": null}),
+        json!({"model": 42}),
+        json!({"model": "  "}),
+        json!({"model": "a\nb"}),
+        json!({"model": "a".repeat(257)}),
+    ] {
+        let mut observed = ResponseModelObservation::default();
+        observed.observe(Some("response.completed"), &json!({"response": response}));
+        assert_eq!(observed.model(), None);
+    }
+}
+
+#[test]
 fn billable_usage_should_validate_cache_writes_totals_and_overflow() {
     for (raw, expected) in [
         (

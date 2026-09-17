@@ -14,7 +14,7 @@ use serde::Serialize as _;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::transport::downstream::{is_non_codex_request_header, strip_non_codex_request_fields};
+use crate::transport::downstream::{is_non_codex_request_header, normalize_codex_request_body};
 use crate::transport::headers::is_managed_identity_header;
 use crate::transport::profile::CodexRequestLocation;
 use crate::transport::protocol::responses::{
@@ -120,7 +120,7 @@ fn adapt_codex_responses_body(
     location: Option<&CodexRequestLocation>,
 ) {
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
-    strip_non_codex_request_fields(body);
+    normalize_codex_request_body(body);
     if let Some(location) = location {
         align_structured_location_fields(body, Utc::now(), location);
     }

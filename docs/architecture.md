@@ -135,6 +135,7 @@ Provider 在选定账号后应用代理位置覆盖。请求期间不额外查�
 
 `engine::observation` 统一维护单次响应的用量、费用、时间和响应 ID，并负责重试前清理；协调器继续
 独占发送、提交、重试和终结顺序。Provider 上报费用优先于本地估算，丢弃的 attempt 不得污染最终计量。
+Provider 本地估算按当前 attempt 实际发送的上游模型查价，响应声明的模型只作观测；费用明细复用同一口径。
 Client Key 费用账本独立累计各次 attempt 的实际费用，不能因请求重试而清空已产生的费用或未知计费状态。
 
 ## 4. 数据面请求生命周期
@@ -167,7 +168,9 @@ sequenceDiagram
 
 Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/CLI，Core 使用同一请求冻结的
 `RuntimeSnapshot` 比较对应最低版本。Desktop 优先于其 User-Agent 内嵌的 CLI/Core 标记；未知客户端不
-应用门禁。低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `426` 合同。
+应用门禁。API 识别手机远程 UA 后缀；这类 Desktop 请求缺失应用版本时不应用门禁，不以 Core 或远程
+客户端版本代替应用版本。其余低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `426` 合同，
+具体请求头规则见 [API 鉴权与公共约定](api.md#1-鉴权与公共约定)。
 
 核心不变量：
 
@@ -203,7 +206,7 @@ OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配�
 - Responses 的业务扩展头保留原始多值字节。API 负责剥离鉴权、账号身份和 HTTP 传输字段，
   并提取会话语义；`gateway-protocol` 共享 HTTP 传输与网关链路字段分类。客户端兼容规则集中在
   `providers/openai/src/transport/downstream/`：`headers.rs` 管理下游环境头和已提取语义的头部别名，
-  `body.rs` 管理不适用于 Codex Responses 的已知顶层参数；兼容基准为 Codex Core/Desktop 请求协议，
+  `body.rs` 管理已知顶层参数的过滤和缺省值补齐；兼容基准为 Codex Core/Desktop 请求协议，
   不持有账号身份保护或会话规范化逻辑。
   Provider 在 `transport/request.rs` 解码不透明头时组合兼容、身份与 HTTP 规则，
   同时调用正文兼容规则；HTTP/SSE 与 WebSocket 共用此边界。

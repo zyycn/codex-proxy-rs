@@ -37,8 +37,8 @@ pub struct CodexWebSocketStreamingExchange {
     pub rate_limit_headers: Vec<(String, String)>,
     /// 上游内部 `codex.rate_limits` 事件里的结构化动态更新。
     pub rate_limit_updates: CodexWebSocketRateLimitUpdates,
-    /// 上游内部 metadata 事件里的首个动态 turn state。
-    pub turn_state_update: CodexWebSocketTurnStateUpdate,
+    /// 上游内部 metadata 事件里的请求级动态更新。
+    pub response_metadata_updates: CodexWebSocketResponseMetadataUpdates,
     /// WebSocket 连接池决策。
     pub pool_decision: Option<WebSocketPoolDecision>,
     /// terminal completed 后该 socket 是否会保留 connection-local continuation。
@@ -54,17 +54,31 @@ pub type CodexWebSocketSseStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, CodexWebSocketExchangeError>> + Send + 'static>>;
 /// live 流中的结构化限流动态更新。
 pub type CodexWebSocketRateLimitUpdates = Arc<Mutex<Vec<ParsedRateLimits>>>;
-/// live 流中的 turn state 动态更新。
-pub type CodexWebSocketTurnStateUpdate = Arc<Mutex<Option<String>>>;
+/// 单次响应的动态 metadata，与连接池保存的握手快照隔离。
+#[derive(Debug, Default)]
+pub struct CodexWebSocketResponseMetadataUpdate {
+    /// 当前响应首次声明的会话续接状态。
+    pub turn_state: Option<String>,
+    /// 当前响应最新的服务端模型报告。
+    pub reported_model: Option<String>,
+}
+
+pub type CodexWebSocketResponseMetadataUpdates = Arc<Mutex<CodexWebSocketResponseMetadataUpdate>>;
 
 pub(super) fn reusable_websocket_metadata(
     mut metadata: CodexWebSocketConnectionMetadata,
 ) -> CodexWebSocketConnectionMetadata {
     metadata.rate_limit_headers.clear();
     metadata.turn_state = None;
+    // 模型报告属于上一轮请求，池中连接不能把它带到下一轮缺失报告的响应。
+    metadata.response_metadata.effective_model = None;
     metadata
         .response_metadata
         .client_headers
-        .retain(|(name, _)| !name.eq_ignore_ascii_case("x-codex-turn-state"));
+        .retain(|(name, _)| {
+            !["x-codex-turn-state", "openai-model", "x-openai-model"]
+                .iter()
+                .any(|header| name.eq_ignore_ascii_case(header))
+        });
     metadata
 }

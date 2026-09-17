@@ -78,6 +78,7 @@ async fn reused_websocket_should_keep_response_metadata_scoped_to_each_exchange(
         .expect("response within timeout")
         .expect("response should complete on the same socket");
         assert_eq!(response.response_metadata, expected, "exchange {round}");
+        assert_eq!(response.reported_model, Some(format!("model-{round}")));
         assert!(response.body.contains(&format!("etag-{round}")));
         assert_eq!(response.turn_state, Some(format!("turn-{round}")));
         if round > 0 {

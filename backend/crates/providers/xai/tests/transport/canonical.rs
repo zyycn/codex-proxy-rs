@@ -10,6 +10,60 @@ use provider_xai::{
     grok_billing_breakdown_with_tier,
 };
 
+#[test]
+fn decoder_should_bill_the_sent_model_independently_of_the_response_model() {
+    for (sent, returned, reported_cost, expected_cost) in [
+        ("grok-4.5", Some("grok-future"), None, Some(2_175_000)),
+        ("grok-4.5", Some("grok-4.3"), None, Some(2_175_000)),
+        ("grok-4.5", None, None, Some(2_175_000)),
+        ("grok-future", Some("grok-4.5"), None, None),
+        ("grok-4.5", Some("grok-future"), Some(123), None),
+        ("grok-4.5", Some("grok-future"), Some(0), None),
+    ] {
+        let created = serde_json::json!({"type":"response.created","response":{"id":"resp_model_cost","model":returned}});
+        let mut completed = serde_json::json!({
+            "type":"response.completed",
+            "response":{
+                "id":"resp_model_cost","model":returned,"status":"completed","output":[],
+                "usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25},"total_tokens":110}
+            }
+        });
+        if let Some(ticks) = reported_cost {
+            completed["response"]["usage"]["cost_in_usd_ticks"] = serde_json::json!(ticks);
+        }
+        let body = format!("data: {created}\n\ndata: {completed}\n\n");
+        let mut decoder = GrokCanonicalDecoder::new(sent);
+        let events = decoder.push(body.as_bytes()).expect("model cost response");
+        let facts: Vec<_> = events
+            .into_iter()
+            .flat_map(|event| event.into_parts().0)
+            .collect();
+        assert_eq!(
+            calculated_cost_ticks(&facts),
+            expected_cost,
+            "{sent} -> {returned:?}"
+        );
+        assert_eq!(provider_cost_ticks(&facts), reported_cost);
+        assert_eq!(decoder.response_model(), returned);
+        assert!(facts.iter().any(|event| matches!(
+            event,
+            GatewayEvent::Completed(meta) if meta.model() == Some(returned.unwrap_or(sent))
+        )));
+    }
+}
+
+#[test]
+fn response_model_observation_preserves_raw_model_and_missing_values() {
+    for model in [None, Some("grok-4.6-build")] {
+        let mut decoder = GrokCanonicalDecoder::new("grok-4.6");
+        let body = serde_json::json!({"type":"response.created","response":{"id":"resp_model","model":model}});
+        decoder
+            .push(format!("data: {body}\n\n").as_bytes())
+            .expect("decode created");
+        assert_eq!(decoder.response_model(), model);
+    }
+}
+
 fn terminal_cost_events(
     model: &str,
     input_tokens: u64,
@@ -33,11 +87,11 @@ fn terminal_cost_events(
         cached_tokens = cached_tokens,
         provider_cost = provider_cost,
     );
-    decode_canonical(body.as_bytes()).expect("canonical cost response")
+    decode_canonical(body.as_bytes(), model).expect("canonical cost response")
 }
 
-fn decode_canonical(body: &[u8]) -> Result<Vec<GatewayEvent>, ProviderError> {
-    GrokCanonicalDecoder::new("fallback")
+fn decode_canonical(body: &[u8], upstream_model: &str) -> Result<Vec<GatewayEvent>, ProviderError> {
+    GrokCanonicalDecoder::new(upstream_model)
         .push(body)
         .map(|events| {
             events
@@ -97,7 +151,7 @@ fn decoder_should_normalize_text_usage_and_completion() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"grok-code-test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5,\"cost_in_usd_ticks\":37756000}}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("canonical response");
+    let events = decode_canonical(body.as_bytes(), "fallback").expect("canonical response");
 
     assert!(matches!(events[0], GatewayEvent::Started(_)));
     assert!(matches!(
@@ -188,7 +242,8 @@ fn decoder_should_preserve_image_tool_tokens_in_canonical_usage() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_usage\",\"model\":\"grok-4.5\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"total_tokens\":17},\"tool_usage\":{\"image_gen\":{\"input_tokens\":31,\"output_tokens\":9}}}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("canonical image usage response");
+    let events =
+        decode_canonical(body.as_bytes(), "fallback").expect("canonical image usage response");
     let image_usage = events.iter().find_map(|event| match event {
         GatewayEvent::Usage(usage) => Some((usage.image_input_tokens, usage.image_output_tokens)),
         _ => None,
@@ -205,7 +260,7 @@ fn decoder_should_leave_cost_unavailable_when_upstream_omits_it() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_no_cost\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("canonical response");
+    let events = decode_canonical(body.as_bytes(), "fallback").expect("canonical response");
 
     assert!(!events.iter().any(|event| matches!(
         event,
@@ -420,7 +475,8 @@ fn decoder_should_leave_incomplete_usage_pricing_unavailable() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_partial\",\"model\":\"grok-4.5\",\"status\":\"completed\",\"usage\":{\"total_tokens\":3}}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("canonical partial usage response");
+    let events =
+        decode_canonical(body.as_bytes(), "grok-4.5").expect("canonical partial usage response");
 
     assert_eq!(calculated_cost_ticks(&events), None);
 }
@@ -501,7 +557,7 @@ fn decoder_should_normalize_function_call_and_tool_finish() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool\",\"model\":\"grok-code-test\",\"status\":\"completed\"}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("canonical function call");
+    let events = decode_canonical(body.as_bytes(), "fallback").expect("canonical function call");
 
     assert!(events.iter().any(|event| matches!(
         event,
@@ -1076,7 +1132,7 @@ fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reason\",\"status\":\"completed\"}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("canonical reasoning");
+    let events = decode_canonical(body.as_bytes(), "fallback").expect("canonical reasoning");
 
     assert_eq!(
         events
@@ -1303,7 +1359,7 @@ fn decoder_should_preserve_incomplete_length_reason() {
         "event: response.incomplete\n",
         "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_short\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
     );
-    let events = decode_canonical(body.as_bytes()).expect("incomplete response");
+    let events = decode_canonical(body.as_bytes(), "fallback").expect("incomplete response");
 
     assert!(matches!(
         events.last(),

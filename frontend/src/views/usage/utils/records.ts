@@ -29,6 +29,7 @@ export interface UsageViewModel {
   model: string | null
   requestedModel: string | null
   upstreamModel: string | null
+  upstreamResponseModel: string | null
   serviceTier: string | null
   statusCode: number | null
   clientTransport: string
@@ -96,6 +97,7 @@ export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel 
     model: record.model,
     requestedModel: record.requestedModel,
     upstreamModel: record.upstreamModel,
+    upstreamResponseModel: record.upstreamResponseModel,
     serviceTier: record.serviceTier,
     statusCode: record.statusCode,
     clientTransport: record.clientTransport,
@@ -217,7 +219,27 @@ export function usageModelDisplay(record: UsageCommonRecord) {
         ? storedModel
         : ''
 
-  return { primary, secondary }
+  const responseModel = record.upstreamResponseModel || ''
+  const returned = responseModel && responseModel !== primary ? responseModel : ''
+  const routes = []
+  if (secondary && secondary !== returned) {
+    routes.push({
+      model: secondary,
+      kind: 'mapped' as const,
+      description: `网关映射后发送给上游的模型：${secondary}`,
+    })
+  }
+  if (returned) {
+    routes.push({
+      model: returned,
+      kind: 'returned' as const,
+      description: returned === secondary
+        ? `上游返回模型：${returned}（与网关映射后发送的模型一致）`
+        : `上游返回模型：${returned}`,
+    })
+  }
+
+  return { primary, secondary, routes }
 }
 
 export function usageTokenDetails(record: Pick<UsageCommonRecord, 'tokenDetails'>) {

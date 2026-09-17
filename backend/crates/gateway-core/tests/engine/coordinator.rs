@@ -73,6 +73,7 @@ struct FinalState {
     http_version: Option<String>,
     websocket_pool: Option<String>,
     service_tier: Option<String>,
+    upstream_response_model: Option<String>,
     upstream_request_id: Option<String>,
     upstream_status_code: Option<u16>,
     transport_decision_wait_ms: Option<u64>,
@@ -239,6 +240,7 @@ impl ExecutionStore for FakeStore {
                 http_version: finalization.http_version,
                 websocket_pool: finalization.websocket_pool,
                 service_tier: finalization.service_tier,
+                upstream_response_model: finalization.upstream_response_model,
                 upstream_request_id: finalization.upstream_request_id,
                 upstream_status_code: finalization.upstream_status_code,
                 transport_decision_wait_ms: finalization.timings.transport_decision_wait_ms,
@@ -1093,6 +1095,7 @@ fn response_observation_is_persisted_but_never_delivered() {
     .with_websocket_pool(WebSocketPoolKind::New)
     .with_status_code(200)
     .with_request_id(OpaqueUpstreamValue::new("upstream-observed"))
+    .with_upstream_response_model_if_valid("gpt-returned")
     .try_with_service_tier("priority")
     .expect("service tier")
     .with_timings(ProviderResponseTimings {
@@ -1132,6 +1135,10 @@ fn response_observation_is_persisted_but_never_delivered() {
     assert_eq!(finalization.http_version.as_deref(), Some("HTTP/2"));
     assert_eq!(finalization.websocket_pool.as_deref(), Some("new"));
     assert_eq!(finalization.service_tier.as_deref(), Some("priority"));
+    assert_eq!(
+        finalization.upstream_response_model.as_deref(),
+        Some("gpt-returned")
+    );
     assert_eq!(
         finalization.upstream_request_id.as_deref(),
         Some("upstream-observed")
@@ -1350,6 +1357,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
     .with_http_version(UpstreamHttpVersion::Http11)
     .with_status_code(503)
     .with_request_id(OpaqueUpstreamValue::new("discarded-request"))
+    .with_upstream_response_model_if_valid("discarded-model")
     .with_timings(ProviderResponseTimings {
         transport_decision_wait_ms: Some(7),
         connect_ms: Some(11),
@@ -1409,6 +1417,7 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
 
     let state = store.state.lock().expect("store lock");
     let finalization = &state.finalizations[0];
+    assert_eq!(finalization.upstream_response_model, None);
     let trace: Value =
         serde_json::from_str(finalization.diagnostic_trace_json.as_deref().unwrap()).unwrap();
     let events = trace["events"].as_array().unwrap();

@@ -659,6 +659,7 @@ pub struct ModelRequestFinalization {
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
     pub service_tier: Option<String>,
+    pub upstream_response_model: Option<String>,
     /// Provider 已筛选的专有观测 JSON；Core 不解释字段。
     pub provider_metadata_json: Option<String>,
     /// 请求全程的有界诊断快照，跨 Provider 与重试保留。

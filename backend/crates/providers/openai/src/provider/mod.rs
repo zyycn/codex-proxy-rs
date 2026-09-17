@@ -91,8 +91,8 @@ use crate::transport::{
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
     CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
     CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexTransportMetrics, CodexTurnStateUpdate, CodexUpstreamDiagnostics, CodexWebSocketPool,
-    endpoint_url,
+    CodexResponseMetadataUpdates, CodexTransportMetrics, CodexUpstreamDiagnostics,
+    CodexWebSocketPool, endpoint_url,
 };
 
 mod execution;

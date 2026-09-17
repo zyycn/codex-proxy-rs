@@ -41,7 +41,9 @@ use serde_json::{Value, json};
 use gateway_api::openai::responses::{collect_execution_response, stream_execution_response};
 use tower::ServiceExt;
 
-use crate::openai::{api_router, authenticated_client_for_provider};
+use crate::openai::{
+    api_router, authenticated_client_for_provider, authenticated_client_with_min_versions,
+};
 
 #[derive(Default)]
 struct Trace {
@@ -1966,6 +1968,112 @@ const MODEL_REQUEST_ID: &str = "req_model_correlation";
 struct SessionExecution {
     client: AuthenticatedClient,
     session: Mutex<Option<Box<dyn ExecutionSession>>>,
+}
+
+#[tokio::test]
+async fn chatgpt_remote_responses_should_only_skip_missing_desktop_versions() {
+    for name in [
+        "codex_chatgpt_android_remote",
+        "codex_chatgpt_ios_remote",
+        "codex_chatgpt_future_os_remote",
+    ] {
+        for (version, expected_code) in [
+            (None, None),
+            (Some("26.908.70816"), None),
+            (Some("26.1.0"), Some("client_version_too_old")),
+            (Some("dev"), Some("client_version_unavailable")),
+        ] {
+            let trace = Arc::new(Trace::default());
+            let execution = Arc::new(SessionExecution {
+                client: authenticated_client_with_min_versions(
+                    "sk_remote_test",
+                    Some("26.908.70816"),
+                    Some("0.154.0"),
+                ),
+                session: Mutex::new(Some(Box::new(FakeSession::streaming(
+                    Arc::clone(&trace),
+                    vec![
+                        NextStep::Event(delivery(
+                            started(),
+                            CommitRequirement::CommitBeforeDelivery,
+                        )),
+                        NextStep::Event(delivery(completed(), CommitRequirement::AlreadyCommitted)),
+                        NextStep::FinalizeSuccess,
+                    ],
+                )))),
+            });
+            let mut request = Request::post("/v1/responses")
+                .header(AUTHORIZATION, "Bearer sk_remote_test")
+                .header("user-agent", format!(
+                    "Codex Desktop/0.154.0-alpha.6.2 (Windows 10.0.26200; x86_64) unknown ({name}; dev)"
+                ));
+            if let Some(version) = version {
+                request = request.header("version", version);
+            }
+            let response = api_router(execution.clone())
+                .await
+                .oneshot(
+                    request
+                        .body(Body::from(
+                            json!({"model": "model-a", "input": "synthetic", "stream": true})
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            if let Some(code) = expected_code {
+                let value: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(status, StatusCode::UPGRADE_REQUIRED, "{name} {version:?}");
+                assert_eq!(value["error"]["code"], code);
+                assert!(execution.session.lock().unwrap().is_some());
+            } else {
+                assert_eq!(status, StatusCode::OK, "{name} {version:?}");
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                assert!(body.contains("event: response.completed\n"));
+                assert!(body.ends_with("data: [DONE]\n\n"));
+                assert!(trace.snapshot().contains(&"commit"));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn chatgpt_remote_responses_should_still_require_client_key_authentication() {
+    let observed = Arc::new(Mutex::new(None));
+    let execution = Arc::new(ContextCaptureExecution {
+        observed: Arc::clone(&observed),
+        client: authenticated_client_with_min_versions(
+            "sk_context_test",
+            Some("26.908.70816"),
+            None,
+        ),
+    });
+    let router = api_router(execution).await;
+    for authorization in [None, Some("Bearer sk_invalid")] {
+        let mut request = Request::post("/v1/responses").header(
+            "user-agent",
+            "Codex Desktop/0.154.0-alpha.6.2 (codex_chatgpt_android_remote; dev)",
+        );
+        if let Some(authorization) = authorization {
+            request = request.header(AUTHORIZATION, authorization);
+        }
+        let response = router
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::from(
+                        json!({"model": "model-a", "input": "synthetic"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(observed.lock().unwrap().is_none());
+    }
 }
 
 impl ExecutionService for SessionExecution {

@@ -6,6 +6,56 @@ use provider_openai::transport::canonical::{
 use provider_openai::transport::protocol::websocket::websocket_event_to_sse_frame;
 use serde_json::json;
 
+#[test]
+fn response_model_observation_prefers_reported_headers_without_changing_wire() {
+    for websocket in [false, true] {
+        let mut decoder = CodexCanonicalDecoder::new("requested")
+            .with_reported_model(Some("opening-model"))
+            .with_raw_sse_passthrough();
+        for (value, expected) in [
+            (
+                json!({"type":"response.created","response":{"id":"resp_model","model":"body-model"}}),
+                "opening-model",
+            ),
+            (
+                json!({"type":"codex.response.metadata","headers":{"X-OpenAI-Model":["metadata-model"]}}),
+                "metadata-model",
+            ),
+            (
+                json!({"type":"response.completed","headers":{"openai-model":"top-level"},"response":{"id":"resp_model","model":"final-body-model","headers":{"OpenAI-Model":"terminal-model"}}}),
+                "terminal-model",
+            ),
+        ] {
+            let raw = value.to_string();
+            let frame = if websocket {
+                websocket_event_to_sse_frame(&raw).expect("WS event")
+            } else {
+                format!("data: {raw}\n\n")
+            };
+            let events = decoder
+                .push(frame.as_bytes())
+                .expect("decode model observation");
+            assert_eq!(decoder.response_model(), Some(expected));
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.wire_event().is_some_and(|wire| wire.data() == &value))
+            );
+        }
+    }
+}
+
+#[test]
+fn response_model_observation_uses_explicit_body_and_never_request_fallback() {
+    let mut decoder = CodexCanonicalDecoder::new("requested");
+    decoder
+        .push(b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_model\"}}\n\n")
+        .expect("response model event");
+    assert_eq!(decoder.response_model(), None);
+    decoder.push(b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_model\",\"model\":\"returned\"}}\n\n").expect("response model event");
+    assert_eq!(decoder.response_model(), Some("returned"));
+}
+
 const METADATA_PREFIX_FIXTURE: &str = include_str!("fixtures/metadata_only_prefix.sse");
 
 #[test]
@@ -200,6 +250,48 @@ fn decoder_should_preserve_long_event_metadata_without_raw_frame() {
 }
 
 #[test]
+fn decoder_should_bill_the_sent_model_independently_of_the_response_model() {
+    for (sent, returned, expected_cost) in [
+        ("gpt-5.6-sol", Some("gpt-6-sol"), Some(6_875_000)),
+        ("gpt-5.6-sol", Some("gpt-6-astra"), Some(6_875_000)),
+        ("gpt-5.6-sol", Some("gpt-5.6-sol"), Some(6_875_000)),
+        ("gpt-5.6-sol", None, Some(6_875_000)),
+        ("gpt-6-sol", Some("gpt-5.6-sol"), None),
+    ] {
+        let created =
+            json!({"type":"response.created","response":{"id":"resp_model_cost","model":returned}});
+        let completed = json!({
+            "type":"response.completed",
+            "response":{
+                "id":"resp_model_cost","model":returned,"status":"completed","output":[],
+                "usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25},"total_tokens":110}
+            }
+        });
+        let body = format!("data: {created}\n\ndata: {completed}\n\n");
+        let mut decoder = CodexCanonicalDecoder::new(sent).with_raw_sse_passthrough();
+        let events = decoder.push(body.as_bytes()).expect("model cost response");
+        let cost = canonical_facts(&events)
+            .into_iter()
+            .find_map(|event| match event {
+                GatewayEvent::CalculatedCost(cost) => Some(cost.total().amount().scaled()),
+                _ => None,
+            });
+        assert_eq!(cost, expected_cost, "{sent} -> {returned:?}");
+        assert_eq!(decoder.response_model(), returned);
+        assert!(canonical_facts(&events).into_iter().any(|event| matches!(
+            event,
+            GatewayEvent::Completed(meta) if meta.model() == Some(returned.unwrap_or(sent))
+        )));
+        let raw: Vec<u8> = events
+            .iter()
+            .filter_map(|event| event.wire_event().and_then(|wire| wire.raw_sse_frame()))
+            .flat_map(|frame| frame.iter().copied())
+            .collect();
+        assert_eq!(raw, body.as_bytes());
+    }
+}
+
+#[test]
 fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
     let body = concat!(
         "event: response.created\n",
@@ -207,7 +299,7 @@ fn decoder_should_emit_calculated_cost_for_complete_known_model_usage() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":0},\"total_tokens\":110}}}\n\n",
     );
-    let events = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("gpt-5.4")
         .push(body.as_bytes())
         .expect("canonical priced response");
 
@@ -227,7 +319,7 @@ fn decoder_should_bill_requested_service_tier_despite_default_response() {
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fast_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":0},\"total_tokens\":110}}}\n\n",
     );
     let mut decoder =
-        CodexCanonicalDecoder::new("fallback").with_requested_service_tier(Some("priority"));
+        CodexCanonicalDecoder::new("gpt-5.4").with_requested_service_tier(Some("priority"));
     let events = decoder
         .push(body.as_bytes())
         .expect("canonical priority response");
@@ -248,7 +340,7 @@ fn decoder_should_bill_standard_when_request_omits_service_tier() {
         "event: response.completed\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_response_tier_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":25,\"cache_write_tokens\":0},\"total_tokens\":110}}}\n\n",
     );
-    let mut decoder = CodexCanonicalDecoder::new("fallback");
+    let mut decoder = CodexCanonicalDecoder::new("gpt-5.4");
     let events = decoder
         .push(body.as_bytes())
         .expect("canonical response-tier priority response");
@@ -270,7 +362,7 @@ fn decoder_should_add_standard_web_search_call_cost() {
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_search_cost\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n",
     );
     let tools = vec![json!({ "type": "web_search" })];
-    let events = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("gpt-5.4")
         .with_request_tool_pricing("gpt-5.4", Some(&tools))
         .push(body.as_bytes())
         .expect("canonical web search response");
@@ -291,7 +383,7 @@ fn decoder_should_use_non_reasoning_preview_web_search_price() {
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_preview_search_cost\",\"model\":\"gpt-4o\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n",
     );
     let tools = vec![json!({ "type": "web_search_preview" })];
-    let events = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("gpt-4o")
         .with_request_tool_pricing("gpt-4o", Some(&tools))
         .push(body.as_bytes())
         .expect("canonical preview web search response");
@@ -312,7 +404,7 @@ fn astra_decoder_should_use_reasoning_preview_web_search_price() {
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_preview_search_cost\",\"model\":\"gpt-6-astra\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n",
     );
     let tools = vec![json!({ "type": "web_search_preview" })];
-    let events = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("gpt-6-astra")
         .with_request_tool_pricing("gpt-6-astra", Some(&tools))
         .push(body.as_bytes())
         .expect("canonical preview web search response");
@@ -333,7 +425,7 @@ fn decoder_should_fail_closed_for_fixed_block_web_search_content() {
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixed_search_cost\",\"model\":\"gpt-4o-mini\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
     );
     let tools = vec![json!({ "type": "web_search" })];
-    let events = CodexCanonicalDecoder::new("fallback")
+    let events = CodexCanonicalDecoder::new("gpt-4o-mini")
         .with_request_tool_pricing("gpt-4o-mini", Some(&tools))
         .push(body.as_bytes())
         .expect("canonical fixed-block search response");
@@ -355,7 +447,7 @@ fn websocket_decoder_should_bill_requested_service_tier_despite_default_response
         r#"{"type":"response.completed","response":{"id":"resp_ws_fast_cost","model":"gpt-5.4","status":"completed","usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25,"cache_write_tokens":0},"total_tokens":110}}}"#,
     )
     .expect("completed frame");
-    let mut decoder = CodexCanonicalDecoder::new("fallback")
+    let mut decoder = CodexCanonicalDecoder::new("gpt-5.4")
         .with_requested_service_tier(Some("priority"))
         .with_raw_sse_passthrough();
     let events = decoder

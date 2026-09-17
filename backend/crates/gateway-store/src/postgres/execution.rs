@@ -282,6 +282,7 @@ pub struct ModelRequestFinalization {
     pub http_version: Option<String>,
     pub websocket_pool: Option<String>,
     pub service_tier: Option<String>,
+    pub upstream_response_model: Option<String>,
     pub provider_metadata_json: Option<Value>,
     pub diagnostic_trace_json: Option<Value>,
     pub error_kind: Option<String>,
@@ -345,6 +346,12 @@ impl ModelRequestFinalization {
             require_nonempty(ENTITY, "service_tier", service_tier)?;
             if service_tier.len() > 64 || service_tier.chars().any(char::is_control) {
                 return Err(invalid("service tier is invalid"));
+            }
+        }
+        if let Some(model) = self.upstream_response_model.as_deref() {
+            require_nonempty(ENTITY, "upstream_response_model", model)?;
+            if model.len() > 256 || model.chars().any(char::is_control) {
+                return Err(invalid("upstream response model is invalid"));
             }
         }
         if self
@@ -735,7 +742,8 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_connection_id = $44,
                  upstream_connection_exit_reason = $45,
                  upstream_connection_age_ms = $46,
-                 upstream_connection_idle_ms = $47, diagnostic_trace_json = $48
+                 upstream_connection_idle_ms = $47, diagnostic_trace_json = $48,
+                 upstream_response_model = $49
              where id = $1 and outcome = 'running'
              returning id, client_api_key_ref, continuation_affinity_hash,
                        continuation_requested, provider_kind, upstream_transport,
@@ -927,6 +935,7 @@ impl ModelRequestRepository for PgExecutionStore {
             "upstream_connection_idle_ms",
         )?)
         .bind(finalization.diagnostic_trace_json.map(sqlx::types::Json))
+        .bind(finalization.upstream_response_model)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -1223,6 +1232,7 @@ impl ExecutionStore for PgExecutionStore {
                 http_version: finalization.http_version,
                 websocket_pool: finalization.websocket_pool,
                 service_tier: finalization.service_tier,
+                upstream_response_model: finalization.upstream_response_model,
                 provider_metadata_json,
                 diagnostic_trace_json: finalization
                     .diagnostic_trace_json

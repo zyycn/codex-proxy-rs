@@ -530,6 +530,7 @@ pub struct ProviderResponseObservation {
     status_code: Option<u16>,
     request_id: Option<OpaqueUpstreamValue>,
     service_tier: Option<String>,
+    upstream_response_model: Option<String>,
     timings: ProviderResponseTimings,
     client_headers: Vec<ProviderResponseHeader>,
     provider_metadata: Option<ProviderResponseMetadata>,
@@ -545,6 +546,7 @@ impl ProviderResponseObservation {
             status_code: None,
             request_id: None,
             service_tier: None,
+            upstream_response_model: None,
             timings: ProviderResponseTimings::default(),
             client_headers: Vec::new(),
             provider_metadata: None,
@@ -598,6 +600,21 @@ impl ProviderResponseObservation {
             self.service_tier = Some(service_tier);
         }
         self
+    }
+
+    /// 记录 Provider 从上游响应明确取得的模型，不改写发送模型或计费合同。
+    #[must_use]
+    pub fn with_upstream_response_model_if_valid(mut self, model: &str) -> Self {
+        let model = model.trim();
+        if validate_text(model, 256, false, None).is_ok() {
+            self.upstream_response_model = Some(model.to_owned());
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn upstream_response_model(&self) -> Option<&str> {
+        self.upstream_response_model.as_deref()
     }
 
     #[must_use]

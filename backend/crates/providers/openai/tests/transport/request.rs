@@ -118,7 +118,7 @@ fn encoder_should_preserve_openai_wire_fields_without_deriving_accountless_pool_
 
     assert_eq!(encoded.body().get("model"), Some(&json!("gpt-routed")));
     assert!(encoded.body().get("stream").is_none());
-    assert!(encoded.body().get("store").is_none());
+    assert_eq!(encoded.body().get("store"), Some(&json!(false)));
     assert_eq!(encoded.body().get("tool_choice"), Some(&json!("auto")));
     assert_eq!(
         encoded.body().get("future_official_field"),
