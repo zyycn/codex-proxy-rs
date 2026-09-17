@@ -338,7 +338,10 @@ impl ProviderConnectionObservation {
     }
 }
 
-/// 只供当前客户端请求使用的原始上游 HTTP 失败响应。
+/// 只供当前客户端请求使用的 HTTP 失败响应。
+///
+/// 通常保留原始上游响应；Provider 也可为明确的恢复流程准备客户端投影。
+/// 投影不能覆盖 [`ProviderError`] 中用于诊断和记账的真实上游事实。
 ///
 /// 该值不属于稳定诊断事实，不能进入日志或持久化。它刻意不实现 [`Clone`]；
 /// [`ProviderError`] 的普通 clone 会丢弃它，只有最终失败的原对象才能把响应交给
@@ -352,7 +355,7 @@ pub struct ClientVisibleUpstreamResponse {
 }
 
 impl ClientVisibleUpstreamResponse {
-    /// 保存 transport 实际收到的状态码、Content-Type 原值和正文。
+    /// 保存客户端响应的状态码、Content-Type 和正文。
     #[must_use]
     pub fn new(status: u16, content_type: Option<Vec<u8>>, body: Bytes) -> Self {
         Self {
