@@ -19,6 +19,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
@@ -378,5 +379,53 @@ async fn auto_freeze_defaults_off_and_explicit_opt_in_round_trips() {
             .expect("settings")
             .account_auto_freeze_enabled
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn decompression_setting_should_persist_and_reach_snapshot_facts() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("decompression_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        before.responses_max_decompressed_body_bytes,
+        64 * 1024 * 1024
+    );
+    let mut update = settings_with_margin(3600);
+    update.responses_max_decompressed_body_bytes = 128 * 1024 * 1024;
+    repository.update_runtime_settings(update).await.unwrap();
+    let reloaded = PgRuntimeSettingsRepository::new(database.pool.clone())
+        .load_runtime_settings()
+        .await
+        .unwrap();
+    assert_eq!(
+        reloaded.responses_max_decompressed_body_bytes,
+        128 * 1024 * 1024
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.settings.responses_max_decompressed_body_bytes,
+        reloaded.responses_max_decompressed_body_bytes
+    );
+    assert!(snapshot.config_revision > before.config_revision);
+    for invalid in [0, u64::MAX] {
+        let mut update = settings_with_margin(3600);
+        update.responses_max_decompressed_body_bytes = invalid;
+        assert!(repository.update_runtime_settings(update).await.is_err());
+        assert_eq!(
+            repository
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .config_revision,
+            reloaded.config_revision
+        );
+    }
     database.close().await;
 }

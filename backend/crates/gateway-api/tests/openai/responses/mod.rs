@@ -19,7 +19,7 @@ use gateway_protocol::openai::sse::parse_sse_events;
 use serde_json::{Value, json};
 
 fn decode_request(body: &[u8]) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_with_headers(body, &HeaderMap::new())
+    decode_request_with_headers(body, &HeaderMap::new(), 64 * 1024 * 1024)
 }
 
 fn decode_response_create(
@@ -205,8 +205,9 @@ fn decoder_should_preserve_connection_metadata_outside_the_openai_wire_body() {
         }
     });
 
-    let decoded = decode_request_with_headers(body.to_string().as_bytes(), &headers)
-        .expect("request should decode");
+    let decoded =
+        decode_request_with_headers(body.to_string().as_bytes(), &headers, 64 * 1024 * 1024)
+            .expect("request should decode");
 
     assert_eq!(Value::Object(openai_wire_body(&decoded).clone()), body);
     assert_eq!(
@@ -317,9 +318,12 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         HeaderValue::from_static("client-is-update"),
     );
 
-    let decoded =
-        decode_request_with_headers(br#"{"model":"smart-code","input":"hello"}"#, &headers)
-            .expect("opaque request headers should not affect body decoding");
+    let decoded = decode_request_with_headers(
+        br#"{"model":"smart-code","input":"hello"}"#,
+        &headers,
+        64 * 1024 * 1024,
+    )
+    .expect("opaque request headers should not affect body decoding");
     let entries = openai_protocol_context(&decoded)
         .get("opaque_request_headers")
         .and_then(Value::as_array)
@@ -420,9 +424,12 @@ fn decoder_should_strip_http_transport_but_leave_source_headers_for_provider() {
     headers.insert("content-encoding", HeaderValue::from_static("identity"));
     headers.insert("x-openai-future-mode", HeaderValue::from_static("keep"));
 
-    let decoded =
-        decode_request_with_headers(br#"{"model":"smart-code","input":"hello"}"#, &headers)
-            .expect("decode request behind a reverse proxy");
+    let decoded = decode_request_with_headers(
+        br#"{"model":"smart-code","input":"hello"}"#,
+        &headers,
+        64 * 1024 * 1024,
+    )
+    .expect("decode request behind a reverse proxy");
 
     assert_eq!(
         openai_protocol_context(&decoded).get("opaque_request_headers"),
@@ -482,7 +489,8 @@ fn downstream_client_headers_should_remain_opaque_without_losing_session_semanti
         frame["type"] = json!("response.create");
         let opening = OpenAiRequestHeaders::from_headers(&headers);
         for decoded in [
-            decode_request_with_headers(body.to_string().as_bytes(), &headers).unwrap(),
+            decode_request_with_headers(body.to_string().as_bytes(), &headers, 64 * 1024 * 1024)
+                .unwrap(),
             decode_response_create_with_context(&frame.to_string(), &opening).unwrap(),
             decode_response_create_with_context(&frame.to_string(), &opening).unwrap(),
         ] {
@@ -565,7 +573,7 @@ fn decoder_should_preserve_unknown_arbitrary_precision_numbers() {
     let number = "12345678901234567890123456789012345678901234567890";
     let body = format!(r#"{{"model":"smart-code","input":"hello","future_number":{number}}}"#);
 
-    let decoded = decode_request_with_headers(body.as_bytes(), &HeaderMap::new())
+    let decoded = decode_request_with_headers(body.as_bytes(), &HeaderMap::new(), 64 * 1024 * 1024)
         .expect("opaque numeric field should decode");
     let encoded = serde_json::to_string(openai_wire_body(&decoded)).expect("encode request body");
 

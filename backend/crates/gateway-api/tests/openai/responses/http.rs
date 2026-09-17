@@ -546,7 +546,7 @@ async fn invalid_compressed_http_requests_should_fail_before_execution() {
             super::request::encode_body("zstd", std::io::repeat(0).take(64 * 1024 * 1024 + 1))
                 .into(),
             "request_too_large",
-            "Decompressed request body exceeds the allowed size.",
+            "Decompressed request body exceeds the allowed size (67108864 bytes).",
         ),
     ] {
         let headers = HeaderMap::from_iter([
@@ -2176,6 +2176,53 @@ async fn local_execution_failure_uses_the_existing_model_id() {
             assert_eq!(
                 response.headers()["x-codex-turn-state"],
                 "retained-turn-state"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn compressed_http_request_above_default_limit_should_reach_execution_after_increase() {
+    let body = json!({"model": "model-a", "input": "x".repeat(64 * 1024 * 1024)}).to_string();
+    let compressed = super::request::encode_body("zstd", body.as_bytes());
+    for limit in [64 * 1024 * 1024, 128 * 1024 * 1024] {
+        let observed = Arc::new(Mutex::new(None));
+        let execution = Arc::new(ContextCaptureExecution {
+            observed: Arc::clone(&observed),
+            client: crate::openai::authenticated_client_for_provider_with_limit(
+                "sk_context_test",
+                "openai",
+                limit,
+            ),
+        });
+        let response = api_router(execution)
+            .await
+            .oneshot(
+                Request::post("/v1/responses")
+                    .header(AUTHORIZATION, "Bearer sk_context_test")
+                    .header(CONTENT_ENCODING, "zstd")
+                    .body(Body::from(compressed.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if limit == 64 * 1024 * 1024 {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert!(observed.lock().unwrap().is_none());
+            let error: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(error["error"]["code"], "request_too_large");
+        } else {
+            // 捕获执行服务刻意返回 500；断言完整输入到达执行层，而不是只验证路由状态码。
+            let captured = observed
+                .lock()
+                .unwrap()
+                .take()
+                .expect("request reached execution");
+            assert_eq!(
+                captured.input.unwrap().as_str().unwrap().len(),
+                64 * 1024 * 1024
             );
         }
     }

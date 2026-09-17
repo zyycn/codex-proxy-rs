@@ -13,6 +13,7 @@ const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: t
 const maxWaitingPerKey = defineModel<string>('maxWaitingPerKey', { required: true })
 const maxWaitingPerAccount = defineModel<string>('maxWaitingPerAccount', { required: true })
 const concurrencyWaitTimeoutSeconds = defineModel<string>('concurrencyWaitTimeoutSeconds', { required: true })
+const responsesMaxDecompressedBodyMiB = defineModel<string>('responsesMaxDecompressedBodyMiB', { required: true })
 </script>
 
 <template>
@@ -77,6 +78,22 @@ const concurrencyWaitTimeoutSeconds = defineModel<string>('concurrencyWaitTimeou
         >
           <template #prefix>
             <Timer class="size-4" />
+          </template>
+        </BaseInput>
+      </BaseFormItem>
+      <BaseFormItem
+        label="Responses 解压上限"
+        description="默认 64 MiB，保存后对新请求生效；调高可接收更大的图片和历史上下文，也会增加内存占用"
+      >
+        <BaseInput
+          v-model="responsesMaxDecompressedBodyMiB"
+          aria-label="Responses 解压上限"
+          type="number"
+          min="1"
+          step="1"
+        >
+          <template #suffix>
+            MiB
           </template>
         </BaseInput>
       </BaseFormItem>

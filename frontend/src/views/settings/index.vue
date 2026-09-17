@@ -54,6 +54,7 @@ const {
   maxWaitingPerKeyValue,
   maxWaitingPerAccountValue,
   concurrencyWaitTimeoutSecondsValue,
+  responsesMaxDecompressedBodyMiBValue,
   accountAutoFreezeThresholdValue,
   accountAutoFreezeWindowSecondsValue,
   accountAutoFreezeDurationSecondsValue,
@@ -139,6 +140,7 @@ watch(
         v-model:max-waiting-per-key="maxWaitingPerKeyValue"
         v-model:max-waiting-per-account="maxWaitingPerAccountValue"
         v-model:concurrency-wait-timeout-seconds="concurrencyWaitTimeoutSecondsValue"
+        v-model:responses-max-decompressed-body-mi-b="responsesMaxDecompressedBodyMiBValue"
       />
 
       <RequestLocationCard v-model="form.requestLocation" v-model:enabled="form.requestLocationEnabled" :disabled="loading || saving" />

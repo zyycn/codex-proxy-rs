@@ -407,3 +407,49 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
         "Asia/Tokyo"
     );
 }
+
+#[test]
+fn decompression_setting_should_validate_and_remain_frozen_across_publication() {
+    use gateway_core::runtime::RuntimeSnapshotHandle;
+    let compile = |version, bytes| {
+        let facts = SnapshotFacts::new(
+            revision(version),
+            revision(version),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_responses_max_decompressed_body_bytes(bytes),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        block_on(compiler(Arc::new(TestSnapshotStore::new(Ok(facts)))).compile())
+    };
+    for invalid in [0, u64::MAX] {
+        assert!(matches!(
+            compile(1, invalid),
+            Err(RuntimeSnapshotCompileError::InvalidData)
+        ));
+    }
+    let handle = RuntimeSnapshotHandle::new(compile(1, 64 * 1024 * 1024).unwrap());
+    let frozen = handle.acquire().unwrap();
+    handle.publish(compile(2, 128 * 1024 * 1024).unwrap());
+    assert_eq!(
+        handle
+            .acquire()
+            .unwrap()
+            .responses_max_decompressed_body_bytes(),
+        128 * 1024 * 1024
+    );
+    assert_eq!(
+        frozen.responses_max_decompressed_body_bytes(),
+        64 * 1024 * 1024
+    );
+    handle.publish(compile(3, 1024 * 1024).unwrap());
+    assert_eq!(
+        handle
+            .acquire()
+            .unwrap()
+            .responses_max_decompressed_body_bytes(),
+        1024 * 1024
+    );
+}

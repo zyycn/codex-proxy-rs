@@ -11,6 +11,8 @@ import { normalizeRequestLocation, requestLocationError } from '@/utils/request-
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
 
+const MIB = 1024 * 1024
+
 export function useSettingsForm() {
   const loading = shallowRef(true)
   const saveAction = useAsyncAction()
@@ -28,6 +30,7 @@ export function useSettingsForm() {
     maxWaitingPerKey: null as number | null,
     maxWaitingPerAccount: null as number | null,
     concurrencyWaitTimeoutSeconds: null as number | null,
+    responsesMaxDecompressedBodyMiB: null as number | null,
 
     rotationStrategy: '' as RotationStrategy | '',
     minCodexDesktopVersion: '',
@@ -45,7 +48,7 @@ export function useSettingsForm() {
     accountAutoFreezeAdaptiveConcurrency: true,
   })
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'accountAutoFreezeThreshold' | 'accountAutoFreezeWindowSeconds' | 'accountAutoFreezeDurationSeconds') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'responsesMaxDecompressedBodyMiB' | 'accountAutoFreezeThreshold' | 'accountAutoFreezeWindowSeconds' | 'accountAutoFreezeDurationSeconds') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -65,6 +68,7 @@ export function useSettingsForm() {
   const requestIntervalMsValue = numericModel('requestIntervalMs')
   const maxWaitingPerKeyValue = numericModel('maxWaitingPerKey')
   const maxWaitingPerAccountValue = numericModel('maxWaitingPerAccount')
+  const responsesMaxDecompressedBodyMiBValue = numericModel('responsesMaxDecompressedBodyMiB')
   const concurrencyWaitTimeoutSecondsValue = numericModel('concurrencyWaitTimeoutSeconds')
   const accountAutoFreezeThresholdValue = numericModel('accountAutoFreezeThreshold')
   const accountAutoFreezeWindowSecondsValue = numericModel('accountAutoFreezeWindowSeconds')
@@ -89,6 +93,7 @@ export function useSettingsForm() {
     form.maxWaitingPerKey = data.maxWaitingPerKey
     form.maxWaitingPerAccount = data.maxWaitingPerAccount
     form.concurrencyWaitTimeoutSeconds = data.concurrencyWaitTimeoutSeconds
+    form.responsesMaxDecompressedBodyMiB = data.responsesMaxDecompressedBodyBytes / MIB
 
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
@@ -158,9 +163,14 @@ export function useSettingsForm() {
   async function saveSettings() {
     if (saving.value || loading.value || !savedRequestLocation.value)
       return
-    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
+    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
     if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
       toast.warning('请完整填写运行参数和调度策略')
+      return
+    }
+    if (responsesMaxDecompressedBodyMiB === null || !Number.isInteger(responsesMaxDecompressedBodyMiB) || responsesMaxDecompressedBodyMiB < 1
+      || !Number.isSafeInteger(responsesMaxDecompressedBodyMiB * MIB)) {
+      toast.warning('Responses 解压上限应为有效的正整数（MiB）')
       return
     }
     if (![maxWaitingPerKey, maxWaitingPerAccount].every(value => Number.isInteger(value) && value >= 0 && value <= 1000)
@@ -208,6 +218,7 @@ export function useSettingsForm() {
         maxWaitingPerKey,
         maxWaitingPerAccount,
         concurrencyWaitTimeoutSeconds,
+        responsesMaxDecompressedBodyBytes: responsesMaxDecompressedBodyMiB * MIB,
         rotationStrategy,
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,
@@ -248,6 +259,7 @@ export function useSettingsForm() {
     maxWaitingPerKeyValue,
     maxWaitingPerAccountValue,
     concurrencyWaitTimeoutSecondsValue,
+    responsesMaxDecompressedBodyMiBValue,
     accountAutoFreezeThresholdValue,
     accountAutoFreezeWindowSecondsValue,
     accountAutoFreezeDurationSecondsValue,

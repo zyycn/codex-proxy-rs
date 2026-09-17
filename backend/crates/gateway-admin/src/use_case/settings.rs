@@ -115,6 +115,8 @@ impl SettingsService for DefaultSettingsService {
 
 fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
     let valid = command.request_location.validate().is_ok()
+        && command.responses_max_decompressed_body_bytes > 0
+        && isize::try_from(command.responses_max_decompressed_body_bytes).is_ok()
         && command.refresh_margin_seconds > 0
         && command.refresh_concurrency > 0
         && command.max_concurrent_per_account > 0

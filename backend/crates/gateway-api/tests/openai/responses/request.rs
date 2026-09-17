@@ -41,7 +41,9 @@ fn http_decode_should_preserve_compressed_request_fields() {
     let expected = serde_json::from_slice::<serde_json::Value>(REQUEST).expect("fixture JSON");
     for encoding in ENCODINGS {
         let compressed = encode_body(encoding, REQUEST);
-        let decoded = decode_request_with_headers(&compressed, &headers(encoding)).expect(encoding);
+        let decoded =
+            decode_request_with_headers(&compressed, &headers(encoding), 64 * 1024 * 1024)
+                .expect(encoding);
         assert_eq!(
             openai_wire_body(&decoded),
             expected.as_object().expect("object")
@@ -52,10 +54,10 @@ fn http_decode_should_preserve_compressed_request_fields() {
 #[test]
 fn http_decode_should_accept_plain_identity_and_case_insensitive_encodings() {
     for request_headers in [HeaderMap::new(), headers(""), headers(" identity ")] {
-        assert!(decode_request_with_headers(REQUEST, &request_headers).is_ok());
+        assert!(decode_request_with_headers(REQUEST, &request_headers, 64 * 1024 * 1024).is_ok());
     }
     let compressed = encode_body("gzip", REQUEST);
-    assert!(decode_request_with_headers(&compressed, &headers(" GZip ")).is_ok());
+    assert!(decode_request_with_headers(&compressed, &headers(" GZip "), 64 * 1024 * 1024).is_ok());
 }
 
 #[test]
@@ -63,7 +65,7 @@ fn http_decode_should_reject_unknown_and_stacked_encodings() {
     let mut repeated = headers("identity");
     repeated.append(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
     for request_headers in [headers("br"), headers("gzip, zstd"), repeated] {
-        let error = decode_request_with_headers(REQUEST, &request_headers)
+        let error = decode_request_with_headers(REQUEST, &request_headers, 64 * 1024 * 1024)
             .expect_err("unsupported encoding");
         assert!(matches!(
             error,
@@ -82,7 +84,8 @@ fn http_decode_should_reject_corrupted_and_truncated_compressed_bodies() {
         let mut truncated = encode_body(encoding, REQUEST);
         truncated.truncate(truncated.len() - 4);
         for body in [b"not-a-compressed-stream".as_slice(), truncated.as_slice()] {
-            let error = decode_request_with_headers(body, &headers(encoding)).expect_err(encoding);
+            let error = decode_request_with_headers(body, &headers(encoding), 64 * 1024 * 1024)
+                .expect_err(encoding);
             assert_eq!(
                 error.protocol_body().into_value(),
                 json!({"error": {
@@ -99,7 +102,9 @@ fn http_decode_should_read_all_gzip_members_and_zstd_frames() {
     for encoding in ["gzip", "zstd"] {
         let mut compressed = encode_body(encoding, &REQUEST[..12]);
         compressed.extend(encode_body(encoding, &REQUEST[12..]));
-        let decoded = decode_request_with_headers(&compressed, &headers(encoding)).expect(encoding);
+        let decoded =
+            decode_request_with_headers(&compressed, &headers(encoding), 64 * 1024 * 1024)
+                .expect(encoding);
         assert_eq!(openai_wire_body(&decoded)["input"], "hello");
     }
 }
@@ -110,7 +115,8 @@ fn http_decode_should_not_ignore_invalid_trailing_members() {
         let mut compressed = encode_body(encoding, REQUEST);
         compressed.extend(encode_body(encoding, b"invalid trailing JSON".as_slice()));
         assert_eq!(
-            decode_request_with_headers(&compressed, &headers(encoding)).expect_err(encoding),
+            decode_request_with_headers(&compressed, &headers(encoding), 64 * 1024 * 1024)
+                .expect_err(encoding),
             RequestDecodeError::MalformedJson
         );
     }
@@ -129,7 +135,8 @@ fn http_decode_should_reject_zstd_frames_with_an_excessive_window() {
         REQUEST
     );
     assert_eq!(
-        decode_request_with_headers(&compressed, &headers("zstd")).expect_err("oversized window"),
+        decode_request_with_headers(&compressed, &headers("zstd"), 128 * 1024 * 1024)
+            .expect_err("oversized window"),
         RequestDecodeError::MalformedJson
     );
 }
@@ -138,7 +145,8 @@ fn http_decode_should_reject_zstd_frames_with_an_excessive_window() {
 fn http_decode_should_accept_the_exact_decompressed_limit() {
     let padding = repeat(b' ').take(DECOMPRESSED_LIMIT - REQUEST.len() as u64);
     let compressed = encode_body("zstd", REQUEST.chain(padding));
-    let decoded = decode_request_with_headers(&compressed, &headers("zstd")).expect("exact limit");
+    let decoded = decode_request_with_headers(&compressed, &headers("zstd"), 64 * 1024 * 1024)
+        .expect("exact limit");
     assert_eq!(decoded.metadata().requested_model(), "gpt-test");
 }
 
@@ -146,11 +154,13 @@ fn http_decode_should_accept_the_exact_decompressed_limit() {
 fn http_decode_should_reject_bodies_above_the_decompressed_limit() {
     for encoding in ENCODINGS {
         let compressed = encode_body(encoding, repeat(0).take(DECOMPRESSED_LIMIT + 1));
-        let error =
-            decode_request_with_headers(&compressed, &headers(encoding)).expect_err(encoding);
+        let error = decode_request_with_headers(&compressed, &headers(encoding), 64 * 1024 * 1024)
+            .expect_err(encoding);
         assert_eq!(
             error,
-            RequestDecodeError::DecompressedBodyTooLarge,
+            RequestDecodeError::DecompressedBodyTooLarge {
+                limit_bytes: 64 * 1024 * 1024
+            },
             "{encoding}"
         );
     }
@@ -163,12 +173,54 @@ fn http_decode_should_stop_at_limit_before_reading_invalid_trailing_frames() {
         // 这个断言验证越界时已经停止读取，而不只是最终返回了某个超限错误。
         let mut compressed = encode_body(encoding, repeat(0).take(DECOMPRESSED_LIMIT + 1));
         compressed.extend_from_slice(b"invalid trailing frame");
-        let error =
-            decode_request_with_headers(&compressed, &headers(encoding)).expect_err(encoding);
+        let error = decode_request_with_headers(&compressed, &headers(encoding), 64 * 1024 * 1024)
+            .expect_err(encoding);
         assert_eq!(
             error,
-            RequestDecodeError::DecompressedBodyTooLarge,
+            RequestDecodeError::DecompressedBodyTooLarge {
+                limit_bytes: 64 * 1024 * 1024
+            },
             "{encoding}"
         );
+    }
+}
+
+#[test]
+fn http_decode_should_apply_configured_limits_to_every_encoding_and_frame() {
+    for encoding in ENCODINGS {
+        let compressed = encode_body(encoding, REQUEST);
+        assert!(
+            decode_request_with_headers(&compressed, &headers(encoding), REQUEST.len()).is_ok()
+        );
+        let error = decode_request_with_headers(&compressed, &headers(encoding), REQUEST.len() - 1)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            RequestDecodeError::DecompressedBodyTooLarge {
+                limit_bytes: REQUEST.len() - 1
+            }
+        );
+        assert!(
+            error
+                .protocol_body()
+                .error
+                .message
+                .contains(&(REQUEST.len() - 1).to_string())
+        );
+    }
+    for encoding in ["gzip", "zstd"] {
+        let split = REQUEST.len() / 2;
+        let mut compressed = encode_body(encoding, &REQUEST[..split]);
+        compressed.extend(encode_body(encoding, &REQUEST[split..]));
+        assert!(
+            decode_request_with_headers(&compressed, &headers(encoding), REQUEST.len()).is_ok()
+        );
+        assert!(matches!(
+            decode_request_with_headers(&compressed, &headers(encoding), REQUEST.len() - 1),
+            Err(RequestDecodeError::DecompressedBodyTooLarge { .. })
+        ));
+    }
+    for request_headers in [HeaderMap::new(), headers("identity")] {
+        assert!(decode_request_with_headers(REQUEST, &request_headers, 1).is_ok());
     }
 }

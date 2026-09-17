@@ -34,6 +34,7 @@ pub struct SnapshotSettingsFacts {
     max_waiting_per_key: u32,
     max_waiting_per_account: u32,
     concurrency_wait_timeout_seconds: u32,
+    responses_max_decompressed_body_bytes: u64,
     request_interval_ms: u64,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
@@ -42,6 +43,12 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_responses_max_decompressed_body_bytes(mut self, bytes: u64) -> Self {
+        self.responses_max_decompressed_body_bytes = bytes;
+        self
+    }
+
     #[must_use]
     pub fn with_request_location(
         mut self,
@@ -82,6 +89,7 @@ impl SnapshotSettingsFacts {
             max_waiting_per_key: 0,
             max_waiting_per_account: 0,
             concurrency_wait_timeout_seconds: 30,
+            responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             model_mappings,
@@ -391,6 +399,12 @@ async fn compile_runtime_snapshot(
     {
         return Err(RuntimeSnapshotCompileError::InvalidData);
     }
+    let decompressed_body_limit =
+        isize::try_from(facts.settings.responses_max_decompressed_body_bytes)
+            .ok()
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .and_then(std::num::NonZeroUsize::new)
+            .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
     let queue_timeout =
         Duration::from_secs(u64::from(facts.settings.concurrency_wait_timeout_seconds));
     let client_queue_policy = ConcurrencyQueuePolicy {
@@ -492,6 +506,7 @@ async fn compile_runtime_snapshot(
     .map(|snapshot| {
         snapshot
             .with_request_location(request_location)
+            .with_responses_max_decompressed_body_bytes(decompressed_body_limit)
             .with_client_queue_policy(client_queue_policy)
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
@@ -503,6 +518,7 @@ async fn compile_runtime_snapshot(
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
     revision: ConfigRevision,
     client_queue_policy: ConcurrencyQueuePolicy,
@@ -520,6 +536,20 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub const fn responses_max_decompressed_body_bytes(&self) -> usize {
+        self.responses_max_decompressed_body_bytes.get()
+    }
+
+    #[must_use]
+    pub const fn with_responses_max_decompressed_body_bytes(
+        mut self,
+        bytes: std::num::NonZeroUsize,
+    ) -> Self {
+        self.responses_max_decompressed_body_bytes = bytes;
+        self
+    }
+
     #[must_use]
     pub fn with_request_location(
         mut self,
@@ -608,6 +638,8 @@ impl RuntimeSnapshot {
         client_policy_map.retain(|_, policy| policy.enabled());
 
         Ok(Self {
+            responses_max_decompressed_body_bytes: std::num::NonZeroUsize::new(64 * 1024 * 1024)
+                .expect("positive default limit"),
             request_location: None,
             revision,
             account_selection_policy,

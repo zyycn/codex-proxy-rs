@@ -155,8 +155,9 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 
 `POST /v1/responses` 在鉴权后按 `Content-Encoding` 解压，再解析 JSON；支持单一 `gzip`、
 `deflate`（zlib 封装）和 `zstd`，缺省、空值或 `identity` 直接使用原始正文。gzip 多成员与 zstd
-多帧连续解码，整体展开结果最多 64 MiB，超限在继续展开前返回 `400 request_too_large`；zstd
-回溯窗口同样最多 64 MiB，不能满足该限制的帧按解码失败处理。这个限制保护入站解压资源，不是
+多帧连续解码，整体展开结果受运行设置 `responsesMaxDecompressedBodyBytes` 约束（默认 64 MiB），
+超限在继续展开前返回 `400 request_too_large`，错误信息包含当前请求的上限字节数。zstd
+回溯窗口独立固定为最多 64 MiB，不能满足该限制的帧按解码失败处理。这个限制保护入站解压资源，不是
 模型上下文或 Token 上限；未压缩正文不受此长度限制。
 不支持的编码、逗号分隔的叠加编码和重复 `Content-Encoding` 头返回
 `400 unsupported_content_encoding`；压缩正文损坏、截断或解压后不是合法 JSON 返回
@@ -926,6 +927,7 @@ maxConcurrentPerAccount
 maxWaitingPerKey
 maxWaitingPerAccount
 concurrencyWaitTimeoutSeconds
+responsesMaxDecompressedBodyBytes
 requestIntervalMs
 rotationStrategy
 minCodexDesktopVersion
@@ -956,6 +958,11 @@ accountAutoFreezeAdaptiveConcurrency
 `concurrencyWaitTimeoutSeconds` 取值 1～120，默认 30，从首次入队开始计时，密钥与账号两层共享该等待时限；
 切换账号或内部重试不重新计时，等待同时计入请求总超时。该时限不用于中断已开始的上游生成。
 设置更新请求须包含这三个字段，新请求使用更新后的快照。
+
+`responsesMaxDecompressedBodyBytes` 是压缩 Responses HTTP 请求的解压输出上限，单位字节，默认
+67108864（64 MiB）。必须为正整数，且可表示为进程平台的 `isize`；管理端以整数 MiB 编辑。
+保存并发布成功后，新请求使用新值；已鉴权请求沿用原快照，无需重启。调高上限会增加大请求的内存占用，
+它不代表整个进程的内存预算。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。

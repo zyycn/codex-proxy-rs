@@ -764,6 +764,7 @@ impl SettingsStore for FixtureSettingsStore {
             max_waiting_per_key: 0,
             max_waiting_per_account: 0,
             concurrency_wait_timeout_seconds: 30,
+            responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             rotation_strategy: RotationStrategy::Smart,
             min_codex_desktop_version: None,
             min_codex_cli_version: None,
