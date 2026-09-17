@@ -4,7 +4,6 @@ import { CircleHelp, MonitorUp, TerminalSquare } from '@lucide/vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 
 defineOptions({ name: 'ClientVersionPolicyCard' })
@@ -31,27 +30,25 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
 </script>
 
 <template>
-  <BaseCard
-    description="低于最低版本的 Codex 客户端将无法发起请求，留空表示不限制"
-  >
+  <BaseCard>
     <template #title>
       <span class="inline-flex items-center gap-1.5">
         <span>客户端版本限制</span>
-        <BaseIconButton
-          label="查看安装与升级说明"
-          size="sm"
-          class="-my-1"
+        <button
+          type="button"
+          class="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none transition-colors hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
+          aria-label="查看安装与升级说明"
           @click="emit('help')"
         >
-          <CircleHelp class="size-3.5" />
-        </BaseIconButton>
+          <CircleHelp class="size-3.5" aria-hidden="true" />
+        </button>
       </span>
     </template>
 
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem
         label="Codex Desktop 最低版本"
-        description="只检查 Desktop 应用版本，例如 26.825.51511"
+        description="只检查桌面端应用版本，例如 26.825.51511"
         :error="desktopError"
       >
         <BaseInput
@@ -70,7 +67,7 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
 
       <BaseFormItem
         label="Codex CLI 最低版本"
-        description="只检查独立 CLI 版本，例如 0.152.0"
+        description="只检查独立终端版本，例如 0.152.0"
         :error="cliError"
       >
         <BaseInput

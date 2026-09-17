@@ -59,7 +59,7 @@ function resolveModal(
       title: '账号设置',
       description: '设置将应用于本次导入的账号',
       tone: 'neutral' as const,
-      size: 'md' as const,
+      size: 'md-wide' as const,
     }
   }
 

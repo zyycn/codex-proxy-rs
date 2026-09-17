@@ -8,7 +8,7 @@ import BaseScrollbar from '../BaseScrollbar.vue'
 import { lockBodyScroll, unlockBodyScroll } from './bodyScrollLock'
 import { useModalDrag } from './useModalDrag'
 
-type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
+type ModalSize = 'sm' | 'md' | 'md-wide' | 'lg' | 'xl'
 type ModalTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
 
 const props = withDefaults(
@@ -58,10 +58,11 @@ const focusableSelector = [
 ].join(',')
 
 const sizeClasses: Record<ModalSize, string> = {
-  sm: 'max-w-md',
-  md: 'max-w-xl',
-  lg: 'max-w-3xl',
-  xl: 'max-w-5xl',
+  'sm': 'max-w-md',
+  'md': 'max-w-xl',
+  'md-wide': 'max-w-2xl',
+  'lg': 'max-w-3xl',
+  'xl': 'max-w-5xl',
 }
 
 const iconMap = {

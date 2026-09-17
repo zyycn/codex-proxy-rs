@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { GitBranch, Plus, Trash2 } from '@lucide/vue'
+import { Plus, Trash2 } from '@lucide/vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -38,28 +38,17 @@ const emit = defineEmits<{
         <span v-if="error" class="text-xs font-emphasis text-cp-error-text">{{ error }}</span>
       </div>
 
-      <div class="flex items-center gap-2 text-cp-sm font-emphasis text-cp-text-secondary">
-        <GitBranch class="size-4 text-cp-primary-text" />
-        全局模型映射
-      </div>
-
       <div
         v-if="loading"
         class="rounded-cp bg-cp-fill-quaternary px-4 py-4 text-cp font-emphasis text-cp-text-quaternary"
       >
         正在加载模型映射...
       </div>
-      <div
-        v-else-if="mappings.length === 0"
-        class="rounded-cp bg-cp-fill-quaternary px-4 py-4 text-cp font-emphasis text-cp-text-quaternary"
-      >
-        暂无模型映射
-      </div>
-      <div v-else class="grid gap-3">
+      <div v-else-if="mappings.length > 0" class="grid max-w-6xl gap-3">
         <div
           v-for="(row, index) in mappings"
           :key="index"
-          class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-3 rounded-cp-card bg-cp-fill-quaternary p-3"
+          class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-cp-card bg-cp-fill-quaternary p-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]"
         >
           <BaseInput
             :model-value="row.requestedModel"
@@ -67,14 +56,16 @@ const emit = defineEmits<{
             aria-label="请求模型"
             @update:model-value="emit('updateMapping', index, 'requestedModel', $event)"
           />
-          <span class="text-cp-text-quaternary">→</span>
+          <span class="hidden text-cp-text-quaternary sm:block" aria-hidden="true">→</span>
           <BaseInput
+            class="col-start-1 row-start-2 sm:col-start-auto sm:row-start-auto"
             :model-value="row.upstreamModel"
             placeholder="上游模型"
             aria-label="上游模型名称"
             @update:model-value="emit('updateMapping', index, 'upstreamModel', $event)"
           />
           <BaseIconButton
+            class="col-start-2 row-span-2 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto"
             variant="ghost"
             label="删除映射"
             @click="emit('removeMapping', index)"

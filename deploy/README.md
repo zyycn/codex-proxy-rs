@@ -349,10 +349,6 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
 
 ## 镜像升级与源码构建
 
-> [!WARNING]
-> 以下命令只适用于同一大版本内的升级，不支持跨大版本在线升级。跨大版本请使用全新的
-> `.runtime/` 数据目录重新部署，并重新导入或重新授权 Provider 账号与客户端 Key。
-
 每个 Release 独立提供 `config.example.yaml`、默认镜像固定到该版本的 `compose.yaml` 和校验和；
 各平台归档也包含 `deploy/config.example.yaml`。配置模板来自构建该版本的同一提交。
 使用二进制归档手动部署时，将模板中的 `api.asset_directory` 改为 `../web/dist`，指向归档内的静态资源。

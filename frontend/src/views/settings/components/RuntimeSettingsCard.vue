@@ -1,31 +1,17 @@
 <script setup lang="ts">
-import { Gauge, Timer, Zap } from '@lucide/vue'
+import { Gauge, Timer } from '@lucide/vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseSwitch from '@/components/base/BaseSwitch.vue'
-
-defineProps<{ disabled: boolean }>()
-
-const disableFast = defineModel<boolean>('disableFast', { required: true })
 
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
-const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
-const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
-const maxWaitingPerKey = defineModel<string>('maxWaitingPerKey', { required: true })
-const maxWaitingPerAccount = defineModel<string>('maxWaitingPerAccount', { required: true })
-const concurrencyWaitTimeoutSeconds = defineModel<string>('concurrencyWaitTimeoutSeconds', { required: true })
-const responsesMaxDecompressedBodyMiB = defineModel<string>('responsesMaxDecompressedBodyMiB', { required: true })
 </script>
 
 <template>
-  <BaseCard
-    title="运行参数"
-    description="请求节奏、账号并发和 Token 刷新"
-  >
+  <BaseCard title="并发与请求间隔">
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem
         label="单账号默认最大并发"
@@ -43,37 +29,7 @@ const responsesMaxDecompressedBodyMiB = defineModel<string>('responsesMaxDecompr
       </BaseFormItem>
 
       <BaseFormItem
-        label="提前刷新秒数"
-        description="Token 过期前多少秒触发刷新"
-      >
-        <BaseInput
-          v-model="refreshMarginSeconds"
-          aria-label="提前刷新秒数"
-          type="number"
-        >
-          <template #prefix>
-            <Timer class="size-4" />
-          </template>
-        </BaseInput>
-      </BaseFormItem>
-
-      <BaseFormItem
-        label="刷新并发数"
-        description="同时刷新 Token 的最大请求数，减小可避免限流"
-      >
-        <BaseInput
-          v-model="refreshConcurrency"
-          aria-label="刷新并发数"
-          type="number"
-        >
-          <template #prefix>
-            <Zap class="size-4" />
-          </template>
-        </BaseInput>
-      </BaseFormItem>
-
-      <BaseFormItem
-        label="请求间隔 ms"
+        label="请求间隔"
         description="控制同一账号两次调度之间的最小等待时间"
       >
         <BaseInput
@@ -84,47 +40,11 @@ const responsesMaxDecompressedBodyMiB = defineModel<string>('responsesMaxDecompr
           <template #prefix>
             <Timer class="size-4" />
           </template>
-        </BaseInput>
-      </BaseFormItem>
-      <BaseFormItem
-        label="Responses 解压上限"
-        description="默认 64 MiB，保存后对新请求生效；调高可接收更大的图片和历史上下文，也会增加内存占用"
-      >
-        <BaseInput
-          v-model="responsesMaxDecompressedBodyMiB"
-          aria-label="Responses 解压上限"
-          type="number"
-          min="1"
-          step="1"
-        >
           <template #suffix>
-            MiB
+            ms
           </template>
         </BaseInput>
       </BaseFormItem>
-      <BaseFormItem
-        description="开启后，所有 Fast 请求改用普通模式继续处理；优先于分组设置。关闭后仍遵循分组限制。"
-      >
-        <BaseSwitch
-          v-model="disableFast"
-          label="关闭 Fast"
-          show-label
-          :disabled="disabled"
-        />
-      </BaseFormItem>
-      <div class="col-span-full grid gap-4 pt-4 sm:grid-cols-2">
-        <BaseFormItem label="每个密钥最大排队数" description="所有密钥使用此上限，各自独立计数；0 表示不排队">
-          <BaseInput v-model="maxWaitingPerKey" aria-label="每个密钥最大排队数" type="number" min="0" max="1000" step="1" />
-        </BaseFormItem>
-
-        <BaseFormItem label="单账号最大排队数" description="所有账号使用此上限，各自独立计数；0 表示不排队">
-          <BaseInput v-model="maxWaitingPerAccount" aria-label="单账号最大排队数" type="number" min="0" max="1000" step="1" />
-        </BaseFormItem>
-
-        <BaseFormItem label="最长排队秒数" description="密钥和账号共用此时限，从首次入队开始计时，范围 1～120 秒">
-          <BaseInput v-model="concurrencyWaitTimeoutSeconds" aria-label="最长排队秒数" type="number" min="1" max="120" step="1" />
-        </BaseFormItem>
-      </div>
     </BaseForm>
   </BaseCard>
 </template>

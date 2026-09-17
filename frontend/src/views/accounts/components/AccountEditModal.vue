@@ -42,7 +42,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
   <BaseModal
     v-model="open"
     title="编辑账号"
-    size="lg"
+    size="md-wide"
     :dismissible="!saving"
   >
     <div v-if="account" class="grid gap-5">

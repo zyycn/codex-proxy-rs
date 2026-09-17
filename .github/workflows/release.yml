@@ -669,9 +669,6 @@ jobs:
         shell: bash
         env:
           INSTALLATION_NOTES: |
-            > [!WARNING]
-            > **跨大版本升级：** 不支持跨大版本在线升级。请使用全新的 `.runtime/` 数据目录重新部署，再重新导入或重新授权服务商账号，并重新导入客户端密钥。详见[升级说明](https://github.com/${{ github.repository }}/blob/${{ needs.release-info.outputs.tag }}/deploy/README.md#镜像升级与源码构建)。
-
             ## 📥 安装
 
             **Docker 部署：**

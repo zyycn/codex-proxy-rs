@@ -125,7 +125,7 @@ watch(search, () => {
           <RefreshCw class="size-3.5" />
         </BaseIconButton>
       </template>
-      <BaseSegmented v-model="mode" class="w-full" label="模型限制模式" :options="modes" :disabled="disabled" />
+      <BaseSegmented v-model="mode" class="w-80 max-w-full" label="模型限制模式" :options="modes" :disabled="disabled" />
     </BaseFormItem>
     <template v-if="restricted">
       <BaseInput v-model="search" aria-label="搜索或添加模型" placeholder="搜索或输入 ID，回车添加" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter.prevent="addModel">

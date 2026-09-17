@@ -9075,7 +9075,8 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         let previous = index
             .checked_sub(1)
             .map(|index| format!("resp_fast_turn_{index}"));
-        let mut body = json!({"model":"gpt-5.4","input":"next turn","service_tier":"priority"});
+        let mut body =
+            json!({"model":"gpt-5.4","input":"next turn","service_tier":"priority","store":false});
         if let Some(previous) = &previous {
             body["previous_response_id"] = json!(previous);
         }
@@ -9083,7 +9084,14 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
             GenerateRequest::from_protocol_payload(
                 ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
                     .unwrap()
-                    .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
+                    // 与客户端 WebSocket 一致，首轮也禁止按快路径预算降级到 HTTP。
+                    .with_context(Map::from_iter([
+                        ("use_websocket".to_owned(), json!(true)),
+                        (
+                            "downstream_websocket_connection_id".to_owned(),
+                            json!("ws_fast_policy_continuation"),
+                        ),
+                    ])),
             )
             .with_provider_session_state(session_state.clone()),
         );

@@ -69,16 +69,23 @@ const storageReady = computed(
   () => loaded.value && storageConfigured.value && verified.value,
 )
 
+// 首次进入备份页签时加载配置，后续切换只刷新记录，不覆盖草稿。
 watch(
   () => props.active,
-  async (isActive) => {
-    if (isActive) {
-      await loadSettings()
-      await loadRecords()
-      startPolling()
-    }
-    else {
+  async (isActive, _previous, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => {
+      cancelled = true
       stopPolling()
+    })
+    if (isActive) {
+      if (!loaded.value && !settingsLoading.value)
+        await loadSettings()
+      if (cancelled)
+        return
+      await loadRecords()
+      if (!cancelled)
+        startPolling()
     }
   },
   { immediate: true },

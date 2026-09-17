@@ -49,6 +49,24 @@ export function useSettingsForm() {
     accountAutoFreezeAdaptiveConcurrency: true,
   })
 
+  function snapshot() {
+    return {
+      form: { ...form, requestLocation: { ...form.requestLocation } },
+      mappings: mappings.value.map(row => ({ ...row })),
+    }
+  }
+
+  const saved = shallowRef<ReturnType<typeof snapshot>>()
+  const loaded = computed(() => saved.value !== undefined)
+  const hasChanges = computed(() => loaded.value && JSON.stringify(snapshot()) !== JSON.stringify(saved.value))
+
+  function resetSettings() {
+    if (!saved.value || saving.value)
+      return
+    Object.assign(form, saved.value.form, { requestLocation: { ...saved.value.form.requestLocation } })
+    mappings.value = saved.value.mappings.map(row => ({ ...row }))
+  }
+
   function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'responsesMaxDecompressedBodyMiB' | 'accountAutoFreezeThreshold' | 'accountAutoFreezeWindowSeconds' | 'accountAutoFreezeDurationSeconds') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
@@ -114,6 +132,7 @@ export function useSettingsForm() {
       requestedModel,
       upstreamModel: String(upstreamModel),
     }))
+    saved.value = snapshot()
   }
 
   async function loadSettings(silent = false) {
@@ -249,6 +268,8 @@ export function useSettingsForm() {
   return {
     loading,
     saving,
+    hasChanges,
+    resetSettings,
     error,
     form,
     mappings,

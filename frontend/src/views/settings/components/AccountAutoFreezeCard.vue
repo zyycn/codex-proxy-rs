@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { Activity, Gauge, Snowflake, Timer } from '@lucide/vue'
+import { Activity, CircleAlert, Gauge, Snowflake, Timer } from '@lucide/vue'
+import { useId } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 
 const enabled = defineModel<boolean>('enabled', { required: true })
@@ -15,18 +17,19 @@ const durationSeconds = defineModel<string>('durationSeconds', { required: true 
 const probeEnabled = defineModel<boolean>('probeEnabled', { required: true })
 const probeModel = defineModel<string>('probeModel', { required: true })
 const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { required: true })
+const adaptiveConcurrencyHintId = useId()
 </script>
 
 <template>
   <BaseCard
-    title="账号自动冻结"
-    description="容量类错误高频出现时暂停账号调度，在账号管理中显示为限流中"
+    title="过载策略"
+    description="上游繁忙或服务不可用时，使用过载策略保护"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseSwitch
         v-model="enabled"
         class="col-span-full justify-self-start"
-        label="启用自动冻结"
+        label="启用策略"
         show-label
       />
 
@@ -119,16 +122,29 @@ const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { requir
         </BaseInput>
       </BaseFormItem>
 
-      <div class="col-span-full flex flex-wrap items-center gap-x-3 gap-y-2">
+      <div class="col-span-full flex items-center gap-1">
         <BaseCheckbox
           v-model="adaptiveConcurrency"
           :disabled="!enabled"
           label="自适应并发下调"
           show-label
         />
-        <p class="m-0 text-cp-sm leading-5 text-cp-text-secondary">
-          修改账号并发上限，恢复后不自动调高
-        </p>
+        <BasePopover class="-my-1" trigger="hover-click" placement="top-start" :hover-delay="240">
+          <template #trigger="{ open }">
+            <button
+              type="button"
+              class="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-tertiary outline-none transition-colors hover:text-cp-text focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
+              aria-label="自适应并发下调说明"
+              :aria-expanded="open"
+              :aria-describedby="open ? adaptiveConcurrencyHintId : undefined"
+            >
+              <CircleAlert class="size-3.5" aria-hidden="true" />
+            </button>
+          </template>
+          <p :id="adaptiveConcurrencyHintId" role="tooltip" class="m-0 max-w-72 px-3 py-2 text-cp-sm leading-relaxed text-cp-text-secondary">
+            修改账号并发上限，恢复后不自动调高
+          </p>
+        </BasePopover>
       </div>
     </BaseForm>
   </BaseCard>

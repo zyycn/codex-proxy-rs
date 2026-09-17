@@ -13,11 +13,8 @@ const model = defineModel<RotationStrategy | ''>({ required: true })
 </script>
 
 <template>
-  <BaseCard
-    title="调度策略"
-    description="决定每次请求如何调度账号池"
-  >
-    <div class="grid max-w-6xl gap-3 lg:grid-cols-4">
+  <BaseCard title="调度策略">
+    <div class="grid max-w-6xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <button
         v-for="option in options"
         :key="option.value"
@@ -40,7 +37,7 @@ const model = defineModel<RotationStrategy | ''>({ required: true })
               :class="model === option.value ? 'bg-cp-primary opacity-100' : 'opacity-0'"
             />
           </span>
-          <span class="text-cp-lg leading-[1.15] font-heavy">{{ option.label }}</span>
+          <span class="text-cp leading-snug font-emphasis">{{ option.label }}</span>
         </span>
         <span class="mt-2 block text-cp leading-normal font-emphasis text-cp-text-secondary">
           {{ option.description }}
