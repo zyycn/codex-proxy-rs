@@ -43,6 +43,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
+                disable_fast: command.disable_fast,
                 request_location_enabled: command.request_location_enabled,
                 request_location: command.request_location,
                 request_interval_ms: command.request_interval_ms,
@@ -73,6 +74,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "runtime_settings",
                 "1",
                 vec![
+                    "disable_fast".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "model_mappings_json".to_owned(),
@@ -183,6 +185,7 @@ pub(crate) fn admin_runtime_settings(
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         config_revision: admin_revision(settings.config_revision)?,
+        disable_fast: settings.disable_fast,
         request_location_enabled: settings.request_location_enabled,
         request_location: settings.request_location,
         model_mappings,

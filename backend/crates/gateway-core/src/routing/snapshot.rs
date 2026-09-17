@@ -28,6 +28,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    disable_fast: bool,
     request_location_enabled: bool,
     request_location: crate::account::RequestLocation,
     max_concurrent_per_account: u32,
@@ -43,6 +44,12 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
     #[must_use]
     pub const fn with_responses_max_decompressed_body_bytes(mut self, bytes: u64) -> Self {
         self.responses_max_decompressed_body_bytes = bytes;
@@ -83,6 +90,7 @@ impl SnapshotSettingsFacts {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            disable_fast: false,
             request_location_enabled: false,
             request_location: crate::account::RequestLocation::default(),
             max_concurrent_per_account,
@@ -128,6 +136,7 @@ impl SnapshotClientPolicyFacts {
 /// Store 读取到的账号分组事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupFacts {
+    disable_fast: bool,
     id: AccountGroupId,
     name: String,
     enabled: bool,
@@ -135,8 +144,19 @@ pub struct SnapshotAccountGroupFacts {
 
 impl SnapshotAccountGroupFacts {
     #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
+    #[must_use]
     pub fn new(id: AccountGroupId, name: String, enabled: bool) -> Self {
-        Self { id, name, enabled }
+        Self {
+            id,
+            name,
+            enabled,
+            disable_fast: false,
+        }
     }
 }
 
@@ -442,6 +462,7 @@ async fn compile_runtime_snapshot(
     });
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
+        let mut disable_fast = false;
         let account_scope = if policy.group_ids.is_empty() {
             FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -458,6 +479,8 @@ async fn compile_runtime_snapshot(
                 let group = groups
                     .get(&group_id)
                     .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
+                // 禁用分组仅影响选号；Key 仍绑定其 Fast 限制。
+                disable_fast |= group.disable_fast;
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
                     group.name.clone(),
@@ -477,7 +500,7 @@ async fn compile_runtime_snapshot(
         client_policies.push(ClientPolicy::new(
             policy.key_id,
             policy.plaintext_key,
-            Arc::new(account_scope),
+            Arc::new(account_scope.with_disable_fast(disable_fast)),
             true,
             policy.limits,
         ));
@@ -505,6 +528,7 @@ async fn compile_runtime_snapshot(
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
     .map(|snapshot| {
         snapshot
+            .with_disable_fast(facts.settings.disable_fast)
             .with_request_location(request_location)
             .with_responses_max_decompressed_body_bytes(decompressed_body_limit)
             .with_client_queue_policy(client_queue_policy)
@@ -518,6 +542,7 @@ async fn compile_runtime_snapshot(
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    disable_fast: bool,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
     revision: ConfigRevision,
@@ -536,6 +561,12 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
     #[must_use]
     pub const fn responses_max_decompressed_body_bytes(&self) -> usize {
         self.responses_max_decompressed_body_bytes.get()
@@ -640,6 +671,7 @@ impl RuntimeSnapshot {
         Ok(Self {
             responses_max_decompressed_body_bytes: std::num::NonZeroUsize::new(64 * 1024 * 1024)
                 .expect("positive default limit"),
+            disable_fast: false,
             request_location: None,
             revision,
             account_selection_policy,
@@ -951,6 +983,7 @@ impl RuntimeSnapshot {
 
         Ok(RoutingPlan {
             config_revision: self.revision,
+            disable_fast: self.disable_fast || account_scope.disable_fast(),
             request_location: self.request_location.clone(),
             account_selection_policy: self.account_selection_policy,
             operation: operation.kind(),
@@ -993,6 +1026,7 @@ impl RuntimeSnapshot {
         };
         Ok(RoutingPlan {
             config_revision: self.revision,
+            disable_fast: self.disable_fast || account_scope.disable_fast(),
             request_location: self.request_location.clone(),
             account_selection_policy: self.account_selection_policy,
             operation: operation.kind(),

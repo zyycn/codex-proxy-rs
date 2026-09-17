@@ -611,6 +611,21 @@ impl CodexResponsesRequest {
         self.body.get("service_tier").and_then(Value::as_str)
     }
 
+    /// 只覆盖顶层 Fast 请求，显式使用官方标准档退出值。
+    pub(crate) fn apply_fast_policy(&mut self, disable_fast: bool) {
+        if disable_fast
+            && self.service_tier().is_some_and(|tier| {
+                let tier = tier.trim();
+                tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
+            })
+        {
+            self.body.insert(
+                "service_tier".to_owned(),
+                Value::String("default".to_owned()),
+            );
+        }
+    }
+
     /// 前一个 response ID。
     pub fn previous_response_id(&self) -> Option<&str> {
         self.body

@@ -361,6 +361,8 @@ impl Provider for CodexProvider {
         let continuation_requested = generate.native_continuation_requested();
         let mut upstream_request = encode_generate_request(generate, upstream_model.as_str(), None)
             .map_err(map_request_error)?;
+        // 编码已生成独立请求；HTTP、WS 与重试在头部和计量之前共用此策略。
+        upstream_request.apply_fast_policy(context.disable_fast());
         if let Some(conversation_id) = previous_session
             .as_ref()
             .and_then(|state| state.conversation_id.as_ref())

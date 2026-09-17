@@ -719,11 +719,20 @@ fn global_request_location() -> gateway_core::account::RequestLocation {
 }
 
 fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
+    context_with_fast_policy(request_id, cancellation, false)
+}
+
+fn context_with_fast_policy(
+    request_id: &str,
+    cancellation: CancellationToken,
+    disable_fast: bool,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
+        .with_disable_fast(disable_fast)
         .with_request_location(Some(global_request_location())),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
@@ -5325,11 +5334,47 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
 #[tokio::test]
 async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_transports() {
     for use_websocket in [false, true] {
-        for (requested, reported, expected_cost) in [
-            (Some("priority"), Some("default"), 6_875_000),
-            (Some("priority"), None, 6_875_000),
-            (Some("default"), Some("priority"), 3_437_500),
-            (None, Some("priority"), 3_437_500),
+        for (disable_fast, requested, reported, expected_tier, expected_cost) in [
+            (
+                false,
+                Some("priority"),
+                Some("default"),
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                false,
+                Some("priority"),
+                None,
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                false,
+                Some("default"),
+                Some("priority"),
+                Some("default"),
+                Some(3_437_500),
+            ),
+            (false, None, Some("priority"), None, Some(3_437_500)),
+            (
+                true,
+                Some("priority"),
+                Some("priority"),
+                Some("default"),
+                Some(3_437_500),
+            ),
+            (true, Some("fast"), None, Some("default"), Some(3_437_500)),
+            (
+                true,
+                Some("default"),
+                None,
+                Some("default"),
+                Some(3_437_500),
+            ),
+            (true, None, None, None, Some(3_437_500)),
+            (true, Some("flex"), None, Some("flex"), Some(1_720_000)),
+            (true, Some("ultrafast"), None, Some("ultrafast"), None),
         ] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
@@ -5354,7 +5399,21 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                 let base_url = format!("http://{}", listener.local_addr().expect("address"));
                 let server = tokio::spawn(async move {
                     let (socket, _) = listener.accept().await.expect("accept WebSocket");
-                    let mut websocket = accept_codex_test_websocket(socket).await;
+                    let mut websocket = crate::transport::accept_codex_test_websocket_with(
+                        socket,
+                        |request, response| {
+                            let expected_hint = expected_tier.map_or_else(
+                                || "model=gpt-5.4".to_owned(),
+                                |tier| format!("model=gpt-5.4;tier={tier}"),
+                            );
+                            assert_eq!(request.headers()["x-codex-routing-hint"], expected_hint);
+                            response.headers_mut().insert(
+                                "sec-websocket-extensions",
+                                "permessage-deflate".parse().unwrap(),
+                            );
+                        },
+                    )
+                    .await;
                     let request = websocket.next().await.expect("request").expect("frame");
                     let request: Value = serde_json::from_str(request.to_text().expect("text"))
                         .expect("request JSON");
@@ -5383,23 +5442,30 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             let mut body = Map::from_iter([
                 ("model".to_owned(), json!("gpt-5.4")),
                 ("input".to_owned(), json!("hello")),
+                (
+                    "metadata".to_owned(),
+                    json!({"service_tier":"priority","text":"fast priority"}),
+                ),
             ]);
             if let Some(requested) = requested {
                 body.insert("service_tier".to_owned(), json!(requested));
             }
-            let payload = ProtocolPayload::json_object("openai", body)
+            let payload = ProtocolPayload::json_object("openai", body.clone())
                 .expect("payload")
                 .with_context(Map::from_iter([(
                     "use_websocket".to_owned(),
                     json!(use_websocket),
                 )]));
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+            let original = operation.clone();
             let mut stream = provider_with_base_url(&store, base_url)
                 .execute(
-                    planned_request(
-                        "openai",
-                        Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                    planned_request("openai", operation.clone()),
+                    context_with_fast_policy(
+                        "req_service_tier",
+                        CancellationToken::new(),
+                        disable_fast,
                     ),
-                    context("req_service_tier", CancellationToken::new()),
                 )
                 .await
                 .expect("provider stream");
@@ -5423,6 +5489,11 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             let outbound = if let Some(server) = http_server {
                 server.verify().await;
                 let requests = server.received_requests().await.expect("upstream requests");
+                let expected_hint = expected_tier.map_or_else(
+                    || "model=gpt-5.4".to_owned(),
+                    |tier| format!("model=gpt-5.4;tier={tier}"),
+                );
+                assert_eq!(requests[0].headers["x-codex-routing-hint"], expected_hint);
                 captured_request_body(&requests[0])
             } else {
                 websocket_server
@@ -5432,13 +5503,15 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             };
             assert_eq!(
                 outbound.get("service_tier").and_then(Value::as_str),
-                requested
+                expected_tier
             );
+            assert_eq!(operation, original);
+            assert_eq!(outbound["metadata"], body["metadata"]);
             assert!(!observations.is_empty());
             for observation in &observations {
                 assert_eq!(
                     observation.service_tier(),
-                    requested,
+                    expected_tier,
                     "WebSocket={use_websocket}"
                 );
             }
@@ -5453,7 +5526,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             .expect("metadata JSON");
             assert_eq!(
                 metadata.get("requestedServiceTier").and_then(Value::as_str),
-                requested
+                expected_tier
             );
             assert_eq!(
                 metadata.get("upstreamServiceTier").and_then(Value::as_str),
@@ -5461,7 +5534,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             );
             assert_eq!(
                 costs,
-                vec![expected_cost],
+                expected_cost.into_iter().collect::<Vec<_>>(),
                 "WebSocket={use_websocket}, requested={requested:?}, reported={reported:?}"
             );
             assert_eq!(raw_response, response_frames.as_bytes());
@@ -8933,4 +9006,166 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_outbound_tier() {
+    const ACCOUNT: &str = "acct_provider_contract";
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut websocket =
+            crate::transport::accept_codex_test_websocket_with(socket, |request, response| {
+                // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定。
+                assert_eq!(
+                    request.headers()["x-codex-routing-hint"],
+                    "model=gpt-5.4;tier=priority"
+                );
+                response.headers_mut().insert(
+                    "sec-websocket-extensions",
+                    "permessage-deflate".parse().unwrap(),
+                );
+            })
+            .await;
+        for (index, tier) in ["priority", "default", "priority"].into_iter().enumerate() {
+            let message = websocket.next().await.unwrap().unwrap();
+            let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert_eq!(frame["type"], "response.create");
+            assert_eq!(frame["service_tier"], tier);
+            assert_eq!(
+                frame.get("previous_response_id").cloned(),
+                index
+                    .checked_sub(1)
+                    .map(|previous| json!(format!("resp_fast_turn_{previous}")))
+            );
+            websocket.send(Message::Text(json!({
+                "type":"response.created", "response":{"id":format!("resp_fast_turn_{index}"),"model":"gpt-5.4"}
+            }).to_string().into())).await.unwrap();
+            websocket.send(Message::Text(json!({
+                "type":"response.completed", "response":{
+                    "id":format!("resp_fast_turn_{index}"), "model":"gpt-5.4", "status":"completed", "output":[],
+                    "service_tier":"priority", "usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25,"cache_write_tokens":0},"total_tokens":110}
+                }
+            }).to_string().into())).await.unwrap();
+        }
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "all three turns must use the same upstream connection"
+        );
+    });
+    let provider = provider_with_base_url(&store, base_url);
+    let mut session_state = ProviderSessionState::new(
+        "openai",
+        Map::from_iter([
+            ("account_id".to_owned(), json!(ACCOUNT)),
+            (
+                "conversation_id".to_owned(),
+                json!("fast-policy-continuation"),
+            ),
+            ("continuation_scope".to_owned(), json!("connection_local")),
+        ]),
+    )
+    .unwrap();
+    for (index, disable_fast) in [false, true, false].into_iter().enumerate() {
+        let previous = index
+            .checked_sub(1)
+            .map(|index| format!("resp_fast_turn_{index}"));
+        let mut body = json!({"model":"gpt-5.4","input":"next turn","service_tier":"priority"});
+        if let Some(previous) = &previous {
+            body["previous_response_id"] = json!(previous);
+        }
+        let operation = Operation::Generate(
+            GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
+            )
+            .with_provider_session_state(session_state.clone()),
+        );
+        let account = ProviderAccountId::new(ACCOUNT).unwrap();
+        let provider_kind = ProviderKind::new("openai").unwrap();
+        let key = ClientApiKeyId::new("key_openai_contract").unwrap();
+        let binding = previous.as_ref().map(|previous| {
+            ContinuationBinding::Pinned(NativeContinuationPin::new(
+                PreviousResponseId::new(previous),
+                PreviousResponseId::new(previous),
+                key.clone(),
+                provider_kind.clone(),
+                account.clone(),
+            ))
+        });
+        let context = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new(format!("req_fast_turn_{index}")).unwrap(),
+                key,
+            )
+            .with_disable_fast(disable_fast),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy(),
+            AccountAttemptContext::new(
+                BTreeSet::new(),
+                None,
+                Some(ProviderAccountStateOwner::new(provider_kind, account)),
+            )
+            .with_account_scope(contract_account_scope()),
+            binding,
+            CancellationToken::new(),
+        )
+        .with_continuation_attempt(if previous.is_some() {
+            ContinuationAttempt::Native
+        } else {
+            ContinuationAttempt::None
+        });
+        let mut stream = provider
+            .execute(planned_request("openai", operation), context)
+            .await
+            .unwrap();
+        let mut costs = Vec::new();
+        let mut pool = None;
+        let mut observed_tier = None;
+        while let Some(event) = timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+        {
+            let event = event.unwrap();
+            if let Some(update) = event.session_update() {
+                session_state = update.clone();
+            }
+            if let Some(observation) = event.response_observation() {
+                pool = observation.websocket_pool().or(pool);
+                observed_tier = observation
+                    .service_tier()
+                    .map(str::to_owned)
+                    .or(observed_tier);
+            }
+            for fact in event.canonical_facts() {
+                if let GatewayEvent::CalculatedCost(cost) = fact {
+                    costs.push(cost.total().amount().scaled());
+                }
+            }
+        }
+        assert_eq!(
+            pool,
+            Some(if index == 0 {
+                WebSocketPoolKind::New
+            } else {
+                WebSocketPoolKind::Reuse
+            })
+        );
+        assert_eq!(
+            observed_tier.as_deref(),
+            Some(if disable_fast { "default" } else { "priority" })
+        );
+        assert_eq!(
+            costs,
+            vec![if disable_fast { 3_437_500 } else { 6_875_000 }]
+        );
+    }
+    server.await.unwrap();
 }

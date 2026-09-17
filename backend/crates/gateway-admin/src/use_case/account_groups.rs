@@ -144,6 +144,7 @@ impl AccountGroupService for DefaultAccountGroupService {
                         id,
                         name: command.name,
                         description: command.description,
+                        disable_fast: command.disable_fast,
                         color: command.color,
                     },
                     context,

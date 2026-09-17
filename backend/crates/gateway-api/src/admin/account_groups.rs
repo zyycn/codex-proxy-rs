@@ -72,6 +72,8 @@ impl ListAccountGroupsQuery {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateAccountGroupRequest {
+    #[serde(default)]
+    disable_fast: bool,
     name: String,
     description: Option<String>,
     color: String,
@@ -80,6 +82,7 @@ struct CreateAccountGroupRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateAccountGroupRequest {
+    disable_fast: Option<bool>,
     id: String,
     name: String,
     description: Option<String>,
@@ -95,6 +98,7 @@ struct AccountGroupIdRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountGroupView {
+    disable_fast: bool,
     id: String,
     name: String,
     description: Option<String>,
@@ -138,6 +142,7 @@ impl From<AccountGroupRecord> for AccountGroupView {
             id: record.id.to_string(),
             name: record.name,
             description: record.description,
+            disable_fast: record.disable_fast,
             color: record.color.as_str().to_owned(),
             enabled: record.enabled,
             member_count: record.member_count,
@@ -273,6 +278,7 @@ where
                 CreateAccountGroup {
                     name: request.name,
                     description: request.description,
+                    disable_fast: request.disable_fast,
                     color: group_color(&request.color)?,
                 },
             )
@@ -300,6 +306,7 @@ where
                     id: group_id(request.id)?,
                     name: request.name,
                     description: request.description,
+                    disable_fast: request.disable_fast,
                     color: group_color(&request.color)?,
                 },
             )

@@ -595,6 +595,15 @@ fn plan_with_location(
     account_selection_policy: AccountSelectionPolicy,
     request_location: gateway_core::account::RequestLocation,
 ) -> RoutingPlan {
+    plan_with_location_and_fast_policy(operation, account_selection_policy, request_location, false)
+}
+
+fn plan_with_location_and_fast_policy(
+    operation: &Operation,
+    account_selection_policy: AccountSelectionPolicy,
+    request_location: gateway_core::account::RequestLocation,
+    disable_fast: bool,
+) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
@@ -636,6 +645,7 @@ fn plan_with_location(
         Vec::new(),
     )
     .expect("snapshot")
+    .with_disable_fast(disable_fast)
     .with_request_location(Some(request_location))
     .with_account_directory(Arc::clone(&directory));
     snapshot
@@ -4528,16 +4538,17 @@ fn deadline_before_first_event_records_no_provider_circuit_failure() {
 }
 
 #[test]
-fn global_request_location_should_reach_every_account_retry() {
+fn global_location_and_fast_policy_reach_every_account_retry() {
     let operation = generate_operation();
     let location = gateway_core::account::RequestLocation {
         timezone: "Asia/Tokyo".parse().unwrap(),
         ..Default::default()
     };
-    let route_plan = plan_with_location(
+    let route_plan = plan_with_location_and_fast_policy(
         &operation,
         plan(&operation).account_selection_policy(),
         location.clone(),
+        true,
     );
     let (coordinator, _, provider) = coordinator(vec![
         Script::Stream {
@@ -4570,6 +4581,6 @@ fn global_request_location_should_reach_every_account_retry() {
     assert!(
         contexts
             .iter()
-            .all(|context| context.request_location() == Some(&location))
+            .all(|context| context.request_location() == Some(&location) && context.disable_fast())
     );
 }

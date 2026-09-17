@@ -202,6 +202,7 @@ impl AccountRuntimeStore for FakeRuntimeStore {
 fn group_record() -> AccountGroupRecord {
     let now = Utc::now();
     AccountGroupRecord {
+        disable_fast: false,
         id: group_id(),
         name: "Primary".to_owned(),
         description: None,

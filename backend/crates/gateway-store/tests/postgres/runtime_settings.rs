@@ -9,6 +9,7 @@ use super::TestDatabase;
 
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
+        disable_fast: None,
         request_location_enabled: false,
         request_location: Default::default(),
         admin_api_key: None,
@@ -426,6 +427,32 @@ async fn decompression_setting_should_persist_and_reach_snapshot_facts() {
                 .config_revision,
             reloaded.config_revision
         );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn disable_fast_persists_and_omitted_updates_preserve_the_restriction() {
+    let Some(database) = TestDatabase::create("disable_fast_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let initial = repository.load_runtime_settings().await.unwrap();
+    assert!(!initial.disable_fast);
+    for (value, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+        let mut update = settings_with_margin(1_800);
+        update.disable_fast = value;
+        let revision = repository.update_runtime_settings(update).await.unwrap();
+        let reloaded = repository.load_runtime_settings().await.unwrap();
+        assert_eq!(reloaded.disable_fast, expected);
+        assert_eq!(reloaded.config_revision, revision);
+        use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+        let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.settings.disable_fast, expected);
+        assert_eq!(snapshot.config_revision, revision);
     }
     database.close().await;
 }

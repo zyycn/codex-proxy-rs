@@ -247,17 +247,31 @@ impl ClientRoutingScope {
 /// 一次认证随 RuntimeSnapshot 冻结的账号目录与 Key 权限。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
+    disable_fast: bool,
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
 }
 
 impl FrozenAccountScope {
+    /// Key 绑定分组的冻结 Fast 限制，与账号成员资格无关。
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
+    #[must_use]
+    pub const fn disable_fast(&self) -> bool {
+        self.disable_fast
+    }
+
     #[must_use]
     pub const fn new(
         directory: Arc<RuntimeAccountDirectory>,
         client_scope: ClientRoutingScope,
     ) -> Self {
         Self {
+            disable_fast: false,
             directory,
             client_scope,
         }

@@ -21,6 +21,7 @@ export function useSettingsForm() {
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const savedRequestLocation = shallowRef<RequestLocation>()
   const form = reactive({
+    disableFast: false,
     requestLocationEnabled: false,
     requestLocation: { country: '', region: '', city: '', timezone: '' },
     refreshMarginSeconds: null as number | null,
@@ -84,6 +85,7 @@ export function useSettingsForm() {
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     savedRequestLocation.value = { ...data.requestLocation }
+    form.disableFast = data.disableFast
     form.requestLocationEnabled = data.requestLocationEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -208,6 +210,7 @@ export function useSettingsForm() {
     }
     await saveAction.run(async () => {
       const result = await updateSettings({
+        disableFast: form.disableFast,
         requestLocationEnabled: form.requestLocationEnabled,
         requestLocation,
         modelMappings: mappingPayload(),

@@ -483,7 +483,9 @@ fn detached_early_failure_resumes_cancelled_store_write_and_settles_once_for_all
     });
 }
 
+#[derive(Default)]
 struct ChargedProvider {
+    policies: Mutex<Vec<bool>>,
     fail: bool,
 }
 
@@ -510,8 +512,9 @@ impl Provider for ChargedProvider {
     async fn execute(
         &self,
         request: ProviderRequest,
-        _: AttemptContext,
+        context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
+        self.policies.lock().unwrap().push(context.disable_fast());
         let candidate = request.candidate();
         let metadata = ProviderCallMetadata::new(
             candidate.provider().clone(),
@@ -552,7 +555,11 @@ fn charged_service(
     let service = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(start_snapshot()),
         Arc::new(TrackingExecutionStore::default()),
-        ProviderRegistry::new([Arc::new(ChargedProvider { fail }) as Arc<dyn Provider>]).unwrap(),
+        ProviderRegistry::new([Arc::new(ChargedProvider {
+            fail,
+            ..Default::default()
+        }) as Arc<dyn Provider>])
+        .unwrap(),
         admissions,
         Arc::new(UnusedCircuits),
         Arc::new(UnusedContinuation),
@@ -2239,4 +2246,33 @@ fn cancelling_pending_admission_cleans_up_a_slot_acquired_before_the_reply() {
     assert_eq!(admissions.active.lock().unwrap().len(), 1);
     drop(pending);
     assert!(admissions.active.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reused_websocket_client_gets_fast_policy_from_each_new_request_snapshot() {
+    let snapshots = RuntimeSnapshotHandle::new(start_snapshot());
+    let admissions = Arc::new(Admissions::default());
+    let provider = Arc::new(ChargedProvider::default());
+    let service = DefaultExecutionService::new(
+        snapshots.clone(),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).unwrap(),
+        admissions,
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service.authenticate("sk_start_test").unwrap();
+    for (revision, disable_fast) in [(2, true), (3, false)] {
+        snapshots.publish(
+            start_snapshot_with_policy(revision, true, RateLimits::unlimited())
+                .with_disable_fast(disable_fast),
+        );
+        let mut next = request(&service, ClientTransport::WebSocket);
+        next.client = client.clone();
+        let mut started = block_on(service.start(next)).unwrap();
+        block_on(started.session.collect_uncommitted()).unwrap();
+        block_on(started.session.detach_finalize());
+    }
+    assert_eq!(*provider.policies.lock().unwrap(), vec![true, false]);
 }

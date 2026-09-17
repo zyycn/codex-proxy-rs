@@ -133,6 +133,7 @@ watch(
       />
 
       <RuntimeSettingsCard
+        v-model:disable-fast="form.disableFast"
         v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
         v-model:refresh-margin-seconds="refreshMarginSecondsValue"
         v-model:refresh-concurrency="refreshConcurrencyValue"
@@ -141,6 +142,7 @@ watch(
         v-model:max-waiting-per-account="maxWaitingPerAccountValue"
         v-model:concurrency-wait-timeout-seconds="concurrencyWaitTimeoutSecondsValue"
         v-model:responses-max-decompressed-body-mi-b="responsesMaxDecompressedBodyMiBValue"
+        :disabled="loading || saving || Boolean(error)"
       />
 
       <RequestLocationCard v-model="form.requestLocation" v-model:enabled="form.requestLocationEnabled" :disabled="loading || saving" />

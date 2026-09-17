@@ -5,6 +5,11 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
+
+defineProps<{ disabled: boolean }>()
+
+const disableFast = defineModel<boolean>('disableFast', { required: true })
 
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
@@ -96,6 +101,16 @@ const responsesMaxDecompressedBodyMiB = defineModel<string>('responsesMaxDecompr
             MiB
           </template>
         </BaseInput>
+      </BaseFormItem>
+      <BaseFormItem
+        description="开启后，所有 Fast 请求改用普通模式继续处理；优先于分组设置。关闭后仍遵循分组限制。"
+      >
+        <BaseSwitch
+          v-model="disableFast"
+          label="关闭 Fast"
+          show-label
+          :disabled="disabled"
+        />
       </BaseFormItem>
       <div class="col-span-full grid gap-4 pt-4 sm:grid-cols-2">
         <BaseFormItem label="每个密钥最大排队数" description="所有密钥使用此上限，各自独立计数；0 表示不排队">

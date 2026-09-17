@@ -99,9 +99,17 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
             </template>
             <template #identity="{ row }">
               <div class="grid min-w-0 gap-1">
-                <strong class="truncate text-cp text-cp-text">
-                  {{ row.name }}
-                </strong>
+                <div class="flex min-w-0 flex-wrap items-center gap-2">
+                  <strong class="truncate text-cp text-cp-text">
+                    {{ row.name }}
+                  </strong>
+                  <span
+                    v-if="row.disableFast"
+                    class="inline-flex h-6 shrink-0 items-center rounded-lg bg-cp-fill-tertiary px-2 text-cp-xs font-bold text-cp-text-secondary"
+                  >
+                    Fast 已关闭
+                  </span>
+                </div>
                 <span class="truncate text-cp-xs font-emphasis text-cp-text-quaternary">
                   {{ row.description || '未填写描述' }}
                 </span>

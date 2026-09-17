@@ -272,3 +272,27 @@ async fn response_json(response: axum::response::Response) -> Value {
         .expect("account group response body");
     serde_json::from_slice(&body).expect("account group response JSON")
 }
+
+#[tokio::test]
+async fn disable_fast_group_updates_preserve_omitted_values() {
+    let fixture = authenticated_fixture().await;
+    for (value, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+        let mut body = json!({"id": PRIMARY_GROUP_ID, "name":"Policy", "description":null,"color":"#F43F5ECC"});
+        if let Some(value) = value {
+            body["disableFast"] = json!(value);
+        }
+        let response = request(
+            router(&fixture),
+            Method::POST,
+            "/api/admin/account-groups/update",
+            Some(body),
+            true,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["data"]["record"]["disableFast"],
+            expected
+        );
+    }
+}

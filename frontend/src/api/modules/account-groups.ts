@@ -25,6 +25,7 @@ export interface AccountGroupUsage {
 }
 
 export interface AccountGroup extends AccountGroupRef {
+  disableFast: boolean
   description: string | null
   memberCount: number
   providerCounts: Record<string, number>
@@ -63,12 +64,14 @@ interface AccountGroupListParams {
 }
 
 interface AccountGroupCreateParam {
+  disableFast?: boolean
   name: string
   description: string | null
   color: string
 }
 
 interface AccountGroupUpdateParam {
+  disableFast?: boolean
   id: string
   name: string
   description: string | null

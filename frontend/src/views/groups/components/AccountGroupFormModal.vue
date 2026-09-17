@@ -9,6 +9,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
@@ -23,7 +24,7 @@ const open = defineModel<boolean>({ required: true })
 const form = defineModel<AccountGroupFormValue>('form', { required: true })
 const title = computed(() => props.group ? '编辑分组' : '创建分组')
 const description = computed(() => props.group
-  ? '修改分组名称和用途说明。'
+  ? '修改分组名称、用途说明和 Fast 限制。'
   : '创建后，可在账号管理中将账号加入这个分组。')
 </script>
 
@@ -58,6 +59,14 @@ const description = computed(() => props.group
           aria-label="分组描述"
           :rows="4"
           placeholder="说明这个分组的用途..."
+          :disabled="saving"
+        />
+      </BaseFormItem>
+      <BaseFormItem description="开启后，绑定本分组的密钥将以普通模式处理 Fast 请求。任一绑定分组或全局关闭 Fast 时，限制均生效。">
+        <BaseSwitch
+          v-model="form.disableFast"
+          label="关闭 Fast"
+          show-label
           :disabled="saving"
         />
       </BaseFormItem>
