@@ -202,7 +202,8 @@ OAuth 与 API Key 共用业务请求、响应和能力透传链路，差异限�
 OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配置的模型权限仍由 Core 与选号链路执行。
 
 - OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
-  Search 的业务正文按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。
+  Search 的业务正文按原始字节转发，原生续写额度恢复遵循下述 continuation 例外。
+  canonical facts 从同一数据旁路提取，用于路由、恢复判断、观测和计费。
 - Responses 的业务扩展头保留原始多值字节。API 负责剥离鉴权、账号身份和 HTTP 传输字段，
   并提取会话语义；`gateway-protocol` 共享 HTTP 传输与网关链路字段分类。客户端兼容规则集中在
   `providers/openai/src/transport/downstream/`：`headers.rs` 管理下游环境头和已提取语义的头部别名，
@@ -281,7 +282,8 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 错误信息按用途分成三层，不能用同一个 `message` 同时承担协议、界面和诊断职责：
 
 1. **数据面协议错误**：`/v1/*` 继续遵守 OpenAI/xAI wire 合同。可交付原始上游响应时保留其状态、headers、
-   content type 和 body；本地 fallback 使用数据面稳定机器码与安全英文，不受管理端中文化影响。
+   content type 和 body；原生续写额度恢复由 Provider 单独投影客户端响应，真实上游事实仍用于诊断和记账。
+   本地 fallback 使用数据面稳定机器码与安全英文，不受管理端中文化影响。
 2. **控制面展示错误**：`/api/admin/*` 由 API 统一 HTTP 状态与数值业务码，由 Admin/API owner 提供安全中文
    文案。extractor rejection、namespace 404 和 method 405 也使用同一 JSON 信封；任意 Store、Serde、
    Provider `Display` 不得直接跨越 HTTP 边界。
@@ -340,6 +342,9 @@ Client Key 与账号分组形成授权范围：
 Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/交付边界约束：
 
 - native continuation 固定创建它的 Provider 与账号；
+- OpenAI 在交付前收到可安全重放的明确额度拒绝时，先隔离账号，再投影 `ClientReplayRequired`；
+  丢弃未交付的原错误帧，由客户端提交完整历史开启新链，不把原增量输入交给其他账号。
+  真实错误分类、状态码、发送状态和上游诊断保持不变，客户端合同见 [Responses API](api.md#3-openai-数据面与模型目录)；
 - OpenAI 按 native → replay owner → replay any 推进，并保留官方 `previous_response_id` 语义；
 - xAI 使用客户端提交的完整历史作为重放输入；
 - scope 外账号、跨 Key 复用或不明确发送结果均 fail closed。

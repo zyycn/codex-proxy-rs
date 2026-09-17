@@ -216,7 +216,8 @@ OAuth 账号在客户端使用 HTTP/SSE 时仍可能选择上游 WebSocket。API
 WebSocket 在尚未交付上游业务事件时合成的错误保留已确认的失败状态，以及 Provider 提取的结构化
 message/type/code；没有结构化错误时使用稳定安全文案，不把原始 HTML 或截断正文当作 message。
 合成错误自身的 `headers` 携带允许下发的响应头：优先保留实际失败的上游 request ID，无上游 ID 时
-提供网关关联 ID，并用 `x-gateway-request-id` 独立标识网关请求。已经取得的原始上游错误帧不重写。
+提供网关关联 ID，并用 `x-gateway-request-id` 独立标识网关请求。除下述原生续写额度恢复外，
+已经取得的原始上游错误帧不重写。
 客户端可能对特定状态另行统一展示；这不构成网关改写真实状态码的理由。
 
 `GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
@@ -250,8 +251,9 @@ Codex 专用目录中的 `context_window` 与 `max_context_window` 分别表示�
 
 OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段和字段顺序保持不变（受控模型
 映射除外），HTTP SSE 与 WebSocket 的上游业务事件字节原样转发，response ID 按 opaque 值处理而不
-假设 UUID 或固定长度；OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical
-观测结果重写。Images 请求不读取或重建 JSON，也不要求或映射模型字段；它固定使用 OpenAI Provider，
+假设 UUID 或固定长度；除下述原生续写额度恢复外，OpenAI 上游错误 envelope 和允许下发的 opaque
+header 值也不由 canonical 观测结果重写。Images 请求不读取或重建 JSON，也不要求或映射模型字段；
+它固定使用 OpenAI Provider，
 只在原始字节之外完成账号选择、鉴权头替换和端点路由，成功与失败响应正文同样保持原始字节。
 `/v1/alpha/search` 使用相同的 OpenAI Provider 原生端点边界：body（包括 `model`）不解析、不映射，
 `x-codex-turn-metadata` 在移除客户端账号身份并按当前 lease 重写 installation ID 后转发；上游账号
@@ -270,6 +272,13 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 最终交付的上游错误仍按上述透明边界保留原始状态码、错误码和正文。
 明确额度耗尽触发账号隔离与安全换号，
 包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待。
+
+带 `previous_response_id` 的 OpenAI 原生续写仍绑定原账号。若该账号明确拒绝请求且额度已耗尽，
+并且请求可安全重放、尚无语义输出且未提交下游，网关隔离该账号，对客户端返回 HTTP `400`
+（WebSocket 为 `status: 400`）及 `previous_response_not_found`，不附带额度窗口的 `Retry-After`。
+支持该恢复协议的客户端应去掉 `previous_response_id`、携带完整历史重试，由正常调度选择可用账号；
+官方 Codex 的 WebSocket 客户端支持这一流程。其他客户端需要自行处理，网关不会跨账号发送原增量输入。
+普通限流、容量不足、发送结果不明以及已经交付输出的失败不触发此转换。
 
 ## 4. 浏览器认证
 

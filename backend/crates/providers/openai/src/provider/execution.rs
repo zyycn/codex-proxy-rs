@@ -661,7 +661,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 }
                 apply_failure(&failure_context, &active_account, &failure)
                 .await;
-                Err(failure.error)?;
+                Err(quota_continuation_replay_error(
+                    failure.error,
+                    &request,
+                    ReplayBoundary::BeforeSemanticOutput,
+                ))?;
                 return;
             }
         };
@@ -847,7 +851,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     }
                     apply_failure(&failure_context, &active_account, &failure)
                     .await;
-                    Err(failure.error)?;
+                    Err(quota_continuation_replay_error(
+                        failure.error,
+                        &request,
+                        ReplayBoundary::from_semantic_output(pre_commit_events.is_committed()),
+                    ))?;
                     return;
                 }
             };
@@ -974,7 +982,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         .error
                         .with_atomic_client_events(pre_commit_events.take_for_failure(events));
                 }
-                Err(failure.error)?;
+                Err(quota_continuation_replay_error(
+                    failure.error,
+                    &request,
+                    ReplayBoundary::from_semantic_output(failure_after_commit),
+                ))?;
                 return;
             }
             let events = pre_commit_events.stage(events, timing_signals, completed);
@@ -1101,7 +1113,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     .error
                     .with_atomic_client_events(pre_commit_events.take_for_failure(events));
             }
-            Err(failure.error)?;
+            Err(quota_continuation_replay_error(
+                failure.error,
+                &request,
+                ReplayBoundary::from_semantic_output(failure_after_commit),
+            ))?;
             return;
         }
         let events = pre_commit_events.finish(events, timing_signals, completed);

@@ -615,3 +615,33 @@ mod model_routing {
         );
     }
 }
+
+#[tokio::test]
+async fn quota_recovery_http_response_uses_projection_without_replacing_upstream_facts() {
+    use bytes::Bytes;
+    use gateway_core::error::{ClientVisibleUpstreamResponse, OpaqueUpstreamValue};
+    let body = Bytes::from_static(br#"{"error":{"code":"previous_response_not_found","type":"invalid_request_error","message":"Previous response was not found. Retrying the full request."}}"#);
+    let provider = ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
+        .with_status(429)
+        .with_upstream_code(OpaqueUpstreamValue::new("usage_limit_reached"))
+        .with_retry_after(std::time::Duration::from_secs(129_600))
+        .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+            400,
+            Some(b"application/json".to_vec()),
+            body.clone(),
+        ));
+    let error = EngineError::Provider(provider);
+    let response = gateway_api::openai::error::engine_error_response(&error);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["content-type"], "application/json");
+    assert!(!response.headers().contains_key("retry-after"));
+    assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), body);
+    let EngineError::Provider(provider) = error else {
+        unreachable!()
+    };
+    assert_eq!(provider.upstream_status(), Some(429));
+    assert_eq!(
+        provider.upstream_code().unwrap().as_str(),
+        "usage_limit_reached"
+    );
+}

@@ -447,3 +447,29 @@ async fn deliverable_business_failures_are_not_rewritten_or_followed_by_a_second
         socket.close(None).await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn initial_quota_recovery_delivers_client_projection_instead_of_upstream_status() {
+    let detail = json!({"message":"Previous response was not found. Retrying the full request.","code":"previous_response_not_found","type":"invalid_request_error"});
+    let provider = ProviderError::new(ProviderErrorKind::QuotaExhausted, UpstreamSendState::Sent)
+        .with_status(429)
+        .with_retry_after(Duration::from_secs(129_600))
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            detail["message"].as_str().unwrap(),
+            Some("previous_response_not_found".to_owned()),
+            Some("invalid_request_error".to_owned()),
+        ))
+        .with_client_visible_upstream_response(
+            ClientVisibleUpstreamResponse::new(
+                400,
+                Some(b"application/json".to_vec()),
+                Bytes::from(json!({"error":detail}).to_string()),
+            )
+            .with_headers(vec![header("x-request-id", b"req-quota-rejected")]),
+        );
+    let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+    assert_eq!(error["status"], 400);
+    assert_eq!(error["error"], detail);
+    assert_eq!(error["headers"]["x-request-id"], "req-quota-rejected");
+    assert!(error["headers"].get("retry-after").is_none());
+}
