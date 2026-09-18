@@ -30,7 +30,10 @@ async fn artifact_profile_uses_one_expiring_key_and_rejects_rollback_or_conflict
             .expect("store current profile")
     );
     assert_eq!(
-        repository.read(&provider).await.expect("read profile"),
+        repository
+            .read(&provider, "desktop-macos-arm64")
+            .await
+            .expect("read profile"),
         Some(current.clone())
     );
 
@@ -53,10 +56,35 @@ async fn artifact_profile_uses_one_expiring_key_and_rejects_rollback_or_conflict
     assert_eq!(conflict.kind(), ProviderStoreErrorKind::Conflict);
     assert_eq!(
         repository
-            .read(&provider)
+            .read(&provider, "desktop-macos-arm64")
             .await
             .expect("read retained profile"),
         Some(current)
+    );
+
+    let other = ProviderArtifactProfile::new(
+        provider.clone(),
+        "cli-linux-x64".to_owned(),
+        1,
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+        OpaqueProviderData::new(
+            serde_json::json!({"version":"0.155.0"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+    );
+    repository
+        .replace_if_newer(other.clone(), Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.read(&provider, "cli-linux-x64").await.unwrap(),
+        Some(other)
+    );
+    assert_eq!(
+        repository.read(&provider, "cli-win32-x64").await.unwrap(),
+        None
     );
 
     let keys = redis::cmd("KEYS")
@@ -64,13 +92,12 @@ async fn artifact_profile_uses_one_expiring_key_and_rejects_rollback_or_conflict
         .query_async::<Vec<String>>(&mut connection)
         .await
         .expect("list isolated keys");
-    assert_eq!(keys.len(), 1);
-    assert_eq!(
-        keys[0],
-        format!("{namespace}:provider:openai:artifact-profile:v1")
-    );
+    assert_eq!(keys.len(), 2);
+    let desktop_key =
+        format!("{namespace}:provider:openai:artifact-profile:v2:desktop-macos-arm64");
+    assert!(keys.contains(&desktop_key));
     let ttl = redis::cmd("PTTL")
-        .arg(&keys[0])
+        .arg(&desktop_key)
         .query_async::<i64>(&mut connection)
         .await
         .expect("read profile TTL");
@@ -90,6 +117,7 @@ fn profile(
     );
     ProviderArtifactProfile::new(
         provider,
+        "desktop-macos-arm64".to_owned(),
         artifact_sequence,
         SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
         OpaqueProviderData::new(fields),

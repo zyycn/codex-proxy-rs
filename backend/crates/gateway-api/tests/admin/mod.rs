@@ -402,6 +402,7 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<RuntimeSettings> {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
+            openai_client_profile: None,
             disable_fast: command.disable_fast.unwrap_or(settings.disable_fast),
             request_location_enabled: command.request_location_enabled,
             request_location: command.request_location,
@@ -745,6 +746,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
         let now = Utc::now();
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
+                openai_client_profile_override: None,
                 budget: Default::default(),
                 id: id.clone(),
                 name: "revealed".to_owned(),
@@ -1278,6 +1280,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        openai_client_profile: None,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),

@@ -1,5 +1,6 @@
 import type { rotationOptions } from '../constants'
 import type { RequestLocation } from '@/api'
+import type { ClientProfileSelection } from '@/api/modules/client-profiles'
 import { computed, reactive, ref, shallowRef } from 'vue'
 
 import { getSettings, updateSettings } from '@/api'
@@ -21,6 +22,7 @@ export function useSettingsForm() {
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const savedRequestLocation = shallowRef<RequestLocation>()
   const form = reactive({
+    openaiClientProfile: null as ClientProfileSelection | null,
     disableFast: false,
     requestLocationEnabled: false,
     requestLocation: { country: '', region: '', city: '', timezone: '' },
@@ -117,6 +119,7 @@ export function useSettingsForm() {
 
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
+    form.openaiClientProfile = data.openaiClientProfile
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
@@ -182,7 +185,7 @@ export function useSettingsForm() {
   }
 
   async function saveSettings() {
-    if (saving.value || loading.value || !savedRequestLocation.value)
+    if (saving.value || loading.value || !savedRequestLocation.value || !form.openaiClientProfile)
       return
     const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
     if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
@@ -227,8 +230,10 @@ export function useSettingsForm() {
       toast.warning('探测模型名称不能超过 128 个字符')
       return
     }
+    const openaiClientProfile = form.openaiClientProfile
     await saveAction.run(async () => {
       const result = await updateSettings({
+        openaiClientProfile,
         disableFast: form.disableFast,
         requestLocationEnabled: form.requestLocationEnabled,
         requestLocation,

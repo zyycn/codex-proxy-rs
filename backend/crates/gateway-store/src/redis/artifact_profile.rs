@@ -35,7 +35,7 @@ redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return 1
 "#;
 
-/// 每个 Provider 只占一个覆盖写 key；TTL 负责进程长期停机后的最终清理。
+/// 每个 Provider 的各制品使用独立覆盖写 key；TTL 负责进程长期停机后的最终清理。
 #[derive(Clone)]
 pub struct RedisProviderArtifactProfileRepository {
     connection: ConnectionManager,
@@ -50,11 +50,12 @@ impl RedisProviderArtifactProfileRepository {
         })
     }
 
-    fn key(&self, provider_kind: &ProviderKind) -> String {
+    fn key(&self, provider_kind: &ProviderKind, artifact_key: &str) -> String {
         format!(
-            "{}:provider:{}:artifact-profile:v1",
+            "{}:provider:{}:artifact-profile:v2:{}",
             self.namespace,
-            provider_kind.as_str()
+            provider_kind.as_str(),
+            artifact_key
         )
     }
 }
@@ -66,6 +67,7 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
         ttl: Duration,
     ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
+            validate_artifact_key(profile.artifact_key())?;
             let artifact_sequence = profile.artifact_sequence();
             if artifact_sequence == 0 || artifact_sequence > MAX_REDIS_EXACT_INTEGER {
                 return Err(provider_invalid("validate artifact profile sequence"));
@@ -88,7 +90,7 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
 
             let mut connection = self.connection.clone();
             let outcome = Script::new(REPLACE_SCRIPT)
-                .key(self.key(profile.provider_kind()))
+                .key(self.key(profile.provider_kind(), profile.artifact_key()))
                 .arg(artifact_sequence)
                 .arg(verified_at_ms)
                 .arg(payload)
@@ -111,12 +113,14 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
     fn read<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
+        artifact_key: &'a str,
     ) -> futures::future::BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>>
     {
         Box::pin(async move {
             let mut connection = self.connection.clone();
+            validate_artifact_key(artifact_key)?;
             let values: (Option<u64>, Option<u64>, Option<Vec<u8>>) = redis::cmd("HMGET")
-                .arg(self.key(provider_kind))
+                .arg(self.key(provider_kind, artifact_key))
                 .arg("artifact_sequence")
                 .arg("verified_at_ms")
                 .arg("profile")
@@ -148,6 +152,7 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
                 .ok_or_else(|| provider_invalid("decode artifact profile timestamp"))?;
             Ok(Some(ProviderArtifactProfile::new(
                 provider_kind.clone(),
+                artifact_key.to_owned(),
                 artifact_sequence,
                 verified_at,
                 OpaqueProviderData::new(fields),
@@ -172,4 +177,16 @@ fn provider_unavailable(operation: &'static str) -> ProviderStoreError {
 
 fn provider_invalid(operation: &'static str) -> ProviderStoreError {
     ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
+}
+
+fn validate_artifact_key(key: &str) -> Result<(), ProviderStoreError> {
+    if key.is_empty()
+        || key.len() > 128
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(provider_invalid("validate artifact profile key"));
+    }
+    Ok(())
 }

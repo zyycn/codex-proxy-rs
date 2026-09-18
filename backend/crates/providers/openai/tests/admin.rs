@@ -74,7 +74,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 5);
+    assert_eq!(contributions.len(), 7);
     assert!(
         contributions
             .iter()
@@ -102,6 +102,8 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     };
     assert_eq!(schedule.interval(), APPCAST_POLL_INTERVAL);
     for (owner, interval) in [
+        ("openai-cli-release", APPCAST_POLL_INTERVAL),
+        ("openai-platform-desktop-release", APPCAST_POLL_INTERVAL),
         ("openai", Duration::from_secs(30)),
         (
             "openai-model-catalog",
@@ -294,7 +296,14 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
         .await
         .expect("OpenAI bundle");
     let admin = bundle.admin_provider();
-    let profile = admin.dashboard_wire_profile().expect("wire profile");
+    let baseline = admin.dashboard_wire_profile().expect("official baseline");
+    assert_eq!(
+        baseline.release.as_ref().map(|release| release.status),
+        Some(DesktopReleaseStatus::Unchecked)
+    );
+    let profile = admin
+        .configured_wire_profile(&config.config.initial_client_profile().unwrap())
+        .expect("imported fixed profile");
     assert_eq!(profile.version, "0.102.0");
     assert_eq!(profile.build, None);
     assert_eq!(profile.target.os_type, "Mac OS");
@@ -311,10 +320,7 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
             .map(|attribute| attribute.value.as_str()),
         Some("Codex Desktop; 1.2026.190")
     );
-    assert_eq!(
-        profile.release.as_ref().map(|release| release.status),
-        Some(DesktopReleaseStatus::Unchecked)
-    );
+    assert!(profile.release.is_none());
     let billing = admin
         .calculated_billing(&ProviderBillingInput {
             upstream_model_id: "gpt-4o".to_owned(),
@@ -1429,6 +1435,7 @@ impl ProviderArtifactProfileCachePort for TestArtifactProfiles {
     fn read<'a>(
         &'a self,
         _provider_kind: &'a ProviderKind,
+        _artifact_key: &'a str,
     ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>> {
         Box::pin(async { Ok(None) })
     }

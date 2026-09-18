@@ -447,10 +447,11 @@ pub trait ProviderCatalogCachePort: Send + Sync {
 /// Provider 从官方制品核验出的可重建请求画像。
 ///
 /// Core 只用单调制品序号约束覆盖顺序；具体版本字段由对应 Provider 放在
-/// `profile` 中解释。每个 Provider 在 Store 中只保留一份最新画像。
+/// `profile` 中解释。每个 Provider 的各制品分别保留一份最新画像。
 #[derive(Clone, PartialEq)]
 pub struct ProviderArtifactProfile {
     provider_kind: ProviderKind,
+    artifact_key: String,
     artifact_sequence: u64,
     verified_at: SystemTime,
     profile: OpaqueProviderData,
@@ -460,12 +461,14 @@ impl ProviderArtifactProfile {
     #[must_use]
     pub const fn new(
         provider_kind: ProviderKind,
+        artifact_key: String,
         artifact_sequence: u64,
         verified_at: SystemTime,
         profile: OpaqueProviderData,
     ) -> Self {
         Self {
             provider_kind,
+            artifact_key,
             artifact_sequence,
             verified_at,
             profile,
@@ -475,6 +478,11 @@ impl ProviderArtifactProfile {
     #[must_use]
     pub const fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
+    }
+
+    #[must_use]
+    pub fn artifact_key(&self) -> &str {
+        &self.artifact_key
     }
 
     #[must_use]
@@ -506,7 +514,7 @@ impl fmt::Debug for ProviderArtifactProfile {
 }
 
 pub trait ProviderArtifactProfileCachePort: Send + Sync {
-    /// 覆盖同一 Provider 的固定 cache key。
+    /// 覆盖同一 Provider、同一制品的固定 cache key。
     ///
     /// 返回 `false` 表示 Store 已持有更高的制品序号；相同序号但内容不同必须返回
     /// [`ProviderStoreErrorKind::Conflict`]，不能静默改写已核验画像。
@@ -519,6 +527,7 @@ pub trait ProviderArtifactProfileCachePort: Send + Sync {
     fn read<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
+        artifact_key: &'a str,
     ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>>;
 }
 
@@ -927,6 +936,15 @@ fn invalid_refresh_policy(operation: &'static str) -> ProviderStoreError {
 }
 
 pub trait ProviderRuntimePolicyPort: Send + Sync {
+    /// 仅首次启动写入该 Provider 的默认选择；已保存的管理配置始终优先。
+    fn initialize_request_profile<'a>(
+        &'a self,
+        _provider: &'a ProviderKind,
+        initial: OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<OpaqueProviderData, ProviderStoreError>> {
+        Box::pin(async move { Ok(initial) })
+    }
+
     fn load_refresh_policy(
         &self,
     ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>>;

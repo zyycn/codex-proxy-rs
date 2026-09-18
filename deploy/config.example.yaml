@@ -64,21 +64,11 @@ api:
   request_id_header: 'x-request-id'
 
 openai:
-  # 上游地址、WebSocket 池、额度刷新和 OAuth 使用 Provider 内置默认值；模板只保留画像启动基线。
+  # 上游客户端身份从管理端设置，默认 macOS Desktop 自动最新。
+  # 旧版本的完整 wire_profile 仅在首次初始化数据库选择时导入。
   wire_profile:
-    # 版本元组来自同一个官方 macOS Desktop ZIP；Provider 每 24 小时检查 appcast，
-    # 仅在包内 Core 核验和 Redis 条件覆盖都成功后原子更新。
-    originator: 'Codex Desktop'
-    codex_version: '0.153.4'
-    desktop_version: '26.901.51231'
-    desktop_build: '8109'
-    os_type: 'Mac OS'
-    os_version: '15.7.1'
-    arch: 'arm64'
-    terminal: 'unknown'
-    # 部署选择的 US residency；省略或 null 时使用官方无地域约束的默认分支。
+    # 数据驻留仍为部署配置；省略或 null 不指定地域约束。
     residency: us
-    verified_at: '2026-09-06T11:26:12.084+08:00'
 
 xai:
   # OAuth 端点、额度与模型目录策略由 xAI Provider 固定管理；这里只声明请求画像启动基线。

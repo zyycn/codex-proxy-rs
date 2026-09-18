@@ -51,14 +51,23 @@ pub trait ClientKeyService: Send + Sync {
 }
 
 pub(crate) struct DefaultClientKeyService {
+    profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
     store: Arc<dyn ClientKeyStore>,
     snapshot: Arc<dyn SnapshotControl>,
 }
 
 impl DefaultClientKeyService {
     #[must_use]
-    pub(crate) fn new(store: Arc<dyn ClientKeyStore>, snapshot: Arc<dyn SnapshotControl>) -> Self {
-        Self { store, snapshot }
+    pub(crate) fn new(
+        store: Arc<dyn ClientKeyStore>,
+        snapshot: Arc<dyn SnapshotControl>,
+        profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
+    ) -> Self {
+        Self {
+            store,
+            snapshot,
+            profile_provider,
+        }
     }
 }
 
@@ -85,6 +94,11 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: CreateClientKey,
     ) -> Result<CreatedClientKey, AdminError> {
+        if let Some(profile) = &command.openai_client_profile_override {
+            self.profile_provider
+                .preview_client_profile(profile)
+                .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        }
         let id = ClientApiKeyId::new(format!("key_{}", Uuid::now_v7().simple()))
             .map_err(|_| AdminError::internal("创建 Client API Key ID 失败"))?;
         let plaintext = if let Some(key) = command.custom_key {
@@ -98,6 +112,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .store
             .create_client_key(
                 NewClientKey {
+                    openai_client_profile_override: command.openai_client_profile_override,
                     id,
                     name: command.name,
                     label: command.label,
@@ -122,6 +137,11 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: UpdateClientKey,
     ) -> Result<ClientKeyMutation, AdminError> {
+        if let Some(Some(profile)) = &command.openai_client_profile_override {
+            self.profile_provider
+                .preview_client_profile(profile)
+                .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        }
         let id = command.id.clone();
         let (config_revision, record) = self
             .store

@@ -15,6 +15,7 @@ bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 chrono-tz = { version = "0.10", features = ["serde"] }
 cookie = "0.18.1"
+crc32fast = "1.5.0"
 futures = "0.3.32"
 flate2 = "1.1.9"
 gateway-admin = { path = "../../gateway-admin" }
@@ -45,6 +46,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 sha2 = "0.11.0"
 subtle = "2.6.1"
+tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.18"
 tokio = { version = "=1.52.3", default-features = false, features = ["fs", "macros", "rt", "sync", "time"] }
 tokio-rustls = { version = "=0.26.4", default-features = false }
@@ -56,9 +58,12 @@ tracing = "0.1.44"
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f", features = ["deflate", "proxy"] }
 url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v4", "v7"] }
+# 静态链接 XZ 解码器，不要求部署环境安装 liblzma。
+xz2 = { version = "0.1.7", features = ["static"] }
 # 官方 Codex app-server 对 /v1/responses 请求体默认做 zstd 压缩（level 3），
 # 并携带 Content-Encoding: zstd；保持同版本同级别以对齐上游指纹。
 zstd = "=0.13.3"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 openssl = "=0.10.75"

@@ -11,6 +11,7 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import ClientProfileEditor from '@/components/client-profile/ClientProfileEditor.vue'
 
 const props = defineProps<{
   groups: AccountGroup[]
@@ -35,7 +36,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     v-model="open"
     :title="title"
     tone="info"
-    size="md"
+    size="lg"
     :dismissible="!saving"
   >
     <template #icon>
@@ -83,6 +84,10 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
           :loading="groupLoading"
           :disabled="saving"
         />
+      </BaseFormItem>
+
+      <BaseFormItem label="上游身份">
+        <ClientProfileEditor v-if="open" v-model="form.openaiClientProfileOverride" allow-inherit :disabled="saving" />
       </BaseFormItem>
 
       <div class="grid gap-6 sm:grid-cols-2">

@@ -1,10 +1,13 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
+import type { ClientProfileSelection } from './client-profiles'
 import request from '../request'
 
 export type ApiKeyRoutingScope = 'all' | 'groups'
 
 export interface ApiKey {
+  openaiClientProfileOverride: ClientProfileSelection | null
+
   id: string
   name: string
   label: string | null
@@ -57,6 +60,8 @@ interface ApiKeyListParams {
 }
 
 export interface ApiKeyWriteParam {
+  openaiClientProfileOverride: ClientProfileSelection | null
+
   name: string
   label: string | null
   groupIds: string[]

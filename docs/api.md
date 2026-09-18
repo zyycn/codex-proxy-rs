@@ -871,11 +871,15 @@ Client Key 绑定的任一分组开启此限制（包括已禁用分组）时，
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
-`dailyLimitUsd`、`weeklyLimitUsd` 和 `customKey`。更新请求携带 `id`，不接受 `customKey`。
+`dailyLimitUsd`、`weeklyLimitUsd`、`customKey` 和 `openaiClientProfileOverride`。更新请求携带 `id`，不接受 `customKey`。
 `groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
 `routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
 `providerKinds`。创建和 reveal 响应会返回完整明文 Key，调用方
 必须立即安全保存。
+
+`openaiClientProfileOverride` 为完整的 [OpenAI 客户端身份](#openai-上游客户端身份)对象或 `null`，列表也返回该字段。
+创建时省略或 `null` 表示跟随通用设置；更新时省略保留现值，显式 `null` 才清除覆盖。
+独立配置整体覆盖通用设置，不逐字段继承；切换全局配置不会影响独立 Key。
 
 密钥列表的 `search` 仅匹配名称和标签，不匹配密钥值或可见前缀；搜索不区分大小写，使用字面量前缀匹配。
 创建和更新时去除名称首尾空白，并按忽略大小写、首尾空格的名称查重，重复返回 `409`。
@@ -939,6 +943,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | `GET` | `/api/admin/settings` | 读取运行设置 |
 | `POST` | `/api/admin/settings/update` | 原子替换全部运行设置 |
 | `GET` | `/api/admin/settings/client-downloads/codex-desktop/windows` | 提取 Codex Desktop Windows 离线安装直链；`refresh=true` 强制刷新进程内短缓存 |
+| `GET` | `/api/admin/settings/client-profiles/openai` | 读取六个预设、自动更新可用状态和 `globalConfiguration` |
+| `POST` | `/api/admin/settings/client-profiles/openai/preview` | body 为 `{ configuration }`，值为完整身份对象或 `null`（解析当前通用设置）；只预览，不保存 |
 | `GET` | `/api/admin/settings/admin-api-key` | 只返回管理 API Key 是否存在 |
 | `POST` | `/api/admin/settings/admin-api-key/delete` | 删除管理 API Key |
 | `POST` | `/api/admin/settings/admin-api-key/regenerate` | 重新生成并一次性返回完整管理 API Key |
@@ -946,6 +952,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+openaiClientProfile
 disableFast
 requestLocationEnabled
 requestLocation
@@ -1002,6 +1009,44 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+### OpenAI 上游客户端身份
+
+`openaiClientProfile` 保存通用选择，首次默认 `MacOS · Desktop · 自动最新`。
+设置更新省略该字段保留现值，不能提交 `null`。内置默认只用于初始化，不形成第三层运行时回退。
+该配置作用于 Client Key 的 OpenAI 模型请求与原生模型目录，适用于 HTTP/SSE、WebSocket、Images 和 Search。
+不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作。
+
+身份对象字段如下，可选字段省略或 `null` 时使用所选预设参数：
+
+| 字段 | 取值与语义 |
+| --- | --- |
+| `client` | 必填，`desktop` 或 `cli` |
+| `platform` | 必填，`macos`、`linux` 或 `windows` |
+| `versionMode` | 必填，`latest` 或 `fixed` |
+| `originator`、`osVersion`、`arch`、`terminal` | 可选自定义参数，非空、最多 128 字节；只接受可见 ASCII，不能包含括号、分号、反斜杠及首尾空白 |
+| `codexVersion` | `fixed` 必填的 Core SemVer；`latest` 必须省略或为 `null` |
+| `desktopVersion`、`desktopBuild` | 仅 Desktop 的 `fixed` 模式必填，分别为数字点分版本和数字构建号；CLI 不接受这些字段 |
+
+```json
+{ "client": "cli", "platform": "linux", "versionMode": "latest" }
+```
+
+六套预设均支持自动更新：macOS Desktop 支持 arm64，Windows/Linux Desktop 及三套 CLI 支持 arm64、x86_64。
+预设接口的 `automaticAvailable`、`reason` 表示当前组合的可用性；自定义架构可能使自动解析不可用。
+每 24 小时后台检查官方稳定发布，失败保留同组合上次有效版本；固定值不受后台更新影响。
+Desktop 的应用版本、Core 和构建号来自同一平台、架构的官方制品：macOS ZIP、Windows MSIX、Linux DEB。
+Windows/Linux 通过 ETag 检查更新，未变化时复用已核验版本；CLI 依据官方 npm 稳定标签和对应平台依赖。
+
+预览返回 `configuration`、`source`（`global` / `override`）、`userAgent`、解析后的环境和版本字段，
+以及 `versionSource`（`official` / `custom`）、`verifiedAt`、`checkedAt`、`error`。
+`verifiedAt` 只表示版本资料核验，不能代表自定义运行环境或 TLS 已核验；固定版本返回 `null`。
+未完成本次启动检查时 `checkedAt` 为 `null`。非法或当前不可用的选择返回 `400`，保存失败不提交其他修改。
+
+配置在请求开始时冻结，Provider 首次解析的版本用于该请求的全部重试与换号。
+已建立 WebSocket 的精确续写沿用所属连接；新请求使用保存后的选择。
+
+### 账号自动冻结
 
 账号自动冻结（`accountAutoFreezeEnabled`）默认关闭。启用后，在统计窗口内按尝试累计容量类上游错误（`server_is_overloaded`
 等与 5xx 不可用），达到阈值后把该账号冻结为带恢复倒计时的 `rate_limited` 状态。`accountAutoFreezeThreshold`

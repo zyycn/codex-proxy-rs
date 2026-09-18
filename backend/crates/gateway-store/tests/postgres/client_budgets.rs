@@ -285,6 +285,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
         .await
         .unwrap();
     let update = UpdateClientKey {
+        openai_client_profile_override: None,
         id: ClientApiKeyId::new("key").unwrap(),
         name: "key".to_owned(),
         label: None,
@@ -303,6 +304,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
     admin
         .update_client_key(
             UpdateClientKey {
+                openai_client_profile_override: None,
                 daily_limit_usd: None,
                 weekly_limit_usd: None,
                 ..update.clone()
@@ -326,6 +328,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
     admin
         .update_client_key(
             UpdateClientKey {
+                openai_client_profile_override: None,
                 daily_limit_usd: Some("0".parse().unwrap()),
                 weekly_limit_usd: None,
                 ..update

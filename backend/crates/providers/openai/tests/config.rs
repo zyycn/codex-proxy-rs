@@ -6,12 +6,21 @@ use provider_openai::config::{
 };
 
 #[test]
-fn openai_config_builds_the_audited_wire_profile() {
+fn openai_config_imports_legacy_fixed_profile_without_changing_official_release_facts() {
     let mut config = valid_config();
     config
         .resolve_and_validate(Path::new("/srv/gateway"))
         .expect("valid OpenAI config");
-    let profile = config.wire_profile_state().snapshot();
+    let state = config.wire_profile_state();
+    let selection = provider_openai::transport::profile::selection::ClientProfileSelection::parse(
+        &config.initial_client_profile().unwrap(),
+    )
+    .unwrap();
+    let profile = selection.resolve(&state).unwrap();
+    assert_eq!(
+        state.snapshot().codex_version,
+        CodexWireProfileConfig::default().codex_version
+    );
 
     assert_eq!(
         profile.user_agent(),

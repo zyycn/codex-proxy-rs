@@ -73,8 +73,8 @@ const releaseStatus = computed(() => {
   const current = profile.value
   if (!current?.release) {
     return {
-      label: '当前生效',
-      title: '当前 Provider 请求正在使用此运行时画像',
+      label: current?.attributes.some(item => item.label === '版本策略' && item.value === '固定自定义') ? '固定自定义' : '当前生效',
+      title: '跟随通用设置的新请求使用此身份',
       tone: 'bg-cp-info-container text-cp-info-on-container',
       icon: ShieldCheck,
     }
@@ -175,7 +175,7 @@ function providerLabel(provider: string) {
 </script>
 
 <template>
-  <BaseCard as="article" title="上游请求身份" class="flex min-h-95 w-full flex-col">
+  <BaseCard as="article" title="通用上游身份" class="flex min-h-95 w-full flex-col">
     <template #actions>
       <BaseSegmented
         v-if="providerOptions.length > 1"

@@ -248,11 +248,27 @@ impl ClientRoutingScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
     disable_fast: bool,
+    request_profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
 }
 
 impl FrozenAccountScope {
+    /// 与 Key 授权范围一同冻结；具体字段只由对应 Provider 解释。
+    #[must_use]
+    pub fn with_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profiles = profiles;
+        self
+    }
+
+    #[must_use]
+    pub fn request_profile(&self, provider: &ProviderKind) -> Option<&super::OpaqueProviderData> {
+        self.request_profiles.get(provider)
+    }
+
     /// Key 绑定分组的冻结 Fast 限制，与账号成员资格无关。
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
@@ -272,6 +288,7 @@ impl FrozenAccountScope {
     ) -> Self {
         Self {
             disable_fast: false,
+            request_profiles: BTreeMap::new(),
             directory,
             client_scope,
         }

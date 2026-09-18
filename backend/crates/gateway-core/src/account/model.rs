@@ -205,7 +205,7 @@ impl fmt::Debug for PlaintextCredential {
 }
 
 /// Provider-owned 的任意 JSON object；公共层只搬运、不读取内部 key。
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OpaqueProviderData(Map<String, Value>);
 
 impl OpaqueProviderData {

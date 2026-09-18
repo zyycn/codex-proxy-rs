@@ -112,6 +112,21 @@ impl ProviderAdminError {
 pub trait ProviderAdmin: Send + Sync {
     fn provider_kind(&self) -> &ProviderKind;
 
+    /// 提供该 Provider 的可选客户端身份；通用管理层不解释内部字段。
+    fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// 校验并投影客户端身份，结果不含认证或账号材料。
+    fn preview_client_profile(
+        &self,
+        _configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     /// 将原始套餐值投影为展示名称；默认保留未知 Provider 的原始名称。
     fn plan_type_display(&self, plan_type: &str) -> String {
         plan_type.to_owned()
@@ -138,6 +153,13 @@ pub trait ProviderAdmin: Send + Sync {
 
     /// 返回该 Provider 实际持有的 Dashboard 上游身份画像。
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile>;
+
+    fn configured_wire_profile(
+        &self,
+        _configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Option<DashboardWireProfile> {
+        self.dashboard_wire_profile()
+    }
 
     /// 使用 Provider-owned 价格规则恢复持久请求的逐项费用。
     fn calculated_billing(
@@ -313,10 +335,19 @@ impl ProviderAdminRegistry {
     }
 
     /// 返回所有已注册 Provider 的 Dashboard 上游身份画像。
-    pub fn dashboard_wire_profiles(&self) -> Vec<DashboardWireProfile> {
+    pub fn dashboard_wire_profiles(
+        &self,
+        configurations: &std::collections::BTreeMap<
+            ProviderKind,
+            gateway_core::account::OpaqueProviderData,
+        >,
+    ) -> Vec<DashboardWireProfile> {
         self.providers
-            .values()
-            .filter_map(|provider| provider.dashboard_wire_profile())
+            .iter()
+            .filter_map(|(kind, provider)| match configurations.get(kind) {
+                Some(configuration) => provider.configured_wire_profile(configuration),
+                None => provider.dashboard_wire_profile(),
+            })
             .collect()
     }
 

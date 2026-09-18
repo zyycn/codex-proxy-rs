@@ -446,7 +446,11 @@ fn config_loader_should_reject_missing_client_session_ttl() {
 
 #[test]
 fn config_loader_should_reject_invalid_codex_cli_version() {
-    assert_rejected(valid_config().replace("codex_version: '0.153.4'", "codex_version: 'latest'"));
+    assert_rejected(valid_config().replacen(
+        "    residency: us",
+        "    residency: us\n    codex_version: 'latest'",
+        1,
+    ));
 }
 
 #[test]
@@ -465,7 +469,11 @@ fn config_loader_should_reject_zero_server_port() {
 
 #[test]
 fn config_loader_should_reject_invalid_desktop_profile_fields() {
-    assert_rejected(valid_config().replace("desktop_build: '8109'", "desktop_build: 'build'"));
+    assert_rejected(valid_config().replacen(
+        "    residency: us",
+        "    residency: us\n    desktop_build: 'build'",
+        1,
+    ));
 }
 
 #[test]

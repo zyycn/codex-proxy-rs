@@ -711,3 +711,78 @@ async fn websocket_should_keep_an_exact_chain_while_new_connections_adopt_the_la
     assert_eq!(second_version, "1.2.4");
     assert_ne!(first_user_agent, second_user_agent);
 }
+
+#[tokio::test]
+async fn concurrent_request_profiles_emit_independent_http_identities() {
+    use provider_openai::transport::profile::selection::{
+        ClientKind, ClientPlatform, ClientProfileSelection,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut handlers = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            handlers.push(tokio::spawn(async move {
+                let request = read_http_request(&mut stream).await;
+                write_completed_sse_response(&mut stream).await;
+                request
+            }));
+        }
+        let mut requests = Vec::new();
+        for handler in handlers {
+            requests.push(handler.await.unwrap());
+        }
+        requests
+    });
+    let state = provider_openai::config::OpenAiConfig::default().wire_profile_state();
+    let desktop = ClientProfileSelection::default().resolve(&state).unwrap();
+    let cli = ClientProfileSelection {
+        client: ClientKind::Cli,
+        platform: ClientPlatform::Linux,
+        ..Default::default()
+    }
+    .resolve(&state)
+    .unwrap();
+    let client = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{address}"),
+        state.clone(),
+    );
+    let desktop_client = client.clone().with_request_profile(desktop.clone());
+    let cli_client = client.with_request_profile(cli.clone());
+    state.update_bundled_release(&CodexBundledReleaseProfile {
+        codex_version: "0.999.0".into(),
+        desktop_version: "99.1.1".into(),
+        desktop_build: "99999".into(),
+        verified_at: Utc::now(),
+    });
+    let mut request = codex_request("gpt-test", "", Vec::new());
+    request.force_http_sse = true;
+    let (first, second) = tokio::join!(
+        desktop_client.create_response(
+            &request,
+            request_context("req_desktop", Some("acct_desktop"))
+        ),
+        cli_client.create_response(&request, request_context("req_cli", Some("acct_cli")))
+    );
+    first.unwrap();
+    second.unwrap();
+    let requests = server.await.unwrap();
+    for expected in [desktop, cli] {
+        let actual = requests
+            .iter()
+            .find(|request| {
+                read_header_value(request, "originator") == Some(expected.originator.as_str())
+            })
+            .unwrap();
+        assert_eq!(
+            read_header_value(actual, "user-agent"),
+            Some(expected.user_agent().as_str())
+        );
+        assert_eq!(
+            read_header_value(actual, "version"),
+            Some(expected.codex_version.as_str())
+        );
+    }
+}

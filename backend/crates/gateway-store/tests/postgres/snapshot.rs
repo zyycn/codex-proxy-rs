@@ -8,6 +8,7 @@ use super::TestDatabase;
 #[test]
 fn snapshot_client_policy_contains_only_common_limits() {
     let policy = ClientApiKeySnapshot {
+        request_profiles: Default::default(),
         id: ClientApiKeyId::new("key-1").expect("client key ID"),
         plaintext_key: PlaintextClientApiKey::new("sk_snapshot_secret").expect("plaintext key"),
         group_ids: Vec::new(),

@@ -23,6 +23,17 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Runtime settings 管理服务。
 #[async_trait]
 pub trait SettingsService: Send + Sync {
+    async fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持客户端身份配置"))
+    }
+    async fn preview_client_profile(
+        &self,
+        _configuration: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持客户端身份配置"))
+    }
     async fn load(&self) -> Result<RuntimeSettings, AdminError>;
     async fn replace(
         &self,
@@ -41,19 +52,72 @@ pub trait SettingsService: Send + Sync {
 }
 
 pub(crate) struct DefaultSettingsService {
+    profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
     store: Arc<dyn SettingsStore>,
     snapshot: Arc<dyn SnapshotControl>,
 }
 
 impl DefaultSettingsService {
     #[must_use]
-    pub(crate) fn new(store: Arc<dyn SettingsStore>, snapshot: Arc<dyn SnapshotControl>) -> Self {
-        Self { store, snapshot }
+    pub(crate) fn new(
+        store: Arc<dyn SettingsStore>,
+        snapshot: Arc<dyn SnapshotControl>,
+        profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
+    ) -> Self {
+        Self {
+            store,
+            snapshot,
+            profile_provider,
+        }
     }
 }
 
 #[async_trait]
 impl SettingsService for DefaultSettingsService {
+    async fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
+        let mut options = self
+            .profile_provider
+            .client_profile_options()
+            .map_err(|error| super::map_provider_error(error, "client profile"))?
+            .into_inner();
+        let configuration = self
+            .load()
+            .await?
+            .openai_client_profile
+            .ok_or_else(|| AdminError::internal("通用客户端身份尚未初始化"))?;
+        options.insert(
+            "globalConfiguration".to_owned(),
+            serde_json::Value::Object(configuration.into_inner()),
+        );
+        Ok(gateway_core::account::OpaqueProviderData::new(options))
+    }
+
+    async fn preview_client_profile(
+        &self,
+        configuration: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
+        let global;
+        let (configuration, source) = if let Some(configuration) = configuration {
+            (configuration, "override")
+        } else {
+            global = self
+                .load()
+                .await?
+                .openai_client_profile
+                .ok_or_else(|| AdminError::internal("通用客户端身份尚未初始化"))?;
+            (&global, "global")
+        };
+        let mut preview = self
+            .profile_provider
+            .preview_client_profile(configuration)
+            .map_err(|error| super::map_provider_error(error, "client profile"))?
+            .into_inner();
+        preview.insert("source".to_owned(), serde_json::Value::from(source));
+        Ok(gateway_core::account::OpaqueProviderData::new(preview))
+    }
+
     async fn load(&self) -> Result<RuntimeSettings, AdminError> {
         self.store
             .load_runtime_settings()
@@ -67,6 +131,11 @@ impl SettingsService for DefaultSettingsService {
         command: ReplaceRuntimeSettings,
     ) -> Result<RuntimeSettings, AdminError> {
         validate_settings(&command)?;
+        if let Some(profile) = &command.openai_client_profile {
+            self.profile_provider
+                .preview_client_profile(profile)
+                .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        }
         let settings = self
             .store
             .replace_runtime_settings(command, context)

@@ -17,6 +17,7 @@ pub use gateway_core::account::RotationStrategy;
 /// 完整运行设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub disable_fast: bool,
     pub config_revision: Revision,
     pub request_location_enabled: bool,
@@ -49,6 +50,7 @@ pub struct RuntimeSettings {
 /// 原子替换运行设置的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,

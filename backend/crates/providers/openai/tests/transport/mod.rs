@@ -123,6 +123,7 @@ where
 
 fn test_wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
+        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "1.2.3".to_owned(),
         desktop_version: "1.2.3".to_owned(),

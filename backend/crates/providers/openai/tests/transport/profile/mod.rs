@@ -15,7 +15,10 @@ use provider_openai::transport::profile::{
     CodexWireProfile, CodexWireProfileState, parse_desktop_release,
 };
 
+mod cli_release;
 mod desktop_artifact;
+mod platform_release;
+mod selection;
 
 struct ReleaseTransport {
     releases: Mutex<VecDeque<Result<CodexDesktopRelease, CodexDesktopReleaseError>>>,
@@ -116,6 +119,7 @@ impl ProviderArtifactProfileCachePort for ArtifactProfiles {
     fn read<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
+        artifact_key: &'a str,
     ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>> {
         Box::pin(async move {
             Ok(self
@@ -123,7 +127,10 @@ impl ProviderArtifactProfileCachePort for ArtifactProfiles {
                 .lock()
                 .expect("artifact profile")
                 .as_ref()
-                .filter(|profile| profile.provider_kind() == provider_kind)
+                .filter(|profile| {
+                    profile.provider_kind() == provider_kind
+                        && profile.artifact_key() == artifact_key
+                })
                 .cloned())
         })
     }
@@ -132,6 +139,7 @@ impl ProviderArtifactProfileCachePort for ArtifactProfiles {
 #[test]
 fn wire_profile_should_generate_bundled_core_app_server_user_agent() {
     let profile = CodexWireProfile {
+        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.147.0-alpha.6.6".to_owned(),
         desktop_version: "26.803.81509".to_owned(),
@@ -335,6 +343,7 @@ fn service(
 
 fn wire_profile() -> CodexWireProfile {
     CodexWireProfile {
+        client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.147.0-alpha.6.6".to_owned(),
         desktop_version: "26.803.81509".to_owned(),

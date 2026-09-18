@@ -146,6 +146,7 @@ impl ClientKeySort {
 #[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
+    openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     custom_key: Option<String>,
     name: String,
     label: Option<String>,
@@ -175,6 +176,9 @@ impl CreateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(CreateClientKey {
+            openai_client_profile_override: self
+                .openai_client_profile_override
+                .map(gateway_core::account::OpaqueProviderData::new),
             custom_key: self
                 .custom_key
                 .filter(|key| !key.is_empty())
@@ -201,6 +205,8 @@ impl CreateClientKeyRequest {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateClientKeyRequest {
+    #[serde(default, deserialize_with = "deserialize_profile_override")]
+    openai_client_profile_override: Option<Option<serde_json::Map<String, serde_json::Value>>>,
     id: String,
     name: String,
     label: Option<String>,
@@ -221,6 +227,9 @@ impl UpdateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(UpdateClientKey {
+            openai_client_profile_override: self
+                .openai_client_profile_override
+                .map(|value| value.map(gateway_core::account::OpaqueProviderData::new)),
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
             name: self.name,
             label: self.label,
@@ -276,6 +285,7 @@ impl ClientKeyMutationRequest {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
+    openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     id: String,
     name: String,
     label: Option<String>,
@@ -314,6 +324,9 @@ impl From<ClientKeyRecord> for ClientKeyView {
             "groups"
         };
         Self {
+            openai_client_profile_override: record
+                .openai_client_profile_override
+                .map(gateway_core::account::OpaqueProviderData::into_inner),
             id: record.id.to_string(),
             name: record.name,
             label: record.label,
@@ -873,4 +886,11 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     map_admin_service_error(error)
+}
+
+// 省略表示不修改，null 表示恢复跟随通用设置。
+fn deserialize_profile_override<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<serde_json::Map<String, serde_json::Value>>>, D::Error> {
+    Option::<serde_json::Map<String, serde_json::Value>>::deserialize(deserializer).map(Some)
 }

@@ -18,6 +18,7 @@ fn client(base_url: &str) -> CodexBackendClient {
             .expect("reset-credit client"),
         base_url,
         CodexWireProfileState::new(CodexWireProfile {
+            client_kind: provider_openai::transport::profile::selection::ClientKind::Desktop,
             originator: "Codex Desktop".to_owned(),
             codex_version: "0.115.0-alpha.11".to_owned(),
             desktop_version: "26.818.21641".to_owned(),

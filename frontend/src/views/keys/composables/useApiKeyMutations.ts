@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { getApiKeys } from '@/api'
+import type { ClientProfileSelection } from '@/api/modules/client-profiles'
 import { ref, shallowRef, watch } from 'vue'
 import {
   createApiKey,
@@ -17,6 +18,7 @@ import { useIdSet } from '@/composables/useIdSet'
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export interface ApiKeyFormValue {
+  openaiClientProfileOverride: ClientProfileSelection | null
   customKey: string
   name: string
   label: string
@@ -62,6 +64,7 @@ export function useApiKeyMutations(options: {
   function openEdit(key: ApiKeyRow) {
     editingKey.value = key
     form.value = {
+      openaiClientProfileOverride: key.openaiClientProfileOverride ? { ...key.openaiClientProfileOverride } : null,
       customKey: '',
       name: key.name,
       label: key.label ?? '',
@@ -96,6 +99,7 @@ export function useApiKeyMutations(options: {
     await savingKeyAction.run(
       async () => {
         const payload = {
+          openaiClientProfileOverride: form.value.openaiClientProfileOverride,
           name: form.value.name.trim(),
           label: form.value.label.trim() || null,
           groupIds: [...new Set(form.value.groupIds)],
@@ -294,6 +298,7 @@ export function useApiKeyMutations(options: {
 
 function emptyForm(): ApiKeyFormValue {
   return {
+    openaiClientProfileOverride: null,
     customKey: '',
     name: '',
     label: '',

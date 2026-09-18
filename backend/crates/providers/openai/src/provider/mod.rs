@@ -99,6 +99,7 @@ mod execution;
 mod failure;
 mod observation;
 mod workers;
+pub(crate) use workers::ClientReleaseServices;
 
 use execution::*;
 #[doc(hidden)]
@@ -152,6 +153,20 @@ pub struct CodexProvider {
 }
 
 impl CodexProvider {
+    fn client_for_request(
+        &self,
+        context: &AttemptContext,
+    ) -> Result<CodexBackendClient, ProviderError> {
+        let Some(profile) = context.request_profile() else {
+            return Ok(self.client.clone());
+        };
+        let profile = serde_json::from_value(Value::Object(profile.expose_to_provider().clone()))
+            .map_err(|_| {
+            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+        })?;
+        Ok(self.client.clone().with_request_profile(profile))
+    }
+
     // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权。
     #[expect(clippy::too_many_arguments)]
     pub fn new(
@@ -210,6 +225,27 @@ impl fmt::Debug for CodexProvider {
 
 #[async_trait]
 impl Provider for CodexProvider {
+    fn resolve_request_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
+        let selection =
+            crate::transport::profile::selection::ClientProfileSelection::parse(configuration)
+                .map_err(|_| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                })?;
+        let profile = selection
+            .resolve(self.client.profile_state())
+            .map_err(|_| {
+                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            })?;
+        crate::transport::profile::selection::object(&profile)
+            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))
+    }
+
     fn name(&self) -> &'static str {
         PROVIDER_NAME
     }
@@ -589,7 +625,7 @@ impl Provider for CodexProvider {
         };
         let events = cold_response_stream(ColdResponse {
             client: self
-                .client
+                .client_for_request(&context)?
                 .for_account(lease.account())
                 .map_err(|_| {
                     provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)

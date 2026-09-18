@@ -103,6 +103,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
+        openai_client_profile: None,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -148,6 +149,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     assert_eq!(
         value,
         json!({
+            "openaiClientProfile": null,
             "disableFast": false,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
@@ -202,6 +204,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .cloned()
         .collect();
     let settings = RuntimeSettings {
+        openai_client_profile: None,
         disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
@@ -251,6 +254,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
             .cloned()
             .collect();
     let mut expected_fields = request_fields;
+    expected_fields.insert("openaiClientProfile".to_owned());
     expected_fields.insert("updatedAt".to_owned());
 
     assert_eq!(response_fields, expected_fields);
@@ -637,4 +641,16 @@ async fn disable_fast_settings_updates_preserve_omitted_values() {
             expected
         );
     }
+}
+
+#[test]
+fn global_profile_can_be_omitted_but_cannot_be_cleared() {
+    let mut body = update_body();
+    body.as_object_mut().unwrap().remove("openaiClientProfile");
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_ok());
+    body["openaiClientProfile"] = json!(null);
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_err());
+    body["openaiClientProfile"] =
+        json!({"client":"cli", "platform":"linux", "versionMode":"latest"});
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_ok());
 }

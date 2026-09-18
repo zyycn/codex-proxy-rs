@@ -1,6 +1,6 @@
 //! 单行 `model_requests`、账号重试与下游提交屏障测试。
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::{
     Arc, Mutex,
@@ -293,6 +293,7 @@ enum Script {
 }
 
 struct ScriptedProvider {
+    profile_generation: AtomicUsize,
     scripts: Mutex<VecDeque<Script>>,
     contexts: Mutex<Vec<AttemptContext>>,
     operations: Mutex<Vec<Operation>>,
@@ -310,6 +311,7 @@ impl Drop for TrackedLease {
 impl ScriptedProvider {
     fn new(scripts: Vec<Script>) -> Self {
         Self {
+            profile_generation: AtomicUsize::new(1),
             scripts: Mutex::new(scripts.into()),
             contexts: Mutex::new(Vec::new()),
             operations: Mutex::new(Vec::new()),
@@ -320,6 +322,18 @@ impl ScriptedProvider {
 
 #[async_trait]
 impl Provider for ScriptedProvider {
+    fn resolve_request_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
+        let mut fields = configuration.clone().into_inner();
+        fields.insert(
+            "generation".to_owned(),
+            json!(self.profile_generation.load(Ordering::SeqCst)),
+        );
+        Ok(gateway_core::account::OpaqueProviderData::new(fields))
+    }
+
     fn name(&self) -> &'static str {
         "openai"
     }
@@ -344,6 +358,8 @@ impl Provider for ScriptedProvider {
             .expect("operations lock")
             .push(request.operation().clone());
         self.contexts.lock().expect("contexts lock").push(context);
+        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本。
+        self.profile_generation.fetch_add(1, Ordering::SeqCst);
         let script = self
             .scripts
             .lock()
@@ -604,6 +620,22 @@ fn plan_with_location_and_fast_policy(
     request_location: gateway_core::account::RequestLocation,
     disable_fast: bool,
 ) -> RoutingPlan {
+    plan_with_profiles(
+        operation,
+        account_selection_policy,
+        request_location,
+        disable_fast,
+        Default::default(),
+    )
+}
+
+fn plan_with_profiles(
+    operation: &Operation,
+    account_selection_policy: AccountSelectionPolicy,
+    request_location: gateway_core::account::RequestLocation,
+    disable_fast: bool,
+    profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
+) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
     let public_model = PublicModelId::new("gpt-5").expect("public model");
     let capabilities = ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
@@ -652,10 +684,10 @@ fn plan_with_location_and_fast_policy(
         .plan(
             &public_model,
             operation,
-            Arc::new(FrozenAccountScope::new(
-                directory,
-                ClientRoutingScope::all_accounts(),
-            )),
+            Arc::new(
+                FrozenAccountScope::new(directory, ClientRoutingScope::all_accounts())
+                    .with_request_profiles(profiles),
+            ),
             &RoutingContext {
                 required_provider: Some(provider),
                 ..RoutingContext::default()
@@ -4583,4 +4615,55 @@ fn global_location_and_fast_policy_reach_every_account_retry() {
             .iter()
             .all(|context| context.request_location() == Some(&location) && context.disable_fast())
     );
+}
+
+#[test]
+fn first_resolved_profile_is_frozen_across_account_retries() {
+    use gateway_core::account::OpaqueProviderData;
+    let operation = generate_operation();
+    let route_plan = plan_with_profiles(
+        &operation,
+        plan(&operation).account_selection_policy(),
+        Default::default(),
+        false,
+        BTreeMap::from([(
+            ProviderKind::new("openai").unwrap(),
+            OpaqueProviderData::new(
+                json!({"selection":"key-override"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )]),
+    );
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_second",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    block_on(session.collect_uncommitted()).unwrap();
+    let contexts = provider.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    let first = contexts[0].request_profile().unwrap();
+    assert_eq!(first.expose_to_provider()["generation"], 1);
+    assert_eq!(contexts[1].request_profile(), Some(first));
 }

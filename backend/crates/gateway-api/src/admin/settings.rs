@@ -34,6 +34,7 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub disable_fast: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -66,6 +67,8 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    #[serde(default, deserialize_with = "deserialize_profile_update")]
+    pub openai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -177,6 +180,9 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            openai_client_profile: self
+                .openai_client_profile
+                .map(gateway_core::account::OpaqueProviderData::new),
             disable_fast: self.disable_fast,
             request_location_enabled: self.request_location_enabled,
             request_location: self
@@ -219,6 +225,9 @@ impl UpdateRuntimeSettingsRequest {
 impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
+            openai_client_profile: settings
+                .openai_client_profile
+                .map(gateway_core::account::OpaqueProviderData::into_inner),
             disable_fast: settings.disable_fast,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
@@ -345,6 +354,14 @@ where
 {
     Router::new()
         .route("/api/admin/settings", get(settings::<S>))
+        .route(
+            "/api/admin/settings/client-profiles/openai",
+            get(client_profile_options::<S>),
+        )
+        .route(
+            "/api/admin/settings/client-profiles/openai/preview",
+            post(preview_client_profile::<S>),
+        )
         .route("/api/admin/settings/update", post(update_settings::<S>))
         .route(
             "/api/admin/settings/client-downloads/codex-desktop/windows",
@@ -578,4 +595,59 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     map_admin_service_error(error)
+}
+
+// 字段省略时保留已有配置；显式 null 不能清空唯一的通用默认。
+fn deserialize_profile_update<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, D::Error> {
+    serde_json::Map::<String, serde_json::Value>::deserialize(deserializer).map(Some)
+}
+
+async fn client_profile_options<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .settings()
+        .client_profile_options()
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result.into_inner()),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientProfilePreviewRequest {
+    configuration: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+async fn preview_client_profile<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<ClientProfilePreviewRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let configuration = request
+        .configuration
+        .map(gateway_core::account::OpaqueProviderData::new);
+    let result = state
+        .admin_services()
+        .settings()
+        .preview_client_profile(configuration.as_ref())
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result.into_inner()),
+    ))
 }

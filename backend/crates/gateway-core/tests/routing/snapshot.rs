@@ -534,3 +534,73 @@ fn disable_fast_uses_bound_groups_and_global_policy_without_changing_account_sco
         }
     }
 }
+
+#[test]
+fn key_profiles_replace_whole_global_choice_and_previous_snapshot_stays_frozen() {
+    use gateway_core::account::OpaqueProviderData;
+    let provider = ProviderKind::new("alpha").unwrap();
+    let document = |label| {
+        OpaqueProviderData::new(
+            serde_json::json!({"choice":label})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+    };
+    let build = |global, overridden| {
+        let profiles = BTreeMap::from([(provider.clone(), document(global))]);
+        let settings = SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+            .with_request_profiles(profiles);
+        let inherited = SnapshotClientPolicyFacts::new(
+            ClientApiKeyId::new("key_inherited").unwrap(),
+            PlaintextClientApiKey::new("sk_inherited").unwrap(),
+            vec![],
+            RateLimits::unlimited(),
+        );
+        let independent = SnapshotClientPolicyFacts::new(
+            ClientApiKeyId::new("key_independent").unwrap(),
+            PlaintextClientApiKey::new("sk_independent").unwrap(),
+            vec![],
+            RateLimits::unlimited(),
+        )
+        .with_request_profiles(if overridden {
+            BTreeMap::from([(provider.clone(), document("override"))])
+        } else {
+            BTreeMap::new()
+        });
+        block_on(
+            compiler(Arc::new(TestSnapshotStore::new(Ok(SnapshotFacts::new(
+                revision(1),
+                revision(1),
+                settings,
+                vec![inherited, independent],
+                vec![],
+                vec![],
+                vec![],
+            )))))
+            .compile(),
+        )
+        .unwrap()
+    };
+    let values = |snapshot: &gateway_core::routing::RuntimeSnapshot| {
+        let mut values: Vec<_> = snapshot
+            .client_policies()
+            .map(|policy| {
+                policy
+                    .account_scope()
+                    .request_profile(&provider)
+                    .unwrap()
+                    .expose_to_provider()["choice"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        values.sort();
+        values
+    };
+    let previous = build("global-a", true);
+    assert_eq!(values(&build("global-b", true)), ["global-b", "override"]);
+    assert_eq!(values(&previous), ["global-a", "override"]);
+    assert_eq!(values(&build("global-b", false)), ["global-b", "global-b"]);
+}

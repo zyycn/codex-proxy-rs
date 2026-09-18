@@ -4,10 +4,12 @@ import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import ClientProfileEditor from '@/components/client-profile/ClientProfileEditor.vue'
 
 import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
@@ -160,6 +162,10 @@ onMounted(() => {
           v-model:probe-model="form.accountAutoFreezeProbeModel"
           v-model:adaptive-concurrency="form.accountAutoFreezeAdaptiveConcurrency"
         />
+
+        <BaseCard title="上游身份">
+          <ClientProfileEditor v-if="form.openaiClientProfile" v-model="form.openaiClientProfile" :disabled="saving || loading || !!error" class="max-w-6xl" />
+        </BaseCard>
 
         <ClientVersionSettings
           v-model:min-codex-desktop-version="form.minCodexDesktopVersion"

@@ -28,6 +28,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     disable_fast: bool,
     request_location_enabled: bool,
     request_location: crate::account::RequestLocation,
@@ -44,6 +45,15 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub fn with_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profiles = profiles;
+        self
+    }
+
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
         self.disable_fast = disable_fast;
@@ -91,6 +101,7 @@ impl SnapshotSettingsFacts {
     ) -> Self {
         Self {
             disable_fast: false,
+            request_profiles: BTreeMap::new(),
             request_location_enabled: false,
             request_location: crate::account::RequestLocation::default(),
             max_concurrent_per_account,
@@ -110,6 +121,7 @@ impl SnapshotSettingsFacts {
 /// Store 读取到的一个启用 Client API Key 策略事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotClientPolicyFacts {
+    request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
     group_ids: Vec<AccountGroupId>,
@@ -117,6 +129,15 @@ pub struct SnapshotClientPolicyFacts {
 }
 
 impl SnapshotClientPolicyFacts {
+    #[must_use]
+    pub fn with_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profiles = profiles;
+        self
+    }
+
     #[must_use]
     pub fn new(
         key_id: ClientApiKeyId,
@@ -126,6 +147,7 @@ impl SnapshotClientPolicyFacts {
     ) -> Self {
         Self {
             key_id,
+            request_profiles: BTreeMap::new(),
             plaintext_key,
             group_ids,
             limits,
@@ -497,10 +519,16 @@ async fn compile_runtime_snapshot(
                     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?,
             )
         };
+        let mut request_profiles = facts.settings.request_profiles.clone();
+        request_profiles.extend(policy.request_profiles);
         client_policies.push(ClientPolicy::new(
             policy.key_id,
             policy.plaintext_key,
-            Arc::new(account_scope.with_disable_fast(disable_fast)),
+            Arc::new(
+                account_scope
+                    .with_disable_fast(disable_fast)
+                    .with_request_profiles(request_profiles),
+            ),
             true,
             policy.limits,
         ));

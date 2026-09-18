@@ -272,6 +272,16 @@ impl CodexCredentialCatalogService {
         client_version: &str,
     ) -> ClientCatalogResult {
         let now = SystemTime::now();
+        let provider = gateway_core::routing::ProviderKind::new("openai")
+            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+        let request_profile = match scope.request_profile(&provider) {
+            Some(configuration) => {
+                crate::transport::profile::selection::ClientProfileSelection::parse(configuration)
+                    .and_then(|selection| selection.resolve(&self.profile))
+                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
+            }
+            None => self.profile.snapshot(),
+        };
         let mut accounts = self.repository.list_for_provider().await?;
         accounts
             .retain(|account| scope.allows(account.id()) && eligible_catalog_account(account, now));
@@ -319,7 +329,7 @@ impl CodexCredentialCatalogService {
         });
         let mut last_error = CodexCredentialCatalogError::NoEligibleCredential;
         for account in accounts.iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
-            let profile = self.profile.snapshot();
+            let profile = request_profile.clone();
             let key = ClientCatalogKey {
                 account_id: account.id().clone(),
                 revision: account.revision(),

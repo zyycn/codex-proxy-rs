@@ -62,6 +62,15 @@ pub async fn initialize(
     let session_exclusions = ports.session_exclusions();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
+    let initial_profile = config
+        .initial_client_profile()
+        .map_err(OpenAiInitializeError::Config)?;
+    let configured_profile = runtime_policy
+        .initialize_request_profile(&provider_kind, initial_profile)
+        .await
+        .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
+    transport::profile::selection::ClientProfileSelection::parse(&configured_profile)
+        .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let credential_state = ports.credential_state();
     let profile = config.wire_profile_state();
     let artifact_cache =
@@ -95,6 +104,27 @@ pub async fn initialize(
         verified_profile,
     ));
     let desktop_release_status = desktop_release.status();
+    let cli_release = Arc::new(
+        transport::profile::cli_release::CliReleaseService::new(
+            provider_kind.clone(),
+            profile.clone(),
+            ports.artifact_profiles(),
+        )
+        .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
+    );
+    cli_release.restore().await;
+    let platform_releases = Arc::new(
+        transport::profile::platform_release::PlatformDesktopReleaseService::new(
+            provider_kind.clone(),
+            profile.clone(),
+            ports.artifact_profiles(),
+            Arc::new(
+                transport::profile::platform_release::OfficialDesktopArtifactTransport::new()
+                    .map_err(|_| OpenAiInitializeError::DesktopRelease)?,
+            ),
+        ),
+    );
+    platform_releases.restore().await;
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
     let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
         config.websocket_pool_config(),
@@ -204,7 +234,11 @@ pub async fn initialize(
         catalog,
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
-        desktop_release,
+        provider::ClientReleaseServices {
+            desktop: desktop_release,
+            cli: cli_release,
+            platforms: platform_releases,
+        },
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
 

@@ -40,6 +40,7 @@ pub struct OpenAiConfig {
     pub auth: CodexAuthSettings,
     #[serde(default = "default_stream_max_retries")]
     pub stream_max_retries: u64,
+    #[serde(default)]
     pub wire_profile: CodexWireProfileConfig,
     #[serde(skip)]
     identity_secret_path: PathBuf,
@@ -62,7 +63,60 @@ impl OpenAiConfig {
 
     #[must_use]
     pub fn wire_profile_state(&self) -> CodexWireProfileState {
-        CodexWireProfileState::new(self.wire_profile.clone().into())
+        // 官方发布基线独立于用户固定配置；旧 YAML 只用于首次导入管理设置。
+        CodexWireProfileState::new(
+            CodexWireProfileConfig {
+                residency: self.wire_profile.residency,
+                ..CodexWireProfileConfig::default()
+            }
+            .into(),
+        )
+    }
+
+    /// 将旧部署选择转换为一次性初始化值；数据库已有选择时不覆盖。
+    pub fn initial_client_profile(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, OpenAiConfigError> {
+        use crate::transport::profile::selection::{
+            ClientKind, ClientPlatform, ClientProfileSelection, VersionMode,
+        };
+        let profile = &self.wire_profile;
+        let baseline = CodexWireProfileConfig::default();
+        let platform = match profile.os_type.as_str() {
+            "Mac OS" | "Darwin" | "macOS" => ClientPlatform::Macos,
+            "Linux" => ClientPlatform::Linux,
+            "Windows" => ClientPlatform::Windows,
+            _ => {
+                return Err(OpenAiConfigError::InvalidField(
+                    "openai.wire_profile.os_type",
+                ));
+            }
+        };
+        let fixed = profile.codex_version != baseline.codex_version
+            || profile.desktop_version != baseline.desktop_version
+            || profile.desktop_build != baseline.desktop_build
+            || platform != ClientPlatform::Macos
+            || profile.arch != "arm64";
+        let selection = ClientProfileSelection {
+            client: ClientKind::Desktop,
+            platform,
+            version_mode: if fixed {
+                VersionMode::Fixed
+            } else {
+                VersionMode::Latest
+            },
+            originator: (profile.originator != baseline.originator)
+                .then(|| profile.originator.clone()),
+            os_version: Some(profile.os_version.clone()),
+            arch: Some(profile.arch.clone()),
+            terminal: Some(profile.terminal.clone()),
+            codex_version: fixed.then(|| profile.codex_version.clone()),
+            desktop_version: fixed.then(|| profile.desktop_version.clone()),
+            desktop_build: fixed.then(|| profile.desktop_build.clone()),
+        };
+        selection
+            .document()
+            .map_err(|_| OpenAiConfigError::InvalidField("openai.wire_profile"))
     }
 
     #[must_use]
@@ -255,6 +309,7 @@ impl CodexAuthSettings {
 
 /// 经审计固定的 Codex Desktop 上游请求画像。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct CodexWireProfileConfig {
     pub originator: String,
     /// 官方 Desktop ZIP 内嵌 Core 的启动基线；运行时按完整制品元组更新。
@@ -335,6 +390,7 @@ impl CodexWireProfileConfig {
 impl From<CodexWireProfileConfig> for CodexWireProfile {
     fn from(value: CodexWireProfileConfig) -> Self {
         Self {
+            client_kind: crate::transport::profile::selection::ClientKind::Desktop,
             originator: value.originator,
             codex_version: value.codex_version,
             desktop_version: value.desktop_version,
