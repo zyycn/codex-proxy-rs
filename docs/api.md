@@ -874,6 +874,7 @@ Client Key 绑定的任一分组开启此限制（包括已禁用分组）时，
 | `POST` | `/api/admin/client-keys/create` | 创建字段 | 创建带账号范围的 Client Key |
 | `GET` | `/api/admin/client-keys/reveal` | `id` | 显式读取完整明文 Key |
 | `POST` | `/api/admin/client-keys/update` | 更新字段 | 原子更新名称、分组范围和限额 |
+| `POST` | `/api/admin/client-keys/reset-budget` | `{ id, period }` | 管理员清零日／周已用金额；`period` 为 `daily`、`weekly` 或 `all` |
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
@@ -924,6 +925,9 @@ Client Key 绑定的任一分组开启此限制（包括已禁用分组）时，
 `dailyResetsAt`、`weeklyResetsAt`（RFC3339 或 `null`）。
 记账和限额比较保留完整精度。
 日窗口按北京时间零点重置；周窗口从首次准入当天零点起持续七天，到期后在下一次使用时重新开启。
+手动重置仅清零所选周期的已用金额，保留限额上限、原到期时间和历史费用，返回 `{ id }`。
+未使用或已过期的窗口不会因手动重置而重新开启。重置前完成但延迟结算的费用不再计入所选周期；
+重置后完成的请求继续计费，包括重置时仍在进行的请求。操作保留管理员审计，不改变账号上游额度。
 费用按请求完成时间归属窗口。并发按同一 Key 的执行中请求累计，包含 SSE 与每个 WebSocket
 `response.create`；空闲连接不占名额，内部重试不重复占用。
 修改 Key 策略对既有 WebSocket 连接的下一次请求同样生效，已开始的请求保持原有快照。

@@ -22,10 +22,20 @@ struct TestClientKeyStore {
     plaintexts: Mutex<Vec<String>>,
     create_error: Option<AdminStoreErrorKind>,
     update_error: Option<AdminStoreErrorKind>,
+    resets: Mutex<Vec<gateway_admin::model::client_keys::ResetClientKeyBudget>>,
 }
 
 #[async_trait]
 impl ClientKeyStore for TestClientKeyStore {
+    async fn reset_client_key_budget(
+        &self,
+        command: gateway_admin::model::client_keys::ResetClientKeyBudget,
+        _: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        self.resets.lock().unwrap().push(command);
+        Ok(())
+    }
+
     async fn get_client_key(
         &self,
         _: &ClientApiKeyId,
@@ -111,6 +121,27 @@ impl ClientKeyStore for TestClientKeyStore {
     ) -> AdminStoreResult<Revision> {
         Err(unused())
     }
+}
+
+#[tokio::test]
+async fn reset_budget_forwards_scope_and_returns_only_key_identity() {
+    use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
+    let store = Arc::new(TestClientKeyStore::default());
+    let services = super::AdminHarness::new()
+        .client_keys(store.clone())
+        .build()
+        .await;
+    let command = ResetClientKeyBudget {
+        id: ClientApiKeyId::new("key_reset").unwrap(),
+        period: ClientKeyBudgetPeriod::Weekly,
+    };
+    let result = services
+        .client_keys()
+        .reset_budget(&mutation_context(), command.clone())
+        .await
+        .unwrap();
+    assert_eq!(result, command.id);
+    assert_eq!(*store.resets.lock().unwrap(), vec![command]);
 }
 
 #[tokio::test]

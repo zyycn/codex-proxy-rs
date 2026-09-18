@@ -782,6 +782,34 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn reset_client_key_budget(
+        &self,
+        command: gateway_admin::model::client_keys::ResetClientKeyBudget,
+        _: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        use gateway_admin::model::client_keys::ClientKeyBudgetPeriod;
+        let mut record = self.0.lock().unwrap();
+        let record = record
+            .as_mut()
+            .filter(|record| record.id == command.id)
+            .ok_or_else(|| {
+                AdminStoreError::new(AdminStoreErrorKind::NotFound, "client key", "missing key")
+            })?;
+        if matches!(
+            command.period,
+            ClientKeyBudgetPeriod::Daily | ClientKeyBudgetPeriod::All
+        ) {
+            record.budget.daily_used_usd = gateway_core::metering::Decimal::ZERO;
+        }
+        if matches!(
+            command.period,
+            ClientKeyBudgetPeriod::Weekly | ClientKeyBudgetPeriod::All
+        ) {
+            record.budget.weekly_used_usd = gateway_core::metering::Decimal::ZERO;
+        }
+        Ok(())
+    }
+
     async fn get_client_key(
         &self,
         id: &ClientApiKeyId,

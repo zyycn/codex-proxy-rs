@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import type { ApiKey } from '@/api'
+import { ref, shallowRef, watch } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -12,6 +13,7 @@ import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
+import ApiKeyBudgetResetModal from './components/ApiKeyBudgetResetModal.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
@@ -25,6 +27,13 @@ import { useApiKeyUse } from './composables/useApiKeyUse'
 import { apiKeyColumns } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
+const showBudgetResetModal = shallowRef(false)
+const resettingKey = shallowRef<ApiKey | null>(null)
+
+function openBudgetReset(key: ApiKey) {
+  resettingKey.value = key
+  showBudgetResetModal.value = true
+}
 const {
   loading,
   apiKeys,
@@ -189,6 +198,7 @@ watch(
                 :revealing="revealingKeyIds.has(row.id)"
                 :updating-status="updatingStatusKeyIds.has(row.id)"
                 @edit="openEdit"
+                @reset-budget="openBudgetReset"
                 @delete="requestDeleteKey"
                 @import-ccs="importToCcs"
                 @toggle="handleToggleStatus"
@@ -218,6 +228,12 @@ watch(
       @copy="copyToClipboard"
       @save="requestSave"
       @import-ccs="importCreatedKeyToCcs"
+    />
+
+    <ApiKeyBudgetResetModal
+      v-model="showBudgetResetModal"
+      :api-key="resettingKey"
+      @reset="loadApiKeys"
     />
 
     <ApiKeyUseModal

@@ -7,10 +7,11 @@ use std::fmt;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use gateway_admin::model::client_keys::{
-    ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue, ClientKeyListQuery,
-    ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord, ClientKeySecret,
-    ClientKeySort as DomainSort, ClientKeySortField as DomainSortField, CreateClientKey,
-    CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection, UpdateClientKey,
+    ClientKeyBudgetPeriod, ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue,
+    ClientKeyListQuery, ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord,
+    ClientKeySecret, ClientKeySort as DomainSort, ClientKeySortField as DomainSortField,
+    CreateClientKey, CreatedClientKey, DeleteClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
+    SortDirection, UpdateClientKey,
 };
 use gateway_core::{
     engine::budget::ClientBudgetLimits,
@@ -239,6 +240,36 @@ impl UpdateClientKeyRequest {
             limits: RateLimits {
                 max_concurrency: self.max_concurrency,
                 requests_per_minute: self.requests_per_minute,
+            },
+        })
+    }
+}
+
+/// 重置指定周期已用金额的请求。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResetClientKeyBudgetRequest {
+    id: String,
+    period: BudgetResetPeriod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BudgetResetPeriod {
+    Daily,
+    Weekly,
+    All,
+}
+
+impl ResetClientKeyBudgetRequest {
+    pub fn into_command(self) -> Result<ResetClientKeyBudget, WireValidationError> {
+        validate_required_text(&self.id, "id")?;
+        Ok(ResetClientKeyBudget {
+            id: client_key_id(self.id, "clientKeyMutationNotFound")?,
+            period: match self.period {
+                BudgetResetPeriod::Daily => ClientKeyBudgetPeriod::Daily,
+                BudgetResetPeriod::Weekly => ClientKeyBudgetPeriod::Weekly,
+                BudgetResetPeriod::All => ClientKeyBudgetPeriod::All,
             },
         })
     }
@@ -704,6 +735,10 @@ where
         )
         .route("/api/admin/client-keys/reveal", get(reveal_client_key::<S>))
         .route(
+            "/api/admin/client-keys/reset-budget",
+            post(reset_client_key_budget::<S>),
+        )
+        .route(
             "/api/admin/client-keys/update",
             post(update_client_key::<S>),
         )
@@ -802,6 +837,29 @@ where
             .update(&auth.context().mutation_context(), command)
             .await,
     )
+}
+
+async fn reset_client_key_budget<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(payload): AdminJson<ResetClientKeyBudgetRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let id = state
+        .admin_services()
+        .client_keys()
+        .reset_budget(
+            &auth.context().mutation_context(),
+            payload.into_command().map_err(map_wire_error)?,
+        )
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(MutatedClientKeyData::new(id.as_str().to_owned())),
+    ))
 }
 
 async fn disable_client_key<S>(

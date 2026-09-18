@@ -152,12 +152,15 @@ impl AdminSecurityAuditRepository for PgAdminSecurityAuditRepository {
 pub(crate) async fn append_admin_audit_event_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     mut event: AdminAuditEvent,
-    revision: Revision,
+    revision: impl Into<Option<Revision>>,
 ) -> StoreResult<()> {
-    event.config_revision = Some(
-        i64::try_from(revision.get())
-            .map_err(|_| invalid("config revision exceeds PostgreSQL bigint"))?,
-    );
+    event.config_revision = revision
+        .into()
+        .map(|revision| {
+            i64::try_from(revision.get())
+                .map_err(|_| invalid("config revision exceeds PostgreSQL bigint"))
+        })
+        .transpose()?;
     event.validate()?;
     sqlx::query(
         "insert into admin_audit_events (

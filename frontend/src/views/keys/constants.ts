@@ -21,5 +21,5 @@ export const apiKeyColumns = defineTableColumns<ApiKeyRow>([
     sortable: true,
     emptyText: '',
   },
-  { key: 'actions', label: '操作', kind: 'actions', size: 'xl' },
+  { key: 'actions', label: '操作', kind: 'actions', size: 'lg' },
 ])

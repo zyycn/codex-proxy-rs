@@ -11,6 +11,127 @@ use serde_json::json;
 use super::{AdminTestFixture, AdminTestState};
 
 #[test]
+fn reset_budget_requires_an_explicit_supported_period_and_valid_key() {
+    use gateway_api::admin::client_keys::ResetClientKeyBudgetRequest;
+    for period in ["daily", "weekly", "all"] {
+        let command = serde_json::from_value::<ResetClientKeyBudgetRequest>(
+            json!({"id":"key_reset", "period":period}),
+        )
+        .unwrap()
+        .into_command()
+        .unwrap();
+        assert_eq!(command.id.as_str(), "key_reset");
+    }
+    for payload in [
+        json!({"id":"key_reset"}),
+        json!({"id":"key_reset", "period":"monthly"}),
+        json!({"id":"key_reset", "period":"all", "amount":0}),
+    ] {
+        assert!(serde_json::from_value::<ResetClientKeyBudgetRequest>(payload).is_err());
+    }
+    assert!(
+        serde_json::from_value::<ResetClientKeyBudgetRequest>(json!({"id":" ", "period":"all"}))
+            .unwrap()
+            .into_command()
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn reset_budget_route_requires_admin_and_maps_missing_keys() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (cookie, expected) in [
+        ("", StatusCode::UNAUTHORIZED),
+        ("cpr_session=valid-session", StatusCode::NOT_FOUND),
+    ] {
+        let response = client_keys::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/client-keys/reset-budget")
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-request-id", "req_reset")
+                    .body(Body::from(r#"{"id":"missing","period":"all"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
+async fn budget_reset_allows_admin_but_rejects_key_sessions_without_changing_usage() {
+    use crate::support::{RAW_KEY, json_request, key_fixture, response_json};
+    use axum::http::{Method, StatusCode, header};
+    use gateway_core::policy::ClientApiKeyId;
+    use tower::ServiceExt as _;
+
+    let fixture = key_fixture().await;
+    fixture.auth.insert_session("valid-admin");
+    let mut record = fixture
+        .services
+        .client_keys()
+        .reveal(&ClientApiKeyId::new("key-42").unwrap())
+        .await
+        .unwrap()
+        .record;
+    record.budget.daily_used_usd = "1.25".parse().unwrap();
+    record.budget.weekly_used_usd = "4.5".parse().unwrap();
+    *fixture.client_key.lock().unwrap() = Some(record);
+    let app = crate::openai::api_router_with_admin(fixture.services.clone());
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            Method::POST,
+            "/api/auth/login",
+            json!({"mode":"key", "apiKey":RAW_KEY}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let key_cookie = login.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    for (cookie, expected, used) in [
+        (key_cookie.as_str(), StatusCode::FORBIDDEN, "1.25"),
+        ("cpr_session=valid-admin", StatusCode::OK, "0"),
+    ] {
+        let mut request = json_request(
+            Method::POST,
+            "/api/admin/client-keys/reset-budget",
+            json!({"id":"key-42", "period":"daily"}),
+        );
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            assert_eq!(
+                response_json(response).await["data"],
+                json!({"id":"key-42"})
+            );
+        }
+        let key = fixture.client_key.lock().unwrap().clone().unwrap();
+        assert_eq!(key.budget.daily_used_usd.canonical(), used);
+        assert_eq!(key.budget.weekly_used_usd.canonical(), "4.5");
+    }
+}
+
+#[test]
 fn custom_client_keys_preserve_migrated_values_and_redact_debug() {
     for value in [
         "q".to_owned(),

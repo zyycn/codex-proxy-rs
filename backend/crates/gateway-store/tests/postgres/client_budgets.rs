@@ -2,7 +2,10 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gateway_admin::{
-    model::{MutationActor, MutationContext, client_keys::UpdateClientKey},
+    model::{
+        MutationActor, MutationContext,
+        client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget, UpdateClientKey},
+    },
     ports::store::ClientKeyStore as _,
 };
 use gateway_core::{
@@ -61,6 +64,189 @@ fn context() -> MutationContext {
         actor: MutationActor::System,
         request_id: "budget-test".to_owned(),
     }
+}
+
+#[tokio::test]
+async fn manual_reset_clears_only_selected_budget_and_preserves_policy_history_and_expiry() {
+    let Some(database) = TestDatabase::create("budget_manual_reset").await else {
+        return;
+    };
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    let revision: i64 =
+        sqlx::query_scalar("select config_revision from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    for (key, period, daily, weekly) in [
+        ("daily", ClientKeyBudgetPeriod::Daily, "0", "2.5"),
+        ("weekly", ClientKeyBudgetPeriod::Weekly, "2.5", "0"),
+        ("all", ClientKeyBudgetPeriod::All, "0", "0"),
+    ] {
+        seed(&database, key, "1", "2").await;
+        store.admit(key_id(key)).await.unwrap();
+        let billed = charge(key, key, "2.5");
+        store.settle(billed.clone()).await.unwrap();
+        assert!(store.admit(key_id(key)).await.is_err());
+        let before = status(&database, key).await;
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id(key),
+                    period,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        // 同一费用重试仍由事件 ID 去重，不因清零而被再次累计。
+        store.settle(billed).await.unwrap();
+        let after = status(&database, key).await;
+        assert_eq!(after.daily_used_usd.canonical(), daily);
+        assert_eq!(after.weekly_used_usd.canonical(), weekly);
+        assert_eq!(after.limits, before.limits);
+        assert_eq!(after.daily_resets_at, before.daily_resets_at);
+        assert_eq!(after.weekly_resets_at, before.weekly_resets_at);
+        assert_eq!(
+            store.admit(key_id(key)).await.is_ok(),
+            period == ClientKeyBudgetPeriod::All
+        );
+    }
+    let counts: (i64, i64, i64) = sqlx::query_as(
+        "select (select count(*) from client_key_charge_events),
+        (select count(*) from admin_audit_events where action = 'reset_budget' and config_revision is null and actor_kind = 'system'),
+        (select config_revision from runtime_settings where id = 1)"
+    ).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(counts, (3, 3, revision));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_reset_excludes_old_completions_but_counts_inflight_requests_after_reset() {
+    let Some(database) = TestDatabase::create("budget_reset_late").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    store.admit(key_id("key")).await.unwrap();
+    store
+        .settle(charge("key", "before-reset", "1.2"))
+        .await
+        .unwrap();
+    let delayed = charge("key", "delayed", "0.3");
+    let reset_context = context();
+    // 无论迟到结算还是重置先取得锁，重置前完成的费用都不应重新进入日额度。
+    let (reset, settled) = tokio::join!(
+        admin.reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("key"),
+                period: ClientKeyBudgetPeriod::Daily
+            },
+            &reset_context
+        ),
+        store.settle(delayed),
+    );
+    reset.unwrap();
+    settled.unwrap();
+    let after = status(&database, "key").await;
+    assert_eq!(after.daily_used_usd.canonical(), "0");
+    assert_eq!(after.weekly_used_usd.canonical(), "1.5");
+    store
+        .settle(charge("key", "completed-after-reset", "0.4"))
+        .await
+        .unwrap();
+    let after = status(&database, "key").await;
+    assert_eq!(after.daily_used_usd.canonical(), "0.4");
+    assert_eq!(after.weekly_used_usd.canonical(), "1.9");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_missing_keys() {
+    let Some(database) = TestDatabase::create("budget_reset_inactive").await else {
+        return;
+    };
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    for key in ["unused", "expired"] {
+        seed(&database, key, "1", "5").await;
+    }
+    store.admit(key_id("expired")).await.unwrap();
+    store.settle(charge("expired", "old", "2")).await.unwrap();
+    sqlx::query("update client_key_budget_windows set daily_end = now() - interval '1 second', weekly_end = now() - interval '1 second'")
+        .execute(&database.pool).await.unwrap();
+    for key in ["unused", "expired"] {
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id(key),
+                    period: ClientKeyBudgetPeriod::All,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let after = status(&database, key).await;
+        assert!(after.daily_resets_at.is_none());
+        assert!(after.weekly_resets_at.is_none());
+        assert_eq!(after.daily_used_usd.canonical(), "0");
+    }
+    let windows: i64 = sqlx::query_scalar("select count(*) from client_key_budget_windows")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(windows, 1);
+    let error = admin
+        .reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("missing"),
+                period: ClientKeyBudgetPeriod::All,
+            },
+            &context(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        gateway_admin::ports::store::AdminStoreErrorKind::NotFound
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_reset_rolls_back_when_audit_cannot_be_written() {
+    let Some(database) = TestDatabase::create("budget_reset_atomic").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    store.settle(charge("key", "bill", "1.2")).await.unwrap();
+    let before = status(&database, "key").await;
+    sqlx::raw_sql(
+        "create function reject_reset_audit() returns trigger language plpgsql as $$
+        begin raise exception 'test audit unavailable'; end $$;
+        create trigger reject_reset_audit before insert on admin_audit_events
+        for each row execute function reject_reset_audit();",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert!(
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id("key"),
+                    period: ClientKeyBudgetPeriod::All
+                },
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(status(&database, "key").await, before);
+    database.close().await;
 }
 
 #[tokio::test]

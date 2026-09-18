@@ -20,7 +20,7 @@ use gateway_admin::{
             ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPage as AdminClientKeyPage,
             ClientKeyRecord as AdminClientKeyRecord, ClientKeySecret as AdminClientKeySecret,
             ClientKeySort as AdminClientKeySort, ClientKeySortField as AdminClientKeySortField,
-            DeleteClientKey, NewClientKey, SetClientKeyEnabled,
+            DeleteClientKey, NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
             SortDirection as AdminSortDirection, UpdateClientKey as AdminUpdateClientKey,
         },
     },
@@ -698,6 +698,16 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn reset_client_key_budget(
+        &self,
+        command: ResetClientKeyBudget,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        super::client_budgets::reset_client_key_budget(&self.keys.pool, command, context)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
     async fn get_client_key(
         &self,
         id: &ClientApiKeyId,

@@ -15,7 +15,8 @@ use crate::{
         client_keys::{
             ClientKeyCursorValue, ClientKeyListQuery, ClientKeyMutation, ClientKeyPage,
             ClientKeySecret, ClientKeySortField, CreateClientKey, CreatedClientKey,
-            DeleteClientKey, NewClientKey, SetClientKeyEnabled, UpdateClientKey,
+            DeleteClientKey, NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
+            UpdateClientKey,
         },
     },
     ports::store::{AdminStoreError, AdminStoreErrorKind, ClientKeyStore},
@@ -48,6 +49,11 @@ pub trait ClientKeyService: Send + Sync {
         context: &MutationContext,
         command: DeleteClientKey,
     ) -> Result<ClientKeyMutation, AdminError>;
+    async fn reset_budget(
+        &self,
+        context: &MutationContext,
+        command: ResetClientKeyBudget,
+    ) -> Result<ClientApiKeyId, AdminError>;
 }
 
 pub(crate) struct DefaultClientKeyService {
@@ -73,6 +79,19 @@ impl DefaultClientKeyService {
 
 #[async_trait]
 impl ClientKeyService for DefaultClientKeyService {
+    async fn reset_budget(
+        &self,
+        context: &MutationContext,
+        command: ResetClientKeyBudget,
+    ) -> Result<ClientApiKeyId, AdminError> {
+        let id = command.id.clone();
+        self.store
+            .reset_client_key_budget(command, context)
+            .await
+            .map_err(|error| map_store_error(error, "client API key"))?;
+        Ok(id)
+    }
+
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError> {
         validate_cursor(&query)?;
         self.store

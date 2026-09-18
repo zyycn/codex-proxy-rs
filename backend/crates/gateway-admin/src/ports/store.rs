@@ -23,7 +23,7 @@ use crate::model::{
     auth::{AdminAuditEvent, AuthSession},
     client_keys::{
         ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
-        NewClientKey, SetClientKeyEnabled, UpdateClientKey,
+        NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled, UpdateClientKey,
     },
     observability::{
         DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
@@ -297,6 +297,13 @@ pub trait ClientKeyStore: Send + Sync {
         command: DeleteClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
+
+    /// 仅修改运行时账本并原子记录审计，不推进配置版本。
+    async fn reset_client_key_budget(
+        &self,
+        command: ResetClientKeyBudget,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()>;
 }
 
 /// Provider-neutral account group management transactions.

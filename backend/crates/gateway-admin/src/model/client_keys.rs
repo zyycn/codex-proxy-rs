@@ -199,6 +199,21 @@ pub struct SetClientKeyEnabled {
     pub enabled: bool,
 }
 
+/// 管理员选择的金额重置范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKeyBudgetPeriod {
+    Daily,
+    Weekly,
+    All,
+}
+
+/// 清零所选窗口已用金额，保留限额、到期时间与历史费用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetClientKeyBudget {
+    pub id: ClientApiKeyId,
+    pub period: ClientKeyBudgetPeriod,
+}
+
 /// 删除 Client Key。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteClientKey {
