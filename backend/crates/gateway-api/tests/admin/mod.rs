@@ -271,6 +271,20 @@ impl MemoryAuthStore {
             session_id.to_owned(),
             AuthSession {
                 subject: gateway_admin::model::auth::SessionSubject::Admin {
+                    credential_fingerprint: {
+                        use base64::Engine as _;
+                        use sha2::Digest as _;
+                        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                            sha2::Sha256::digest(
+                                self.password_hash
+                                    .lock()
+                                    .unwrap()
+                                    .as_ref()
+                                    .unwrap()
+                                    .as_bytes(),
+                            ),
+                        )
+                    },
                     admin_user_id: "admin_1".to_owned(),
                 },
                 expires_at: Utc::now() + Duration::hours(1),
@@ -299,6 +313,28 @@ impl MemoryAuthStore {
 impl AuthStore for MemoryAuthStore {
     async fn load_password_hash(&self, _: &str) -> AdminStoreResult<Option<String>> {
         Ok(self.password_hash.lock().expect("password hash").clone())
+    }
+
+    async fn change_password(
+        &self,
+        _: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: gateway_admin::model::auth::AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        if self.fail_audit.load(Ordering::SeqCst) {
+            return Err(unavailable("audit"));
+        }
+        let mut stored = self.password_hash.lock().unwrap();
+        let Some(credentials) = stored
+            .as_mut()
+            .filter(|value| value.as_str() == expected_hash)
+        else {
+            return Ok(false);
+        };
+        *credentials = password_hash.to_owned();
+        self.audits.lock().unwrap().push(audit);
+        Ok(true)
     }
 
     async fn create_password_hash_if_absent(

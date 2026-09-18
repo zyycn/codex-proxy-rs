@@ -331,6 +331,9 @@ API 模块按 `url`、`method`、`data`（POST）或 `params: data`（GET）排�
 AuthService 每次恢复 Key 会话时重新检查 Key 是否存在且启用；Key 会话不能访问管理员页面和管理接口。
 前端只维护一份 Auth Store，不在每个 API 请求上标记身份；401 会话失效、403 权限不足和 503 依赖故障分别处理。
 成功登录替换旧会话，登出必须确认服务端撤销。
+管理员会话保存由已加盐密码哈希派生的指纹，每次恢复时与 PostgreSQL 当前密码核对；普通设置变更不影响该绑定。
+改密在 AuthService 验证当前密码和新密码策略，Store 以旧哈希条件更新密码并在同一 PostgreSQL 事务记录审计。
+事务提交后旧管理员会话的指纹失配，不依赖 Redis 批量删除完成撤销；原始密码及密码哈希不进入 Redis。
 KeyUsageService 从 AuthService 的服务端身份确定唯一查询范围，复用 ClientKeyStore 的额度账本投影和
 ObservabilityStore 的范围查询；API 只输出单页所需的字段白名单，不复用管理员的宽响应。
 前端 `/key-usage` 独立于管理布局，不挂载管理员菜单或请求管理接口。

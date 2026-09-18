@@ -227,6 +227,15 @@ pub trait AccountRuntimeStore: Send + Sync {
 pub trait AuthStore: Send + Sync {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>>;
 
+    /// 密码更新与审计必须在同一事务提交；旧哈希不匹配时不写入。
+    async fn change_password(
+        &self,
+        admin_user_id: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: AdminAuditEvent,
+    ) -> AdminStoreResult<bool>;
+
     async fn create_password_hash_if_absent(
         &self,
         admin_user_id: &str,

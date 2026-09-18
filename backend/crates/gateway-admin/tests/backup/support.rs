@@ -618,6 +618,16 @@ impl AuthStore for FakeAuthStore {
     async fn load_password_hash(&self, _admin_user_id: &str) -> AdminStoreResult<Option<String>> {
         Ok(None)
     }
+    async fn change_password(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: gateway_admin::model::auth::AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
     async fn create_password_hash_if_absent(
         &self,
         _admin_user_id: &str,

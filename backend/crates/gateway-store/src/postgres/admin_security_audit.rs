@@ -71,6 +71,14 @@ impl AdminAuditEvent {
 pub trait AdminSecurityAuditRepository: Send + Sync {
     async fn password_hash(&self, admin_user_id: &str) -> StoreResult<Option<String>>;
 
+    async fn change_password(
+        &self,
+        admin_user_id: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: AdminAuditEvent,
+    ) -> StoreResult<bool>;
+
     async fn create_password_hash_if_absent(
         &self,
         admin_user_id: &str,
@@ -101,6 +109,43 @@ impl AdminSecurityAuditRepository for PgAdminSecurityAuditRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|_| postgres_unavailable("read admin password hash"))
+    }
+
+    async fn change_password(
+        &self,
+        admin_user_id: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: AdminAuditEvent,
+    ) -> StoreResult<bool> {
+        require_nonempty("admin user", "id", admin_user_id)?;
+        require_nonempty("admin user", "password_hash", password_hash)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| postgres_unavailable("begin password change"))?;
+        let changed = sqlx::query(
+            "update admin_users set password_hash = $3, updated_at = now()
+             where id = $1 and password_hash = $2",
+        )
+        .bind(admin_user_id)
+        .bind(expected_hash)
+        .bind(password_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| postgres_unavailable("change admin password"))?
+        .rows_affected()
+            == 1;
+        if !changed {
+            return Ok(false);
+        }
+        append_admin_audit_event_in_transaction(&mut transaction, audit, None).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| postgres_unavailable("commit password change"))?;
+        Ok(true)
     }
 
     async fn create_password_hash_if_absent(

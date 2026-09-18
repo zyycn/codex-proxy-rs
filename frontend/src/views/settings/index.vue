@@ -13,6 +13,7 @@ import ClientProfileEditor from '@/components/client-profile/ClientProfileEditor
 
 import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
+import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
 import FastPolicyCard from './components/FastPolicyCard.vue'
@@ -137,6 +138,7 @@ watch(section, (value) => {
         正在加载设置…
       </div>
 
+      <AdminPasswordCard />
       <AdminApiKeyCard
         :status="adminApiKeyStatus"
         :loading="adminKeyLoading"

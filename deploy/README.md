@@ -342,8 +342,11 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
 ## 密码语义
 
 - `admin.default_password` 只在首次创建管理员时使用。
+- 已有管理员在「系统设置 → 管理员密码」修改登录密码，需要验证当前密码；修改后所有管理员会话失效，使用新密码重新登录。
 - PostgreSQL 官方镜像只在空数据目录初始化时使用 `database.password`。
 - Redis 在每次容器创建时使用 `redis.password`。
+
+管理员会话绑定密码哈希指纹；从尚未包含此字段的版本升级后，管理员需要重新登录一次，密钥身份会话不受影响。
 
 已有 PostgreSQL 数据目录后，直接修改 `database.password` 不会修改数据库用户密码，只会导致
 应用无法连接。轮换时必须先在 PostgreSQL 中修改用户密码，再同步更新 `config.yaml`。Redis

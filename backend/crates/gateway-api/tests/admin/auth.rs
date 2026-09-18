@@ -5,6 +5,21 @@ use serde_json::json;
 use super::AdminTestFixture;
 
 #[test]
+fn password_change_request_rejects_unknown_fields_and_redacts_both_passwords() {
+    let request: gateway_api::auth::ChangePasswordRequest = serde_json::from_value(json!({
+        "currentPassword": "current-password-secret", "newPassword": "new-password-secret"
+    }))
+    .unwrap();
+    assert!(!format!("{request:?}").contains("password-secret"));
+    assert!(
+        serde_json::from_value::<gateway_api::auth::ChangePasswordRequest>(json!({
+            "currentPassword": "old", "newPassword": "new", "username": "another-admin"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn login_request_should_deny_unknown_fields_and_redact_password_debug() {
     let password = "admin-password-must-not-leak";
     let request = serde_json::from_value::<LoginRequest>(json!({

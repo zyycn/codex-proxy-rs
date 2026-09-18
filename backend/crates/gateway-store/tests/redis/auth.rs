@@ -149,6 +149,7 @@ async fn auth_repository() -> Option<(RedisAuthStateRepository, ConnectionManage
 fn admin_auth_state_rejects_invalid_ttl_boundaries() {
     let session = AuthSessionRecord {
         subject: SessionSubjectRecord::Admin {
+            credential_fingerprint: String::new(),
             admin_user_id: "admin".to_owned(),
         },
         expires_at: Utc::now() - chrono::Duration::seconds(1),
@@ -174,6 +175,7 @@ async fn admin_auth_state_keeps_fixed_ttl_and_opaque_keys() {
     let admin_api_key = "admin-must-never-enter-redis";
     let session = AuthSessionRecord {
         subject: SessionSubjectRecord::Admin {
+            credential_fingerprint: "test-password-fingerprint".to_owned(),
             admin_user_id: "default-admin".to_owned(),
         },
         expires_at: Utc::now() + chrono::Duration::seconds(60),
@@ -232,7 +234,7 @@ async fn admin_auth_state_keeps_fixed_ttl_and_opaque_keys() {
 }
 
 #[tokio::test]
-async fn unified_session_rejects_unknown_or_mixed_identity_payloads() {
+async fn unified_session_rejects_invalid_identities_and_loads_legacy_admin_payloads() {
     let Some((repository, mut connection, namespace)) = auth_repository().await else {
         return;
     };
@@ -272,4 +274,30 @@ async fn unified_session_rejects_unknown_or_mixed_identity_payloads() {
             .unwrap();
         assert!(repository.load_session(token).await.is_err());
     }
+
+    // 旧版会话仍能解码，空指纹交由认证服务判定失效，避免升级后返回存储故障。
+    let legacy = serde_json::json!({
+        "subject": {"type": "admin", "admin_user_id": "admin"},
+        "expires_at": (Utc::now() + chrono::Duration::seconds(60)).to_rfc3339(),
+    });
+    redis::cmd("SET")
+        .arg(&keys[0])
+        .arg(legacy.to_string())
+        .arg("EX")
+        .arg(60)
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_session(token)
+            .await
+            .unwrap()
+            .unwrap()
+            .subject,
+        SessionSubjectRecord::Admin {
+            admin_user_id: "admin".to_owned(),
+            credential_fingerprint: String::new(),
+        }
+    );
 }

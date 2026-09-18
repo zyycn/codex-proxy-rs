@@ -8,6 +8,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
 use gateway_core::engine::execution::ClientKeyVerifier;
 use rand_core::{OsRng, RngCore as _};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
@@ -15,8 +16,8 @@ use crate::{
     model::{
         AdminError, AdminErrorKind,
         auth::{
-            AdminAuditEvent, AuditActorKind, AuthSession, LoginCommand, LoginError, LoginResult,
-            SessionSubject,
+            AdminAuditEvent, AuditActorKind, AuthSession, ChangePassword, LoginCommand, LoginError,
+            LoginResult, SessionSubject,
         },
     },
     ports::store::AuthStore,
@@ -27,6 +28,12 @@ use super::map_store_error;
 /// 所有控制面接口消费同一个会话服务，权限由服务端身份决定。
 #[async_trait]
 pub trait AuthService: Send + Sync {
+    async fn change_password(
+        &self,
+        session_id: Option<&str>,
+        command: ChangePassword,
+        source_ip: IpAddr,
+    ) -> Result<(), AdminError>;
     async fn ensure_default_admin(&self, password: &str) -> Result<bool, AdminError>;
     async fn session(&self, session_id: Option<&str>) -> Result<Option<AuthSession>, AdminError>;
     async fn resolve_admin_user_id(
@@ -98,17 +105,21 @@ impl DefaultAuthService {
                 {
                     return Err(LoginError::InvalidCredentials);
                 }
-                let hash = self
+                let password_hash = self
                     .store
                     .load_password_hash(&self.default_admin_user_id)
                     .await
                     .map_err(|_| LoginError::Unavailable)?
                     .ok_or(LoginError::InvalidCredentials)?;
-                if !verify_admin_password(&password, &hash).map_err(|_| LoginError::Unavailable)? {
+                if password.len() > 4096
+                    || !verify_admin_password(&password, &password_hash)
+                        .map_err(|_| LoginError::Unavailable)?
+                {
                     return Err(LoginError::InvalidCredentials);
                 }
                 Ok(SessionSubject::Admin {
                     admin_user_id: self.default_admin_user_id.clone(),
+                    credential_fingerprint: password_fingerprint(&password_hash),
                 })
             }
             LoginCommand::Key { api_key } => {
@@ -132,6 +143,75 @@ impl DefaultAuthService {
 
 #[async_trait]
 impl AuthService for DefaultAuthService {
+    async fn change_password(
+        &self,
+        session_id: Option<&str>,
+        command: ChangePassword,
+        source_ip: IpAddr,
+    ) -> Result<(), AdminError> {
+        let session = self
+            .session(session_id)
+            .await?
+            .ok_or_else(|| AdminError::new(AdminErrorKind::Unauthorized, "请先登录"))?;
+        let SessionSubject::Admin {
+            admin_user_id,
+            credential_fingerprint,
+        } = session.subject
+        else {
+            return Err(AdminError::new(
+                AdminErrorKind::Forbidden,
+                "仅管理员可以修改密码",
+            ));
+        };
+        if self
+            .store
+            .consume_login_attempt(
+                source_ip,
+                LOGIN_ATTEMPTS_PER_SOURCE,
+                LOGIN_ATTEMPTS_GLOBAL,
+                LOGIN_WINDOW,
+            )
+            .await
+            .map_err(|error| map_store_error(error, "password change limit"))?
+            .is_some()
+        {
+            return Err(AdminError::new(
+                AdminErrorKind::RateLimited,
+                "尝试过于频繁，请稍后再试",
+            ));
+        }
+        validate_new_password(&command.new_password)?;
+        let password_hash = self
+            .store
+            .load_password_hash(&admin_user_id)
+            .await
+            .map_err(|error| map_store_error(error, "administrator"))?
+            .filter(|hash| password_fingerprint(hash) == credential_fingerprint)
+            .ok_or_else(|| AdminError::conflict("密码已变更，请重新登录"))?;
+        if command.current_password.len() > 4096
+            || !verify_admin_password(&command.current_password, &password_hash)?
+        {
+            return Err(AdminError::invalid("当前密码不正确"));
+        }
+        if command.new_password == command.current_password {
+            return Err(AdminError::invalid("新密码不能与当前密码相同"));
+        }
+        let hash = hash_admin_password(&command.new_password)?;
+        let mut audit = self.auth_audit("admin.password_changed", &admin_user_id);
+        audit.entity_kind = "admin_user".to_owned();
+        audit.changed_fields = vec!["password".to_owned()];
+        if !self
+            .store
+            .change_password(&admin_user_id, &password_hash, &hash, audit)
+            .await
+            .map_err(|error| map_store_error(error, "administrator password"))?
+        {
+            return Err(AdminError::conflict("密码已变更，请重新登录"));
+        }
+        // 密码事务提交后旧指纹不再匹配，会话撤销不依赖 Redis 删除成功。
+        Ok(())
+    }
+
     async fn ensure_default_admin(&self, password: &str) -> Result<bool, AdminError> {
         let hash = hash_admin_password(password)?;
         self.store
@@ -156,6 +236,23 @@ impl AuthService for DefaultAuthService {
             let _ = self.store.delete_session(session_id).await;
             return Ok(None);
         }
+        if let SessionSubject::Admin {
+            admin_user_id,
+            credential_fingerprint,
+        } = &session.subject
+        {
+            let password_hash = self
+                .store
+                .load_password_hash(admin_user_id)
+                .await
+                .map_err(|error| map_store_error(error, "administrator session"))?;
+            if password_hash
+                .is_none_or(|hash| password_fingerprint(&hash) != *credential_fingerprint)
+            {
+                let _ = self.store.delete_session(session_id).await;
+                return Ok(None);
+            }
+        }
         if let SessionSubject::Key { client_key_id } = &session.subject
             && !self
                 .store
@@ -178,7 +275,7 @@ impl AuthService for DefaultAuthService {
             .await?
             .map(|session| session.subject)
         {
-            Some(SessionSubject::Admin { admin_user_id }) => Ok(Some(admin_user_id)),
+            Some(SessionSubject::Admin { admin_user_id, .. }) => Ok(Some(admin_user_id)),
             Some(SessionSubject::Key { .. }) => Err(AdminError::new(
                 AdminErrorKind::Forbidden,
                 "当前身份无权访问管理接口",
@@ -237,7 +334,7 @@ impl AuthService for DefaultAuthService {
             .store_session(&session_id, &session)
             .await
             .map_err(|_| LoginError::Unavailable)?;
-        if let SessionSubject::Admin { admin_user_id } = &session.subject
+        if let SessionSubject::Admin { admin_user_id, .. } = &session.subject
             && self
                 .store
                 .append_audit_event(self.auth_audit("admin.login", admin_user_id))
@@ -267,7 +364,7 @@ impl AuthService for DefaultAuthService {
             .await
             .map_err(|error| map_store_error(error, "authentication session"))?;
         if let Some(AuthSession {
-            subject: SessionSubject::Admin { admin_user_id },
+            subject: SessionSubject::Admin { admin_user_id, .. },
             ..
         }) = session
         {
@@ -286,6 +383,19 @@ fn session_ttl(minutes: u64) -> Duration {
             .unwrap_or(MAX_SESSION_TTL_MINUTES)
             .clamp(1, MAX_SESSION_TTL_MINUTES),
     )
+}
+
+fn validate_new_password(password: &str) -> Result<(), AdminError> {
+    if password.trim().chars().count() < 12
+        || password.len() > 1024
+        || password.chars().any(char::is_control)
+        || crate::WEAK_ADMIN_PASSWORDS.contains(&password.trim().to_ascii_lowercase().as_str())
+    {
+        return Err(AdminError::invalid(
+            "新密码至少需要 12 个字符，最多 1024 字节，不能使用常见弱口令或控制字符",
+        ));
+    }
+    Ok(())
 }
 
 fn hash_admin_password(password: &str) -> Result<String, AdminError> {
@@ -313,4 +423,9 @@ fn valid_admin_api_key_shape(value: &str) -> bool {
     value.len() == 70
         && value.starts_with("admin-")
         && value[6..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+// 指纹只绑定已加盐的密码哈希，不把密码或原始哈希复制到 Redis 会话。
+fn password_fingerprint(password_hash: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(password_hash.as_bytes()))
 }

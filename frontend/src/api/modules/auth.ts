@@ -39,3 +39,11 @@ export function logout() {
     method: 'POST',
   })
 }
+
+export function changeAdminPassword(data: { currentPassword: string, newPassword: string }) {
+  return request<{ message: string }>({
+    url: '/api/auth/password',
+    method: 'POST',
+    data,
+  })
+}

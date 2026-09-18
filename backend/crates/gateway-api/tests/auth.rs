@@ -42,6 +42,173 @@ async fn get(app: &axum::Router, path: &str, cookie: &str) -> axum::response::Re
         .expect("GET response")
 }
 
+async fn change_password(
+    app: &axum::Router,
+    cookie: Option<&str>,
+    current: &str,
+    new: &str,
+) -> axum::response::Response {
+    let mut request = json_request(
+        Method::POST,
+        "/api/auth/password",
+        json!({"currentPassword": current, "newPassword": new}),
+    );
+    if let Some(cookie) = cookie {
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+    }
+    app.clone().oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn password_change_revokes_all_admin_sessions_but_preserves_key_sessions() {
+    let (app, fixture) = auth_app().await;
+    let admin_body = json!({"mode": "admin", "password": "strong-admin-password"});
+    let first = session_cookie(&login(&app, admin_body.clone(), None).await);
+    let second = session_cookie(&login(&app, admin_body.clone(), None).await);
+    let key = session_cookie(&login(&app, json!({"mode": "key", "apiKey": RAW_KEY}), None).await);
+    fixture.set_api_key(&format!("admin-{}", "b".repeat(64)));
+    assert_eq!(
+        get(&app, "/api/admin/system/version", &first)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let response = change_password(
+        &app,
+        Some(&first),
+        "strong-admin-password",
+        "new-strong-admin-password",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(
+        response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    for cookie in [&first, &second] {
+        assert_eq!(
+            get(&app, "/api/admin/system/version", cookie)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        response_json(get(&app, "/api/auth/status", &key).await).await["data"]["authenticated"],
+        true
+    );
+    assert_eq!(
+        login(&app, admin_body, None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        login(
+            &app,
+            json!({"mode": "admin", "password": "new-strong-admin-password"}),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn password_change_requires_admin_session_and_keeps_session_on_validation_failure() {
+    let (app, _) = auth_app().await;
+    assert_eq!(
+        change_password(&app, None, "strong-admin-password", "new-strong-password")
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let key = session_cookie(&login(&app, json!({"mode": "key", "apiKey": RAW_KEY}), None).await);
+    assert_eq!(
+        change_password(
+            &app,
+            Some(&key),
+            "strong-admin-password",
+            "new-strong-password"
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let admin = session_cookie(
+        &login(
+            &app,
+            json!({"mode": "admin", "password": "strong-admin-password"}),
+            None,
+        )
+        .await,
+    );
+    for (current, new) in [
+        ("wrong-current-password", "new-strong-password"),
+        ("strong-admin-password", "short"),
+        ("strong-admin-password", "strong-admin-password"),
+    ] {
+        assert_eq!(
+            change_password(&app, Some(&admin), current, new)
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            get(&app, "/api/admin/system/version", &admin)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+}
+
+#[tokio::test]
+async fn password_change_audit_failure_preserves_password_and_session() {
+    let (app, fixture) = auth_app().await;
+    let admin = session_cookie(
+        &login(
+            &app,
+            json!({"mode": "admin", "password": "strong-admin-password"}),
+            None,
+        )
+        .await,
+    );
+    fixture.fail_audit(true);
+    assert_eq!(
+        change_password(
+            &app,
+            Some(&admin),
+            "strong-admin-password",
+            "new-strong-password"
+        )
+        .await
+        .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        get(&app, "/api/admin/system/version", &admin)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    fixture.fail_audit(false);
+    assert_eq!(
+        login(
+            &app,
+            json!({"mode": "admin", "password": "strong-admin-password"}),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+}
+
 #[tokio::test]
 async fn unified_login_returns_server_identity_and_rotates_the_previous_session() {
     let (app, _) = auth_app().await;

@@ -283,6 +283,25 @@ impl AuthStore for BootstrapAuthStore {
         Ok(self.password_hash.lock().expect("password hash").clone())
     }
 
+    async fn change_password(
+        &self,
+        _: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: gateway_admin::model::auth::AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        let mut stored = self.password_hash.lock().unwrap();
+        let Some(credentials) = stored
+            .as_mut()
+            .filter(|value| value.as_str() == expected_hash)
+        else {
+            return Ok(false);
+        };
+        *credentials = password_hash.to_owned();
+        let _ = audit;
+        Ok(true)
+    }
+
     async fn create_password_hash_if_absent(
         &self,
         _: &str,

@@ -12,7 +12,7 @@ use axum::{
 };
 use gateway_admin::{
     AdminServices,
-    model::auth::{AuthSession, LoginCommand, LoginError, SessionSubject},
+    model::auth::{AuthSession, ChangePassword, LoginCommand, LoginError, SessionSubject},
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,19 @@ pub enum LoginRequest {
         #[serde(rename = "apiKey")]
         api_key: String,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+impl fmt::Debug for ChangePasswordRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ChangePasswordRequest([REDACTED])")
+    }
 }
 
 impl fmt::Debug for LoginRequest {
@@ -102,6 +115,7 @@ where
         .route("/api/auth/login", post(login::<S>))
         .route("/api/auth/status", get(session_status::<S>))
         .route("/api/auth/logout", post(logout::<S>))
+        .route("/api/auth/password", post(change_password::<S>))
         .route("/api/auth", any(not_found))
         .route("/api/auth/{*path}", any(not_found))
         .method_not_allowed_fallback(method_not_allowed)
@@ -189,17 +203,56 @@ where
             .await
             .map_err(map_admin_service_error)?;
     }
-    let mut response = AdminResponse::new(
+    let response = AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(LogoutData {
             message: "Logged out successfully",
         }),
     )
     .into_response();
+    clear_session_cookie(response, &headers)
+}
+
+async fn change_password<S>(
+    State(state): State<S>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    AdminJson(payload): AdminJson<ChangePasswordRequest>,
+) -> Result<Response, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .auth()
+        .change_password(
+            session_cookie::value(&headers).as_deref(),
+            ChangePassword {
+                current_password: payload.current_password,
+                new_password: payload.new_password,
+            },
+            peer.ip(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    let response = AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(LogoutData {
+            message: "密码已修改，请重新登录",
+        }),
+    )
+    .into_response();
+    clear_session_cookie(response, &headers)
+}
+
+fn clear_session_cookie(
+    mut response: Response,
+    headers: &HeaderMap,
+) -> Result<Response, AdminError> {
     let cookie = format!(
         "{}=; {}; Max-Age=0",
         session_cookie::NAME,
-        session_cookie::attributes(&headers)
+        session_cookie::attributes(headers)
     );
     response.headers_mut().insert(
         header::SET_COOKIE,

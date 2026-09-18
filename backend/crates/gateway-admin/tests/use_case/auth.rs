@@ -21,10 +21,81 @@ struct MemoryAuthStore {
     audits: Mutex<Vec<AdminAuditEvent>>,
 }
 
+#[tokio::test]
+async fn password_change_obeys_rate_limit_and_rejects_unbound_legacy_sessions() {
+    use gateway_admin::model::{
+        AdminErrorKind,
+        auth::{ChangePassword, SessionSubject},
+    };
+    let store = std::sync::Arc::new(MemoryAuthStore::default());
+    let services = super::AdminHarness::new().auth(store.clone()).build().await;
+    let auth = services.auth();
+    let login = auth
+        .login(
+            LoginCommand::Admin {
+                username: None,
+                password: "strong-test-password".into(),
+            },
+            std::net::Ipv4Addr::LOCALHOST.into(),
+            None,
+        )
+        .await
+        .unwrap();
+    *store.retry_after.lock().unwrap() = Some(std::time::Duration::from_secs(30));
+    let error = auth
+        .change_password(
+            Some(&login.session_id),
+            ChangePassword {
+                current_password: "strong-test-password".into(),
+                new_password: "new-strong-password".into(),
+            },
+            std::net::Ipv4Addr::LOCALHOST.into(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminErrorKind::RateLimited);
+    assert!(
+        auth.session(Some(&login.session_id))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    store.sessions.lock().unwrap().insert(
+        "legacy".into(),
+        AuthSession {
+            subject: SessionSubject::Admin {
+                admin_user_id: "admin".into(),
+                credential_fingerprint: String::new(),
+            },
+            expires_at: Utc::now() + TimeDelta::hours(1),
+        },
+    );
+    assert!(auth.session(Some("legacy")).await.unwrap().is_none());
+}
+
 #[async_trait]
 impl AuthStore for MemoryAuthStore {
     async fn load_password_hash(&self, _: &str) -> AdminStoreResult<Option<String>> {
         Ok(self.password_hash.lock().expect("password hash").clone())
+    }
+
+    async fn change_password(
+        &self,
+        _: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: gateway_admin::model::auth::AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        let mut stored = self.password_hash.lock().unwrap();
+        let Some(credentials) = stored
+            .as_mut()
+            .filter(|value| value.as_str() == expected_hash)
+        else {
+            return Ok(false);
+        };
+        *credentials = password_hash.to_owned();
+        self.audits.lock().unwrap().push(audit);
+        Ok(true)
     }
 
     async fn create_password_hash_if_absent(
@@ -197,6 +268,7 @@ async fn expired_sessions_are_removed_and_store_outages_are_not_treated_as_logou
         "expired".to_owned(),
         AuthSession {
             subject: SessionSubject::Admin {
+                credential_fingerprint: String::new(),
                 admin_user_id: "admin".to_owned(),
             },
             expires_at: Utc::now() - TimeDelta::seconds(1),

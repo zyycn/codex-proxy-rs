@@ -25,14 +25,21 @@ return 0
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionSubjectRecord {
-    Admin { admin_user_id: String },
-    Key { client_key_id: String },
+    Admin {
+        admin_user_id: String,
+        // 旧会话没有指纹，按未认证处理并要求重新登录。
+        #[serde(default)]
+        credential_fingerprint: String,
+    },
+    Key {
+        client_key_id: String,
+    },
 }
 
 impl SessionSubjectRecord {
     fn validate(&self) -> StoreResult<()> {
         match self {
-            Self::Admin { admin_user_id } => {
+            Self::Admin { admin_user_id, .. } => {
                 require_nonempty("authentication session", "admin_user_id", admin_user_id)
             }
             Self::Key { client_key_id } => {

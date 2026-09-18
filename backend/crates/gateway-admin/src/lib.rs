@@ -51,7 +51,7 @@ use use_case::{
 const OPENAI_PROVIDER_KIND: &str = "openai";
 const XAI_PROVIDER_KIND: &str = "xai";
 const MINIMUM_INITIAL_PASSWORD_BYTES: usize = 12;
-const WEAK_INITIAL_PASSWORDS: &[&str] = &[
+const WEAK_ADMIN_PASSWORDS: &[&str] = &[
     "",
     "admin",
     "123456",
@@ -149,7 +149,7 @@ impl AdminConfig {
         let password = self.default_password.expose().trim();
         if password.len() < MINIMUM_INITIAL_PASSWORD_BYTES
             || password.contains('$')
-            || WEAK_INITIAL_PASSWORDS.contains(&password.to_ascii_lowercase().as_str())
+            || WEAK_ADMIN_PASSWORDS.contains(&password.to_ascii_lowercase().as_str())
         {
             return Err(AdminConfigError::WeakInitialPassword);
         }

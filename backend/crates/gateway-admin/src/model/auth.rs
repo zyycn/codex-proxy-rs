@@ -109,8 +109,25 @@ impl From<ClientAuthenticationError> for LoginError {
 /// 服务端已验证的身份绑定，不保存密码或原始 API Key。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionSubject {
-    Admin { admin_user_id: String },
-    Key { client_key_id: ClientApiKeyId },
+    Admin {
+        admin_user_id: String,
+        credential_fingerprint: String,
+    },
+    Key {
+        client_key_id: ClientApiKeyId,
+    },
+}
+
+/// 仅已登录管理员可以修改自己的密码。
+pub struct ChangePassword {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+impl std::fmt::Debug for ChangePassword {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ChangePassword([REDACTED])")
+    }
 }
 
 /// 两种登录方式共用的固定有效期会话。
