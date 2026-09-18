@@ -33,6 +33,12 @@ export interface UsageCostCoverage {
 }
 
 export interface UsageBilling {
+  image?: {
+    inputAmountDisplay: string
+    cacheReadAmountDisplay: string
+    inputPriceDisplay: string
+    cacheReadPriceDisplay: string
+  }
   inputAmountDisplay: string
   outputAmountDisplay: string
   cacheReadAmountDisplay: string

@@ -99,6 +99,7 @@ curl http://127.0.0.1:8080/v1/models \
 - [客户端接入与生图](deploy/README.md#客户端配置)
 - [部署、备份与恢复](deploy/README.md)
 - [API 参考](docs/api.md)
+- [模型定价与手动同步](docs/api.md#模型定价)
 - [系统架构](docs/architecture.md)
 - [管理端主题](docs/theme.md)
 - [数据库迁移](backend/migrations/README.md)

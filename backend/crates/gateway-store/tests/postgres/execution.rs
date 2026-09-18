@@ -430,6 +430,76 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
 }
 
 #[tokio::test]
+async fn billing_snapshot_survives_later_price_changes_and_usage_detail_reads() {
+    use gateway_core::metering::{
+        CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates, CurrencyCode, Decimal,
+        Money,
+    };
+    let Some(database) = TestDatabase::create("billing_snapshot").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_billing_snapshot")
+        .await
+        .unwrap();
+    let money = |ticks| {
+        Money::new(
+            Decimal::from_scaled(ticks).unwrap(),
+            CurrencyCode::new("USD").unwrap(),
+        )
+    };
+    let billing = CalculatedCostBreakdown::new(
+        CalculatedCostAmounts::new(
+            money(1_000_000),
+            money(2_000_000),
+            money(3_000_000),
+            money(0),
+            money(6_000_000),
+            money(6_000_000),
+        ),
+        CalculatedCostRates::new(
+            money(10_000_000_000),
+            money(20_000_000_000),
+            money(5_000_000_000),
+            money(0),
+        ),
+        Some("default".to_owned()),
+        100,
+    )
+    .with_custom_multiplier(12500)
+    .unwrap();
+    let mut finalization = successful_core_finalization("req_billing_snapshot");
+    finalization.cost = billing.calculated_cost().into_estimate();
+    ExecutionStore::finalize_model_request(
+        &PgExecutionStore::new(database.pool.clone()),
+        finalization,
+    )
+    .await
+    .unwrap();
+    let observation = admin_observability_store(&database.pool);
+    let original = observation
+        .usage_record_detail("req_billing_snapshot")
+        .await
+        .unwrap();
+    let Some(admin_observability::UsageBilling::Calculated(saved)) = &original.request.billing
+    else {
+        panic!("persisted billing breakdown must be restored without provider recalculation");
+    };
+    assert_eq!(saved.custom_multiplier_bps, 12500);
+    assert_eq!(saved.total_amount.amount, "0.00075".parse().unwrap());
+    sqlx::query("update runtime_settings set pricing_overrides_json = $1 where id = 1")
+        .bind(json!({"openai":{"gpt-5.4":{"multiplierBps":90000,"bands":{}}}}))
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let after = observation
+        .usage_record_detail("req_billing_snapshot")
+        .await
+        .unwrap();
+    assert_eq!(original.request.billing, after.request.billing);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn core_adapter_should_persist_image_result_and_new_websocket_pool() {
     let Some(database) = TestDatabase::create("execution_image_usage").await else {
         return;

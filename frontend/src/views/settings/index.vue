@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Save, Undo2 } from '@lucide/vue'
-import { computed, onMounted } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -26,13 +26,15 @@ import TokenRefreshCard from './components/TokenRefreshCard.vue'
 import { useAdminApiKey } from './composables/useAdminApiKey'
 import { useSettingsForm } from './composables/useSettingsForm'
 import { rotationOptions } from './constants'
+import PricingSection from './pricing/index.vue'
 
 const route = useRoute()
 const router = useRouter()
-const section = computed(() => route.name === 'settings-backup' ? 'backup' : 'runtime')
+const pricingVisited = ref(false)
+const section = computed(() => route.name === 'settings-pricing' ? 'pricing' : route.name === 'settings-backup' ? 'backup' : 'runtime')
 
 function switchSection(value: string): void {
-  void router.push(value === 'backup' ? '/settings/backup' : '/settings')
+  void router.push(value === 'runtime' ? '/settings' : `/settings/${value}`)
 }
 
 const {
@@ -77,23 +79,31 @@ const {
   loadStatus: loadAdminApiKeyStatus,
 } = useAdminApiKey()
 
-onMounted(() => {
-  void loadSettings()
-  void loadAdminApiKeyStatus()
-})
+const runtimeVisited = ref(false)
+watch(section, (value) => {
+  if (value === 'pricing') {
+    pricingVisited.value = true
+  }
+  else if (!runtimeVisited.value) {
+    runtimeVisited.value = true
+    void loadSettings()
+    void loadAdminApiKeyStatus()
+  }
+}, { immediate: true })
 </script>
 
 <template>
-  <div class="w-full">
-    <BasePageHeader title="系统设置" description="管理运行参数、管理员凭据与备份配置" />
+  <div class="w-full" :class="section === 'pricing' ? 'flex h-[calc(100dvh-2rem)] flex-none! flex-col min-[961px]:h-[calc(100dvh-3rem)]' : undefined">
+    <BasePageHeader title="系统设置" description="管理运行参数、模型定价、管理员凭据与备份配置" />
 
-    <div class="mt-4 flex min-h-cp-control flex-wrap items-center justify-between gap-3">
+    <div class="mt-4 flex min-h-cp-control shrink-0 flex-wrap items-center justify-between gap-3">
       <BaseSegmented
         :model-value="section"
         label="设置分区"
         class="bg-(--cp-input-bg)!"
         :options="[
           { label: '运行设置', value: 'runtime' },
+          { label: '模型定价', value: 'pricing' },
           { label: '备份', value: 'backup' },
         ]"
         @update:model-value="switchSection"
@@ -114,7 +124,7 @@ onMounted(() => {
     </div>
 
     <!-- 切换页签只隐藏内容，保留运行设置和备份配置的未保存草稿。 -->
-    <div v-show="section === 'runtime'" class="mt-5 grid w-full gap-5">
+    <div v-if="runtimeVisited" v-show="section === 'runtime'" class="mt-5 grid w-full gap-5">
       <div v-if="error" role="alert" class="flex flex-wrap items-center justify-between gap-3 rounded-cp-card bg-cp-error-container p-5 text-cp-error-on-container">
         <p class="m-0 text-cp">
           设置加载失败：{{ error }}
@@ -187,6 +197,7 @@ onMounted(() => {
     </div>
 
     <SettingsBackupSection v-show="section === 'backup'" class="mt-5" :active="section === 'backup'" />
+    <PricingSection v-if="pricingVisited" v-show="section === 'pricing'" class="mt-5 min-h-0 flex-1" />
 
     <BaseConfirmModal
       v-model="showDeleteAdminKeyModal"

@@ -314,6 +314,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
@@ -325,6 +326,12 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_pricing(mut self, pricing: Arc<crate::metering::PricingOverrides>) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
     #[must_use]
     pub fn with_request_profile(
         mut self,
@@ -355,6 +362,7 @@ impl RequestAttemptContext {
             request_id,
             client_api_key_ref,
             request_profile: None,
+            pricing: Arc::default(),
             disable_fast: false,
             request_location: None,
             timing_started_at: Instant::now(),
@@ -418,6 +426,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn pricing(&self) -> &crate::metering::PricingOverrides {
+        &self.request.pricing
+    }
+
     /// 本次逻辑请求首次解析的 Provider 身份，换号及传输重试保持不变。
     #[must_use]
     pub const fn request_profile(&self) -> Option<&crate::account::OpaqueProviderData> {

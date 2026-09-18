@@ -16,6 +16,9 @@ export * from './modules/backups'
 // Dashboard 聚合
 export * from './modules/dashboard'
 
+// 模型定价
+export * from './modules/pricing'
+
 export * from './modules/proxies'
 
 // 设置管理

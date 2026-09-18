@@ -299,7 +299,7 @@ pub(crate) fn calculated_usage_billing_facts(
             "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
                     mr.provider_kind, mr.upstream_model_id, mr.service_tier,
                     mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
-                    mr.cost_currency, mr.cost_amount::text as amount
+                    mr.billing_snapshot_json, mr.cost_currency, mr.cost_amount::text as amount
              from model_requests mr where mr.started_at >= ",
         );
         query.push_bind(range.start);

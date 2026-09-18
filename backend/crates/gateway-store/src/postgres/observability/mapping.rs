@@ -368,6 +368,10 @@ pub(crate) fn admin_calculated_usage_billing_fact(
     fact: CalculatedUsageBillingFact,
 ) -> AdminStoreResult<admin_observability::UsageCalculatedBillingFact> {
     Ok(admin_observability::UsageCalculatedBillingFact {
+        breakdown: fact
+            .billing_snapshot_json
+            .as_ref()
+            .and_then(super::super::pricing::decode_billing_snapshot),
         bucket_start: fact.bucket_start,
         provider_kind: fact.provider_kind,
         upstream_model_id: fact.upstream_model_id,
@@ -408,6 +412,22 @@ pub(crate) fn admin_usage_page(
     })
 }
 
+fn restore_billing_snapshot(
+    billing: Option<admin_observability::UsageBilling>,
+    snapshot: Option<&serde_json::Value>,
+) -> Option<admin_observability::UsageBilling> {
+    if let Some(admin_observability::UsageBilling::Total { source, total }) = &billing
+        && source == "calculated"
+        && let Some(detail) = snapshot.and_then(super::super::pricing::decode_billing_snapshot)
+        && &detail.total_amount == total
+    {
+        return Some(admin_observability::UsageBilling::Calculated(Box::new(
+            detail,
+        )));
+    }
+    billing
+}
+
 pub(crate) fn admin_usage_list_record(
     record: UsageListRecord,
 ) -> AdminStoreResult<admin_observability::UsageListRecord> {
@@ -427,6 +447,7 @@ pub(crate) fn admin_usage_list_record(
             }));
         }
     };
+    let billing = restore_billing_snapshot(billing, record.billing_snapshot_json.as_ref());
     Ok(admin_observability::UsageListRecord {
         id: record.id,
         endpoint: record.endpoint,
@@ -495,6 +516,7 @@ pub(crate) fn admin_usage_record(
             }));
         }
     };
+    let billing = restore_billing_snapshot(billing, record.billing_snapshot_json.as_ref());
     Ok(admin_observability::UsageRecord {
         id: record.id,
         client_api_key_ref: record.client_api_key_ref,
@@ -755,6 +777,7 @@ pub(crate) fn usage_list_record_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<UsageListRecord> {
     Ok(UsageListRecord {
+        billing_snapshot_json: get(row, "billing_snapshot_json")?,
         id: get(row, "id")?,
         endpoint: get(row, "endpoint")?,
         client_transport: get(row, "client_transport")?,
@@ -804,6 +827,7 @@ pub(crate) fn usage_list_record_from_row(
 
 pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord> {
     Ok(UsageRecord {
+        billing_snapshot_json: get(row, "billing_snapshot_json")?,
         id: get(row, "id")?,
         client_api_key_ref: get(row, "client_api_key_ref")?,
         config_revision: unsigned(row, "config_revision")?,
@@ -954,6 +978,7 @@ pub(crate) fn calculated_usage_billing_fact_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<CalculatedUsageBillingFact> {
     Ok(CalculatedUsageBillingFact {
+        billing_snapshot_json: get(row, "billing_snapshot_json")?,
         bucket_start: get(row, "bucket_start")?,
         provider_kind: get(row, "provider_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,

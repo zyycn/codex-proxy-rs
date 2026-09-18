@@ -504,7 +504,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             ResponseMeta::for_provider_endpoint(request.context.request_id().as_str());
         yield ProviderEvent::canonical(GatewayEvent::Started(response_meta.clone()));
         if matches!(request.endpoint_path, CODEX_IMAGE_GENERATIONS_PATH | CODEX_IMAGE_EDITS_PATH)
-            && let Some((usage, cost)) = image_response_metering(&request.body, &response.body)
+            && let Some((usage, cost)) = image_response_metering(&request.body, &response.body, request.context.pricing())
         {
             yield ProviderEvent::canonical(GatewayEvent::Usage(usage));
             if let Some(cost) = cost {
@@ -524,6 +524,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
 fn image_response_metering(
     request_body: &[u8],
     body: &[u8],
+    prices: &gateway_core::metering::PricingOverrides,
 ) -> Option<(Usage, Option<CalculatedCost>)> {
     // 只保留 usage，跳过通常很大的 base64 图片；原始响应仍按字节透传。
     #[derive(Deserialize)]
@@ -548,7 +549,7 @@ fn image_response_metering(
         .and_then(Value::as_u64);
     // 总量是上游独立报告的事实；图片明细是总输入/输出的子集，不能再次相加。
     usage.total_tokens = raw.get("total_tokens").and_then(Value::as_u64);
-    let cost = crate::transport::usage::image_calculated_cost(request_body, &raw);
+    let cost = crate::transport::usage::image_calculated_cost(request_body, &raw, prices);
     (usage != Usage::default()).then_some((usage, cost))
 }
 
@@ -740,6 +741,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
+            .with_pricing(context.pricing().get("openai").and_then(|models| models.get(upstream_model.as_str())).cloned())
             .with_reported_model(response.response_metadata.effective_model.as_deref())
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())

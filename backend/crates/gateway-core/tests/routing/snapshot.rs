@@ -136,6 +136,45 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 }
 
 #[test]
+fn routing_plans_share_frozen_pricing_after_a_new_snapshot_is_published() {
+    use gateway_core::{metering::PricingOverrides, runtime::RuntimeSnapshotHandle};
+    let prices = |bps| -> Arc<PricingOverrides> {
+        Arc::new(
+            serde_json::from_value(serde_json::json!({"openai":{"gpt-5.5":{
+                "multiplierBps":bps,"bands":{}
+            }}}))
+            .unwrap(),
+        )
+    };
+    let original = prices(12500);
+    let handle = RuntimeSnapshotHandle::new(super::snapshot().with_pricing(original.clone()));
+    let frozen = handle.acquire().unwrap();
+    let plan = |snapshot: &gateway_core::routing::RuntimeSnapshot| {
+        snapshot
+            .plan(
+                &PublicModelId::new("gpt-5.4").unwrap(),
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &gateway_core::routing::RoutingContext::default(),
+            )
+            .unwrap()
+    };
+    let old_plan = plan(&frozen);
+    handle.publish(super::snapshot().with_pricing(prices(20000)));
+    let new_plan = plan(&handle.acquire().unwrap());
+    assert!(Arc::ptr_eq(&old_plan.pricing(), &original));
+    assert!(Arc::ptr_eq(&plan(&frozen).pricing(), &original));
+    assert_eq!(
+        old_plan.pricing()["openai"]["gpt-5.5"].multiplier_bps,
+        12500
+    );
+    assert_eq!(
+        new_plan.pricing()["openai"]["gpt-5.5"].multiplier_bps,
+        20000
+    );
+}
+
+#[test]
 fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
     let compiler = RuntimeSnapshotCompiler::new(
         Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),

@@ -243,6 +243,7 @@ impl AdminHarness {
                 self.backup,
             ),
             gateway_admin::AdminRuntimePorts {
+                pricing_source: Arc::new(UnavailablePricingSource),
                 providers: self.providers,
                 snapshot: Arc::new(NoopSnapshot),
                 account_probe: self.probe,
@@ -678,6 +679,23 @@ impl ObservabilityStore for UnavailableStore {
 
 #[async_trait]
 impl SettingsStore for UnavailableStore {
+    async fn load_pricing(&self) -> AdminStoreResult<gateway_admin::model::pricing::StoredPricing> {
+        Ok(Default::default())
+    }
+    async fn sync_pricing(
+        &self,
+        _: gateway_core::metering::PricingOverrides,
+        _: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        panic!("unexpected pricing sync")
+    }
+    async fn update_pricing(
+        &self,
+        _: gateway_admin::model::pricing::UpdatePricing,
+        _: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        panic!("unexpected pricing update")
+    }
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Err(unavailable("settings"))
     }
@@ -714,6 +732,19 @@ struct UnavailableProvider {
     kind: ProviderKind,
     dashboard_profile: Option<DashboardWireProfile>,
     calculated_billing: Option<gateway_admin::model::observability::CalculatedBillingBreakdown>,
+}
+
+struct UnavailablePricingSource;
+#[async_trait]
+impl gateway_admin::ports::pricing::PricingSource for UnavailablePricingSource {
+    async fn fetch(
+        &self,
+    ) -> Result<gateway_admin::model::pricing::PricingSyncPreview, gateway_admin::model::AdminError>
+    {
+        Err(gateway_admin::model::AdminError::internal(
+            "pricing source unavailable",
+        ))
+    }
 }
 
 impl UnavailableProvider {
@@ -863,6 +894,8 @@ pub(super) fn calculated_billing_provider() -> Arc<dyn ProviderAdmin> {
         dashboard_profile: None,
         calculated_billing: Some(
             gateway_admin::model::observability::CalculatedBillingBreakdown {
+                custom_multiplier_bps: 10_000,
+                image: None,
                 input_amount: amount("0.8"),
                 output_amount: amount("0.2"),
                 cache_read_amount: amount("0"),

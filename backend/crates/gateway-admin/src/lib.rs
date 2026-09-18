@@ -296,6 +296,7 @@ impl AdminBundle {
 
 /// 组合根提供给控制面的运行能力；与配置和存储端口分别传入。
 pub struct AdminRuntimePorts {
+    pub pricing_source: Arc<dyn ports::pricing::PricingSource>,
     pub providers: Vec<Arc<dyn ProviderAdmin>>,
     pub snapshot: Arc<dyn SnapshotControl>,
     pub account_probe: Arc<dyn AccountProbe>,
@@ -317,6 +318,7 @@ pub async fn initialize(
     runtime: AdminRuntimePorts,
 ) -> Result<AdminBundle, AdminError> {
     let AdminRuntimePorts {
+        pricing_source,
         providers,
         snapshot,
         account_probe: probe,
@@ -414,12 +416,14 @@ pub async fn initialize(
             store.observability(),
             store.accounts(),
             store.settings(),
-            registry,
+            registry.clone(),
         )),
         settings: Arc::new(DefaultSettingsService::new(
             store.settings(),
             snapshot.clone(),
             profile_provider,
+            registry,
+            pricing_source,
         )),
         system: Arc::new(DefaultSystemService::new(system)),
         openai,

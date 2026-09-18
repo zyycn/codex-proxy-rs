@@ -290,6 +290,26 @@ async fn initialized_provider_keeps_thread_spawn_transport_conversations_distinc
 }
 
 #[tokio::test]
+async fn copying_builtin_prices_keeps_cache_read_and_write_fallback_costs() {
+    use provider_openai::transport::{
+        OpenAiBillingUsage, openai_billing_breakdown, openai_billing_breakdown_with_override,
+    };
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let prices = bundle.admin_provider().pricing_catalog();
+    for model in ["gpt-4", "gpt-4o", "gpt-6-astra"] {
+        let usage = OpenAiBillingUsage::new(100, 10, 20, 15);
+        let inherited = openai_billing_breakdown(model, usage, None).unwrap();
+        let copied =
+            openai_billing_breakdown_with_override(model, usage, None, Some(&prices[model]))
+                .unwrap();
+        assert_eq!(inherited.total_amount(), copied.total_amount(), "{model}");
+    }
+}
+
+#[tokio::test]
 async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing() {
     let config = valid_config();
     let bundle = provider_openai::initialize(config.config.clone(), provider_ports())

@@ -56,6 +56,8 @@ pub struct CostCoverageView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BillingView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageBillingView>,
     pub input_amount_display: String,
     pub output_amount_display: String,
     pub cache_read_amount_display: String,
@@ -68,6 +70,15 @@ pub struct BillingView {
     pub cache_write_price_display: String,
     pub service_tier_display: String,
     pub multiplier_display: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageBillingView {
+    pub input_amount_display: String,
+    pub cache_read_amount_display: String,
+    pub input_price_display: String,
+    pub cache_read_price_display: String,
 }
 
 /// 使用记录表格的窄展示。

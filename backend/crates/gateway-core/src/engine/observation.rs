@@ -44,7 +44,7 @@ impl ResponseObservation {
         if let GatewayEvent::CalculatedCost(observed) = event
             && self.cost.source() != CostSource::ProviderReported
         {
-            self.cost = observed.into_estimate();
+            self.cost = observed.clone().into_estimate();
         }
         if let GatewayEvent::ProviderCost(observed) = event {
             self.cost = observed.into_estimate();

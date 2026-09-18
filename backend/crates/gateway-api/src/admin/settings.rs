@@ -353,6 +353,16 @@ where
     S: SessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/api/admin/settings/pricing", get(pricing::<S>))
+        .route(
+            "/api/admin/settings/pricing/update",
+            post(update_pricing::<S>),
+        )
+        .route(
+            "/api/admin/settings/pricing/sync/preview",
+            post(preview_pricing_sync::<S>),
+        )
+        .route("/api/admin/settings/pricing/sync", post(sync_pricing::<S>))
         .route("/api/admin/settings", get(settings::<S>))
         .route(
             "/api/admin/settings/client-profiles/openai",
@@ -398,6 +408,123 @@ where
         StatusCode::OK,
         AdminEnvelope::ok(CodexDesktopWindowsDownloadsView::from(downloads)),
     )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PricingUpdateRequest {
+    provider: String,
+    models: Vec<String>,
+    change: PricingChangeRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
+enum PricingChangeRequest {
+    Replace {
+        pricing: gateway_core::metering::ModelPriceOverride,
+    },
+    Multiplier {
+        #[serde(rename = "multiplierBps")]
+        multiplier_bps: u32,
+    },
+    Reset {},
+}
+
+async fn pricing<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let pricing = state
+        .admin_services()
+        .settings()
+        .pricing()
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({
+            "defaults": pricing.defaults, "overrides": pricing.overrides,
+            "synced": pricing.synced, "syncedAt": pricing.synced_at,
+        })),
+    ))
+}
+
+async fn preview_pricing_sync<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let preview = state
+        .admin_services()
+        .settings()
+        .preview_pricing_sync()
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(preview),
+    ))
+}
+
+async fn sync_pricing<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(preview): AdminJson<gateway_admin::model::pricing::PricingSyncPreview>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .settings()
+        .sync_pricing(&auth.context().mutation_context(), preview)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({"saved": true})),
+    ))
+}
+
+async fn update_pricing<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<PricingUpdateRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    use gateway_admin::model::pricing::{PricingChange, UpdatePricing};
+    let change = match request.change {
+        PricingChangeRequest::Replace { pricing } => PricingChange::Replace(pricing),
+        PricingChangeRequest::Multiplier { multiplier_bps } => {
+            PricingChange::Multiplier(multiplier_bps)
+        }
+        PricingChangeRequest::Reset {} => PricingChange::Reset,
+    };
+    state
+        .admin_services()
+        .settings()
+        .update_pricing(
+            &auth.context().mutation_context(),
+            UpdatePricing {
+                provider: request.provider,
+                models: request.models,
+                change,
+            },
+        )
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({"saved": true})),
+    ))
 }
 
 async fn settings<S>(

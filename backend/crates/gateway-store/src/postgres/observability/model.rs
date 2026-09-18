@@ -335,6 +335,7 @@ pub struct RequestMetricPoint {
 /// 已完整交付且由 Provider 计算费用的请求事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedUsageBillingFact {
+    pub billing_snapshot_json: Option<serde_json::Value>,
     pub bucket_start: DateTime<Utc>,
     pub provider_kind: String,
     pub upstream_model_id: String,
@@ -479,6 +480,7 @@ pub struct DashboardObservation {
 /// 使用记录列表所需的窄投影；完整执行、路由和客户端详情按 ID 单独读取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageListRecord {
+    pub billing_snapshot_json: Option<serde_json::Value>,
     pub id: String,
     pub endpoint: String,
     pub client_transport: String,
@@ -527,6 +529,7 @@ pub struct UsageListRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRecord {
+    pub billing_snapshot_json: Option<serde_json::Value>,
     pub id: String,
     pub client_api_key_ref: String,
     pub config_revision: u64,

@@ -189,7 +189,8 @@ pub(super) fn cold_compaction_http_sse_stream(
         yield ProviderEvent::observation(observation.clone());
 
         let mut body = accepted.response.into_body();
-        let mut canonical = GrokCanonicalDecoder::new(upstream_model.as_str());
+        let mut canonical = GrokCanonicalDecoder::new(upstream_model.as_str())
+            .with_pricing(context.pricing().get("xai").and_then(|p| p.get(upstream_model.as_str())).cloned());
         let mut summary = GrokCompactionSummaryDecoder::new();
         let mut facts = CompactionFacts::default();
 
@@ -475,7 +476,8 @@ pub(super) fn cold_http_sse_stream(
         yield ProviderEvent::observation(observation.clone());
 
         let mut body = response.into_body();
-        let mut decoder = GrokCanonicalDecoder::for_request(upstream_model.as_str(), &request);
+        let mut decoder = GrokCanonicalDecoder::for_request(upstream_model.as_str(), &request)
+            .with_pricing(context.pricing().get("xai").and_then(|p| p.get(upstream_model.as_str())).cloned());
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
                 Err(provider_error(

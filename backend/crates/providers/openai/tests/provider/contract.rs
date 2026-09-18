@@ -728,12 +728,22 @@ fn context_with_fast_policy(
     cancellation: CancellationToken,
     disable_fast: bool,
 ) -> AttemptContext {
+    context_with_pricing(request_id, cancellation, disable_fast, Default::default())
+}
+
+fn context_with_pricing(
+    request_id: &str,
+    cancellation: CancellationToken,
+    disable_fast: bool,
+    pricing: gateway_core::metering::PricingOverrides,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
         .with_disable_fast(disable_fast)
+        .with_pricing(Arc::new(pricing))
         .with_request_location(Some(global_request_location())),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
@@ -1558,13 +1568,13 @@ async fn image_prices_should_use_modality_rates_and_precede_delivery() {
                         .canonical_facts()
                         .iter()
                         .filter_map(move |fact| match fact {
-                            GatewayEvent::CalculatedCost(cost) => Some((index, *cost)),
+                            GatewayEvent::CalculatedCost(cost) => Some((index, cost.clone())),
                             _ => None,
                         })
                 })
                 .collect::<Vec<_>>();
             assert_eq!(costs.len(), 1, "model={model}");
-            let (cost_index, cost) = costs[0];
+            let (cost_index, cost) = costs[0].clone();
             assert_eq!(
                 cost.total().amount().scaled(),
                 expected_ticks,
@@ -1662,6 +1672,15 @@ async fn image_metering_events(
     response: &[u8],
     model: &str,
 ) -> Vec<gateway_core::event::ProviderEvent> {
+    image_metering_events_with_pricing(kind, response, model, Default::default()).await
+}
+
+async fn image_metering_events_with_pricing(
+    kind: ImageRequestKind,
+    response: &[u8],
+    model: &str,
+    pricing: gateway_core::metering::PricingOverrides,
+) -> Vec<gateway_core::event::ProviderEvent> {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
@@ -1690,7 +1709,7 @@ async fn image_metering_events(
     let mut stream = provider
         .execute(
             planned_provider_endpoint_request("openai", operation),
-            context("req_image_usage", CancellationToken::new()),
+            context_with_pricing("req_image_usage", CancellationToken::new(), false, pricing),
         )
         .await
         .expect("prepare image stream");
@@ -1700,6 +1719,45 @@ async fn image_metering_events(
     }
     server.verify().await;
     events
+}
+
+#[tokio::test]
+async fn image_custom_prices_apply_text_and_image_rates_from_the_frozen_request() {
+    let pricing = serde_json::from_value(json!({"openai":{"gpt-image-2":{
+        "multiplierBps":20000,"bands":{
+            "standard":{"input":"2","output":"0","cacheRead":"0","cacheWrite":"0"},
+            "image":{"input":"8","output":"30","cacheRead":"2","cacheWrite":"0"}
+        }
+    }}}))
+    .unwrap();
+    let response = serde_json::to_vec(&json!({"data":[{"b64_json":"AAEC"}],"usage":{
+        "input_tokens":100,"input_tokens_details":{"text_tokens":20,"image_tokens":80},
+        "output_tokens":10,"output_tokens_details":{"text_tokens":0,"image_tokens":10},"total_tokens":110
+    }})).unwrap();
+    let events = image_metering_events_with_pricing(
+        ImageRequestKind::Generation,
+        &response,
+        "gpt-image-2",
+        pricing,
+    )
+    .await;
+    let cost = events
+        .iter()
+        .flat_map(|event| event.canonical_facts())
+        .find_map(|event| match event {
+            GatewayEvent::CalculatedCost(cost) => Some(cost.clone()),
+            _ => None,
+        })
+        .unwrap()
+        .into_estimate();
+    assert_eq!(cost.total().unwrap().amount().canonical(), "0.00196");
+    let breakdown = cost.breakdown().unwrap();
+    assert_eq!(breakdown.input_amount().amount().canonical(), "0.00008");
+    assert_eq!(
+        breakdown.image().unwrap().input_amount.amount().canonical(),
+        "0.00128"
+    );
+    assert_eq!(breakdown.custom_multiplier_bps(), 20000);
 }
 
 #[tokio::test]

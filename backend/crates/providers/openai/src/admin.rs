@@ -163,6 +163,10 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
+        crate::transport::usage::pricing_catalog()
+    }
+
     fn client_profile_options(
         &self,
     ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
@@ -367,6 +371,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
+            image: None,
+            custom_multiplier_bps: breakdown.custom_multiplier_bps(),
             input_amount: currency_cost(breakdown.input_amount())?,
             output_amount: currency_cost(breakdown.output_amount())?,
             cache_read_amount: currency_cost(breakdown.cache_read_amount())?,

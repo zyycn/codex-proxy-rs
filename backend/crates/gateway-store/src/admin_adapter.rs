@@ -15,6 +15,53 @@ pub(crate) struct AdminSettingsStoreAdapter {
 
 #[async_trait::async_trait]
 impl SettingsStore for AdminSettingsStoreAdapter {
+    async fn load_pricing(&self) -> AdminStoreResult<gateway_admin::model::pricing::StoredPricing> {
+        self.control_plane
+            .load_pricing()
+            .await
+            .map_err(|error| admin_store_error("model pricing", error))
+    }
+
+    async fn sync_pricing(
+        &self,
+        prices: gateway_core::metering::PricingOverrides,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let audit = mutation_audit(
+            context,
+            "pricing.sync",
+            "model_pricing",
+            "models.dev",
+            vec!["synced".to_owned()],
+        );
+        let revision = self
+            .control_plane
+            .sync_pricing(prices, audit)
+            .await
+            .map_err(|error| admin_store_error("model pricing sync", error))?;
+        admin_revision(revision)
+    }
+
+    async fn update_pricing(
+        &self,
+        command: gateway_admin::model::pricing::UpdatePricing,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let audit = mutation_audit(
+            context,
+            "pricing.update",
+            "model_pricing",
+            &command.provider,
+            command.models.clone(),
+        );
+        let revision = self
+            .control_plane
+            .update_pricing(command, audit)
+            .await
+            .map_err(|error| admin_store_error("model pricing", error))?;
+        admin_revision(revision)
+    }
+
     async fn load_runtime_settings(&self) -> AdminStoreResult<AdminRuntimeSettings> {
         let snapshot = postgres::ControlPlaneRepository::load_control_plane(&self.control_plane)
             .await

@@ -321,6 +321,9 @@ impl XaiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for XaiAdminProvider {
+    fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
+        crate::transport::canonical::pricing_catalog()
+    }
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }
@@ -404,6 +407,8 @@ impl ProviderAdmin for XaiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
+            image: None,
+            custom_multiplier_bps: breakdown.custom_multiplier_bps(),
             input_amount: currency_cost(breakdown.input_amount())?,
             output_amount: currency_cost(breakdown.output_amount())?,
             cache_read_amount: currency_cost(breakdown.cache_read_amount())?,

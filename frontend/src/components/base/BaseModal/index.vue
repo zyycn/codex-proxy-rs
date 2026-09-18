@@ -216,7 +216,7 @@ onBeforeUnmount(() => {
           :role="role"
           aria-modal="true"
           :aria-labelledby="titleId"
-          :aria-describedby="description ? descriptionId : undefined"
+          :aria-describedby="description || $slots.description ? descriptionId : undefined"
           tabindex="-1"
         >
           <header
@@ -225,7 +225,7 @@ onBeforeUnmount(() => {
               tone === 'neutral'
                 ? 'grid-cols-[minmax(0,1fr)_28px]'
                 : 'grid-cols-[auto_minmax(0,1fr)_28px]',
-              description ? 'items-start' : 'items-center',
+              description || $slots.description ? 'items-start' : 'items-center',
               draggable ? 'cp-modal-header--draggable' : undefined,
             ]"
             @pointerdown="handlePointerDown"
@@ -244,11 +244,13 @@ onBeforeUnmount(() => {
                 {{ title }}
               </h2>
               <p
-                v-if="description"
+                v-if="description || $slots.description"
                 :id="descriptionId"
                 class="mt-1 mb-0 text-cp leading-[1.45] font-semibold text-cp-text-secondary"
               >
-                {{ description }}
+                <slot name="description">
+                  {{ description }}
+                </slot>
               </p>
             </div>
             <BaseIconButton

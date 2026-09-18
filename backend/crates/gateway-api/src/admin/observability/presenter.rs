@@ -214,6 +214,7 @@ fn capitalize_first(value: &str) -> String {
 pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<BillingView> {
     match billing? {
         domain::UsageBilling::Total { source, total } => Some(BillingView {
+            image: None,
             input_amount_display: "—".to_owned(),
             output_amount_display: "—".to_owned(),
             cache_read_amount_display: "—".to_owned(),
@@ -232,6 +233,17 @@ pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<Bil
             multiplier_display: "—".to_owned(),
         }),
         domain::UsageBilling::Calculated(value) => Some(BillingView {
+            image: value
+                .image
+                .as_ref()
+                .map(|image| super::wire::ImageBillingView {
+                    input_amount_display: format_money(&image.input_amount),
+                    cache_read_amount_display: format_money(&image.cache_read_amount),
+                    input_price_display: format_token_price(&image.input_price_per_million),
+                    cache_read_price_display: format_token_price(
+                        &image.cache_read_price_per_million,
+                    ),
+                }),
             input_amount_display: format_money(&value.input_amount),
             output_amount_display: format_money(&value.output_amount),
             cache_read_amount_display: format_money(&value.cache_read_amount),
@@ -243,7 +255,15 @@ pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<Bil
             cache_read_price_display: format_token_price(&value.cache_read_price_per_million),
             cache_write_price_display: format_token_price(&value.cache_write_price_per_million),
             service_tier_display: format_service_tier(value.service_tier.as_deref()),
-            multiplier_display: format!("{:.2}x", f64::from(value.multiplier_percent) / 100.0),
+            multiplier_display: if value.custom_multiplier_bps == 10_000 {
+                format!("{:.2}x", f64::from(value.multiplier_percent) / 100.0)
+            } else {
+                format!(
+                    "档位 {:.2}x · 自定义 {:.4}x",
+                    f64::from(value.multiplier_percent) / 100.0,
+                    f64::from(value.custom_multiplier_bps) / 10_000.0
+                )
+            },
         }),
     }
 }

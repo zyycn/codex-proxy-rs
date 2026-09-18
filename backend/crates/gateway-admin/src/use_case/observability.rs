@@ -619,7 +619,7 @@ async fn recover_standard_costs(
     mut facts: UsageCalculatedBillingStream<'_>,
 ) -> Result<UsageCostScenarios, AdminError> {
     let mut scenarios = UsageCostScenarios::default();
-    while let Some(fact) = facts
+    while let Some(mut fact) = facts
         .try_next()
         .await
         .map_err(|error| map_store_error(error, "usage billing facts"))?
@@ -636,7 +636,14 @@ async fn recover_standard_costs(
             cache_write_tokens: fact.cache_write_tokens,
             total: fact.total.clone(),
         };
-        let breakdown = match providers.calculated_billing(&provider_kind, &input) {
+        let breakdown = match fact
+            .breakdown
+            .take()
+            .filter(|b| b.total_amount == input.total)
+            .map_or_else(
+                || providers.calculated_billing(&provider_kind, &input),
+                |b| Ok(Some(b)),
+            ) {
             Ok(breakdown) => breakdown,
             Err(error) if error.kind() == ProviderAdminErrorKind::Unsupported => continue,
             Err(error) => return Err(map_provider_error(error, "usage billing")),
@@ -665,8 +672,15 @@ fn no_cache_cost(
     fact: &UsageCalculatedBillingFact,
     breakdown: &crate::model::observability::CalculatedBillingBreakdown,
 ) -> Option<DecimalAmount> {
-    let input_tokens = fact.input_tokens?;
-    let cached_tokens = fact.cached_tokens.unwrap_or_default().min(input_tokens);
+    let image = breakdown.image.as_ref();
+    let input_tokens = fact
+        .input_tokens?
+        .checked_sub(image.map_or(0, |i| i.input_tokens))?;
+    let cached_tokens = fact
+        .cached_tokens
+        .unwrap_or_default()
+        .checked_sub(image.map_or(0, |i| i.cached_tokens))?
+        .min(input_tokens);
     let cache_write_tokens = fact
         .cache_write_tokens
         .unwrap_or_default()
@@ -676,11 +690,20 @@ fn no_cache_cost(
         .scaled()
         .checked_mul(u128::from(cached_tokens.saturating_add(cache_write_tokens)))?
         .checked_div(1_000_000)?;
-    let total = decimal(&breakdown.total_amount.amount)?
+    let mut total = decimal(&breakdown.total_amount.amount)?
         .scaled()
         .checked_sub(decimal(&breakdown.cache_read_amount.amount)?.scaled())?
         .checked_sub(decimal(&breakdown.cache_write_amount.amount)?.scaled())?
         .checked_add(replaced_input_amount)?;
+    if let Some(image) = image {
+        let image_no_cache = decimal(&image.input_price_per_million.amount)?
+            .scaled()
+            .checked_mul(u128::from(image.cached_tokens))?
+            .checked_div(1_000_000)?;
+        total = total
+            .checked_sub(decimal(&image.cache_read_amount.amount)?.scaled())?
+            .checked_add(image_no_cache)?;
+    }
     DecimalAmount::from_str(
         &gateway_core::metering::Decimal::from_scaled(total)
             .ok()?

@@ -2,6 +2,7 @@
 
 pub mod backup;
 pub mod client_distribution;
+pub mod pricing;
 pub mod provider;
 pub mod proxy;
 pub mod store;

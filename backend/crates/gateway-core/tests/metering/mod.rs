@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+mod pricing;
+
 use gateway_core::metering::{
     CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
     CostEstimate, CostEstimateStatus, CostSource, CurrencyCode, Decimal, Money,

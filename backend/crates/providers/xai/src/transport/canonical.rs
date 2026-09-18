@@ -113,43 +113,137 @@ pub fn grok_billing_breakdown_with_tier(
     cached_tokens: u64,
     service_tier: Option<&str>,
 ) -> Option<CalculatedCostBreakdown> {
+    grok_billing_breakdown_with_override(
+        model,
+        input_tokens,
+        output_tokens,
+        cached_tokens,
+        0,
+        service_tier,
+        None,
+    )
+}
+
+#[must_use]
+pub fn grok_billing_breakdown_with_override(
+    model: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_tokens: u64,
+    cache_write_tokens: u64,
+    service_tier: Option<&str>,
+    custom: Option<&gateway_core::metering::ModelPriceOverride>,
+) -> Option<CalculatedCostBreakdown> {
     let (tier, multiplier) = match service_tier.map(str::trim) {
         None | Some("default" | "standard") => ("default", 1_u128),
         Some("priority") => ("priority", 2),
         Some(_) => return None,
     };
-    let pricing = model_pricing(model)?;
-    let rates = if input_tokens >= LONG_CONTEXT_THRESHOLD {
-        pricing.long
-    } else {
-        pricing.short
+    let long = input_tokens >= LONG_CONTEXT_THRESHOLD;
+    let standard_band = if long { "long_standard" } else { "standard" };
+    let fast_band = if long { "long_fast" } else { "fast" };
+    let convert = |rates: &gateway_core::metering::TokenPriceOverride| TokenRates {
+        input_ticks: rates.input.ticks_per_token(),
+        cached_input_ticks: rates.cache_read.ticks_per_token(),
+        output_ticks: rates.output.ticks_per_token(),
     };
-    let uncached_tokens = input_tokens.checked_sub(cached_tokens)?;
+    let standard = custom
+        .and_then(|p| p.bands.get(standard_band))
+        .map(convert)
+        .or_else(|| model_pricing(model).map(|p| if long { p.long } else { p.short }))?;
+    let rates = if multiplier == 2 {
+        custom
+            .and_then(|p| p.bands.get(fast_band))
+            .map(convert)
+            .or_else(|| {
+                // 未覆盖档位继承内置价，不把人工标准价再次解释成 Priority 价。
+                let builtin = model_pricing(model).map(|p| if long { p.long } else { p.short })?;
+                Some(TokenRates {
+                    input_ticks: builtin.input_ticks.checked_mul(2)?,
+                    cached_input_ticks: builtin.cached_input_ticks.checked_mul(2)?,
+                    output_ticks: builtin.output_ticks.checked_mul(2)?,
+                })
+            })?
+    } else {
+        standard
+    };
+    if cached_tokens.checked_add(cache_write_tokens)? > input_tokens {
+        return None;
+    }
+    let standard_write = custom
+        .and_then(|p| p.bands.get(standard_band))
+        .map(|p| p.cache_write.ticks_per_token());
+    let selected_band = if multiplier == 2 {
+        fast_band
+    } else {
+        standard_band
+    };
+    let selected_write = custom
+        .and_then(|p| p.bands.get(selected_band))
+        .map(|p| p.cache_write.ticks_per_token());
+    let uncached_tokens =
+        input_tokens
+            .checked_sub(cached_tokens)?
+            .checked_sub(if selected_write.is_some() {
+                cache_write_tokens
+            } else {
+                0
+            })?;
+    let standard_input_tokens =
+        input_tokens
+            .checked_sub(cached_tokens)?
+            .checked_sub(if standard_write.is_some() {
+                cache_write_tokens
+            } else {
+                0
+            })?;
+    let cache_write_amount_ticks =
+        u128::from(cache_write_tokens).checked_mul(selected_write.unwrap_or_default())?;
     let input_amount_ticks = u128::from(uncached_tokens).checked_mul(rates.input_ticks)?;
     let cache_read_amount_ticks =
         u128::from(cached_tokens).checked_mul(rates.cached_input_ticks)?;
     let output_amount_ticks = u128::from(output_tokens).checked_mul(rates.output_ticks)?;
-    let standard_amount_ticks = input_amount_ticks
+    let selected_amount_ticks = input_amount_ticks
         .checked_add(cache_read_amount_ticks)?
+        .checked_add(cache_write_amount_ticks)?
         .checked_add(output_amount_ticks)?;
-    Some(CalculatedCostBreakdown::new(
+    let standard_amount_ticks = u128::from(standard_input_tokens)
+        .checked_mul(standard.input_ticks)?
+        .checked_add(u128::from(cached_tokens).checked_mul(standard.cached_input_ticks)?)?
+        .checked_add(
+            u128::from(cache_write_tokens).checked_mul(standard_write.unwrap_or_default())?,
+        )?
+        .checked_add(u128::from(output_tokens).checked_mul(standard.output_ticks)?)?;
+    let multiplier_percent = if standard_amount_ticks == 0 {
+        100
+    } else {
+        u32::try_from(
+            selected_amount_ticks
+                .checked_mul(100)?
+                .checked_add(standard_amount_ticks / 2)?
+                .checked_div(standard_amount_ticks)?,
+        )
+        .ok()?
+    };
+    CalculatedCostBreakdown::new(
         CalculatedCostAmounts::new(
-            usd_money(input_amount_ticks.checked_mul(multiplier)?)?,
-            usd_money(output_amount_ticks.checked_mul(multiplier)?)?,
-            usd_money(cache_read_amount_ticks.checked_mul(multiplier)?)?,
-            usd_money(0)?,
+            usd_money(input_amount_ticks)?,
+            usd_money(output_amount_ticks)?,
+            usd_money(cache_read_amount_ticks)?,
+            usd_money(cache_write_amount_ticks)?,
             usd_money(standard_amount_ticks)?,
-            usd_money(standard_amount_ticks.checked_mul(multiplier)?)?,
+            usd_money(selected_amount_ticks)?,
         ),
         CalculatedCostRates::new(
-            usd_price_per_million(rates.input_ticks.checked_mul(multiplier)?)?,
-            usd_price_per_million(rates.output_ticks.checked_mul(multiplier)?)?,
-            usd_price_per_million(rates.cached_input_ticks.checked_mul(multiplier)?)?,
-            usd_money(0)?,
+            usd_price_per_million(rates.input_ticks)?,
+            usd_price_per_million(rates.output_ticks)?,
+            usd_price_per_million(rates.cached_input_ticks)?,
+            usd_price_per_million(selected_write.unwrap_or_default())?,
         ),
         Some(tier.to_owned()),
-        if multiplier == 2 { 200 } else { 100 },
-    ))
+        multiplier_percent,
+    )
+    .with_custom_multiplier(custom.map_or(10_000, |p| p.multiplier_bps))
 }
 
 fn usd_money(ticks: u128) -> Option<Money> {
@@ -167,6 +261,7 @@ fn usd_price_per_million(per_token_ticks: u128) -> Option<Money> {
 ///
 /// 每个上游 event 同时保留 OpenAI wire，并在可识别时附加 canonical facts。
 pub struct GrokCanonicalDecoder {
+    pricing: Option<gateway_core::metering::ModelPriceOverride>,
     decoder: SseEventDecoder,
     response_transform: GrokResponseTransform,
     upstream_model: String,
@@ -187,6 +282,7 @@ impl GrokCanonicalDecoder {
     pub fn new(upstream_model: impl Into<String>) -> Self {
         Self {
             decoder: SseEventDecoder::default(),
+            pricing: None,
             response_transform: GrokResponseTransform::default(),
             upstream_model: upstream_model.into(),
             response_id: None,
@@ -200,6 +296,15 @@ impl GrokCanonicalDecoder {
             response_model: ResponseModelObservation::default(),
             requires_provider_cost: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_pricing(
+        mut self,
+        pricing: Option<gateway_core::metering::ModelPriceOverride>,
+    ) -> Self {
+        self.pricing = pricing;
+        self
     }
 
     /// 创建在 canonical 与 wire 投影处理每个上游 event 前先还原请求级 tool 别名的
@@ -673,6 +778,7 @@ impl GrokCanonicalDecoder {
                     &self.upstream_model,
                     usage,
                     self.response_service_tier(),
+                    self.pricing.as_ref(),
                 )
             })
         {
@@ -858,6 +964,7 @@ fn calculated_cost(
     model: &str,
     usage: TokenUsage,
     service_tier: Option<&str>,
+    pricing: Option<&gateway_core::metering::ModelPriceOverride>,
 ) -> Option<CalculatedCost> {
     if !billable_usage_is_complete(response, usage)
         || usage.image_input_tokens > 0
@@ -865,62 +972,129 @@ fn calculated_cost(
     {
         return None;
     }
-    let breakdown = grok_billing_breakdown_with_tier(
+    let breakdown = grok_billing_breakdown_with_override(
         model,
         usage.input_tokens,
         usage.output_tokens,
         usage.cached_tokens,
+        usage.cache_write_tokens,
         service_tier,
+        pricing,
     )?;
     Some(breakdown.calculated_cost())
 }
 
+const PRICING_RULES: &[(&[&str], ModelPricing)] = &[
+    (&["grok-4.6", "grok-4.6-latest"], GROK_46_PRICING),
+    (
+        &[
+            "grok-4.5",
+            "grok-4.5-latest",
+            "grok-4.5-build-free",
+            "grok-build-latest",
+        ],
+        GROK_45_PRICING,
+    ),
+    (
+        &[
+            "grok-build-0.1",
+            "grok-code-fast-1",
+            "grok-code-fast",
+            "grok-code-fast-1-0825",
+        ],
+        GROK_BUILD_PRICING,
+    ),
+    (
+        &[
+            "grok-4.3",
+            "grok-4.3-latest",
+            "grok-latest",
+            "grok-4.20-multi-agent-0309",
+            "grok-4.20-multi-agent",
+            "grok-4.20-multi-agent-latest",
+            "grok-4.20-multi-agent-beta-latest",
+            "grok-4.20-multi-agent-experimental-beta-0304",
+            "grok-4.20-multi-agent-experimental-beta-latest",
+            "grok-4.20-multi-agent-beta-0309",
+            "grok-4.20-0309-reasoning",
+            "grok-4.20-reasoning-latest",
+            "grok-4.20",
+            "grok-4.20-reasoning",
+            "grok-4.20-0309",
+            "grok-4.20-beta-0309-reasoning",
+            "grok-4.20-beta",
+            "grok-4.20-beta-0309",
+            "grok-4.20-beta-latest",
+            "grok-4.20-beta-latest-reasoning",
+            "grok-4.20-beta-reasoning",
+            "grok-4.20-experimental-beta-0304-reasoning",
+            "grok-4.20-experimental-beta-0304",
+            "grok-4.20-experimental-beta-reasoning-latest",
+            "grok-4.20-experimental-beta-latest",
+            "grok-4.20-reasoning-gv2",
+            "grok-4.20-0309-non-reasoning",
+            "grok-4.20-non-reasoning",
+            "grok-4.20-non-reasoning-latest",
+            "grok-4.20-beta-non-reasoning",
+            "grok-4.20-beta-latest-non-reasoning",
+            "grok-4.20-experimental-beta-0304-non-reasoning",
+            "grok-4.20-experimental-beta-non-reasoning-latest",
+            "grok-4.20-beta-0309-non-reasoning",
+            "grok-4.20-non-reasoning-gv2",
+        ],
+        GROK_43_PRICING,
+    ),
+];
+
 fn model_pricing(model: &str) -> Option<ModelPricing> {
-    match model {
-        "grok-4.6" | "grok-4.6-latest" => Some(GROK_46_PRICING),
-        "grok-4.5" | "grok-4.5-latest" | "grok-4.5-build-free" | "grok-build-latest" => {
-            Some(GROK_45_PRICING)
-        }
-        "grok-build-0.1" | "grok-code-fast-1" | "grok-code-fast" | "grok-code-fast-1-0825" => {
-            Some(GROK_BUILD_PRICING)
-        }
-        "grok-4.3"
-        | "grok-4.3-latest"
-        | "grok-latest"
-        | "grok-4.20-multi-agent-0309"
-        | "grok-4.20-multi-agent"
-        | "grok-4.20-multi-agent-latest"
-        | "grok-4.20-multi-agent-beta-latest"
-        | "grok-4.20-multi-agent-experimental-beta-0304"
-        | "grok-4.20-multi-agent-experimental-beta-latest"
-        | "grok-4.20-multi-agent-beta-0309"
-        | "grok-4.20-0309-reasoning"
-        | "grok-4.20-reasoning-latest"
-        | "grok-4.20"
-        | "grok-4.20-reasoning"
-        | "grok-4.20-0309"
-        | "grok-4.20-beta-0309-reasoning"
-        | "grok-4.20-beta"
-        | "grok-4.20-beta-0309"
-        | "grok-4.20-beta-latest"
-        | "grok-4.20-beta-latest-reasoning"
-        | "grok-4.20-beta-reasoning"
-        | "grok-4.20-experimental-beta-0304-reasoning"
-        | "grok-4.20-experimental-beta-0304"
-        | "grok-4.20-experimental-beta-reasoning-latest"
-        | "grok-4.20-experimental-beta-latest"
-        | "grok-4.20-reasoning-gv2"
-        | "grok-4.20-0309-non-reasoning"
-        | "grok-4.20-non-reasoning"
-        | "grok-4.20-non-reasoning-latest"
-        | "grok-4.20-beta-non-reasoning"
-        | "grok-4.20-beta-latest-non-reasoning"
-        | "grok-4.20-experimental-beta-0304-non-reasoning"
-        | "grok-4.20-experimental-beta-non-reasoning-latest"
-        | "grok-4.20-beta-0309-non-reasoning"
-        | "grok-4.20-non-reasoning-gv2" => Some(GROK_43_PRICING),
-        _ => None,
-    }
+    PRICING_RULES
+        .iter()
+        .find(|(models, _)| models.contains(&model))
+        .map(|(_, price)| *price)
+}
+
+pub(crate) fn pricing_catalog() -> gateway_admin::model::pricing::ProviderPricingCatalog {
+    use gateway_core::metering::{ModelPriceOverride, TokenPrice, TokenPriceOverride};
+    let price = |ticks: u128| -> TokenPrice {
+        Decimal::from_scaled(ticks * 1_000_000)
+            .expect("内置价格在范围内")
+            .canonical()
+            .try_into()
+            .expect("内置价格精度合法")
+    };
+    PRICING_RULES
+        .iter()
+        .flat_map(|(models, pricing)| {
+            models.iter().map(|model| {
+                let bands = [
+                    ("standard", pricing.short, 1),
+                    ("fast", pricing.short, 2),
+                    ("long_standard", pricing.long, 1),
+                    ("long_fast", pricing.long, 2),
+                ]
+                .into_iter()
+                .map(|(band, rates, multiplier)| {
+                    (
+                        band.to_owned(),
+                        TokenPriceOverride {
+                            input: price(rates.input_ticks * multiplier),
+                            output: price(rates.output_ticks * multiplier),
+                            cache_read: price(rates.cached_input_ticks * multiplier),
+                            cache_write: price(rates.input_ticks * multiplier),
+                        },
+                    )
+                })
+                .collect();
+                (
+                    (*model).to_owned(),
+                    ModelPriceOverride {
+                        multiplier_bps: 10_000,
+                        bands,
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
 fn incomplete_finish_reason(response: &Value) -> FinishReason {

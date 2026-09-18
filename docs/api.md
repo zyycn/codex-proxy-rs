@@ -1010,6 +1010,45 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
 
+### 模型定价
+
+定价接口独立于运行设置的整体替换，仅允许管理员访问。改价影响本地估算费用与 Client Key 金额限额，
+不改变上游报告金额、订阅账号实际扣额或历史费用。请求开始时冻结价格，内部重试沿用同一份配置。
+
+| 方法 | 路由 | 请求与返回 |
+| --- | --- | --- |
+| `GET` | `/api/admin/settings/pricing` | 返回 `{ defaults, synced, overrides, syncedAt }` |
+| `POST` | `/api/admin/settings/pricing/update` | `{ provider, models, change }`，成功返回 `{ saved: true }` |
+| `POST` | `/api/admin/settings/pricing/sync/preview` | 无 body；返回 `{ prices, skipped }`，不写入配置 |
+| `POST` | `/api/admin/settings/pricing/sync` | 原样提交确认的 `{ prices, skipped }`；成功返回 `{ saved: true }` |
+
+价目使用 `Provider → 精确上游模型 ID → { multiplierBps, bands }` 的映射。优先级为人工覆盖、已同步价目、
+内置价目；按档位合并，不从客户端模型别名或响应模型猜测价格。`syncedAt` 为 ISO 时间或 `null`。
+每个档位包含四个非负十进制字符串：`input`、`output`、`cacheRead`、`cacheWrite`，单位 USD / 百万
+Token，范围 0～1000000、最多四位小数。`"0"` 表示免费，缺少整个档位表示继承；不能只缺少部分单价。
+
+`bands` 可用键为 `standard`、`fast`、`flex`、`long_standard`、`long_fast`、`long_flex`、`image`。
+OpenAI 长上下文为输入超过 272000 Token，xAI 为输入达到 200000 Token；仍按 Provider 支持的
+模型与服务档位判断是否能估算。xAI 不接受 `flex`、`long_flex`、`image`。图像端点的 `standard`
+用于文本输入，`image` 用于图像 Token；不能用文本输出单价替代图像输出单价。用量无法完整拆分时不估算。
+
+`multiplierBps` 为 0～1000000 的整数，10000 表示 1 倍、0 表示本地估算为零，最大 100 倍。
+它作用于本地费用及对应明细，独立于服务档位；缺少计价依据的请求即使倍率为零仍然是费用未知。
+
+`provider` 为 `openai` 或 `xai`；`models` 为 1～500 个模型 ID，每个 ID 为 1～128 字节且不含空白、
+控制字符。`change` 为以下形式之一：
+
+- `{ "action": "replace", "pricing": { "multiplierBps": 12500, "bands": { ... } } }`：替换选中模型的人工
+  配置，未提供档位重新继承来源；内置和同步均未登记的模型必须包含 `standard`。
+- `{ "action": "multiplier", "multiplierBps": 20000 }`：设置目标倍率，保留已有人工单价；重复提交不连续相乘。
+- `{ "action": "reset" }`：移除人工单价与倍率，恢复同步价或内置价；仅有人工价格的模型恢复为未配置。
+
+一批更新原子提交并写审计，不覆盖未选中的模型。未知字段、错误类型和非法价格字符串等 JSON 合同错误
+返回 422；Provider、模型 ID、批量数量、倍率上限和不支持的档位等业务校验错误返回 400。
+models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI 模型；不完整价格、其他输出模态及
+不匹配的上下文梯度在 `skipped` 中返回 `provider/model`。确认会重新抓取价目；若与预览不同返回 400，
+需重新预览。来源不可用返回 502，已有价目保持不变。同步只更新来源层，始终保留人工单价与倍率。
+
 ### OpenAI 上游客户端身份
 
 `openaiClientProfile` 保存通用选择，首次默认 `MacOS · Desktop · 自动最新`。
@@ -1247,8 +1286,11 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 原始 `response.service_tier` 不变。用量中的 Fast 仅表示发送档位，不能证明上游实际加速，本地费用
 估算也不能代替官方账单。档位与费用在请求记录生成时确定；查询不会回填历史档位或重算已存储费用。
 
-本地计价规则覆盖尚在服务的型号。已关闭型号或缺少计价规则时，不生成新的本地估价；已存储的历史费用
-保留原值，但缺少规则时无法补充费用拆分。
+本地计价使用[模型定价](#模型定价)的生效规则。缺少内置、同步及人工价格时不生成估价。新请求的本地
+费用明细、有效单价、服务档位与自定义倍率随终态记录持久化，后续改价和清除覆盖不重算历史明细。
+旧记录没有费用快照时仍按内置规则核对总额后补充拆分，核对失败只显示原总额。图像明细通过可选的
+`billing.image` 返回 `inputAmountDisplay`、`cacheReadAmountDisplay`、`inputPriceDisplay` 和
+`cacheReadPriceDisplay`；存在该字段时，普通输入与缓存字段仅表示文本输入，输出字段表示图像输出。
 
 ## 11. 版本、更新与重启
 

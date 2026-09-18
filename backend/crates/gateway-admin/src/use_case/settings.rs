@@ -23,6 +23,20 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Runtime settings 管理服务。
 #[async_trait]
 pub trait SettingsService: Send + Sync {
+    async fn preview_pricing_sync(
+        &self,
+    ) -> Result<crate::model::pricing::PricingSyncPreview, AdminError>;
+    async fn sync_pricing(
+        &self,
+        context: &MutationContext,
+        preview: crate::model::pricing::PricingSyncPreview,
+    ) -> Result<(), AdminError>;
+    async fn pricing(&self) -> Result<crate::model::pricing::PricingCatalog, AdminError>;
+    async fn update_pricing(
+        &self,
+        context: &MutationContext,
+        command: crate::model::pricing::UpdatePricing,
+    ) -> Result<(), AdminError>;
     async fn client_profile_options(
         &self,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
@@ -52,6 +66,8 @@ pub trait SettingsService: Send + Sync {
 }
 
 pub(crate) struct DefaultSettingsService {
+    providers: crate::ports::provider::ProviderAdminRegistry,
+    pricing_source: Arc<dyn crate::ports::pricing::PricingSource>,
     profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
     store: Arc<dyn SettingsStore>,
     snapshot: Arc<dyn SnapshotControl>,
@@ -63,8 +79,12 @@ impl DefaultSettingsService {
         store: Arc<dyn SettingsStore>,
         snapshot: Arc<dyn SnapshotControl>,
         profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
+        providers: crate::ports::provider::ProviderAdminRegistry,
+        pricing_source: Arc<dyn crate::ports::pricing::PricingSource>,
     ) -> Self {
         Self {
+            providers,
+            pricing_source,
             store,
             snapshot,
             profile_provider,
@@ -74,6 +94,112 @@ impl DefaultSettingsService {
 
 #[async_trait]
 impl SettingsService for DefaultSettingsService {
+    async fn preview_pricing_sync(
+        &self,
+    ) -> Result<crate::model::pricing::PricingSyncPreview, AdminError> {
+        self.pricing_source.fetch().await
+    }
+
+    async fn sync_pricing(
+        &self,
+        context: &MutationContext,
+        preview: crate::model::pricing::PricingSyncPreview,
+    ) -> Result<(), AdminError> {
+        let current = self.pricing_source.fetch().await?;
+        if current != preview {
+            return Err(AdminError::invalid(
+                "models.dev 价目已变化，请重新预览后确认",
+            ));
+        }
+        let revision = self
+            .store
+            .sync_pricing(current.prices, context)
+            .await
+            .map_err(|error| map_store_error(error, "model pricing sync"))?;
+        publish_committed(self.snapshot.as_ref(), revision).await
+    }
+
+    async fn pricing(&self) -> Result<crate::model::pricing::PricingCatalog, AdminError> {
+        let stored = self
+            .store
+            .load_pricing()
+            .await
+            .map_err(|error| map_store_error(error, "model pricing"))?;
+        Ok(crate::model::pricing::PricingCatalog {
+            defaults: self.providers.pricing_catalog(),
+            overrides: stored.overrides,
+            synced: stored.synced,
+            synced_at: stored.synced_at,
+        })
+    }
+
+    async fn update_pricing(
+        &self,
+        context: &MutationContext,
+        command: crate::model::pricing::UpdatePricing,
+    ) -> Result<(), AdminError> {
+        use crate::model::pricing::PricingChange;
+        let catalog = self.pricing().await?;
+        if !catalog.defaults.contains_key(&command.provider)
+            || command.models.is_empty()
+            || command.models.len() > 500
+            || command.models.iter().any(|model| {
+                model.is_empty()
+                    || model.len() > 128
+                    || model.trim() != model
+                    || model.chars().any(char::is_whitespace)
+                    || model.chars().any(char::is_control)
+            })
+        {
+            return Err(AdminError::invalid("Provider、模型 ID 或批量数量不合法"));
+        }
+        let defaults = gateway_core::metering::merge_pricing(catalog.defaults, &catalog.synced);
+        let defaults = defaults.get(&command.provider);
+        match &command.change {
+            PricingChange::Replace(pricing) => {
+                pricing.validate().map_err(AdminError::invalid)?;
+                if command.provider == "xai"
+                    && pricing
+                        .bands
+                        .keys()
+                        .any(|band| matches!(band.as_str(), "image" | "flex" | "long_flex"))
+                {
+                    return Err(AdminError::invalid("xAI 不支持此价格档位"));
+                }
+                if !pricing.bands.contains_key("standard")
+                    && command
+                        .models
+                        .iter()
+                        .any(|model| !defaults.is_some_and(|p| p.contains_key(model)))
+                {
+                    return Err(AdminError::invalid("未知模型必须提供标准档价格"));
+                }
+            }
+            PricingChange::Multiplier(bps) if *bps > 1_000_000 => {
+                return Err(AdminError::invalid("倍率必须在 0 至 100 倍之间"));
+            }
+            PricingChange::Multiplier(_)
+                if command.models.iter().any(|model| {
+                    !defaults.is_some_and(|p| p.contains_key(model))
+                        && !catalog
+                            .overrides
+                            .get(&command.provider)
+                            .and_then(|p| p.get(model))
+                            .is_some_and(|p| p.bands.contains_key("standard"))
+                }) =>
+            {
+                return Err(AdminError::invalid("请先为未知模型配置标准档价格"));
+            }
+            _ => {}
+        }
+        let revision = self
+            .store
+            .update_pricing(command, context)
+            .await
+            .map_err(|error| map_store_error(error, "model pricing"))?;
+        publish_committed(self.snapshot.as_ref(), revision).await
+    }
+
     async fn client_profile_options(
         &self,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {

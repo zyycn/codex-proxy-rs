@@ -21,6 +21,7 @@ mod execution;
 mod execution_buffer;
 mod observability;
 mod ops_events;
+mod pricing;
 mod provider_accounts;
 mod proxies;
 mod retention;

@@ -61,7 +61,10 @@ pub use self::{
         CodexRateLimitResetCreditsConsumeResult, MAX_CODEX_RESET_CREDITS_BODY_BYTES,
     },
     response_meta::CodexResponseMetadata,
-    usage::{MAX_CODEX_USAGE_BODY_BYTES, OpenAiBillingUsage, openai_billing_breakdown},
+    usage::{
+        MAX_CODEX_USAGE_BODY_BYTES, OpenAiBillingUsage, openai_billing_breakdown,
+        openai_billing_breakdown_with_override,
+    },
     websocket::{
         CodexWebSocketPool, CodexWebSocketPoolConfig, CodexWebSocketPoolKey, WebSocketPoolDecision,
     },

@@ -84,6 +84,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         client,
         store.admin_ports(),
         gateway_admin::AdminRuntimePorts {
+            pricing_source: std::sync::Arc::new(gateway_host::pricing::ModelsDevPricing),
             providers: vec![openai.admin_provider(), xai.admin_provider()],
             snapshot: core.snapshot_control(),
             account_probe: core.account_probe(),

@@ -5,6 +5,11 @@ use std::str::FromStr;
 
 use crate::validation::MeteringError;
 
+mod pricing;
+pub use pricing::{
+    ModelPriceOverride, PricingOverrides, TokenPrice, TokenPriceOverride, merge_pricing,
+};
+
 const DECIMAL_SCALE: u128 = 10_000_000_000;
 const MAX_SCALED_DECIMAL: u128 = 99_999_999_999_999_999_999;
 
@@ -272,12 +277,13 @@ impl CostEstimateStatus {
     }
 }
 
-/// 单次模型请求的总费用，不保存价格版本或 breakdown。
+/// 单次模型请求的总费用及当次确定的本地计算明细。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostEstimate {
     status: CostEstimateStatus,
     source: CostSource,
     total: Option<Money>,
+    breakdown: Option<std::sync::Arc<CalculatedCostBreakdown>>,
 }
 
 /// Provider 在单次请求终态上报的实际已计费总额。
@@ -287,16 +293,18 @@ pub struct ProviderReportedCost {
 }
 
 /// Provider 域依据公开单价和实际用量算出的单次总额。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedCost {
     total: Money,
+    breakdown: Option<std::sync::Arc<CalculatedCostBreakdown>>,
 }
 
 /// Provider 受控价格规则计算出的运行时费用明细。
 ///
-/// 该值只用于生成事件和管理端展示，不是持久化模型；数据库仍只保存最终总额、货币和来源。
+/// 随本地费用事件保存，以免后续改价改变历史明细。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedCostBreakdown {
+    image: Option<ImageCostBreakdown>,
     input_amount: Money,
     output_amount: Money,
     cache_read_amount: Money,
@@ -309,6 +317,18 @@ pub struct CalculatedCostBreakdown {
     cache_write_price_per_million: Money,
     service_tier: Option<String>,
     multiplier_percent: u32,
+    custom_multiplier_bps: u32,
+}
+
+/// 图像输入是总输入的子集，单独保留其价格，不能伪装成文本平均单价。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageCostBreakdown {
+    pub input_tokens: u64,
+    pub cached_tokens: u64,
+    pub input_amount: Money,
+    pub cache_read_amount: Money,
+    pub input_price_per_million: Money,
+    pub cache_read_price_per_million: Money,
 }
 
 /// 一次请求的费用组成，全部使用同一币种。
@@ -374,6 +394,7 @@ impl CalculatedCostBreakdown {
     ) -> Self {
         Self {
             input_amount: amounts.input,
+            image: None,
             output_amount: amounts.output,
             cache_read_amount: amounts.cache_read,
             cache_write_amount: amounts.cache_write,
@@ -385,7 +406,19 @@ impl CalculatedCostBreakdown {
             cache_write_price_per_million: rates.cache_write,
             service_tier,
             multiplier_percent,
+            custom_multiplier_bps: 10_000,
         }
+    }
+
+    #[must_use]
+    pub fn with_image(mut self, image: ImageCostBreakdown) -> Self {
+        self.image = Some(image);
+        self
+    }
+
+    #[must_use]
+    pub const fn image(&self) -> Option<&ImageCostBreakdown> {
+        self.image.as_ref()
     }
 
     #[must_use]
@@ -449,10 +482,89 @@ impl CalculatedCostBreakdown {
     }
 
     #[must_use]
-    pub const fn calculated_cost(&self) -> CalculatedCost {
+    pub fn calculated_cost(&self) -> CalculatedCost {
         CalculatedCost {
             total: self.total_amount,
+            breakdown: Some(std::sync::Arc::new(self.clone())),
         }
+    }
+
+    #[must_use]
+    pub const fn custom_multiplier_bps(&self) -> u32 {
+        self.custom_multiplier_bps
+    }
+
+    /// 统一调整金额和有效单价，保留服务档位倍率的独立含义。
+    #[must_use]
+    pub fn with_custom_multiplier(mut self, bps: u32) -> Option<Self> {
+        if bps > 1_000_000 {
+            return None;
+        }
+        let scale = |money: Money| {
+            let ticks = money
+                .amount()
+                .scaled()
+                .checked_mul(u128::from(bps))?
+                .checked_add(5_000)?
+                .checked_div(10_000)?;
+            Some(Money::new(
+                Decimal::from_scaled(ticks).ok()?,
+                money.currency(),
+            ))
+        };
+        let previous_total = self.total_amount;
+        let same_standard = self.standard_amount == previous_total;
+        let mut token_total = self
+            .input_amount
+            .amount()
+            .scaled()
+            .checked_add(self.output_amount.amount().scaled())?
+            .checked_add(self.cache_read_amount.amount().scaled())?
+            .checked_add(self.cache_write_amount.amount().scaled())?;
+        if let Some(image) = &mut self.image {
+            token_total = token_total
+                .checked_add(image.input_amount.amount().scaled())?
+                .checked_add(image.cache_read_amount.amount().scaled())?;
+            image.input_amount = scale(image.input_amount)?;
+            image.cache_read_amount = scale(image.cache_read_amount)?;
+            image.input_price_per_million = scale(image.input_price_per_million)?;
+            image.cache_read_price_per_million = scale(image.cache_read_price_per_million)?;
+        }
+        let other = Money::new(
+            Decimal::from_scaled(previous_total.amount().scaled().checked_sub(token_total)?)
+                .ok()?,
+            previous_total.currency(),
+        );
+        self.input_amount = scale(self.input_amount)?;
+        self.output_amount = scale(self.output_amount)?;
+        self.cache_read_amount = scale(self.cache_read_amount)?;
+        self.cache_write_amount = scale(self.cache_write_amount)?;
+        self.standard_amount = scale(self.standard_amount)?;
+        // 各费用项独立四舍五入后求和，防止明细合计与账本金额相差一个 tick。
+        let mut total = self
+            .input_amount
+            .amount()
+            .scaled()
+            .checked_add(self.output_amount.amount().scaled())?
+            .checked_add(self.cache_read_amount.amount().scaled())?
+            .checked_add(self.cache_write_amount.amount().scaled())?
+            .checked_add(scale(other)?.amount().scaled())?;
+        if let Some(image) = &self.image {
+            total = total
+                .checked_add(image.input_amount.amount().scaled())?
+                .checked_add(image.cache_read_amount.amount().scaled())?;
+        }
+        self.total_amount =
+            Money::new(Decimal::from_scaled(total).ok()?, previous_total.currency());
+        if same_standard {
+            self.standard_amount = self.total_amount;
+        }
+        self.input_price_per_million = scale(self.input_price_per_million)?;
+        self.output_price_per_million = scale(self.output_price_per_million)?;
+        self.cache_read_price_per_million = scale(self.cache_read_price_per_million)?;
+        self.cache_write_price_per_million = scale(self.cache_write_price_per_million)?;
+        self.custom_multiplier_bps = bps;
+        Some(self)
     }
 }
 
@@ -479,6 +591,7 @@ impl ProviderReportedCost {
             status: CostEstimateStatus::Known,
             source: CostSource::ProviderReported,
             total: Some(self.total),
+            breakdown: None,
         }
     }
 }
@@ -492,31 +605,39 @@ impl CalculatedCost {
     pub fn from_usd_ticks(ticks: u128) -> Result<Self, MeteringError> {
         Ok(Self {
             total: Money::new(Decimal::from_scaled(ticks)?, CurrencyCode(*b"USD")),
+            breakdown: None,
         })
     }
 
     #[must_use]
-    pub const fn total(self) -> Money {
+    pub const fn total(&self) -> Money {
         self.total
     }
 
     #[must_use]
-    pub const fn into_estimate(self) -> CostEstimate {
+    pub fn into_estimate(self) -> CostEstimate {
         CostEstimate {
             status: CostEstimateStatus::Known,
             source: CostSource::Calculated,
             total: Some(self.total),
+            breakdown: self.breakdown,
         }
     }
 }
 
 impl CostEstimate {
     #[must_use]
+    pub fn breakdown(&self) -> Option<&CalculatedCostBreakdown> {
+        self.breakdown.as_deref()
+    }
+
+    #[must_use]
     pub const fn unavailable() -> Self {
         Self {
             status: CostEstimateStatus::Unknown,
             source: CostSource::Unavailable,
             total: None,
+            breakdown: None,
         }
     }
 

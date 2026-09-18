@@ -38,6 +38,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import BaseTag from '@/components/base/BaseTag.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 
 interface PreviewTableRow {
@@ -63,6 +64,7 @@ const selected = shallowRef(true)
 const partialSelected = shallowRef(false)
 const strategy = shallowRef('balanced')
 const controlHeight = shallowRef(38)
+const syncTagVisible = shallowRef(true)
 
 const providerOptions = [
   { label: 'OpenAI', value: 'openai' },
@@ -138,7 +140,7 @@ function statusClass(status: PreviewTableRow['status']) {
 
       <div class="flex shrink-0 items-center gap-6">
         <span class="rounded-full bg-cp-primary-container px-3 py-1.5 font-mono text-[10px] font-heavy tracking-wide text-cp-primary-on-container uppercase">
-          20 Base Components
+          21 Base Components
         </span>
         <div class="flex items-center gap-5" aria-label="当前主题语义色">
           <div
@@ -316,14 +318,25 @@ function statusClass(status: PreviewTableRow['status']) {
         </template>
       </BaseCard>
 
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="状态与进度" description="Alias Token · Progress Token">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="状态与进度" description="BaseTag · Progress Token">
         <template #body>
           <div class="grid gap-4">
             <div class="flex flex-wrap gap-2">
-              <span class="rounded-full bg-cp-success-container px-3 py-1.5 text-cp-xs font-heavy text-cp-success-on-container">运行正常</span>
-              <span class="rounded-full bg-cp-warning-container px-3 py-1.5 text-cp-xs font-heavy text-cp-warning-on-container">额度受限</span>
-              <span class="rounded-full bg-cp-error-container px-3 py-1.5 text-cp-xs font-heavy text-cp-error-on-container">需要处理</span>
-              <span class="rounded-full bg-cp-info-container px-3 py-1.5 text-cp-xs font-heavy text-cp-info-on-container">同步中</span>
+              <BaseTag type="success" round>
+                运行正常
+              </BaseTag>
+              <BaseTag type="warning" round>
+                额度受限
+              </BaseTag>
+              <BaseTag type="danger" round>
+                需要处理
+              </BaseTag>
+              <BaseTag v-if="syncTagVisible" type="info" round closable @close="syncTagVisible = false">
+                同步中
+              </BaseTag>
+              <BaseButton v-else size="sm" variant="ghost" @click="syncTagVisible = true">
+                恢复标签
+              </BaseButton>
             </div>
             <div v-for="item in progressItems" :key="item.label" class="grid gap-2">
               <div class="flex justify-between text-cp-sm font-heavy text-cp-text-secondary">

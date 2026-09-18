@@ -372,6 +372,7 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         }],
     }]);
     store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
+        breakdown: None,
         bucket_start: quarter_hour_start(now),
         provider_kind: "openai".to_owned(),
         upstream_model_id: "gpt-5.5".to_owned(),
@@ -543,6 +544,7 @@ async fn usage_insights_should_reject_partial_costs_when_billing_stream_fails() 
     let range = observation_range(now);
     let store = Arc::new(FixtureObservabilityStore::new(range));
     store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
+        breakdown: None,
         bucket_start: quarter_hour_start(now),
         provider_kind: "openai".to_owned(),
         upstream_model_id: "gpt-5.5".to_owned(),
@@ -751,6 +753,23 @@ struct FixtureSettingsStore;
 
 #[async_trait]
 impl SettingsStore for FixtureSettingsStore {
+    async fn load_pricing(&self) -> AdminStoreResult<gateway_admin::model::pricing::StoredPricing> {
+        Ok(Default::default())
+    }
+    async fn sync_pricing(
+        &self,
+        _: gateway_core::metering::PricingOverrides,
+        _: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        panic!("unexpected pricing sync")
+    }
+    async fn update_pricing(
+        &self,
+        _: gateway_admin::model::pricing::UpdatePricing,
+        _: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        panic!("unexpected pricing update")
+    }
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             openai_client_profile: None,

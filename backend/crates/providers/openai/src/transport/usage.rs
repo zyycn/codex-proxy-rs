@@ -103,6 +103,8 @@ impl WebSearchPricing {
 
 #[derive(Clone, Copy)]
 struct TokenRates {
+    explicit_cache: bool,
+    cache_write_ticks: Option<u128>,
     input_ticks: u128,
     output_ticks: u128,
     cache_read_ticks: u128,
@@ -117,11 +119,16 @@ impl TokenRates {
             input_ticks,
             output_ticks,
             cache_read_ticks,
+            explicit_cache: false,
+            cache_write_ticks: None,
         }
     }
 
     const fn is_configured(self) -> bool {
-        self.input_ticks > 0 || self.output_ticks > 0 || self.cache_read_ticks > 0
+        self.explicit_cache
+            || self.input_ticks > 0
+            || self.output_ticks > 0
+            || self.cache_read_ticks > 0
     }
 }
 
@@ -467,6 +474,24 @@ pub fn openai_billing_breakdown(
         usage,
         service_tier,
         usage.input_tokens > LONG_CONTEXT_THRESHOLD,
+        None,
+    )
+}
+
+/// 使用请求开始时冻结的价格覆盖，不读取管理存储。
+#[must_use]
+pub fn openai_billing_breakdown_with_override(
+    model: &str,
+    usage: OpenAiBillingUsage,
+    service_tier: Option<&str>,
+    pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+) -> Option<CalculatedCostBreakdown> {
+    openai_billing_breakdown_with_context(
+        model,
+        usage,
+        service_tier,
+        usage.input_tokens > LONG_CONTEXT_THRESHOLD,
+        pricing,
     )
 }
 
@@ -475,6 +500,7 @@ fn openai_billing_breakdown_with_context(
     usage: OpenAiBillingUsage,
     service_tier: Option<&str>,
     long_context: bool,
+    custom: Option<&gateway_core::metering::ModelPriceOverride>,
 ) -> Option<CalculatedCostBreakdown> {
     if usage.cached_tokens.checked_add(usage.cache_write_tokens)? > usage.input_tokens
         || usage.image_input_tokens > 0
@@ -484,14 +510,15 @@ fn openai_billing_breakdown_with_context(
     }
     let tool_ticks = web_search_amount_ticks(usage)?
         .checked_add(u128::from(usage.file_search_calls).checked_mul(FILE_SEARCH_CALL_TICKS)?)?;
-    let pricing = model_pricing(model)?;
+    let pricing = model_pricing(model);
     let normalized_tier = normalize_service_tier(service_tier);
     let tier = pricing_tier(normalized_tier.as_deref())?;
-    let standard_rates = pricing.rates(PricingTier::Standard, long_context)?;
-    let selected_rates = pricing.rates(tier, long_context)?;
+    let standard_rates = effective_rates(pricing, custom, PricingTier::Standard, long_context)?;
+    let selected_rates = effective_rates(pricing, custom, tier, long_context)?;
+    let cache_write_percent = pricing.map_or(0, |pricing| pricing.cache_write_percent);
     let mut standard = token_amounts(
         standard_rates,
-        pricing.cache_write_percent,
+        cache_write_percent,
         usage.input_tokens,
         usage.output_tokens,
         usage.cached_tokens,
@@ -499,7 +526,7 @@ fn openai_billing_breakdown_with_context(
     )?;
     let mut selected = token_amounts(
         selected_rates,
-        pricing.cache_write_percent,
+        cache_write_percent,
         usage.input_tokens,
         usage.output_tokens,
         usage.cached_tokens,
@@ -509,9 +536,9 @@ fn openai_billing_breakdown_with_context(
     selected.total_ticks = selected.total_ticks.checked_add(tool_ticks)?;
     let multiplier_percent =
         effective_multiplier_percent(selected.total_ticks, standard.total_ticks)?;
-    let cache_write_rate = cache_write_rate(selected_rates, pricing.cache_write_percent)?;
+    let cache_write_rate = cache_write_rate(selected_rates, cache_write_percent)?;
 
-    Some(CalculatedCostBreakdown::new(
+    CalculatedCostBreakdown::new(
         CalculatedCostAmounts::new(
             usd_money(selected.input_ticks)?,
             usd_money(selected.output_ticks)?,
@@ -528,28 +555,166 @@ fn openai_billing_breakdown_with_context(
         ),
         Some(normalized_tier.unwrap_or_else(|| "default".to_owned())),
         multiplier_percent,
-    ))
+    )
+    .with_custom_multiplier(custom.map_or(10_000, |pricing| pricing.multiplier_bps))
 }
 
+fn effective_rates(
+    default: Option<ModelPricing>,
+    custom: Option<&gateway_core::metering::ModelPriceOverride>,
+    tier: PricingTier,
+    long_context: bool,
+) -> Option<TokenRates> {
+    let long_band = match tier {
+        PricingTier::Standard => "long_standard",
+        PricingTier::Fast => "long_fast",
+        PricingTier::Flex => "long_flex",
+    };
+    let uses_long = long_context
+        && (default.is_some_and(|p| p.long_standard.is_configured() || p.unpriced_long_context)
+            || custom.is_some_and(|p| p.bands.contains_key(long_band)));
+    let band = match (tier, uses_long) {
+        (PricingTier::Standard, false) => "standard",
+        (PricingTier::Fast, false) => "fast",
+        (PricingTier::Flex, false) => "flex",
+        (PricingTier::Standard, true) => "long_standard",
+        (PricingTier::Fast, true) => "long_fast",
+        (PricingTier::Flex, true) => "long_flex",
+    };
+    if let Some(rates) = custom.and_then(|p| p.bands.get(band)) {
+        return Some(TokenRates {
+            input_ticks: rates.input.ticks_per_token(),
+            output_ticks: rates.output.ticks_per_token(),
+            cache_read_ticks: rates.cache_read.ticks_per_token(),
+            cache_write_ticks: Some(rates.cache_write.ticks_per_token()),
+            explicit_cache: true,
+        });
+    }
+    default?.rates(tier, long_context)
+}
+
+pub(crate) fn pricing_catalog()
+-> std::collections::BTreeMap<String, gateway_core::metering::ModelPriceOverride> {
+    use gateway_core::metering::{ModelPriceOverride, TokenPrice, TokenPriceOverride};
+    let price = |ticks: u128| -> Option<TokenPrice> {
+        Decimal::from_scaled(ticks.checked_mul(1_000_000)?)
+            .ok()?
+            .canonical()
+            .try_into()
+            .ok()
+    };
+    let mut catalog: std::collections::BTreeMap<_, _> = PRICING_RULES
+        .iter()
+        .map(|rule| {
+            let pricing = rule.pricing;
+            let bands = [
+                ("standard", pricing.standard),
+                ("fast", pricing.fast),
+                ("flex", pricing.flex),
+                ("long_standard", pricing.long_standard),
+                ("long_fast", pricing.long_fast),
+                ("long_flex", pricing.long_flex),
+            ]
+            .into_iter()
+            .filter(|(_, rates)| rates.is_configured())
+            .filter_map(|(name, rates)| {
+                Some((
+                    name.to_owned(),
+                    TokenPriceOverride {
+                        input: price(rates.input_ticks)?,
+                        output: price(rates.output_ticks)?,
+                        cache_read: price(if rates.cache_read_ticks == 0 {
+                            rates.input_ticks
+                        } else {
+                            rates.cache_read_ticks
+                        })?,
+                        // 内置表没有独立缓存写入费时，这部分 Token 原本按输入计费。
+                        // 管理页复制来源档位不能把它改成显式免费。
+                        cache_write: price(if pricing.cache_write_percent == 0 {
+                            rates.input_ticks
+                        } else {
+                            cache_write_rate(rates, pricing.cache_write_percent)?
+                        })?,
+                    },
+                ))
+            })
+            .collect();
+            (
+                rule.model.to_owned(),
+                ModelPriceOverride {
+                    multiplier_bps: 10_000,
+                    bands,
+                },
+            )
+        })
+        .collect();
+    for model in IMAGE_MODELS {
+        let bands = [("standard", IMAGE_TEXT_RATES), ("image", IMAGE_TOKEN_RATES)]
+            .into_iter()
+            .map(|(band, rates)| {
+                (
+                    band.to_owned(),
+                    TokenPriceOverride {
+                        input: price(rates.input_ticks).expect("内置图像价格合法"),
+                        output: price(rates.output_ticks).expect("内置图像价格合法"),
+                        cache_read: price(rates.cache_read_ticks).expect("内置图像价格合法"),
+                        cache_write: price(0).expect("零价格合法"),
+                    },
+                )
+            })
+            .collect();
+        catalog.insert(
+            (*model).to_owned(),
+            ModelPriceOverride {
+                multiplier_bps: 10_000,
+                bands,
+            },
+        );
+    }
+    catalog
+}
+
+const IMAGE_MODELS: &[&str] = &[
+    "gpt-image-2",
+    "gpt-image-2-2026-04-21",
+    "gpt-image-2.5-sunburst",
+    "gpt-image-2.5-sunburst-2026-09-08",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-flare-2026-09-08",
+];
+const IMAGE_TEXT_RATES: TokenRates = TokenRates::new(50_000, 0, 12_500);
+const IMAGE_TOKEN_RATES: TokenRates = TokenRates::new(80_000, 300_000, 20_000);
+
 /// 独立 Images 端点按公开标准 API 单价估算；不是 ChatGPT 账号实际扣费。
-pub(crate) fn image_calculated_cost(request_body: &[u8], usage: &Value) -> Option<CalculatedCost> {
+pub(crate) fn image_calculated_cost(
+    request_body: &[u8],
+    usage: &Value,
+    prices: &gateway_core::metering::PricingOverrides,
+) -> Option<CalculatedCost> {
     #[derive(serde::Deserialize)]
     struct ImageModel {
         model: String,
     }
     // 只读取模型，跳过编辑请求中可能很大的 base64 图片。
     let request = serde_json::from_slice::<ImageModel>(request_body).ok()?;
-    if !matches!(
-        request.model.as_str(),
-        "gpt-image-2"
-            | "gpt-image-2-2026-04-21"
-            | "gpt-image-2.5-sunburst"
-            | "gpt-image-2.5-sunburst-2026-09-08"
-            | "gpt-image-2.5-flare"
-            | "gpt-image-2.5-flare-2026-09-08"
-    ) {
-        return None;
-    }
+    let custom = prices
+        .get("openai")
+        .and_then(|models| models.get(&request.model));
+    let known = IMAGE_MODELS.contains(&request.model.as_str());
+    let rates = |band, builtin| {
+        custom
+            .and_then(|p| p.bands.get(band))
+            .map(|p| TokenRates {
+                input_ticks: p.input.ticks_per_token(),
+                output_ticks: p.output.ticks_per_token(),
+                cache_read_ticks: p.cache_read.ticks_per_token(),
+                cache_write_ticks: Some(p.cache_write.ticks_per_token()),
+                explicit_cache: true,
+            })
+            .or_else(|| known.then_some(builtin))
+    };
+    let text_rates = rates("standard", IMAGE_TEXT_RATES)?;
+    let image_rates = rates("image", IMAGE_TOKEN_RATES)?;
     let input = usage.get("input_tokens")?.as_u64()?;
     let output = usage.get("output_tokens")?.as_u64()?;
     let details = usage.get("input_tokens_details")?;
@@ -588,23 +753,37 @@ pub(crate) fn image_calculated_cost(request_body: &[u8], usage: &Value) -> Optio
     // 价格来源：https://developers.openai.com/api/docs/pricing，核验日期 2026-09-09。
     // GPT Image 2 和两个 2.5 型号按相同的 token 单价计费，不使用按张估价。
     // 每百万 token 的美元单价：文本 5 / 缓存 1.25；图片 8 / 缓存 2 / 输出 30。
-    let text = token_amounts(
-        TokenRates::new(50_000, 0, 12_500),
-        0,
-        text_input,
-        0,
-        cached_text,
-        0,
-    )?;
-    let image = token_amounts(
-        TokenRates::new(80_000, 300_000, 20_000),
-        0,
-        image_input,
-        output,
-        cached_image,
-        0,
-    )?;
-    CalculatedCost::from_usd_ticks(text.total_ticks.checked_add(image.total_ticks)?).ok()
+    let text = token_amounts(text_rates, 0, text_input, 0, cached_text, 0)?;
+    let image = token_amounts(image_rates, 0, image_input, output, cached_image, 0)?;
+    let total = usd_money(text.total_ticks.checked_add(image.total_ticks)?)?;
+    let breakdown = CalculatedCostBreakdown::new(
+        CalculatedCostAmounts::new(
+            usd_money(text.input_ticks)?,
+            usd_money(image.output_ticks)?,
+            usd_money(text.cache_read_ticks)?,
+            usd_money(0)?,
+            total,
+            total,
+        ),
+        CalculatedCostRates::new(
+            usd_price_per_million(text_rates.input_ticks)?,
+            usd_price_per_million(image_rates.output_ticks)?,
+            usd_price_per_million(text_rates.cache_read_ticks)?,
+            usd_money(0)?,
+        ),
+        Some("default".to_owned()),
+        100,
+    )
+    .with_image(gateway_core::metering::ImageCostBreakdown {
+        input_tokens: image_input,
+        cached_tokens: cached_image,
+        input_amount: usd_money(image.input_ticks)?,
+        cache_read_amount: usd_money(image.cache_read_ticks)?,
+        input_price_per_million: usd_price_per_million(image_rates.input_ticks)?,
+        cache_read_price_per_million: usd_price_per_million(image_rates.cache_read_ticks)?,
+    })
+    .with_custom_multiplier(custom.map_or(10_000, |p| p.multiplier_bps))?;
+    Some(breakdown.calculated_cost())
 }
 
 fn model_pricing(model: &str) -> Option<ModelPricing> {
@@ -686,13 +865,13 @@ fn token_amounts(
     if cached_tokens.checked_add(cache_write_tokens)? > input_tokens {
         return None;
     }
-    let billed_cache_read = if rates.cache_read_ticks > 0 {
+    let billed_cache_read = if rates.explicit_cache || rates.cache_read_ticks > 0 {
         cached_tokens
     } else {
         0
     };
     let cache_write_rate = cache_write_rate(rates, cache_write_percent)?;
-    let billed_cache_write = if cache_write_rate > 0 {
+    let billed_cache_write = if rates.explicit_cache || cache_write_rate > 0 {
         cache_write_tokens
     } else {
         0
@@ -718,6 +897,9 @@ fn token_amounts(
 }
 
 fn cache_write_rate(rates: TokenRates, percent: u32) -> Option<u128> {
+    if let Some(ticks) = rates.cache_write_ticks {
+        return Some(ticks);
+    }
     if percent == 0 {
         return Some(0);
     }

@@ -176,6 +176,7 @@ impl AdminTestFixture {
             ClientConfig::default(),
             stores,
             gateway_admin::AdminRuntimePorts {
+                pricing_source: Arc::new(StaticPricingSource),
                 providers,
                 snapshot: Arc::new(NoopSnapshot),
                 account_probe: Arc::new(NoopProbe),
@@ -368,14 +369,31 @@ impl AuthStore for MemoryAuthStore {
 }
 
 pub(super) struct MemorySettingsStore {
+    pricing: Mutex<gateway_admin::model::pricing::StoredPricing>,
     settings: Mutex<RuntimeSettings>,
     api_key: Arc<Mutex<Option<AdminApiKey>>>,
+}
+
+struct StaticPricingSource;
+#[async_trait]
+impl gateway_admin::ports::pricing::PricingSource for StaticPricingSource {
+    async fn fetch(
+        &self,
+    ) -> Result<gateway_admin::model::pricing::PricingSyncPreview, gateway_admin::model::AdminError>
+    {
+        Ok(gateway_admin::model::pricing::PricingSyncPreview {
+            prices: serde_json::from_value(serde_json::json!({"openai":{"gpt-5.4":{
+                "multiplierBps":10000,"bands":{"standard":{"input":"2.5","output":"15","cacheRead":"0.25","cacheWrite":"0"}}
+            }}})).expect("prices"), skipped: vec![],
+        })
+    }
 }
 
 impl MemorySettingsStore {
     fn new(api_key: Arc<Mutex<Option<AdminApiKey>>>) -> Self {
         Self {
             settings: Mutex::new(test_runtime_settings()),
+            pricing: Mutex::default(),
             api_key,
         }
     }
@@ -387,6 +405,52 @@ impl MemorySettingsStore {
 
 #[async_trait]
 impl SettingsStore for MemorySettingsStore {
+    async fn load_pricing(&self) -> AdminStoreResult<gateway_admin::model::pricing::StoredPricing> {
+        Ok(self.pricing.lock().expect("pricing").clone())
+    }
+    async fn sync_pricing(
+        &self,
+        prices: gateway_core::metering::PricingOverrides,
+        _: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let mut pricing = self.pricing.lock().expect("pricing");
+        pricing.synced = prices;
+        pricing.synced_at = Some(Utc::now());
+        let mut settings = self.settings.lock().expect("settings");
+        settings.config_revision = next_revision(settings.config_revision);
+        Ok(settings.config_revision)
+    }
+    async fn update_pricing(
+        &self,
+        command: gateway_admin::model::pricing::UpdatePricing,
+        _: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        use gateway_admin::model::pricing::PricingChange;
+        let mut pricing = self.pricing.lock().expect("pricing");
+        let models = pricing.overrides.entry(command.provider).or_default();
+        for model in command.models {
+            match &command.change {
+                PricingChange::Reset => {
+                    models.remove(&model);
+                }
+                PricingChange::Replace(p) => {
+                    models.insert(model, p.clone());
+                }
+                PricingChange::Multiplier(bps) => {
+                    models
+                        .entry(model)
+                        .or_insert_with(|| gateway_core::metering::ModelPriceOverride {
+                            multiplier_bps: 10_000,
+                            bands: Default::default(),
+                        })
+                        .multiplier_bps = *bps;
+                }
+            }
+        }
+        let mut settings = self.settings.lock().expect("settings");
+        settings.config_revision = next_revision(settings.config_revision);
+        Ok(settings.config_revision)
+    }
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(self.settings.lock().expect("settings").clone())
     }

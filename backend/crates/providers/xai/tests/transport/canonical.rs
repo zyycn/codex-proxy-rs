@@ -336,9 +336,14 @@ fn billing_should_price_grok_46_cache_and_priority_at_the_context_boundary() {
     assert_eq!(priority.multiplier_percent(), 200);
 }
 
-fn pricing_events(
+fn pricing_events(response: Value, request: Option<&GrokResponsesRequest>) -> Vec<GatewayEvent> {
+    pricing_events_with_override(response, request, None)
+}
+
+fn pricing_events_with_override(
     mut response: Value,
     request: Option<&GrokResponsesRequest>,
+    pricing: Option<gateway_core::metering::ModelPriceOverride>,
 ) -> Vec<GatewayEvent> {
     response["id"] = serde_json::json!("resp_pricing");
     response["model"] = serde_json::json!("grok-4.6");
@@ -348,10 +353,12 @@ fn pricing_events(
     let body = format!(
         "event: response.created\ndata: {created}\n\nevent: response.completed\ndata: {completed}\n\n"
     );
-    let mut decoder = request.map_or_else(
-        || GrokCanonicalDecoder::new("grok-4.6"),
-        |request| GrokCanonicalDecoder::for_request("grok-4.6", request),
-    );
+    let mut decoder = request
+        .map_or_else(
+            || GrokCanonicalDecoder::new("grok-4.6"),
+            |request| GrokCanonicalDecoder::for_request("grok-4.6", request),
+        )
+        .with_pricing(pricing);
     let events = decoder
         .push(body.as_bytes())
         .expect("计费未知时仍应交付响应");
@@ -365,6 +372,50 @@ fn pricing_events(
             .any(|event| matches!(event, GatewayEvent::Completed(_)))
     );
     facts
+}
+
+#[test]
+fn custom_pricing_scales_calculations_but_never_changes_reported_cost() {
+    let pricing: gateway_core::metering::ModelPriceOverride =
+        serde_json::from_value(serde_json::json!({
+            "multiplierBps":15000,"bands":{"standard":{
+                "input":"3", "output":"12", "cacheRead":"0", "cacheWrite":"0"
+            }}
+        }))
+        .unwrap();
+    let mut response = serde_json::json!({"service_tier":"default","output":[],"usage":{
+        "input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":20}
+    }});
+    assert_eq!(
+        calculated_cost_ticks(&pricing_events_with_override(
+            response.clone(),
+            None,
+            Some(pricing.clone())
+        )),
+        Some(5_400_000)
+    );
+    response["usage"]["input_tokens_details"]["cache_write_tokens"] = serde_json::json!(10);
+    assert_eq!(
+        calculated_cost_ticks(&pricing_events_with_override(
+            response.clone(),
+            None,
+            Some(pricing.clone())
+        )),
+        Some(4_950_000)
+    );
+    response["service_tier"] = serde_json::json!("priority");
+    assert_eq!(
+        calculated_cost_ticks(&pricing_events_with_override(
+            response.clone(),
+            None,
+            Some(pricing.clone())
+        )),
+        Some(6_900_000)
+    );
+    response["usage"]["cost_in_usd_ticks"] = serde_json::json!(123);
+    let events = pricing_events_with_override(response, None, Some(pricing));
+    assert_eq!(provider_cost_ticks(&events), Some(123));
+    assert_eq!(calculated_cost_ticks(&events), None);
 }
 
 #[test]
