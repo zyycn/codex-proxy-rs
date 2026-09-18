@@ -185,6 +185,8 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
 - Provider 的一次 `execute` 只选择一个 credential 并返回一个冷流；换号、重试和 fallback 由 Core 决定。
 - `not_sent`、`sent`、`ambiguous` 是单调的上游发送边界；结果不明确时不能假定上游未收到请求。
 - downstream commit 是不可撤回的交付承诺。commit 后禁止换号、重试和 fallback。
+- API 在最终错误编码出口投影客户端恢复信号；该投影不修改 Provider 上游事实，也不改变 Core 的
+  重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)。
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开。
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生。

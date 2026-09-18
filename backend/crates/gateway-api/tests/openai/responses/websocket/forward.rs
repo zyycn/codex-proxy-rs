@@ -201,6 +201,54 @@ async fn non_structured_bodies_use_safe_fallback_without_losing_status_or_ids() 
 }
 
 #[tokio::test]
+async fn initial_capacity_failure_offers_client_retry_with_upstream_correlation() {
+    for code in ["server_is_overloaded", "slow_down"] {
+        for status in [400, 429, 503] {
+            let provider = upstream_failure(
+                status,
+                b"",
+                vec![
+                    header("x-request-id", b"req_capacity"),
+                    header("retry-after", b"7"),
+                ],
+            )
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "busy",
+                Some(code.to_owned()),
+                Some("service_unavailable_error".to_owned()),
+            ));
+            let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+            assert_eq!(error["status"], 503);
+            assert_eq!(error["error"]["code"], "server_error");
+            assert_eq!(error["error"]["message"], "busy");
+            assert_eq!(error["headers"]["x-request-id"], "req_capacity");
+            assert_eq!(error["headers"]["retry-after"], "7");
+        }
+    }
+}
+
+#[tokio::test]
+async fn classified_capacity_error_without_special_code_returns_retryable_websocket_status() {
+    let provider = ProviderError::new(
+        ProviderErrorKind::UpstreamCapacityUnavailable,
+        UpstreamSendState::Sent,
+    )
+    .with_status(400)
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "Selected model is at capacity. Please try a different model.",
+        None,
+        Some("server_error".to_owned()),
+    ));
+    let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+    assert_eq!(error["status"], 503);
+    assert_eq!(error["error"]["code"], "upstream_unavailable");
+    assert_eq!(
+        error["error"]["message"],
+        "Selected model is at capacity. Please try a different model."
+    );
+}
+
+#[tokio::test]
 async fn final_failure_headers_take_precedence_over_observed_opening_headers() {
     let provider = upstream_failure(403, b"", vec![header("x-oai-request-id", b"req_final")])
         .with_status(502)

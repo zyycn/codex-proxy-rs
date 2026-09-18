@@ -8,7 +8,7 @@ use axum::{
 };
 use gateway_core::{
     engine::EngineError,
-    error::{GatewayError, GatewayErrorKind},
+    error::{GatewayError, GatewayErrorKind, ProviderErrorKind},
     policy::{ClientVersionRejection, CodexClientKind},
 };
 use serde_json::{Value, json};
@@ -22,16 +22,54 @@ pub fn openai_error_response(
     error_type: &str,
     code: &str,
 ) -> (StatusCode, Json<Value>) {
-    (
-        status,
-        Json(json!({
-            "error": {
-                "message": message,
-                "type": error_type,
-                "code": code
-            }
-        })),
-    )
+    let body = json!({
+        "error": {"message": message, "type": error_type, "code": code}
+    });
+    match capacity_error_for_client(&body) {
+        Some(body) => (StatusCode::SERVICE_UNAVAILABLE, Json(body)),
+        None => (status, Json(body)),
+    }
+}
+
+/// Codex 将这两个容量码视为不可重试；仅在交付边界转换，内部仍保留真实上游事实。
+pub(super) fn client_error_code(code: &str) -> &str {
+    match code {
+        "server_is_overloaded" | "slow_down" => "server_error",
+        _ => code,
+    }
+}
+
+/// 为 HTTP 错误或流内失败保留原有字段，仅投影客户端需要的重试信号。
+pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
+    const CODE_PATHS: [&str; 2] = ["/error/code", "/response/error/code"];
+    let capacity_code = |value: &Value| {
+        value
+            .as_str()
+            .is_some_and(|code| client_error_code(code) != code)
+    };
+    if !CODE_PATHS
+        .iter()
+        .any(|path| data.pointer(path).is_some_and(capacity_code))
+    {
+        return None;
+    }
+    let mut projected = data.clone();
+    for path in CODE_PATHS {
+        if let Some(code) = projected.pointer_mut(path)
+            && capacity_code(code)
+        {
+            *code = Value::String("server_error".to_owned());
+        }
+    }
+    // WS 包装错误按 HTTP 状态分类；保留 400/429 会使客户端终止重试。
+    for field in ["status", "status_code"] {
+        if let Some(status) = projected.get_mut(field)
+            && status.is_number()
+        {
+            *status = json!(503);
+        }
+    }
+    Some(projected)
 }
 
 /// 严格协议 decoder/encoder 返回的安全错误 body。
@@ -166,14 +204,33 @@ pub fn gateway_error_response(error: &GatewayError) -> Response {
     response
 }
 
-/// 在下游尚未提交时优先交付 Provider 的原始 HTTP 失败响应。
+/// 在下游尚未提交时交付 Provider 的 HTTP 失败响应，并应用客户端容量恢复合同。
 pub fn engine_error_response(error: &EngineError) -> Response {
+    let capacity_unavailable = matches!(error, EngineError::Provider(error)
+        if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable);
     if let EngineError::Provider(error) = error
         && let Some(upstream) = error.client_visible_upstream_response()
         && let Ok(status) = StatusCode::from_u16(upstream.status())
     {
-        let mut response = Response::new(Body::from(upstream.body().clone()));
-        *response.status_mut() = status;
+        let projected = serde_json::from_slice::<Value>(upstream.body())
+            .ok()
+            .and_then(|body| capacity_error_for_client(&body));
+        let mut response = match projected {
+            Some(body) => {
+                let mut response = Response::new(Body::from(body.to_string()));
+                *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                response
+            }
+            None => {
+                let mut response = Response::new(Body::from(upstream.body().clone()));
+                *response.status_mut() = if capacity_unavailable {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    status
+                };
+                response
+            }
+        };
         if let Some(content_type) = upstream.content_type()
             && let Ok(content_type) = HeaderValue::from_bytes(content_type)
         {
@@ -191,6 +248,9 @@ pub fn engine_error_response(error: &EngineError) -> Response {
         return response;
     }
     let mut response = gateway_error_response(&gateway_error_from_engine(error));
+    if capacity_unavailable {
+        *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    }
     // 正文未完整取得时不能透传残缺响应，但已确认的上游关联 ID 仍应交付。
     if let EngineError::Provider(error) = error
         && let Some(request_id) = error.upstream_request_id()

@@ -2,11 +2,14 @@
 
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use gateway_core::engine::EngineError;
+use gateway_core::error::ProviderErrorKind;
 use gateway_core::event::ProviderResponseHeader;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::openai::error::{gateway_error_contract, gateway_error_from_engine};
+use crate::openai::error::{
+    capacity_error_for_client, gateway_error_contract, gateway_error_from_engine,
+};
 
 use super::super::{
     DecodedResponsesRequest, ProtocolErrorBody, RequestDecodeError,
@@ -152,12 +155,18 @@ pub(super) fn initial_engine_error_event(
         headers.remove("x-request-id");
         headers.remove("x-oai-request-id");
     }
-    let status = upstream
-        .map(|response| response.status())
-        .or_else(|| provider.and_then(|error| error.upstream_status()))
-        .and_then(|value| StatusCode::from_u16(value).ok())
-        .filter(|value| !value.is_success() && !value.is_informational())
-        .unwrap_or(default_status);
+    let status = if provider
+        .is_some_and(|error| error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable)
+    {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        upstream
+            .map(|response| response.status())
+            .or_else(|| provider.and_then(|error| error.upstream_status()))
+            .and_then(|value| StatusCode::from_u16(value).ok())
+            .filter(|value| !value.is_success() && !value.is_informational())
+            .unwrap_or(default_status)
+    };
     // 无原响应关联头时使用 Provider 的失败事实；不能让旧会话 ID 遮住当前失败。
     if !has_request_id(&headers)
         && let Some(request_id) = provider.and_then(|error| error.upstream_request_id())
@@ -224,7 +233,10 @@ pub(super) fn error_event(
     if !headers.is_empty() {
         event.insert("headers".to_owned(), Value::Object(headers));
     }
-    Value::Object(event).to_string()
+    let event = Value::Object(event);
+    capacity_error_for_client(&event)
+        .unwrap_or(event)
+        .to_string()
 }
 
 pub(super) fn connection_limit_event() -> String {

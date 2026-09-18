@@ -1698,7 +1698,7 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
                     "status": "failed",
                     "error": {
                         "type": "service_unavailable_error",
-                        "code": "server_is_overloaded",
+                        "code": "server_error",
                         "message": "Our servers are currently overloaded. Please try again later.",
                         "param": null,
                         "future_error_field": {"keep": true}
@@ -1713,6 +1713,45 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
             true,
         )
     );
+}
+
+#[tokio::test]
+async fn streaming_capacity_error_after_commit_offers_client_retry() {
+    for code in ["server_is_overloaded", "slow_down"] {
+        let trace = Arc::new(Trace::default());
+        let error = ProviderError::new(
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+            UpstreamSendState::Sent,
+        )
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            "busy",
+            Some(code.to_owned()),
+            Some("service_unavailable_error".to_owned()),
+        ));
+        let session = FakeSession::streaming(
+            Arc::clone(&trace),
+            vec![
+                NextStep::Event(delivery(started(), CommitRequirement::CommitBeforeDelivery)),
+                NextStep::Error(EngineError::Provider(error)),
+            ],
+        );
+        let response = stream_execution_response(Box::new(session), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("SSE body");
+        let text = std::str::from_utf8(&body).expect("UTF-8");
+        let events = parse_sse_events(text).expect("SSE");
+        let failed = events
+            .iter()
+            .find(|event| event.event.as_deref() == Some("response.failed"))
+            .expect("failed event");
+        let failed: Value = serde_json::from_str(&failed.data).expect("JSON");
+        assert_eq!(failed["response"]["error"]["code"], "server_error");
+        assert_eq!(failed["response"]["error"]["message"], "busy");
+        assert_eq!(text.matches("event: response.failed").count(), 1);
+        assert!(text.ends_with("data: [DONE]\n\n"));
+    }
 }
 
 #[tokio::test]
