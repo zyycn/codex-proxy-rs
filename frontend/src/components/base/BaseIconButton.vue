@@ -34,7 +34,7 @@ const variantClasses: Record<IconButtonVariant, string> = {
   primary:
     'bg-(--cp-button-primary-bg) text-(--cp-button-primary-color) shadow-cp-tertiary hover:bg-(--cp-button-primary-hover-bg) active:bg-(--cp-button-primary-active-bg)',
   secondary:
-    'bg-cp-bg-container text-cp-text-secondary shadow-cp-tertiary hover:bg-cp-bg-text-hover hover:text-cp-text active:bg-cp-bg-text-active',
+    'bg-cp-icon-button-secondary-bg text-cp-text-secondary shadow-cp-tertiary hover:bg-cp-icon-button-secondary-hover-bg hover:text-cp-text active:bg-cp-icon-button-secondary-active-bg',
   filled:
     'bg-cp-fill-tertiary text-cp-text-secondary shadow-none hover:bg-cp-bg-text-hover hover:text-cp-text active:bg-cp-fill-secondary aria-pressed:bg-cp-bg-text-active',
   success:

@@ -5,6 +5,7 @@ import type {
   ThemeAliasMap,
   ThemeColorRoleRecipe,
   ThemeDataMap,
+  ThemeFillMap,
   ThemeLinkMap,
   ThemeName,
   ThemePaletteSource,
@@ -17,6 +18,7 @@ import type {
 } from '../types'
 import { normalizeHexColor } from '../../utils/color'
 import {
+  compositeOnBackground,
   ensureContrast,
   ensureLightness,
   generateColorPalette,
@@ -52,21 +54,62 @@ const SURFACE_MAP_DERIVERS = {
   dark: deriveNeutralDarkSurfaceMap,
 } satisfies Record<ThemeName, (seedTokens: ResolvedThemeSeedTokens) => ThemeSurfaceMap>
 
-export function deriveThemeSurfaceMap(
-  theme: ThemeName,
-  seedTokens: ResolvedThemeSeedTokens,
-): ThemeSurfaceMap {
-  const surfaces = SURFACE_MAP_DERIVERS[theme](seedTokens)
+const LIGHT_FILL_OPACITIES = {
+  controlBg: 0.075,
+  controlHoverBg: 0.105,
+  controlActiveBg: 0.14,
+  contentBg: 0.095,
+  contentStripeBg: 0.045,
+  contentHoverBg: 0.09,
+} satisfies Record<keyof ThemeFillMap, number>
+
+export function deriveLightThemeFillMap(seedTokens: ResolvedThemeSeedTokens): ThemeFillMap {
+  // 先提亮色源并保留色相与饱和度，避免近黑色低透明度叠白后发灰。
+  const fillColor = mixColorTone(WHITE, seedTokens.colorTextBase, 0.5)
+  const fills = {} as ThemeFillMap
+  for (const name of Object.keys(LIGHT_FILL_OPACITIES) as (keyof ThemeFillMap)[])
+    fills[name] = withAlpha(fillColor, LIGHT_FILL_OPACITIES[name])
+  return fills
+}
+
+function themeTextBackgrounds(surfaces: ThemeSurfaceMap, fills: ThemeFillMap | null, primary: ThemePrimaryMap): string[] {
+  const hosts = [surfaces.colorBgLayout, surfaces.colorBgContainer, surfaces.colorBgElevated]
   const backgrounds = [
-    surfaces.colorBgLayout,
-    surfaces.colorBgContainer,
-    surfaces.colorBgElevated,
+    ...hosts,
     surfaces.colorBgTextHover,
     surfaces.colorBgTextActive,
     surfaces.colorFillSecondary,
     surfaces.colorFillTertiary,
     surfaces.colorFillQuaternary,
   ]
+  if (!fills)
+    return backgrounds
+
+  return [
+    ...backgrounds,
+    primary.colorPrimaryContainer,
+    primary.colorPrimaryContainerHover,
+    // 透明控件在页面、卡片和浮层上颜色不同，不能把带 Alpha 的值当作实色校正。
+    ...hosts.flatMap(background => [fills.controlBg, fills.controlHoverBg, fills.controlActiveBg]
+      .map(fill => compositeOnBackground(fill, background))),
+    ...[fills.contentBg, fills.contentStripeBg, fills.contentHoverBg]
+      .map(fill => compositeOnBackground(fill, surfaces.colorBgContainer)),
+  ]
+}
+
+export function deriveThemeSurfaceMap(
+  theme: ThemeName,
+  seedTokens: ResolvedThemeSeedTokens,
+): ThemeSurfaceMap {
+  return SURFACE_MAP_DERIVERS[theme](seedTokens)
+}
+
+export function ensureThemeSurfaceContrast(
+  surfaces: ThemeSurfaceMap,
+  fills: ThemeFillMap | null,
+  primary: ThemePrimaryMap,
+): ThemeSurfaceMap {
+  const backgrounds = themeTextBackgrounds(surfaces, fills, primary)
 
   // 辅助文字仍用于正常信息；按最深/最亮填充面保留可读的三级梯度。
   return {
@@ -136,19 +179,12 @@ export function deriveThemeSemanticMap(
   theme: ThemeName,
   surfaces: ThemeSurfaceMap,
   seedTokens: ResolvedThemeSeedTokens,
+  fills: ThemeFillMap | null,
+  primary: ThemePrimaryMap,
 ): ThemeSemanticMap {
   const recipe = THEME_COLOR_ROLE_RECIPES[theme].semantic
   const containerBg = surfaces.colorBgContainer
-  const textBackgrounds = [
-    surfaces.colorBgLayout,
-    surfaces.colorBgContainer,
-    surfaces.colorBgElevated,
-    surfaces.colorBgTextHover,
-    surfaces.colorBgTextActive,
-    surfaces.colorFillSecondary,
-    surfaces.colorFillTertiary,
-    surfaces.colorFillQuaternary,
-  ]
+  const textBackgrounds = themeTextBackgrounds(surfaces, fills, primary)
 
   return {
     info: deriveColorRoleMap(

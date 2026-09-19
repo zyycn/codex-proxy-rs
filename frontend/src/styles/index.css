@@ -158,6 +158,12 @@
   --color-cp-activity-level-4: var(--cp-activity-level-4);
 
   /* 颜色 · 组件 */
+  --color-cp-button-secondary-bg: var(--cp-button-secondary-bg);
+  --color-cp-button-secondary-hover-bg: var(--cp-button-secondary-hover-bg);
+  --color-cp-button-secondary-active-bg: var(--cp-button-secondary-active-bg);
+  --color-cp-icon-button-secondary-bg: var(--cp-icon-button-secondary-bg);
+  --color-cp-icon-button-secondary-hover-bg: var(--cp-icon-button-secondary-hover-bg);
+  --color-cp-icon-button-secondary-active-bg: var(--cp-icon-button-secondary-active-bg);
   --color-cp-control-item-bg-active: var(--cp-control-item-bg-active);
   --color-cp-control-item-bg-active-hover: var(--cp-control-item-bg-active-hover);
   --color-cp-control-outline: var(--cp-control-outline);

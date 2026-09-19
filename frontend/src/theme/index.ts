@@ -9,6 +9,7 @@ export {
   isThemeColorId,
   isThemeMode,
   normalizeThemeCustomization,
+  themeTokenAllowsAlpha,
 } from './core/normalize'
 export {
   resolveTheme,

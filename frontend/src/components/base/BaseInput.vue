@@ -60,7 +60,7 @@ const containerClasses = computed(() => [
       ? 'bg-(--cp-input-error-active-bg) shadow-cp-input-error-active'
       : [
           'bg-[var(--cp-input-bg)]',
-          'hover:bg-[var(--cp-input-hover-bg)] hover:shadow-cp-input-hover',
+          'hover:not-focus-within:bg-[var(--cp-input-hover-bg)] hover:not-focus-within:shadow-cp-input-hover',
           'focus-within:bg-(--cp-input-active-bg) focus-within:shadow-cp-input-active',
         ],
 ])

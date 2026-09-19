@@ -39,7 +39,9 @@ export function useKeyConfig() {
     if (!open)
       configKey.value = null
   })
-  onScopeDispose(() => { configKey.value = null })
+  onScopeDispose(() => {
+    configKey.value = null
+  })
 
   return { showConfig, configKey, configuring: request.loading, apiBaseUrl, openConfig, copyConfig }
 }

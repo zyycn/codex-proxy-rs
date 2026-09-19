@@ -125,16 +125,6 @@ export const DARK_SURFACE_ANCHORS = {
   colorBgSpotlight: '#050913',
 } as const
 
-/** 默认主题组件基准；带色温主题会连续过渡到 Surface 派生结果。 */
-export const LIGHT_COMPONENT_ANCHORS = {
-  inputHoverBg: '#F2F6FA',
-  inputActiveBg: '#F8FAFC',
-} as const
-
-export const DARK_COMPONENT_ANCHORS = {
-  inputActiveBg: '#111D2D',
-} as const
-
 /** 浅色阴影保持中性，不随主题文字色染色。 */
 export const LIGHT_SHADOW_BASE = LIGHT_TEXT_BASE
 
@@ -147,6 +137,12 @@ export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-button-primary-bg',
   '--cp-button-primary-hover-bg',
   '--cp-button-primary-active-bg',
+  '--cp-button-secondary-bg',
+  '--cp-button-secondary-hover-bg',
+  '--cp-button-secondary-active-bg',
+  '--cp-icon-button-secondary-bg',
+  '--cp-icon-button-secondary-hover-bg',
+  '--cp-icon-button-secondary-active-bg',
   '--cp-card-bg',
   '--cp-modal-bg',
   '--cp-popover-header-bg',
@@ -155,6 +151,7 @@ export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-table-row-stripe-bg',
   '--cp-table-row-hover-bg',
   '--cp-table-row-selected-bg',
+  '--cp-table-row-selected-hover-bg',
   '--cp-progress-remaining-color',
   '--cp-layout-sider-bg',
   '--cp-scrollbar-thumb-bg',
@@ -168,3 +165,16 @@ export const EDITABLE_SHADOW_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-card-shadow',
   '--cp-layout-sider-shadow',
 ])
+
+/** 只有控件填充允许透出宿主背景；容器与固定表格单元格保持实色。 */
+export const ALPHA_COLOR_TOKEN_NAMES = new Set<string>([
+  '--cp-input-bg',
+  '--cp-input-hover-bg',
+  '--cp-input-active-bg',
+  '--cp-button-secondary-bg',
+  '--cp-button-secondary-hover-bg',
+  '--cp-button-secondary-active-bg',
+  '--cp-icon-button-secondary-bg',
+  '--cp-icon-button-secondary-hover-bg',
+  '--cp-icon-button-secondary-active-bg',
+] satisfies ThemeTokenName[])

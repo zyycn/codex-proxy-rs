@@ -173,6 +173,16 @@ export interface ThemeShadowMap {
   boxShadowTertiary: string
 }
 
+/** 中性填充的派生中间值，不直接暴露为全局 CSS Token。 */
+export interface ThemeFillMap {
+  controlBg: string
+  controlHoverBg: string
+  controlActiveBg: string
+  contentBg: string
+  contentStripeBg: string
+  contentHoverBg: string
+}
+
 export interface ThemeComponentMap {
   menuItemSelectedBg: string
   inputBg: string
@@ -183,6 +193,12 @@ export interface ThemeComponentMap {
   buttonPrimaryBg: string
   buttonPrimaryHoverBg: string
   buttonPrimaryActiveBg: string
+  buttonSecondaryBg: string
+  buttonSecondaryHoverBg: string
+  buttonSecondaryActiveBg: string
+  iconButtonSecondaryBg: string
+  iconButtonSecondaryHoverBg: string
+  iconButtonSecondaryActiveBg: string
   brandMarkBg: string
   cardBg: string
   modalBg: string
@@ -192,6 +208,7 @@ export interface ThemeComponentMap {
   tableRowStripeBg: string
   tableRowHoverBg: string
   tableRowSelectedBg: string
+  tableRowSelectedHoverBg: string
   progressRemainingColor: string
   layoutSiderBg: string
   cardShadow: string

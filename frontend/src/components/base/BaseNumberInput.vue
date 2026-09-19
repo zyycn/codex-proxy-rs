@@ -63,7 +63,10 @@ function stepBy(direction: -1 | 1) {
 <template>
   <div
     v-bind="rootAttrs"
-    class="inline-flex h-8 items-center rounded-cp bg-cp-fill-tertiary p-0.5 text-cp-text transition-[background-color,box-shadow] duration-150 focus-within:bg-cp-bg-container focus-within:shadow-cp-input-active motion-reduce:transition-none"
+    class="inline-flex h-8 items-center rounded-cp p-0.5 text-cp-text transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none"
+    :class="disabled
+      ? 'cursor-not-allowed bg-cp-bg-container-disabled'
+      : 'bg-[var(--cp-input-bg)] shadow-cp-input hover:not-focus-within:bg-[var(--cp-input-hover-bg)] hover:not-focus-within:shadow-cp-input-hover focus-within:bg-(--cp-input-active-bg) focus-within:shadow-cp-input-active'"
   >
     <BaseIconButton
       :label="`减少${label}`"

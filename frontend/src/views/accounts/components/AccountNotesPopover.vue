@@ -55,7 +55,7 @@ watch(() => props.notes, recheckOpen, { flush: 'post' })
 
     <section :id="detailId" class="w-max max-w-[min(20rem,calc(100vw-1rem))] overflow-hidden rounded-cp-lg" role="dialog" aria-label="账号备注">
       <BaseScrollbar max-height="min(240px, calc(100dvh - 2rem))">
-        <div class="px-3 py-2.5 text-cp leading-5 whitespace-pre-wrap text-cp-text select-text wrap-anywhere">
+        <div class="px-3 py-2.5 text-cp-sm leading-5 whitespace-pre-wrap text-cp-text select-text wrap-anywhere">
           {{ notes }}
         </div>
       </BaseScrollbar>

@@ -15,6 +15,7 @@ import type {
 import { normalizeHexColor } from '../../utils/color'
 import { deriveCustomThemeAppearance } from '../derive/appearance'
 import {
+  deriveLightThemeFillMap,
   deriveThemeAliasMap,
   deriveThemeDataMap,
   deriveThemeLinkMap,
@@ -22,6 +23,7 @@ import {
   deriveThemePrimaryMap,
   deriveThemeSemanticMap,
   deriveThemeSurfaceMap,
+  ensureThemeSurfaceContrast,
 } from '../derive/colors'
 import {
   deriveThemeComponentMap,
@@ -96,11 +98,13 @@ function deriveThemeMap(
   seedTokens: ResolvedThemeSeedTokens,
   customization: ThemeCustomization,
 ): ThemeMap {
-  const surfaces = deriveThemeSurfaceMap(name, seedTokens)
+  const fills = name === 'light' ? deriveLightThemeFillMap(seedTokens) : null
+  const baseSurfaces = deriveThemeSurfaceMap(name, seedTokens)
+  const primary = deriveThemePrimaryMap(seed, name, baseSurfaces.colorBgContainer)
+  const surfaces = ensureThemeSurfaceContrast(baseSurfaces, fills, primary)
   const aliases = deriveThemeAliasMap(surfaces)
-  const primary = deriveThemePrimaryMap(seed, name, surfaces.colorBgContainer)
   const link = deriveThemeLinkMap(seedTokens.colorLink, name, surfaces.colorBgContainer)
-  const semantics = deriveThemeSemanticMap(name, surfaces, seedTokens)
+  const semantics = deriveThemeSemanticMap(name, surfaces, seedTokens, fills, primary)
 
   return {
     surfaces,
@@ -112,9 +116,8 @@ function deriveThemeMap(
     data: deriveThemeDataMap(aliases, semantics),
     shadows: deriveThemeShadowMap(name, seedTokens.shadowStrength),
     components: deriveThemeComponentMap(
-      name,
       surfaces,
-      aliases,
+      fills,
       primary,
       semantics.error,
       seedTokens.shadowStrength,

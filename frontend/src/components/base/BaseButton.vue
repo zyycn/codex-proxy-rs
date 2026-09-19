@@ -32,7 +32,7 @@ const variantClasses: Record<ButtonVariant, string> = {
   primary:
     'bg-(--cp-button-primary-bg) text-(--cp-button-primary-color) shadow-cp-tertiary hover:bg-(--cp-button-primary-hover-bg) active:bg-(--cp-button-primary-active-bg)',
   secondary:
-    'bg-cp-fill-tertiary text-cp-text shadow-cp-tertiary hover:bg-cp-bg-text-active active:bg-cp-bg-text-active',
+    'bg-cp-button-secondary-bg text-cp-text shadow-cp-tertiary hover:bg-cp-button-secondary-hover-bg active:bg-cp-button-secondary-active-bg',
   soft:
     'bg-cp-primary-container text-cp-primary-on-container shadow-none hover:bg-cp-primary-container-hover active:bg-cp-primary-container-hover',
   ghost:

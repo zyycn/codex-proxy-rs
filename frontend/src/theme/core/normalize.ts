@@ -7,12 +7,17 @@ import type {
   ThemeTokenName,
   ThemeTokens,
 } from '../types'
-import { normalizeHexColor } from '../../utils/color'
+import { normalizeHexColor, normalizeRgbaHexColor } from '../../utils/color'
 import {
+  ALPHA_COLOR_TOKEN_NAMES,
   EDITABLE_COLOR_TOKEN_NAMES,
   EDITABLE_SHADOW_TOKEN_NAMES,
   THEME_COLOR_PRESETS,
 } from './constants'
+
+export function themeTokenAllowsAlpha(name: string): boolean {
+  return ALPHA_COLOR_TOKEN_NAMES.has(name)
+}
 
 export function normalizeThemeCustomization(value: unknown): ThemeCustomization {
   if (!value || typeof value !== 'object')
@@ -103,6 +108,7 @@ function normalizeThemeTokenOverrides(value: unknown): Partial<ThemeTokens> {
 
     if (EDITABLE_COLOR_TOKEN_NAMES.has(name)) {
       const normalized = normalizeHexColor(rawValue)
+        ?? (themeTokenAllowsAlpha(name) ? normalizeRgbaHexColor(rawValue) : null)
       if (normalized)
         result[name] = normalized
       continue

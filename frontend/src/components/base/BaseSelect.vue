@@ -108,7 +108,7 @@ const triggerClasses = computed(() => [
         ? 'cursor-pointer bg-(--cp-input-active-bg) text-cp-text shadow-cp-input-active'
         : [
             'cursor-pointer bg-[var(--cp-input-bg)] text-cp-text',
-            'hover:bg-[var(--cp-input-hover-bg)] hover:shadow-cp-input-hover',
+            'hover:not-focus-visible:bg-[var(--cp-input-hover-bg)] hover:not-focus-visible:shadow-cp-input-hover',
             'focus-visible:bg-(--cp-input-active-bg) focus-visible:shadow-cp-input-active',
           ],
 ])

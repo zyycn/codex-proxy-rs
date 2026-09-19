@@ -151,13 +151,14 @@ Preset 的实心色使用 P6，普通 Container、Strong Container 与边界按 
 
 中继蓝使用稳定的浅色 / 深色中性基线；深海青、古风色与石墨预置额外提供各自的 `colorBgBase`、`colorTextBase`
 画像，自定义主色则只向通用中性基线注入少量色温。默认浅色采用中性锚点，默认深色使用 HSL 色调派生；带色温
-主题按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。稳定锚点用于 Surface、Component 与 Shadow，
+主题按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。稳定锚点用于 Surface 与 Shadow，Component 从角色派生，
 所有预置、自定义 Seed 和用户覆盖仍进入同一条算法，不在页面或组件中追加 HEX 特判。
-Input、阴影与其他 Component Token 继续从 Surface、Primary 和 Semantic Map 派生，不在常量文件维护整套颜色表。
+Input、阴影与其他 Component Token 从 Fill、Surface、Primary 和 Semantic 派生，不在常量文件维护整套颜色表。
 
-正常文字同时检查 Layout、Container、Elevated、文字交互背景与三级 Fill。正文、标题和 Secondary 至少 7:1，
+正常文字同时检查 Layout、Container、Elevated、文字交互背景、三级 Fill，以及控件透明填充在各宿主上的合成色
+和选中 / 选中 Hover 背景（新增配对用于浅色，暗色保持既有中性表面校正）。正文、标题和 Secondary 至少 7:1，
 Tertiary 至少 5.5:1，Quaternary 至少 4.5:1；这些是相对全部上述表面的最低目标，对 Container 的实测比值通常更高。
-Disabled 保留独立的弱化颜色，不承担正常信息。输入背景主要从这些 Surface 混色派生，placeholder 继续消费
+Disabled 保留独立的弱化颜色，不承担正常信息。控件填充由文字 Seed 和透明度派生，placeholder 继续消费
 Quaternary；主按钮白字与功能色文字遵循各自的容器配对规则。
 
 ### Alias Token
@@ -186,11 +187,12 @@ Token 直接覆盖时不会自动重算同组件的其他状态；需要保持�
 
 | 组件 | 代表 Token |
 | --- | --- |
-| Button | `--cp-button-primary-color / bg / hover-bg / active-bg` |
+| Button | `--cp-button-primary-color / bg / hover-bg / active-bg`、`--cp-button-secondary-bg / hover-bg / active-bg` |
+| IconButton | `--cp-icon-button-secondary-bg / hover-bg / active-bg` |
 | Input | `--cp-input-bg / hover-bg / active-bg / error-active-bg` 与对应 Shadow |
 | Menu | `--cp-menu-item-selected-bg` |
 | Popover | `--cp-popover-header-bg` |
-| Table | `--cp-table-row-bg / stripe-bg / hover-bg / selected-bg / height` |
+| Table | `--cp-table-row-bg / stripe-bg / hover-bg / selected-bg / selected-hover-bg / height` |
 | Card | `--cp-card-bg / border-radius / shadow` |
 | Layout | `--cp-layout-sider-bg / shadow` |
 | Scrollbar | `--cp-scrollbar-thumb-bg / hover-bg` |
@@ -199,8 +201,24 @@ Token 直接覆盖时不会自动重算同组件的其他状态；需要保持�
 主按钮的颜色在 Component 派生入口统一生成：文字保留 `colorTextLightSolid`，默认背景从 Primary Seed 校正到
 4.5:1，Hover/Active 在该背景上分别混入 8% / 16% 黑色，使白字对比度逐级增强；明暗模式共用此规则。
 这组组件状态与全局 `colorPrimaryHover/Active` 分工明确，调整按钮不会反向改写主色 Seed。
-输入框 Hover 与 Focus 使用 Primary Container Hover 的同色、同宽外圈；
-错误外圈使用带透明度的 Error 色，具体值由 Input Component Token 提供。
+Input、Select、Textarea 与 NumberInput 共用 Input Component Token，普通按钮和图标按钮分别使用 Button Secondary 与
+Icon Button Secondary Token。组件合同统一，明暗配方分别派生：浅色需要改善宿主背景上的辨识度，暗色保留已有的
+Surface 混色与填充层次，不把浅色配方直接套入暗色。暗色输入的聚焦态直接复用原有 Hover 背景与外圈，
+浅色两态都使用 Container 背景与浅蓝外圈，保证点击前后不切换形态。
+
+浅色控件常态使用 7.5% 透明填充，按钮 Hover / Active 分别使用 10.5% / 14%。色源保留 `colorTextBase` 的色相与
+饱和度，明度向白色提升一半，避免近黑色直接叠白后发灰。透明填充随页面、卡片和浮层的宿主背景自然合成。
+输入控件常态保持无边，Hover 与 Focus 均使用 Container 背景（默认浅色为白色）和同色、同宽的 3px 半透明主色
+外圈；两种状态的外圈都不受装饰性阴影强度影响。暗色同样将 Hover 与 Focus 的背景、外圈和装饰阴影统一派生。
+
+浅色表头、斑马纹、行 Hover 使用独立的内容填充，透明度为 9.5% / 4.5% / 9%，让斑马纹可辨、Hover 再深一档。
+这些值先与 Container 合成为不透明背景，避免固定列透出滚动内容。暗色表头、斑马纹和行 Hover 继续分别消费
+Tertiary Fill、Quaternary Fill 和 Text Hover，保持已有颜色。
+表格数据单元格的背景统一使用 150ms 淡入淡出，覆盖普通行、斑马纹和选中行，固定列同步过渡；系统偏好减少动态效果时关闭。
+
+选中行使用 Primary Container；浅色选中行 Hover 使用 Primary Container Hover，暗色仅混入 4% 正文色以轻微提亮，
+保留选中语义。错误状态使用 Error Container 与独立外圈，Hover 或 Focus 不覆盖错误反馈；`ghost` 延续无常态底色的
+轻操作角色。输入焦点外圈不乘以 `shadowStrength`，关闭装饰性阴影不会移除焦点反馈。
 
 结构化浮层头部统一使用 `--cp-popover-header-bg`：浅色从 Secondary Fill 派生，
 深色从 Tertiary Fill 派生。健康时间线朝向头部的箭头也使用该值；
@@ -296,6 +314,8 @@ Theme Store 统一读取持久化配置并初始化主题，首个 Vue 组件渲
 
 Component Token 只开放白名单字段，且不允许在组件目录覆盖全局 Alias。未覆盖项始终继续使用全局 Seed 与
 Alias 算法，避免主题配置逐渐退化成一份无法维护的完整 CSS 快照。
+Input、Button Secondary 与 Icon Button Secondary 的三个背景 Token 支持 HEX Alpha 编辑和保存；Seed、容器与表格背景仍只接受实色。
+透明填充先合成再参与默认文字对比度计算，用户显式覆盖 Component Token 时仍由用户负责整组状态的搭配。
 
 ### 草稿与保存
 
@@ -354,8 +374,8 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 ### 视觉状态
 
 - 静态填充、Hover、Active 与 Selected 必须使用不同角色，不能复用一个变量制造所有层级。
-- Input 的 Hover 与 Active 只改变内部填充；外圈反馈保持同色同宽，错误状态使用独立 Error Token。
-- 表格斑马纹使用 `table-row-stripe-bg`，不借用 `row-hover-bg`。
+- 输入控件常态无边；明暗模式的 Hover 与 Focus 均保留同色、同宽外圈反馈。Hover 仅在未聚焦时生效，错误与禁用状态优先。
+- 表格斑马纹使用 `table-row-stripe-bg`；选中行悬停使用 `table-row-selected-hover-bg`，不被普通 Hover 覆盖。
 - 结构化浮层头部使用 `popover-header-bg`，明暗模式分别检查它与表格背景的区分。
 - Card 和选项默认不增加装饰性边框；键盘焦点必须保留可见反馈。
 - 阴影保持中性，`shadowStrength` 只调节层级强弱，不给阴影染品牌色。
@@ -413,3 +433,10 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 - [Colorful Tag 样式](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/tag/style/presetCmp.ts)
 - [Map 到 Alias](https://github.com/ant-design/ant-design/blob/621b63dff5641cd96afa5bec26ca18a389961db3/components/theme/util/alias.ts)
 - [`@ant-design/colors` 生成器](https://github.com/ant-design/ant-design-colors/blob/89b4a5b7e989b792610087abe855bf4a2fb1d322/src/generate.ts)
+
+填充分层的实现参考：
+
+- [Ant Design Filled Input](https://github.com/ant-design/ant-design/blob/db0488c167154941ce4686074ef69e757e1f3492/components/input/style/variants.ts)
+- [Ant Design Table 填充合成与选中态](https://github.com/ant-design/ant-design/blob/db0488c167154941ce4686074ef69e757e1f3492/components/table/style/index.ts)
+- [Element Plus Table 角色](https://github.com/element-plus/element-plus/blob/5ac2b162180d3922d77c50990bb40c2f02376796/packages/theme-chalk/src/common/var.scss)
+- [Element Plus 暗色填充合成](https://github.com/element-plus/element-plus/blob/5ac2b162180d3922d77c50990bb40c2f02376796/packages/theme-chalk/src/dark/var.scss)

@@ -66,6 +66,11 @@ export function ensureLightness(color: string, minimum: number): string {
     .toUpperCase()
 }
 
+/** 将透明填充合成为真实表面色，再用于固定单元格或文字对比度计算。 */
+export function compositeOnBackground(fill: string, background: string): string {
+  return new FastColor(fill).onBackground(background).toHexString().toUpperCase()
+}
+
 export function mix(first: string, second: string, secondWeight: number): string {
   const from = hexToRgb(first)
   const to = hexToRgb(second)

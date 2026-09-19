@@ -1,55 +1,34 @@
 import type {
   FunctionalColorMap,
   ResolvedThemeSeedTokens,
-  ThemeAliasMap,
   ThemeComponentMap,
   ThemeComponentOverrides,
   ThemeDimensionMap,
+  ThemeFillMap,
   ThemeName,
   ThemePrimaryMap,
   ThemeShadowMap,
   ThemeSurfaceMap,
 } from '../types'
 import {
+  compositeOnBackground,
   ensureContrast,
   mix,
-  relativeColorDistance,
   scaleShadowAlpha,
   withAlpha,
 } from '../core/color'
 import {
   BLACK,
-  DARK_COMPONENT_ANCHORS,
-  DARK_CONTAINER_BASE,
-  DARK_TEXT_BASE,
   DEFAULT_DIMENSIONS,
-  LIGHT_COMPONENT_ANCHORS,
-  LIGHT_CONTAINER_BASE,
   LIGHT_SHADOW_BASE,
-  LIGHT_TEXT_BASE,
 } from '../core/constants'
 
-const FULL_COMPONENT_APPEARANCE_DISTANCE = 0.02
-
-type SurfaceComponentMap = Omit<ThemeComponentMap, 'buttonPrimaryColor' | 'buttonPrimaryBg' | 'buttonPrimaryHoverBg' | 'buttonPrimaryActiveBg'>
-
-type ComponentMapDeriver = (
-  surfaces: ThemeSurfaceMap,
-  aliases: ThemeAliasMap,
-  primary: ThemePrimaryMap,
-  error: FunctionalColorMap,
-  shadowStrength: number,
-) => SurfaceComponentMap
+type SurfaceComponentMap = Omit<ThemeComponentMap, `buttonPrimary${string}` | 'tableRowSelectedHoverBg'>
 
 const SHADOW_MAP_DERIVERS = {
   light: deriveLightShadowMap,
   dark: deriveDarkShadowMap,
 } satisfies Record<ThemeName, (shadowStrength: number) => ThemeShadowMap>
-
-const COMPONENT_MAP_DERIVERS = {
-  light: deriveLightComponentMap,
-  dark: deriveDarkComponentMap,
-} satisfies Record<ThemeName, ComponentMapDeriver>
 
 export function deriveThemeDimensionMap(
   seedTokens: ResolvedThemeSeedTokens,
@@ -117,25 +96,23 @@ function deriveLightShadowMap(shadowStrength: number): ThemeShadowMap {
 }
 
 export function deriveThemeComponentMap(
-  theme: ThemeName,
   surfaces: ThemeSurfaceMap,
-  aliases: ThemeAliasMap,
+  fills: ThemeFillMap | null,
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
 ): ThemeComponentMap {
-  const components = COMPONENT_MAP_DERIVERS[theme](
-    surfaces,
-    aliases,
-    primary,
-    error,
-    shadowStrength,
-  )
-
-  // 实心按钮单独承担小字号白字的可读性，不改写品牌 Seed 或全局主色。
+  // 明暗模式共用组件合同，各自保留适合宿主表面的填充配方。
+  const components = fills
+    ? deriveLightComponentMap(surfaces, fills, primary, error, shadowStrength)
+    : deriveDarkComponentMap(surfaces, primary, error, shadowStrength)
   const buttonPrimaryBg = ensureContrast(primary.colorPrimary, primary.colorTextLightSolid, 4.5)
   return {
     ...components,
+    // 暗色选中行只轻微提亮，保留原有蓝灰色温和选中语义。
+    tableRowSelectedHoverBg: fills
+      ? primary.colorPrimaryContainerHover
+      : mix(primary.colorPrimaryContainer, surfaces.colorText, 0.04),
     buttonPrimaryColor: primary.colorTextLightSolid,
     buttonPrimaryBg,
     buttonPrimaryHoverBg: mix(buttonPrimaryBg, BLACK, 0.08),
@@ -145,28 +122,30 @@ export function deriveThemeComponentMap(
 
 function deriveDarkComponentMap(
   surfaces: ThemeSurfaceMap,
-  aliases: ThemeAliasMap,
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
 ): SurfaceComponentMap {
-  const inputOutlineColor = 'var(--cp-color-primary-container-hover)'
-  const appearanceInfluence = deriveComponentAppearanceInfluence(
-    surfaces.colorBgContainer,
-    DARK_CONTAINER_BASE,
-    surfaces.colorText,
-    DARK_TEXT_BASE,
-  )
+  const inputInteractionBg = mix(surfaces.colorBgContainer, surfaces.colorFillSecondary, 0.69)
+  // 悬停与聚焦共用反馈；装饰阴影关闭时仍保留可见外圈。
+  const inputInteractionShadow = [
+    '0 0 0 3px var(--cp-color-primary-container-hover)',
+    shadowStrength > 0
+      ? scaleShadowAlpha(`0 14px 28px -22px ${withAlpha(BLACK, 0.72)}`, shadowStrength)
+      : null,
+  ].filter(Boolean).join(', ')
 
   return {
+    buttonSecondaryBg: surfaces.colorFillTertiary,
+    buttonSecondaryHoverBg: surfaces.colorBgTextActive,
+    buttonSecondaryActiveBg: surfaces.colorBgTextActive,
+    iconButtonSecondaryBg: surfaces.colorBgContainer,
+    iconButtonSecondaryHoverBg: surfaces.colorBgTextHover,
+    iconButtonSecondaryActiveBg: surfaces.colorBgTextActive,
     menuItemSelectedBg: surfaces.colorBgTextHover,
     inputBg: mix(surfaces.colorBgContainer, surfaces.colorFillSecondary, 0.375),
-    inputHoverBg: mix(surfaces.colorBgContainer, surfaces.colorFillSecondary, 0.69),
-    inputActiveBg: mix(
-      DARK_COMPONENT_ANCHORS.inputActiveBg,
-      mix(surfaces.colorBgContainer, surfaces.colorBgElevated, 0.4),
-      appearanceInfluence,
-    ),
+    inputHoverBg: inputInteractionBg,
+    inputActiveBg: inputInteractionBg,
     inputErrorActiveBg: error.container,
     brandMarkBg: surfaces.colorBgElevated,
     cardBg: surfaces.colorBgContainer,
@@ -174,18 +153,15 @@ function deriveDarkComponentMap(
     popoverHeaderBg: surfaces.colorFillTertiary,
     tableHeaderBg: surfaces.colorFillTertiary,
     tableRowBg: surfaces.colorBgContainer,
-    tableRowStripeBg: aliases.colorFillAlter,
+    tableRowStripeBg: surfaces.colorFillQuaternary,
     tableRowHoverBg: surfaces.colorBgTextHover,
     tableRowSelectedBg: primary.colorPrimaryContainer,
     progressRemainingColor: mix(surfaces.colorBgContainer, surfaces.colorBorderSecondary, 0.92),
     layoutSiderBg: surfaces.colorBgContainer,
     cardShadow: scaleShadowAlpha(`0 18px 34px -26px ${withAlpha(BLACK, 0.64)}`, shadowStrength),
     inputShadow: scaleShadowAlpha(`0 12px 24px -20px ${withAlpha(BLACK, 0.66)}`, shadowStrength),
-    inputHoverShadow: scaleShadowAlpha(
-      `0 0 0 3px ${inputOutlineColor}, 0 14px 28px -22px ${withAlpha(BLACK, 0.72)}`,
-      shadowStrength,
-    ),
-    inputActiveShadow: `0 0 0 3px ${inputOutlineColor}`,
+    inputHoverShadow: inputInteractionShadow,
+    inputActiveShadow: inputInteractionShadow,
     inputErrorActiveShadow: `0 0 0 3px ${withAlpha(error.color, 0.28)}`,
     layoutSiderShadow: scaleShadowAlpha(`2px 0 18px -14px ${withAlpha(BLACK, 0.72)}`, shadowStrength),
     scrollbarThumbBg: mix(surfaces.colorBorderSecondary, surfaces.colorTextSecondary, 0.16),
@@ -195,70 +171,43 @@ function deriveDarkComponentMap(
 
 function deriveLightComponentMap(
   surfaces: ThemeSurfaceMap,
-  aliases: ThemeAliasMap,
+  fills: ThemeFillMap,
   primary: ThemePrimaryMap,
   error: FunctionalColorMap,
   shadowStrength: number,
 ): SurfaceComponentMap {
-  const inputOutlineColor = 'var(--cp-color-primary-container-hover)'
-  const appearanceInfluence = deriveComponentAppearanceInfluence(
-    surfaces.colorBgContainer,
-    LIGHT_CONTAINER_BASE,
-    surfaces.colorText,
-    LIGHT_TEXT_BASE,
-  )
-
+  const inputInteractionShadow = `0 0 0 3px ${withAlpha(primary.colorPrimary, 0.16)}`
   return {
-    menuItemSelectedBg: surfaces.colorBgTextActive,
-    inputBg: mix(surfaces.colorBgContainer, surfaces.colorFillSecondary, 0.78),
-    inputHoverBg: mix(
-      LIGHT_COMPONENT_ANCHORS.inputHoverBg,
-      mix(surfaces.colorBgContainer, surfaces.colorFillTertiary, 0.88),
-      appearanceInfluence,
-    ),
-    inputActiveBg: mix(
-      LIGHT_COMPONENT_ANCHORS.inputActiveBg,
-      aliases.colorFillAlter,
-      appearanceInfluence,
-    ),
+    buttonSecondaryBg: fills.controlBg,
+    buttonSecondaryHoverBg: fills.controlHoverBg,
+    buttonSecondaryActiveBg: fills.controlActiveBg,
+    iconButtonSecondaryBg: fills.controlBg,
+    iconButtonSecondaryHoverBg: fills.controlHoverBg,
+    iconButtonSecondaryActiveBg: fills.controlActiveBg,
+    inputBg: fills.controlBg,
+    inputHoverBg: surfaces.colorBgContainer,
+    inputActiveBg: surfaces.colorBgContainer,
     inputErrorActiveBg: error.container,
+    inputShadow: 'none',
+    inputHoverShadow: inputInteractionShadow,
+    inputActiveShadow: inputInteractionShadow,
+    inputErrorActiveShadow: `0 0 0 3px ${withAlpha(error.color, 0.18)}`,
+    // 先合成实色，固定列滚动时不会透出下层内容。
+    tableHeaderBg: compositeOnBackground(fills.contentBg, surfaces.colorBgContainer),
+    tableRowBg: surfaces.colorBgContainer,
+    tableRowStripeBg: compositeOnBackground(fills.contentStripeBg, surfaces.colorBgContainer),
+    tableRowHoverBg: compositeOnBackground(fills.contentHoverBg, surfaces.colorBgContainer),
+    tableRowSelectedBg: primary.colorPrimaryContainer,
+    menuItemSelectedBg: surfaces.colorBgTextActive,
     brandMarkBg: surfaces.colorBgSpotlight,
     cardBg: surfaces.colorBgContainer,
     modalBg: surfaces.colorBgContainer,
     popoverHeaderBg: surfaces.colorFillSecondary,
-    tableHeaderBg: surfaces.colorFillTertiary,
-    tableRowBg: surfaces.colorBgContainer,
-    tableRowStripeBg: aliases.colorFillAlter,
-    tableRowHoverBg: surfaces.colorBgTextHover,
-    tableRowSelectedBg: primary.colorPrimaryContainer,
     progressRemainingColor: surfaces.colorBorderSecondary,
     layoutSiderBg: surfaces.colorBgContainer,
     cardShadow: scaleShadowAlpha(`0 10px 22px -18px ${withAlpha(LIGHT_SHADOW_BASE, 0.08)}`, shadowStrength),
-    inputShadow: scaleShadowAlpha(`0 9px 18px -14px ${withAlpha(LIGHT_SHADOW_BASE, 0.086)}`, shadowStrength),
-    inputHoverShadow: scaleShadowAlpha(
-      `0 0 0 3px ${inputOutlineColor}, 0 12px 24px -16px ${withAlpha(LIGHT_SHADOW_BASE, 0.12)}`,
-      shadowStrength,
-    ),
-    inputActiveShadow: `0 0 0 3px ${inputOutlineColor}`,
-    inputErrorActiveShadow: `0 0 0 3px ${withAlpha(error.color, 0.18)}`,
     layoutSiderShadow: scaleShadowAlpha(`2px 0 12px -12px ${withAlpha(LIGHT_SHADOW_BASE, 0.027)}`, shadowStrength),
     scrollbarThumbBg: mix(surfaces.colorBgLayout, surfaces.colorTextSecondary, 0.2),
     scrollbarThumbHoverBg: mix(surfaces.colorBgLayout, surfaces.colorTextSecondary, 0.34),
   }
-}
-
-function deriveComponentAppearanceInfluence(
-  background: string,
-  baselineBackground: string,
-  text: string,
-  baselineText: string,
-): number {
-  const distance = Math.min(
-    1,
-    Math.max(
-      relativeColorDistance(background, baselineBackground),
-      relativeColorDistance(text, baselineText),
-    ) / FULL_COMPONENT_APPEARANCE_DISTANCE,
-  )
-  return distance * distance * (3 - 2 * distance)
 }
