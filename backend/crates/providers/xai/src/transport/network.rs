@@ -684,6 +684,8 @@ fn build_official_client(
     proxy: Option<&OutboundProxy>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
     let mut builder = Client::builder()
+        // 工作区可能同时启用 native-tls；与官方 Grok CLI 一样显式固定 rustls，避免握手画像漂移。
+        .use_rustls_tls()
         .redirect(Policy::none())
         .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)

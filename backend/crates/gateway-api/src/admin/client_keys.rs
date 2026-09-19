@@ -148,6 +148,7 @@ impl ClientKeySort {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
     openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
+    xai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     custom_key: Option<String>,
     name: String,
     label: Option<String>,
@@ -180,6 +181,9 @@ impl CreateClientKeyRequest {
             openai_client_profile_override: self
                 .openai_client_profile_override
                 .map(gateway_core::account::OpaqueProviderData::new),
+            xai_client_profile_override: self
+                .xai_client_profile_override
+                .map(gateway_core::account::OpaqueProviderData::new),
             custom_key: self
                 .custom_key
                 .filter(|key| !key.is_empty())
@@ -208,6 +212,8 @@ impl CreateClientKeyRequest {
 pub struct UpdateClientKeyRequest {
     #[serde(default, deserialize_with = "deserialize_profile_override")]
     openai_client_profile_override: Option<Option<serde_json::Map<String, serde_json::Value>>>,
+    #[serde(default, deserialize_with = "deserialize_profile_override")]
+    xai_client_profile_override: Option<Option<serde_json::Map<String, serde_json::Value>>>,
     id: String,
     name: String,
     label: Option<String>,
@@ -230,6 +236,9 @@ impl UpdateClientKeyRequest {
         Ok(UpdateClientKey {
             openai_client_profile_override: self
                 .openai_client_profile_override
+                .map(|value| value.map(gateway_core::account::OpaqueProviderData::new)),
+            xai_client_profile_override: self
+                .xai_client_profile_override
                 .map(|value| value.map(gateway_core::account::OpaqueProviderData::new)),
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
             name: self.name,
@@ -317,6 +326,7 @@ impl ClientKeyMutationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
     openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
+    xai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     id: String,
     name: String,
     label: Option<String>,
@@ -357,6 +367,9 @@ impl From<ClientKeyRecord> for ClientKeyView {
         Self {
             openai_client_profile_override: record
                 .openai_client_profile_override
+                .map(gateway_core::account::OpaqueProviderData::into_inner),
+            xai_client_profile_override: record
+                .xai_client_profile_override
                 .map(gateway_core::account::OpaqueProviderData::into_inner),
             id: record.id.to_string(),
             name: record.name,

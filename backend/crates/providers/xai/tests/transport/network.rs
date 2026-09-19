@@ -10,6 +10,7 @@ use futures::StreamExt;
 use gateway_core::upstream::UpstreamSendState;
 use reqwest::Client;
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -25,6 +26,97 @@ use provider_xai::{
 };
 
 use crate::support::{loopback_endpoint_policy, rejecting_account_proxy};
+
+#[tokio::test]
+async fn official_inference_tls_should_advertise_grok_cli_alpn() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let capture = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut connect = Vec::new();
+        while !connect.ends_with(b"\r\n\r\n") {
+            assert!(connect.len() < 8192);
+            connect.push(socket.read_u8().await.unwrap());
+        }
+        assert!(connect.starts_with(b"CONNECT cli-chat-proxy.grok.com:443 HTTP/1.1\r\n"));
+        socket
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .unwrap();
+        // 只读取公开的 ClientHello 后关闭连接，不发送证书，也不接收认证和模型请求。
+        let mut handshake = Vec::new();
+        loop {
+            assert_eq!(socket.read_u8().await.unwrap(), 22);
+            let _record_version = socket.read_u16().await.unwrap();
+            let record_len = usize::from(socket.read_u16().await.unwrap());
+            assert!(record_len <= 16384);
+            let start = handshake.len();
+            handshake.resize(start + record_len, 0);
+            socket.read_exact(&mut handshake[start..]).await.unwrap();
+            assert!(handshake.len() <= 65536);
+            if handshake.len() >= 4 {
+                assert_eq!(handshake[0], 1);
+                let size = u32::from_be_bytes([0, handshake[1], handshake[2], handshake[3]]);
+                if handshake.len() >= 4 + size as usize {
+                    return client_hello_alpn(&handshake[4..]);
+                }
+            }
+        }
+    });
+    let transport =
+        ReqwestGrokInferenceTransport::new(Arc::new(OfficialGrokEndpointPolicy)).unwrap();
+    let request = GrokInferenceRequest::new(
+        Url::parse("https://cli-chat-proxy.grok.com/v1/responses").unwrap(),
+        Vec::new(),
+        b"{}".to_vec(),
+        GrokSessionBinding::new("tls-contract")
+            .unwrap()
+            .with_outbound_proxy(Some(proxy)),
+    );
+    let (response, alpn) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(transport.execute(request), capture)
+    })
+    .await
+    .unwrap();
+    assert!(response.is_err(), "捕获端在 TLS 握手后主动关闭");
+    assert_eq!(alpn.unwrap(), vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+}
+
+fn client_hello_alpn(mut hello: &[u8]) -> Vec<Vec<u8>> {
+    fn take<'a>(input: &mut &'a [u8], len: usize) -> &'a [u8] {
+        let (value, rest) = input.split_at(len);
+        *input = rest;
+        value
+    }
+    fn vector<'a>(input: &mut &'a [u8], prefix: usize) -> &'a [u8] {
+        let len = take(input, prefix)
+            .iter()
+            .fold(0_usize, |len, byte| len * 256 + usize::from(*byte));
+        take(input, len)
+    }
+    take(&mut hello, 34); // 跳过版本号与随机值。
+    vector(&mut hello, 1); // 跳过会话 ID。
+    vector(&mut hello, 2); // 跳过密码套件列表。
+    vector(&mut hello, 1); // 跳过压缩方法列表。
+    let mut extensions = vector(&mut hello, 2);
+    while !extensions.is_empty() {
+        let kind = u16::from_be_bytes(take(&mut extensions, 2).try_into().unwrap());
+        let mut data = vector(&mut extensions, 2);
+        if kind == 16 {
+            let mut protocols = vector(&mut data, 2);
+            let mut alpn = Vec::new();
+            while !protocols.is_empty() {
+                alpn.push(vector(&mut protocols, 1).to_vec());
+            }
+            return alpn;
+        }
+    }
+    Vec::new()
+}
 
 #[tokio::test]
 async fn inference_and_oauth_connect_through_each_accounts_authenticated_proxy() {

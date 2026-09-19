@@ -27,28 +27,25 @@ use provider_xai::{
     GrokCatalogCacheError, GrokCatalogScope, GrokCredentialAdmin, GrokCredentialCatalogCache,
     GrokCredentialCatalogService, GrokCredentialQuotaService, GrokCredentialRepository,
     GrokCredentialRepositoryError, GrokEndpointPolicy, GrokModelCatalogTransport, GrokOAuthSecret,
-    GrokPlanCatalog, GrokReqwestTransportBuildError, SecretValue, XaiConfig, XaiWireProfileState,
+    GrokPlanCatalog, GrokReqwestTransportBuildError, SecretValue, XaiWireProfile,
+    XaiWireProfileState,
 };
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use url::{Host, Url};
 
-pub fn xai_config() -> XaiConfig {
-    serde_json::from_value(serde_json::json!({
-        "wire_profile": {
+pub fn xai_wire_profile() -> XaiWireProfileState {
+    XaiWireProfileState::new(
+        serde_json::from_value::<XaiWireProfile>(serde_json::json!({
             "client_identifier": "grok-shell",
             "client_version": "0.2.106",
             "client_mode": "headless",
             "target_os": "linux",
             "target_arch": "x86_64",
             "verified_at": "2026-07-21T00:00:00+08:00"
-        }
-    }))
-    .expect("valid xAI test config")
-}
-
-pub fn xai_wire_profile() -> XaiWireProfileState {
-    xai_config().wire_profile_state()
+        }))
+        .expect("valid test runtime profile"),
+    )
 }
 
 pub fn grok_catalog_service(

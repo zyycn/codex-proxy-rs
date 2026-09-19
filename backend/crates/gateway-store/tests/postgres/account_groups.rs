@@ -171,6 +171,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         .update_client_key(
             UpdateClientKey {
                 openai_client_profile_override: None,
+                xai_client_profile_override: None,
                 daily_limit_usd: None,
                 weekly_limit_usd: None,
                 id: client_key_id("key_group_one"),
@@ -197,6 +198,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         .update_client_key(
             UpdateClientKey {
                 openai_client_profile_override: None,
+                xai_client_profile_override: None,
                 daily_limit_usd: None,
                 weekly_limit_usd: None,
                 id: client_key_id("key_group_one"),
@@ -321,6 +323,7 @@ fn new_key(id: &str, group_ids: Vec<AccountGroupId>) -> NewClientKey {
     let marker = char::from(id.as_bytes().last().copied().unwrap_or(b'k'));
     NewClientKey {
         openai_client_profile_override: None,
+        xai_client_profile_override: None,
         budget: Default::default(),
         id: client_key_id(id),
         name: id.to_owned(),

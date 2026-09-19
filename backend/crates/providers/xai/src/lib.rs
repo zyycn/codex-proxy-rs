@@ -1,13 +1,11 @@
 //! 官方 Grok Build OAuth Provider 边界。
 
 mod admin;
-pub mod config;
 pub mod credential;
 mod provider;
 mod reasoning_replay;
 pub mod transport;
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,8 +19,7 @@ use gateway_core::task::WorkerContribution;
 use crate::admin::{XaiAdminProvider, XaiAdminServices};
 use crate::transport::profile::OfficialGrokCliReleaseTransport;
 
-pub use config::{XaiConfig, XaiConfigError, XaiWireProfileConfig};
-pub use transport::XaiWireProfileState;
+pub use transport::{XaiWireProfile, XaiWireProfileState};
 
 pub use credential::{
     AllowedRedirectUri, AuthorizationCallback, AuthorizationCodeGrant, CallbackRejection,
@@ -91,15 +88,9 @@ pub struct ProviderBundle {
 }
 
 /// 构造 xAI 数据面、管理面准备器与 Provider-owned 后台任务。
-pub async fn initialize(
-    mut config: XaiConfig,
-    ports: ProviderStorePorts,
-) -> Result<ProviderBundle, XaiInitializeError> {
-    config
-        .resolve_and_validate(Path::new("."))
-        .map_err(XaiInitializeError::Config)?;
-    let profile = config.wire_profile_state();
-    let oauth_config = config.oauth_config().map_err(XaiInitializeError::Config)?;
+pub async fn initialize(ports: ProviderStorePorts) -> Result<ProviderBundle, XaiInitializeError> {
+    let profile = XaiWireProfileState::new(XaiWireProfile::default());
+    let oauth_config = GrokOAuthConfig::official().map_err(XaiInitializeError::Config)?;
     let cli_release = Arc::new(GrokCliReleaseService::new(
         profile.clone(),
         Arc::new(
@@ -114,6 +105,15 @@ pub async fn initialize(
     let cooldowns = ports.cooldowns();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
+    let initial_profile = transport::client_profile::GrokClientProfileSelection::default()
+        .document()
+        .map_err(|_| XaiInitializeError::RuntimePolicy)?;
+    let configured_profile = runtime_policy
+        .initialize_request_profile(&provider_kind, initial_profile)
+        .await
+        .map_err(|_| XaiInitializeError::RuntimePolicy)?;
+    transport::client_profile::GrokClientProfileSelection::parse(&configured_profile)
+        .map_err(|_| XaiInitializeError::RuntimePolicy)?;
     let repository = GrokCredentialRepository::new(Arc::clone(&accounts));
     let endpoint_policy: Arc<dyn GrokEndpointPolicy> = Arc::new(OfficialGrokEndpointPolicy);
 
@@ -241,7 +241,7 @@ impl ProviderBundle {
 #[derive(Debug, thiserror::Error)]
 pub enum XaiInitializeError {
     #[error(transparent)]
-    Config(XaiConfigError),
+    Config(ConfigError),
     #[error("xAI runtime policy is unavailable")]
     RuntimePolicy,
     #[error("xAI Provider kind is invalid")]

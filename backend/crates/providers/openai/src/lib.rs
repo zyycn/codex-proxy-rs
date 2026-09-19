@@ -27,7 +27,7 @@ use crate::transport::profile::{
 };
 use crate::transport::{CodexWebSocketPool, build_reqwest_client};
 
-pub use config::{CodexWireProfileConfig, OpenAiConfig, OpenAiConfigError};
+pub use config::{OpenAiConfig, OpenAiConfigError};
 pub use provider::{
     CodexProvider, CodexProviderConfigError, CodexProviderTransport, OFFICIAL_CODEX_BASE_PATH,
     OFFICIAL_CODEX_BASE_URL, openai_failure_affects_account_score,
@@ -62,9 +62,9 @@ pub async fn initialize(
     let session_exclusions = ports.session_exclusions();
     let account_feedback = ports.account_feedback();
     let runtime_policy = ports.runtime_policy();
-    let initial_profile = config
-        .initial_client_profile()
-        .map_err(OpenAiInitializeError::Config)?;
+    let initial_profile = transport::profile::selection::ClientProfileSelection::default()
+        .document()
+        .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let configured_profile = runtime_policy
         .initialize_request_profile(&provider_kind, initial_profile)
         .await
@@ -72,7 +72,11 @@ pub async fn initialize(
     transport::profile::selection::ClientProfileSelection::parse(&configured_profile)
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let credential_state = ports.credential_state();
-    let profile = config.wire_profile_state();
+    let profile =
+        transport::profile::CodexWireProfileState::new(transport::profile::CodexWireProfile {
+            residency: config.residency,
+            ..Default::default()
+        });
     let artifact_cache =
         CodexArtifactProfileCache::new(provider_kind.clone(), ports.artifact_profiles());
     let configured_build = profile.snapshot().desktop_build.parse::<u64>().ok();
@@ -269,8 +273,6 @@ impl ProviderBundle {
 /// OpenAI 初始化失败的脱敏分类。
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiInitializeError {
-    #[error(transparent)]
-    Config(OpenAiConfigError),
     #[error("OpenAI runtime policy is unavailable")]
     RuntimePolicy,
     #[error("OpenAI Provider kind is invalid")]

@@ -48,7 +48,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::support::{
     MemoryCooldownPort, MemoryGrokCatalogCache, MemoryProviderAccountStore, TestSessionAffinity,
-    TestSessionExclusions, account_id, create_input, seed_input, xai_config,
+    TestSessionExclusions, account_id, create_input, seed_input,
 };
 
 #[tokio::test]
@@ -83,7 +83,7 @@ async fn account_unavailable_clears_real_selector_cooldowns_only_for_deleted_acc
         cooldowns.clone(),
         ports.account_feedback(),
     );
-    let bundle = provider_xai::initialize(xai_config(), ports).await.unwrap();
+    let bundle = provider_xai::initialize(ports).await.unwrap();
     let models = ["grok-4.5", "grok-4.6"].map(|id| UpstreamModelId::new(id).unwrap());
     for suffix in ["deleted-cooldown", "retained-cooldown"] {
         let input = create_input(suffix, &format!("subject-{suffix}"));
@@ -143,7 +143,7 @@ async fn account_unavailable_clears_real_selector_cooldowns_only_for_deleted_acc
 
 #[tokio::test]
 async fn xai_bundle_exposes_core_admin_and_drains_worker_contributions_once() {
-    let mut bundle = provider_xai::initialize(xai_config(), provider_ports())
+    let mut bundle = provider_xai::initialize(provider_ports())
         .await
         .expect("xAI bundle");
 
@@ -166,7 +166,7 @@ async fn xai_bundle_exposes_core_admin_and_drains_worker_contributions_once() {
 
 #[tokio::test]
 async fn xai_quota_catalog_worker_treats_empty_account_pool_as_idle() {
-    let mut bundle = provider_xai::initialize(xai_config(), provider_ports())
+    let mut bundle = provider_xai::initialize(provider_ports())
         .await
         .expect("xAI bundle");
 
@@ -177,10 +177,10 @@ async fn xai_quota_catalog_worker_treats_empty_account_pool_as_idle() {
 async fn xai_quota_catalog_worker_preserves_store_failures() {
     let store = Arc::new(MemoryProviderAccountStore::default());
     store.fail_provider_listing();
-    let mut bundle = provider_xai::initialize(
-        xai_config(),
-        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
-    )
+    let mut bundle = provider_xai::initialize(provider_ports_with(
+        store,
+        Arc::new(TestOAuthPending::default()),
+    ))
     .await
     .expect("xAI bundle");
 
@@ -219,15 +219,15 @@ async fn run_quota_catalog_cycle(
 
 #[tokio::test]
 async fn xai_admin_provider_validates_known_billing_breakdown() {
-    let bundle = provider_xai::initialize(xai_config(), provider_ports())
+    let bundle = provider_xai::initialize(provider_ports())
         .await
         .expect("xAI bundle");
     let admin = bundle.admin_provider();
     let profile = admin.dashboard_wire_profile().expect("wire profile");
     assert_eq!(profile.provider, "xai");
     assert_eq!(profile.product, "Grok Build");
-    assert_eq!(profile.version, "0.2.106");
-    assert_eq!(profile.user_agent, "grok-shell/0.2.106 (linux; x86_64)");
+    assert_eq!(profile.version, "1.0.13");
+    assert_eq!(profile.user_agent, "grok-shell/1.0.13 (linux; x86_64)");
     let release = profile.release.expect("release status");
     assert_eq!(release.status, DesktopReleaseStatus::Unchecked);
     assert!(release.checked_at.is_none());
@@ -276,13 +276,10 @@ async fn xai_admin_provider_validates_known_billing_breakdown() {
 #[tokio::test]
 async fn xai_admin_provider_restores_full_pending_envelope_and_binds_owner() {
     let pending = Arc::new(TestOAuthPending::default());
-    let bundle = provider_xai::initialize(
-        xai_config(),
-        provider_ports_with(
-            Arc::new(MemoryProviderAccountStore::default()),
-            Arc::clone(&pending),
-        ),
-    )
+    let bundle = provider_xai::initialize(provider_ports_with(
+        Arc::new(MemoryProviderAccountStore::default()),
+        Arc::clone(&pending),
+    ))
     .await
     .expect("xAI bundle");
     let owner = MutationContext {
@@ -386,14 +383,11 @@ async fn xai_admin_provider_projects_cached_quota_models_and_canonical_export() 
     record.outbound_proxy = Some(proxy.clone());
     let catalog_cache = Arc::new(TestCatalogCache::default());
     catalog_cache.seed("plan:standard", ["grok-4.5"]);
-    let bundle = provider_xai::initialize(
-        xai_config(),
-        provider_ports_with_catalog(
-            Arc::clone(&store),
-            Arc::new(TestOAuthPending::default()),
-            catalog_cache,
-        ),
-    )
+    let bundle = provider_xai::initialize(provider_ports_with_catalog(
+        Arc::clone(&store),
+        Arc::new(TestOAuthPending::default()),
+        catalog_cache,
+    ))
     .await
     .expect("xAI bundle");
     let admin = bundle.admin_provider();
@@ -497,10 +491,10 @@ async fn xai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
     seed_input(&store, &input).await.expect("create account");
     let account = store.account(&input.account_id).expect("stored account");
     let record = account_record(&account);
-    let bundle = provider_xai::initialize(
-        xai_config(),
-        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
-    )
+    let bundle = provider_xai::initialize(provider_ports_with(
+        store,
+        Arc::new(TestOAuthPending::default()),
+    ))
     .await
     .expect("xAI bundle");
     let admin = bundle.admin_provider();
@@ -1075,10 +1069,10 @@ mod errors {
             if !expired {
                 account.upstream_user_id = Some("previous-subject".to_owned());
             }
-            let bundle = provider_xai::initialize(
-                xai_config(),
-                provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
-            )
+            let bundle = provider_xai::initialize(provider_ports_with(
+                store.clone(),
+                Arc::new(TestOAuthPending::default()),
+            ))
             .await
             .unwrap();
             let error = bundle
@@ -1132,7 +1126,7 @@ mod errors {
             Arc::new(TestRuntimePolicy),
             Arc::new(TestOAuthPending::default()),
         );
-        let bundle = provider_xai::initialize(xai_config(), ports).await.unwrap();
+        let bundle = provider_xai::initialize(ports).await.unwrap();
         let error = bundle
             .admin_provider()
             .prepare_refresh(PrepareCredentialRefresh { account })
@@ -1161,10 +1155,10 @@ mod errors {
         let before = store.account(&input.account_id).unwrap();
         let mut account = account_record(&before);
         account.outbound_proxy = before.outbound_proxy().cloned();
-        let bundle = provider_xai::initialize(
-            xai_config(),
-            provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
-        )
+        let bundle = provider_xai::initialize(provider_ports_with(
+            store.clone(),
+            Arc::new(TestOAuthPending::default()),
+        ))
         .await
         .unwrap();
         let error = bundle
@@ -1207,4 +1201,38 @@ mod errors {
             Box::pin(async { Ok(ProviderLeaseAcquisition::Busy { retry_after: None }) })
         }
     }
+}
+
+#[tokio::test]
+async fn client_profile_preview_and_dashboard_use_saved_configuration() {
+    use provider_xai::transport::client_profile::{GrokClientProfileSelection, VersionMode};
+    let bundle = provider_xai::initialize(provider_ports()).await.unwrap();
+    let admin = bundle.admin_provider();
+    let options = admin.client_profile_options().unwrap();
+    assert_eq!(
+        options.expose_to_provider()["defaults"]["versionMode"],
+        "latest"
+    );
+    let selection = GrokClientProfileSelection {
+        version_mode: VersionMode::Fixed,
+        client_version: Some("8.7.6".to_owned()),
+        target_os: "windows".to_owned(),
+        target_arch: "arm64".to_owned(),
+        ..Default::default()
+    };
+    let configuration = selection.document().unwrap();
+    let preview = admin.preview_client_profile(&configuration).unwrap();
+    assert_eq!(preview.expose_to_provider()["clientVersion"], "8.7.6");
+    assert_eq!(preview.expose_to_provider()["versionSource"], "custom");
+    assert!(preview.expose_to_provider()["verifiedAt"].is_null());
+    let dashboard = admin.configured_wire_profile(&configuration).unwrap();
+    assert_eq!(dashboard.version, "8.7.6");
+    assert_eq!(dashboard.target.os_type, "windows");
+    assert_eq!(dashboard.target.arch, "arm64");
+    assert_eq!(
+        dashboard.user_agent,
+        preview.expose_to_provider()["userAgent"].as_str().unwrap()
+    );
+    assert!(dashboard.release.is_none());
+    assert!(dashboard.verified_at.is_none());
 }

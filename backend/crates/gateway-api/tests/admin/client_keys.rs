@@ -433,6 +433,7 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         .expect("valid time");
     let view = ClientKeyView::from(gateway_admin::model::client_keys::ClientKeyRecord {
         openai_client_profile_override: None,
+        xai_client_profile_override: None,
         budget: Default::default(),
         id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
         name: "visible".to_owned(),
@@ -584,5 +585,22 @@ fn profile_override_distinguishes_omission_from_explicit_inheritance() {
     assert_eq!(decode(payload.clone()), Some(None));
     payload["openaiClientProfileOverride"] =
         json!({"client":"cli", "platform":"linux", "versionMode":"latest"});
+    assert!(decode(payload).unwrap().is_some());
+}
+
+#[test]
+fn xai_profile_override_distinguishes_omission_from_explicit_inheritance() {
+    let mut payload = json!({"id":"key_profile", "name":"profile", "groupIds":[], "maxConcurrency":0, "requestsPerMinute":0});
+    let decode = |body| {
+        serde_json::from_value::<UpdateClientKeyRequest>(body)
+            .unwrap()
+            .into_command()
+            .unwrap()
+            .xai_client_profile_override
+    };
+    assert_eq!(decode(payload.clone()), None);
+    payload["xaiClientProfileOverride"] = json!(null);
+    assert_eq!(decode(payload.clone()), Some(None));
+    payload["xaiClientProfileOverride"] = json!({"versionMode":"latest"});
     assert!(decode(payload).unwrap().is_some());
 }

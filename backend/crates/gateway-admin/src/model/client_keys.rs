@@ -87,6 +87,7 @@ pub struct ClientKeyListQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyRecord {
     pub openai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
@@ -146,6 +147,7 @@ impl fmt::Debug for ClientKeySecret {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
     pub openai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
     pub custom_key: Option<PlaintextClientApiKey>,
     pub name: String,
     pub label: Option<String>,
@@ -158,6 +160,7 @@ pub struct CreateClientKey {
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
     pub openai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,
@@ -183,6 +186,7 @@ impl fmt::Debug for NewClientKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKey {
     pub openai_client_profile_override: Option<Option<gateway_core::account::OpaqueProviderData>>,
+    pub xai_client_profile_override: Option<Option<gateway_core::account::OpaqueProviderData>>,
     pub id: ClientApiKeyId,
     pub name: String,
     pub label: Option<String>,

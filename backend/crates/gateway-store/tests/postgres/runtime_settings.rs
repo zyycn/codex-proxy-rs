@@ -10,6 +10,7 @@ use super::TestDatabase;
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         openai_client_profile: None,
+        xai_client_profile: None,
         request_location_enabled: false,
         request_location: Default::default(),
         admin_api_key: None,
@@ -493,6 +494,56 @@ async fn request_profile_initialization_is_idempotent_and_old_updates_preserve_i
     let mut update = settings_with_margin(3600);
     update.openai_client_profile = Some(document("edited"));
     repository.update_runtime_settings(update).await.unwrap();
+    assert_eq!(
+        repository
+            .initialize_request_profile(&provider, document("old-yaml"))
+            .await
+            .unwrap(),
+        document("edited")
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn xai_profile_initialization_and_updates_preserve_other_providers() {
+    use gateway_core::{
+        account::OpaqueProviderData, provider_ports::ProviderRuntimePolicyPort,
+        routing::ProviderKind,
+    };
+    let Some(database) = TestDatabase::create("xai_profiles").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let document = |version: &str| {
+        OpaqueProviderData::new(
+            serde_json::json!({"clientVersion":version})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+    };
+    let provider = ProviderKind::new("xai").unwrap();
+    repository
+        .initialize_request_profile(&provider, document("initial"))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .initialize_request_profile(&provider, document("ignored"))
+            .await
+            .unwrap(),
+        document("initial")
+    );
+    let mut update = settings_with_margin(3600);
+    update.openai_client_profile = Some(document("openai"));
+    update.xai_client_profile = Some(document("xai"));
+    repository.update_runtime_settings(update).await.unwrap();
+    let mut update = settings_with_margin(3600);
+    update.xai_client_profile = Some(document("edited"));
+    repository.update_runtime_settings(update).await.unwrap();
+    let settings = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(settings.openai_client_profile, Some(document("openai")));
+    assert_eq!(settings.xai_client_profile, Some(document("edited")));
     assert_eq!(
         repository
             .initialize_request_profile(&provider, document("old-yaml"))

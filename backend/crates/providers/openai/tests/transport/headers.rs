@@ -735,7 +735,7 @@ async fn concurrent_request_profiles_emit_independent_http_identities() {
         }
         requests
     });
-    let state = provider_openai::config::OpenAiConfig::default().wire_profile_state();
+    let state = provider_openai::transport::profile::CodexWireProfileState::new(Default::default());
     let desktop = ClientProfileSelection::default().resolve(&state).unwrap();
     let cli = ClientProfileSelection {
         client: ClientKind::Cli,

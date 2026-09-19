@@ -521,6 +521,7 @@ impl SettingsStore for MemorySettingsStore {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
             openai_client_profile: None,
+            xai_client_profile: None,
             request_location_enabled: command.request_location_enabled,
             request_location: command.request_location,
             config_revision: next_revision(settings.config_revision),
@@ -892,6 +893,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
                 openai_client_profile_override: None,
+                xai_client_profile_override: None,
                 budget: Default::default(),
                 id: id.clone(),
                 name: "revealed".to_owned(),
@@ -1435,6 +1437,7 @@ fn test_runtime_settings() -> RuntimeSettings {
     ]);
     RuntimeSettings {
         openai_client_profile: None,
+        xai_client_profile: None,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),

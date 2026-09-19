@@ -75,6 +75,7 @@ impl ClientKeyStore for TestClientKeyStore {
         self.plaintexts.lock().unwrap().push(key.plaintext);
         let record = ClientKeyRecord {
             openai_client_profile_override: None,
+            xai_client_profile_override: None,
             id: key.id,
             name: key.name,
             label: key.label,
@@ -260,6 +261,7 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
             &mutation_context(),
             UpdateClientKey {
                 openai_client_profile_override: None,
+                xai_client_profile_override: None,
                 id: ClientApiKeyId::new("key_existing").unwrap(),
                 name: "Migration".to_owned(),
                 label: None,
@@ -280,6 +282,7 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
 fn create_command(key: Option<&str>) -> CreateClientKey {
     CreateClientKey {
         openai_client_profile_override: None,
+        xai_client_profile_override: None,
         custom_key: key.map(|value| PlaintextClientApiKey::new(value).unwrap()),
         name: "Migration".to_owned(),
         label: None,

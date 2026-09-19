@@ -26,6 +26,7 @@ use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, event
 fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> RuntimeSettings {
     RuntimeSettings {
         openai_client_profile: None,
+        xai_client_profile: None,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: revision(1),

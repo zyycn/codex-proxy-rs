@@ -96,6 +96,9 @@ fn invalid_headers_and_mixed_version_modes_are_rejected() {
         json!({"codexVersion":"0.155.0"}),
         json!({"desktopVersion":"26.1.0"}),
         json!({"versionMode":"fixed"}),
+        json!({"versionMode":"fixed", "codexVersion":"latest"}),
+        json!({"client":"desktop", "versionMode":"fixed", "codexVersion":"0.153.4", "desktopVersion":"1.preview", "desktopBuild":"8109"}),
+        json!({"client":"desktop", "versionMode":"fixed", "codexVersion":"0.153.4", "desktopVersion":"26.901.51231", "desktopBuild":"build"}),
         json!({"extraHeader":"secret"}),
     ] {
         let mut fields = baseline.as_object().unwrap().clone();

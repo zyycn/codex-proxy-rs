@@ -2,6 +2,7 @@
 
 pub(crate) mod canonical;
 pub(crate) mod catalog;
+pub mod client_profile;
 pub(crate) mod compaction;
 pub(crate) mod config;
 pub(crate) mod egress;
@@ -47,7 +48,7 @@ pub use network::{
     GrokReqwestTransportBuildError, OfficialGrokEndpointPolicy, ReqwestGrokInferenceTransport,
     ReqwestGrokModelCatalogTransport, ReqwestOAuthTransport,
 };
-pub use profile::XaiWireProfileState;
+pub use profile::{XaiWireProfile, XaiWireProfileState};
 pub use request::{GrokRequestEncodeError, GrokResponsesRequest};
 pub use session::{
     GrokCredentialFailure, GrokCredentialFeedbackFuture, GrokSessionAffinityKey,

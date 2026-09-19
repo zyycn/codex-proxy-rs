@@ -129,6 +129,23 @@ impl GrokBuildProvider {
 
 #[async_trait]
 impl Provider for GrokBuildProvider {
+    fn resolve_request_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderError> {
+        use crate::transport::client_profile::{GrokClientProfileSelection, object};
+        let profile = GrokClientProfileSelection::parse(configuration)
+            .and_then(|selection| selection.resolve(&self.wire_profile))
+            .and_then(|profile| object(&profile))
+            .map_err(|_| {
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
+            })?;
+        Ok(profile)
+    }
+
     fn name(&self) -> &'static str {
         XAI_PROVIDER_NAME
     }
@@ -203,6 +220,25 @@ impl Provider for GrokBuildProvider {
 }
 
 impl GrokBuildProvider {
+    fn request_wire_profile(
+        &self,
+        context: &AttemptContext,
+    ) -> Result<XaiWireProfileState, ProviderError> {
+        let profile = match context.request_profile() {
+            Some(profile) => serde_json::from_value(serde_json::Value::Object(
+                profile.expose_to_provider().clone(),
+            ))
+            .map_err(|_| {
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
+            })?,
+            None => self.wire_profile.snapshot(),
+        };
+        Ok(XaiWireProfileState::new(profile))
+    }
+
     async fn execute_generate(
         &self,
         generate: &GenerateRequest,
@@ -311,7 +347,7 @@ impl GrokBuildProvider {
             Arc::clone(&self.transport),
             GrokStreamAttempt {
                 client_identity: self.client_identity.clone(),
-                wire_profile: self.wire_profile.clone(),
+                wire_profile: self.request_wire_profile(&context)?,
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 responses_url: self.responses_url.clone(),
                 request: upstream_request,
@@ -405,7 +441,7 @@ impl GrokBuildProvider {
             Arc::clone(&self.transport),
             GrokCompactionStreamAttempt {
                 client_identity: self.client_identity.clone(),
-                wire_profile: self.wire_profile.clone(),
+                wire_profile: self.request_wire_profile(&context)?,
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 responses_url: self.responses_url.clone(),
                 request: upstream_request,

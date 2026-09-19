@@ -291,9 +291,6 @@ fn config_loader_should_ignore_unknown_fields_in_configuration_sections() {
         "/client",
         "/api",
         "/openai",
-        "/openai/wire_profile",
-        "/xai",
-        "/xai/wire_profile",
     ] {
         let mut extended = document.clone();
         extended.pointer_mut(path).expect("configuration section")["unused_setting"] =
@@ -364,7 +361,7 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
         );
         match case {
             "unused" => assert!(
-                stderr.contains("openai.wire_profile.location") && stderr.contains("已忽略"),
+                stderr.contains("openai.wire_profile") && stderr.contains("已忽略"),
                 "{stderr}"
             ),
             "missing" => assert!(stderr.contains("host.listen.port"), "{stderr}"),
@@ -378,6 +375,26 @@ fn config_loader_should_report_startup_configuration_diagnostics() {
 #[test]
 fn config_loader_should_reject_missing_explicit_fields() {
     assert_rejected(valid_config().replace("  request_id_header: 'x-request-id'\n", ""));
+}
+
+#[test]
+fn config_loader_should_allow_missing_provider_configuration() {
+    let mut document = valid_config_document();
+    document.as_object_mut().unwrap().remove("openai");
+    document.as_object_mut().unwrap().remove("xai");
+    parse_config(&document.to_string()).expect("provider defaults require no YAML identity");
+}
+
+#[test]
+fn config_loader_should_ignore_removed_provider_identity_sections() {
+    let mut document = valid_config_document();
+    document["openai"]["wire_profile"] = serde_json::json!({"codex_version":"legacy-invalid"});
+    document["xai"] = serde_json::json!({"wire_profile": {"client_identifier": "legacy-client"}});
+    let (config, _directory) =
+        parse_config(&document.to_string()).expect("removed identities ignored");
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("legacy-invalid"));
+    assert!(!debug.contains("legacy-client"));
 }
 
 #[test]
@@ -445,15 +462,6 @@ fn config_loader_should_reject_missing_client_session_ttl() {
 }
 
 #[test]
-fn config_loader_should_reject_invalid_codex_cli_version() {
-    assert_rejected(valid_config().replacen(
-        "    residency: us",
-        "    residency: us\n    codex_version: 'latest'",
-        1,
-    ));
-}
-
-#[test]
 fn config_loader_should_reject_disabled_all_log_outputs() {
     assert_rejected(
         valid_config()
@@ -468,31 +476,10 @@ fn config_loader_should_reject_zero_server_port() {
 }
 
 #[test]
-fn config_loader_should_reject_invalid_desktop_profile_fields() {
-    assert_rejected(valid_config().replacen(
-        "    residency: us",
-        "    residency: us\n    desktop_build: 'build'",
-        1,
-    ));
-}
-
-#[test]
-fn config_loader_should_ignore_removed_request_location_setting() {
-    let original = valid_config();
-    parse_config(&original).expect("location belongs to runtime settings");
-    for value in [
-        "null",
-        "{}",
-        "{ country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' }",
-    ] {
-        let legacy = original.replacen(
-            "    residency: us",
-            &format!("    residency: us\n    location: {value}"),
-            1,
-        );
-        assert_ne!(legacy, original);
-        parse_config(&legacy).expect("removed request location does not prevent startup");
-    }
+fn config_loader_should_validate_openai_residency() {
+    let mut document = valid_config_document();
+    document["openai"]["residency"] = serde_json::json!("invalid");
+    assert_rejected(document.to_string());
 }
 
 fn assert_rejected(config: String) {

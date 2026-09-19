@@ -20,6 +20,7 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
@@ -110,6 +111,7 @@ impl fmt::Debug for RuntimeSettings {
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -373,7 +375,9 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      request_location_json = $23,
                      request_location_enabled = $24,
                      responses_max_decompressed_body_bytes = $25,
-                     provider_request_profiles_json = case when $26::jsonb is null then provider_request_profiles_json else jsonb_set(provider_request_profiles_json, '{openai}', $26) end,
+                     provider_request_profiles_json = provider_request_profiles_json
+                         || case when $26::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $26::jsonb) end
+                         || case when $27::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $27::jsonb) end,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -416,6 +420,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
             .map_err(|_| invalid_numeric())?,
     )
     .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -503,6 +508,11 @@ fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<Runtime
             .provider_request_profiles_json
             .0
             .remove("openai")
+            .map(gateway_core::account::OpaqueProviderData::new),
+        xai_client_profile: row
+            .provider_request_profiles_json
+            .0
+            .remove("xai")
             .map(gateway_core::account::OpaqueProviderData::new),
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         admin_api_key: row.admin_api_key,

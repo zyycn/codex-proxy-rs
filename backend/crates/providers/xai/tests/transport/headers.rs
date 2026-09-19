@@ -91,6 +91,33 @@ fn headers_should_bind_identity_to_the_selected_oauth_account() {
 }
 
 #[test]
+fn custom_client_identifier_should_not_replace_grok_shell_user_agent() {
+    let mut profile = crate::support::xai_wire_profile().snapshot();
+    profile.client_identifier = "custom-client".to_owned();
+    let headers = build_grok_headers(
+        &provider_xai::XaiWireProfileState::new(profile),
+        &selected_session(),
+        &GrokClientIdentity::new(),
+        &ModelRequestId::new("req_custom_identifier").expect("request ID"),
+        None,
+        None,
+        &UpstreamModelId::new("grok-code-test").expect("model"),
+    );
+    let value = |name: &str| {
+        headers
+            .iter()
+            .find(|header| header.name() == name)
+            .map(|header| header.value().expose())
+    };
+
+    assert_eq!(value("x-grok-client-identifier"), Some("custom-client"));
+    assert_eq!(
+        value("user-agent"),
+        Some("grok-shell/0.2.106 (linux; x86_64)")
+    );
+}
+
+#[test]
 fn headers_should_send_both_stable_session_headers_without_inventing_a_turn_index() {
     let headers = build_grok_headers(
         &crate::support::xai_wire_profile(),

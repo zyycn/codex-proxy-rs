@@ -50,7 +50,7 @@ pub use gateway_core::account::RequestLocation as CodexRequestLocation;
 
 /// Codex Desktop 上游请求身份。
 ///
-/// 启动配置提供经源码审计的 Core、运行环境和 Desktop 启动版本。运行时只会使用
+/// 内置基线提供经源码审计的 Core、运行环境和 Desktop 版本。运行时只会使用
 /// 同一个官方 Desktop ZIP 中核验出的 Core、Desktop 版本及构建号原子替换版本字段。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexWireProfile {
@@ -75,6 +75,25 @@ pub struct CodexWireProfile {
     pub residency: Option<CodexResidency>,
     /// 版本元组最后一次经制品核验的时间；不表示 TLS 传输已重新核验。
     pub verified_at: DateTime<Utc>,
+}
+
+impl Default for CodexWireProfile {
+    fn default() -> Self {
+        Self {
+            client_kind: ClientKind::Desktop,
+            originator: "Codex Desktop".to_owned(),
+            codex_version: "0.153.4".to_owned(),
+            desktop_version: "26.901.51231".to_owned(),
+            desktop_build: "8109".to_owned(),
+            os_type: "Mac OS".to_owned(),
+            os_version: "15.7.1".to_owned(),
+            arch: "arm64".to_owned(),
+            terminal: "unknown".to_owned(),
+            residency: None,
+            // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验。
+            verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
+        }
+    }
 }
 
 impl CodexWireProfile {

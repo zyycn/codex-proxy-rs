@@ -13,6 +13,20 @@ use gateway_admin::{
 
 struct UnusedSettingsStore;
 
+#[tokio::test]
+async fn client_profile_preview_rejects_unknown_provider_before_loading_settings() {
+    let services = super::AdminHarness::new()
+        .settings(std::sync::Arc::new(UnusedSettingsStore))
+        .build()
+        .await;
+    let error = services
+        .settings()
+        .preview_client_profile("unknown", None)
+        .await
+        .expect_err("unknown provider cannot use global settings");
+    assert_eq!(error.kind(), AdminErrorKind::Invalid);
+}
+
 #[async_trait]
 impl SettingsStore for UnusedSettingsStore {
     async fn load_pricing(&self) -> AdminStoreResult<gateway_admin::model::pricing::StoredPricing> {
@@ -79,6 +93,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
             },
             ReplaceRuntimeSettings {
                 openai_client_profile: None,
+                xai_client_profile: None,
                 request_location_enabled: false,
                 request_location: Default::default(),
                 model_mappings: Default::default(),

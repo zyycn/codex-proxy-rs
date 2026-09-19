@@ -10,7 +10,6 @@ use gateway_admin::model::provider_credentials::{
 use gateway_admin::model::{MutationActor, MutationContext};
 use gateway_core::account::{AccountStatus, ProviderAccountId};
 use gateway_core::routing::ProviderKind;
-use provider_openai::OpenAiConfig;
 use provider_openai::credential::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     AuthorizationTokenSet,
@@ -362,7 +361,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
 }
 
 fn profile() -> CodexWireProfileState {
-    OpenAiConfig::default().wire_profile_state()
+    provider_openai::transport::profile::CodexWireProfileState::new(Default::default())
 }
 
 #[tokio::test]

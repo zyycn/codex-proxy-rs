@@ -1,32 +1,21 @@
 use std::path::Path;
 
-use chrono::{TimeZone as _, Utc};
-use provider_openai::config::{
-    CodexWireProfileConfig, DEFAULT_STREAM_MAX_RETRIES, MAX_STREAM_MAX_RETRIES, OpenAiConfig,
-};
+use provider_openai::config::{DEFAULT_STREAM_MAX_RETRIES, MAX_STREAM_MAX_RETRIES, OpenAiConfig};
 
 #[test]
-fn openai_config_imports_legacy_fixed_profile_without_changing_official_release_facts() {
-    let mut config = valid_config();
-    config
-        .resolve_and_validate(Path::new("/srv/gateway"))
-        .expect("valid OpenAI config");
-    let state = config.wire_profile_state();
-    let selection = provider_openai::transport::profile::selection::ClientProfileSelection::parse(
-        &config.initial_client_profile().unwrap(),
-    )
-    .unwrap();
-    let profile = selection.resolve(&state).unwrap();
-    assert_eq!(
-        state.snapshot().codex_version,
-        CodexWireProfileConfig::default().codex_version
-    );
+fn openai_config_ignores_removed_yaml_identity_fields() {
+    let config: OpenAiConfig = serde_json::from_value(serde_json::json!({
+        "wire_profile": {"originator": "legacy-client", "codex_version": "invalid", "residency": "us"}
+    })).unwrap();
+    assert_eq!(config, OpenAiConfig::default());
+}
 
-    assert_eq!(
-        profile.user_agent(),
-        "Codex Desktop/0.102.0 (Mac OS 15.5.0; arm64) xterm-256color (Codex Desktop; 1.2026.190)"
-    );
-    assert_eq!(profile.desktop_build, "19012345678");
+#[test]
+fn openai_config_keeps_residency_separate_from_client_identity() {
+    use provider_openai::transport::profile::CodexResidency;
+    let config: OpenAiConfig = serde_json::from_str(r#"{"residency":"us"}"#).unwrap();
+    assert_eq!(config.residency, Some(CodexResidency::Us));
+    assert!(serde_json::from_str::<OpenAiConfig>(r#"{"residency":"invalid"}"#).is_err());
 }
 
 #[test]
@@ -37,33 +26,6 @@ fn openai_config_derives_identity_secret_from_runtime_data_dir() {
         .expect("valid OpenAI config");
 
     assert!(format!("{config:?}").contains("/srv/gateway/runtime-data/identity_hmac_secret"));
-}
-
-#[test]
-fn openai_config_rejects_noncanonical_versions_and_empty_fields() {
-    let mut config = valid_config();
-    config.wire_profile.codex_version = "latest".to_owned();
-    assert!(
-        config
-            .resolve_and_validate(Path::new("/srv/gateway"))
-            .is_err()
-    );
-
-    let mut config = valid_config();
-    config.wire_profile.desktop_version = "1.preview".to_owned();
-    assert!(
-        config
-            .resolve_and_validate(Path::new("/srv/gateway"))
-            .is_err()
-    );
-
-    let mut config = valid_config();
-    config.wire_profile.originator.clear();
-    assert!(
-        config
-            .resolve_and_validate(Path::new("/srv/gateway"))
-            .is_err()
-    );
 }
 
 #[test]
@@ -135,7 +97,7 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
         )
     );
     assert_eq!(
-        config.wire_profile_state().snapshot().user_agent(),
+        provider_openai::transport::profile::CodexWireProfile::default().user_agent(),
         "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)"
     );
 }
@@ -152,21 +114,5 @@ fn openai_stream_retry_budget_uses_the_official_hard_cap() {
 }
 
 fn valid_config() -> OpenAiConfig {
-    let mut config = OpenAiConfig::default();
-    config.wire_profile = CodexWireProfileConfig {
-        originator: "Codex Desktop".to_owned(),
-        codex_version: "0.102.0".to_owned(),
-        desktop_version: "1.2026.190".to_owned(),
-        desktop_build: "19012345678".to_owned(),
-        os_type: "Mac OS".to_owned(),
-        os_version: "15.5.0".to_owned(),
-        arch: "arm64".to_owned(),
-        terminal: "xterm-256color".to_owned(),
-        residency: None,
-        verified_at: Utc
-            .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
-            .single()
-            .expect("valid test time"),
-    };
-    config
+    OpenAiConfig::default()
 }

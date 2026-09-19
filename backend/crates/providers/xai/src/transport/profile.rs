@@ -8,17 +8,54 @@ use std::{
 use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
 use reqwest::{Client, redirect::Policy};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::config::XaiWireProfileConfig;
+/// Grok CLI 运行时身份；默认值作为官方发布检查的内置基线。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct XaiWireProfile {
+    pub client_identifier: String,
+    pub client_version: String,
+    pub client_mode: String,
+    pub target_os: String,
+    pub target_arch: String,
+    pub verified_at: DateTime<Utc>,
+}
+
+impl Default for XaiWireProfile {
+    fn default() -> Self {
+        Self {
+            client_identifier: "grok-shell".to_owned(),
+            client_version: "1.0.13".to_owned(),
+            client_mode: "headless".to_owned(),
+            target_os: "linux".to_owned(),
+            target_arch: "x86_64".to_owned(),
+            verified_at: DateTime::UNIX_EPOCH + chrono::Duration::seconds(1_788_105_600),
+        }
+    }
+}
+
+impl XaiWireProfile {
+    #[must_use]
+    pub fn user_agent(&self) -> String {
+        // Grok CLI 的产品名独立于 x-grok-client-identifier；自定义请求头不替换 UA 产品名。
+        let arch = match self.target_arch.as_str() {
+            "arm64" => "aarch64",
+            arch => arch,
+        };
+        format!(
+            "grok-shell/{} ({}; {arch})",
+            self.client_version, self.target_os
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
-pub struct XaiWireProfileState(Arc<RwLock<XaiWireProfileConfig>>);
+pub struct XaiWireProfileState(Arc<RwLock<XaiWireProfile>>);
 
 impl XaiWireProfileState {
     #[must_use]
-    pub fn new(profile: XaiWireProfileConfig) -> Self {
+    pub fn new(profile: XaiWireProfile) -> Self {
         Self(Arc::new(RwLock::new(profile)))
     }
 
@@ -49,18 +86,11 @@ impl XaiWireProfileState {
 
     #[must_use]
     pub fn user_agent(&self) -> String {
-        let profile = self.snapshot();
-        format!(
-            "{}/{} ({}; {})",
-            profile.client_identifier,
-            profile.client_version,
-            profile.target_os,
-            profile.target_arch
-        )
+        self.snapshot().user_agent()
     }
 
     #[must_use]
-    pub fn snapshot(&self) -> XaiWireProfileConfig {
+    pub fn snapshot(&self) -> XaiWireProfile {
         self.0
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -74,6 +104,7 @@ impl XaiWireProfileState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if profile.client_version != version {
             profile.client_version = version.to_owned();
+            profile.verified_at = Utc::now();
         }
     }
 }

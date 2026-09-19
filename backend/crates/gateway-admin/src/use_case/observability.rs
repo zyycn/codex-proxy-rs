@@ -199,6 +199,12 @@ impl DefaultObservabilityService {
                 configuration.clone(),
             );
         }
+        if let Some(configuration) = &settings.xai_client_profile {
+            configurations.insert(
+                gateway_core::routing::ProviderKind::new("xai").expect("static provider kind"),
+                configuration.clone(),
+            );
+        }
         let wire_profiles = self.providers.dashboard_wire_profiles(&configurations);
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
         let total_slots = runtime_slots.as_ref().map_or_else(

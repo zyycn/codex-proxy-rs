@@ -18,6 +18,7 @@ pub use gateway_core::account::RotationStrategy;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub config_revision: Revision,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -50,6 +51,7 @@ pub struct RuntimeSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
     pub openai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: ModelMappings,
@@ -124,5 +126,18 @@ impl fmt::Debug for RegeneratedAdminApiKey {
             .field("mutation", &self.mutation)
             .field("key", &"[REDACTED]")
             .finish()
+    }
+}
+
+impl RuntimeSettings {
+    pub fn client_profile(
+        &self,
+        provider: &str,
+    ) -> Option<&gateway_core::account::OpaqueProviderData> {
+        match provider {
+            "openai" => self.openai_client_profile.as_ref(),
+            "xai" => self.xai_client_profile.as_ref(),
+            _ => None,
+        }
     }
 }

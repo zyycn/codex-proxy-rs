@@ -39,11 +39,13 @@ pub trait SettingsService: Send + Sync {
     ) -> Result<(), AdminError>;
     async fn client_profile_options(
         &self,
+        _provider: &str,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
         Err(AdminError::invalid("当前 Provider 不支持客户端身份配置"))
     }
     async fn preview_client_profile(
         &self,
+        _provider: &str,
         _configuration: Option<&gateway_core::account::OpaqueProviderData>,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
         Err(AdminError::invalid("当前 Provider 不支持客户端身份配置"))
@@ -68,17 +70,26 @@ pub trait SettingsService: Send + Sync {
 pub(crate) struct DefaultSettingsService {
     providers: crate::ports::provider::ProviderAdminRegistry,
     pricing_source: Arc<dyn crate::ports::pricing::PricingSource>,
-    profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
     store: Arc<dyn SettingsStore>,
     snapshot: Arc<dyn SnapshotControl>,
 }
 
 impl DefaultSettingsService {
+    fn profile_provider(
+        &self,
+        provider: &str,
+    ) -> Result<Arc<dyn crate::ports::provider::ProviderAdmin>, AdminError> {
+        let kind = gateway_core::routing::ProviderKind::new(provider)
+            .map_err(|_| AdminError::invalid("Provider 不合法"))?;
+        self.providers
+            .require(&kind)
+            .map_err(|error| super::map_provider_error(error, "client profile"))
+    }
+
     #[must_use]
     pub(crate) fn new(
         store: Arc<dyn SettingsStore>,
         snapshot: Arc<dyn SnapshotControl>,
-        profile_provider: Arc<dyn crate::ports::provider::ProviderAdmin>,
         providers: crate::ports::provider::ProviderAdminRegistry,
         pricing_source: Arc<dyn crate::ports::pricing::PricingSource>,
     ) -> Self {
@@ -87,7 +98,6 @@ impl DefaultSettingsService {
             pricing_source,
             store,
             snapshot,
-            profile_provider,
         }
     }
 }
@@ -250,16 +260,18 @@ impl SettingsService for DefaultSettingsService {
 
     async fn client_profile_options(
         &self,
+        provider: &str,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
         let mut options = self
-            .profile_provider
+            .profile_provider(provider)?
             .client_profile_options()
             .map_err(|error| super::map_provider_error(error, "client profile"))?
             .into_inner();
         let configuration = self
             .load()
             .await?
-            .openai_client_profile
+            .client_profile(provider)
+            .cloned()
             .ok_or_else(|| AdminError::internal("通用客户端身份尚未初始化"))?;
         options.insert(
             "globalConfiguration".to_owned(),
@@ -270,8 +282,10 @@ impl SettingsService for DefaultSettingsService {
 
     async fn preview_client_profile(
         &self,
+        provider: &str,
         configuration: Option<&gateway_core::account::OpaqueProviderData>,
     ) -> Result<gateway_core::account::OpaqueProviderData, AdminError> {
+        let profile_provider = self.profile_provider(provider)?;
         let global;
         let (configuration, source) = if let Some(configuration) = configuration {
             (configuration, "override")
@@ -279,12 +293,12 @@ impl SettingsService for DefaultSettingsService {
             global = self
                 .load()
                 .await?
-                .openai_client_profile
+                .client_profile(provider)
+                .cloned()
                 .ok_or_else(|| AdminError::internal("通用客户端身份尚未初始化"))?;
             (&global, "global")
         };
-        let mut preview = self
-            .profile_provider
+        let mut preview = profile_provider
             .preview_client_profile(configuration)
             .map_err(|error| super::map_provider_error(error, "client profile"))?
             .into_inner();
@@ -305,10 +319,15 @@ impl SettingsService for DefaultSettingsService {
         command: ReplaceRuntimeSettings,
     ) -> Result<RuntimeSettings, AdminError> {
         validate_settings(&command)?;
-        if let Some(profile) = &command.openai_client_profile {
-            self.profile_provider
-                .preview_client_profile(profile)
-                .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        for (provider, profile) in [
+            ("openai", &command.openai_client_profile),
+            ("xai", &command.xai_client_profile),
+        ] {
+            if let Some(profile) = profile {
+                self.profile_provider(provider)?
+                    .preview_client_profile(profile)
+                    .map_err(|error| super::map_provider_error(error, "client profile"))?;
+            }
         }
         let settings = self
             .store

@@ -57,7 +57,8 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
         .expect(4)
         .mount(&server)
         .await;
-    let profile = provider_openai::OpenAiConfig::default().wire_profile_state();
+    let profile =
+        provider_openai::transport::profile::CodexWireProfileState::new(Default::default());
     let client = provider_openai::credential::token_client::openai_token_client(
         TokenClientConfig {
             client_id: "audit-client".to_owned(),
@@ -123,7 +124,7 @@ fn client(server: &MockServer) -> OpenAiTokenClient {
             client_id: "test-public-client".to_owned(),
             token_endpoint: format!("{}/oauth/token", server.uri()),
         },
-        provider_openai::OpenAiConfig::default().wire_profile_state(),
+        provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
     )
 }
 

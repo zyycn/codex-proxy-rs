@@ -321,6 +321,60 @@ impl XaiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for XaiAdminProvider {
+    fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::client_profile::object(&serde_json::json!({
+            "defaults": crate::transport::client_profile::GrokClientProfileSelection::default(),
+        }))
+        .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))
+    }
+
+    fn preview_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::client_profile::GrokClientProfileSelection::parse(configuration)
+            .and_then(|selection| {
+                selection.preview(&self.wire_profile, &self.cli_release.snapshot())
+            })
+            .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))
+    }
+
+    fn configured_wire_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Option<DashboardWireProfile> {
+        use crate::transport::client_profile::{GrokClientProfileSelection, VersionMode};
+        let selection = GrokClientProfileSelection::parse(configuration).ok()?;
+        let profile = selection.resolve(&self.wire_profile).ok()?;
+        let mut view = self.dashboard_wire_profile()?;
+        view.user_agent = profile.user_agent();
+        view.version = profile.client_version;
+        view.target.os_type = profile.target_os;
+        view.target.arch = profile.target_arch;
+        view.target.terminal = profile.client_mode.clone();
+        view.attributes = vec![
+            DashboardWireAttribute {
+                label: "客户端标识".to_owned(),
+                value: profile.client_identifier,
+            },
+            DashboardWireAttribute {
+                label: "运行模式".to_owned(),
+                value: profile.client_mode,
+            },
+            DashboardWireAttribute {
+                label: "Token 认证".to_owned(),
+                value: "xai-grok-cli".to_owned(),
+            },
+        ];
+        if selection.version_mode == VersionMode::Fixed {
+            view.release = None;
+            view.verified_at = None;
+        }
+        Some(view)
+    }
+
     fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
         crate::transport::canonical::pricing_catalog()
     }
@@ -359,13 +413,7 @@ impl ProviderAdmin for XaiAdminProvider {
                 arch: profile.target_arch.clone(),
                 terminal: profile.client_mode.clone(),
             },
-            user_agent: format!(
-                "{}/{} ({}; {})",
-                profile.client_identifier,
-                profile.client_version,
-                profile.target_os,
-                profile.target_arch
-            ),
+            user_agent: profile.user_agent(),
             attributes: vec![
                 DashboardWireAttribute {
                     label: "客户端标识".to_owned(),

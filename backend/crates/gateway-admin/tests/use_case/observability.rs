@@ -773,6 +773,7 @@ impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             openai_client_profile: None,
+            xai_client_profile: None,
             request_location_enabled: false,
             request_location: Default::default(),
             config_revision: Revision::new(1).expect("revision"),

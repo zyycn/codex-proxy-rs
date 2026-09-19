@@ -18,6 +18,7 @@ pub(super) async fn fixture() -> AdminTestFixture {
     let now = Utc::now();
     *fixture.client_key.lock().unwrap() = Some(ClientKeyRecord {
         openai_client_profile_override: None,
+        xai_client_profile_override: None,
         id: ClientApiKeyId::new("key-42").unwrap(),
         name: "Development".to_owned(),
         label: Some("private-sentinel".to_owned()),

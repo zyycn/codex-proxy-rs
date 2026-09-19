@@ -54,3 +54,39 @@ export function previewClientProfile(configuration: ClientProfileSelection | nul
     silent: true,
   })
 }
+
+export interface XaiClientProfileSelection {
+  versionMode: 'latest' | 'fixed'
+  clientVersion: string | null
+  clientIdentifier: string
+  clientMode: string
+  targetOs: string
+  targetArch: string
+}
+
+export interface XaiClientProfilePreview extends Omit<XaiClientProfileSelection, 'versionMode'> {
+  configuration: XaiClientProfileSelection
+  source: 'global' | 'override'
+  userAgent: string
+  versionSource: 'official' | 'custom'
+  verifiedAt: string | null
+  checkedAt: string | null
+  error: string | null
+}
+
+export function getXaiClientProfileOptions() {
+  return request<{ defaults: XaiClientProfileSelection, globalConfiguration: XaiClientProfileSelection }>({
+    url: '/api/admin/settings/client-profiles/xai',
+    method: 'GET',
+    silent: true,
+  })
+}
+
+export function previewXaiClientProfile(configuration: XaiClientProfileSelection | null) {
+  return request<XaiClientProfilePreview>({
+    url: '/api/admin/settings/client-profiles/xai/preview',
+    method: 'POST',
+    data: { configuration },
+    silent: true,
+  })
+}

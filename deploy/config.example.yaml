@@ -64,22 +64,8 @@ api:
   request_id_header: 'x-request-id'
 
 openai:
-  # 上游客户端身份从管理端设置，默认 macOS Desktop 自动最新。
-  # 旧版本的完整 wire_profile 仅在首次初始化数据库选择时导入。
-  wire_profile:
-    # 数据驻留仍为部署配置；省略或 null 不指定地域约束。
-    residency: us
-
-xai:
-  # OAuth 端点、额度与模型目录策略由 xAI Provider 固定管理；这里只声明请求画像启动基线。
-  wire_profile:
-    # Provider 每 24 小时读取官方 npm metadata，仅在进程内更新 client_version。
-    client_identifier: 'GrokShell'
-    client_version: '1.0.13'
-    client_mode: 'headless'
-    target_os: 'linux'
-    target_arch: 'x86_64'
-    verified_at: '2026-08-31T00:00:00+08:00'
+  # 数据驻留约束；省略或 null 不指定地域约束，与管理端客户端身份无关。
+  residency: us
 
 # Compose 凭据桥接区；密码仍只维护在 store 中。
 services:

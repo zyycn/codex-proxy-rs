@@ -103,6 +103,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
 
     let settings = RuntimeSettings {
         openai_client_profile: None,
+        xai_client_profile: None,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
@@ -148,6 +149,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         value,
         json!({
             "openaiClientProfile": null,
+            "xaiClientProfile": null,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
             "modelMappings": {
@@ -202,6 +204,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .collect();
     let settings = RuntimeSettings {
         openai_client_profile: None,
+        xai_client_profile: None,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
@@ -251,6 +254,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
             .collect();
     let mut expected_fields = request_fields;
     expected_fields.insert("openaiClientProfile".to_owned());
+    expected_fields.insert("xaiClientProfile".to_owned());
     expected_fields.insert("updatedAt".to_owned());
 
     assert_eq!(response_fields, expected_fields);
@@ -640,14 +644,15 @@ async fn settings_reject_removed_global_fast_policy() {
 
 #[test]
 fn global_profile_can_be_omitted_but_cannot_be_cleared() {
-    let mut body = update_body();
-    body.as_object_mut().unwrap().remove("openaiClientProfile");
-    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_ok());
-    body["openaiClientProfile"] = json!(null);
-    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_err());
-    body["openaiClientProfile"] =
-        json!({"client":"cli", "platform":"linux", "versionMode":"latest"});
-    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_ok());
+    for field in ["openaiClientProfile", "xaiClientProfile"] {
+        let mut body = update_body();
+        body.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_ok());
+        body[field] = json!(null);
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_err());
+        body[field] = json!({"versionMode":"latest"});
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_ok());
+    }
 }
 
 fn custom_pricing() -> Value {

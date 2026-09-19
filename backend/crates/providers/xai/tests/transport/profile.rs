@@ -4,12 +4,31 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use futures::future::BoxFuture;
 use provider_xai::{
-    GrokCliReleaseError, GrokCliReleaseService, GrokCliReleaseTransport, XaiWireProfileConfig,
+    GrokCliReleaseError, GrokCliReleaseService, GrokCliReleaseTransport, XaiWireProfile,
     XaiWireProfileState,
 };
 
 struct ReleaseTransport {
     outcomes: Mutex<VecDeque<Result<String, GrokCliReleaseError>>>,
+}
+
+#[test]
+fn default_identity_should_match_official_grok_shell() {
+    let profile = XaiWireProfile::default();
+
+    assert_eq!(profile.client_identifier, "grok-shell");
+    assert_eq!(profile.user_agent(), "grok-shell/1.0.13 (linux; x86_64)");
+}
+
+#[test]
+fn user_agent_should_normalize_arm64_like_official_cli() {
+    let profile = XaiWireProfile {
+        target_os: "macos".to_owned(),
+        target_arch: "arm64".to_owned(),
+        ..XaiWireProfile::default()
+    };
+
+    assert_eq!(profile.user_agent(), "grok-shell/1.0.13 (macos; aarch64)");
 }
 
 impl ReleaseTransport {
@@ -77,7 +96,7 @@ async fn failed_release_refresh_should_keep_last_successful_version() {
 }
 
 fn wire_profile() -> XaiWireProfileState {
-    XaiWireProfileState::new(XaiWireProfileConfig {
+    XaiWireProfileState::new(XaiWireProfile {
         client_identifier: "grok-shell".to_owned(),
         client_version: "0.2.106".to_owned(),
         client_mode: "headless".to_owned(),

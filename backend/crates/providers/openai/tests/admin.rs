@@ -44,7 +44,7 @@ use gateway_core::routing::{
     RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
-use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
+use provider_openai::config::OpenAiConfig;
 use provider_openai::credential::{CodexCredentialCodec, ImportCodexOAuthCredential};
 use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use secrecy::SecretString;
@@ -321,9 +321,14 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
         baseline.release.as_ref().map(|release| release.status),
         Some(DesktopReleaseStatus::Unchecked)
     );
+    let selection = OpaqueProviderData::new(json!({
+        "client": "desktop", "platform": "macos", "versionMode": "fixed",
+        "codexVersion": "0.102.0", "desktopVersion": "1.2026.190", "desktopBuild": "19012345678",
+        "osVersion": "15.5.0", "arch": "arm64", "terminal": "xterm-256color"
+    }).as_object().unwrap().clone());
     let profile = admin
-        .configured_wire_profile(&config.config.initial_client_profile().unwrap())
-        .expect("imported fixed profile");
+        .configured_wire_profile(&selection)
+        .expect("managed fixed profile");
     assert_eq!(profile.version, "0.102.0");
     assert_eq!(profile.build, None);
     assert_eq!(profile.target.os_type, "Mac OS");
@@ -1416,21 +1421,6 @@ struct TestOpenAiConfig {
 
 fn valid_config() -> TestOpenAiConfig {
     let mut config = OpenAiConfig::default();
-    config.wire_profile = CodexWireProfileConfig {
-        originator: "Codex Desktop".to_owned(),
-        codex_version: "0.102.0".to_owned(),
-        desktop_version: "1.2026.190".to_owned(),
-        desktop_build: "19012345678".to_owned(),
-        os_type: "Mac OS".to_owned(),
-        os_version: "15.5.0".to_owned(),
-        arch: "arm64".to_owned(),
-        terminal: "xterm-256color".to_owned(),
-        residency: None,
-        verified_at: Utc
-            .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
-            .single()
-            .expect("valid test time"),
-    };
     let runtime = tempfile::tempdir().expect("test runtime directory");
     config
         .resolve_and_validate(&runtime.path().join("deploy"))

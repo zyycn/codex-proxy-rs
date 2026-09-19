@@ -112,6 +112,7 @@ impl fmt::Debug for ClientApiKeySecret {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeyRecord {
     pub openai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
     pub id: String,
     pub name: String,
     pub label: Option<String>,
@@ -273,6 +274,7 @@ pub struct ClientApiKeyPage {
 #[derive(Clone)]
 pub struct NewClientApiKey {
     pub openai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
+    pub xai_client_profile_override: Option<gateway_core::account::OpaqueProviderData>,
     pub id: String,
     pub name: String,
     pub label: Option<String>,
@@ -306,6 +308,7 @@ impl NewClientApiKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientApiKeyDetails {
     pub openai_client_profile_override: Option<Option<gateway_core::account::OpaqueProviderData>>,
+    pub xai_client_profile_override: Option<Option<gateway_core::account::OpaqueProviderData>>,
     pub id: String,
     pub name: String,
     pub label: Option<String>,
@@ -363,6 +366,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         let total = count_client_api_keys(&self.pool, query.search.as_deref()).await?;
         let mut statement = QueryBuilder::<Postgres>::new(
             "select k.id, k.name, k.label, k.provider_request_profiles_json -> 'openai' as openai_client_profile_override,
+                    k.provider_request_profiles_json -> 'xai' as xai_client_profile_override,
                     left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, '[]'::jsonb as groups, '{}'::text[] as provider_kinds
@@ -423,6 +427,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         require_nonempty(ENTITY, "id", id)?;
         let record = sqlx::query(
             "select k.id, k.name, k.label, k.provider_request_profiles_json -> 'openai' as openai_client_profile_override,
+                    k.provider_request_profiles_json -> 'xai' as xai_client_profile_override,
                     left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, coalesce(groups.groups, '[]'::jsonb) as groups,
@@ -769,6 +774,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             .create_client_api_key(
                 NewClientApiKey {
                     openai_client_profile_override: command.openai_client_profile_override,
+                    xai_client_profile_override: command.xai_client_profile_override,
                     id: id.as_str().to_owned(),
                     name: command.name,
                     label: command.label,
@@ -820,6 +826,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             .update_client_api_key(
                 UpdateClientApiKeyDetails {
                     openai_client_profile_override: command.openai_client_profile_override,
+                    xai_client_profile_override: command.xai_client_profile_override,
                     id: id.as_str().to_owned(),
                     name: command.name,
                     label: command.label,
@@ -978,6 +985,7 @@ fn admin_client_key_cursor(cursor: ClientApiKeyCursor) -> AdminStoreResult<Admin
 fn admin_client_key_record(record: ClientApiKeyRecord) -> AdminStoreResult<AdminClientKeyRecord> {
     Ok(AdminClientKeyRecord {
         openai_client_profile_override: record.openai_client_profile_override,
+        xai_client_profile_override: record.xai_client_profile_override,
         id: ClientApiKeyId::new(record.id)
             .map_err(|_| admin_store_error(ENTITY, invalid("invalid client key id")))?,
         name: record.name,
@@ -1029,7 +1037,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
         "insert into client_api_keys (
            id, name, label, key, enabled, max_concurrency, requests_per_minute,
            last_used_at, created_at, updated_at, daily_limit_usd, weekly_limit_usd, provider_request_profiles_json
-         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric, case when $9::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $9::jsonb) end)",
+         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric, case when $9::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $9::jsonb) end
+             || case when $10::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $10::jsonb) end)",
     )
     .bind(&key.id)
     .bind(key.name.trim())
@@ -1040,6 +1049,7 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(key.budget.daily_usd.canonical())
     .bind(key.budget.weekly_usd.canonical())
     .bind(key.openai_client_profile_override.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(key.xai_client_profile_override.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .execute(&mut **transaction)
     .await
     .map_err(|error| {
@@ -1072,9 +1082,11 @@ pub(crate) async fn update_client_api_key_in_transaction(
              requests_per_minute = $5, updated_at = now(),
              daily_limit_usd = coalesce($6::text::numeric, daily_limit_usd),
              weekly_limit_usd = coalesce($7::text::numeric, weekly_limit_usd),
-             provider_request_profiles_json = case when not $8 then provider_request_profiles_json
-                 when $9::jsonb is null then provider_request_profiles_json - 'openai'
-                 else jsonb_set(provider_request_profiles_json, '{openai}', $9) end
+             provider_request_profiles_json = (provider_request_profiles_json
+                 - case when $8 then array['openai'] else array[]::text[] end
+                 - case when $10 then array['xai'] else array[]::text[] end)
+                 || case when $9::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $9::jsonb) end
+                 || case when $11::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $11::jsonb) end
          where id = $1",
     )
     .bind(&key.id)
@@ -1087,6 +1099,13 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .bind(key.openai_client_profile_override.is_some())
     .bind(
         key.openai_client_profile_override
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(|profile| sqlx::types::Json(profile.expose_to_provider())),
+    )
+    .bind(key.xai_client_profile_override.is_some())
+    .bind(
+        key.xai_client_profile_override
             .as_ref()
             .and_then(Option::as_ref)
             .map(|profile| sqlx::types::Json(profile.expose_to_provider())),
@@ -1243,6 +1262,12 @@ fn client_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClientApiK
         openai_client_profile_override: row
             .try_get::<Option<sqlx::types::Json<serde_json::Map<String, serde_json::Value>>>, _>(
                 "openai_client_profile_override",
+            )
+            .map_err(|_| invalid("invalid request profile"))?
+            .map(|value| gateway_core::account::OpaqueProviderData::new(value.0)),
+        xai_client_profile_override: row
+            .try_get::<Option<sqlx::types::Json<serde_json::Map<String, serde_json::Value>>>, _>(
+                "xai_client_profile_override",
             )
             .map_err(|_| invalid("invalid request profile"))?
             .map(|value| gateway_core::account::OpaqueProviderData::new(value.0)),

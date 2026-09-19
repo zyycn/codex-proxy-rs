@@ -1,14 +1,13 @@
-//! OpenAI Provider 启动配置与 Codex Desktop 请求画像校验。
+//! OpenAI Provider 启动配置；客户端身份由管理端设置持久化。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use url::Url;
 
 use crate::credential::CodexQuotaRefreshPolicy;
-use crate::transport::profile::{CodexResidency, CodexWireProfile, CodexWireProfileState};
+use crate::transport::profile::CodexResidency;
 use crate::transport::session::{CodexSessionIdentity, CodexSessionIdentityError};
 use crate::transport::websocket::CodexWebSocketPoolConfig;
 use crate::{
@@ -41,7 +40,7 @@ pub struct OpenAiConfig {
     #[serde(default = "default_stream_max_retries")]
     pub stream_max_retries: u64,
     #[serde(default)]
-    pub wire_profile: CodexWireProfileConfig,
+    pub residency: Option<CodexResidency>,
     #[serde(skip)]
     identity_secret_path: PathBuf,
 }
@@ -56,67 +55,8 @@ impl OpenAiConfig {
         self.ws_pool.validate()?;
         self.quota.validate()?;
         self.auth.validate()?;
-        self.wire_profile.validate()?;
         self.identity_secret_path = runtime_data_dir.join("identity_hmac_secret");
         Ok(())
-    }
-
-    #[must_use]
-    pub fn wire_profile_state(&self) -> CodexWireProfileState {
-        // 官方发布基线独立于用户固定配置；旧 YAML 只用于首次导入管理设置。
-        CodexWireProfileState::new(
-            CodexWireProfileConfig {
-                residency: self.wire_profile.residency,
-                ..CodexWireProfileConfig::default()
-            }
-            .into(),
-        )
-    }
-
-    /// 将旧部署选择转换为一次性初始化值；数据库已有选择时不覆盖。
-    pub fn initial_client_profile(
-        &self,
-    ) -> Result<gateway_core::account::OpaqueProviderData, OpenAiConfigError> {
-        use crate::transport::profile::selection::{
-            ClientKind, ClientPlatform, ClientProfileSelection, VersionMode,
-        };
-        let profile = &self.wire_profile;
-        let baseline = CodexWireProfileConfig::default();
-        let platform = match profile.os_type.as_str() {
-            "Mac OS" | "Darwin" | "macOS" => ClientPlatform::Macos,
-            "Linux" => ClientPlatform::Linux,
-            "Windows" => ClientPlatform::Windows,
-            _ => {
-                return Err(OpenAiConfigError::InvalidField(
-                    "openai.wire_profile.os_type",
-                ));
-            }
-        };
-        let fixed = profile.codex_version != baseline.codex_version
-            || profile.desktop_version != baseline.desktop_version
-            || profile.desktop_build != baseline.desktop_build
-            || platform != ClientPlatform::Macos
-            || profile.arch != "arm64";
-        let selection = ClientProfileSelection {
-            client: ClientKind::Desktop,
-            platform,
-            version_mode: if fixed {
-                VersionMode::Fixed
-            } else {
-                VersionMode::Latest
-            },
-            originator: (profile.originator != baseline.originator)
-                .then(|| profile.originator.clone()),
-            os_version: Some(profile.os_version.clone()),
-            arch: Some(profile.arch.clone()),
-            terminal: Some(profile.terminal.clone()),
-            codex_version: fixed.then(|| profile.codex_version.clone()),
-            desktop_version: fixed.then(|| profile.desktop_version.clone()),
-            desktop_build: fixed.then(|| profile.desktop_build.clone()),
-        };
-        selection
-            .document()
-            .map_err(|_| OpenAiConfigError::InvalidField("openai.wire_profile"))
     }
 
     #[must_use]
@@ -174,7 +114,7 @@ impl Default for OpenAiConfig {
             quota: CodexQuotaSettings::default(),
             auth: CodexAuthSettings::default(),
             stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
-            wire_profile: CodexWireProfileConfig::default(),
+            residency: None,
             identity_secret_path: PathBuf::new(),
         }
     }
@@ -307,115 +247,8 @@ impl CodexAuthSettings {
     }
 }
 
-/// 经审计固定的 Codex Desktop 上游请求画像。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct CodexWireProfileConfig {
-    pub originator: String,
-    /// 官方 Desktop ZIP 内嵌 Core 的启动基线；运行时按完整制品元组更新。
-    pub codex_version: String,
-    pub desktop_version: String,
-    pub desktop_build: String,
-    pub os_type: String,
-    pub os_version: String,
-    pub arch: String,
-    pub terminal: String,
-    #[serde(default)]
-    pub residency: Option<CodexResidency>,
-    pub verified_at: DateTime<Utc>,
-}
-
-impl Default for CodexWireProfileConfig {
-    fn default() -> Self {
-        Self {
-            originator: "Codex Desktop".to_owned(),
-            codex_version: "0.153.4".to_owned(),
-            desktop_version: "26.901.51231".to_owned(),
-            desktop_build: "8109".to_owned(),
-            os_type: "Mac OS".to_owned(),
-            os_version: "15.7.1".to_owned(),
-            arch: "arm64".to_owned(),
-            terminal: "unknown".to_owned(),
-            residency: None,
-            // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验。
-            verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
-        }
-    }
-}
-
-impl CodexWireProfileConfig {
-    fn validate(&self) -> Result<(), OpenAiConfigError> {
-        for (field, value) in [
-            ("openai.wire_profile.originator", self.originator.as_str()),
-            (
-                "openai.wire_profile.codex_version",
-                self.codex_version.as_str(),
-            ),
-            (
-                "openai.wire_profile.desktop_version",
-                self.desktop_version.as_str(),
-            ),
-            (
-                "openai.wire_profile.desktop_build",
-                self.desktop_build.as_str(),
-            ),
-            ("openai.wire_profile.os_type", self.os_type.as_str()),
-            ("openai.wire_profile.os_version", self.os_version.as_str()),
-            ("openai.wire_profile.arch", self.arch.as_str()),
-            ("openai.wire_profile.terminal", self.terminal.as_str()),
-        ] {
-            if value.trim().is_empty() {
-                return Err(OpenAiConfigError::InvalidField(field));
-            }
-        }
-        if semver::Version::parse(&self.codex_version).is_err() {
-            return Err(OpenAiConfigError::InvalidField(
-                "openai.wire_profile.codex_version",
-            ));
-        }
-        if !numeric_dotted_version(&self.desktop_version) {
-            return Err(OpenAiConfigError::InvalidField(
-                "openai.wire_profile.desktop_version",
-            ));
-        }
-        if !self.desktop_build.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(OpenAiConfigError::InvalidField(
-                "openai.wire_profile.desktop_build",
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl From<CodexWireProfileConfig> for CodexWireProfile {
-    fn from(value: CodexWireProfileConfig) -> Self {
-        Self {
-            client_kind: crate::transport::profile::selection::ClientKind::Desktop,
-            originator: value.originator,
-            codex_version: value.codex_version,
-            desktop_version: value.desktop_version,
-            desktop_build: value.desktop_build,
-            os_type: value.os_type,
-            os_version: value.os_version,
-            arch: value.arch,
-            terminal: value.terminal,
-            residency: value.residency,
-            verified_at: value.verified_at,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OpenAiConfigError {
     #[error("OpenAI configuration field is invalid: {0}")]
     InvalidField(&'static str),
-}
-
-fn numeric_dotted_version(value: &str) -> bool {
-    let mut parts = value.split('.');
-    let valid_parts = parts
-        .by_ref()
-        .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-        .count();
-    valid_parts >= 2 && valid_parts == value.split('.').count()
 }

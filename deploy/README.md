@@ -64,12 +64,14 @@ Linux 上应用容器以 `10001:10001` 运行。上述命令将应用数据和�
 配置设为 `0640`，均由当前用户持有、容器组 `10001` 访问。
 `config.yaml` 通过 Compose `configs` 只读挂载，普通 Compose 保留宿主机文件的 UID/GID 和 mode。
 
-OpenAI 上游身份在管理端「系统设置 → 上游配置 → 客户端身份」配置，Key 可选择独立身份覆盖通用值。
-首次默认 macOS Desktop 自动最新，支持范围与字段见 [客户端身份合同](../docs/api.md#openai-上游客户端身份)。
-旧 `openai.wire_profile` 在数据库尚无选择时一次性导入：默认版本采用自动更新；版本元组、平台或架构
-与默认值不同则保留为固定版本。导入后从管理端修改，重启不会用 YAML 覆盖数据库。
-`residency` 仍为部署配置；后台账号与 Desktop 专属请求保持独立官方画像。
-OpenAI 上游地址、WebSocket 池、额度刷新和 OAuth 使用 Provider 默认值；xAI 仍在 YAML 配置启动画像。
+OpenAI 与 xAI 上游身份在管理端「系统设置 → 上游配置 → 客户端身份」配置，Key 可按 Provider 选择独立身份覆盖通用值。
+OpenAI 首次默认 macOS Desktop 自动最新，支持范围与字段见 [客户端身份合同](../docs/api.md#openai-上游客户端身份)。
+客户端身份只保存于数据库；首次使用内置默认值，重启不会覆盖已有选择。
+`openai.residency` 为独立的数据驻留部署约束，省略或 `null` 时不指定；后台账号与 Desktop 专属请求使用内置官方画像。
+OpenAI 上游地址、WebSocket 池、额度刷新和 OAuth 使用 Provider 默认值。
+xAI 无需 YAML 配置，首次默认 Grok CLI 的 Linux x86_64 身份并采用自动更新。
+管理端支持固定版本与自动更新；字段及生效范围见 [xAI 客户端身份](../docs/api.md#xai-上游客户端身份)。
+xAI 的后台 OAuth、目录和额度查询使用内置官方画像。
 后台发布检查只更新可重建的版本资料，不回写用户选择或 `config.yaml`；失败继续使用同组合的有效版本。
 
 全局请求位置在管理端「系统设置 → 上游配置 → 请求位置覆盖」配置，默认关闭，保留客户端原有位置和时区。

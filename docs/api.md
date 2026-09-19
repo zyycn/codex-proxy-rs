@@ -893,13 +893,14 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
-`dailyLimitUsd`、`weeklyLimitUsd`、`customKey` 和 `openaiClientProfileOverride`。更新请求携带 `id`，不接受 `customKey`。
+`dailyLimitUsd`、`weeklyLimitUsd`、`customKey`、`openaiClientProfileOverride` 和 `xaiClientProfileOverride`。更新请求携带 `id`，不接受 `customKey`。
 `groupIds` 必须显式提交：空数组派生 `routingScope: "all"`，非空数组派生
 `routingScope: "groups"`。响应同时返回分组引用 `groups`，以及从当前有效账号池派生、仅供展示的
 `providerKinds`。创建和 reveal 响应会返回完整明文 Key，调用方
 必须立即安全保存。
 
 `openaiClientProfileOverride` 为完整的 [OpenAI 客户端身份](#openai-上游客户端身份)对象或 `null`，列表也返回该字段。
+`xaiClientProfileOverride` 对应完整的 [xAI 客户端身份](#xai-上游客户端身份)，两者分别覆盖所属 Provider，列表同时返回。
 创建时省略或 `null` 表示跟随通用设置；更新时省略保留现值，显式 `null` 才清除覆盖。
 独立配置整体覆盖通用设置，不逐字段继承；切换全局配置不会影响独立 Key。
 
@@ -970,6 +971,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | `GET` | `/api/admin/settings/client-downloads/codex-desktop/windows` | 提取 Codex Desktop Windows 离线安装直链；`refresh=true` 强制刷新进程内短缓存 |
 | `GET` | `/api/admin/settings/client-profiles/openai` | 读取六个预设、自动更新可用状态和 `globalConfiguration` |
 | `POST` | `/api/admin/settings/client-profiles/openai/preview` | body 为 `{ configuration }`，值为完整身份对象或 `null`（解析当前通用设置）；只预览，不保存 |
+| `GET` | `/api/admin/settings/client-profiles/xai` | 读取 Grok CLI 默认字段 `defaults` 和 `globalConfiguration` |
+| `POST` | `/api/admin/settings/client-profiles/xai/preview` | body 为 `{ configuration }`，值为完整 xAI 身份对象或 `null`（解析当前通用设置）；只预览，不保存 |
 | `GET` | `/api/admin/settings/admin-api-key` | 只返回管理 API Key 是否存在 |
 | `POST` | `/api/admin/settings/admin-api-key/delete` | 删除管理 API Key |
 | `POST` | `/api/admin/settings/admin-api-key/regenerate` | 重新生成并一次性返回完整管理 API Key |
@@ -1074,7 +1077,7 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 ### OpenAI 上游客户端身份
 
 `openaiClientProfile` 保存通用选择，首次默认 `MacOS · Desktop · 自动最新`。
-设置更新省略该字段保留现值，不能提交 `null`。内置默认只用于初始化，不形成第三层运行时回退。
+设置更新省略该字段保留现值，不能提交 `null`。初始化不读取 YAML 身份字段；内置默认只用于初始化，不形成第三层运行时回退。
 该配置作用于 Client Key 的 OpenAI 模型请求与原生模型目录，适用于 HTTP/SSE、WebSocket、Images 和 Search。
 不改变 xAI、入站客户端版本门禁、账号认证或后台 Desktop 专属操作。
 
@@ -1106,6 +1109,32 @@ Windows/Linux 通过 ETag 检查更新，未变化时复用已核验版本；CLI
 
 配置在请求开始时冻结，Provider 首次解析的版本用于该请求的全部重试与换号。
 已建立 WebSocket 的精确续写沿用所属连接；新请求使用保存后的选择。
+
+### xAI 上游客户端身份
+
+`xaiClientProfile` 保存 Grok CLI 的通用身份选择；首次使用内置 `grok-shell / headless / linux / x86_64`
+并采用自动更新版本。初始化不读取 YAML 身份字段，数据库已有选择时不覆盖。
+更新设置省略该字段保留现值，不能提交 `null`。
+
+| 字段 | 取值与语义 |
+| --- | --- |
+| `versionMode` | 必填，`latest` 或 `fixed` |
+| `clientVersion` | `fixed` 必填 SemVer，最多 64 字节；`latest` 必须省略或为 `null` |
+| `clientIdentifier`、`clientMode`、`targetOs`、`targetArch` | 必填，各为 1～64 字节可见 ASCII，不含空白或控制字符 |
+
+```json
+{"versionMode":"latest","clientVersion":null,"clientIdentifier":"grok-shell","clientMode":"headless","targetOs":"linux","targetArch":"x86_64"}
+```
+
+配置作用于 Client Key 的 xAI 模型请求和压缩请求，影响 `x-grok-client-version`、`x-grok-client-identifier`、
+`x-grok-client-mode` 与 User-Agent；OAuth、后台目录和额度查询使用 Provider 内置官方画像。
+User-Agent 使用 `grok-shell/<版本> (<系统>; <架构>)`，其中 `arm64` 按官方规则展示为 `aarch64`。
+`clientIdentifier` 只控制对应请求头，不替换 User-Agent 中的 `grok-shell` 产品名。
+每个请求开始时解析并冻结身份，重试和换号沿用该身份；保存后新请求生效，密钥独立配置优先于通用设置。
+
+自动版本通过官方 npm 检查稳定版本，周期 24 小时；检查失败保留当前进程最近有效版本，重启以内置基线开始。
+固定版本不受后台更新影响。预览返回配置、来源、最终身份字段、`userAgent`、`versionSource`、`verifiedAt`、
+`checkedAt` 和 `error`；固定版本不附带官方核验时间。Dashboard 展示已保存的通用身份。
 
 ### 账号自动冻结
 

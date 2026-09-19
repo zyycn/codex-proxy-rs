@@ -12,6 +12,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import ClientProfileEditor from '@/components/client-profile/ClientProfileEditor.vue'
+import XaiClientProfileEditor from '@/components/client-profile/XaiClientProfileEditor.vue'
 
 const props = defineProps<{
   groups: AccountGroup[]
@@ -87,8 +88,11 @@ const title = computed(() => props.editing ? '编辑密钥' : '创建 API Key')
         />
       </BaseFormItem>
 
-      <BaseFormItem label="上游身份">
+      <BaseFormItem label="OpenAI 上游身份">
         <ClientProfileEditor v-if="open" v-model="form.openaiClientProfileOverride" allow-inherit :disabled="saving" />
+      </BaseFormItem>
+      <BaseFormItem label="xAI 上游身份">
+        <XaiClientProfileEditor v-if="open" v-model="form.xaiClientProfileOverride" allow-inherit :disabled="saving" />
       </BaseFormItem>
 
       <div class="grid gap-6 sm:grid-cols-2">
