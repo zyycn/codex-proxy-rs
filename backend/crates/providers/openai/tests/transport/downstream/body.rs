@@ -44,10 +44,55 @@ fn encoder_should_adapt_pi_responses_parameters_without_losing_codex_fields() {
 }
 
 #[test]
+fn encoder_should_expand_string_input_into_user_message_item() {
+    // 公开 Responses API 的字符串 input 等价于一条 user 文本消息；
+    // 目标形状对照 codex-rs/protocol/src/models.rs 的 ResponseItem::Message + ContentItem::InputText。
+    let encoded = encode_downstream_request(json!({"model": "gpt-test", "input": "hello"}));
+
+    assert_eq!(
+        Value::Object(encoded.body().clone()),
+        json!({
+            "model": "gpt-test",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }],
+            "store": false
+        })
+    );
+    assert_eq!(encoded.input().len(), 1);
+}
+
+#[test]
+fn encoder_should_keep_non_string_input_shapes_untouched() {
+    // 数组按原样透传；空串仍展开为空文本消息，语义由上游判定。
+    // null、对象等既不是官方形状也没有公开 API 的等价定义，不猜测语义。
+    let items = json!([{"type": "message", "role": "user", "content": [
+        {"type": "input_text", "text": "hi"},
+        {"type": "input_image", "image_url": "data:image/png;base64,AA=="}
+    ]}]);
+    for input in [items, Value::Null, json!({"text": "hello"}), json!(42)] {
+        let body = json!({"model": "gpt-test", "input": input, "store": false});
+        let encoded = encode_downstream_request(body.clone());
+
+        assert_eq!(Value::Object(encoded.body().clone()), body);
+    }
+
+    let encoded = encode_downstream_request(json!({"model": "gpt-test", "input": ""}));
+    assert_eq!(
+        encoded.body()["input"],
+        json!([{"type": "message", "role": "user", "content": [{"type": "input_text", "text": ""}]}])
+    );
+}
+
+#[test]
 fn encoder_should_default_missing_store_without_changing_unknown_or_nested_fields() {
     let mut body = json!({
         "model": "client-model",
-        "input": "temperature and max_output_tokens are tool parameter names",
+        "input": [{"role": "user", "content": [{
+            "type": "input_text", "text": "temperature and max_output_tokens are tool parameter names"
+        }]}],
         "max_tokens": 256,
         "future_options": {"temperature": 0.7},
         "client_metadata": {"prompt_cache_retention": "business-value", "store": true},
@@ -80,7 +125,11 @@ fn encoder_should_default_missing_store_without_changing_unknown_or_nested_field
 #[test]
 fn encoder_should_preserve_explicit_store_values() {
     for store in [json!(false), json!(true), Value::Null, json!("false")] {
-        let body = json!({"model": "gpt-test", "input": "hello", "store": store});
+        let body = json!({
+            "model": "gpt-test",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            "store": store
+        });
         let encoded = encode_downstream_request(body.clone());
 
         assert_eq!(Value::Object(encoded.body().clone()), body);

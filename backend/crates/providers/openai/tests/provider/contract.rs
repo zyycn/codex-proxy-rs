@@ -4985,7 +4985,10 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
         "openai",
         Map::from_iter([
             ("model".to_owned(), json!("gpt-5.4")),
-            ("input".to_owned(), json!("second request")),
+            (
+                "input".to_owned(),
+                json!([{"role": "user", "content": "second request"}]),
+            ),
             ("session_id".to_owned(), json!(session_id)),
         ]),
     )
@@ -5020,7 +5023,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
     let second_request = &requests[0];
     assert_eq!(
         captured_request_body(second_request).get("input"),
-        Some(&json!("second request"))
+        Some(&json!([{"role": "user", "content": "second request"}]))
     );
     assert!(captured_header_values(second_request, "x-codex-turn-state").is_empty());
     let expected_account_id = format!("chatgpt-{second_account_id}");
@@ -8772,16 +8775,33 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
 fn quota_continuation_operation(use_websocket: bool) -> Operation {
     Operation::Generate(
         GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object("openai", json!({
-                "model": "gpt-5.4", "input": "continue", "previous_response_id": "resp_previous",
-                "session_id": "quota-replay", "thread_id": "turn",
-            }).as_object().unwrap().clone())
+            ProtocolPayload::json_object(
+                "openai",
+                json!({
+                    "model": "gpt-5.4", "input": [{"role":"user","content":"continue"}],
+                    "previous_response_id": "resp_previous",
+                    "session_id": "quota-replay", "thread_id": "turn",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )
             .unwrap()
-            .with_context(Map::from_iter([("use_websocket".to_owned(), json!(use_websocket))])),
+            .with_context(Map::from_iter([(
+                "use_websocket".to_owned(),
+                json!(use_websocket),
+            )])),
         )
         .with_provider_session_state(
-            generate_with_persisted_session_context("acct_provider_contract", "conversation-quota", "quota-replay", "turn")
-                .provider_session_state("openai").unwrap().clone(),
+            generate_with_persisted_session_context(
+                "acct_provider_contract",
+                "conversation-quota",
+                "quota-replay",
+                "turn",
+            )
+            .provider_session_state("openai")
+            .unwrap()
+            .clone(),
         ),
     )
 }
@@ -9092,7 +9112,10 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
         let delta: Value =
             serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(delta["previous_response_id"], "resp_previous");
-        assert_eq!(delta["input"], "continue");
+        assert_eq!(
+            delta["input"],
+            json!([{"role":"user","content":"continue"}])
+        );
         ws.send(Message::Text(json!({"type":"error","status":429,"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"You have reached your usage limit."}}).to_string().into())).await.unwrap();
         let (socket, _) = listener.accept().await.unwrap();
         let mut ws = accept_codex_test_websocket(socket).await;

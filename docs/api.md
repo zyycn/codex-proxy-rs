@@ -190,9 +190,11 @@ Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和
 
 Responses 上游编码会移除 Codex 不接受的顶层 `temperature`、`max_output_tokens` 和
 `prompt_cache_retention`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
-显式提供的值保持原样。`input` 数组中显式指定 `type: "message"` 且 `role: "system"` 的消息，
-其角色转换为 Codex 接受的 `developer`；消息内容、顺序、其他字段和顶层 `instructions` 保持不变。
-HTTP/SSE 与 WebSocket 共用这条正文兼容规则。
+显式提供的值保持原样。顶层 `input` 为字符串时按公开 Responses API 的语义展开为一条
+`user` 文本消息条目（`{"type": "message", "role": "user", "content": [{"type": "input_text", ...}]}`），
+因为 Codex 后端只接受条目数组；数组及其他类型原样透传。`input` 数组中显式指定 `type: "message"`
+且 `role: "system"` 的消息，其角色转换为 Codex 接受的 `developer`；消息内容、顺序、其他字段和顶层
+`instructions` 保持不变。HTTP/SSE 与 WebSocket 共用这条正文兼容规则。
 `prompt_cache_key`、`reasoning`、`include` 等 Codex 参数继续保留。过滤只作用于顶层，
 不删除工具参数 schema、输入内容或 `client_metadata` 内的同名业务字段；其他未知字段继续透传。
 

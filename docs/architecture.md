@@ -216,7 +216,7 @@ OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配�
 - Responses 的业务扩展头保留原始多值字节。API 负责剥离鉴权、账号身份和 HTTP 传输字段，
   并提取会话语义；`gateway-protocol` 共享 HTTP 传输与网关链路字段分类。客户端兼容规则集中在
   `providers/openai/src/transport/downstream/`：`headers.rs` 管理下游环境头和已提取语义的头部别名，
-  `body.rs` 管理已知顶层参数的过滤和缺省值补齐；兼容基准为 Codex Core/Desktop 请求协议，
+  `body.rs` 管理已知顶层参数的过滤、缺省值补齐和已确认不兼容的 `input` 形状适配；兼容基准为 Codex Core/Desktop 请求协议，
   不持有账号身份保护或会话规范化逻辑。
   Provider 在 `transport/request.rs` 解码不透明头时组合兼容、身份与 HTTP 规则，
   同时调用正文兼容规则；HTTP/SSE 与 WebSocket 共用此边界。
