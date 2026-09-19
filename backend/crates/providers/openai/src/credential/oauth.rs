@@ -31,10 +31,12 @@ use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
-use super::types::{parse_access_token_expiration, parse_chatgpt_jwt_claims};
+use super::types::{CodexOAuthMetadata, parse_access_token_expiration, parse_chatgpt_jwt_claims};
 use crate::transport::profile::CodexWireProfileState;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
+/// 重新授权身份校验失败的结构化原因码；日志只带账号与原因码，不带任何 claim。
+const REAUTHORIZATION_IDENTITY_MISMATCH: &str = "reauthorization_identity_mismatch";
 const DESKTOP_AUTH_ENDPOINT: &str = "https://chatgpt.com/codex/desktop-auth";
 const AUTHORIZATION_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
@@ -338,6 +340,10 @@ pub enum CodexOAuthAdminError {
     Ambiguous,
     #[error("Codex OAuth pending storage is unavailable")]
     StorageUnavailable,
+    /// 重新授权拿到的令牌属于另一个 ChatGPT 账号。沿用 `Conflict` 会让操作者
+    /// 以为是并发冲突而反复重试，因此单独区分。
+    #[error("Codex OAuth credential does not match the targeted account")]
+    IdentityMismatch,
     #[error("Codex OAuth account mutation failed")]
     Credential,
 }
@@ -540,6 +546,19 @@ impl CodexOAuthAdminService {
             parse_access_token_expiration(secret.access_token.expose_secret());
         let metadata = parse_chatgpt_jwt_claims(id_token.expose_secret())
             .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
+        // 重新授权可以在授权页选择另一个 ChatGPT 账号；这里 fail-closed 地要求
+        // 新令牌的身份 claims 与目标行一致，否则会写出身份列属于 A、令牌属于 B
+        // 的行，造成静默的计费与调度错配。首次授权没有基线，保持原行为。
+        if let Some(current) = &current
+            && !reauthorized_identity_matches(&current.account, &metadata)
+        {
+            tracing::warn!(
+                account_id = %current.account.id().as_str(),
+                reason = REAUTHORIZATION_IDENTITY_MISMATCH,
+                "OpenAI OAuth reauthorization identity mismatch"
+            );
+            return Err(CodexOAuthAdminError::IdentityMismatch);
+        }
         secret.id_token = Some(id_token);
         let credential = if let Some(current) = current {
             CompletedCodexOAuthCredential::Reauthorize(
@@ -738,6 +757,25 @@ fn current_installation_id(current: &LoadedCredential) -> Result<String, CodexOA
         return Err(CodexOAuthAdminError::Credential);
     }
     Ok(runtime.installation_id)
+}
+
+fn reauthorized_identity_matches(
+    account: &gateway_core::account::ProviderAccount,
+    metadata: &CodexOAuthMetadata,
+) -> bool {
+    let Some(stored_user_id) = account.upstream_user_id() else {
+        return false;
+    };
+    let Some(new_user_id) = metadata.chatgpt_user_id.as_deref() else {
+        return false;
+    };
+    if new_user_id.is_empty() || stored_user_id != new_user_id {
+        return false;
+    }
+    let Some(stored_account_id) = account.upstream_account_id() else {
+        return true;
+    };
+    metadata.chatgpt_account_id.as_deref() == Some(stored_account_id)
 }
 
 fn derive_surface_stable_id(installation_id: &str) -> Result<String, CodexOAuthAdminError> {

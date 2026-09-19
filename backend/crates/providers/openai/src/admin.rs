@@ -1686,6 +1686,12 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
             Kind::Conflict,
             "OpenAI 授权流程正在处理或已被更新，请先检查授权状态",
         ),
+        // 沿用 Conflict 的 HTTP 语义，但必须让操作者明白重试同一个回调永远不会成功：
+        // 授权页选中的账号与账号记录不一致时只能新建账号。
+        Error::IdentityMismatch => (
+            Kind::Conflict,
+            "所选 ChatGPT 账号与账号记录不一致，无法完成授权：请改为新建账号并重新授权，不要重复提交本次回调",
+        ),
         Error::Ambiguous => (
             Kind::Ambiguous,
             "OpenAI 授权结果未知，请先核对账号状态，不要立即重复提交",
@@ -1710,6 +1716,7 @@ const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
         CodexOAuthAdminError::UpstreamUnavailable => "upstream_unavailable",
         CodexOAuthAdminError::Ambiguous => "ambiguous",
         CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",
+        CodexOAuthAdminError::IdentityMismatch => "identity_mismatch",
         CodexOAuthAdminError::Credential => "credential",
     }
 }

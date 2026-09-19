@@ -33,16 +33,16 @@ use gateway_admin::{
             AuthorizationCommit, AuthorizationCommitGuard, AuthorizationCredentialCommit,
             AuthorizationMutationTarget, AuthorizationStarted, CompleteAuthorization,
             ConsumeProviderResetCredit, CredentialCommitGuard, CredentialDetails,
-            CredentialImportCommit, CredentialImportResult, CredentialMutationResult,
-            CredentialRotationCommit, PendingAuthorizationMutation, PrepareCredentialImport,
-            PrepareCredentialRefresh, PrepareCredentialRotation, PreparedAuthorizationCommit,
-            PreparedAuthorizationCredential, PreparedCredentialCreate, PreparedCredentialImport,
-            PreparedCredentialRotation, PreparedCredentialRotationFacts, ProviderDocument,
-            ProviderExport, ProviderExportCredentialInput, ProviderModels,
+            CredentialImportCommit, CredentialImportResult,
+            CredentialMutationResult, CredentialRotationCommit, PendingAuthorizationMutation,
+            PrepareCredentialImport, PrepareCredentialRefresh, PrepareCredentialRotation,
+            PreparedAuthorizationCommit, PreparedAuthorizationCredential, PreparedCredentialCreate,
+            PreparedCredentialImport, PreparedCredentialRotation, PreparedCredentialRotationFacts,
+            ProviderDocument, ProviderExport, ProviderExportCredentialInput, ProviderModels,
             ProviderProfileActivityInsights, ProviderProfileStatistics,
             ProviderProfileStatisticsSummary, ProviderQuota, ProviderQuotaRequest,
             ProviderQuotaWindow, ProviderResetCreditResult, ProviderSubscription,
-            QuotaLocalUsageAttribution,
+            QuotaLocalUsageAttribution, StartAuthorization,
         },
         quota_forecast_sampling::{QuotaForecastHistory, QuotaForecastUsage},
         settings::{
@@ -2480,6 +2480,48 @@ async fn accounts_refresh_store_failure_should_drop_guard_after_commit_attempt()
             "guard.drop",
         ]
     );
+}
+
+/// 重新授权身份错配的公开文案只允许是静态提示：它必须劝操作者新建账号，
+/// 且不得回显上游正文或任何身份值。
+#[tokio::test]
+async fn openai_authorization_identity_mismatch_should_expose_only_the_static_public_message() {
+    const PUBLIC_MESSAGE: &str = "所选 ChatGPT 账号与账号记录不一致，无法完成授权：请改为新建账号并重新授权，不要重复提交本次回调";
+
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider.clone(), store.clone()).await;
+    services
+        .openai()
+        .start_authorization(StartAuthorization {
+            outbound_proxy: None,
+            context: context("oauth-identity-mismatch"),
+            name: "reauthorize".to_owned(),
+            reauthorization: Some(ProviderAccountId::new("acct_test").expect("account ID")),
+        })
+        .await
+        .expect("start reauthorization");
+
+    provider.fail_next_with_public_message(ProviderAdminErrorKind::Conflict, PUBLIC_MESSAGE);
+
+    let error = services
+        .openai()
+        .complete_authorization(CompleteAuthorization {
+            settings: None,
+            context: context("oauth-identity-mismatch"),
+            flow_id: "flow-test".to_owned(),
+            callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
+        })
+        .await
+        .expect_err("identity mismatch must fail the authorization");
+
+    assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Conflict);
+    assert_eq!(error.to_string(), PUBLIC_MESSAGE);
+    assert!(error.to_string().contains("新建账号"));
+    assert!(!error.to_string().contains("重新发起授权"));
+    assert!(!format!("{error:?}").contains("secret token"));
+    assert!(store.audit_requests().is_empty());
 }
 
 pub(super) fn events() -> EventLog {

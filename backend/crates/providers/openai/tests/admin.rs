@@ -50,6 +50,7 @@ use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
+use url::Url;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -646,6 +647,127 @@ async fn openai_reauthorization_pending_payload_reuses_the_account_installation_
         Some("acct_pending_reauth")
     );
     assert!(target.get("expected_credential_revision").is_none());
+}
+
+/// Provider 管理边界的重新授权身份校验：即使底层 token exchange 成功，身份不一致
+/// 也必须以 `Conflict` + 静态公开文案失败，且不得泄漏上游身份或令牌。
+#[tokio::test]
+async fn openai_reauthorization_with_a_different_upstream_identity_is_rejected() {
+    let server = MockServer::start().await;
+    let id_token = {
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "email": "other-account@example.com",
+                "https://api.openai.com/auth": {
+                    "chatgpt_user_id": "chatgpt-other-user",
+                    "chatgpt_account_id": "other-workspace-id"
+                }
+            }))
+            .expect("payload JSON"),
+        );
+        format!("unverified-header.{payload}.unverified-signature")
+    };
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "mismatched-access",
+            "refresh_token": "mismatched-refresh",
+            "id_token": id_token
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let accounts = Arc::new(MemoryAccountStore::default());
+    accounts
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_identity".to_owned(),
+            name: "admin identity".to_owned(),
+            secret: secret("admin-identity-access"),
+            verified_account: profile("chatgpt-admin-identity"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let before = accounts
+        .load_current_credential(
+            &ProviderAccountId::new("acct_admin_identity").expect("account id"),
+        )
+        .await
+        .expect("seeded credential");
+    let account_id = ProviderAccountId::new("acct_admin_identity").expect("account id");
+
+    let mut config = valid_config();
+    config.config.auth.oauth_token_endpoint = format!("{}/oauth/token", server.uri());
+    let pending = Arc::new(TestOAuthPending::default());
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&accounts), Arc::clone(&pending)),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let context = MutationContext {
+        actor: MutationActor::AdminApiKey,
+        request_id: "request-identity-mismatch".to_owned(),
+    };
+    let started = bundle
+        .admin_provider()
+        .start_authorization(PendingAuthorizationMutation::new(
+            ProviderKind::new("openai").expect("provider"),
+            AuthorizationMutationTarget::Reauthorize {
+                account_id: account_id.clone(),
+            },
+            AuthorizationOwnerBinding::from_context(&context),
+        ))
+        .await
+        .expect("start reauthorization");
+    let state = Url::parse(&started.authorization_url)
+        .expect("authorization URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "authorize_url").then(|| value.into_owned()))
+        .and_then(|inner| Url::parse(&inner).ok())
+        .and_then(|inner| {
+            inner
+                .query_pairs()
+                .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        })
+        .expect("state parameter");
+
+    let error = bundle
+        .admin_provider()
+        .complete_authorization(CompleteAuthorization {
+            settings: None,
+            context,
+            flow_id: started.flow_id,
+            callback_url: format!(
+                "http://localhost:1455/auth/callback?code=code-from-browser&state={state}"
+            ),
+        })
+        .await
+        .expect_err("a different upstream identity must be rejected");
+
+    assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
+    assert_eq!(
+        error.public_message(),
+        Some(
+            "所选 ChatGPT 账号与账号记录不一致，无法完成授权：请改为新建账号并重新授权，不要重复提交本次回调"
+        )
+    );
+    assert!(!format!("{error:?}").contains("chatgpt-other-user"));
+    assert!(!format!("{error:?}").contains("mismatched-access"));
+    let after = accounts
+        .load_current_credential(&account_id)
+        .await
+        .expect("credential after rejection");
+    assert_eq!(
+        after.account.upstream_user_id(),
+        before.account.upstream_user_id()
+    );
+    assert_eq!(
+        after.account.upstream_account_id(),
+        before.account.upstream_account_id()
+    );
+    assert_eq!(after.credential, before.credential);
 }
 
 #[tokio::test]
