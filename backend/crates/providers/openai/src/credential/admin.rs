@@ -747,6 +747,49 @@ impl CodexCredentialAdmin {
         })
     }
 
+    pub fn prepare_web_token_update(
+        &self,
+        current: LoadedCredential,
+        web_access_token: Option<String>,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        if current.account.provider().as_str() != PROVIDER_NAME
+            || current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(CodexCredentialAdminError::InvalidCredential);
+        }
+        let mut data = CodexCredentialCodec::decode_complete(&current.credential)
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let oauth = data
+            .oauth_mut()
+            .ok_or(CodexCredentialAdminError::InvalidCredential)?;
+        oauth.web_access_token = web_access_token;
+        let credential = CodexCredentialCodec::encode_complete(data)
+            .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let profile = ProviderAccountUpdate {
+            account_id: current.account.id().clone(),
+            name: current.account.name().to_owned(),
+            email: current.account.email().map(str::to_owned),
+            plan_type: current.account.plan_type().map(str::to_owned),
+        };
+        let credential = CredentialCasUpdate::new(
+            current.account.id().clone(),
+            current.account.revision(),
+            profile.clone(),
+            credential,
+            current.account.has_refresh_token(),
+            current.account.access_token_expires_at(),
+            current.account.next_refresh_at(),
+        )
+        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?
+        .preserving_profile();
+        Ok(PreparedCodexCredentialRotation {
+            profile,
+            credential,
+            replacement_identity: None,
+            refresh_guards: None,
+        })
+    }
+
     fn prepare_oauth_rotation(
         &self,
         input: RotateManagedCodexCredential,
@@ -937,6 +980,7 @@ impl CodexCredentialAdminService {
                 .id_token
                 .map(SecretString::from)
                 .or_else(|| oauth.id_token.clone()),
+            web_access_token: oauth.web_access_token.clone(),
         };
         Self::record_recovery_log(
             CodexOAuthRecoveryOperation::ManualRefresh,
@@ -1036,6 +1080,7 @@ impl CodexCredentialAdminService {
                     access_token: SecretString::from(token),
                     refresh_token: None,
                     id_token: None,
+                    web_access_token: None,
                 };
                 access_token_expires_at = None;
                 metadata
@@ -1104,6 +1149,7 @@ impl CodexCredentialAdminService {
                 access_token: SecretString::from(access_token),
                 refresh_token: refresh_token.map(SecretString::from),
                 id_token,
+                web_access_token: None,
             };
             Self::record_recovery_log(
                 CodexOAuthRecoveryOperation::ImportDirect,
@@ -1130,6 +1176,7 @@ impl CodexCredentialAdminService {
                 .map(SecretString::from)
                 .or_else(|| Some(SecretString::from(refresh_token))),
             id_token: tokens.id_token.map(SecretString::from).or(id_token),
+            web_access_token: None,
         };
         Self::record_recovery_log(
             CodexOAuthRecoveryOperation::ImportRefreshToken,

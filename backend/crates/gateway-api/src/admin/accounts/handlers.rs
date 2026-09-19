@@ -42,6 +42,10 @@ where
             get(account_reset_credits::<S>).post(consume_account_reset_credit::<S>),
         )
         .route(
+            "/api/admin/accounts/web-token",
+            post(update_account_web_token::<S>),
+        )
+        .route(
             "/api/admin/accounts/quota/refresh",
             post(refresh_account_quota::<S>),
         )
@@ -544,6 +548,29 @@ where
         StatusCode::OK,
         AdminEnvelope::ok(AccountResetCreditResultData::from(result)),
     ))
+}
+
+async fn update_account_web_token<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<UpdateAccountWebTokenRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let (account_id, web_access_token) = request.into_command().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .update_web_token(
+            &auth.context().mutation_context(),
+            account_id,
+            web_access_token,
+        )
+        .await
+        .map_err(map_service_error)?;
+    let data = account_refresh_data(result, Utc::now());
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
 async fn account_models<S>(

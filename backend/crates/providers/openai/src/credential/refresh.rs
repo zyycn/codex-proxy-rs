@@ -452,6 +452,7 @@ impl CodexCredentialRefreshService {
             access_token: current_access_token,
             refresh_token: current_refresh_token,
             id_token: current_id_token,
+            web_access_token,
         } = due.secret;
         let refresh_token = rotated_refresh_token
             .map(SecretString::from)
@@ -464,6 +465,7 @@ impl CodexCredentialRefreshService {
             id_token: rotated_id_token
                 .map(SecretString::from)
                 .or(current_id_token),
+            web_access_token,
         };
         record_oauth_recovery(
             CodexOAuthRecoveryOperation::ScheduledRefresh,

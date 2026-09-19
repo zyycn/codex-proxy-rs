@@ -538,6 +538,20 @@ export function consumeAccountResetCredit(data: AccountResetCreditConsumeParam, 
   })
 }
 
+export interface UpdateAccountWebTokenParam {
+  accountId: string
+  webAccessToken: string | null
+}
+
+export function updateAccountWebToken(data: UpdateAccountWebTokenParam, options: RequestOptions = {}) {
+  return request<AccountRefreshResponse>({
+    url: '/api/admin/accounts/web-token',
+    method: 'POST',
+    data,
+    ...options,
+  })
+}
+
 export function getAccountModels(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountModelsResponse>({
     url: '/api/admin/accounts/models',

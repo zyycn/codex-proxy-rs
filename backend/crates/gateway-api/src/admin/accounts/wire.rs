@@ -635,6 +635,49 @@ impl AccountRefreshRequest {
     }
 }
 
+/// 独立更新账号专用于额度充值卡的网页 Access Token。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateAccountWebTokenRequest {
+    pub account_id: String,
+    pub web_access_token: Option<String>,
+}
+
+impl UpdateAccountWebTokenRequest {
+    pub fn validate(&self) -> Result<(), WireValidationError> {
+        require_account_id(&self.account_id, "accountId")?;
+        if let Some(token) = &self.web_access_token {
+            let trimmed = token.trim();
+            if !trimmed.is_empty() {
+                const MAX_WEB_TOKEN_BYTES: usize = 16 * 1024;
+                if trimmed.len() > MAX_WEB_TOKEN_BYTES
+                    || !trimmed.bytes().all(|byte| byte.is_ascii_graphic())
+                {
+                    return Err(WireValidationError::new("webAccessToken"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn into_command(
+        self,
+    ) -> Result<(ProviderAccountId, Option<String>), WireValidationError> {
+        self.validate()?;
+        let account_id = ProviderAccountId::new(self.account_id)
+            .map_err(|_| WireValidationError::new("accountId"))?;
+        let token = self.web_access_token.and_then(|t| {
+            let trimmed = t.trim().to_owned();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+        Ok((account_id, token))
+    }
+}
+
 /// 连接测试 query；测试仍经唯一 Core/Provider 模型请求路径执行。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

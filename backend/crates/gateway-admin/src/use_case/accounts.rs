@@ -38,8 +38,8 @@ use crate::{
 };
 
 use super::{
-    commit_credential_refresh, map_provider_error, map_store_error, publish_committed,
-    validate_prepared_rotation,
+    commit_credential_refresh, commit_credential_rotation, map_provider_error, map_store_error,
+    publish_committed, validate_prepared_rotation,
 };
 
 const CONNECTION_TEST_INPUT: &str = "Reply with exactly OK.";
@@ -132,6 +132,15 @@ pub trait AccountsService: Send + Sync {
         _command: ConsumeProviderResetCredit,
     ) -> Result<ProviderResetCreditResult, AdminError> {
         Err(AdminError::invalid("当前 Provider 不支持重置额度"))
+    }
+
+    async fn update_web_token(
+        &self,
+        _context: &MutationContext,
+        _account_id: ProviderAccountId,
+        _web_access_token: Option<String>,
+    ) -> Result<AccountRefreshResult, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持配置网页令牌"))
     }
 
     async fn models(
@@ -821,6 +830,12 @@ impl AccountsService for DefaultAccountsService {
                 if error.kind()
                     == crate::ports::provider::ProviderAdminErrorKind::CredentialRefreshRequired =>
             {
+                let (stored, _) = self.provider_for_account(&account_id).await?;
+                if !stored.account.has_refresh_token {
+                    return Err(AdminError::invalid(
+                        "网页 Access Token 已过期或失效，请重新填入网页 Access Token",
+                    ));
+                }
                 self.refresh(context, account_id.clone()).await?;
                 let (_, provider) = self.provider_for_account(&account_id).await?;
                 provider
@@ -849,6 +864,12 @@ impl AccountsService for DefaultAccountsService {
                 if error.kind()
                     == crate::ports::provider::ProviderAdminErrorKind::CredentialRefreshRequired =>
             {
+                let (stored, _) = self.provider_for_account(&account_id).await?;
+                if !stored.account.has_refresh_token {
+                    return Err(AdminError::invalid(
+                        "网页 Access Token 已过期或失效，请重新填入网页 Access Token",
+                    ));
+                }
                 self.refresh(context, account_id.clone()).await?;
                 let (_, provider) = self.provider_for_account(&account_id).await?;
                 provider
@@ -858,6 +879,38 @@ impl AccountsService for DefaultAccountsService {
             }
             Err(error) => Err(map_provider_error(error, "provider reset-credit consume")),
         }
+    }
+
+    async fn update_web_token(
+        &self,
+        context: &MutationContext,
+        account_id: ProviderAccountId,
+        web_access_token: Option<String>,
+    ) -> Result<AccountRefreshResult, AdminError> {
+        let (stored, provider) = self.provider_for_account(&account_id).await?;
+        let account = stored.account;
+        let prepared = provider
+            .prepare_web_token_update(&account_id, web_access_token)
+            .await
+            .map_err(|error| map_provider_error(error, "provider web token update"))?;
+        validate_prepared_rotation(&account, &prepared, "provider web token update")?;
+        let result = commit_credential_rotation(
+            self.accounts.as_ref(),
+            prepared,
+            None,
+            context,
+            "provider web token update",
+        )
+        .await?;
+        provider
+            .account_facts_changed(std::slice::from_ref(&result.account_id))
+            .await;
+        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        let account = self.load_directory_item(&result.account_id, false).await?;
+        Ok(AccountRefreshResult {
+            config_revision: result.config_revision,
+            account,
+        })
     }
 
     async fn models(

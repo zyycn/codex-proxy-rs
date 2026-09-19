@@ -838,6 +838,60 @@ async fn pat_import_uses_account_proxy_without_direct_fallback() {
     }
 }
 
+#[test]
+fn prepare_web_token_update_updates_only_web_token_and_preserves_pat() {
+    use gateway_core::account::{
+        CredentialRevision, LoadedCredential, ProviderAccount, ProviderAccountId,
+    };
+    use provider_openai::credential::{
+        CodexCredentialAdmin, CodexCredentialCodec, CodexCredentialData, CodexOAuthCredentialData,
+    };
+
+    let account_id = ProviderAccountId::new("acct_00000000000000000000000001").unwrap();
+    let account = ProviderAccount::new(
+        account_id,
+        gateway_core::routing::ProviderKind::new("openai").unwrap(),
+        "Test Account".to_owned(),
+        Some("user-123".to_owned()),
+        "oauth".to_owned(),
+        CredentialRevision::new(1).unwrap(),
+        None,
+    );
+    let original_credential = CodexCredentialCodec::encode_complete(CodexCredentialData::OAuth(
+        CodexOAuthCredentialData {
+            schema_version: 1,
+            principal: None,
+            installation_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            access_token: "at-my-pat-token".to_owned(),
+            refresh_token: None,
+            id_token: None,
+            oauth_client_id: None,
+            oauth_scope: None,
+            cookies: vec![],
+            web_access_token: None,
+        },
+    ))
+    .expect("encode");
+
+    let loaded = LoadedCredential {
+        account,
+        credential: original_credential,
+    };
+
+    let rotation = CodexCredentialAdmin
+        .prepare_web_token_update(loaded, Some("ey-new-web-token".to_owned()))
+        .expect("prepare web token update");
+
+    let updated_data = CodexCredentialCodec::decode_complete(rotation.credential.credential())
+        .expect("decode updated credential");
+
+    let oauth = updated_data.oauth().expect("oauth data");
+    // PAT token is preserved verbatim!
+    assert_eq!(oauth.access_token, "at-my-pat-token");
+    // Web token is updated!
+    assert_eq!(oauth.web_access_token.as_deref(), Some("ey-new-web-token"));
+}
+
 #[tokio::test]
 async fn api_key_import_export_preserves_target_without_oauth_exchange() {
     use gateway_core::account::LoadedCredential;

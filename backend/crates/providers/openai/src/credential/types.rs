@@ -8,12 +8,13 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
-/// OAuth AT/RT/ID Token；`Debug` 永不输出明文。
+/// OAuth AT/RT/ID Token 与专用于额度充值卡的 Web Access Token；`Debug` 永不输出明文。
 #[derive(Clone)]
 pub struct CodexOAuthSecret {
     pub access_token: SecretString,
     pub refresh_token: Option<SecretString>,
     pub id_token: Option<SecretString>,
+    pub web_access_token: Option<SecretString>,
 }
 
 impl fmt::Debug for CodexOAuthSecret {
@@ -26,6 +27,10 @@ impl fmt::Debug for CodexOAuthSecret {
                 &self.refresh_token.as_ref().map(|_| "<redacted>"),
             )
             .field("id_token", &self.id_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "web_access_token",
+                &self.web_access_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -300,6 +305,8 @@ pub struct CodexOAuthCredentialData {
     pub oauth_scope: Option<String>,
     #[serde(default)]
     pub cookies: Vec<CodexCookie>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_access_token: Option<String>,
 }
 
 impl fmt::Debug for CodexOAuthCredentialData {
@@ -318,6 +325,10 @@ impl fmt::Debug for CodexOAuthCredentialData {
             .field("oauth_client_id", &self.oauth_client_id)
             .field("oauth_scope", &self.oauth_scope)
             .field("cookies", &self.cookies)
+            .field(
+                "web_access_token",
+                &self.web_access_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -381,6 +392,18 @@ impl CodexCredentialData {
     pub fn has_refresh_token(&self) -> bool {
         self.oauth()
             .is_some_and(|data| data.refresh_token.is_some())
+    }
+
+    #[must_use]
+    pub fn has_web_token(&self) -> bool {
+        self.oauth()
+            .is_some_and(|data| data.web_access_token.is_some())
+    }
+
+    #[must_use]
+    pub fn web_access_token(&self) -> Option<&str> {
+        self.oauth()
+            .and_then(|data| data.web_access_token.as_deref())
     }
 }
 

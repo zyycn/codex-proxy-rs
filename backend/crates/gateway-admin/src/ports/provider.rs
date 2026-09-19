@@ -198,6 +198,15 @@ pub trait ProviderAdmin: Send + Sync {
         command: PrepareCredentialRefresh,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError>;
 
+    /// 准备更新账号专用的网页 Access Token。默认不支持。
+    async fn prepare_web_token_update(
+        &self,
+        _account_id: &ProviderAccountId,
+        _web_access_token: Option<String>,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     /// 可公开的账号连接设置；实现只能显式投影非敏感字段，不能返回凭据原文。
     async fn account_configuration(
         &self,

@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import type { AccountRow } from './constants'
 import { ChevronDown } from '@lucide/vue'
-import { ref } from 'vue'
 
+import { ref } from 'vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -28,6 +29,7 @@ import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.
 import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
+import AccountWebTokenModal from './components/AccountWebTokenModal.vue'
 import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
 import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
 import { useAccountEditor } from './composables/useAccountEditor'
@@ -186,6 +188,14 @@ const {
   reloadAccounts: loadAccounts,
   reloadGroups: loadGroups,
 })
+
+const showWebTokenModal = ref(false)
+const webTokenAccount = ref<AccountRow | null>(null)
+
+function openWebTokenModal(account: AccountRow) {
+  webTokenAccount.value = account
+  showWebTokenModal.value = true
+}
 </script>
 
 <template>
@@ -329,6 +339,7 @@ const {
                 @refresh="handleRefresh"
                 @reauthorize="openReauthorizeAccount"
                 @test="openConnectionTest"
+                @edit-web-token="openWebTokenModal"
               />
             </template>
 
@@ -475,5 +486,11 @@ const {
         吗？
       </p>
     </BaseConfirmModal>
+
+    <AccountWebTokenModal
+      v-model="showWebTokenModal"
+      :account="webTokenAccount"
+      @updated="void replaceAccount($event)"
+    />
   </div>
 </template>

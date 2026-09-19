@@ -129,6 +129,8 @@ pub enum CodexCredentialQuotaError {
 pub enum CodexResetCreditsError {
     #[error("Codex reset-credit credential data is invalid")]
     InvalidCredentialData,
+    #[error("当前账号使用 Personal Access Token (at-)，需配置网页 Access Token 才能使用额度充值卡")]
+    WebAccessTokenRequired,
     #[error("Codex OAuth access token must be refreshed before using reset credits")]
     CredentialRefreshRequired { upstream_body: Option<String> },
     #[error("Codex reset-credit account was not found")]
@@ -151,6 +153,7 @@ impl std::fmt::Debug for CodexResetCreditsError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidCredentialData => formatter.write_str("InvalidCredentialData"),
+            Self::WebAccessTokenRequired => formatter.write_str("WebAccessTokenRequired"),
             Self::CredentialRefreshRequired { .. } => {
                 formatter.write_str("CredentialRefreshRequired { upstream_body: <redacted> }")
             }
@@ -261,6 +264,7 @@ enum CodexQuotaFetchError {
 
 enum ResetCreditAttemptError {
     InvalidCredential,
+    WebAccessTokenRequired,
     Upstream(CodexClientError),
 }
 
@@ -1362,10 +1366,16 @@ async fn list_reset_credits_once(
     prepared: &PreparedCodexRuntimeCredential,
     request_id: &str,
 ) -> Result<CodexRateLimitResetCredits, ResetCreditAttemptError> {
+    if let Some(oauth) = prepared.credential.authentication.oauth()
+        && oauth.access_token.expose_secret().trim().starts_with("at-")
+        && oauth.web_access_token.is_none()
+    {
+        return Err(ResetCreditAttemptError::WebAccessTokenRequired);
+    }
     let authorization = prepared
         .credential
         .authentication
-        .authorization_header()
+        .reset_credits_authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
         .for_account(&prepared.account)
@@ -1387,10 +1397,16 @@ async fn consume_reset_credit_once(
     credit_id: Option<&str>,
     redeem_request_id: Uuid,
 ) -> Result<CodexRateLimitResetCreditsConsumeResult, ResetCreditAttemptError> {
+    if let Some(oauth) = prepared.credential.authentication.oauth()
+        && oauth.access_token.expose_secret().trim().starts_with("at-")
+        && oauth.web_access_token.is_none()
+    {
+        return Err(ResetCreditAttemptError::WebAccessTokenRequired);
+    }
     let authorization = prepared
         .credential
         .authentication
-        .authorization_header()
+        .reset_credits_authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
         .for_account(&prepared.account)
@@ -1415,6 +1431,9 @@ fn map_reset_credit_attempt_error(
 ) -> CodexResetCreditsError {
     match error {
         ResetCreditAttemptError::InvalidCredential => CodexResetCreditsError::InvalidCredentialData,
+        ResetCreditAttemptError::WebAccessTokenRequired => {
+            CodexResetCreditsError::WebAccessTokenRequired
+        }
         ResetCreditAttemptError::Upstream(error) => map_reset_credit_client_error(error, consume),
     }
 }

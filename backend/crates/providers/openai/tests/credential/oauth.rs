@@ -109,6 +109,7 @@ impl AuthorizationCodeExchanger for Exchanger {
                 access_token: SecretString::from("access-token-from-upstream"),
                 refresh_token: Some(SecretString::from("refresh-token-from-upstream")),
                 id_token: None,
+                web_access_token: None,
             },
             id_token: SecretString::from(self.id_token.clone()),
         })

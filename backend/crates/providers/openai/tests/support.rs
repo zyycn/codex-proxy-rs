@@ -1007,6 +1007,7 @@ pub(crate) fn secret(access_token: &str) -> CodexOAuthSecret {
         access_token: SecretString::from(access_token.to_owned()),
         refresh_token: Some(SecretString::from(format!("rt-{access_token}"))),
         id_token: None,
+        web_access_token: None,
     }
 }
 

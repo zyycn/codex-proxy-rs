@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
+import { Globe, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -21,6 +21,7 @@ const emit = defineEmits<{
   test: [account: AccountRow]
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
+  editWebToken: [account: AccountRow]
 }>()
 </script>
 
@@ -83,6 +84,12 @@ const emit = defineEmits<{
               <KeyRound class="size-3.5 text-cp-text-quaternary" />
             </template>
             重新授权
+          </BaseMenuItem>
+          <BaseMenuItem v-if="account.authenticationKind === 'oauth'" @click.stop="(close(), emit('editWebToken', account))">
+            <template #icon>
+              <Globe class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            配置网页 Token
           </BaseMenuItem>
           <BaseMenuItem
             :loading="recovering"

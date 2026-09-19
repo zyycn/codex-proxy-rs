@@ -587,6 +587,7 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
                 access_token: SecretString::from(tokens.access_token),
                 refresh_token: Some(SecretString::from(tokens.refresh_token)),
                 id_token: None,
+                web_access_token: None,
             },
             id_token,
         })

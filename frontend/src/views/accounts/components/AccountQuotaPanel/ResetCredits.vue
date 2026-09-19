@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import type { Account, AccountResetCredit } from '@/api'
-import { AlertTriangle, RefreshCw, TicketCheck } from '@lucide/vue'
+import { AlertTriangle, Globe, RefreshCw, TicketCheck } from '@lucide/vue'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { computed, shallowRef, watch } from 'vue'
 
+import { updateAccountWebToken } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { toast } from '@/components/base/BaseToast'
+import { errorMessage } from '@/utils/async'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
 import UsageLimits from './UsageLimits.vue'
 
@@ -78,14 +82,58 @@ const countLabel = computed(() => {
   return `可用 ${availableCount.value} 次`
 })
 
+const webTokenInput = shallowRef('')
+const savingWebToken = shallowRef(false)
+const webTokenError = shallowRef('')
+const showWebTokenForm = shallowRef(false)
+
+const isWebTokenIssue = computed(() => {
+  if (!loadError.value)
+    return false
+  return loadError.value.includes('网页 Access Token')
+    || loadError.value.includes('Personal Access Token')
+    || loadError.value.includes('at-')
+    || loadError.value.includes('刷新令牌')
+    || loadError.value.includes('重新授权')
+})
+
 watch(panelOpen, (isOpen) => {
   if (isOpen) {
+    webTokenError.value = ''
+    webTokenInput.value = ''
     void loadCredits()
     return
   }
   if (showConfirm.value)
     cancelConsume()
 })
+
+async function handleSaveWebToken() {
+  const token = webTokenInput.value.trim()
+  if (!token) {
+    webTokenError.value = '请输入网页 Access Token'
+    return
+  }
+  savingWebToken.value = true
+  webTokenError.value = ''
+  try {
+    const res = await updateAccountWebToken({
+      accountId: props.account.id,
+      webAccessToken: token,
+    })
+    toast.success('网页 Access Token 已更新')
+    emit('accountUpdated', res.account)
+    webTokenInput.value = ''
+    showWebTokenForm.value = false
+    await loadCredits()
+  }
+  catch (error) {
+    webTokenError.value = errorMessage(error)
+  }
+  finally {
+    savingWebToken.value = false
+  }
+}
 
 function expiryLabel(value: string | null) {
   if (!value)
@@ -182,6 +230,15 @@ function handleRequestConsume(creditId: string) {
           <BaseIconButton
             variant="ghost"
             size="sm"
+            label="配置网页 Token"
+            :disabled="loading || consuming"
+            @click="showWebTokenForm = !showWebTokenForm"
+          >
+            <Globe class="size-3.5" />
+          </BaseIconButton>
+          <BaseIconButton
+            variant="ghost"
+            size="sm"
             label="刷新主动重置卡"
             :loading="loading"
             :disabled="loading || consuming"
@@ -196,12 +253,70 @@ function handleRequestConsume(creditId: string) {
 
         <div :aria-busy="loading || consuming">
           <p
-            v-if="loadError"
+            v-if="loadError && !isWebTokenIssue"
             class="mx-4 mt-0 mb-4 rounded-cp bg-cp-error-container px-4 py-3 text-cp-xs leading-normal font-emphasis text-cp-error-on-container"
             role="status"
           >
             {{ loadError }}，请刷新重试
           </p>
+
+          <div
+            v-if="isWebTokenIssue || showWebTokenForm"
+            class="mx-4 mt-0 mb-4 rounded-cp border border-cp-border-secondary bg-cp-bg-container p-3.5"
+          >
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <span class="flex items-center gap-1.5 text-cp-xs font-heavy text-cp-text">
+                <Globe class="size-3.5 text-cp-primary" />
+                配置网页 Access Token
+              </span>
+              <button
+                v-if="showWebTokenForm && !isWebTokenIssue"
+                type="button"
+                class="cursor-pointer border-0 bg-transparent p-0 text-cp-xs text-cp-text-tertiary transition hover:text-cp-text"
+                @click="showWebTokenForm = false"
+              >
+                收起
+              </button>
+            </div>
+            <p
+              v-if="loadError && isWebTokenIssue"
+              class="mt-0 mb-2.5 rounded-cp bg-cp-error-container px-3 py-2 text-cp-xs leading-normal font-emphasis text-cp-error-on-container"
+              role="status"
+            >
+              {{ loadError }}
+            </p>
+            <p class="mt-0 mb-2 text-cp-xs leading-normal text-cp-text-secondary">
+              用于支持以 Personal Access Token（<code class="rounded bg-cp-fill-quaternary px-1 py-0.5 font-mono text-[10px]">at-</code>）接入的账号使用额度充值卡。该 Token 仅用于额度重置，不影响 API 调用的原有凭据。
+            </p>
+            <p
+              v-if="webTokenError"
+              class="mt-0 mb-2 rounded-cp bg-cp-error-container px-3 py-2 text-cp-xs leading-normal font-emphasis text-cp-error-on-container"
+              role="alert"
+            >
+              {{ webTokenError }}
+            </p>
+            <BaseTextarea
+              v-model="webTokenInput"
+              :rows="3"
+              placeholder="粘贴以 ey... 开头的网页 Access Token"
+              :disabled="savingWebToken"
+              class="mb-2.5"
+            />
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-[10px] text-cp-text-quaternary">
+                登录 chatgpt.com 后打开 api/auth/session 即可复制 accessToken
+              </span>
+              <BaseButton
+                size="sm"
+                variant="primary"
+                :loading="savingWebToken"
+                :disabled="savingWebToken || !webTokenInput.trim()"
+                @click="handleSaveWebToken"
+              >
+                保存并查询
+              </BaseButton>
+            </div>
+          </div>
           <p
             v-else-if="loading && !hasSnapshot"
             class="m-0 px-4 pt-1 pb-4 text-cp-xs font-emphasis text-cp-text-secondary"
