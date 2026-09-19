@@ -61,7 +61,7 @@ function resolveStatus(input: SystemUpdatePresentationInput) {
   }
   if (input.updateSuccess || input.hasUpdate || input.updateInfo) {
     return {
-      label: input.updateSuccess ? '已更新' : input.hasUpdate ? '有新版本' : '已是最新',
+      label: input.updateSuccess ? '已更新' : input.hasUpdate ? '有可用更新' : '无可用更新',
       icon: input.hasUpdate ? ArrowUpCircle : CheckCircle2,
       badge: 'bg-cp-success-container text-cp-success-on-container',
       iconClass: 'text-cp-success',

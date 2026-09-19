@@ -84,11 +84,9 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   const restarting = computed(() => phaseKind.value === 'restarting')
 
   const hasUpdate = computed(() => Boolean(updateInfo.value?.hasUpdate ?? version.value?.hasUpdate))
-  const isReleaseBuild = computed(() => updateInfo.value?.buildType === 'release')
   const canUpdate = computed(
     () =>
       hasUpdate.value
-      && isReleaseBuild.value
       && Boolean(updateInfo.value?.updateSupported)
       && !UPDATE_BUSY_PHASES.has(phaseKind.value),
   )
@@ -336,7 +334,6 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     updateStreaming,
     updateStreamError,
     hasUpdate,
-    isReleaseBuild,
     canUpdate,
     loadVersion,
     loadSystem,

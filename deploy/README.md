@@ -395,19 +395,48 @@ CPR_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 docker compose -f deploy/compose.yaml build codex-proxy-rs
 ```
 
+### 版本命名与升级规则
+
+发行通道由当前版本确定，不提供通道切换配置。预发行编号 `N` 从 1 开始递增。
+
+| 类型 | 命名示例 | 含义 | 允许在线更新到 |
+| --- | --- | --- | --- |
+| 正式版 | `3.12.0` | 稳定发布 | 同一大版本内更新的正式版 |
+| alpha | `3.12.0-alpha.1` | 下一正式版本的早期开发阶段 | 同一目标版本的更新 alpha、beta、rc、正式版 |
+| beta | `3.12.0-beta.1` | 下一正式版本的功能测试阶段 | 同一目标版本的更新 beta、rc、正式版 |
+| rc | `3.12.0-rc.1` | 准备转正的发布候选版本 | 同一目标版本的更新 rc、正式版 |
+| exp | `3.10.0-exp.1` | 临时功能实验，可能合入正式版或结束维护 | 同一轮实验中编号更高的 exp |
+
+“同一目标版本”要求 `X.Y.Z` 相同。alpha → beta → rc → 正式版可以跳过中间阶段，不能倒退；
+转正后按正式版规则更新，不自动进入下一轮预发行。同一 `X.Y.Z-exp.N` 系列只用于同一轮实验，
+不能混用不同实验分支；变更基线即进入另一实验线，需手动迁移。exp 不自动进入正式版、alpha、beta 或 rc。
+从 exp 切换正式版时需先备份，在目标版本的独立数据库中迁移业务数据，不能直接复用或整库还原实验数据库。
+
+版本大小遵循 [SemVer](https://semver.org/)，构建元数据 `+...` 不参与比较。未知预发行标识不提供在线更新。
+更新器先过滤不允许的目标，再选择版本最高的候选；其他通道或更高大版本领先，不影响当前发行线的更新。
+只有当前官方构建满足在线更新条件且存在允许安装的新版本时，才返回“有可用更新”。否则不显示更新标记、
+其他通道的版本及发布说明，手动检查显示“当前没有可用更新”。检查失败单独报告，不能当作没有更新。
+
+alpha、beta、rc、exp 在 GitHub 标记为 Pre-release，不覆盖 GitHub Latest 或镜像 `latest`。
+允许连续升级的发行线从首次发布起遵守[迁移冻结规则](../backend/migrations/README.md#冻结规则)，
+包括预发行到正式版的晋级；发版前验证对应升级路径，不能仅凭版本号认定数据库兼容。
+
 ### 管理端在线更新
+
+官方构建按上述规则在线更新；源码等非官方构建返回不支持原因，不提供可用更新。
 
 Compose 提供以下在线更新运行参数：
 
 - `CPR_UPDATE_REPOSITORY`：只接受 `owner/repository`；默认 `zyycn/codex-proxy-rs`。
 - `CPR_GITHUB_API_BASE`：正式环境必须为 `https://api.github.com/repos`。
-- `CPR_UPDATE_CHANNEL`：`stable` 会拒绝 prerelease。
 - `CPR_UPDATE_EXE_PATH`、`CPR_WEB_DIST_DIR`：分别指向容器内二进制和前端静态目录；
   `CPR_WEB_DIST_DIR` 同时供页面服务与更新器使用，相对路径以 `deploy/config.yaml` 所在目录为基准。
 - 更新临时目录、状态文件和锁文件默认由 `host.runtime_data_dir` 派生；
   `CPR_UPDATE_TEMP_DIR`、`CPR_UPDATE_STATE_FILE`、`CPR_UPDATE_LOCK_FILE` 仅用于显式覆盖。
 - `CPR_ENABLE_SELF_RESTART=true`：更新或回滚完成后允许管理端请求重启；Docker 进程退出后由
   Compose 的 `restart: unless-stopped` 拉起新进程。
+
+旧配置中的 `CPR_UPDATE_CHANNEL` 不再参与版本选择，可移除。
 
 Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.tar.gz` 与
 `checksums.txt`。服务会在替换前再次查询远端最新版本，校验下载 host、声明大小、SHA-256 和

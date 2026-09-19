@@ -97,7 +97,11 @@ function pinUpdateLogsToBottom() {
 async function handleCheckUpdates(force = true) {
   try {
     const data = await checkUpdates(force)
-    toast.success(data?.hasUpdate ? '发现可用更新' : '当前已是最新版本')
+    if (data?.warning) {
+      toast.error(data.warning)
+      return
+    }
+    toast.success(data?.hasUpdate ? '发现可用更新' : '当前没有可用更新')
   }
   catch {}
 }
@@ -110,8 +114,12 @@ async function handleUpdateRequest() {
   preparingUpdate.value = true
   try {
     const data = await checkUpdates(true)
+    if (data?.warning) {
+      toast.error(data.warning)
+      return
+    }
     if (!data?.hasUpdate) {
-      toast.success('当前已是最新版本')
+      toast.success('当前没有可用更新')
       return
     }
     const remoteTargetVersion = normalizeSystemVersion(data.latestVersion)
@@ -355,7 +363,7 @@ watch(
         {{ presentation.restartButtonLabel }}
       </BaseButton>
       <BaseButton
-        v-else
+        v-else-if="hasUpdate || updating"
         variant="primary"
         :loading="preparingUpdate || updating"
         :disabled="!canUpdate || preparingUpdate"

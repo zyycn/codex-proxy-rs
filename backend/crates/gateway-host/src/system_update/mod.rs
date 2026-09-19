@@ -32,8 +32,8 @@ use self::archive::extract_release;
 use self::download::{MAX_CHECKSUM_SIZE, MAX_DOWNLOAD_SIZE, download_file, verify_checksum};
 use self::process::{environment_value, spawn_replacement};
 use self::release::{
-    ReleaseCache, confirmed_target, detail_from_release, fetch_latest, select_archive,
-    versions_cross_major,
+    ReleaseCache, UpdateChannel, confirmed_target, detail_from_release, fetch_latest,
+    select_archive, validate_update_target, version_channel,
 };
 use self::state::{
     OperationFileLock, UpdateTempDir, finish, operation_id, read_status, set_running,
@@ -57,7 +57,6 @@ pub struct SystemUpdateConfig {
     pub build_time: String,
     pub deployment_mode: String,
     pub build_type: String,
-    pub update_channel: String,
     pub update_repository: Option<String>,
     pub github_api_base: String,
     pub executable_path: Option<PathBuf>,
@@ -98,8 +97,6 @@ impl Default for SystemUpdateConfig {
                 .to_owned(),
             deployment_mode,
             build_type: option_env!("CPR_BUILD_TYPE").unwrap_or("source").to_owned(),
-            update_channel: environment_value("CPR_UPDATE_CHANNEL")
-                .unwrap_or_else(|| "stable".to_owned()),
             update_repository: Some(
                 environment_value("CPR_UPDATE_REPOSITORY")
                     .unwrap_or_else(|| DEFAULT_UPDATE_REPOSITORY.to_owned()),
@@ -158,17 +155,18 @@ impl SystemUpdateConfig {
                 "host.system_update.deployment_mode",
             ));
         }
-        if !matches!(self.update_channel.as_str(), "stable" | "preview") {
-            return Err(ConfigError::InvalidField(
-                "host.system_update.update_channel",
-            ));
-        }
         Ok(())
     }
 
     fn update_support_error(&self) -> Option<String> {
-        if self.build_type != "release" {
-            return Some("一键更新需要正式构建包".to_owned());
+        if !matches!(self.build_type.as_str(), "release" | "experimental") {
+            return Some("在线更新需要官方发布构建".to_owned());
+        }
+        let Some(channel) = version_channel(&self.version) else {
+            return Some("当前版本不符合发行命名规范，无法确定更新通道".to_owned());
+        };
+        if self.build_type == "experimental" && channel != UpdateChannel::Experimental {
+            return Some("实验构建必须使用 exp.N 版本，无法在线更新".to_owned());
         }
         let Some(repository) = self.update_repository.as_deref() else {
             return Some("检查更新需要配置 CPR_UPDATE_REPOSITORY".to_owned());
@@ -187,13 +185,12 @@ impl SystemUpdateConfig {
 
     fn release_cache_key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}",
             self.update_repository.as_deref().unwrap_or_default(),
             self.github_api_base,
             self.version,
             self.deployment_mode,
             self.build_type,
-            self.update_channel,
         )
     }
 
@@ -249,10 +246,10 @@ impl ProcessSystemOperations {
             return Err(conflict(reason));
         }
         let target = confirmed_target(target_version)?;
-        if versions_cross_major(&self.config.version, &target).unwrap_or(false) {
-            let reason = "跨大版本升级不提供自动更新，请按发布说明手动迁移";
-            self.events.error_terminal(None, Some("preflight"), reason);
-            return Err(conflict(reason));
+        if let Err(error) = validate_update_target(&self.config.version, &target) {
+            self.events
+                .error_terminal(None, Some("preflight"), error.to_string());
+            return Err(error);
         }
         let repository = self
             .config
@@ -264,11 +261,16 @@ impl ProcessSystemOperations {
         let release = match fetch_latest(
             &self.config.github_api_base,
             repository,
-            &self.config.update_channel,
+            &self.config.version,
         )
         .await
         {
-            Ok(release) => release,
+            Ok(Some(release)) => release,
+            Ok(None) => {
+                let reason = "当前发行通道没有可用更新";
+                self.events.warning_terminal(None, Some("release"), reason);
+                return Err(conflict(reason));
+            }
             Err(error) => {
                 self.events
                     .error_terminal(None, Some("release"), error.to_string());
@@ -428,7 +430,9 @@ impl SystemOperations for ProcessSystemOperations {
             git_sha: self.config.git_sha.clone(),
             build_time: self.config.build_time.clone(),
             deployment_mode: self.config.deployment_mode.clone(),
-            update_channel: self.config.update_channel.clone(),
+            update_channel: version_channel(&self.config.version)
+                .map(|channel| channel.label().to_owned())
+                .unwrap_or_else(|| "unknown".to_owned()),
             latest_version: detail.latest_version,
             has_update: detail.has_update,
             update_cached: detail.cached,

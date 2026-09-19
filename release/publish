@@ -5,7 +5,7 @@ APP_NAME="codex-proxy-rs"
 VERSION_FILE="release/version.yaml"
 NOTES_FILE="release/notes.md"
 TAG_PREFIX="v"
-SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc|exp)\.[1-9][0-9]*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
 SIGNATURE="Co-authored-by: Codex <noreply@openai.com>"
 
 usage() {
@@ -78,7 +78,7 @@ require_command ruby
 gh auth status >/dev/null 2>&1 || die "gh authentication is required; run gh auth login first"
 
 version="${1#v}"
-[[ "$version" =~ $SEMVER ]] || die "version must be semver, for example 0.1.4"
+[[ "$version" =~ $SEMVER ]] || die "version must be X.Y.Z or X.Y.Z-{alpha,beta,rc,exp}.N (N >= 1), optionally with +build metadata"
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
 cd "$repo_root"

@@ -35,6 +35,7 @@ jobs:
       docker_platforms: ${{ steps.version.outputs.docker_platforms }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      build_type: ${{ steps.version.outputs.build_type }}
 
     steps:
       - name: Checkout
@@ -57,7 +58,7 @@ jobs:
           require "yaml"
 
           APP_NAME = "codex-proxy-rs"
-          SEMVER = /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z/
+          SEMVER = /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta|rc|exp)\.[1-9]\d*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z/
 
           def fail(message)
             warn(message)
@@ -161,6 +162,7 @@ jobs:
           puts "docker_platforms=#{docker_platforms.join(",")}"
           puts "previous_tag=#{previous_tag}"
           puts "prerelease=#{version.split("+", 2).first.include?("-")}"
+          puts "build_type=#{version.split("+", 2).first.include?("-exp.") ? "experimental" : "release"}"
           RUBY
 
   quality:
@@ -221,7 +223,7 @@ jobs:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
-          CPR_BUILD_TYPE: release
+          CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -274,7 +276,7 @@ jobs:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
-          CPR_BUILD_TYPE: release
+          CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

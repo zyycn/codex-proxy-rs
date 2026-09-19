@@ -16,7 +16,7 @@ use gateway_host::system_update::{
 };
 use sha2::{Digest as _, Sha256};
 use tar::{Builder, EntryType, Header};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const TARGET_VERSION: &str = "1.9.9";
@@ -162,40 +162,44 @@ async fn rollback_should_restore_binary_web_and_version_state() {
 }
 
 #[tokio::test]
-async fn update_detail_should_fallback_to_cache_when_refresh_fetch_fails() {
+async fn update_detail_should_report_refresh_failure_and_clear_previous_update() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
     fixture.mount_release_once(&server, TARGET_VERSION).await;
     let service = fixture.service(&server);
     service.update_detail(true).await.expect("prime cache");
 
-    assert_eq!(
-        service
-            .update_detail(true)
-            .await
-            .expect("cached fallback")
-            .latest_version,
-        TARGET_VERSION
-    );
+    let detail = service.update_detail(true).await.expect("failure detail");
+    assert!(!detail.has_update);
+    assert!(detail.warning.is_some());
+    assert!(!detail.cached);
+    assert_eq!(detail.latest_version, "1.0.0");
+    assert!(detail.notes.is_none());
+    let version = service
+        .version()
+        .await
+        .expect("version after failed refresh");
+    assert!(!version.has_update);
+    assert!(version.update_warning.is_some());
 }
 
 #[tokio::test]
-async fn update_detail_should_offer_latest_non_draft_prerelease_on_preview_channel() {
+async fn update_detail_should_offer_latest_non_draft_release_in_current_channel() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
     Mock::given(method("GET"))
         .and(path("/repos/owner/repository/releases"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
-                "tag_name": "v1.2.0-beta.2",
-                "name": "Draft 1.2.0-beta.2",
+                "tag_name": "v1.1.0-beta.3",
+                "name": "Draft 1.1.0-beta.3",
                 "prerelease": true,
                 "draft": true,
                 "assets": [],
             },
             {
-                "tag_name": "v1.1.0-beta.1",
-                "name": "Release 1.1.0-beta.1",
+                "tag_name": "v1.1.0-beta.2",
+                "name": "Release 1.1.0-beta.2",
                 "body": "notes",
                 "html_url": "https://github.com/owner/repository/releases",
                 "prerelease": true,
@@ -205,11 +209,11 @@ async fn update_detail_should_offer_latest_non_draft_prerelease_on_preview_chann
         .mount(&server)
         .await;
     let mut config = fixture.config(&format!("{}/repos", server.uri()));
-    config.update_channel = "preview".to_owned();
+    config.version = "1.1.0-beta.1".to_owned();
     let service = ProcessSystemOperations::new(CancellationToken::new(), config);
 
     let detail = service.update_detail(true).await.expect("detail");
-    assert_eq!(detail.latest_version, "1.1.0-beta.1");
+    assert_eq!(detail.latest_version, "1.1.0-beta.2");
     assert!(detail.has_update);
 }
 
@@ -227,19 +231,373 @@ async fn update_detail_should_reject_untrusted_github_api_base() {
 }
 
 #[tokio::test]
-async fn update_detail_should_check_release_for_source_build_without_enabling_update() {
+async fn update_detail_should_withhold_updates_for_source_builds() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
-    fixture.mount_release_once(&server, TARGET_VERSION).await;
     let mut config = fixture.config(&format!("{}/repos", server.uri()));
     config.build_type = "source".to_owned();
     let service = ProcessSystemOperations::new(CancellationToken::new(), config);
 
     let detail = service.update_detail(true).await.expect("detail");
-    assert_eq!(
-        (detail.latest_version, detail.update_supported),
-        (TARGET_VERSION.to_owned(), false)
+    assert_eq!(detail.latest_version, "1.0.0");
+    assert!(!detail.update_supported);
+    assert!(detail.unsupported_reason.is_some());
+    assert!(!detail.has_update);
+    assert!(detail.notes.is_none());
+    assert!(detail.release_url.is_none());
+    assert!(!service.version().await.expect("version").has_update);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
     );
+}
+
+#[tokio::test]
+async fn experimental_build_should_ignore_newer_stable_and_other_experimental_releases() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "tag_name": "v4.0.0", "prerelease": false },
+            { "tag_name": "v3.12.0", "prerelease": false },
+            { "tag_name": "v3.10.0", "prerelease": false },
+            { "tag_name": "v3.11.0-exp.3", "prerelease": true },
+            { "tag_name": "v3.10.1-exp.3", "prerelease": true },
+            { "tag_name": "v3.11.0-beta.1", "prerelease": true },
+            { "tag_name": "v3.10.0-exp.other.3", "prerelease": true },
+            { "tag_name": "v3.10.0-exp.3", "prerelease": true, "draft": true },
+            { "tag_name": "v3.10.0-exp.4", "prerelease": false },
+            { "tag_name": "invalid", "prerelease": true }
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut config = fixture.config(&format!("{}/repos", server.uri()));
+    config.version = "3.10.0-exp.2".to_owned();
+    config.build_type = "experimental".to_owned();
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+    let detail = service.update_detail(true).await.expect("detail");
+    assert_eq!(detail.latest_version, "3.10.0-exp.2");
+    assert!(!detail.has_update);
+    assert!(detail.update_supported);
+    assert!(detail.notes.is_none());
+    assert!(detail.release_url.is_none());
+    assert!(detail.warning.is_none());
+    let version = service.version().await.expect("version");
+    assert!(!version.has_update);
+    assert_eq!(version.update_channel, "exp");
+    let cached = service.update_detail(false).await.expect("cached detail");
+    assert!(cached.cached);
+    assert!(!cached.has_update);
+}
+
+#[tokio::test]
+async fn experimental_update_should_find_highest_same_channel_version_across_pages() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    let mut first_page = vec![
+        serde_json::json!({
+            "tag_name": "v3.12.0", "prerelease": false
+        });
+        100
+    ];
+    first_page[1] = serde_json::json!({ "tag_name": "v3.10.0-exp.3", "prerelease": true });
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases"))
+        .and(query_param("page", "1"))
+        .and(query_param("per_page", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(first_page))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "tag_name": "v3.10.0-exp.10", "prerelease": true, "body": "exp.10 notes" },
+            { "tag_name": "v3.10.0-exp.2", "prerelease": true }
+        ])))
+        .mount(&server)
+        .await;
+    let mut config = fixture.config(&format!("{}/repos", server.uri()));
+    config.version = "3.10.0-exp.2".to_owned();
+    config.build_type = "experimental".to_owned();
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+    let detail = service.update_detail(true).await.expect("detail");
+    assert_eq!(detail.latest_version, "3.10.0-exp.10");
+    assert_eq!(detail.notes.as_deref(), Some("exp.10 notes"));
+    assert!(detail.has_update);
+    assert!(detail.update_supported);
+    assert!(service.version().await.expect("version").has_update);
+}
+
+#[tokio::test]
+async fn experimental_update_should_install_same_channel_release() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    fixture
+        .mount_release(
+            &server,
+            "3.10.0-exp.3",
+            ArchiveKind::Safe,
+            ChecksumKind::Valid,
+        )
+        .await;
+    let mut config = fixture.config(&format!("{}/repos", server.uri()));
+    config.version = "3.10.0-exp.2".to_owned();
+    config.build_type = "experimental".to_owned();
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+    service
+        .perform_update(Some("3.10.0-exp.3".to_owned()))
+        .await
+        .expect("same-channel update");
+    assert_eq!(
+        fs::read(fixture.executable()).expect("binary"),
+        b"new-binary"
+    );
+    assert_eq!(
+        fs::read(fixture.web().join("index.html")).expect("web"),
+        b"new-web"
+    );
+    assert_eq!(
+        service
+            .update_status()
+            .await
+            .expect("status")
+            .operation
+            .status,
+        SystemOperationStatus::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn update_should_reject_cross_channel_targets_before_fetching_or_replacing_files() {
+    for (build_type, current, target) in [
+        ("experimental", "3.10.0-exp.2", "3.12.0"),
+        ("experimental", "3.10.0-exp.2", "3.10.0"),
+        ("experimental", "3.10.0-exp.2", "3.10.1-exp.3"),
+        ("experimental", "3.10.0-exp.2", "3.10.0-exp.1"),
+        ("release", "3.10.0-beta.2", "3.10.0-alpha.3"),
+        ("release", "3.10.0-rc.2", "3.11.0-rc.3"),
+        ("release", "3.10.0-rc.2", "3.11.0"),
+        ("release", "3.10.0", "3.10.0+new"),
+        ("release", "3.10.0", "3.9.0"),
+        ("experimental", "3.10.0-exp.2", "3.11.0-beta.1"),
+        ("experimental", "3.10.0-exp.2", "3.10.0-exp.other.3"),
+        ("release", "3.10.0", "3.11.0-exp.1"),
+        ("release", "3.10.0", "3.11.0-beta.1"),
+    ] {
+        let server = MockServer::start().await;
+        let fixture = Fixture::new();
+        let mut config = fixture.config(&format!("{}/repos", server.uri()));
+        config.version = current.to_owned();
+        config.build_type = build_type.to_owned();
+        let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+        let error = service
+            .perform_update(Some(target.to_owned()))
+            .await
+            .expect_err("cross-channel update");
+        assert_eq!(error.kind(), SystemOperationErrorKind::Conflict);
+        assert!(error.to_string().contains("跨通道"));
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+        assert_eq!(
+            fs::read(fixture.executable()).expect("binary"),
+            b"old-binary"
+        );
+        assert_eq!(
+            fs::read(fixture.web().join("index.html")).expect("web"),
+            b"old-web"
+        );
+        assert!(!fixture.state().exists());
+    }
+}
+
+#[tokio::test]
+async fn update_checks_should_follow_stage_promotion_and_experimental_isolation() {
+    let cases = [
+        ("3.12.0-alpha.1", "alpha", [true, true, true, true, false]),
+        ("3.12.0-beta.1", "beta", [false, true, true, true, false]),
+        ("3.12.0-rc.1", "rc", [false, false, true, true, false]),
+        ("3.12.0-exp.1", "exp", [false, false, false, false, true]),
+        ("3.11.0", "stable", [false, false, false, true, false]),
+    ];
+    for (current, channel, expected) in cases {
+        for (target, allowed) in [
+            "3.12.0-alpha.2",
+            "3.12.0-beta.2",
+            "3.12.0-rc.2",
+            "3.12.0",
+            "3.12.0-exp.2",
+        ]
+        .into_iter()
+        .zip(expected)
+        {
+            let server = MockServer::start().await;
+            let fixture = Fixture::new();
+            fixture.mount_release_once(&server, target).await;
+            let mut config = fixture.config(&format!("{}/repos", server.uri()));
+            config.version = current.to_owned();
+            let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+            let detail = service.update_detail(true).await.expect("detail");
+            assert_eq!(detail.has_update, allowed, "{current} -> {target}");
+            assert_eq!(
+                detail.latest_version,
+                if allowed { target } else { current }
+            );
+            assert_eq!(detail.notes.is_some(), allowed);
+            assert_eq!(detail.release_url.is_some(), allowed);
+            assert!(detail.warning.is_none());
+            let version = service.version().await.expect("version");
+            assert_eq!(version.has_update, allowed);
+            assert_eq!(version.update_channel, channel);
+        }
+    }
+}
+
+#[tokio::test]
+async fn update_checks_should_ignore_other_cycles_downgrades_and_build_metadata() {
+    for (current, target) in [
+        ("3.12.0-alpha.1", "3.13.0-alpha.2"),
+        ("3.12.0-beta.1", "3.12.1-rc.1"),
+        ("3.12.0-rc.1", "3.13.0"),
+        ("3.12.0-beta.2", "3.12.0-beta.1"),
+        ("3.12.0-exp.2", "3.12.0-exp.2"),
+        ("3.12.0", "3.12.0+new-build"),
+        ("3.12.0-beta.1+aaa", "3.12.0-beta.1+zzz"),
+        ("3.12.0", "3.11.0"),
+        ("3.12.0-alpha.1", "3.12.0-preview.2"),
+        ("3.12.0-alpha.1", "3.12.0-beta"),
+        ("3.12.0-alpha.1", "3.12.0-beta.0"),
+        ("3.12.0-alpha.1", "3.12.0-beta.2.extra"),
+    ] {
+        let server = MockServer::start().await;
+        let fixture = Fixture::new();
+        fixture.mount_release_once(&server, target).await;
+        let mut config = fixture.config(&format!("{}/repos", server.uri()));
+        config.version = current.to_owned();
+        let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+        let detail = service.update_detail(true).await.expect("detail");
+        assert!(!detail.has_update, "{current} -> {target}");
+        assert_eq!(detail.latest_version, current);
+        assert!(detail.notes.is_none());
+        assert!(detail.release_url.is_none());
+    }
+}
+
+#[tokio::test]
+async fn update_checks_should_fail_closed_for_unknown_current_channels() {
+    for (current, build_type) in [
+        ("3.12.0-preview.1", "release"),
+        ("3.12.0-alpha", "release"),
+        ("3.12.0-exp.0", "experimental"),
+        ("invalid", "release"),
+        ("3.12.0", "experimental"),
+        ("3.12.0-beta.1", "experimental"),
+    ] {
+        let server = MockServer::start().await;
+        let fixture = Fixture::new();
+        let mut config = fixture.config(&format!("{}/repos", server.uri()));
+        config.version = current.to_owned();
+        config.build_type = build_type.to_owned();
+        let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+        let detail = service.update_detail(true).await.expect("detail");
+        assert!(!detail.has_update);
+        assert!(!detail.update_supported);
+        assert!(detail.unsupported_reason.is_some());
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn stable_update_should_select_allowed_version_below_newer_major_releases() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new();
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "tag_name": "v4.0.0", "prerelease": false },
+            { "tag_name": "v3.13.0-beta.1", "prerelease": true },
+            { "tag_name": "v3.12.1", "prerelease": true },
+            { "tag_name": "v3.12.0", "prerelease": false, "draft": true },
+            { "tag_name": "v3.11.2", "prerelease": false },
+            { "tag_name": "v3.11.10", "prerelease": false, "body": "stable notes" }
+        ])))
+        .mount(&server)
+        .await;
+    let mut config = fixture.config(&format!("{}/repos", server.uri()));
+    config.version = "3.11.0".to_owned();
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+    let detail = service.update_detail(true).await.expect("detail");
+    assert!(detail.has_update);
+    assert_eq!(detail.latest_version, "3.11.10");
+    assert_eq!(detail.notes.as_deref(), Some("stable notes"));
+}
+
+#[tokio::test]
+async fn prerelease_updates_should_install_later_stages_and_stable_release() {
+    for (current, target) in [
+        ("3.12.0-alpha.1", "3.12.0-beta.1"),
+        ("3.12.0-beta.1", "3.12.0-rc.1"),
+        ("3.12.0-rc.1", "3.12.0"),
+        ("3.12.0-alpha.1", "3.12.0"),
+    ] {
+        let server = MockServer::start().await;
+        let fixture = Fixture::new();
+        fixture
+            .mount_release(&server, target, ArchiveKind::Safe, ChecksumKind::Valid)
+            .await;
+        let mut config = fixture.config(&format!("{}/repos", server.uri()));
+        config.version = current.to_owned();
+        let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+        assert!(
+            service
+                .update_detail(true)
+                .await
+                .expect("detail")
+                .has_update
+        );
+        service
+            .perform_update(Some(target.to_owned()))
+            .await
+            .expect("promoted update");
+        assert_eq!(
+            fs::read(fixture.executable()).expect("binary"),
+            b"new-binary"
+        );
+        assert_eq!(
+            fs::read(fixture.web().join("index.html")).expect("web"),
+            b"new-web"
+        );
+        assert_eq!(
+            service
+                .update_status()
+                .await
+                .expect("status")
+                .operation
+                .status,
+            SystemOperationStatus::Succeeded
+        );
+    }
 }
 
 #[tokio::test]
@@ -266,9 +624,11 @@ async fn update_detail_should_withhold_cross_major_release() {
         .update_detail(true)
         .await
         .expect("detail");
-    assert_eq!(detail.latest_version, CROSS_MAJOR_VERSION);
+    assert_eq!(detail.latest_version, "1.0.0");
     assert!(!detail.has_update);
-    assert!(detail.warning.is_some());
+    assert!(detail.warning.is_none());
+    assert!(detail.notes.is_none());
+    assert!(detail.release_url.is_none());
 }
 
 #[tokio::test]
@@ -746,7 +1106,6 @@ impl Fixture {
             build_time: "2026-07-19T00:00:00Z".to_owned(),
             deployment_mode: "binary".to_owned(),
             build_type: "release".to_owned(),
-            update_channel: "stable".to_owned(),
             update_repository: Some("owner/repository".to_owned()),
             github_api_base: api_base.to_owned(),
             executable_path: Some(self.executable()),
@@ -810,7 +1169,7 @@ impl Fixture {
     async fn mount_release_once(&self, server: &MockServer, version: &str) {
         let assets = Vec::new();
         Mock::given(method("GET"))
-            .and(path("/repos/owner/repository/releases/latest"))
+            .and(path("/repos/owner/repository/releases"))
             .respond_with(release_response(version, assets))
             .up_to_n_times(1)
             .mount(server)
@@ -902,7 +1261,7 @@ async fn mount_release_json(
     times: Option<u64>,
 ) {
     let mock = Mock::given(method("GET"))
-        .and(path("/repos/owner/repository/releases/latest"))
+        .and(path("/repos/owner/repository/releases"))
         .respond_with(release_response(version, assets));
     match times {
         Some(times) => mock.up_to_n_times(times).mount(server).await,
@@ -911,13 +1270,18 @@ async fn mount_release_json(
 }
 
 fn release_response(version: &str, assets: Vec<serde_json::Value>) -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    let prerelease = !semver::Version::parse(version)
+        .expect("version")
+        .pre
+        .is_empty();
+    let release = serde_json::json!({
         "tag_name": format!("v{version}"),
         "name": format!("Release {version}"),
         "body": "notes",
         "html_url": "https://github.com/owner/repository/releases/latest",
-        "prerelease": false,
+        "prerelease": prerelease,
         "published_at": "2026-07-19T00:00:00Z",
         "assets": assets,
-    }))
+    });
+    ResponseTemplate::new(200).set_body_json(serde_json::json!([release]))
 }

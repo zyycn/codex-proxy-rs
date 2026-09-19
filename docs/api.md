@@ -1367,6 +1367,12 @@ Key 已删除或未关联时为 `null`，不影响记录返回，不包含密钥
 | `POST` | `/api/admin/system/rollback` | 无 | 回滚到保留的上一版本 |
 | `POST` | `/api/admin/system/restart` | 无 | 请求进程重启 |
 
-在线更新仅在当前部署模式、Release 资产和进程重启能力都满足要求时可用，且只在同一 major 版本内
-提供：跨大版本目标会以 `40901` 冲突拒绝，需按发布说明重新部署。
+在线更新遵循[版本命名与升级规则](../deploy/README.md#版本命名与升级规则)。版本接口的
+`updateChannel` 由当前版本推导，取值为 `stable`、`alpha`、`beta`、`rc`、`exp`，无法识别时为 `unknown`。
+检查与执行使用同一规则，禁止的通道转换、跨实验线、跨大版本、降级或同版本重装均以 `40901` 拒绝。
+`hasUpdate=true` 仅表示当前构建支持在线更新，且存在允许的更高版本；`latestVersion`、`releaseUrl` 和
+`notes` 对应这个候选。没有候选或当前构建不支持时，`hasUpdate=false`、`latestVersion` 为当前版本，
+`releaseUrl` 和 `notes` 为空；不支持原因通过 `updateSupported=false`、`unsupportedReason` 返回。
+强制检查失败时通过 `warning` 返回错误，`hasUpdate=false`，不以旧缓存或“没有更新”掩盖失败。
+普通查询可复用 20 分钟内的结果。下载时仍会校验目标资产、校验和及归档，在线更新成功后按返回值重启。
 实例升级和仓库发版见 [部署文档](../deploy/README.md#镜像升级与源码构建)。
