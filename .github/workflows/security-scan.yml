@@ -40,16 +40,7 @@ jobs:
 
       - name: Run cargo audit
         working-directory: backend
-        shell: bash
-        run: |
-          # 临时接受此中危风险以保持 Codex 0.154.0 的 TLS 指纹；直接升级会新增 ML-DSA 签名算法。
-          # 仅豁免本条公告，2026-09-21 UTC 起恢复阻断；兼容升级验证完成后应提前删除豁免。
-          # https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc
-          audit_advisory_args=()
-          if [[ "$(date -u +%F)" < "2026-09-21" ]]; then
-            audit_advisory_args+=(--ignore RUSTSEC-2026-0285)
-          fi
-          cargo audit "${audit_advisory_args[@]}"
+        run: cargo audit
 
   frontend-security:
     runs-on: ubuntu-latest

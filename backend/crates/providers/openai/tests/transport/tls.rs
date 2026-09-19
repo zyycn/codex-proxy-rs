@@ -4,7 +4,7 @@ use bytes::{Buf as _, Bytes};
 
 use super::*;
 
-// 2026-09-14 从 Desktop 26.908.40834 / Core 0.154.0 抓取。
+// 2026-09-19 从 Desktop 26.915.31945 / Core 0.155.0-alpha.9.2 各重复抓取三次。
 // HTTP/native-tls 的扩展顺序固定；WebSocket/rustls 会随机化扩展顺序和临时密钥。
 #[derive(Debug, PartialEq, Eq)]
 struct ClientHello {
@@ -128,7 +128,9 @@ fn official_websocket_hello() -> ClientHello {
         ],
         extensions: vec![0, 5, 10, 11, 13, 23, 35, 43, 45, 51],
         groups: vec![4588, 29, 23, 24],
-        signature_algorithms: vec![1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025],
+        signature_algorithms: vec![
+            1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025, 2308, 2309, 2310,
+        ],
         key_shares: vec![(4588, 1216), (29, 32)],
         alpn: Vec::new(),
     }

@@ -26,7 +26,7 @@ hex = "0.4.3"
 # TLS 依赖按官方 Core 锁文件固定，包含用于约束传递依赖的直接声明。
 # hyper 受 workspace 的 SOCKS IPv6 修复补丁约束，保留补丁要求的兼容版本。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。
-aws-lc-rs = "=1.16.2"
+aws-lc-rs = "=1.18.1"
 hyper = { version = "=1.11.1", default-features = false }
 hyper-rustls = "=0.27.7"
 hyper-util = { version = "0.1.20", features = ["client-legacy", "http1", "tokio"] }
@@ -38,7 +38,7 @@ roxmltree = "0.21.1"
 semver = "1.0.27"
 # 与官方 rustls 路径一致：aws-lc 支持 P-521，优先提供 X25519MLKEM768。
 # reqwest 的 roots feature 仍会编译 ring；实际 provider 由 TLS 初始化显式选择。
-rustls = { version = "=0.23.36", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std", "tls12"] }
+rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std", "tls12"] }
 rustls-native-certs = "=0.8.3"
 rustls-pki-types = "=1.14.0"
 secrecy = "0.10.3"
