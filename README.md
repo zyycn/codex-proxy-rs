@@ -21,7 +21,7 @@
 
 ## 快速预览
 
-无需部署，打开 [快速预览服务](https://codex-proxy-rs.ainz.cc) 即可体验管理端的系统概览、账号分组、代理管理与用量统计
+管理端提供在线预览，不用自己部署：
 
 | 登录信息 | 默认值 |
 | --- | --- |
@@ -30,13 +30,13 @@
 | 账号 | `admin@cpr.local` |
 | 密码 | `039c18de2aeac46d23ead7766bb07bbbe3747233c66a128e` |
 
-预览服务运行已发布版本，展示的账号、代理与使用记录均为模拟数据，每天北京时间 `00:00` 自动生成当天数据。
-这是公开共享的功能预览环境，不提供真实模型调用；请勿导入真实账号、密钥或其他敏感信息
+预览服务运行的是已发布版本，账号、代理与使用记录均为模拟数据，每天北京时间 `00:00` 自动生成当天数据。
+预览环境公开共享，不提供真实模型调用；请勿导入真实账号、密钥或其他敏感信息
 
 ## 快速开始
 
-使用 Docker Compose 部署版本固定的发布镜像，同时启动 PostgreSQL 和 Redis。
-以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL。已有部署请先看
+用 Docker Compose 部署版本固定的发布镜像，PostgreSQL 和 Redis 一并启动。
+命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL。已有部署先看
 [升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置
 
 ### 一键安装
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/in
 ```
 
 [安装脚本](deploy/install.sh) 默认安装到当前目录下的 `codex-proxy-rs/`，下载同一正式 Release 的部署文件，
-自动生成密码、设置目录权限并启动服务。完成后会显示访问地址和管理员密码，请保存密码，再按下方步骤
+自动生成密码、设置目录权限并启动服务。完成后会显示访问地址和管理员密码，请保存，再按下方步骤
 [添加账号与客户端密钥](#添加账号与客户端密钥)
 
 可在执行 `bash install.sh` 时传入环境变量：
@@ -76,7 +76,7 @@ INSTALL_DIR="$HOME/services/codex-proxy-rs" bash install.sh
 
 部署完成后，打开 `http://127.0.0.1:8080`，使用 `admin@cpr.local` 和管理员密码登录。
 API Key 持有者可在同一登录页切换登录身份，进入 `/key-usage` 查看自己的用量、趋势、请求日志、额度与健康时间线；不能访问管理员页面。
-页面右上角的「密钥配置」支持复制 Codex 配置文件和导入 CCSwitch，导入时同时启用当前 Key 的日／周额度查询，默认刷新间隔为 30 分钟
+页面右上角的「密钥配置」可以复制 Codex 配置文件或导入 CCSwitch，导入时同时启用当前 Key 的日／周额度查询，默认刷新间隔为 30 分钟
 
 默认地址只能在服务器本机访问，从其他设备使用时，需要配置
 [HTTPS 反向代理](deploy/README.md#公网访问)
@@ -119,13 +119,13 @@ curl http://127.0.0.1:8080/v1/models \
 
 ## 社区
 
-欢迎到 [Discussions 讨论区](https://github.com/zyycn/codex-proxy-rs/discussions)交流：
+交流请到 [Discussions 讨论区](https://github.com/zyycn/codex-proxy-rs/discussions)，按内容选择分类：
 [使用问答](https://github.com/zyycn/codex-proxy-rs/discussions/categories/使用问答)、
 [想法讨论](https://github.com/zyycn/codex-proxy-rs/discussions/categories/想法讨论)、
 [实验反馈](https://github.com/zyycn/codex-proxy-rs/discussions/categories/实验反馈)与
 [经验分享](https://github.com/zyycn/codex-proxy-rs/discussions/categories/经验分享)
 
-感谢 [LINUX DO](https://linux.do) 社区提供开放、友善的技术交流平台
+感谢 [LINUX DO](https://linux.do) 社区
 
 ## 许可证
 
