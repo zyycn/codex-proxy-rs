@@ -836,6 +836,7 @@ impl SettingsStore for FixtureSettingsStore {
             account_auto_freeze_probe_enabled: true,
             account_auto_freeze_probe_model: None,
             account_auto_freeze_adaptive_concurrency: true,
+            block_degraded_turn_state: false,
         })
     }
 
@@ -960,6 +961,7 @@ fn total_record(
         capacity_total_slots: None,
         client_ip: None,
         user_agent: None,
+        client_turn_state_bytes: None,
         reasoning_effort: None,
         reasoning_preset: None,
         subagent_kind: None,

@@ -522,6 +522,8 @@ pub struct UsageListRecord {
     pub capacity_total_slots: Option<u64>,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
+    /// 客户端请求头 `x-codex-turn-state` 值的字节数；缺头为 `NULL`。
+    pub client_turn_state_bytes: Option<i64>,
     pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub subagent_kind: Option<String>,
@@ -594,6 +596,8 @@ pub struct UsageRecord {
     pub capacity_total_slots: Option<u64>,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
+    /// 客户端请求头 `x-codex-turn-state` 值的字节数；缺头为 `NULL`。
+    pub client_turn_state_bytes: Option<i64>,
     pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub request_kind: Option<String>,

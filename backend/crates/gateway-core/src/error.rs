@@ -38,6 +38,8 @@ pub enum ProviderErrorKind {
     ConcurrencyQueueTimeout,
     /// Provider 已确认当前请求无法选出可用账号。
     NoEligibleAccount,
+    /// 上游返回了应阻断、不得交给客户端的降智 turn-state。
+    PolicyDenied,
     /// Provider 的账号存储、租约协调或本地凭据数据不可用。
     ProviderInfrastructureUnavailable,
     /// 请求超时。
@@ -72,6 +74,7 @@ impl ProviderErrorKind {
             Self::ConcurrencyQueueFull => "concurrency_queue_full",
             Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::NoEligibleAccount => "no_eligible_account",
+            Self::PolicyDenied => "policy_denied",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
             Self::Timeout => "timeout",
             Self::Transport => "transport",
@@ -1098,6 +1101,10 @@ impl GatewayError {
             ProviderErrorKind::NoEligibleAccount => Self::new(
                 GatewayErrorKind::NoAvailableProvider,
                 "no upstream provider is currently available for this request",
+            ),
+            ProviderErrorKind::PolicyDenied => Self::new(
+                GatewayErrorKind::PolicyDenied,
+                "This conversation triggered upstream degraded-intelligence risk control and was blocked.",
             ),
             ProviderErrorKind::ProviderInfrastructureUnavailable => Self::new(
                 GatewayErrorKind::ProviderInfrastructureUnavailable,

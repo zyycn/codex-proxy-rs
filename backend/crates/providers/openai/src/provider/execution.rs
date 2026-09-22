@@ -680,6 +680,16 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             Err(failure.error)?;
             return;
         }
+        // 312 在上游响应头里，先于正文。这里拒绝后不写会话、不交出 observation。
+        if block_degraded_upstream_turn_state(
+            &context,
+            response_turn_state(response.turn_state.as_deref(), &response.response_metadata.client_headers),
+        ) {
+            let failure = MappedProviderFailure::plain(degraded_turn_state_blocked());
+            apply_failure(&failure_context, &active_account, &failure).await;
+            Err(failure.error)?;
+            return;
+        }
         if let Some(capture) = session_capture.as_mut() {
             capture.continuation_scope = Some(if capture.response_store {
                 OpenAiContinuationScope::Persisted
@@ -810,8 +820,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &mut session_capture,
                         &mut observation_state,
                         &mut decoder,
+                        should_block_degraded_turn_state(&context),
                     )
-                    .await;
+                    .await
+                    .ok()
+                    .flatten();
                     let observation_event = if rate_limits_changed || metadata_merge.is_some() {
                         observation_state.observation(None).map(ProviderEvent::observation)
                     } else {
@@ -884,9 +897,18 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 &mut session_capture,
                 &mut observation_state,
                 &mut decoder,
+                should_block_degraded_turn_state(&context),
             )
             .await;
-            let metadata_changed = metadata_merge.unwrap_or(false);
+            let metadata_changed = match metadata_merge {
+                Ok(changed) => changed.unwrap_or(false),
+                Err(error) => {
+                    let failure = MappedProviderFailure::plain(error);
+                    apply_failure(&failure_context, &active_account, &failure).await;
+                    Err(failure.error)?;
+                    return;
+                }
+            };
             pre_commit_events.observe_chunk(chunk_len);
             let response_model_changed = observation_state
                 .observe_upstream_response_model(decoder.response_model());
@@ -1056,14 +1078,23 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             apply_failure(&failure_context, &active_account, failure)
             .await;
         }
-        let metadata_changed = merge_response_metadata_updates(
+        let metadata_changed = match merge_response_metadata_updates(
             response_metadata_updates.as_ref(),
             &mut session_capture,
             &mut observation_state,
             &mut decoder,
+            should_block_degraded_turn_state(&context),
         )
         .await
-        .unwrap_or(false);
+        {
+            Ok(changed) => changed.unwrap_or(false),
+            Err(error) => {
+                let failure = MappedProviderFailure::plain(error);
+                apply_failure(&failure_context, &active_account, &failure).await;
+                Err(failure.error)?;
+                return;
+            }
+        };
         attach_openai_session_update(&mut events, &mut session_capture);
         let completed = events
             .iter()
@@ -1134,17 +1165,24 @@ async fn merge_response_metadata_updates(
     session_capture: &mut Option<OpenAiSessionCapture>,
     observation_state: &mut OpenAiResponseObservationState,
     decoder: &mut CodexCanonicalDecoder,
-) -> Option<bool> {
-    let updates = updates?;
+    block_degraded: bool,
+) -> Result<Option<bool>, ProviderError> {
+    let Some(updates) = updates else {
+        return Ok(None);
+    };
     let mut pending = updates.lock().await;
     let turn_state = pending.turn_state.take();
     let reported_model = pending.reported_model.clone();
     drop(pending);
     if turn_state.is_none() && reported_model.is_none() {
-        return None;
+        return Ok(None);
     }
     let mut changed = false;
     if let Some(turn_state) = turn_state {
+        // WebSocket 的 312 出现在 metadata 帧。先拒绝，避免把头写进要交给客户端的 observation。
+        if block_degraded && is_degraded_turn_state(&turn_state) {
+            return Err(degraded_turn_state_blocked());
+        }
         if let Some(capture) = session_capture.as_mut() {
             capture.turn_state = Some(turn_state.clone());
         }
@@ -1154,5 +1192,36 @@ async fn merge_response_metadata_updates(
         decoder.observe_reported_model(&model);
         changed |= observation_state.observe_upstream_response_model(decoder.response_model());
     }
-    Some(changed)
+    Ok(Some(changed))
+}
+
+const DEGRADED_TURN_STATE_BYTES: usize = 312;
+
+fn is_degraded_turn_state(value: &str) -> bool {
+    value.len() == DEGRADED_TURN_STATE_BYTES
+}
+
+fn should_block_degraded_turn_state(context: &AttemptContext) -> bool {
+    context.block_degraded_turn_state() && !context.is_diagnostic_required_account()
+}
+
+fn block_degraded_upstream_turn_state(context: &AttemptContext, turn_state: Option<&str>) -> bool {
+    should_block_degraded_turn_state(context) && turn_state.is_some_and(is_degraded_turn_state)
+}
+
+fn response_turn_state<'a>(
+    turn_state: Option<&'a str>,
+    headers: &'a [(String, bytes::Bytes)],
+) -> Option<&'a str> {
+    turn_state.or_else(|| {
+        headers.iter().find_map(|(name, value)| {
+            name.eq_ignore_ascii_case("x-codex-turn-state")
+                .then(|| std::str::from_utf8(value).ok())
+                .flatten()
+        })
+    })
+}
+
+fn degraded_turn_state_blocked() -> ProviderError {
+    provider_error(ProviderErrorKind::PolicyDenied, UpstreamSendState::Sent)
 }

@@ -104,6 +104,8 @@ export interface UsageListRecord {
   createdAtDisplay: string
   clientIp: string | null
   userAgent: string | null
+  /** 客户端请求头 x-codex-turn-state 的字节数；未携带该头为 null。 */
+  clientTurnStateBytes: number | null
 }
 
 export interface UsageRecord {
@@ -152,6 +154,8 @@ export interface UsageRecord {
   createdAtDisplay: string
   clientIp: string | null
   userAgent: string | null
+  /** 客户端请求头 x-codex-turn-state 的字节数；未携带该头为 null。 */
+  clientTurnStateBytes: number | null
   reasoningEffort: string | null
   reasoningPreset: string | null
   compact: boolean | null

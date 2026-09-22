@@ -60,6 +60,8 @@ export interface UsageViewModel {
   createdAtDisplay: string
   clientIp: string | null
   userAgent: string | null
+  /** 客户端请求头 x-codex-turn-state 的字节数；未携带该头为 null。 */
+  clientTurnStateBytes: number | null
   reasoningEffort: string | null
   reasoningPreset: string | null
   compact: boolean
@@ -128,6 +130,7 @@ export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel 
     createdAtDisplay: record.createdAtDisplay,
     clientIp: record.clientIp,
     userAgent: record.userAgent,
+    clientTurnStateBytes: record.clientTurnStateBytes,
     reasoningEffort: record.reasoningEffort,
     reasoningPreset: record.reasoningPreset,
     compact: record.compact === true,
@@ -186,6 +189,32 @@ export function usageClientIp(record: { clientIp?: string | null }) {
 
 export function usageUserAgent(record: { userAgent?: string | null }) {
   return record.userAgent || '—'
+}
+
+/** 展示客户端 turn state 字节数：未携带为 —。 */
+export function usageClientTurnStateBytes(record: { clientTurnStateBytes?: number | null }) {
+  const bytes = record.clientTurnStateBytes
+  if (bytes === null || bytes === undefined)
+    return '—'
+  if (bytes < 1024)
+    return `${bytes} B`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+/** 列表「智商」列：直接显示字节数字。 */
+export function usageIqText(bytes?: number | null) {
+  if (bytes === null || bytes === undefined)
+    return '—'
+  return String(bytes)
+}
+
+/** 292 绿色、312 红色，样式与接入列徽章相同。 */
+export function usageIqClass(bytes?: number | null) {
+  if (bytes === 292)
+    return 'bg-cp-green-container text-cp-green-on-container'
+  if (bytes === 312)
+    return 'bg-cp-red-container text-cp-red-on-container'
+  return 'bg-cp-fill-tertiary text-cp-text-secondary'
 }
 
 export function usageReasoningEffort(record: UsageCommonRecord) {

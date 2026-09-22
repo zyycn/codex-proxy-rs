@@ -538,6 +538,7 @@ impl ProviderCandidate {
 pub struct RoutingPlan {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
+    block_degraded_turn_state: bool,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -561,6 +562,11 @@ impl RoutingPlan {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn block_degraded_turn_state(&self) -> bool {
+        self.block_degraded_turn_state
     }
 
     #[must_use]

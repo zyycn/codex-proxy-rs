@@ -37,6 +37,7 @@ pub struct SnapshotRuntimeSettings {
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
+    pub block_degraded_turn_state: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,7 +173,8 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.max_waiting_per_key,
                 data.settings.max_waiting_per_account,
                 data.settings.concurrency_wait_timeout_seconds,
-            );
+            )
+            .with_block_degraded_turn_state(data.settings.block_degraded_turn_state);
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -266,13 +268,14 @@ struct SnapshotSettingsRow {
     responses_max_decompressed_body_bytes: i64,
     provider_request_profiles_json:
         sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
+    block_degraded_turn_state: bool,
 }
 
 async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json, block_degraded_turn_state from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -309,6 +312,7 @@ async fn load_settings(
             max_waiting_per_key: to_u32(row.max_waiting_per_key)?,
             max_waiting_per_account: to_u32(row.max_waiting_per_account)?,
             concurrency_wait_timeout_seconds: to_u32(row.concurrency_wait_timeout_seconds)?,
+            block_degraded_turn_state: row.block_degraded_turn_state,
         },
     ))
 }

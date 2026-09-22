@@ -96,6 +96,8 @@ pub struct NewModelRequest {
     pub requested_model_id: Option<String>,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
+    /// 客户端请求头 `x-codex-turn-state` 值的字节数；缺头为 `NULL`。
+    pub client_turn_state_bytes: Option<i64>,
     pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub request_kind: Option<String>,
@@ -454,11 +456,11 @@ impl ModelRequestRepository for PgExecutionStore {
                reasoning_preset, request_kind, subagent_kind, compact,
                image_generation_requested, admission_decision_ms, started_at, deadline_at,
                continuation_affinity_hash, continuation_previous_response_id_hash,
-               continuation_requested
+               continuation_requested, client_turn_state_bytes
              ) values (
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
-               $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+               $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
              )",
         )
         .bind(request.id)
@@ -490,6 +492,10 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.continuation.affinity_hash)
         .bind(request.continuation.previous_response_id_hash)
         .bind(request.continuation.requested)
+        .bind(optional_i32(
+            request.client_turn_state_bytes,
+            "client_turn_state_bytes",
+        )?)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert model request"))?;
@@ -521,14 +527,14 @@ impl ModelRequestRepository for PgExecutionStore {
                attempt_count, upstream_send_state, account_selection_wait_ms,
                capacity_used_slots, capacity_total_slots
                , continuation_affinity_hash, continuation_previous_response_id_hash,
-               continuation_requested
+               continuation_requested, client_turn_state_bytes
              ) select
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
                $16, $17, $18, $19, $20, $21, $22, $23,
                $24, $25, $26,
                account.name, account.email, account.authentication_kind,
-               $27, $28, $29, 1, 'not_sent', $30, $31, $32, $33, $34, $35
+               $27, $28, $29, 1, 'not_sent', $30, $31, $32, $33, $34, $35, $36
              from (values (true)) as seed(present)
              left join provider_accounts account on account.id = $25",
         )
@@ -579,6 +585,10 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.continuation.affinity_hash)
         .bind(request.continuation.previous_response_id_hash)
         .bind(request.continuation.requested)
+        .bind(optional_i32(
+            request.client_turn_state_bytes,
+            "client_turn_state_bytes",
+        )?)
         .execute(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("insert model request with first attempt"))?;
@@ -1380,6 +1390,7 @@ fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {
             .map(|model| model.as_str().to_owned()),
         client_ip: request.client_ip.map(|address| address.to_string()),
         user_agent: request.user_agent,
+        client_turn_state_bytes: request.client_turn_state_bytes,
         reasoning_effort: request.reasoning_effort,
         reasoning_preset: request.reasoning_preset,
         request_kind: request.request_kind,
@@ -1465,6 +1476,13 @@ fn attempt_start_row(attempt: CoreAttemptRecord) -> ModelRequestAttemptStart {
 
 fn optional_i64(value: Option<u64>, field: &'static str) -> StoreResult<Option<i64>> {
     value.map(|value| to_i64(value, field)).transpose()
+}
+
+/// `client_turn_state_bytes` 列为 int4；写入前收窄并拒绝超界值。
+fn optional_i32(value: Option<i64>, field: &'static str) -> StoreResult<Option<i32>> {
+    value
+        .map(|value| i32::try_from(value).map_err(|_| invalid(field)))
+        .transpose()
 }
 
 fn validate_status_code(status: Option<u16>) -> StoreResult<()> {

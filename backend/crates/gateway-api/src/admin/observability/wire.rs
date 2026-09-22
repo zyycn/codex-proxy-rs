@@ -115,6 +115,7 @@ pub struct UsageListRecordView {
     pub created_at_display: String,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
+    pub client_turn_state_bytes: Option<i64>,
 }
 
 /// 单条逻辑请求详情展示。
@@ -173,6 +174,7 @@ pub struct UsageRecordView {
     pub created_at_display: String,
     pub client_ip: Option<String>,
     pub user_agent: Option<String>,
+    pub client_turn_state_bytes: Option<i64>,
     pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub compact: Option<bool>,

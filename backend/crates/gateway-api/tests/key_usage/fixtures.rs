@@ -139,6 +139,7 @@ fn usage_record() -> UsageListRecord {
         capacity_total_slots: Some(50),
         client_ip: Some("192.0.2.42".to_owned()),
         user_agent: Some("key-usage-test/1.0".to_owned()),
+        client_turn_state_bytes: None,
         reasoning_effort: Some("xhigh".to_owned()),
         reasoning_preset: Some("private-sentinel".to_owned()),
         subagent_kind: Some("private-sentinel".to_owned()),

@@ -60,6 +60,7 @@ pub struct RuntimeSettingsView {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub block_degraded_turn_state: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -95,6 +96,7 @@ pub struct UpdateRuntimeSettingsRequest {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub block_degraded_turn_state: bool,
 }
 
 impl UpdateRuntimeSettingsRequest {
@@ -220,6 +222,7 @@ impl UpdateRuntimeSettingsRequest {
             account_auto_freeze_probe_enabled: self.account_auto_freeze_probe_enabled,
             account_auto_freeze_probe_model: self.account_auto_freeze_probe_model,
             account_auto_freeze_adaptive_concurrency: self.account_auto_freeze_adaptive_concurrency,
+            block_degraded_turn_state: self.block_degraded_turn_state,
         })
     }
 }
@@ -258,6 +261,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             account_auto_freeze_probe_model: settings.account_auto_freeze_probe_model,
             account_auto_freeze_adaptive_concurrency: settings
                 .account_auto_freeze_adaptive_concurrency,
+            block_degraded_turn_state: settings.block_degraded_turn_state,
             updated_at: settings.updated_at,
         }
     }

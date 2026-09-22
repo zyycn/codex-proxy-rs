@@ -209,6 +209,10 @@ pub struct ResponsesRequestMetadata {
     continuation: ContinuationIntent,
     client_ip: Option<IpAddr>,
     user_agent: Option<String>,
+    /// 客户端请求头 `x-codex-turn-state` 值的字节数（`String::len`）；缺头为 `None`，
+    /// 与 0 字节区分。只统计原始请求头载体；body `turnState` 与 WS client_metadata
+    /// 载体不计（真实 Codex 客户端走 HTTP 头，覆盖主要场景）。
+    client_turn_state_bytes: Option<i64>,
 }
 
 impl ResponsesRequestMetadata {
@@ -247,6 +251,12 @@ impl ResponsesRequestMetadata {
     pub fn user_agent(&self) -> Option<&str> {
         self.user_agent.as_deref()
     }
+
+    /// 返回客户端请求头 `x-codex-turn-state` 值的字节数；`None` 表示客户端未携带该头。
+    #[must_use]
+    pub const fn client_turn_state_bytes(&self) -> Option<i64> {
+        self.client_turn_state_bytes
+    }
 }
 
 impl fmt::Debug for ResponsesRequestMetadata {
@@ -259,6 +269,10 @@ impl fmt::Debug for ResponsesRequestMetadata {
             .field("continuation", &self.continuation)
             .field("client_ip", &self.client_ip)
             .field("has_user_agent", &self.user_agent.is_some())
+            .field(
+                "has_client_turn_state",
+                &self.client_turn_state_bytes.is_some(),
+            )
             .finish()
     }
 }
@@ -482,6 +496,13 @@ pub(super) fn decode_request_object(
             continuation,
             client_ip: None,
             user_agent: None,
+            // 只统计原始请求头载体；body `turnState` 与 WS client_metadata 载体不计
+            // （真实 Codex 客户端走 HTTP 头，覆盖主要场景）。WS 帧复用连接级
+            // `OpenAiRequestHeaders`，此处同样覆盖 WebSocket 接入。
+            client_turn_state_bytes: request_headers
+                .turn_state
+                .as_ref()
+                .map(|value| value.len() as i64),
         },
     })
 }

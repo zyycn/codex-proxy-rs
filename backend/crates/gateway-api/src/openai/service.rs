@@ -103,6 +103,7 @@ impl OpenAiService {
                     stream: metadata.stream(),
                     client_ip: metadata.client_ip(),
                     user_agent: metadata.user_agent().map(str::to_owned),
+                    client_turn_state_bytes: metadata.client_turn_state_bytes(),
                     previous_response_id,
                 },
             })
@@ -135,6 +136,7 @@ impl OpenAiService {
                     stream: false,
                     client_ip,
                     user_agent,
+                    client_turn_state_bytes: None,
                     previous_response_id: None,
                 },
             })

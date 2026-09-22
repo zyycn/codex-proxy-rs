@@ -317,6 +317,7 @@ pub struct RequestAttemptContext {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     disable_fast: bool,
+    block_degraded_turn_state: bool,
     request_location: Option<crate::account::RequestLocation>,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
@@ -347,6 +348,13 @@ impl RequestAttemptContext {
         self
     }
 
+    /// 打开后，上游返回 312 字节 turn-state 时不把该响应交给客户端。
+    #[must_use]
+    pub const fn with_block_degraded_turn_state(mut self, enabled: bool) -> Self {
+        self.block_degraded_turn_state = enabled;
+        self
+    }
+
     #[must_use]
     pub fn with_request_location(
         mut self,
@@ -364,6 +372,7 @@ impl RequestAttemptContext {
             request_profile: None,
             pricing: Arc::default(),
             disable_fast: false,
+            block_degraded_turn_state: false,
             request_location: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -440,6 +449,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.request.disable_fast
+    }
+
+    #[must_use]
+    pub const fn block_degraded_turn_state(&self) -> bool {
+        self.request.block_degraded_turn_state
     }
 
     #[must_use]
@@ -607,6 +621,7 @@ pub struct NewModelRequest {
     pub requested_model: Option<PublicModelId>,
     pub client_ip: Option<IpAddr>,
     pub user_agent: Option<String>,
+    pub client_turn_state_bytes: Option<i64>,
     pub reasoning_effort: Option<String>,
     pub reasoning_preset: Option<String>,
     pub request_kind: Option<String>,

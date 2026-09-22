@@ -983,6 +983,7 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
         routing_group_names_snapshot: serde_json::json!([]),
         client_ip: None,
         user_agent: None,
+        client_turn_state_bytes: None,
         reasoning_effort: None,
         reasoning_preset: None,
         request_kind: None,

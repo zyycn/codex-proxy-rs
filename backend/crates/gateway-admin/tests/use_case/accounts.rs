@@ -1024,6 +1024,7 @@ impl SettingsStore for StaticSettingsStore {
             account_auto_freeze_probe_enabled: true,
             account_auto_freeze_probe_model: None,
             account_auto_freeze_adaptive_concurrency: true,
+            block_degraded_turn_state: false,
             updated_at: Utc::now(),
         })
     }

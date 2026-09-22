@@ -1063,6 +1063,7 @@ accountAutoFreezeDurationSeconds
 accountAutoFreezeProbeEnabled
 accountAutoFreezeProbeModel
 accountAutoFreezeAdaptiveConcurrency
+blockDegradedTurnState
 ```
 
 `requestLocationEnabled` 是必填布尔值，默认 `false`：关闭时不覆盖客户端原有位置和时区；开启时使用已保存的
@@ -1091,6 +1092,9 @@ accountAutoFreezeAdaptiveConcurrency
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+`blockDegradedTurnState` 是必填布尔值，默认 `false`。打开后，上游响应的 `x-codex-turn-state` 恰好 312 字节时，不把该响应发给客户端，改为 `403` / `policy_denied`。
+292、其它长度和未返回该头的响应仍照常交付。关闭时上游返回的 312 仍转发给客户端。管理端连接测试不经过该门。保存后通过现有配置发布机制对新请求生效。
 
 ### 模型定价
 
@@ -1348,6 +1352,10 @@ OpenAI 优先采用服务端 `openai-model` / `x-openai-model` 报告（流内�
 没有报告时采用正文明确声明的 `response.model`；xAI 采用原始正文声明。正文模型以终态优先，
 缺少终态声明时保留首次声明。这些值仅表示上游报告，不作为模型真实性证明，也不参与路由、
 聚合或本地计价模型选择。历史数据只回填此前已保存的 OpenAI 模型报告，其余保留未知。
+
+请求记录列表与详情返回 `clientTurnStateBytes`：客户端请求头 `x-codex-turn-state` 值的字节数；
+未携带该头时为 `null`（区别于 0 字节）。只统计原始请求头载体，body `turnState` 与 WebSocket
+client_metadata 载体不计入。
 
 请求记录列表的 `search` 使用字面量前缀匹配，支持请求 ID、Client Key ID / 名称、
 账号 ID、账号邮箱与名称、请求 / 上游模型 ID、上游请求 ID。密钥名称不区分大小写，其他字段区分大小写。

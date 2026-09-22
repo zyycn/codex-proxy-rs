@@ -818,6 +818,7 @@ where
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
                 .with_request_profile(self.request_profiles.get(candidate.provider()).cloned())
                 .with_disable_fast(self.plan.disable_fast())
+                .with_block_degraded_turn_state(self.plan.block_degraded_turn_state())
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
@@ -917,15 +918,17 @@ where
                         self.finish_provider_error(&last_failure).await?;
                         return Err(provider_engine_error(last_failure));
                     }
-                    if !(matches!(
-                        error.kind(),
-                        ProviderErrorKind::AccountCapacityUnavailable
-                            | ProviderErrorKind::NoEligibleAccount
-                            | ProviderErrorKind::QuotaExhausted
-                            | ProviderErrorKind::ProviderInfrastructureUnavailable
-                            | ProviderErrorKind::ConcurrencyQueueFull
-                            | ProviderErrorKind::ConcurrencyQueueTimeout
-                    ) && error.send_state() == UpstreamSendState::NotSent)
+                    // 降智阻断是交付策略，上游调用本身成功，不计入 Provider 熔断。
+                    if error.kind() != ProviderErrorKind::PolicyDenied
+                        && !(matches!(
+                            error.kind(),
+                            ProviderErrorKind::AccountCapacityUnavailable
+                                | ProviderErrorKind::NoEligibleAccount
+                                | ProviderErrorKind::QuotaExhausted
+                                | ProviderErrorKind::ProviderInfrastructureUnavailable
+                                | ProviderErrorKind::ConcurrencyQueueFull
+                                | ProviderErrorKind::ConcurrencyQueueTimeout
+                        ) && error.send_state() == UpstreamSendState::NotSent)
                     {
                         self.record_provider_failure(candidate.provider().clone(), error.kind());
                     }

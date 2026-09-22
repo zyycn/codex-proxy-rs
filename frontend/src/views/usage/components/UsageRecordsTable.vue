@@ -12,6 +12,7 @@ import {
 } from '../utils/records'
 import UsageBillingCell from './UsageBillingCell.vue'
 import UsageClientIpCell from './UsageClientIpCell.vue'
+import UsageIqBadge from './UsageIqBadge.vue'
 import UsageLatencyCell from './UsageLatencyCell.vue'
 import UsageModelCell from './UsageModelCell.vue'
 import UsageReasoningEffortCell from './UsageReasoningEffortCell.vue'
@@ -84,6 +85,10 @@ withDefaults(
 
     <template #model="{ row }">
       <UsageModelCell :record="row" />
+    </template>
+
+    <template #clientTurnStateBytes="{ row }">
+      <UsageIqBadge :bytes="row.clientTurnStateBytes" />
     </template>
 
     <template #reasoningEffort="{ row }">

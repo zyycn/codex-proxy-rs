@@ -547,6 +547,7 @@ impl SettingsStore for MemorySettingsStore {
             account_auto_freeze_probe_enabled: true,
             account_auto_freeze_probe_model: None,
             account_auto_freeze_adaptive_concurrency: true,
+            block_degraded_turn_state: command.block_degraded_turn_state,
             updated_at: Utc::now(),
         };
         *settings = updated.clone();
@@ -1467,6 +1468,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         account_auto_freeze_probe_enabled: true,
         account_auto_freeze_probe_model: None,
         account_auto_freeze_adaptive_concurrency: true,
+        block_degraded_turn_state: false,
         updated_at: Utc::now(),
     }
 }

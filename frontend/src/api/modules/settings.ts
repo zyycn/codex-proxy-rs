@@ -33,6 +33,7 @@ export interface RuntimeSettings {
   accountAutoFreezeProbeEnabled: boolean
   accountAutoFreezeProbeModel: string | null
   accountAutoFreezeAdaptiveConcurrency: boolean
+  blockDegradedTurnState: boolean
   updatedAt: string
 }
 

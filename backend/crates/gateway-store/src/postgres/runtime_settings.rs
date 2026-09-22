@@ -47,6 +47,8 @@ pub struct RuntimeSettings {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    /// 上游返回恰好 312 字节 `x-codex-turn-state` 时不把该响应发给客户端。默认关闭。
+    pub block_degraded_turn_state: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -103,6 +105,7 @@ impl fmt::Debug for RuntimeSettings {
                 "account_auto_freeze_adaptive_concurrency",
                 &self.account_auto_freeze_adaptive_concurrency,
             )
+            .field("block_degraded_turn_state", &self.block_degraded_turn_state)
             .field("updated_at", &self.updated_at)
             .finish()
     }
@@ -137,6 +140,7 @@ pub struct RuntimeSettingsUpdate {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub block_degraded_turn_state: bool,
 }
 
 impl fmt::Debug for RuntimeSettingsUpdate {
@@ -240,7 +244,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency
+                    account_auto_freeze_adaptive_concurrency, block_degraded_turn_state
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -326,7 +330,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency
+                account_auto_freeze_adaptive_concurrency, block_degraded_turn_state
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -377,6 +381,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      provider_request_profiles_json = provider_request_profiles_json
                          || case when $26::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $26::jsonb) end
                          || case when $27::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $27::jsonb) end,
+                     block_degraded_turn_state = $28,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -420,6 +425,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     )
     .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(update.block_degraded_turn_state)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -499,6 +505,7 @@ struct RuntimeSettingsRow {
     account_auto_freeze_probe_enabled: bool,
     account_auto_freeze_probe_model: Option<String>,
     account_auto_freeze_adaptive_concurrency: bool,
+    block_degraded_turn_state: bool,
 }
 
 fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
@@ -544,6 +551,7 @@ fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<Runtime
         account_auto_freeze_probe_enabled: row.account_auto_freeze_probe_enabled,
         account_auto_freeze_probe_model: row.account_auto_freeze_probe_model,
         account_auto_freeze_adaptive_concurrency: row.account_auto_freeze_adaptive_concurrency,
+        block_degraded_turn_state: row.block_degraded_turn_state,
     })
 }
 

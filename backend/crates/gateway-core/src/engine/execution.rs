@@ -75,6 +75,7 @@ pub struct ExecutionRequestMetadata {
     pub stream: bool,
     pub client_ip: Option<IpAddr>,
     pub user_agent: Option<String>,
+    pub client_turn_state_bytes: Option<i64>,
     pub previous_response_id: Option<PreviousResponseId>,
 }
 
@@ -564,6 +565,7 @@ impl DefaultExecutionService {
             requested_model: target.into_public_model().or(observation.requested_model),
             client_ip: metadata.client_ip,
             user_agent: metadata.user_agent,
+            client_turn_state_bytes: metadata.client_turn_state_bytes,
             reasoning_effort: observation.reasoning_effort,
             reasoning_preset: observation.reasoning_preset,
             request_kind: observation.request_kind,
@@ -799,6 +801,7 @@ impl DefaultExecutionService {
             requested_model: Some(public_model),
             client_ip: None,
             user_agent: None,
+            client_turn_state_bytes: None,
             reasoning_effort: None,
             reasoning_preset: None,
             request_kind: Some("account_connection_test".to_owned()),

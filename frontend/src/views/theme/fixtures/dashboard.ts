@@ -24,6 +24,7 @@ interface PreviewUsageRecordOptions {
   createdAtDisplay: string
   clientIp: string
   userAgent: string
+  clientTurnStateBytes?: number | null
   compact?: boolean
 }
 
@@ -178,6 +179,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
     createdAtDisplay: options.createdAtDisplay,
     clientIp: options.clientIp,
     userAgent: options.userAgent,
+    clientTurnStateBytes: options.clientTurnStateBytes ?? null,
   }
 }
 

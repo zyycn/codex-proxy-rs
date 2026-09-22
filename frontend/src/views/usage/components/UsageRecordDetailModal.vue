@@ -17,6 +17,7 @@ import {
   usageBilling,
   usageBillingText,
   usageClientIp,
+  usageClientTurnStateBytes,
   usageLatencyDetails,
   usageModelDisplay,
   usageReasoningEffort,
@@ -88,6 +89,11 @@ const clientUpstreamItems = computed(() => [
   { label: '服务档位', value: props.record?.serviceTier, mono: true },
   { label: '事件类型', value: props.record?.kind, mono: true },
   { label: '尝试序号', value: finalAttemptIndex.value },
+  {
+    label: 'Turn State',
+    value: props.record ? usageClientTurnStateBytes(props.record) : '—',
+    mono: true,
+  },
   {
     label: 'User-Agent',
     value: props.record ? usageUserAgent(props.record) : '',

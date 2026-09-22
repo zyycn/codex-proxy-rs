@@ -138,6 +138,7 @@ watch(section, (value) => {
         v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
         v-model:min-codex-cli-version="form.minCodexCliVersion"
         v-model:responses-max-decompressed-body-mi-b="responsesMaxDecompressedBodyMiBValue"
+        v-model:block-degraded-turn-state="form.blockDegradedTurnState"
         :disabled="disabled"
         :loading="loading"
         :desktop-error="minCodexDesktopVersionError"

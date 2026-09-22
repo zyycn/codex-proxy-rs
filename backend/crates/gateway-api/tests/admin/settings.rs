@@ -63,7 +63,8 @@ fn update_body() -> Value {
         "accountAutoFreezeDurationSeconds": 7200,
         "accountAutoFreezeProbeEnabled": true,
         "accountAutoFreezeProbeModel": null,
-        "accountAutoFreezeAdaptiveConcurrency": true
+        "accountAutoFreezeAdaptiveConcurrency": true,
+        "blockDegradedTurnState": false
     })
 }
 
@@ -147,6 +148,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         account_auto_freeze_probe_enabled: true,
         account_auto_freeze_probe_model: None,
         account_auto_freeze_adaptive_concurrency: true,
+        block_degraded_turn_state: false,
         updated_at: Utc
             .with_ymd_and_hms(2026, 8, 2, 10, 30, 0)
             .single()
@@ -186,6 +188,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "accountAutoFreezeProbeEnabled": true,
             "accountAutoFreezeProbeModel": null,
             "accountAutoFreezeAdaptiveConcurrency": true,
+            "blockDegradedTurnState": false,
             "updatedAt": "2026-08-02T10:30:00Z"
         })
     );
@@ -250,6 +253,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         account_auto_freeze_probe_enabled: true,
         account_auto_freeze_probe_model: None,
         account_auto_freeze_adaptive_concurrency: true,
+        block_degraded_turn_state: false,
         updated_at: chrono::Utc::now(),
     };
 

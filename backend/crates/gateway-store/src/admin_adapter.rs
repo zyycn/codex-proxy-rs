@@ -115,6 +115,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 account_auto_freeze_probe_model: command.account_auto_freeze_probe_model,
                 account_auto_freeze_adaptive_concurrency: command
                     .account_auto_freeze_adaptive_concurrency,
+                block_degraded_turn_state: command.block_degraded_turn_state,
             },
             audit: mutation_audit(
                 context,
@@ -139,6 +140,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "min_codex_cli_version".to_owned(),
                     "retention".to_owned(),
                     "account_auto_freeze".to_owned(),
+                    "block_degraded_turn_state".to_owned(),
                 ],
             ),
         };
@@ -259,6 +261,7 @@ pub(crate) fn admin_runtime_settings(
         account_auto_freeze_probe_enabled: settings.account_auto_freeze_probe_enabled,
         account_auto_freeze_probe_model: settings.account_auto_freeze_probe_model,
         account_auto_freeze_adaptive_concurrency: settings.account_auto_freeze_adaptive_concurrency,
+        block_degraded_turn_state: settings.block_degraded_turn_state,
         updated_at: settings.updated_at,
     })
 }
