@@ -523,11 +523,12 @@ impl CodexBackendClient {
             .client
             .get(endpoint_url(&self.base_url, path))
             .headers(headers);
-        if self.protocol == OpenAiUpstreamProtocol::Codex {
-            request = request.query(&[(
-                "client_version",
-                client_version.unwrap_or(profile.codex_version.as_str()),
-            )]);
+        let client_version = client_version.or_else(|| {
+            (self.protocol == OpenAiUpstreamProtocol::Codex)
+                .then_some(profile.codex_version.as_str())
+        });
+        if let Some(client_version) = client_version {
+            request = request.query(&[("client_version", client_version)]);
         }
         let response = request.send().await?;
         let status = response.status();

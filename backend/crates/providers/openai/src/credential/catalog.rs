@@ -14,8 +14,8 @@ use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
 };
 use gateway_core::routing::{
-    FrozenAccountScope, ProviderCatalogGeneration, ProviderKind, ProviderModelDescriptor,
-    UpstreamModelId,
+    FrozenAccountScope, ModelPresentation, ProviderCatalogGeneration, ProviderKind,
+    ProviderModelContent, ProviderModelDescriptor, UpstreamModelId,
 };
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -286,15 +286,20 @@ impl CodexCredentialCatalogService {
         accounts
             .retain(|account| scope.allows(account.id()) && eligible_catalog_account(account, now));
         accounts.sort_by(|left, right| left.id().cmp(right.id()));
-        let mut adapted = BTreeMap::new();
+        let mut api_catalogs = BTreeMap::new();
         let (api_accounts, mut accounts): (Vec<_>, Vec<_>) =
             accounts.into_iter().partition(|account| {
                 account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY
             });
         let mut catalogs = stream::iter(api_accounts)
-            .map(|account| async move {
-                let result = self.cached_or_refresh_account_catalog(&account).await;
-                (account, result)
+            .map(|account| {
+                let profile = request_profile.clone();
+                async move {
+                    let result = self
+                        .cached_client_account_catalog(&account, client_version, profile)
+                        .await;
+                    (account, result)
+                }
             })
             .buffer_unordered(MAX_CONCURRENT_API_CATALOGS);
         // 所有 API 账号共享等待预算；慢上游不能逐个耗尽超时或阻塞 OAuth 目录。
@@ -302,116 +307,134 @@ impl CodexCredentialCatalogService {
         while let Ok(Some((account, result))) =
             tokio::time::timeout_at(deadline, catalogs.next()).await
         {
-            if let Ok(catalog) = result {
-                for id in catalog.models() {
-                    if account.model_access().allows(id) {
-                        let model = gateway_core::routing::UpstreamModelId::new(id.clone())
-                            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-                        adapted
-                            .entry(id.clone())
-                            .or_insert(ProviderModelDescriptor {
-                                model,
-                                content: gateway_core::routing::ProviderModelContent::Adapted(
-                                    gateway_core::routing::ModelPresentation::new(
-                                        Some(id.clone()),
-                                        None,
-                                    )
-                                    .with_agent_tools(true, false),
-                                ),
-                            });
-                    }
-                }
+            if let Ok(mut models) = result {
+                models.retain(|model| account.model_access().allows(model.model.as_str()));
+                api_catalogs.insert(account.id().clone(), models);
             }
         }
         drop(catalogs);
+        // 完整对象优先于普通 ID；同类目录按账号顺序选来源，并保留上游条目顺序。
+        let (native, adapted): (Vec<_>, Vec<_>) = api_catalogs
+            .into_values()
+            .flatten()
+            .partition(|model| matches!(model.content, ProviderModelContent::Native(_)));
+        let mut seen = BTreeSet::new();
+        let api_models = native
+            .into_iter()
+            .chain(adapted)
+            .filter(|model| seen.insert(model.model.clone()))
+            .collect::<Vec<_>>();
         accounts.retain(|account| {
             account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_OAUTH
         });
         let mut last_error = CodexCredentialCatalogError::NoEligibleCredential;
         for account in accounts.iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
-            let profile = request_profile.clone();
-            let key = ClientCatalogKey {
-                account_id: account.id().clone(),
-                revision: account.revision(),
-                plan: account.plan_type().map(str::to_owned),
-                upstream_account_id: account.upstream_account_id().map(str::to_owned),
-                client_version: client_version.to_owned(),
-                profile: profile.clone(),
-            };
-            let value = {
-                let mut cache = self
-                    .client_catalogs
-                    .lock()
-                    .map_err(|_| CodexCredentialCatalogError::Cache)?;
-                cache.retain(ClientCatalogEntry::is_fresh);
-                if let Some(entry) = cache.iter().find(|entry| entry.key == key) {
-                    Arc::clone(&entry.value)
-                } else {
-                    // 不驱逐正在读取的目录，避免并发请求绕过缓存容量限制制造额外出站。
-                    if cache.len() >= MAX_CLIENT_CATALOGS {
-                        let Some(index) = cache.iter().position(|entry| entry.value.initialized())
-                        else {
-                            return Err(CodexCredentialCatalogError::Cache);
-                        };
-                        cache.remove(index);
-                    }
-                    let value = Arc::new(OnceCell::new());
-                    cache.push(ClientCatalogEntry {
-                        key,
-                        created_at: Instant::now(),
-                        value: Arc::clone(&value),
-                    });
-                    value
-                }
-            };
-            let result = value
-                .get_or_init(|| async {
-                    // 冻结画像，确保实际请求与缓存身份一致；不传递客户端 Bearer 给上游。
-                    let client = CodexBackendClient::new(
-                        self.http.clone(),
-                        self.base_url.clone(),
-                        CodexWireProfileState::new(profile),
-                    );
-                    let result = self
-                        .fetch_account_models(&client, account, Some(client_version))
-                        .await
-                        .map(|fetched| {
-                            fetched
-                                .models
-                                .into_iter()
-                                .map(|model| ProviderModelDescriptor {
-                                    model: model.request_model().clone(),
-                                    content: gateway_core::routing::ProviderModelContent::Native(
-                                        model.document().clone(),
-                                    ),
-                                })
-                                .collect()
-                        });
-                    CachedClientCatalog {
-                        completed_at: Instant::now(),
-                        result,
-                    }
-                })
-                .await;
-            match &result.result {
+            match self
+                .cached_client_account_catalog(account, client_version, request_profile.clone())
+                .await
+            {
                 Ok(models) => {
-                    for model in models {
-                        adapted.remove(model.model.as_str());
-                    }
-                    return Ok(models
+                    let native_ids = models
                         .iter()
-                        .cloned()
-                        .chain(adapted.into_values())
+                        .map(|model| model.model.clone())
+                        .collect::<BTreeSet<_>>();
+                    return Ok(models
+                        .into_iter()
+                        .chain(
+                            api_models
+                                .into_iter()
+                                .filter(|model| !native_ids.contains(&model.model)),
+                        )
                         .collect());
                 }
-                Err(error) => last_error = error.clone(),
+                Err(error) => last_error = error,
             }
         }
-        if adapted.is_empty() {
+        if api_models.is_empty() {
             Err(last_error)
         } else {
-            Ok(adapted.into_values().collect())
+            Ok(api_models)
         }
+    }
+
+    async fn cached_client_account_catalog(
+        &self,
+        account: &ProviderAccount,
+        client_version: &str,
+        profile: CodexWireProfile,
+    ) -> ClientCatalogResult {
+        let key = ClientCatalogKey {
+            account_id: account.id().clone(),
+            revision: account.revision(),
+            plan: account.plan_type().map(str::to_owned),
+            upstream_account_id: account.upstream_account_id().map(str::to_owned),
+            client_version: client_version.to_owned(),
+            profile: profile.clone(),
+        };
+        let value = {
+            let mut cache = self
+                .client_catalogs
+                .lock()
+                .map_err(|_| CodexCredentialCatalogError::Cache)?;
+            cache.retain(ClientCatalogEntry::is_fresh);
+            if let Some(entry) = cache.iter().find(|entry| entry.key == key) {
+                Arc::clone(&entry.value)
+            } else {
+                // 不驱逐正在读取的目录，避免并发请求绕过缓存容量限制制造额外出站。
+                if cache.len() >= MAX_CLIENT_CATALOGS {
+                    let Some(index) = cache.iter().position(|entry| entry.value.initialized())
+                    else {
+                        return Err(CodexCredentialCatalogError::Cache);
+                    };
+                    cache.remove(index);
+                }
+                let value = Arc::new(OnceCell::new());
+                cache.push(ClientCatalogEntry {
+                    key,
+                    created_at: Instant::now(),
+                    value: Arc::clone(&value),
+                });
+                value
+            }
+        };
+        let result = value
+            .get_or_init(|| async {
+                // 冻结画像，确保实际请求与缓存身份一致；不传递客户端 Bearer 给上游。
+                let client = CodexBackendClient::new(
+                    self.http.clone(),
+                    self.base_url.clone(),
+                    CodexWireProfileState::new(profile),
+                );
+                let result = self
+                    .fetch_account_models(&client, account, Some(client_version))
+                    .await
+                    .map(|fetched| {
+                        fetched
+                            .models
+                            .into_iter()
+                            .map(|model| ProviderModelDescriptor {
+                                model: model.request_model().clone(),
+                                content: if model.document().protocol() == "codex" {
+                                    ProviderModelContent::Native(model.document().clone())
+                                } else {
+                                    ProviderModelContent::Adapted(
+                                        ModelPresentation::new(
+                                            Some(model.request_model().as_str().to_owned()),
+                                            None,
+                                        )
+                                        .with_agent_tools(true, false),
+                                    )
+                                },
+                            })
+                            .collect()
+                    });
+                CachedClientCatalog {
+                    completed_at: Instant::now(),
+                    result,
+                }
+            })
+            .await;
+        result.result.clone()
     }
 
     #[must_use]

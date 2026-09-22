@@ -9,6 +9,8 @@ use gateway_core::routing::{ModelServiceTier, UpstreamModelId};
 use reqwest::header::{ETAG, HeaderMap};
 use serde::Deserialize;
 
+use super::client::OpenAiUpstreamProtocol;
+
 /// 单次 Codex 模型目录响应允许的最大字节数。
 pub const MAX_CODEX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
 
@@ -341,6 +343,14 @@ pub fn parse_codex_model_catalog(
     body: &[u8],
     etag: Option<&str>,
 ) -> Result<CodexModelCatalogSnapshot, CodexModelCatalogError> {
+    parse_native_model_catalog(body, etag, OpenAiUpstreamProtocol::Codex)
+}
+
+fn parse_native_model_catalog(
+    body: &[u8],
+    etag: Option<&str>,
+    protocol: OpenAiUpstreamProtocol,
+) -> Result<CodexModelCatalogSnapshot, CodexModelCatalogError> {
     if body.len() > MAX_CODEX_MODEL_CATALOG_BYTES {
         return Err(CodexModelCatalogError::ResponseTooLarge);
     }
@@ -366,7 +376,7 @@ pub fn parse_codex_model_catalog(
             ),
         )
         .map_err(|_| CodexModelCatalogError::InvalidWire)?;
-        let model = normalize_model(wire, document)?;
+        let model = normalize_model(wire, document, protocol)?;
         if !seen.insert(model.request_model.as_str().to_owned()) {
             return Err(CodexModelCatalogError::DuplicateModelSlug);
         }
@@ -390,8 +400,12 @@ pub(super) fn catalog_etag(headers: &HeaderMap) -> Result<Option<String>, CodexM
 fn normalize_model(
     wire: CodexModelWire,
     document: RawJsonPayload,
+    protocol: OpenAiUpstreamProtocol,
 ) -> Result<CodexCatalogModel, CodexModelCatalogError> {
-    if !valid_model_slug(&wire.slug) {
+    // 协商为 Codex 对象不改变 Responses API 的模型 ID 合同，命名空间和微调模型仍有效。
+    if wire.slug.trim() != wire.slug
+        || (protocol == OpenAiUpstreamProtocol::Codex && !valid_model_slug(&wire.slug))
+    {
         return Err(CodexModelCatalogError::InvalidModelSlug);
     }
     let request_model =
@@ -604,8 +618,14 @@ pub(crate) fn parse_api_model_catalog(
     if body.len() > MAX_CODEX_MODEL_CATALOG_BYTES {
         return Err(CodexModelCatalogError::ResponseTooLarge);
     }
-    let wire: ApiModels =
+    let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| CodexModelCatalogError::InvalidWire)?;
+    // 部分 Responses 上游按客户端版本返回完整 Codex 目录；不能降格为只有 ID 的画像。
+    if value.get("models").is_some() {
+        return parse_native_model_catalog(body, etag, OpenAiUpstreamProtocol::ResponsesApi);
+    }
+    let wire: ApiModels =
+        serde_json::from_value(value).map_err(|_| CodexModelCatalogError::InvalidWire)?;
     if wire.data.is_empty() {
         return Err(CodexModelCatalogError::EmptySnapshot);
     }

@@ -870,6 +870,269 @@ async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_me
 }
 
 #[tokio::test]
+async fn api_key_client_catalog_negotiates_and_preserves_versioned_native_objects() {
+    use gateway_core::routing::ProviderModelContent;
+    use provider_openai::credential::ApiKeyTransport;
+    use serde_json::json;
+
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .await;
+    let account = store.account("acct_api").expect("API account");
+    // 先填满普通 ID 目录，确保客户端不会把已有套餐缓存误当成原生元数据。
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(|request: &Request| request.url.query().is_none())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [{"id":"deepseek-flash"}]
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    service.synchronize().await.expect("background ID catalog");
+    assert_eq!(
+        service.cached_account_models(&account).unwrap().unwrap(),
+        ["deepseek-flash"]
+    );
+    let scope = client_scope(&[account]);
+    for (version, effort) in [("0.155.0", "high"), ("0.156.0", "ultra")] {
+        let original = json!({
+            "slug":"deepseek-flash", "display_name":"DeepSeek Flash",
+            "default_reasoning_level":effort,
+            "supported_reasoning_levels":[
+                {"effort":"low", "description":"Fast"},
+                {"effort":effort, "description":"Upstream description"}
+            ],
+            "base_instructions":"Upstream model instructions",
+            "model_messages":{"instructions_template":"Original template"},
+            "context_window":128000, "future_field":{"null":null,"list":[1,true]}
+        });
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(query_param("client_version", version))
+            .and(header("authorization", "Bearer sk-api-test-only"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"models":[original]}))
+                    .set_delay(std::time::Duration::from_millis(20)),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let (first, concurrent) = tokio::join!(
+            service.client_model_catalog(&scope, version),
+            service.client_model_catalog(&scope, version)
+        );
+        for models in [first, concurrent] {
+            let models = models.expect("native client catalog");
+            assert_eq!(models.len(), 1);
+            let ProviderModelContent::Native(payload) = &models[0].content else {
+                panic!("API Key native metadata must not be replaced by an adapted ID")
+            };
+            assert_eq!(payload.protocol(), "codex");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(payload.body()).unwrap(),
+                original
+            );
+        }
+    }
+    let cached = service
+        .client_model_catalog(&scope, "0.155.0")
+        .await
+        .expect("separate version cache");
+    let ProviderModelContent::Native(payload) = &cached[0].content else {
+        panic!("native cached model")
+    };
+    let document: serde_json::Value = serde_json::from_slice(payload.body()).unwrap();
+    assert_eq!(document["default_reasoning_level"], "high");
+    assert!(
+        service
+            .client_model_catalog(&client_scope(&[]), "0.155.0")
+            .await
+            .is_err()
+    );
+    upstream.verify().await;
+}
+
+#[tokio::test]
+async fn api_key_native_catalog_preserves_unknown_reasoning_and_background_entitlements() {
+    use gateway_core::routing::ProviderModelContent;
+    use provider_openai::credential::ApiKeyTransport;
+    use provider_openai::transport::CodexCatalogCapabilityEvidence;
+    use serde_json::json;
+
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .await;
+    let original = json!({"slug":"z-unknown-reasoning", "display_name":"Unknown reasoning"});
+    let second = json!({"slug":"vendor/model", "display_name":"Second upstream model"});
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"models":[original, second]})),
+        )
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    let snapshot = service
+        .synchronize()
+        .await
+        .expect("native background directory");
+    assert_eq!(
+        snapshot.models()[0].capabilities().reasoning(),
+        CodexCatalogCapabilityEvidence::Unknown
+    );
+    let account = store.account("acct_api").unwrap();
+    assert_eq!(
+        service.cached_account_models(&account).unwrap().unwrap(),
+        ["z-unknown-reasoning", "vendor/model"]
+    );
+    let models = service
+        .client_model_catalog(&client_scope(&[account]), "0.155.0")
+        .await
+        .unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.model.as_str())
+            .collect::<Vec<_>>(),
+        ["z-unknown-reasoning", "vendor/model"]
+    );
+    let ProviderModelContent::Native(payload) = &models[0].content else {
+        panic!("native model expected")
+    };
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(payload.body()).unwrap(),
+        original
+    );
+    upstream.verify().await;
+}
+
+#[tokio::test]
+async fn api_key_client_catalog_keeps_native_sources_stable_and_account_scoped() {
+    use gateway_core::routing::ProviderModelContent;
+    use provider_openai::credential::ApiKeyTransport;
+    use serde_json::json;
+
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut accounts = Vec::new();
+    for (id, delay, body) in [
+        ("acct_a", 0, json!({"data":[{"id":"shared"}]})),
+        (
+            "acct_b",
+            30,
+            json!({"models":[{"slug":"shared", "display_name":"First native", "default_reasoning_level":"high"}]}),
+        ),
+        (
+            "acct_c",
+            0,
+            json!({"models":[{"slug":"shared", "display_name":"Second native", "default_reasoning_level":"low"}]}),
+        ),
+    ] {
+        store
+            .seed_api_key(
+                id,
+                format!("{}/{id}", upstream.uri()),
+                ApiKeyTransport::Http,
+            )
+            .await;
+        accounts.push(store.account(id).unwrap());
+        Mock::given(method("GET"))
+            .and(path(format!("/{id}/models")))
+            .and(query_param("client_version", "0.155.0"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(body)
+                    .set_delay(std::time::Duration::from_millis(delay)),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+    }
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    for (scope_accounts, expected) in [
+        (&accounts[..], "First native"),
+        (&accounts[2..], "Second native"),
+    ] {
+        let models = service
+            .client_model_catalog(&client_scope(scope_accounts), "0.155.0")
+            .await
+            .unwrap();
+        assert_eq!(models.len(), 1);
+        let ProviderModelContent::Native(payload) = &models[0].content else {
+            panic!("native catalog must take precedence over plain IDs")
+        };
+        let document: serde_json::Value = serde_json::from_slice(payload.body()).unwrap();
+        assert_eq!(document["display_name"], expected);
+    }
+    upstream.verify().await;
+}
+
+#[tokio::test]
+async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
+    use gateway_core::account::{CredentialCasOutcome, CredentialCasUpdate, ProviderAccountUpdate};
+    use provider_openai::credential::ApiKeyTransport;
+
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key("acct_api", upstream.uri(), ApiKeyTransport::Http)
+        .await;
+    let account = store.account("acct_api").unwrap();
+    let scope = client_scope(std::slice::from_ref(&account));
+    let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
+    for model in ["before-rotation", "after-rotation"] {
+        upstream.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(query_param("client_version", "0.155.0"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"models":[{
+                    "slug":model, "display_name":model
+                }]})),
+            )
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let models = service
+            .client_model_catalog(&scope, "0.155.0")
+            .await
+            .unwrap();
+        assert_eq!(models[0].model.as_str(), model);
+        upstream.verify().await;
+        if model == "before-rotation" {
+            let loaded = store.load_current_credential(account.id()).await.unwrap();
+            let update = CredentialCasUpdate::new(
+                account.id().clone(),
+                account.revision(),
+                ProviderAccountUpdate {
+                    account_id: account.id().clone(),
+                    name: account.name().to_owned(),
+                    email: None,
+                    plan_type: None,
+                },
+                loaded.credential,
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(matches!(
+                store.compare_and_swap_credential(update).await.unwrap(),
+                CredentialCasOutcome::Updated(_)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabilities() {
     use provider_openai::credential::ApiKeyTransport;
     use provider_openai::transport::CodexCatalogCapabilityEvidence;
@@ -920,6 +1183,14 @@ async fn api_key_catalog_accepts_namespaced_model_ids_without_inventing_capabili
             .collect::<std::collections::BTreeSet<_>>(),
         ids.into_iter().collect()
     );
+    for model in &models {
+        let gateway_core::routing::ProviderModelContent::Adapted(presentation) = &model.content
+        else {
+            panic!("plain API IDs must remain adapted")
+        };
+        assert!(presentation.supported_reasoning_efforts().is_empty());
+        assert_eq!(presentation.default_reasoning_effort(), None);
+    }
 }
 
 #[tokio::test]
