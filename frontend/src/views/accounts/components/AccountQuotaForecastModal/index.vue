@@ -2,7 +2,7 @@
 import type { AccountRow } from '../../constants'
 import type { Account } from '@/api'
 import { ChartNoAxesCombined, CircleAlert, RefreshCw } from '@lucide/vue'
-import { useNow } from '@vueuse/core'
+import { useIntervalFn, useNow } from '@vueuse/core'
 import { computed, ref, toRef, useId, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
@@ -27,7 +27,10 @@ const { report, loading, refreshing, error, load, refresh } = useAccountQuotaFor
   open,
   account => emit('accountUpdated', account),
 )
-const { now, pause, resume } = useNow({ interval: 30_000, controls: true })
+const { now, pause, resume } = useNow({
+  controls: true,
+  scheduler: callback => useIntervalFn(callback, 30_000),
+})
 const options = computed(() => report.value?.forecasts.map(item => ({
   label: item.extrapolated ? `${item.targetDays}天折算` : item.source?.label ?? (item.period === 'weekly' ? '周额度' : '月额度'),
   value: item.period,

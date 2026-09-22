@@ -1,5 +1,7 @@
-import { createSharedComposable, useNow } from '@vueuse/core'
+import { createSharedComposable, useIntervalFn, useNow } from '@vueuse/core'
 
 export const useUiClock = createSharedComposable(() =>
-  useNow({ interval: 30_000 }),
+  useNow({
+    scheduler: callback => useIntervalFn(callback, 30_000),
+  }),
 )
