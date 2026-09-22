@@ -186,6 +186,19 @@ export function useAccountMutations(options: {
     })
   }
 
+  async function handleQuotaReset(accountId: string) {
+    try {
+      const result = await refreshAccountQuota({ accountId }, { silent: true })
+      await options.replaceAccount(result.account)
+    }
+    catch (error: unknown) {
+      toast.warning(
+        `额度已重置，但最新额度加载失败：${errorMessage(error, '请手动刷新额度')}`,
+        { duration: 5000 },
+      )
+    }
+  }
+
   async function handleRecover(accountId: string) {
     await recoveringAccounts.run(accountId, async () => {
       try {
@@ -257,5 +270,6 @@ export function useAccountMutations(options: {
     handleRecover,
     handleRefresh,
     handleRefreshQuota,
+    handleQuotaReset,
   }
 }

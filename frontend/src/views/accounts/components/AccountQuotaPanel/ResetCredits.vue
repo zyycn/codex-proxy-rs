@@ -17,11 +17,12 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  accountUpdated: [account: Account]
+  consumed: [accountId: string]
 }>()
 
 dayjs.extend(utc)
 
+const panelOpen = shallowRef(false)
 const {
   availableCredits,
   availableCount,
@@ -40,10 +41,13 @@ const {
   confirmConsume,
 } = useAccountResetCredits({
   accountId: () => props.account.id,
-  onAccountUpdated: account => emit('accountUpdated', account),
+  onConsumed: (accountId) => {
+    if (props.account.id === accountId)
+      panelOpen.value = false
+    emit('consumed', accountId)
+  },
 })
 
-const panelOpen = shallowRef(false)
 const modalTitle = computed(() => {
   if (!showConfirm.value)
     return '额度重置'
