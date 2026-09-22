@@ -717,6 +717,7 @@ impl ModelRequestRepository for PgExecutionStore {
         finalization: ModelRequestFinalization,
     ) -> StoreResult<bool> {
         finalization.validate()?;
+        // 墙上时间可能回拨；终态必须可落盘，实际耗时仍保留 Core 的单调时钟观测。
         let finalized = sqlx::query_scalar::<_, i64>(
             "with finalized as (
              update model_requests
@@ -734,7 +735,7 @@ impl ModelRequestRepository for PgExecutionStore {
                  transport_decision_wait_ms = $27, connect_ms = $28,
                  headers_ms = $29, first_event_ms = $30, first_reasoning_ms = $31,
                  first_text_ms = $32, first_token_ms = $33, provider_processing_ms = $34,
-                 latency_ms = $35, completed_at = $36,
+                 latency_ms = $35, completed_at = greatest($36, started_at),
                  upstream_transport = coalesce($37, upstream_transport),
                  http_version = coalesce($38, http_version), websocket_pool = $39,
                  service_tier = $40, provider_observation_json = $41,

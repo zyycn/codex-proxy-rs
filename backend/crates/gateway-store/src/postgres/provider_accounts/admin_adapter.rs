@@ -754,7 +754,7 @@ impl AccountStore for PgAdminAccountStore {
             ).fetch_one(&mut *transaction).await
                 .map_err(|_| postgres_unavailable("lock default concurrency"))?;
                 let changed = sqlx::query_scalar::<_, String>(
-                    "update provider_accounts set concurrency_limit = $2, updated_at = now()
+                    "update provider_accounts set concurrency_limit = $2, updated_at = greatest(now(), updated_at)
                  where id = $1 and enabled = true and coalesce(concurrency_limit, $3) > $2
                  returning id",
                 )

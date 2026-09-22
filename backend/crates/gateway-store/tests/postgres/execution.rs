@@ -628,6 +628,115 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
 }
 
 #[tokio::test]
+async fn clock_rollback_preserves_terminal_outcomes_and_errors_after_recovery() {
+    let Some(database) = TestDatabase::create("execution_clock_rollback").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    for (index, outcome) in [
+        ExecutionOutcome::Succeeded,
+        ExecutionOutcome::Failed,
+        ExecutionOutcome::Cancelled,
+        ExecutionOutcome::Incomplete,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("req_clock_rollback_{index}");
+        let request = accepted_request(&id);
+        store
+            .create_model_request(request.clone())
+            .await
+            .expect("create request before clock rollback");
+        store
+            .begin_model_request_attempt(ModelRequestAttemptStart {
+                account_selection_wait_ms: None,
+                capacity_used_slots: None,
+                capacity_total_slots: None,
+                model_request_id: id.clone(),
+                attempt_count: 1,
+                provider_kind: "openai".to_owned(),
+                provider_account_id: None,
+                provider_account_ref: Some("acct_clock_rollback".to_owned()),
+                upstream_model_id: Some("coding".to_owned()),
+                upstream_transport: "websocket".to_owned(),
+                http_version: None,
+            })
+            .await
+            .expect("record real attempt before clock rollback");
+        let mut finalization = successful_core_finalization(&id);
+        finalization.outcome = outcome;
+        finalization.timings.latency_ms = Some(125);
+        finalization.completed_at = request.started_at - StdDuration::from_millis(400);
+        if outcome != ExecutionOutcome::Succeeded {
+            finalization.error = Some(GatewayError::new(
+                GatewayErrorKind::RateLimited,
+                "synthetic upstream quota error",
+            ));
+            finalization.provider_error_code = Some("usage_limit_reached".to_owned());
+            finalization.upstream_status_code = Some(429);
+        }
+        ExecutionStore::finalize_model_request(&store, finalization)
+            .await
+            .expect("finalize despite wall clock rollback");
+        let terminal = stored_row(&database.pool, &id).await;
+        assert_eq!(terminal["completed_at"], terminal["started_at"]);
+        assert_eq!(terminal["latency_ms"], 125);
+        assert_eq!(
+            terminal["outcome"],
+            ["succeeded", "failed", "cancelled", "incomplete"][index]
+        );
+        if outcome != ExecutionOutcome::Succeeded {
+            assert_eq!(terminal["error_kind"], "rate_limited");
+            assert_eq!(terminal["provider_error_code"], "usage_limit_reached");
+            assert_eq!(terminal["error_message"], "synthetic upstream quota error");
+        }
+        assert_eq!(
+            store
+                .recover_expired(request.deadline_at)
+                .await
+                .expect("recovery leaves finalized request intact")
+                .requests,
+            0
+        );
+        assert_eq!(stored_row(&database.pool, &id).await, terminal);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn zero_attempt_finalization_preserves_real_error_after_clock_rollback() {
+    let Some(database) = TestDatabase::create("zero_attempt_clock_rollback").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_zero_attempt_clock_rollback");
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create zero attempt request");
+    let mut finalization = early_failure(&request);
+    finalization.completed_at = request.started_at - StdDuration::from_millis(400);
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("finalize zero attempt after clock rollback");
+    assert_eq!(
+        store
+            .recover_expired(request.deadline_at)
+            .await
+            .expect("recovery preserves real early failure")
+            .requests,
+        0
+    );
+    let terminal = stored_row(&database.pool, request.id.as_str()).await;
+    assert_eq!(terminal["outcome"], "failed");
+    assert_eq!(terminal["error_kind"], "no_available_provider");
+    assert_eq!(terminal["attempt_count"], 0);
+    assert_eq!(terminal["completed_at"], terminal["started_at"]);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn core_adapter_persists_opaque_response_ids_as_bytes() {
     let Some(database) = TestDatabase::create("execution_opaque_response_id").await else {
         return;

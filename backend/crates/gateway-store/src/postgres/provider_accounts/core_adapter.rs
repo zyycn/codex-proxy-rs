@@ -198,7 +198,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                  last_error_message = case
                    when $10::text is not null and enabled
                    then $13 else last_error_message end,
-                 updated_at = greatest(now(), coalesce($11, now()))
+                 updated_at = greatest(now(), updated_at, $11)
              where id = $1 and credential_revision = $2
              returning credential_revision",
         )
