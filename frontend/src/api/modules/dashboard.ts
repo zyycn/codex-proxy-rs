@@ -165,7 +165,7 @@ export interface DashboardPoolSummary {
 
 export interface DashboardCapacityInfo {
   maxConcurrentPerAccount: number
-  totalSlots: number
+  totalSlots: number | null
   usedSlots: number | null
   availableSlots: number | null
 }

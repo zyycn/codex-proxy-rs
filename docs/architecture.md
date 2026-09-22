@@ -355,6 +355,8 @@ Client Key 与账号分组形成授权范围：
 - 分组可以包含多个 Provider，账号也可以属于多个分组。
 
 账号选择综合启停状态、credential/quota 事实、Redis cooldown、并发上限、权重、请求间隔和会话亲和。
+默认账号并发上限为 `0` 时表示无限；账号独立正数上限仍优先，未设置则继承默认值。
+无限并发只跳过并发上限判断，保留在途租约计数、请求间隔及其他准入约束；含无限账号的容量不投影有限占用比例。
 `account::AccountModelAccess` 拥有管理员模型政策的校验与精确匹配语义，存入账号行的 `model_access_json`，
 由 `RuntimeAccountDirectory` / `FrozenAccountScope` 随配置快照冻结。Provider 在额度、亲和与租约之前
 按映射后的上游模型筛选账号；重试和 fallback 使用同一冻结政策。上游目录和凭据不承载或改写该政策。

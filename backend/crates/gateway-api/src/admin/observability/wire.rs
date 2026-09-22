@@ -425,7 +425,7 @@ pub struct DashboardPoolSummaryView {
 #[serde(rename_all = "camelCase")]
 pub struct DashboardCapacityInfoView {
     pub max_concurrent_per_account: u64,
-    pub total_slots: u64,
+    pub total_slots: Option<u64>,
     pub used_slots: Option<u64>,
     pub available_slots: Option<u64>,
 }

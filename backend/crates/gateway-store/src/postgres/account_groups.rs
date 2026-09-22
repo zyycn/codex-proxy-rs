@@ -213,9 +213,10 @@ impl AccountGroupStore for PgAccountGroupRepository {
                         last_error_reason: account.last_error_reason,
                         last_error_message: account.last_error_message,
                     },
-                    total_slots: account
-                        .concurrency_limit
-                        .map_or(default_slots, |limit| u64::from(limit.get())),
+                    total_slots: account.concurrency_limit.map_or_else(
+                        || (default_slots > 0).then_some(default_slots),
+                        |limit| Some(u64::from(limit.get())),
+                    ),
                 })
             })
             .collect::<StoreResult<Vec<_>>>()
@@ -504,7 +505,7 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
         },
         capacity: AccountGroupCapacity {
             used_slots: None,
-            total_slots: 0,
+            total_slots: Some(0),
         },
         usage: AccountGroupUsage {
             today_usd: DecimalAmount::from_str("0").map_err(|_| invalid("invalid zero cost"))?,

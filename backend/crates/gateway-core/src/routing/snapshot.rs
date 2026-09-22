@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
-use crate::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
+use crate::account::{
+    AccountConcurrency, AccountSelectionPolicy, ProviderAccountId, RotationStrategy,
+};
 use crate::concurrency::ConcurrencyQueuePolicy;
 use crate::operation::Operation;
 use crate::policy::{
@@ -474,8 +476,7 @@ async fn compile_runtime_snapshot(
         .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
     let selection_policy = AccountSelectionPolicy::new(
         rotation_strategy,
-        NonZeroU32::new(facts.settings.max_concurrent_per_account)
-            .ok_or(RuntimeSnapshotCompileError::InvalidData)?,
+        AccountConcurrency::new(facts.settings.max_concurrent_per_account),
         Duration::from_millis(facts.settings.request_interval_ms),
     )
     .with_queue(ConcurrencyQueuePolicy {

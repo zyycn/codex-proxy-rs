@@ -237,9 +237,43 @@ async fn dashboard_summary_should_project_rebuildable_runtime_slots() {
         .expect("dashboard summary")
         .capacity;
 
-    assert_eq!(capacity.total_slots, 7);
+    assert_eq!(capacity.total_slots, Some(7));
     assert_eq!(capacity.used_slots, Some(2));
     assert_eq!(capacity.available_slots, Some(5));
+}
+
+#[tokio::test]
+async fn dashboard_capacity_distinguishes_unlimited_inheritance_finite_overrides_and_empty_pool() {
+    for (inherited_accounts, overridden_slots, expected_total, expected_available) in [
+        (2, 5, None, None),
+        (0, 5, Some(5), Some(3)),
+        (0, 0, Some(0), Some(0)),
+    ] {
+        let now = Utc::now();
+        let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+        store.replace_runtime_slots(Some(DashboardRuntimeSlots {
+            inherited_accounts,
+            overridden_slots,
+            used_slots: Some(2),
+        }));
+        let services = super::AdminHarness::new()
+            .observability(store)
+            .settings(Arc::new(FixtureSettingsStore {
+                max_concurrent_per_account: 0,
+            }))
+            .provider(super::dashboard_profile_provider())
+            .build()
+            .await;
+        let capacity = services
+            .observability()
+            .dashboard_summary(observation_range(now), TrendKind::Usage)
+            .await
+            .expect("dashboard")
+            .capacity;
+        assert_eq!(capacity.total_slots, expected_total);
+        assert_eq!(capacity.available_slots, expected_available);
+        assert_eq!(capacity.used_slots, Some(2));
+    }
 }
 
 #[tokio::test]
@@ -749,7 +783,9 @@ impl ObservabilityStore for FixtureObservabilityStore {
     }
 }
 
-struct FixtureSettingsStore;
+struct FixtureSettingsStore {
+    max_concurrent_per_account: u32,
+}
 
 #[async_trait]
 impl SettingsStore for FixtureSettingsStore {
@@ -780,7 +816,7 @@ impl SettingsStore for FixtureSettingsStore {
             model_mappings: Default::default(),
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
-            max_concurrent_per_account: 1,
+            max_concurrent_per_account: self.max_concurrent_per_account,
             request_interval_ms: 0,
             max_waiting_per_key: 0,
             max_waiting_per_account: 0,
@@ -834,7 +870,9 @@ impl SettingsStore for FixtureSettingsStore {
 async fn observability_services(store: Arc<FixtureObservabilityStore>) -> AdminServices {
     super::AdminHarness::new()
         .observability(store)
-        .settings(Arc::new(FixtureSettingsStore))
+        .settings(Arc::new(FixtureSettingsStore {
+            max_concurrent_per_account: 1,
+        }))
         .provider(super::dashboard_profile_provider())
         .build()
         .await
@@ -845,7 +883,9 @@ async fn observability_services_with_calculated_billing(
 ) -> AdminServices {
     super::AdminHarness::new()
         .observability(store)
-        .settings(Arc::new(FixtureSettingsStore))
+        .settings(Arc::new(FixtureSettingsStore {
+            max_concurrent_per_account: 1,
+        }))
         .provider(super::calculated_billing_provider())
         .build()
         .await

@@ -16,7 +16,7 @@ export interface AccountGroupAccountSummary {
 
 export interface AccountGroupCapacity {
   usedSlots: number | null
-  totalSlots: number
+  totalSlots: number | null
 }
 
 export interface AccountGroupUsage {

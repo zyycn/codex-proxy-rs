@@ -57,7 +57,7 @@ const metrics = computed<MetricItem[]>(() => {
     return [
       {
         label: '并发',
-        value: `${props.group.capacity.usedSlots ?? '—'} / ${props.group.capacity.totalSlots}`,
+        value: `${props.group.capacity.usedSlots ?? '—'} / ${props.group.capacity.totalSlots ?? '∞'}`,
         tone: (props.group.capacity.usedSlots ?? 0) > 0 ? 'active' : 'primary',
         icon: Grid2X2,
       },

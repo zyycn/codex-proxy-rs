@@ -934,6 +934,8 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 列表数据为 `{ items, page, configRevision }`，其中 item 返回 `memberCount`、按 Provider 聚合的
 `providerCounts` 和 `clientKeyCount`。查询分组成员使用账号列表的 `groupId` 筛选，
 不提供独立的分组成员路由；账号的 Provider 不代表整个分组的 Provider。
+`capacity.totalSlots` 为 `number | null`：`null` 表示可用成员中存在继承无限并发的账号，`0` 表示没有可用槽位。
+`capacity.usedSlots` 继续返回实际在途数；Redis 不可用时为 `null`。
 
 ## 7. Client Key
 
@@ -1070,6 +1072,10 @@ accountAutoFreezeAdaptiveConcurrency
 字段约束与[代理位置](#独立代理管理--managed-proxies)一致。全局自定义开启后，OpenAI Responses 使用全局位置，
 关联代理配置了自定义位置时优先使用代理值。保存后通过现有配置发布机制对新请求生效，
 已开始请求及其重试保持同一份全局值；普通文本、绝对时间戳和数据驻留要求不受影响。
+
+`maxConcurrentPerAccount` 是默认账号并发上限，取值 0～4294967295；`0` 表示不限制。
+账号的 `concurrencyLimit: null` 继承该默认值，单独设置的正数上限仍优先生效。
+无限并发仍统计在途请求，并遵守最小请求间隔、账号可用性与 Client Key 限制。
 
 `maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的排队容量，取值 0～1,000，默认 0（关闭）；
 每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，
@@ -1324,6 +1330,10 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 | `GET` | `/api/admin/usage/insights/overview` | 用量、成本与成功率洞察 |
 | `GET` | `/api/admin/usage/insights/diagnostics` | 按维度聚合诊断 |
 | `GET` | `/api/admin/operations/errors` | 运维错误分页列表 |
+
+Dashboard 的 `capacityInfo.maxConcurrentPerAccount` 为默认账号并发上限，`0` 表示不限制。
+`capacityInfo.totalSlots` 为 `number | null`；可用账号池含无限并发账号时为 `null`，此时 `availableSlots` 也为 `null`。
+`usedSlots` 仍表示实际在途数，Redis 不可用时为 `null`；没有可用账号时 `totalSlots` 为 `0`。
 
 用量查询可组合页码/游标、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、

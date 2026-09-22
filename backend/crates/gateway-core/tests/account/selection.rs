@@ -10,6 +10,91 @@ use super::{candidate, candidate_with_concurrency, context};
 
 const FAILURE_RATE_HALF_LIFE: Duration = Duration::from_secs(15 * 60);
 
+#[test]
+fn unlimited_account_concurrency_preserves_overrides_intervals_and_finite_scores() {
+    use gateway_core::account::{AccountConcurrency, AccountSelectionPolicy};
+
+    for strategy in [
+        RotationStrategy::Smart,
+        RotationStrategy::RoundRobin,
+        RotationStrategy::Sticky,
+        RotationStrategy::QuotaResetPriority,
+    ] {
+        let mut context = context(strategy);
+        context.policy =
+            AccountSelectionPolicy::new(strategy, AccountConcurrency::Unlimited, Duration::ZERO);
+        let candidates = [
+            candidate("acct_unlimited", u32::MAX, None),
+            candidate_with_concurrency("acct_limited", 2, 2),
+        ];
+        assert_eq!(
+            AccountSelector
+                .select(&candidates, &context)
+                .expect("unlimited remains eligible")
+                .candidate()
+                .account
+                .id()
+                .as_str(),
+            "acct_unlimited"
+        );
+        assert!(AccountSelector.select(&candidates[1..], &context).is_none());
+        assert!(
+            AccountSelector
+                .capacity_snapshot(&candidates, &context)
+                .is_none()
+        );
+        let trace = gateway_core::diagnostics::TraceContext::new("req_unlimited_concurrency");
+        trace.account_selection(
+            &candidates,
+            &context,
+            AccountSelector.select(&candidates, &context).as_ref(),
+        );
+        if strategy == RotationStrategy::Smart {
+            let snapshot = trace.snapshot().expect("trace");
+            assert!(
+                snapshot["events"][0]["data"]["candidates"][0]["smartScore"]
+                    .as_f64()
+                    .expect("finite score")
+                    .is_finite()
+            );
+        }
+        context.policy = AccountSelectionPolicy::new(
+            strategy,
+            AccountConcurrency::Unlimited,
+            Duration::from_secs(1),
+        );
+        let mut recent = candidate("acct_unlimited", u32::MAX, None);
+        recent.signals.last_started_at = Some(context.now);
+        assert!(AccountSelector.select(&[recent], &context).is_none());
+    }
+}
+
+#[test]
+fn unavailable_unlimited_account_does_not_hide_the_finite_pool_capacity() {
+    use gateway_core::account::{
+        AccountConcurrency, AccountSelectionPolicy, CredentialState, QuotaState,
+    };
+    let mut context = context(RotationStrategy::Smart);
+    context.policy = AccountSelectionPolicy::new(
+        RotationStrategy::Smart,
+        AccountConcurrency::Unlimited,
+        Duration::ZERO,
+    );
+    let mut unavailable = candidate("acct_disabled", 0, None);
+    unavailable.account = unavailable.account.with_account_facts(
+        false,
+        CredentialState::Ready,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
+    let finite = candidate_with_concurrency("acct_limited", 1, 2);
+    let capacity = AccountSelector
+        .capacity_snapshot(&[unavailable, finite], &context)
+        .expect("finite available pool");
+    assert_eq!((capacity.used_slots(), capacity.total_slots()), (1, 2));
+}
+
 fn feedback_subject() -> (AccountFeedbackStats, ProviderKind, ProviderAccountId) {
     (
         AccountFeedbackStats::default(),

@@ -231,8 +231,8 @@ fn project_group_runtime(
                     })
                 })
             },
-            total_slots: available_ids.iter().fold(0_u64, |sum, account_id| {
-                sum.saturating_add(slots_by_account.get(*account_id).copied().unwrap_or(0))
+            total_slots: available_ids.iter().try_fold(0_u64, |sum, account_id| {
+                Some(sum.saturating_add(slots_by_account.get(*account_id).copied().flatten()?))
             }),
         };
     }

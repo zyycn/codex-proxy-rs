@@ -381,7 +381,6 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
         && isize::try_from(command.responses_max_decompressed_body_bytes).is_ok()
         && command.refresh_margin_seconds > 0
         && command.refresh_concurrency > 0
-        && command.max_concurrent_per_account > 0
         && command.max_waiting_per_key <= 1_000
         && command.max_waiting_per_account <= 1_000
         && (1..=120).contains(&command.concurrency_wait_timeout_seconds)

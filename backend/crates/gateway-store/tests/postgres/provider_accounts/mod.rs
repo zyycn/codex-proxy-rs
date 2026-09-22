@@ -3445,7 +3445,8 @@ async fn model_access_only_batch_update_preserves_other_settings_and_survives_re
 }
 
 #[tokio::test]
-async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_admin_fields() {
+async fn adaptive_concurrency_handles_unlimited_and_latest_locked_settings_without_overwriting_admin_fields()
+ {
     let Some(database) = TestDatabase::create("adaptive_concurrency").await else {
         return;
     };
@@ -3466,6 +3467,9 @@ async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_ad
         (true, Some(2), 10, Some(2), false),
         (true, None, 2, None, false),
         (true, None, 10, Some(3), true),
+        (true, None, 0, Some(3), true),
+        (true, Some(2), 0, Some(2), false),
+        (false, None, 0, None, false),
     ] {
         let mut admin = database.pool.begin().await.expect("admin transaction");
         sqlx::query("update runtime_settings set max_concurrent_per_account = $1 where id = 1")
@@ -3520,6 +3524,9 @@ async fn adaptive_concurrency_uses_latest_locked_settings_without_overwriting_ad
     .fetch_all(&database.pool)
     .await
     .expect("audit");
-    assert_eq!(audited_fields, vec![vec!["concurrency_limit".to_owned()]]);
+    assert_eq!(
+        audited_fields,
+        vec![vec!["concurrency_limit".to_owned()]; 2]
+    );
     database.close().await;
 }

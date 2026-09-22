@@ -207,27 +207,25 @@ impl DefaultObservabilityService {
         }
         let wire_profiles = self.providers.dashboard_wire_profiles(&configurations);
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
-        let total_slots = runtime_slots.as_ref().map_or_else(
-            || {
-                observation
-                    .provider_accounts
-                    .normal
-                    .saturating_mul(max_concurrent_per_account)
-            },
-            |slots| {
-                slots
-                    .inherited_accounts
-                    .saturating_mul(max_concurrent_per_account)
-                    .saturating_add(slots.overridden_slots)
-            },
-        );
+        let (inherited_accounts, overridden_slots) = runtime_slots
+            .as_ref()
+            .map_or((observation.provider_accounts.normal, 0), |slots| {
+                (slots.inherited_accounts, slots.overridden_slots)
+            });
+        let total_slots = (max_concurrent_per_account > 0 || inherited_accounts == 0).then(|| {
+            inherited_accounts
+                .saturating_mul(max_concurrent_per_account)
+                .saturating_add(overridden_slots)
+        });
         let used_slots = runtime_slots.and_then(|slots| slots.used_slots);
         Ok(DashboardResult {
             capacity: DashboardCapacity {
                 max_concurrent_per_account,
                 total_slots,
                 used_slots,
-                available_slots: used_slots.map(|used| total_slots.saturating_sub(used)),
+                available_slots: used_slots
+                    .zip(total_slots)
+                    .map(|(used, total)| total.saturating_sub(used)),
             },
             rotation_strategy: settings.rotation_strategy,
             observation,

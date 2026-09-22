@@ -19,9 +19,101 @@ fn credential_lease_rejects_zero_ttl() {
 }
 
 #[test]
-fn scheduling_lease_rejects_zero_concurrency() {
-    let request = scheduling_request("acct_invalid", "worker-invalid", 0, Duration::ZERO);
-    assert!(request.validate().is_err());
+fn only_account_scheduling_leases_allow_unlimited_concurrency() {
+    let mut request = scheduling_request("acct_unlimited", "worker-unlimited", 0, Duration::ZERO);
+    request.validate().expect("unlimited account concurrency");
+    for scope in [
+        CredentialLeaseScope::OAuthRefresh,
+        CredentialLeaseScope::OAuthRefreshCapacity,
+    ] {
+        request.scope = scope;
+        assert!(request.validate().is_err());
+    }
+}
+
+#[tokio::test]
+async fn unlimited_scheduling_leases_still_count_release_and_enforce_request_interval() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let request = scheduling_request("acct_unlimited", "worker-unlimited", 0, Duration::ZERO);
+    let mut leases = Vec::new();
+    for _ in 0..5 {
+        leases.push(acquired(
+            repository
+                .try_acquire_bounded_lease(&request)
+                .await
+                .expect("unlimited slot"),
+        ));
+    }
+    assert_eq!(
+        repository
+            .credential_runtime_signals(std::slice::from_ref(&request.resource_id))
+            .await
+            .expect("signals")[0]
+            .in_flight,
+        5
+    );
+    let limited = CredentialBoundedLeaseRequest {
+        max_concurrent: 3,
+        ..request.clone()
+    };
+    assert!(matches!(
+        repository
+            .try_acquire_bounded_lease(&limited)
+            .await
+            .expect("positive limit still applies"),
+        CredentialBoundedLeaseAcquisition::Busy { .. }
+    ));
+    for lease in leases {
+        assert!(lease.release().await.expect("release unlimited slot"));
+    }
+    assert_eq!(
+        repository
+            .credential_runtime_signals(std::slice::from_ref(&request.resource_id))
+            .await
+            .expect("released signals")[0]
+            .in_flight,
+        0
+    );
+    let interval = scheduling_request(
+        "acct_unlimited_interval",
+        "worker-interval",
+        0,
+        Duration::from_secs(30),
+    );
+    acquired(
+        repository
+            .try_acquire_bounded_lease(&interval)
+            .await
+            .expect("first start"),
+    )
+    .release()
+    .await
+    .expect("release interval slot");
+    assert!(
+        matches!(repository.try_acquire_bounded_lease(&interval).await.expect("interval decision"), CredentialBoundedLeaseAcquisition::Busy { retry_after: Some(value) } if value > Duration::ZERO)
+    );
+    let keys = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*"))
+        .query_async::<Vec<String>>(&mut connection)
+        .await
+        .expect("isolated keys");
+    for key in &keys {
+        assert!(
+            redis::cmd("PTTL")
+                .arg(key)
+                .query_async::<i64>(&mut connection)
+                .await
+                .expect("TTL")
+                > 0
+        );
+    }
+    redis::cmd("DEL")
+        .arg(keys)
+        .query_async::<i64>(&mut connection)
+        .await
+        .expect("cleanup isolated keys");
 }
 
 #[tokio::test]

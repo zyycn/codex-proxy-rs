@@ -38,7 +38,7 @@ local max_concurrent = tonumber(ARGV[4])
 local interval_ms = tonumber(ARGV[5])
 local retry_ms = 0
 
-if in_flight >= max_concurrent then
+if max_concurrent > 0 and in_flight >= max_concurrent then
   local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
   if #earliest == 2 then
     retry_ms = math.max(retry_ms, math.ceil(tonumber(earliest[2]) - now_ms))
@@ -177,7 +177,7 @@ impl CredentialBoundedLeaseRequest {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty("credential bounded lease", "resource_id", &self.resource_id)?;
         require_nonempty("credential bounded lease", "owner_id", &self.owner_id)?;
-        if self.max_concurrent == 0 {
+        if self.max_concurrent == 0 && self.scope != CredentialLeaseScope::ProviderAccount {
             return Err(invalid("max_concurrent must be positive"));
         }
         supported_duration(self.request_interval, true, "request interval")?;
@@ -395,7 +395,7 @@ impl RedisCredentialLeaseRepository {
         request_interval: Duration,
     ) -> StoreResult<LeaseAttempt> {
         request.validate()?;
-        if max_concurrent == 0 {
+        if max_concurrent == 0 && request.scope != CredentialLeaseScope::ProviderAccount {
             return Err(invalid("max_concurrent must be positive"));
         }
         let keys = self.keys(request)?;

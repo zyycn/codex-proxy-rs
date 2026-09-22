@@ -126,7 +126,7 @@ struct AccountGroupAccountSummaryView {
 #[serde(rename_all = "camelCase")]
 struct AccountGroupCapacityView {
     used_slots: Option<u64>,
-    total_slots: u64,
+    total_slots: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

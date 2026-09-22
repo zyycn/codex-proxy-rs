@@ -19,15 +19,17 @@ const props = defineProps<{
   rotationStrategy?: string | null
 }>()
 
+const unlimitedCapacity = computed(() => props.capacity?.maxConcurrentPerAccount === 0 && props.capacity.totalSlots === null)
+
 const scheduleStats = computed(() => {
   const cap = props.capacity
   const display = (value: number | null | undefined) => value === null || value === undefined
     ? '—'
     : formatCompactNumber(value)
   return [
-    { label: '默认并发', value: display(cap?.maxConcurrentPerAccount) },
-    { label: '总槽位', value: display(cap?.totalSlots) },
-    { label: '空闲槽位', value: display(cap?.availableSlots) },
+    { label: '默认并发', value: cap?.maxConcurrentPerAccount === 0 ? '不限制' : display(cap?.maxConcurrentPerAccount) },
+    { label: '总槽位', value: unlimitedCapacity.value ? '不限制' : display(cap?.totalSlots) },
+    { label: '空闲槽位', value: unlimitedCapacity.value ? '不限制' : display(cap?.availableSlots) },
   ]
 })
 
@@ -44,6 +46,8 @@ const usedProgressStyle = computed(() => {
 
 const usedRatio = computed(() => {
   const cap = props.capacity
+  if (unlimitedCapacity.value)
+    return `${cap?.usedSlots === null || cap?.usedSlots === undefined ? '—' : formatCompactNumber(cap.usedSlots)} / ∞`
   if (!cap || cap.totalSlots === null || cap.totalSlots === undefined)
     return '— / —'
   if (cap.usedSlots === null || cap.usedSlots === undefined)
@@ -180,7 +184,7 @@ const statusBars = computed(() => {
                   {{ usedRatio }}
                 </strong>
               </div>
-              <div class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-cp-progress-remaining">
+              <div v-if="!unlimitedCapacity" class="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-cp-progress-remaining">
                 <i
                   class="block h-2.5 rounded-full bg-cp-success"
                   :style="usedProgressStyle"

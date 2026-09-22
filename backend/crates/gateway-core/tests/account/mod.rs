@@ -77,7 +77,7 @@ fn weighted_candidate(id: &str, weight: u16, in_flight: u32) -> AccountCandidate
 
 #[test]
 fn account_scheduling_should_default_and_resolve_concurrency_override() {
-    let default = NonZeroU32::new(12).expect("default concurrency");
+    let default = gateway_core::account::AccountConcurrency::new(12);
     let account = account("acct_scheduling_default");
     assert_eq!(account.concurrency_limit(), None);
     assert_eq!(account.weight(), AccountWeight::DEFAULT);

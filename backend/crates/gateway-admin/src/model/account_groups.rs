@@ -38,7 +38,8 @@ pub struct AccountGroupAccountSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountGroupCapacity {
     pub used_slots: Option<u64>,
-    pub total_slots: u64,
+    /// `None` 表示可用账号中存在不限制并发的账号。
+    pub total_slots: Option<u64>,
 }
 
 /// Successful, downstream-committed USD request costs for group accounts.
@@ -55,7 +56,7 @@ pub struct AccountGroupMemberFact {
     pub group_id: AccountGroupId,
     pub account_id: String,
     pub status: AccountStatusFacts,
-    pub total_slots: u64,
+    pub total_slots: Option<u64>,
 }
 
 /// Lightweight group reference embedded in account and client-key views.

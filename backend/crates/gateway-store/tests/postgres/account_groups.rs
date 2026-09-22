@@ -113,8 +113,11 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         .expect("load current-page group members");
     assert_eq!(members.len(), 2);
     assert_eq!(
-        members.iter().map(|member| member.total_slots).sum::<u64>(),
-        7
+        members
+            .iter()
+            .map(|member| member.total_slots)
+            .sum::<Option<u64>>(),
+        Some(7)
     );
     assert_eq!(page.total, 2);
     let by_id = page
@@ -134,7 +137,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     assert_eq!(mixed.account_summary.limited, 0);
     assert_eq!(mixed.account_summary.total, 0);
     assert_eq!(mixed.capacity.used_slots, None);
-    assert_eq!(mixed.capacity.total_slots, 0);
+    assert_eq!(mixed.capacity.total_slots, Some(0));
     assert_eq!(mixed.usage.today_usd.as_str(), "0");
     assert_eq!(mixed.usage.retained_total_usd.as_str(), "0");
     let empty = by_id.get(EMPTY_GROUP).expect("empty group");

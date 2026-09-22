@@ -136,6 +136,43 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 }
 
 #[test]
+fn compiler_accepts_unlimited_default_account_concurrency() {
+    let facts = SnapshotFacts::new(
+        revision(1),
+        revision(1),
+        SnapshotSettingsFacts::new(0, 50, "smart", BTreeMap::new(), None, None),
+        Vec::new(),
+        Vec::new(),
+        vec![SnapshotProviderAccountFacts::new(
+            gateway_core::account::ProviderAccountId::new("acct_unlimited").expect("account"),
+            "alpha",
+        )],
+        Vec::new(),
+    );
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts))),
+        Arc::new(TestCatalog::Unavailable),
+    );
+    let snapshot = block_on(compiler.compile()).expect("compile unlimited default");
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new("any-model").expect("model"),
+            &super::operation(),
+            snapshot.all_account_scope(),
+            &Default::default(),
+        )
+        .expect("plan request");
+    assert_eq!(
+        plan.account_selection_policy().max_concurrent_per_account(),
+        gateway_core::account::AccountConcurrency::Unlimited
+    );
+    assert_eq!(
+        plan.account_selection_policy().request_interval(),
+        std::time::Duration::from_millis(50)
+    );
+}
+
+#[test]
 fn routing_plans_share_frozen_pricing_after_a_new_snapshot_is_published() {
     use gateway_core::{metering::PricingOverrides, runtime::RuntimeSnapshotHandle};
     let prices = |bps| -> Arc<PricingOverrides> {

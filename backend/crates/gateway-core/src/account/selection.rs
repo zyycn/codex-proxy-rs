@@ -2,7 +2,6 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap};
-use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -10,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::concurrency::ConcurrencyQueuePolicy;
 use crate::identity::ProviderKind;
 
-use super::{AccountStatus, ProviderAccount, ProviderAccountId};
+use super::{AccountConcurrency, AccountStatus, ProviderAccount, ProviderAccountId};
 
 /// `runtime_settings.rotation_strategy` 的稳定值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -48,21 +47,21 @@ impl RotationStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSelectionPolicy {
     strategy: RotationStrategy,
-    max_concurrent_per_account: NonZeroU32,
+    max_concurrent_per_account: AccountConcurrency,
     request_interval: Duration,
     queue_policy: ConcurrencyQueuePolicy,
 }
 
 impl AccountSelectionPolicy {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         strategy: RotationStrategy,
-        max_concurrent_per_account: NonZeroU32,
+        max_concurrent_per_account: impl Into<AccountConcurrency>,
         request_interval: Duration,
     ) -> Self {
         Self {
             strategy,
-            max_concurrent_per_account,
+            max_concurrent_per_account: max_concurrent_per_account.into(),
             request_interval,
             queue_policy: ConcurrencyQueuePolicy {
                 max_waiting: 0,
@@ -88,7 +87,7 @@ impl AccountSelectionPolicy {
     }
 
     #[must_use]
-    pub const fn max_concurrent_per_account(self) -> NonZeroU32 {
+    pub const fn max_concurrent_per_account(self) -> AccountConcurrency {
         self.max_concurrent_per_account
     }
 
@@ -502,18 +501,19 @@ impl AccountSelector {
                     )
                 )
             })
-            .fold((0_u64, 0_u64), |(used, total), candidate| {
+            .try_fold((0_u64, 0_u64), |(used, total), candidate| {
                 let capacity = u64::from(
                     candidate
                         .account
                         .effective_concurrency(context.policy.max_concurrent_per_account())
+                        .limit()?
                         .get(),
                 );
-                (
+                Some((
                     used.saturating_add(u64::from(candidate.signals.in_flight)),
                     total.saturating_add(capacity),
-                )
-            });
+                ))
+            })?;
         (total_slots > 0).then_some(AccountCapacitySnapshot {
             used_slots: used_slots.min(total_slots),
             total_slots,
@@ -671,11 +671,11 @@ impl AccountSelector {
         if context.excluded_accounts.contains(candidate.account.id()) {
             return Some(AccountSchedulingBlocker::Excluded);
         }
-        if candidate.signals.in_flight
-            >= candidate
-                .account
-                .effective_concurrency(context.policy.max_concurrent_per_account())
-                .get()
+        if candidate
+            .account
+            .effective_concurrency(context.policy.max_concurrent_per_account())
+            .limit()
+            .is_some_and(|limit| candidate.signals.in_flight >= limit.get())
         {
             return Some(AccountSchedulingBlocker::ConcurrencyLimit);
         }
@@ -704,19 +704,22 @@ pub(crate) const SMART_SCORE_TOLERANCE: f64 = 0.05;
 // 首输出 10 秒时延迟得分减半；固定尺度不随其他候选账号变化。
 const SMART_LATENCY_HALF_SCORE_MS: f64 = 10_000.0;
 
-fn capacity_utilization(candidate: &AccountCandidate, default_concurrency: NonZeroU32) -> f64 {
-    f64::from(candidate.signals.in_flight)
-        / f64::from(
-            candidate
-                .account
-                .effective_concurrency(default_concurrency)
-                .get(),
-        )
+fn capacity_utilization(
+    candidate: &AccountCandidate,
+    default_concurrency: AccountConcurrency,
+) -> f64 {
+    candidate
+        .account
+        .effective_concurrency(default_concurrency)
+        .limit()
+        .map_or(0.0, |limit| {
+            f64::from(candidate.signals.in_flight) / f64::from(limit.get())
+        })
 }
 
 fn select_smart_candidate<'a>(
     candidates: &[&'a AccountCandidate],
-    default_concurrency: NonZeroU32,
+    default_concurrency: AccountConcurrency,
     cursor: u64,
 ) -> Option<&'a AccountCandidate> {
     let mut ranked = candidates
@@ -734,7 +737,10 @@ fn select_smart_candidate<'a>(
     Some(ranked[index].0)
 }
 
-pub(crate) fn smart_score(candidate: &AccountCandidate, default_concurrency: NonZeroU32) -> f64 {
+pub(crate) fn smart_score(
+    candidate: &AccountCandidate,
+    default_concurrency: AccountConcurrency,
+) -> f64 {
     let load = 1.0 - capacity_utilization(candidate, default_concurrency).clamp(0.0, 1.0);
     let quota = candidate
         .signals

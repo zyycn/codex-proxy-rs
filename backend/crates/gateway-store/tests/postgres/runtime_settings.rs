@@ -48,6 +48,45 @@ fn runtime_settings_keep_account_rotation_global() {
     assert!(settings.validate().is_ok());
 }
 
+#[tokio::test]
+async fn unlimited_default_account_concurrency_round_trips_without_relaxing_other_limits() {
+    let Some(database) = TestDatabase::create("unlimited_default_concurrency").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let mut update = settings_with_margin(3_600);
+    update.max_concurrent_per_account = 0;
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("persist unlimited default");
+    let settings = repository
+        .load_runtime_settings()
+        .await
+        .expect("read unlimited default");
+    assert_eq!(settings.max_concurrent_per_account, 0);
+    for statement in [
+        "update runtime_settings set max_concurrent_per_account = -1 where id = 1",
+        "update runtime_settings set refresh_concurrency = 0 where id = 1",
+        "update runtime_settings set refresh_margin_seconds = 0 where id = 1",
+        "update runtime_settings set request_interval_ms = -1 where id = 1",
+    ] {
+        let error = sqlx::query(statement)
+            .execute(&database.pool)
+            .await
+            .expect_err("constraint must reject invalid setting");
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("23514"),
+            "{statement}"
+        );
+    }
+    database.close().await;
+}
+
 #[test]
 fn runtime_settings_reject_invalid_model_mapping() {
     let settings = RuntimeSettingsUpdate {

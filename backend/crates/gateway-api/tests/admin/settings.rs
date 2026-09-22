@@ -78,6 +78,15 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
 }
 
 #[test]
+fn settings_request_accepts_unlimited_default_account_concurrency() {
+    let mut body = update_body();
+    body["maxConcurrentPerAccount"] = json!(0);
+    let request: UpdateRuntimeSettingsRequest =
+        serde_json::from_value(body).expect("decode settings");
+    request.validate().expect("zero means unlimited");
+}
+
+#[test]
 fn settings_request_should_reject_non_semver_client_min() {
     let mut body = update_body();
     body["minCodexCliVersion"] = json!("v0.40.0");

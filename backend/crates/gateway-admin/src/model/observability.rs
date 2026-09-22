@@ -992,7 +992,8 @@ pub struct DashboardWireAttribute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardCapacity {
     pub max_concurrent_per_account: u64,
-    pub total_slots: u64,
+    /// `None` 表示可用账号池不限制并发。
+    pub total_slots: Option<u64>,
     pub used_slots: Option<u64>,
     pub available_slots: Option<u64>,
 }

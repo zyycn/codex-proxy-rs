@@ -192,6 +192,10 @@ export function useSettingsForm() {
       toast.warning('请完整填写并发、队列、凭据刷新参数和调度策略')
       return
     }
+    if (!Number.isInteger(maxConcurrentPerAccount) || maxConcurrentPerAccount < 0 || maxConcurrentPerAccount > 4294967295) {
+      toast.warning('默认账号并发上限应为 0～4294967295 的整数，0 表示不限制')
+      return
+    }
     if (responsesMaxDecompressedBodyMiB === null || !Number.isInteger(responsesMaxDecompressedBodyMiB) || responsesMaxDecompressedBodyMiB < 1
       || !Number.isSafeInteger(responsesMaxDecompressedBodyMiB * MIB)) {
       toast.warning('Responses 解压上限应为有效的正整数（MiB）')

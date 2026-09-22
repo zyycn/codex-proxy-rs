@@ -58,6 +58,46 @@ impl AccountConcurrencyLimit {
     }
 }
 
+/// 账号继承默认值或应用独立覆盖后的实际并发约束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountConcurrency {
+    Unlimited,
+    Limited(NonZeroU32),
+}
+
+impl AccountConcurrency {
+    /// 配置值零表示不限制；账号独立覆盖仍只接受正数。
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        match NonZeroU32::new(value) {
+            Some(limit) => Self::Limited(limit),
+            None => Self::Unlimited,
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        match self {
+            Self::Unlimited => 0,
+            Self::Limited(limit) => limit.get(),
+        }
+    }
+
+    #[must_use]
+    pub const fn limit(self) -> Option<NonZeroU32> {
+        match self {
+            Self::Unlimited => None,
+            Self::Limited(limit) => Some(limit),
+        }
+    }
+}
+
+impl From<NonZeroU32> for AccountConcurrency {
+    fn from(limit: NonZeroU32) -> Self {
+        Self::Limited(limit)
+    }
+}
+
 /// Relative scheduling priority for an account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AccountWeight(NonZeroU16);
@@ -958,9 +998,9 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub const fn effective_concurrency(&self, default: NonZeroU32) -> NonZeroU32 {
+    pub const fn effective_concurrency(&self, default: AccountConcurrency) -> AccountConcurrency {
         match self.concurrency_limit {
-            Some(limit) => limit.into_non_zero(),
+            Some(limit) => AccountConcurrency::Limited(limit.into_non_zero()),
             None => default,
         }
     }

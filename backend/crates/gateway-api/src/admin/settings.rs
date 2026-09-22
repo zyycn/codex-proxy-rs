@@ -125,7 +125,6 @@ impl UpdateRuntimeSettingsRequest {
         for (value, field) in [
             (self.refresh_margin_seconds, "refreshMarginSeconds"),
             (self.refresh_concurrency, "refreshConcurrency"),
-            (self.max_concurrent_per_account, "maxConcurrentPerAccount"),
             (self.usage_retention_days, "usageRetentionDays"),
             (self.ops_event_retention_days, "opsEventRetentionDays"),
             (self.audit_retention_days, "auditRetentionDays"),
