@@ -1504,6 +1504,340 @@ async fn generate_without_an_eligible_openai_account_fails_before_network_io() {
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
 }
 
+#[tokio::test]
+async fn quota_snapshot_race_reloads_and_sends_the_request_once() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let original = store.account("acct_provider_contract").expect("account");
+    let observed_at = SystemTime::now();
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: original.id().clone(),
+            expected_revision: original.revision(),
+            state: QuotaState::allowed(observed_at),
+        })
+        .await
+        .expect("initial quota");
+    store.on_credential_load(Arc::new(move |store, id, count| {
+        Box::pin(async move {
+            if count == 1 {
+                let account = store.account(id.as_str()).expect("account");
+                store
+                    .apply_quota_access(QuotaAccessChange {
+                        account_id: id.clone(),
+                        expected_revision: account.revision(),
+                        state: QuotaState::allowed(observed_at + Duration::from_millis(1)),
+                    })
+                    .await?;
+            }
+            Ok(())
+        })
+    }));
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header("authorization", "Bearer at-acct_provider_contract"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        upstream.uri(),
+        Arc::clone(&leases),
+    );
+    let mut stream = provider
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_quota_snapshot_race", CancellationToken::new()),
+        )
+        .await
+        .expect("concurrent quota observation must not fail prepare");
+    assert_eq!(stream.metadata().provider_account_id(), original.id());
+    assert_eq!(store.credential_loads(), 2);
+    assert_eq!(leases.requests.lock().expect("leases").len(), 1);
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("upstream event");
+        completed |= event
+            .wire_event()
+            .is_some_and(|wire| wire.data()["type"] == "response.completed");
+    }
+    assert!(
+        completed,
+        "the successful upstream response must reach the client stream"
+    );
+    upstream.verify().await;
+}
+
+#[tokio::test]
+async fn snapshot_retry_rechecks_account_availability_without_sending() {
+    for change in ["disabled", "revoked", "exhausted"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        store.on_credential_load(Arc::new(move |store, id, count| {
+            Box::pin(async move {
+                assert_eq!(count, 1, "an unavailable account cannot be selected again");
+                let account = store.account(id.as_str()).expect("account");
+                match change {
+                    "disabled" => store.set_enabled(id, false).await?,
+                    "revoked" => {
+                        store
+                            .apply_state_change(gateway_core::account::AccountStateChange {
+                                account_id: id.clone(),
+                                expected_revision: account.revision(),
+                                credential_state: CredentialState::Invalid,
+                                observed_at: SystemTime::now(),
+                                error_reason: None,
+                                message: None,
+                            })
+                            .await?
+                    }
+                    "exhausted" => {
+                        store
+                            .apply_quota_access(QuotaAccessChange {
+                                account_id: id.clone(),
+                                expected_revision: account.revision(),
+                                state: QuotaState::exhausted(
+                                    QuotaEvidence::UsageLimitReached,
+                                    SystemTime::now(),
+                                    None,
+                                ),
+                            })
+                            .await?;
+                    }
+                    _ => unreachable!("test case"),
+                }
+                Ok(())
+            })
+        }));
+        let upstream = MockServer::start().await;
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let provider = provider_with_affinity_and_base_url_and_leases(
+            &store,
+            Arc::new(MemorySessionAffinity::default()),
+            upstream.uri(),
+            Arc::clone(&leases),
+        );
+        let Err(error) = provider
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context("req_snapshot_unavailable", CancellationToken::new()),
+            )
+            .await
+        else {
+            panic!("{change} account must not produce an upstream stream");
+        };
+        let expected = if change == "exhausted" {
+            ProviderErrorKind::QuotaExhausted
+        } else {
+            ProviderErrorKind::NoEligibleAccount
+        };
+        assert_eq!(error.kind(), expected, "{change}");
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(leases.requests.lock().expect("leases").is_empty());
+        assert!(
+            upstream
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn snapshot_retry_cannot_switch_a_disabled_native_continuation_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    create_account(&store, "acct_scope_new").await;
+    store.on_credential_load(Arc::new(|store, id, count| {
+        Box::pin(async move {
+            assert_eq!(id.as_str(), "acct_provider_contract");
+            assert_eq!(count, 1);
+            store.set_enabled(id, false).await
+        })
+    }));
+    let upstream = MockServer::start().await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        upstream.uri(),
+        Arc::clone(&leases),
+    );
+    let Err(error) = provider
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            pinned_continuation_context(
+                "req_snapshot_pinned",
+                "acct_provider_contract",
+                "client-previous",
+                "upstream-previous",
+                1,
+                ContinuationAttempt::Native,
+            ),
+        )
+        .await
+    else {
+        panic!("native continuation cannot move to the healthy second account");
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert!(leases.requests.lock().expect("leases").is_empty());
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn repeated_snapshot_conflicts_are_bounded_and_report_the_selection_stage() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    store.on_credential_load(Arc::new(|store, id, count| {
+        Box::pin(async move {
+            assert!(count <= 4, "snapshot conflict retries must be bounded");
+            let account = store.account(id.as_str()).expect("account");
+            let observed_at = account
+                .quota()
+                .observed_at()
+                .unwrap_or_else(SystemTime::now)
+                + Duration::from_millis(1);
+            store
+                .apply_quota_access(QuotaAccessChange {
+                    account_id: id.clone(),
+                    expected_revision: account.revision(),
+                    state: QuotaState::allowed(observed_at),
+                })
+                .await?;
+            Ok(())
+        })
+    }));
+    let upstream = MockServer::start().await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        upstream.uri(),
+        Arc::clone(&leases),
+    );
+    let Err(error) = provider
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_snapshot_conflicts", CancellationToken::new()),
+        )
+        .await
+    else {
+        panic!("continuously changing snapshots must not be sent");
+    };
+    assert_eq!(
+        error.kind(),
+        ProviderErrorKind::ProviderInfrastructureUnavailable
+    );
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    let diagnostic = error.diagnostic().expect("selection diagnostic");
+    assert_eq!(diagnostic.stage(), Some("account_selection"));
+    assert_eq!(diagnostic.code(), Some("account_snapshot_conflict"));
+    assert_eq!(store.credential_loads(), 4);
+    assert!(leases.requests.lock().expect("leases").is_empty());
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() {
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_provider_contract",
+            upstream.uri(),
+            provider_openai::credential::ApiKeyTransport::PreferWebsocket,
+        )
+        .await;
+    store.on_credential_load(Arc::new(|store, id, count| {
+        Box::pin(async move {
+            assert!(
+                count <= 6,
+                "both credential checks must share one retry budget"
+            );
+            // 第 1、4 次在传输预检冲突，第 3、6 次在最终候选校验冲突。
+            if matches!(count, 1 | 3 | 4 | 6) {
+                let account = store.account(id.as_str()).expect("account");
+                let observed_at = account
+                    .quota()
+                    .observed_at()
+                    .unwrap_or_else(SystemTime::now)
+                    + Duration::from_millis(1);
+                store
+                    .apply_quota_access(QuotaAccessChange {
+                        account_id: id.clone(),
+                        expected_revision: account.revision(),
+                        state: QuotaState::allowed(observed_at),
+                    })
+                    .await?;
+            }
+            Ok(())
+        })
+    }));
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        upstream.uri(),
+        Arc::clone(&leases),
+    );
+    let warmup = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4","input":[],"store":false,"generate":false})
+                .as_object()
+                .expect("object")
+                .clone(),
+        )
+        .expect("warmup"),
+    ));
+    let Err(error) = provider
+        .execute(
+            planned_request("openai", warmup),
+            context("req_api_snapshot_conflicts", CancellationToken::new()),
+        )
+        .await
+    else {
+        panic!("mixed snapshot conflicts must stop before WebSocket connection");
+    };
+    assert_eq!(
+        error.kind(),
+        ProviderErrorKind::ProviderInfrastructureUnavailable
+    );
+    assert_eq!(
+        error.diagnostic().and_then(|diagnostic| diagnostic.code()),
+        Some("account_snapshot_conflict")
+    );
+    assert_eq!(store.credential_loads(), 6);
+    assert!(leases.requests.lock().expect("leases").is_empty());
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
 async fn exhaust_account_quota(store: &Arc<MemoryAccountStore>, account_id: &str) {
     let account = store.account(account_id).expect("test account");
     store

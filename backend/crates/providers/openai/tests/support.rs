@@ -41,11 +41,21 @@ struct StoredAccount {
     state_observed_at: Option<SystemTime>,
 }
 
+type CredentialLoadHook = dyn for<'a> Fn(
+        &'a MemoryAccountStore,
+        &'a ProviderAccountId,
+        usize,
+    ) -> BoxFuture<'a, Result<(), StoreError>>
+    + Send
+    + Sync;
+
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     quota_reads: AtomicUsize,
     fail_provider_listing: AtomicBool,
+    credential_load_hook: Mutex<Option<Arc<CredentialLoadHook>>>,
+    credential_loads: AtomicUsize,
 }
 
 impl MemoryAccountStore {
@@ -175,6 +185,17 @@ impl MemoryAccountStore {
     pub(crate) fn fail_provider_listing(&self) {
         self.fail_provider_listing.store(true, Ordering::SeqCst);
     }
+
+    pub(crate) fn on_credential_load(&self, hook: Arc<CredentialLoadHook>) {
+        *self
+            .credential_load_hook
+            .lock()
+            .expect("credential hook lock") = Some(hook);
+    }
+
+    pub(crate) fn credential_loads(&self) -> usize {
+        self.credential_loads.load(Ordering::SeqCst)
+    }
 }
 
 #[async_trait]
@@ -266,6 +287,16 @@ impl ProviderAccountStore for MemoryAccountStore {
         account: &ProviderAccountId,
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError> {
+        let count = self.credential_loads.fetch_add(1, Ordering::SeqCst) + 1;
+        let hook = self
+            .credential_load_hook
+            .lock()
+            .expect("credential hook lock")
+            .clone();
+        // 在列表快照与凭据读取之间确定性提交并发变更，不依赖线程调度或延时。
+        if let Some(hook) = hook {
+            hook(self, account, count).await?;
+        }
         let loaded = self.load_current_credential(account).await?;
         if loaded.account.revision() != expected_revision {
             return Err(store_error(StoreErrorKind::Conflict));

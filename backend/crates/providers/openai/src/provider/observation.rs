@@ -797,6 +797,14 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
             Some("usage_limit_reached".to_owned()),
             Some("usage_limit_reached".to_owned()),
         )),
+        CredentialSelectionError::AccountSnapshotChanged => provider_error(
+            ProviderErrorKind::ProviderInfrastructureUnavailable,
+            UpstreamSendState::NotSent,
+        )
+        .with_diagnostic(
+            ProviderDiagnostic::new("OpenAI account changed repeatedly during selection")
+                .with_classification("account_selection", "account_snapshot_conflict"),
+        ),
         CredentialSelectionError::InvalidCredential
         | CredentialSelectionError::Store
         | CredentialSelectionError::Coordinator
