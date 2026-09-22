@@ -264,7 +264,8 @@ impl CodexCredentialCatalogService {
         }
     }
 
-    /// 原生客户端目录使用 Key 范围内排序稳定的首个成功账号，不复用套餐级画像。
+    /// OAuth 目录使用 Key 范围内排序稳定的首个成功账号；API Key 聚合按完整对象优先稳定选源。
+    /// 客户端原生对象不复用套餐级画像。
     /// 同一账号/凭据版本/客户端版本的并发读取合并；原生正文仅保留在有界进程缓存。
     pub async fn client_model_catalog(
         &self,

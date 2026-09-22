@@ -8768,15 +8768,19 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
                 provider_openai::credential::ApiKeyTransport::Http,
             )
             .await;
-        Mock::given(method("GET"))
-            .and(path(format!("{prefix}/models")))
-            .and(header("authorization", "Bearer sk-api-test-only"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"gpt-5.4"}]})),
-            )
-            .expect(1)
-            .mount(&upstream)
-            .await;
+        // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存。
+        for query in [None, Some("client_version=1.0.0")] {
+            Mock::given(method("GET"))
+                .and(path(format!("{prefix}/models")))
+                .and(move |request: &wiremock::Request| request.url.query() == query)
+                .and(header("authorization", "Bearer sk-api-test-only"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"gpt-5.4"}]})),
+                )
+                .expect(1)
+                .mount(&upstream)
+                .await;
+        }
         Mock::given(method("POST"))
             .and(path(format!("{prefix}/responses")))
             .and(header("authorization", "Bearer sk-api-test-only"))
@@ -8844,19 +8848,37 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             request.headers["user-agent"],
             wire_profile().snapshot().user_agent()
         );
-        let model_request = requests
+        let model_requests = requests
             .iter()
-            .find(|request| request.method == "GET")
-            .unwrap();
-        assert_eq!(
-            model_request.headers["user-agent"],
-            wire_profile().snapshot().user_agent()
-        );
-        assert_eq!(model_request.headers["originator"], "codex_cli_rs");
-        assert_eq!(model_request.headers["version"], "0.144.0");
+            .filter(|request| request.method == "GET")
+            .collect::<Vec<_>>();
+        assert_eq!(model_requests.len(), 2);
+        for query in [None, Some("client_version=1.0.0")] {
+            let model_request = model_requests
+                .iter()
+                .find(|request| request.url.query() == query)
+                .expect("separate background and client catalog requests");
+            assert_eq!(
+                model_request.headers["authorization"],
+                "Bearer sk-api-test-only"
+            );
+            assert_eq!(
+                model_request.headers["user-agent"],
+                wire_profile().snapshot().user_agent()
+            );
+            assert_eq!(model_request.headers["originator"], "codex_cli_rs");
+            assert_eq!(model_request.headers["version"], "0.144.0");
+            for header in ["cookie", "chatgpt-account-id"] {
+                assert!(
+                    !model_request.headers.contains_key(header),
+                    "unexpected catalog {header}"
+                );
+            }
+        }
         let body: Value = serde_json::from_slice(&request.body).expect("ordinary JSON");
         assert_eq!(body["stream"], true);
         assert_eq!(body["model"], "gpt-5.4");
+        upstream.verify().await;
     }
 }
 
