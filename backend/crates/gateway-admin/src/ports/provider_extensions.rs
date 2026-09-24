@@ -65,7 +65,7 @@ impl ProviderAdminExtensionIndex {
         let reference = snapshot
             .extensions()
             .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unavailable))?;
-        if !reference.is_ready() {
+        if !reference.can_serve() {
             return Err(ProviderAdminError::new(ProviderAdminErrorKind::Unavailable));
         }
         let registry = self

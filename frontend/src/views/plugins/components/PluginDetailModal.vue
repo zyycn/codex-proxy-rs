@@ -3,21 +3,21 @@ import type { InstalledPlugin } from '../utils/catalog'
 import type { PluginArtifact, PluginInstance, PluginManagementView } from '@/api'
 import { ArrowInDownSquareHalf } from '@boxicons/vue'
 import { BaseButton, BaseEmpty, BaseIconButton, BaseModal, BaseSegmented, BaseTag } from '@codex-proxy/ui'
-import { ArrowUpRight, History, Layers, Play, Plus, Power, RefreshCw, Settings2, Trash2 } from '@lucide/vue'
+import { ArrowUpRight, CircleAlert, History, Layers, Play, Power, RefreshCw, Settings2 } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { configurationStatus, PLUGIN_STATUS_LABELS, pluginStatusType } from '../utils/catalog'
-import { artifactForInstance, pluginCapabilityForContribution } from '../utils/model'
+import { configurationStatus, currentPluginInstance, hasPluginSettings, PLUGIN_STATUS_LABELS, pluginStatusType } from '../utils/catalog'
+import { artifactForInstance } from '../utils/model'
 import { pluginPageLocation } from '../utils/navigation'
 import PluginConfigurationSummary from './PluginConfigurationSummary.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
+import PluginLegacyConfigurations from './PluginLegacyConfigurations.vue'
 import PluginVersionsPanel from './PluginVersionsPanel.vue'
 
 const props = defineProps<{ plugin: InstalledPlugin | null, initialSection: 'configurations' | 'versions', views: PluginManagementView[], busy: boolean }>()
 defineEmits<{
-  configure: [artifact: PluginArtifact]
   accept: [artifact: PluginArtifact]
-  edit: [instance: PluginInstance, artifact?: PluginArtifact]
+  edit: [instance: PluginInstance]
   enable: [instance: PluginInstance]
   disable: [instance: PluginInstance]
   deleteConfiguration: [instance: PluginInstance]
@@ -30,16 +30,15 @@ defineEmits<{
 }>()
 const open = defineModel<boolean>({ required: true })
 const section = shallowRef('configurations')
-const sections = [{ label: '配置', value: 'configurations', icon: Settings2 }, { label: '版本', value: 'versions', icon: Layers }]
+const sections = [{ label: '概览', value: 'configurations', icon: Settings2 }, { label: '版本', value: 'versions', icon: Layers }]
+const current = computed(() => props.plugin && currentPluginInstance(props.plugin))
+const legacy = computed(() => props.plugin?.configurations.filter(instance => instance.id !== current.value?.id) ?? [])
+const currentArtifact = computed(() => current.value && artifactForInstance(current.value, props.plugin?.artifacts ?? []))
 const acceptedArtifact = computed(() => props.plugin?.artifacts.find(artifact => artifact.acceptedAt) ?? null)
 const pendingArtifact = computed(() => props.plugin?.artifacts.find(artifact => !artifact.acceptedAt) ?? null)
 const viewByInstance = computed(() => new Map(props.views.map(view => [view.target.instanceId, view])))
 function capabilities(instance: PluginInstance) {
   return artifactForInstance(instance, props.plugin?.artifacts ?? [])?.metadata.contributes ?? {}
-}
-function hasMiddlewareBinding(instance: PluginInstance) {
-  const artifact = artifactForInstance(instance, props.plugin?.artifacts ?? [])
-  return artifact && instance.bindings.some(binding => pluginCapabilityForContribution(artifact.metadata, binding.contribution) === 'middleware')
 }
 function configurationNotes(instance: PluginInstance) {
   const notes: string[] = []
@@ -49,8 +48,6 @@ function configurationNotes(instance: PluginInstance) {
     notes.push('配置已保存，等待生效，状态会自动刷新')
   if (configurationStatus(instance) === 'unconfigured')
     notes.push('补充必填配置后即可启用')
-  if (capabilities(instance).middleware && !hasMiddlewareBinding(instance))
-    notes.push('请求中间件尚未开启，可在“请求处理”中设置')
   if (instance.runtime.drainingRevisions.length || instance.runtime.retainedContinuations)
     notes.push('旧版本仍有进行中的调用或保留流程，完成前暂不能删除')
   return notes
@@ -63,38 +60,36 @@ watch(() => props.initialSection, value => section.value = value)
 </script>
 
 <template>
-  <BaseModal v-model="open" :title="plugin?.artifact.metadata.displayName ?? '插件详情'" description="多份配置可独立启停，相同 Provider 的配置不可同时启用" size="lg" :dismissible="!busy">
+  <BaseModal v-model="open" :title="plugin?.artifact.metadata.displayName ?? '插件详情'" :description="plugin?.artifact.metadata.description" size="md-wide" :dismissible="!busy">
     <div v-if="plugin" class="grid gap-5">
       <div class="flex flex-wrap items-center gap-3">
         <BaseSegmented v-model="section" :options="sections" label="插件详情分区" class="w-44" />
-        <BaseIconButton v-if="section === 'configurations' && acceptedArtifact" label="添加配置" variant="secondary" class="ml-auto" :disabled="busy" @click="$emit('configure', acceptedArtifact)">
-          <Plus class="size-4" />
-        </BaseIconButton>
-        <div v-if="section === 'versions' && plugin.artifact.source.kind !== 'builtin'" class="ml-auto flex items-center gap-2">
+        <div v-if="plugin.artifact.source.kind !== 'builtin'" class="ml-auto flex items-center gap-2">
           <BaseIconButton v-if="plugin.source?.source.kind === 'github' || plugin.source?.source.kind === 'url'" label="检查更新" variant="secondary" :disabled="busy" @click="$emit('checkUpdate', plugin)">
             <RefreshCw class="size-4" />
           </BaseIconButton>
-          <BaseIconButton label="安装新版本" variant="secondary" :disabled="busy" @click="$emit('installVersion', plugin)">
+          <BaseIconButton label="更新插件" variant="secondary" :disabled="busy" @click="$emit('installVersion', plugin)">
             <ArrowInDownSquareHalf pack="filled" class="size-5" />
           </BaseIconButton>
         </div>
       </div>
       <template v-if="section === 'configurations'">
-        <BaseEmpty v-if="!plugin.configurations.length" :title="acceptedArtifact ? '尚无配置' : '插件待安装'" :description="acceptedArtifact ? '添加一份配置以使用此插件' : '查看访问权限并确认安装后才能配置'" size="sm" surface="inset">
+        <BaseEmpty v-if="!plugin.configurations.length" :title="acceptedArtifact ? '插件尚未初始化' : '插件待安装'" size="sm" surface="inset">
           <template #action>
-            <BaseButton v-if="acceptedArtifact" variant="primary" @click="$emit('configure', acceptedArtifact)">
-              添加配置
+            <BaseButton v-if="acceptedArtifact" variant="primary" @click="$emit('accept', acceptedArtifact)">
+              初始化插件
             </BaseButton>
             <BaseButton v-else-if="pendingArtifact" variant="primary" @click="$emit('accept', pendingArtifact)">
               安装
             </BaseButton>
           </template>
         </BaseEmpty>
-        <article v-for="instance in plugin.configurations" :key="instance.id" class="grid gap-3 rounded-cp bg-cp-fill-alter p-4">
+        <article v-for="instance in current ? [current] : []" :key="instance.id" class="grid min-h-36 content-between gap-3 rounded-cp bg-cp-fill-alter p-4">
           <div class="flex flex-wrap items-center gap-2">
-            <strong class="min-w-0 flex-1 break-words text-cp-sm">{{ instance.name }}</strong>
+            <strong class="min-w-0 flex-1 wrap-break-word text-cp-sm">当前版本</strong>
             <BaseTag>{{ artifactForInstance(instance, plugin.artifacts)?.metadata.version ?? '版本不可用' }}</BaseTag>
             <BaseTag :type="pluginStatusType(configurationStatus(instance))">
+              <CircleAlert v-if="configurationStatus(instance) === 'failed'" class="mr-1 size-3.5" />
               {{ PLUGIN_STATUS_LABELS[configurationStatus(instance)] }}
             </BaseTag>
             <PluginHelpPopover v-if="configurationNotes(instance).length" :label="`${instance.name}配置状态说明`">
@@ -115,23 +110,32 @@ watch(() => props.initialSection, value => section.value = value)
                 <ArrowUpRight class="size-3.5 shrink-0" />
               </RouterLink>
             </div>
-            <BaseIconButton size="sm" variant="secondary" :label="configurationStatus(instance) === 'failed' ? '修正配置并重试' : '编辑配置'" :disabled="busy" @click="$emit('edit', instance)">
+            <BaseIconButton v-if="instance.configurationRequired || (currentArtifact && hasPluginSettings(currentArtifact))" size="sm" variant="secondary" label="设置" :disabled="busy" @click="$emit('edit', instance)">
               <Settings2 class="size-4" />
+            </BaseIconButton>
+            <BaseIconButton v-if="configurationStatus(instance) === 'failed'" label="重新启动" size="sm" variant="secondary" :disabled="busy" @click="$emit('enable', instance)">
+              <RefreshCw class="size-4" />
             </BaseIconButton>
             <BaseIconButton v-if="instance.enabled" label="停用" size="sm" variant="secondary" :disabled="busy" @click="$emit('disable', instance)">
               <Power class="size-4" />
             </BaseIconButton>
-            <BaseIconButton v-else :label="instance.configurationRequired ? '启用前请完善配置' : '启用'" size="sm" variant="secondary" :disabled="busy || instance.configurationRequired" @click="$emit('enable', instance)">
+            <BaseIconButton v-else :label="instance.configurationRequired ? '完成设置并启用' : '启用'" size="sm" variant="secondary" :disabled="busy" @click="$emit('enable', instance)">
               <Play class="size-4" />
             </BaseIconButton>
-            <BaseIconButton v-if="plugin.artifacts.length > 1" label="回滚版本" size="sm" variant="secondary" :disabled="busy" @click="$emit('rollback', instance)">
+            <BaseIconButton v-if="plugin.artifacts.length > 1" label="回退版本" size="sm" variant="secondary" :disabled="busy" @click="$emit('rollback', instance)">
               <History class="size-4" />
-            </BaseIconButton>
-            <BaseIconButton v-if="!instance.enabled" label="删除配置" size="sm" variant="destructive" :disabled="busy" @click="$emit('deleteConfiguration', instance)">
-              <Trash2 class="size-4" />
             </BaseIconButton>
           </div>
         </article>
+        <PluginLegacyConfigurations
+          :instances="legacy"
+          :artifacts="plugin.artifacts"
+          :busy="busy"
+          @edit="$emit('edit', $event)"
+          @enable="$emit('enable', $event)"
+          @disable="$emit('disable', $event)"
+          @delete="$emit('deleteConfiguration', $event)"
+        />
       </template>
       <PluginVersionsPanel v-else :plugin="plugin" :busy="busy" @accept="$emit('accept', $event)" @switch-version="$emit('switchVersion', $event)" @delete-version="$emit('deleteVersion', $event)" />
     </div>

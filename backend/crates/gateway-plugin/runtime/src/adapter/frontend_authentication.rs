@@ -4,7 +4,7 @@ use futures::future::BoxFuture;
 use gateway_admin::model::{
     AdminError,
     plugins::instances::{
-        PluginCapabilityBinding, PluginFailurePolicy, PluginFrontendIdentityBinding,
+        PluginCapabilityBinding, PluginFailurePolicy, PluginFrontendIdentityBinding, PluginInstance,
     },
 };
 use gateway_core::{
@@ -29,8 +29,7 @@ const IDENTIFIER_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct FrontendAuthenticationEntry {
     identities: BTreeMap<String, ClientApiKeyId>,
     exclusive: bool,
-    session: Arc<RpcSession>,
-    callbacks: Arc<PluginCallbacks>,
+    invocation: Option<(Arc<RpcSession>, Arc<PluginCallbacks>)>,
 }
 
 pub(crate) async fn prepare_entry(
@@ -62,9 +61,21 @@ pub(crate) async fn prepare_entry(
     Ok(Some(FrontendAuthenticationEntry {
         identities: compiled.identities,
         exclusive: compiled.binding.failure_policy == PluginFailurePolicy::Reject,
-        session,
-        callbacks,
+        invocation: Some((session, callbacks)),
     }))
+}
+
+/// 认证器恢复失败仍占据认证入口，不能静默改走其他认证路径。
+pub(crate) fn unavailable_entry(instance: &PluginInstance) -> Option<FrontendAuthenticationEntry> {
+    instance
+        .bindings
+        .iter()
+        .find(|binding| binding.stage == "authentication")
+        .map(|binding| FrontendAuthenticationEntry {
+            identities: BTreeMap::new(),
+            exclusive: binding.failure_policy == PluginFailurePolicy::Reject,
+            invocation: None,
+        })
 }
 
 pub(crate) fn validate_bindings(
@@ -181,21 +192,19 @@ impl FrontendAuthenticationPlan for PluginFrontendAuthenticationPlan {
         request: &'a ClientAuthenticationRequest,
     ) -> BoxFuture<'a, Result<FrontendAuthenticationDecision, FrontendAuthenticationError>> {
         Box::pin(async move {
-            let context = self
+            let (session, callbacks) = self
                 .entry
-                .session
-                .context(Stage::Authentication, self.timeout);
-            let _scope = self
-                .entry
-                .callbacks
+                .invocation
+                .as_ref()
+                .ok_or(FrontendAuthenticationError)?;
+            let context = session.context(Stage::Authentication, self.timeout);
+            let _scope = callbacks
                 .prepare_frontend_authentication(&context)
                 .map_err(|_| FrontendAuthenticationError)?;
             let input = FrontendAuthenticationRequest {
                 authorization: request.authorization().to_owned(),
             };
-            let reply = self
-                .entry
-                .session
+            let reply = session
                 .call(
                     "frontend_auth.authenticate",
                     context,

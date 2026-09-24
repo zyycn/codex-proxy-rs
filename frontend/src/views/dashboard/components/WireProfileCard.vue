@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { Openai, Xai } from '@boxicons/vue'
 import { BaseCard, BaseEmpty, BaseSegmented } from '@codex-proxy/ui'
 
 import { Box, CheckCircle2, Monitor, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import { formatDateTime } from '@/utils/date'
-import { formatProviderLabel } from '@/utils/providers'
+import { formatProviderLabel, isSupportedProvider, providerIcon } from '@/utils/providers'
 
 interface WireProfile {
   provider: string
@@ -38,9 +37,9 @@ const activeProvider = shallowRef('')
 
 const providerOptions = computed(() =>
   props.profiles.map(profile => ({
-    label: providerLabel(profile.provider),
+    label: formatProviderLabel(profile.provider),
     value: profile.provider,
-    icon: profile.provider === 'openai' ? Openai : profile.provider === 'xai' ? Xai : undefined,
+    icon: providerIcon(profile.provider),
   })),
 )
 
@@ -136,6 +135,15 @@ const clientIdentity = computed(() => {
   return current.provider === 'xai' ? toPascalCase(value) : value
 })
 
+const identityAttributes = computed(() => {
+  const current = profile.value
+  if (!current)
+    return []
+  return isSupportedProvider(current.provider)
+    ? [{ label: '客户端标识', value: clientIdentity.value }]
+    : current.attributes
+})
+
 const authProtocol = computed(() => {
   const value = profile.value?.attributes.find(attribute => attribute.label === 'Token 认证')?.value
   if (!value)
@@ -166,23 +174,25 @@ watch(
   },
   { immediate: true },
 )
-
-function providerLabel(provider: string) {
-  return formatProviderLabel(provider)
-}
 </script>
 
 <template>
-  <BaseCard as="article" title="通用上游身份" class="flex min-h-95 w-full flex-col">
-    <template #actions>
-      <BaseSegmented
-        v-if="providerOptions.length > 1"
-        v-model="activeProvider"
-        label="上游平台"
-        :options="providerOptions"
-        display="icon"
-        class="w-21"
-      />
+  <BaseCard as="article" class="flex min-h-95 w-full flex-col">
+    <template #header>
+      <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <h2 class="m-0 pt-0.5 text-xl leading-[1.15] font-heavy text-cp-text text-balance">
+          通用上游身份
+        </h2>
+        <div v-if="providerOptions.length > 1" class="min-w-0 max-w-full overflow-x-auto">
+          <BaseSegmented
+            v-model="activeProvider"
+            label="上游平台"
+            :options="providerOptions"
+            :style="{ width: `${providerOptions.length * 40 + 4}px` }"
+            display="icon"
+          />
+        </div>
+      </div>
     </template>
 
     <template #body>
@@ -203,7 +213,7 @@ function providerLabel(provider: string) {
               <span class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-cp-fill-tertiary">
                 <Box class="size-3.75 text-cp-text-secondary" />
               </span>
-              <span class="truncate text-cp-xs leading-none font-heavy">{{ profile.product }}</span>
+              <span class="truncate text-cp-xs leading-none font-heavy" :title="profile.product">{{ profile.product }}</span>
             </div>
             <span
               class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-cp-sm leading-none font-bold"
@@ -238,17 +248,14 @@ function providerLabel(provider: string) {
             </div>
           </div>
 
-          <dl
-            class="m-0 grid min-w-0 gap-5 sm:gap-7"
-            :class="profile.provider === 'xai' ? 'sm:grid-cols-[0.62fr_1.28fr_0.94fr]' : 'sm:grid-cols-[0.72fr_1.28fr]'"
-          >
+          <dl class="m-0 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-x-7 gap-y-5">
             <div v-if="profile.provider === 'xai'" class="min-w-0">
               <dt class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary">
                 <ShieldCheck class="size-3.25 text-cp-text-tertiary" />
                 认证协议
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"
+                class="mt-2 mb-0 font-mono text-cp-lg leading-snug font-bold wrap-anywhere tabular-nums text-cp-text"
                 :title="authProtocol"
               >
                 {{ authProtocol }}
@@ -261,7 +268,7 @@ function providerLabel(provider: string) {
                 {{ profile.provider === 'openai' ? '模拟运行环境' : '运行环境' }}
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"
+                class="mt-2 mb-0 font-mono text-cp-lg leading-snug font-bold wrap-anywhere tabular-nums text-cp-text"
                 :title="runtimeEnvironment.title"
               >
                 {{ runtimeEnvironment.primary }}
@@ -271,16 +278,16 @@ function providerLabel(provider: string) {
               </dd>
             </div>
 
-            <div class="min-w-0">
+            <div v-for="(attribute, index) in identityAttributes" :key="index" class="min-w-0">
               <dt class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary">
                 <Terminal class="size-3.25 text-cp-text-tertiary" />
-                客户端标识
+                {{ attribute.label }}
               </dt>
               <dd
-                class="mt-2 mb-0 truncate font-mono text-[16px] leading-none font-heavy tabular-nums text-cp-text"
-                :title="clientIdentity"
+                class="mt-2 mb-0 font-mono text-[16px] leading-snug font-heavy wrap-anywhere tabular-nums text-cp-text"
+                :title="attribute.value"
               >
-                {{ clientIdentity }}
+                {{ attribute.value }}
               </dd>
             </div>
           </dl>

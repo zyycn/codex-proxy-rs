@@ -463,3 +463,31 @@ export function deletePluginInstance(data: { id: string }, options: RequestOptio
     ...options,
   })
 }
+
+export interface PluginVersionPlan {
+  instanceRevision: number
+  artifactSha256: string
+  configuration: Record<string, unknown>
+  secretFields: string[]
+  bindings: PluginCapabilityBinding[]
+  restored: boolean
+}
+
+export function getPluginVersionPlan(id: string, artifactSha256: string, options: RequestOptions = {}) {
+  return request<PluginVersionPlan>({
+    url: '/api/admin/plugins/instances/version-plan',
+    method: 'GET',
+    params: { id, artifactSha256 },
+    ...options,
+  })
+}
+
+export function switchPluginVersion(data: { id: string, target: { artifactSha256: string, expectedRevision: number } }, options: RequestOptions = {}) {
+  return request<PluginInstanceMutationResponse>({
+    url: '/api/admin/plugins/instances/switch-version',
+    method: 'POST',
+    data,
+    timeout: 120000,
+    ...options,
+  })
+}

@@ -147,7 +147,7 @@ pub struct PluginInstanceReplacement {
     pub expected_revision: u64,
 }
 
-/// 只替换已安装制品；配置、secret 与授权保持当前值，并重新通过目标版本校验。
+/// 恢复已安装旧版本的配置快照，并重新通过目标版本校验。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RollbackPluginInstance {
@@ -170,4 +170,24 @@ pub struct PluginRollbackPlan {
     pub instance_revision: u64,
     pub current_version: String,
     pub targets: Vec<PluginRollbackTarget>,
+}
+
+/// 版本配置快照只用于服务端恢复，敏感值不实现 Debug 或 Serialize。
+#[derive(Clone)]
+pub struct PluginVersionConfiguration {
+    pub configuration: serde_json::Value,
+    pub secrets: BTreeMap<String, SecretString>,
+    pub bindings: Vec<PluginCapabilityBinding>,
+}
+
+/// 切换版本的只读草稿，不包含密钥值，也不会启动插件或写入配置。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginVersionPlan {
+    pub instance_revision: u64,
+    pub artifact_sha256: String,
+    pub configuration: serde_json::Value,
+    pub secret_fields: Vec<String>,
+    pub bindings: Vec<PluginCapabilityBinding>,
+    pub restored: bool,
 }

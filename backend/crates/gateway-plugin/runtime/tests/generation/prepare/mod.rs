@@ -725,3 +725,142 @@ async fn preparation_cannot_mix_a_newer_persisted_revision_with_an_older_snapsho
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn restoring_a_failed_plugin_keeps_other_instances_ready_and_reports_only_its_failure() {
+    let (cache, store, runtime) = super::setup().await;
+    let snapshot = {
+        let mut snapshot = store.snapshot.lock().unwrap();
+        let mut failed = snapshot.instances[0].clone();
+        failed.id = "failed-plugin".into();
+        failed.configuration = serde_json::json!({"startup":"fail"});
+        snapshot.instances.insert(0, failed);
+        snapshot.clone()
+    };
+    let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .expect("one failed plugin must not stop restoration");
+    assert!(generation.can_serve());
+    let diagnostics =
+        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(1), Some(&generation))
+            .await
+            .unwrap();
+    assert_eq!(
+        diagnostics["failed-plugin"].status,
+        PluginInstanceRuntimeStatus::PreparationFailed
+    );
+    assert!(diagnostics["failed-plugin"].failure.is_some());
+    assert_eq!(
+        diagnostics["instance-one"].status,
+        PluginInstanceRuntimeStatus::Running
+    );
+    let reused = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        generation.id(),
+        reused.id(),
+        "quarantined failures do not restart on every request"
+    );
+    drop(reused);
+    drop(generation);
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn a_published_process_crash_preserves_the_serving_snapshot_and_other_plugin_status() {
+    let (cache, store, runtime) = super::setup().await;
+    let snapshot = {
+        let mut snapshot = store.snapshot.lock().unwrap();
+        let mut failed = snapshot.instances[0].clone();
+        failed.id = "crashing-plugin".into();
+        failed.configuration = serde_json::json!({"exit_after_ready_ms":100});
+        snapshot.instances.push(failed);
+        snapshot.clone()
+    };
+    let generation = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    wait_until_unready(&generation).await;
+    assert!(generation.can_serve());
+    assert!(
+        runtime
+            .provider_registry()
+            .for_extensions(Some(&generation))
+            .is_ok()
+    );
+    assert!(!generation.is_ready());
+    let diagnostics =
+        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(1), Some(&generation))
+            .await
+            .unwrap();
+    assert_eq!(
+        diagnostics["instance-one"].status,
+        PluginInstanceRuntimeStatus::Running
+    );
+    assert_eq!(
+        diagnostics["crashing-plugin"].status,
+        PluginInstanceRuntimeStatus::Faulted
+    );
+    drop(generation);
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn an_incompatible_host_quarantines_the_plugin_with_a_specific_version_error() {
+    use std::sync::Arc;
+    let (cache, store, _) = super::setup().await;
+    let runtime = gateway_plugin_runtime::PluginRuntime::new(
+        store.clone(),
+        store.clone(),
+        gateway_plugin_runtime::PluginRuntimeConfig {
+            cache_directory: cache.path().to_owned(),
+            host_version: "3.0.0".parse().unwrap(),
+            package_limits: Default::default(),
+            rpc_limits: Default::default(),
+            continuation_drain: Default::default(),
+            restart_circuit: Default::default(),
+        },
+        Default::default(),
+        gateway_admin::ports::provider::ProviderAdminRegistry::new([]).unwrap(),
+        Arc::new(gateway_host::outbound::HttpClient::new().unwrap()),
+        Arc::new(gateway_host::process::ProcessSupervisor::default()),
+    );
+    let restored = ExtensionPreparationPort::prepare(&runtime, ConfigRevision::new(1).unwrap())
+        .await
+        .unwrap();
+    assert!(restored.can_serve());
+    let snapshot = store.snapshot.lock().unwrap().clone();
+    let diagnostics =
+        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(1), Some(&restored))
+            .await
+            .unwrap();
+    let failure = diagnostics["instance-one"].failure.as_ref().unwrap();
+    assert!(
+        failure
+            .message
+            .contains("插件要求宿主 >=1.0.0, <2.0.0，当前为 3.0.0")
+    );
+    assert!(
+        std::fs::read_dir(cache.path()).unwrap().next().is_none(),
+        "incompatible packages never start"
+    );
+}
+
+#[tokio::test]
+async fn an_existing_failed_plugin_does_not_prevent_editing_an_unrelated_instance() {
+    let (cache, store, runtime) = super::setup().await;
+    let mut snapshot = store.snapshot.lock().unwrap().clone();
+    let mut failed = snapshot.instances[0].clone();
+    failed.id = "failed-plugin".into();
+    failed.configuration = serde_json::json!({"startup":"fail"});
+    snapshot.instances.push(failed);
+    snapshot.config_revision = Revision::new(2).unwrap();
+    snapshot.instances[0].revision = snapshot.config_revision;
+    let candidate = PluginPreparation::prepare(&runtime, Revision::new(1).unwrap(), snapshot)
+        .await
+        .expect("only the instance being changed must successfully prepare");
+    assert!(candidate.can_serve());
+    drop(candidate);
+    super::wait_until_empty(cache.path()).await;
+}

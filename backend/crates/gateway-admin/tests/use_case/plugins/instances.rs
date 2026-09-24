@@ -20,7 +20,8 @@ use gateway_admin::{
                 ConfigurePluginInstance, PluginCapabilityBinding, PluginFailurePolicy,
                 PluginInstance, PluginInstanceMutation, PluginInstanceReplacement,
                 PluginInstanceRuntime, PluginInstanceRuntimeFailure, PluginInstanceRuntimeStatus,
-                PluginInstanceSnapshot, PluginPermissionGrant, RollbackPluginInstance,
+                PluginInstanceSnapshot, PluginPermissionGrant, PluginVersionConfiguration,
+                RollbackPluginInstance,
             },
             state::{
                 ApplyPluginStateMigration, DeletePluginState, PluginStateCommit,
@@ -71,8 +72,10 @@ struct FixtureData {
     artifact_reads: usize,
     change_during_artifact_read: bool,
     fail_preparation: bool,
+    configuration_ready: bool,
     prepared_snapshots: Vec<PluginInstanceSnapshot>,
     saves: Vec<SavedInstance>,
+    history: BTreeMap<String, PluginVersionConfiguration>,
     aborted: usize,
     activated: usize,
     quiesced: usize,
@@ -112,8 +115,17 @@ impl LifecycleFixture {
                 artifact_reads: 0,
                 change_during_artifact_read: false,
                 fail_preparation: false,
+                configuration_ready: true,
                 prepared_snapshots: vec![],
                 saves: vec![],
+                history: BTreeMap::from([(
+                    NEW_ARTIFACT.into(),
+                    PluginVersionConfiguration {
+                        configuration: json!({"oldVersion": true}),
+                        secrets: BTreeMap::from([("token".into(), "old-version-secret".into())]),
+                        bindings: vec![],
+                    },
+                )]),
                 aborted: 0,
                 activated: 0,
                 quiesced: 0,
@@ -151,6 +163,16 @@ impl LifecycleFixture {
             current.enabled = false;
             current.revision = next;
         }
+        if instance.enabled {
+            data.history.insert(
+                instance.artifact_sha256.clone(),
+                PluginVersionConfiguration {
+                    configuration: instance.configuration.clone(),
+                    secrets: instance.secrets.clone(),
+                    bindings: instance.bindings.clone(),
+                },
+            );
+        }
         instance.revision = next;
         data.snapshot.config_revision = next;
         data.snapshot
@@ -185,7 +207,7 @@ impl PluginPreparation for LifecycleFixture {
         metadata: &gateway_admin::model::plugins::PluginArtifactMetadata,
     ) -> Result<bool, AdminError> {
         assert_eq!(instance.artifact_sha256, metadata.sha256);
-        Ok(true)
+        Ok(self.data.lock().unwrap().configuration_ready)
     }
 
     async fn validate(
@@ -213,6 +235,13 @@ impl PluginPreparation for LifecycleFixture {
         if data.fail_preparation {
             return Err(AdminError::invalid("候选配置准备失败"));
         }
+        assert!(
+            snapshot
+                .instances
+                .iter()
+                .all(|instance| instance.revision <= snapshot.config_revision),
+            "候选集合必须包含本次实例变更的 revision，才能严格拒绝目标插件启动失败"
+        );
         data.prepared_snapshots.push(snapshot);
         let id = self.next_prepared.fetch_add(1, Ordering::Relaxed);
         Ok(ExtensionSetReference::new(
@@ -379,6 +408,17 @@ impl PluginStore for LifecycleFixture {
     }
     async fn load_instances(&self) -> AdminStoreResult<PluginInstanceSnapshot> {
         Ok(self.snapshot())
+    }
+
+    async fn load_version_configuration(
+        &self,
+        _: &str,
+        digest: &str,
+    ) -> AdminStoreResult<Option<PluginVersionConfiguration>> {
+        Ok(self.data.lock().unwrap().history.get(digest).cloned())
+    }
+    async fn configuration_versions(&self, _: &str) -> AdminStoreResult<Vec<String>> {
+        Ok(self.data.lock().unwrap().history.keys().cloned().collect())
     }
 
     async fn save_instance(
@@ -965,7 +1005,7 @@ async fn failed_state_migration_never_overwrites_a_concurrent_configuration_chan
 }
 
 #[tokio::test]
-async fn rollback_preserves_configuration_secrets_and_bindings_and_derives_target_permissions() {
+async fn rollback_restores_target_configuration_secrets_and_bindings_and_derives_permissions() {
     use secrecy::ExposeSecret as _;
 
     let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
@@ -997,17 +1037,17 @@ async fn rollback_preserves_configuration_secrets_and_bindings_and_derives_targe
     assert_eq!(result.instance.artifact_sha256, NEW_ARTIFACT);
     assert_eq!(result.instance.name, before.name);
     assert_eq!(result.instance.enabled, before.enabled);
-    assert_eq!(result.instance.configuration, before.configuration);
+    assert_eq!(result.instance.configuration, json!({"oldVersion": true}));
     assert_eq!(
         result.instance.grants,
         [PluginPermissionGrant {
             permission: "network".into()
         }]
     );
-    assert_eq!(result.instance.bindings, before.bindings);
+    assert!(result.instance.bindings.is_empty());
     assert_eq!(
         result.instance.secrets["token"].expose_secret(),
-        "fixture-secret"
+        "old-version-secret"
     );
     let data = fixture.data.lock().unwrap();
     assert_eq!(data.quiesced, 1);
@@ -1148,6 +1188,9 @@ async fn rollback_plan_is_read_only_and_orders_only_earlier_versions_of_the_same
             artifact(&"e".repeat(64), "test.lifecycle", "2.0.0+another-build"),
             artifact(&"f".repeat(64), "test.other-plugin", "0.1.0"),
         ]);
+        let saved = data.history[NEW_ARTIFACT].clone();
+        data.history.insert("c".repeat(64), saved.clone());
+        data.history.insert("d".repeat(64), saved);
         data.snapshot.instances[0]
             .secrets
             .insert("token".into(), "fixture-secret".into());
@@ -1190,4 +1233,176 @@ async fn rollback_plan_excludes_unaccepted_older_artifacts() {
             .iter()
             .all(|target| target.artifact_sha256 != digest)
     );
+}
+
+#[tokio::test]
+async fn enabling_another_instance_requires_an_explicit_replacement() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    let error = service(fixture.clone(), Arc::new(Published::default()))
+        .configure_instance(None, input(), &context())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminErrorKind::Conflict);
+    assert!(fixture.data.lock().unwrap().saves.is_empty());
+    assert!(fixture.snapshot().instances[0].enabled);
+}
+
+#[tokio::test]
+async fn version_plan_keeps_explicit_values_adds_defaults_and_remaps_bindings_without_writing() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    {
+        let mut data = fixture.data.lock().unwrap();
+        data.history.clear();
+        data.artifacts[1].metadata.configuration_schema = json!({
+            "type":"object", "default":{"fromRoot":42}, "properties": {
+                "label":{"type":"string","default":"default"},
+                "nested":{"type":"object","properties":{"added":{"default":true},"kept":{"default":100}}},
+                "token":{"type":"string","default":"never-copy-secret"}
+            }
+        });
+        data.artifacts[1].metadata.secret_fields = vec!["token".into()];
+        data.artifacts[1]
+            .metadata
+            .contributes
+            .get_mut("middleware")
+            .unwrap()
+            .id = "renamed.middleware".into();
+        data.snapshot.instances[0].configuration =
+            json!({"label":"mine","nested":{"kept":0},"obsolete":"keep-for-validation"});
+        data.snapshot.instances[0]
+            .secrets
+            .insert("token".into(), "private-value".into());
+        data.snapshot.instances[0].bindings = vec![PluginCapabilityBinding {
+            contribution: "test.lifecycle.middleware".into(),
+            stage: "request".into(),
+            order: 3,
+            failure_policy: PluginFailurePolicy::Reject,
+            client_key_ids: vec![],
+            account_group_ids: vec![],
+            provider_ids: vec![],
+            models: vec!["test-model".into()],
+            identity_bindings: vec![],
+        }];
+    }
+    let before = fixture.snapshot();
+    let plan = service(fixture.clone(), Arc::new(Published::default()))
+        .version_plan(&before.instances[0].id, NEW_ARTIFACT)
+        .await
+        .unwrap();
+    assert!(!plan.restored);
+    assert_eq!(
+        plan.configuration,
+        json!({"label":"mine","nested":{"kept":0,"added":true},"obsolete":"keep-for-validation","fromRoot":42})
+    );
+    assert_eq!(plan.bindings[0].contribution, "renamed.middleware");
+    assert_eq!(plan.bindings[0].models, ["test-model"]);
+    assert_eq!(plan.secret_fields, ["token"]);
+    let public = serde_json::to_string(&plan).unwrap();
+    assert!(!public.contains("private-value"));
+    assert!(!public.contains("never-copy-secret"));
+    assert_eq!(fixture.snapshot().config_revision, before.config_revision);
+    assert!(fixture.data.lock().unwrap().saves.is_empty());
+}
+
+#[tokio::test]
+async fn version_switch_preparation_failure_preserves_current_and_saved_settings() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    fixture.data.lock().unwrap().fail_preparation = true;
+    let before = fixture.snapshot();
+    let result = service(fixture.clone(), Arc::new(Published::default()))
+        .switch_instance_version(&before.instances[0].id, rollback_input(), &context())
+        .await;
+    assert!(result.is_err());
+    assert_eq!(fixture.snapshot().config_revision, before.config_revision);
+    assert_eq!(
+        fixture.snapshot().instances[0].artifact_sha256,
+        OLD_ARTIFACT
+    );
+    let data = fixture.data.lock().unwrap();
+    assert!(data.saves.is_empty());
+    assert_eq!(
+        data.history[NEW_ARTIFACT].configuration,
+        json!({"oldVersion":true})
+    );
+}
+
+#[tokio::test]
+async fn version_edit_preserves_the_target_versions_secrets_when_omitted() {
+    use secrecy::ExposeSecret as _;
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    let before = fixture.snapshot();
+    let mut request = input();
+    request.secrets = None;
+    let result = service(fixture, Arc::new(Published::default()))
+        .configure_instance(Some(&before.instances[0].id), request, &context())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.instance.secrets["token"].expose_secret(),
+        "old-version-secret"
+    );
+}
+
+#[tokio::test]
+async fn rollback_requires_a_saved_configuration_instead_of_reusing_incompatible_current_settings()
+{
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    fixture.data.lock().unwrap().history.clear();
+    let service = service(fixture.clone(), Arc::new(Published::default()));
+    let id = fixture.snapshot().instances[0].id.clone();
+    assert!(service.rollback_plan(&id).await.unwrap().targets.is_empty());
+    let error = service
+        .rollback_instance(&id, rollback_input(), &context())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminErrorKind::Invalid);
+    assert!(fixture.data.lock().unwrap().saves.is_empty());
+}
+
+#[tokio::test]
+async fn switching_a_disabled_plugin_also_requires_complete_target_settings() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    {
+        let mut data = fixture.data.lock().unwrap();
+        data.configuration_ready = false;
+        data.snapshot.instances[0].enabled = false;
+    }
+    let before = fixture.snapshot();
+    let error = service(fixture.clone(), Arc::new(Published::default()))
+        .switch_instance_version(&before.instances[0].id, rollback_input(), &context())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminErrorKind::Invalid);
+    assert_eq!(fixture.snapshot().config_revision, before.config_revision);
+    assert!(fixture.data.lock().unwrap().saves.is_empty());
+}
+
+#[tokio::test]
+async fn switching_versions_uses_saved_settings_and_rejects_stale_retry() {
+    use secrecy::ExposeSecret as _;
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    let service = service(fixture.clone(), Arc::new(Published::default()));
+    let id = fixture.snapshot().instances[0].id.clone();
+    let result = service
+        .switch_instance_version(&id, rollback_input(), &context())
+        .await
+        .unwrap();
+    assert_eq!(result.instance.artifact_sha256, NEW_ARTIFACT);
+    assert_eq!(result.instance.configuration, json!({"oldVersion":true}));
+    assert_eq!(
+        result.instance.secrets["token"].expose_secret(),
+        "old-version-secret"
+    );
+    assert!(result.instance.enabled);
+    let revision = fixture.snapshot().config_revision;
+    let error = service
+        .switch_instance_version(&id, rollback_input(), &context())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminErrorKind::Conflict);
+    assert_eq!(fixture.snapshot().config_revision, revision);
 }

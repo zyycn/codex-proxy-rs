@@ -319,7 +319,7 @@ fn default_instance_id(plugin_id: &str) -> String {
     uuid::Uuid::from_bytes(bytes).to_string()
 }
 
-fn configuration_defaults(metadata: &PluginArtifactMetadata) -> serde_json::Value {
+pub(super) fn configuration_defaults(metadata: &PluginArtifactMetadata) -> serde_json::Value {
     let mut configuration = schema_default(&metadata.configuration_schema)
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
@@ -370,7 +370,7 @@ fn merge_property_defaults(value: &mut serde_json::Value, schema: &serde_json::V
     }
 }
 
-fn default_bindings(metadata: &PluginArtifactMetadata) -> Vec<PluginCapabilityBinding> {
+pub(super) fn default_bindings(metadata: &PluginArtifactMetadata) -> Vec<PluginCapabilityBinding> {
     metadata
         .contributes
         .iter()

@@ -1,7 +1,7 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io::Write as _,
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use flate2::{Compression, write::GzEncoder};
@@ -70,12 +70,23 @@ pub fn contribution_for_id(
     )
 }
 
-pub fn worker() -> &'static [u8] {
-    static WORKER: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+struct WorkerFixture {
+    bytes: Vec<u8>,
+    digest: String,
+}
+
+fn worker_fixture() -> &'static WorkerFixture {
+    static WORKER: OnceLock<WorkerFixture> = OnceLock::new();
     WORKER.get_or_init(|| {
-        std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-worker"))
-            .expect("Cargo 应为集成测试构建 Rust 测试插件")
+        let bytes = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-worker"))
+            .expect("Cargo 应为集成测试构建 Rust 测试插件");
+        let digest = hex::encode(Sha256::digest(&bytes));
+        WorkerFixture { bytes, digest }
     })
+}
+
+pub fn worker() -> &'static [u8] {
+    &worker_fixture().bytes
 }
 
 pub fn package(worker: &[u8]) -> Arc<[u8]> {
@@ -125,7 +136,12 @@ fn package_with_identity_and_state(
     let (publisher, name) = plugin_id
         .split_once('.')
         .expect("测试插件 ID 必须使用 publisher.name");
-    let files = BTreeMap::from([("bin/worker".to_owned(), hex::encode(Sha256::digest(worker)))]);
+    let digest = if std::ptr::eq(worker, self::worker()) {
+        worker_fixture().digest.clone()
+    } else {
+        hex::encode(Sha256::digest(worker))
+    };
+    let files = BTreeMap::from([("bin/worker".to_owned(), digest)]);
     let manifest = Manifest {
         manifest_version: gateway_plugin_sdk::MANIFEST_VERSION,
         name: name.to_owned(),
@@ -156,10 +172,28 @@ fn package_with_identity_and_state(
             files,
         }),
     };
-    archive(BTreeMap::from([
-        ("plugin.json".into(), serde_json::to_vec(&manifest).unwrap()),
+    let manifest = serde_json::to_vec(&manifest).unwrap();
+    let key: [u8; 32] = Sha256::digest(&manifest).into();
+    type PackageCache = VecDeque<([u8; 32], Arc<[u8]>)>;
+    static PACKAGES: Mutex<PackageCache> = Mutex::new(VecDeque::new());
+    // 缓存的只是不可变制品；各用例仍独立校验、解包、启动进程和创建数据库 schema。
+    // 同时保留至多 8 个制品，避免复杂清单用例累积常驻内存。
+    let mut packages = PACKAGES.lock().unwrap();
+    if let Some(index) = packages.iter().position(|(existing, _)| *existing == key) {
+        let entry = packages.remove(index).unwrap();
+        let package = entry.1.clone();
+        packages.push_back(entry);
+        return package;
+    }
+    let package = archive(BTreeMap::from([
+        ("plugin.json".into(), manifest),
         ("bin/worker".into(), worker.to_vec()),
-    ]))
+    ]));
+    if packages.len() == 8 {
+        packages.pop_front();
+    }
+    packages.push_back((key, package.clone()));
+    package
 }
 
 pub fn archive(files: BTreeMap<String, Vec<u8>>) -> Arc<[u8]> {

@@ -68,8 +68,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-      additional_contexts:
-        codex-proxy-ui: ../../codex-proxy-ui
       target: runtime
       args:
         CPR_VERSION: ${CPR_VERSION:-}

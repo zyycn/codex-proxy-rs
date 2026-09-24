@@ -154,7 +154,7 @@ const previousArtifact = computed(() => props.installedArtifacts
 const addedPermissions = computed(() => verified.value?.metadata.permissionDescriptions.filter(permission =>
   !previousArtifact.value?.metadata.requestedPermissions.includes(permission.permission),
 ) ?? [])
-const installationLabel = computed(() => props.acceptanceArtifact || !previousArtifact.value ? '安装' : '安装版本')
+const installationLabel = computed(() => previousArtifact.value ? '安装新版本' : '安装')
 const sourceDraft = computed<PluginUpdateSourceBinding | null>(() => {
   const previous = props.updateSource
   if (!previous)
@@ -434,8 +434,8 @@ watch(
 <template>
   <BaseModal
     v-model="open"
-    :title="updateSource ? '安装新版本' : '安装插件'"
-    :description="acceptanceArtifact ? '确认访问权限后安装' : updateSource ? '安装新版本，现有配置不变' : '支持本地插件包、URL 与 GitHub'"
+    :title="updateSource ? '更新插件' : '安装插件'"
+    :description="acceptanceArtifact ? '确认访问权限后安装' : updateSource ? '检查设置兼容性后切换版本' : '支持本地插件包、URL 与 GitHub'"
     size="md"
     :dismissible="!busy"
   >
@@ -529,13 +529,9 @@ watch(
       </div>
     </div>
 
-    <p v-if="!verified && sourceChanged" class="mt-4 mb-0 text-cp-xs text-cp-text-secondary">
-      继续将保存新来源，现有版本不变，取消安装也会保留
-    </p>
-
     <section v-if="!verified && mode === 'github' && release" class="mt-4 grid gap-3">
       <div class="flex min-w-0 flex-wrap items-center gap-2">
-        <strong class="min-w-0 break-words text-cp text-cp-text">{{ release.name || release.tag }}</strong>
+        <strong class="min-w-0 wrap-break-word text-cp text-cp-text">{{ release.name || release.tag }}</strong>
         <BaseTag type="primary">
           {{ release.tag }}
         </BaseTag>
@@ -604,9 +600,9 @@ watch(
         安装即授权，插件以网关身份运行，请仅安装可信来源
       </p>
       <div v-if="previousArtifact" class="mt-2 flex items-center gap-1.5 text-cp-xs text-cp-text-secondary">
-        <span>现有配置保持原版本</span>
+        <span>安装后确认切换到新版本</span>
         <PluginHelpPopover label="安装新版本说明">
-          安装不会自动切换已有配置，可在版本列表中快速切换
+          沿用设置并补充新版本默认值，需要调整时会打开设置，已使用版本保留恢复设置
         </PluginHelpPopover>
       </div>
     </section>

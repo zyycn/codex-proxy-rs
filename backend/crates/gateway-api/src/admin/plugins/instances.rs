@@ -29,6 +29,14 @@ pub(super) fn router<S: SessionState + Clone + Send + Sync + 'static>() -> Route
         .route("/api/admin/plugins/instances/update", post(configure::<S>))
         .route("/api/admin/plugins/instances/rollback", post(rollback::<S>))
         .route(
+            "/api/admin/plugins/instances/switch-version",
+            post(switch_version::<S>),
+        )
+        .route(
+            "/api/admin/plugins/instances/version-plan",
+            get(version_plan::<S>),
+        )
+        .route(
             "/api/admin/plugins/instances/rollback-plan",
             get(rollback_plan::<S>),
         )
@@ -295,5 +303,49 @@ async fn remove<S: SessionState + Send + Sync>(
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({"configRevision":revision.get()})),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VersionPlanQuery {
+    id: String,
+    artifact_sha256: String,
+}
+
+async fn version_plan<S: SessionState + Send + Sync>(
+    _: AdminAuth,
+    State(state): State<S>,
+    Query(request): Query<VersionPlanQuery>,
+) -> Result<impl IntoResponse, AdminError> {
+    let plan = state
+        .admin_services()
+        .plugins()
+        .version_plan(&request.id, &request.artifact_sha256)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(plan)))
+}
+
+async fn switch_version<S: SessionState + Send + Sync>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<RollbackRequest>,
+) -> Result<impl IntoResponse, AdminError> {
+    let result = state
+        .admin_services()
+        .plugins()
+        .switch_instance_version(
+            &request.id,
+            request.target,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(
+            serde_json::json!({"id":result.instance.id,"configRevision":result.config_revision.get()}),
+        ),
     ))
 }

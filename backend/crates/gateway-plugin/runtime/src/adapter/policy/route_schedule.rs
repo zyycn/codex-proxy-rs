@@ -105,6 +105,7 @@ async fn route_with_entry(
     timeout: Duration,
     maximum_payload_bytes: usize,
 ) -> Result<ModelRouteDecision, ()> {
+    let invocation = entry.invocation.as_ref().ok_or(())?;
     let projection = operation_projection(input.operation())?;
     let payload = if entry.requests_authorized {
         projection.body.to_bytes(maximum_payload_bytes)?
@@ -128,13 +129,13 @@ async fn route_with_entry(
             .collect(),
         headers,
     };
-    let mut context = entry.session.context(Stage::Routing, timeout);
+    let mut context = invocation.session.context(Stage::Routing, timeout);
     context.request_id = Some(input.request_id().as_str().to_owned());
-    let _network_scope = entry
+    let _network_scope = invocation
         .callbacks
         .prepare_data_plane(&context, input.execution_effects())
         .map_err(|_| ())?;
-    let reply = entry
+    let reply = invocation
         .session
         .call(
             "policy.route_model",
@@ -177,6 +178,7 @@ async fn schedule_with_entry(
     input: &AccountScheduleInput,
     timeout: Duration,
 ) -> Result<AccountScheduleDecision, ()> {
+    let invocation = entry.invocation.as_ref().ok_or(())?;
     let highest_weight = input
         .candidates()
         .iter()
@@ -208,18 +210,18 @@ async fn schedule_with_entry(
             })
             .collect(),
     };
-    let mut context = entry.session.context(Stage::Scheduling, timeout);
+    let mut context = invocation.session.context(Stage::Scheduling, timeout);
     context.request_id = Some(input.request_id().as_str().to_owned());
     context.attempt_id = Some(format!(
         "{}:{}",
         input.request_id().as_str(),
         input.attempt_index()
     ));
-    let _network_scope = entry
+    let _network_scope = invocation
         .callbacks
         .prepare_data_plane(&context, input.execution_effects())
         .map_err(|_| ())?;
-    let reply = entry
+    let reply = invocation
         .session
         .call(
             "policy.schedule_account",

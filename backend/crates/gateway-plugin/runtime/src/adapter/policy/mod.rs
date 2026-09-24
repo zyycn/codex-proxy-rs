@@ -5,7 +5,7 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use gateway_admin::model::{
     AdminError,
-    plugins::instances::{PluginCapabilityBinding, PluginFailurePolicy},
+    plugins::instances::{PluginCapabilityBinding, PluginFailurePolicy, PluginInstance},
 };
 use gateway_core::engine::middleware::MiddlewareMount;
 use gateway_plugin_sdk::{Capability, Manifest, Permission, Stage};
@@ -20,12 +20,17 @@ pub(crate) enum PolicyEntry {
     Middleware(MiddlewareEntry),
 }
 
+#[derive(Clone)]
+struct PolicyInvocation {
+    session: Arc<RpcSession>,
+    callbacks: Arc<PluginCallbacks>,
+}
+
 pub(crate) struct ModelRouterEntry {
     order: i32,
     plugin_id: String,
     instance_id: String,
-    session: Arc<RpcSession>,
-    callbacks: Arc<PluginCallbacks>,
+    invocation: Option<PolicyInvocation>,
     scope: BindingScope,
     failure_policy: PluginFailurePolicy,
     requests_authorized: bool,
@@ -34,8 +39,7 @@ pub(crate) struct ModelRouterEntry {
 pub(crate) struct AccountSchedulerEntry {
     plugin_id: String,
     instance_id: String,
-    session: Arc<RpcSession>,
-    callbacks: Arc<PluginCallbacks>,
+    invocation: Option<PolicyInvocation>,
     scope: BindingScope,
     failure_policy: PluginFailurePolicy,
     requests_authorized: bool,
@@ -46,8 +50,7 @@ pub(crate) struct MiddlewareEntry {
     plugin_id: String,
     instance_id: String,
     mount: MiddlewareMount,
-    session: Arc<RpcSession>,
-    callbacks: Arc<PluginCallbacks>,
+    invocation: Option<PolicyInvocation>,
     scope: BindingScope,
     failure_policy: PluginFailurePolicy,
     requests_authorized: bool,
@@ -127,62 +130,104 @@ pub(crate) fn compile_entries(
     let plugin_id = manifest
         .plugin_id()
         .map_err(|_| AdminError::invalid("插件身份无效"))?;
-    let requests_authorized = permissions.contains(&Permission::Requests);
-    let mut entries = Vec::new();
-    for binding in bindings {
-        let capability = crate::contribution::resolve(manifest, binding)?.capability;
-        if !matches!(
-            capability,
-            Capability::ModelRouter | Capability::Scheduler | Capability::Middleware
-        ) {
-            continue;
-        }
-        let scope = BindingScope::compile(binding)?;
-        entries.push(match capability {
-            Capability::ModelRouter => PolicyEntry::Router(ModelRouterEntry {
-                order: binding.order,
-                plugin_id: plugin_id.clone(),
-                instance_id: instance_id.to_owned(),
-                session: Arc::clone(&session),
-                callbacks: Arc::clone(&callbacks),
-                scope,
-                failure_policy: binding.failure_policy.clone(),
-                requests_authorized,
-            }),
-            Capability::Scheduler => PolicyEntry::Scheduler(AccountSchedulerEntry {
-                plugin_id: plugin_id.clone(),
-                instance_id: instance_id.to_owned(),
-                session: Arc::clone(&session),
-                callbacks: Arc::clone(&callbacks),
-                scope,
-                failure_policy: binding.failure_policy.clone(),
-                requests_authorized,
-            }),
-            Capability::Middleware => {
-                let stage: Stage =
-                    serde_json::from_value(serde_json::Value::String(binding.stage.clone()))
-                        .map_err(|_| AdminError::invalid("插件中间件阶段无效"))?;
-                let mount = match stage {
-                    Stage::Request => MiddlewareMount::Request,
-                    Stage::Attempt => MiddlewareMount::Attempt,
-                    _ => return Err(AdminError::invalid("插件中间件阶段无效")),
-                };
-                PolicyEntry::Middleware(MiddlewareEntry {
-                    order: binding.order,
-                    plugin_id: plugin_id.clone(),
-                    instance_id: instance_id.to_owned(),
-                    mount,
-                    session: Arc::clone(&session),
-                    callbacks: Arc::clone(&callbacks),
-                    scope,
-                    failure_policy: binding.failure_policy.clone(),
-                    requests_authorized,
-                })
-            }
-            _ => unreachable!("capability was filtered above"),
-        });
-    }
-    Ok(entries)
+    let invocation = PolicyInvocation { session, callbacks };
+    bindings
+        .iter()
+        .filter_map(|binding| {
+            let capability = match crate::contribution::resolve(manifest, binding) {
+                Ok(contribution) => contribution.capability,
+                Err(error) => return Some(Err(error)),
+            };
+            matches!(
+                capability,
+                Capability::ModelRouter | Capability::Scheduler | Capability::Middleware
+            )
+            .then(|| {
+                compile_entry(
+                    &plugin_id,
+                    instance_id,
+                    binding,
+                    capability,
+                    Some(invocation.clone()),
+                    permissions.contains(&Permission::Requests),
+                )
+            })
+        })
+        .collect()
+}
+
+/// 已保存绑定的阶段是宿主合同；进程不可用时仍保留相同范围和故障策略。
+pub(crate) fn unavailable_entries(
+    instance: &PluginInstance,
+) -> Result<Vec<PolicyEntry>, AdminError> {
+    instance
+        .bindings
+        .iter()
+        .filter_map(|binding| {
+            let capability = match binding.stage.as_str() {
+                "routing" => Capability::ModelRouter,
+                "scheduling" => Capability::Scheduler,
+                "request" | "attempt" => Capability::Middleware,
+                _ => return None,
+            };
+            Some(compile_entry(
+                binding
+                    .contribution
+                    .rsplit_once('.')
+                    .map_or(binding.contribution.as_str(), |(plugin, _)| plugin),
+                &instance.id,
+                binding,
+                capability,
+                None,
+                false,
+            ))
+        })
+        .collect()
+}
+
+fn compile_entry(
+    plugin_id: &str,
+    instance_id: &str,
+    binding: &PluginCapabilityBinding,
+    capability: Capability,
+    invocation: Option<PolicyInvocation>,
+    requests_authorized: bool,
+) -> Result<PolicyEntry, AdminError> {
+    let scope = BindingScope::compile(binding)?;
+    Ok(match capability {
+        Capability::ModelRouter => PolicyEntry::Router(ModelRouterEntry {
+            order: binding.order,
+            plugin_id: plugin_id.to_owned(),
+            instance_id: instance_id.to_owned(),
+            invocation,
+            scope,
+            failure_policy: binding.failure_policy.clone(),
+            requests_authorized,
+        }),
+        Capability::Scheduler => PolicyEntry::Scheduler(AccountSchedulerEntry {
+            plugin_id: plugin_id.to_owned(),
+            instance_id: instance_id.to_owned(),
+            invocation,
+            scope,
+            failure_policy: binding.failure_policy.clone(),
+            requests_authorized,
+        }),
+        Capability::Middleware => PolicyEntry::Middleware(MiddlewareEntry {
+            order: binding.order,
+            plugin_id: plugin_id.to_owned(),
+            instance_id: instance_id.to_owned(),
+            mount: match binding.stage.as_str() {
+                "request" => MiddlewareMount::Request,
+                "attempt" => MiddlewareMount::Attempt,
+                _ => return Err(AdminError::invalid("插件中间件阶段无效")),
+            },
+            invocation,
+            scope,
+            failure_policy: binding.failure_policy.clone(),
+            requests_authorized,
+        }),
+        _ => return Err(AdminError::invalid("插件请求策略能力无效")),
+    })
 }
 
 pub(crate) struct PluginRequestPolicyPlan {

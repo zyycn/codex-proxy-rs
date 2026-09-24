@@ -500,6 +500,7 @@ async fn plugin_mutations_require_admin_and_validate_json_on_static_post_routes(
         "instances",
         "instances/update",
         "instances/rollback",
+        "instances/switch-version",
         "instances/disable",
         "instances/delete",
     ] {
@@ -975,5 +976,38 @@ impl gateway_admin::ports::plugins::PluginDistribution for TestPluginPorts {
         _: Option<gateway_admin::model::plugins::distribution::PluginDistributionEgress>,
     ) -> Result<DownloadedPlugin, AdminError> {
         Err(AdminError::invalid("unused plugin fixture"))
+    }
+}
+
+#[tokio::test]
+async fn version_plan_requires_admin_and_an_explicit_target() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+    let fixture = super::AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for authenticated in [false, true] {
+        let mut request = Request::builder()
+            .uri("/api/admin/plugins/instances/version-plan")
+            .header("x-request-id", "version-plan");
+        if authenticated {
+            request = request.header("cookie", "cpr_session=valid-session");
+        }
+        let response = gateway_api::admin::router::<super::AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if authenticated {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
     }
 }

@@ -78,3 +78,34 @@ fn failed_generation_blocks_new_requests_without_destroying_an_inflight_referenc
     drop(inflight);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn an_isolated_extension_fault_keeps_new_requests_and_host_health_available() {
+    use gateway_core::health::{HealthProbe, HealthState};
+    struct IsolatedFault;
+    impl ExtensionSetLease for IsolatedFault {
+        fn is_ready(&self) -> bool {
+            false
+        }
+        fn can_serve(&self) -> bool {
+            true
+        }
+    }
+    let reference = ExtensionSetReference::new(
+        ExtensionSetId::new("isolated-fault".into()).unwrap(),
+        Arc::new(IsolatedFault),
+    );
+    assert!(!reference.is_ready());
+    let handle =
+        RuntimeSnapshotHandle::new(super::empty_snapshot(1).with_extensions(Some(reference)));
+    assert!(handle.acquire().is_ok());
+    assert!(matches!(
+        futures::executor::block_on(handle.check()),
+        HealthState::Healthy
+    ));
+    handle.suspend();
+    assert!(
+        handle.acquire().is_err(),
+        "unconfirmed host configuration still fails closed"
+    );
+}

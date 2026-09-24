@@ -29,23 +29,23 @@ const options = computed(() => (props.plan?.targets ?? []).map(target => ({
 const canConfirm = computed(() => !props.loading && options.value.some(option => option.value === selected.value))
 
 watch(() => props.plan, () => {
-  selected.value = ''
+  selected.value = props.plan?.targets[0]?.artifactSha256 ?? ''
 })
 </script>
 
 <template>
-  <BaseModal v-model="open" title="回滚插件版本" description="仅切换当前配置，保留数据与启停状态" size="md" :dismissible="!saving">
+  <BaseModal v-model="open" title="回退插件版本" description="恢复对应版本的设置，保持当前启停状态" size="md" :dismissible="!saving">
     <BaseForm class="grid gap-4">
-      <BaseFormItem label="当前配置">
+      <BaseFormItem label="当前版本">
         <p class="m-0 break-all text-cp-sm text-cp-text">
           {{ instance?.name }} <span v-if="plan" class="font-mono">· {{ plan.currentVersion }}</span>
         </p>
       </BaseFormItem>
       <BaseFormItem v-if="loading || options.length" label="目标版本" required>
         <template #label-extra>
-          <PluginHelpPopover label="回滚说明">
+          <PluginHelpPopover label="回退说明">
             <p class="m-0">
-              只能回滚到已安装的旧版，不删除任何版本，配置、密钥、权限和启停状态保持不变，目标版本须通过兼容检查
+              恢复目标版本上次启用时的参数和密钥，私有数据仍须通过兼容检查
             </p>
             <p v-if="selected" class="m-0 break-all font-mono">
               SHA-256 {{ selected }}
@@ -57,12 +57,12 @@ watch(() => props.plan, () => {
           class="w-full"
           :options="options"
           :disabled="loading || saving"
-          :placeholder="loading ? '正在加载旧版' : '请选择回滚目标'"
-          aria-label="回滚目标版本"
+          :placeholder="loading ? '正在加载旧版' : '请选择回退目标'"
+          aria-label="回退目标版本"
         />
       </BaseFormItem>
       <p v-else-if="plan" role="status" class="m-0 text-cp-sm text-cp-text-secondary">
-        没有可回滚的旧版，切换新版请前往“版本”
+        没有保留恢复设置的旧版，其他版本可在“版本”中切换
       </p>
     </BaseForm>
     <template #footer>
@@ -73,7 +73,7 @@ watch(() => props.plan, () => {
         取消
       </BaseButton>
       <BaseButton variant="primary" :disabled="!canConfirm" :loading="saving" @click="$emit('confirm', selected)">
-        确认回滚
+        确认回退
       </BaseButton>
     </template>
   </BaseModal>

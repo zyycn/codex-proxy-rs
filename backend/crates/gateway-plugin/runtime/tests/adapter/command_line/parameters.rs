@@ -84,12 +84,42 @@ async fn command_registration_rejects_reserved_duplicate_and_mistyped_parameters
     ] {
         store.snapshot.lock().unwrap().instances[0].configuration =
             super::configuration(parameters);
-        assert!(runtime.prepare_command_line().await.is_err());
+        let commands = runtime
+            .prepare_command_line()
+            .await
+            .expect("invalid plugin is isolated from the host");
+        assert!(commands.help(Some("commands"), None).is_err());
+        let snapshot = store.snapshot.lock().unwrap().clone();
+        assert!(
+            gateway_admin::ports::plugins::PluginPreparation::prepare(
+                &runtime,
+                snapshot.config_revision,
+                snapshot,
+            )
+            .await
+            .is_err(),
+            "invalid registration still rejects an explicit candidate"
+        );
     }
     for name in ["help", "serve", "plugin", "version"] {
         let mut config = super::configuration(json!([]));
         config["command_registration"]["commands"][0]["name"] = json!(name);
         store.snapshot.lock().unwrap().instances[0].configuration = config;
-        assert!(runtime.prepare_command_line().await.is_err());
+        let commands = runtime
+            .prepare_command_line()
+            .await
+            .expect("invalid plugin is isolated from the host");
+        assert!(commands.help(Some("commands"), None).is_err());
+        let snapshot = store.snapshot.lock().unwrap().clone();
+        assert!(
+            gateway_admin::ports::plugins::PluginPreparation::prepare(
+                &runtime,
+                snapshot.config_revision,
+                snapshot,
+            )
+            .await
+            .is_err(),
+            "invalid registration still rejects an explicit candidate"
+        );
     }
 }

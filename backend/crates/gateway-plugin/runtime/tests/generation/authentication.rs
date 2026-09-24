@@ -199,3 +199,54 @@ async fn disabling_the_mapped_client_key_revokes_frontend_authentication_after_p
     ));
     close(environment, runtime, core).await;
 }
+
+#[tokio::test]
+async fn startup_failure_of_an_authentication_plugin_never_falls_back_to_a_native_key() {
+    let mut config = configuration(
+        json!({"outcome":"not_matched"}),
+        false,
+        "Bearer sk-native-fixture",
+    );
+    config["startup"] = json!("fail");
+    let Some((environment, runtime, core, authentication)) =
+        authenticate(config, "Bearer sk-native-fixture").await
+    else {
+        return;
+    };
+    assert!(
+        core.snapshots().acquire().is_ok(),
+        "the host stays available"
+    );
+    assert!(matches!(
+        authentication,
+        Err(ClientAuthenticationError::ProviderUnavailable)
+    ));
+    for probe in core.health_probes() {
+        assert!(matches!(
+            probe.check().await,
+            gateway_core::health::HealthState::Healthy
+        ));
+    }
+    close(environment, runtime, core).await;
+}
+
+#[tokio::test]
+async fn startup_failure_of_an_unrelated_plugin_preserves_native_authentication_and_health() {
+    let Some((environment, runtime, core, authentication)) =
+        authenticate(json!({"startup":"fail"}), "Bearer sk-native-fixture").await
+    else {
+        return;
+    };
+    assert_eq!(
+        authentication.unwrap().policy().key_id().as_str(),
+        "key_frontend"
+    );
+    assert!(core.snapshots().acquire().is_ok());
+    for probe in core.health_probes() {
+        assert!(matches!(
+            probe.check().await,
+            gateway_core::health::HealthState::Healthy
+        ));
+    }
+    close(environment, runtime, core).await;
+}

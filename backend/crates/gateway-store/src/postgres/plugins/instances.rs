@@ -6,7 +6,7 @@ use gateway_admin::{
         plugins::{
             instances::{
                 PluginInstance, PluginInstanceMutation, PluginInstanceReplacement,
-                PluginInstanceSnapshot, PluginPermissionGrant,
+                PluginInstanceSnapshot, PluginPermissionGrant, PluginVersionConfiguration,
             },
             state::PluginStateCommit,
         },
@@ -63,6 +63,41 @@ pub(super) async fn load(pool: &PgPool) -> AdminStoreResult<PluginInstanceSnapsh
         config_revision: revision_from_i64(revision)?,
         instances,
     })
+}
+
+pub(super) async fn load_version_configuration(
+    pool: &PgPool,
+    id: &str,
+    digest: &str,
+) -> AdminStoreResult<Option<PluginVersionConfiguration>> {
+    let id = uuid::Uuid::parse_str(id).map_err(|_| not_found())?;
+    let row = sqlx::query("select configuration_json,secrets_json,bindings_json from plugin_version_configurations where instance_id=$1 and artifact_sha256=$2")
+        .bind(id).bind(digest).fetch_optional(pool).await.map_err(|_| unavailable())?;
+    row.map(|row| {
+        Ok(PluginVersionConfiguration {
+            configuration: row
+                .try_get("configuration_json")
+                .map_err(|_| unavailable())?,
+            secrets: row
+                .try_get::<sqlx::types::Json<_>, _>("secrets_json")
+                .map_err(|_| unavailable())?
+                .0,
+            bindings: row
+                .try_get::<sqlx::types::Json<_>, _>("bindings_json")
+                .map_err(|_| unavailable())?
+                .0,
+        })
+    })
+    .transpose()
+}
+
+pub(super) async fn configuration_versions(
+    pool: &PgPool,
+    id: &str,
+) -> AdminStoreResult<Vec<String>> {
+    let id = uuid::Uuid::parse_str(id).map_err(|_| not_found())?;
+    sqlx::query_scalar("select artifact_sha256 from plugin_version_configurations where instance_id=$1 order by artifact_sha256")
+        .bind(id).fetch_all(pool).await.map_err(|_| unavailable())
 }
 
 fn decode(row: &sqlx::postgres::PgRow) -> AdminStoreResult<PluginInstance> {
@@ -255,6 +290,12 @@ async fn save_inner(
         .collect();
     sqlx::query("insert into plugin_instance_secrets(instance_id,secrets_json) values ($1,$2) on conflict (instance_id) do update set secrets_json=excluded.secrets_json")
         .bind(id).bind(sqlx::types::Json(secrets)).execute(&mut *tx).await.map_err(|_| unavailable())?;
+    // 与当前配置及状态一同提交，准备失败或事务冲突不能污染恢复点。
+    // 停用草稿可能缺少必填参数，不能覆盖此版本最近的启用配置。
+    if instance.enabled {
+        sqlx::query("insert into plugin_version_configurations (instance_id,artifact_sha256,configuration_json,secrets_json,bindings_json) select i.id,i.artifact_sha256,i.configuration_json,s.secrets_json,i.bindings_json from plugin_instances i join plugin_instance_secrets s on s.instance_id=i.id where i.id=$1 on conflict (instance_id,artifact_sha256) do update set configuration_json=excluded.configuration_json,secrets_json=excluded.secrets_json,bindings_json=excluded.bindings_json")
+            .bind(id).execute(&mut *tx).await.map_err(|_| unavailable())?;
+    }
     let committed_revision = admin_revision(revision)?;
     // 旧配置与新配置共享事务，任一版本检查或状态提交失败都不留下半次切换。
     for replacement in replacements {

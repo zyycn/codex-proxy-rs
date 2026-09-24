@@ -680,3 +680,156 @@ async fn client_key_deletion_revision_prevents_a_stale_authentication_mapping_co
         .expect("disabling preserves the stale mapping as a recovery path");
     database.close().await;
 }
+
+#[tokio::test]
+async fn version_settings_survive_upgrade_and_disabled_edits_and_share_the_transaction() {
+    let Some(database) = TestDatabase::create("plugin_version_settings").await else {
+        return;
+    };
+    initialize_revision(&database).await;
+    let store = PgPluginStore::new(database.pool.clone());
+    let mut revision = Revision::new(1).unwrap();
+    for digest in ['a', 'b'] {
+        let mut package = artifact(digest, &["linux-x86_64"]);
+        package.metadata.version = if digest == 'a' { "1.0.0" } else { "2.0.0" }.into();
+        store
+            .install_artifact(package, PluginSource::Upload, &context())
+            .await
+            .unwrap();
+        revision = store
+            .accept_artifact(&digest.to_string().repeat(64), &context())
+            .await
+            .unwrap()
+            .config_revision;
+    }
+    let mut old = instance("a".repeat(64));
+    old.enabled = true;
+    old.configuration = serde_json::json!({"v1":"original"});
+    let saved = store
+        .save_instance(old, revision, &context())
+        .await
+        .unwrap();
+    let id = saved.instance.id.clone();
+    let mut next = saved.instance;
+    next.artifact_sha256 = "b".repeat(64);
+    next.configuration = serde_json::json!({"v2":"changed"});
+    next.secrets.insert("token".into(), "v2-secret".into());
+    let saved = store
+        .save_instance(next, saved.config_revision, &context())
+        .await
+        .unwrap();
+    let old_settings = store
+        .load_version_configuration(&id, &"a".repeat(64))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        old_settings.configuration,
+        serde_json::json!({"v1":"original"})
+    );
+    assert_eq!(
+        old_settings.secrets["token"].expose_secret(),
+        "sensitive-fixture"
+    );
+    let mut disabled = saved.instance;
+    disabled.enabled = false;
+    disabled.configuration = serde_json::json!({"incomplete":"draft"});
+    disabled.secrets.clear();
+    let saved = store
+        .save_instance(disabled, saved.config_revision, &context())
+        .await
+        .unwrap();
+    let v2_settings = store
+        .load_version_configuration(&id, &"b".repeat(64))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        v2_settings.configuration,
+        serde_json::json!({"v2":"changed"})
+    );
+    assert_eq!(v2_settings.secrets["token"].expose_secret(), "v2-secret");
+    let mut conflict = saved.instance;
+    conflict.enabled = true;
+    conflict.configuration = serde_json::json!({"mustNotCommit":true});
+    assert!(
+        store
+            .save_instance(conflict, revision, &context())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .load_version_configuration(&id, &"b".repeat(64))
+            .await
+            .unwrap()
+            .unwrap()
+            .configuration,
+        v2_settings.configuration
+    );
+    assert_eq!(store.configuration_versions(&id).await.unwrap().len(), 2);
+    store
+        .delete_artifact(&"a".repeat(64), &context())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .load_version_configuration(&id, &"a".repeat(64))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let current = store.load_instances().await.unwrap();
+    store
+        .delete_instance(&id, current.config_revision, &context())
+        .await
+        .unwrap();
+    assert!(store.configuration_versions(&id).await.unwrap().is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn version_configuration_migration_preserves_existing_enabled_settings() {
+    let Some(database) = TestDatabase::create_through("plugin_version_upgrade", 18).await else {
+        return;
+    };
+    initialize_revision(&database).await;
+    let id = uuid::Uuid::now_v7();
+    let digest = "a".repeat(64);
+    let store = PgPluginStore::new(database.pool.clone());
+    let package = store
+        .install_artifact(
+            artifact('a', &["linux-x86_64"]),
+            PluginSource::Upload,
+            &context(),
+        )
+        .await
+        .unwrap();
+    store
+        .accept_artifact(&package.artifact.metadata.sha256, &context())
+        .await
+        .unwrap();
+    sqlx::query("insert into plugin_instances (id,artifact_sha256,name,enabled,configuration_json,bindings_json,revision) values ($1,$2,'prior installation',true,$3,'[]'::jsonb,1)")
+        .bind(id).bind(&digest).bind(serde_json::json!({"preserved":true})).execute(&database.pool).await.unwrap();
+    sqlx::query("insert into plugin_instance_secrets (instance_id,secrets_json) values ($1,$2)")
+        .bind(id)
+        .bind(serde_json::json!({"token":"migration-fixture-secret"}))
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    super::super::TEST_MIGRATOR
+        .run(&database.pool)
+        .await
+        .unwrap();
+    let saved = store
+        .load_version_configuration(&id.to_string(), &digest)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.configuration, serde_json::json!({"preserved":true}));
+    assert_eq!(
+        saved.secrets["token"].expose_secret(),
+        "migration-fixture-secret"
+    );
+    database.close().await;
+}

@@ -1,5 +1,5 @@
 autoInstallPeers: false
 
-# 首次公开发布前的同级仓库联调覆盖；发布后移除此项并生成 registry 锁文件。
-overrides:
-  '@codex-proxy/ui': link:../../codex-proxy-ui
+# Git 依赖通过 prepack 生成产物；信任自有 UI 仓库，实际提交仍由锁文件固定。
+allowBuilds:
+  '@codex-proxy/ui@git+https://github.com/zyycn/codex-proxy-ui.git': true
