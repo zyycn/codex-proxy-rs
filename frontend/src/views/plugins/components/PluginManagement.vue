@@ -14,7 +14,6 @@ import PluginHelpPopover from './PluginHelpPopover.vue'
 import PluginInstallModal from './PluginInstallModal.vue'
 import PluginRollbackModal from './PluginRollbackModal.vue'
 import PluginUpdateCheckModal from './PluginUpdateCheckModal.vue'
-import PluginVersionSwitchModal from './PluginVersionSwitchModal.vue'
 
 const activeTab = shallowRef<'artifacts' | 'extensions'>('artifacts')
 const management = usePluginManagement()
@@ -27,7 +26,7 @@ const tabOptions = [
 
 <template>
   <div class="flex h-[calc(100dvh-2rem)] min-h-0 w-full flex-none! flex-col gap-3 overflow-hidden min-[961px]:h-[calc(100dvh-3rem)]">
-    <BasePageHeader title="插件管理" description="安装与配置插件，管理运行状态、版本和扩展页面" />
+    <BasePageHeader title="插件管理" description="管理插件、版本和扩展页面" />
 
     <div class="flex shrink-0 items-start gap-3">
       <BaseScrollbar horizontal :vertical="false" height="var(--cp-control-height)" class="min-w-0">
@@ -73,7 +72,6 @@ const tabOptions = [
       :initial-section="management.detailSection.value"
       :views="management.extensions.value"
       :busy="management.savingInstance.value || management.uninstall.busy.value || Boolean(management.busyInstanceId.value || management.busyDigest.value)"
-      @configure="management.openCreateInstance"
       @accept="management.openAcceptance"
       @edit="management.openEditInstance"
       @enable="management.requestInstanceEnable"
@@ -123,13 +121,27 @@ const tabOptions = [
 
     <PluginConfigurationModal
       v-model="management.showInstance.value"
-      :artifacts="management.artifacts.value"
       :instance="management.editingInstance.value"
       :artifact="management.configurationArtifact.value"
-      :default-name="management.defaultConfigurationName.value"
+      :draft="management.configurationDraft.value"
+      :error="management.configurationError.value"
       :saving="management.savingInstance.value"
       @save="management.saveInstance"
     />
+
+    <BaseConfirmModal
+      v-model="management.showVersionSwitch.value"
+      title="切换插件版本"
+      description="切换前会检查目标版本设置，失败时保留当前版本"
+      confirm-text="确认切换"
+      :loading="Boolean(management.busyInstanceId.value)"
+      @confirm="management.confirmVersionSwitch"
+    >
+      <p class="m-0 text-cp-sm">
+        {{ management.pendingVersionSwitch.value?.artifact.metadata.displayName }}：
+        {{ management.pendingVersionSwitch.value?.currentVersion }} → {{ management.pendingVersionSwitch.value?.artifact.metadata.version }}
+      </p>
+    </BaseConfirmModal>
 
     <PluginRollbackModal
       v-model="management.showRollback.value"
@@ -150,22 +162,10 @@ const tabOptions = [
       @confirm="management.confirmInstanceEnable"
     />
 
-    <PluginVersionSwitchModal
-      v-model="management.showVersionSwitch.value"
-      :artifact="management.pendingVersionSwitch.value?.artifact"
-      :configurations="management.pendingVersionSwitch.value?.configurations ?? []"
-      :artifacts="management.artifacts.value"
-      :saving="Boolean(management.busyInstanceId.value)"
-      :rejected-instance-id="management.pendingVersionSwitch.value?.rejectedInstanceId"
-      @confirm="management.confirmVersionSwitch"
-      @edit="management.editVersionSwitch"
-      @create="management.createVersionConfiguration"
-    />
-
     <BaseConfirmModal
       v-model="management.showArtifactDelete.value"
       title="删除插件版本"
-      description="使用中的版本不可删除，不影响其他配置"
+      description="使用中的版本不可删除，删除版本也会清除对应的恢复设置"
       destructive
       confirm-text="确认删除"
       :loading="Boolean(management.busyDigest.value)"
@@ -193,24 +193,6 @@ const tabOptions = [
       <p class="mt-3 mb-0 text-cp-xs font-normal text-cp-text-secondary">
         同时清理独用下载认证，最后一版还会清理来源
       </p>
-    </BaseConfirmModal>
-
-    <BaseConfirmModal
-      v-model="management.showInstanceDisable.value"
-      title="停用插件配置"
-      description="停止处理新请求，配置与数据保留"
-      confirm-text="确认停用"
-      :loading="Boolean(management.busyInstanceId.value)"
-      @confirm="management.confirmInstanceDisable"
-    >
-      <div class="flex min-w-0 items-center gap-2 text-cp-sm font-normal">
-        <p class="m-0 min-w-0 wrap-anywhere">
-          {{ management.pendingDisableInstance.value?.name }}
-        </p>
-        <PluginHelpPopover label="停用说明">
-          已在处理的请求可继续完成，配置、密钥和私有数据保留，可随时重新启用
-        </PluginHelpPopover>
-      </div>
     </BaseConfirmModal>
 
     <BaseConfirmModal

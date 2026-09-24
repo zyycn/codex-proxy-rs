@@ -1052,3 +1052,98 @@ async fn instances_without_data_plane_bindings_publish_neither_plan() {
     drop(generation);
     super::wait_until_empty(cache.path()).await;
 }
+
+#[tokio::test]
+async fn a_failed_plugin_rejects_only_its_bound_models_and_preserves_delegate_policy() {
+    for failure_policy in [PluginFailurePolicy::Reject, PluginFailurePolicy::Delegate] {
+        let mut mount = binding(
+            MODEL_ROUTER_CONTRIBUTION,
+            "routing",
+            0,
+            failure_policy.clone(),
+        );
+        mount.models = vec!["plugin-required".into()];
+        let (cache, runtime) = setup(
+            vec![InstanceFixture {
+                id: "failed-router",
+                configuration: serde_json::json!({"startup":"fail"}),
+                grants: vec![],
+                bindings: vec![mount],
+            }],
+            vec![],
+        )
+        .await;
+        let generation = prepare(&runtime).await;
+        let context = policy_context(&runtime, generation.clone(), "req_isolated_failure");
+        let unrelated = context
+            .route_model(
+                operation(),
+                PublicModelId::new("unrelated-model").unwrap(),
+                BTreeSet::new(),
+            )
+            .await;
+        assert_eq!(unrelated.unwrap(), ModelRouteDecision::Unhandled);
+        let required = context
+            .route_model(
+                operation(),
+                PublicModelId::new("plugin-required").unwrap(),
+                BTreeSet::new(),
+            )
+            .await;
+        if failure_policy == PluginFailurePolicy::Reject {
+            assert!(required.is_err());
+        } else {
+            assert_eq!(required.unwrap(), ModelRouteDecision::Unhandled);
+        }
+        drop(context);
+        drop(generation);
+        super::wait_until_empty(cache.path()).await;
+    }
+}
+
+#[tokio::test]
+async fn a_failed_middleware_preserves_scope_and_the_configured_failure_policy() {
+    for (model, failure_policy, expected_calls) in [
+        ("unrelated", PluginFailurePolicy::Reject, 1),
+        ("public-a", PluginFailurePolicy::Reject, 0),
+        ("public-a", PluginFailurePolicy::Delegate, 1),
+    ] {
+        let mut mount = binding(MIDDLEWARE_CONTRIBUTION, "request", 0, failure_policy);
+        mount.models = vec![model.into()];
+        let (cache, runtime) = setup(
+            vec![InstanceFixture {
+                id: "failed-middleware",
+                configuration: serde_json::json!({"startup":"fail"}),
+                grants: vec![],
+                bindings: vec![mount],
+            }],
+            vec![],
+        )
+        .await;
+        let generation = prepare(&runtime).await;
+        let plan = runtime.middleware_registry().resolve(&generation).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let response = plan
+            .handle(
+                middleware_context(ClientTransport::HttpJson),
+                MiddlewareRequest::new(
+                    "openai",
+                    middleware_headers(),
+                    Bytes::from_static(br#"{"input":"hello"}"#),
+                ),
+                Box::new(Downstream {
+                    calls: calls.clone(),
+                    reads: Arc::default(),
+                    closes: Arc::default(),
+                    error: false,
+                }),
+            )
+            .await;
+        assert_eq!(response.is_ok(), expected_calls == 1);
+        assert_eq!(calls.load(Ordering::Relaxed), expected_calls);
+        drop(response);
+        drop(plan);
+        drop(generation);
+        super::wait_until_empty(cache.path()).await;
+    }
+}

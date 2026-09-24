@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
-import { formatProviderLabel } from '@/utils/providers'
+import { authenticationIcon, formatAuthenticationLabel, formatProviderLabel, providerIcon } from '@/utils/providers'
 
 const props = withDefaults(
   defineProps<{
@@ -15,7 +14,8 @@ const props = withDefaults(
 )
 
 const normalizedProvider = computed(() => (props.provider ?? '').trim().toLowerCase())
-const normalizedAuthenticationKind = computed(() => (props.authenticationKind ?? '').trim().toLowerCase())
+const providerIconComponent = computed(() => normalizedProvider.value ? providerIcon(normalizedProvider.value) : undefined)
+const authenticationIconComponent = computed(() => authenticationIcon(props.authenticationKind))
 const showAuthenticationKind = computed(() => props.authenticationKind !== undefined)
 const groupGapClass = computed(() => {
   if (props.size === 'xs')
@@ -35,13 +35,7 @@ const iconClass = computed(() => {
 
 const providerLabel = computed(() => formatProviderLabel(props.provider, '未知平台'))
 
-const authenticationLabel = computed(() => {
-  if (normalizedAuthenticationKind.value === 'oauth')
-    return 'OAuth'
-  if (normalizedAuthenticationKind.value === 'api_key')
-    return 'API Key'
-  return props.authenticationKind?.trim() || '未知认证类型'
-})
+const authenticationLabel = computed(() => formatAuthenticationLabel(props.authenticationKind))
 </script>
 
 <template>
@@ -51,8 +45,7 @@ const authenticationLabel = computed(() => {
       :class="iconContainerClass"
       :title="providerLabel"
     >
-      <Openai v-if="normalizedProvider === 'openai'" :class="iconClass" />
-      <Xai v-else-if="normalizedProvider === 'xai'" :class="iconClass" />
+      <component :is="providerIconComponent" v-if="providerIconComponent" :class="iconClass" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 
@@ -62,8 +55,7 @@ const authenticationLabel = computed(() => {
       :class="iconContainerClass"
       :title="authenticationLabel"
     >
-      <LinkAlt v-if="normalizedAuthenticationKind === 'oauth'" :class="iconClass" />
-      <Key v-else-if="normalizedAuthenticationKind === 'api_key'" :class="iconClass" />
+      <component :is="authenticationIconComponent" v-if="authenticationIconComponent" :class="iconClass" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 

@@ -152,7 +152,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
   }
 
   async function acceptArtifact(artifact: PluginArtifact) {
-    if (artifact.acceptedAt || acceptanceArtifact.value?.metadata.sha256 !== artifact.metadata.sha256) {
+    if (acceptanceArtifact.value?.metadata.sha256 !== artifact.metadata.sha256) {
       toast.warning('请选择待安装的插件版本')
       return
     }

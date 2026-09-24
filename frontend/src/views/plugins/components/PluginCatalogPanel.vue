@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { InstalledPlugin } from '../utils/catalog'
 import { BaseButton, BaseCard, BaseEmpty, BaseIconButton, BaseInput, BaseScrollbar, BaseSegmented, BaseSelect, BaseTable, BaseTablePagination, BaseTag, defineTableColumns } from '@codex-proxy/ui'
-import { LayoutGrid, List, Puzzle, Search, Settings2 } from '@lucide/vue'
+import { CircleAlert, LayoutGrid, List, Puzzle, Search, Settings2 } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
-import { PLUGIN_STATUS_LABELS, pluginStatus, pluginStatusType } from '../utils/catalog'
+import { currentPluginInstance, PLUGIN_STATUS_LABELS, pluginStatus, pluginStatusType } from '../utils/catalog'
 import PluginCapabilityTags from './PluginCapabilityTags.vue'
 import PluginIcon from './PluginIcon.vue'
 
@@ -24,13 +24,12 @@ const filtered = computed(() => props.plugins.filter((plugin) => {
 const rows = computed(() => filtered.value
   .slice((page.value - 1) * pageSize.value, page.value * pageSize.value)
   .map((plugin) => {
-    const enabledDigests = new Set(plugin.configurations.filter(instance => instance.enabled).map(instance => instance.artifactSha256))
-    const enabledVersions = [...new Set(plugin.artifacts.filter(artifact => enabledDigests.has(artifact.metadata.sha256)).map(artifact => artifact.metadata.version))]
-    const versions = enabledVersions.length ? enabledVersions : [plugin.artifact.metadata.version]
+    const current = currentPluginInstance(plugin)
+    const version = plugin.artifacts.find(artifact => artifact.metadata.sha256 === current?.artifactSha256)?.metadata.version ?? plugin.artifact.metadata.version
     return {
       ...plugin,
-      versionLabel: versions.length === 1 ? versions[0]! : '多版本',
-      versionTitle: `${enabledVersions.length ? '启用配置使用的版本' : '最近安装的版本'}：${versions.join('、')}`,
+      versionLabel: version,
+      versionTitle: `${current ? '当前版本' : '已安装版本'}：${version}`,
     }
   }))
 const pagination = computed(() => ({ currentPage: page.value, pageSize: pageSize.value, total: filtered.value.length }))
@@ -44,7 +43,7 @@ const columns = defineTableColumns<(typeof rows.value)[number]>([
   { key: 'plugin', label: '插件', kind: 'identity', size: '3xl' },
   { key: 'status', label: '状态', kind: 'custom', size: 'lg' },
   { key: 'capabilities', label: '提供功能', kind: 'custom', size: 'xl' },
-  { key: 'configurations', label: '配置 / 版本', kind: 'custom', size: 'lg' },
+  { key: 'configurations', label: '已安装版本', kind: 'custom', size: 'lg' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'sm' },
 ])
 </script>
@@ -84,6 +83,7 @@ const columns = defineTableColumns<(typeof rows.value)[number]>([
                 <span class="truncate text-cp-xs text-cp-text-secondary">{{ plugin.artifact.metadata.publisher }}</span>
               </div>
               <BaseTag :type="pluginStatusType(pluginStatus(plugin))" size="sm">
+                <CircleAlert v-if="pluginStatus(plugin) === 'failed'" class="mr-1 size-3.5" />
                 {{ PLUGIN_STATUS_LABELS[pluginStatus(plugin)] }}
               </BaseTag>
             </div>
@@ -92,7 +92,7 @@ const columns = defineTableColumns<(typeof rows.value)[number]>([
             </p>
             <PluginCapabilityTags :metadata="plugin.artifact.metadata" />
             <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
-              <span class="text-cp-xs text-cp-text-secondary">{{ plugin.configurations.length ? `${plugin.configurations.length} 个配置` : '尚未配置' }} · {{ plugin.artifacts.length }} 个版本</span>
+              <span class="text-cp-xs text-cp-text-secondary">{{ plugin.artifacts.length }} 个版本</span>
               <BaseIconButton class="ml-auto" :label="`管理 ${plugin.artifact.metadata.displayName}`" variant="secondary" size="sm" @click="$emit('manage', plugin)">
                 <Settings2 class="size-4" />
               </BaseIconButton>
@@ -118,6 +118,7 @@ const columns = defineTableColumns<(typeof rows.value)[number]>([
       </template>
       <template #status="{ row }">
         <BaseTag :type="pluginStatusType(pluginStatus(row))">
+          <CircleAlert v-if="pluginStatus(row) === 'failed'" class="mr-1 size-3.5" />
           {{ PLUGIN_STATUS_LABELS[pluginStatus(row)] }}
         </BaseTag>
       </template>
@@ -125,7 +126,7 @@ const columns = defineTableColumns<(typeof rows.value)[number]>([
         <PluginCapabilityTags :metadata="row.artifact.metadata" />
       </template>
       <template #configurations="{ row }">
-        {{ row.configurations.length }} 个配置 · {{ row.artifacts.length }} 个版本
+        {{ row.artifacts.length }} 个版本
       </template>
       <template #actions="{ row }">
         <BaseIconButton size="sm" variant="secondary" :label="`管理 ${row.artifact.metadata.displayName}`" @click="$emit('manage', row)">

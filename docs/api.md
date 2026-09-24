@@ -1737,7 +1737,9 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 | GET | `/api/admin/plugins/instances` | 列出实例配置、功能绑定、配置完整性及发布状态，不返回 secret 值 |
 | POST | `/api/admin/plugins/instances` | 创建实例，返回 `id` 和 `configRevision` |
 | POST | `/api/admin/plugins/instances/update` | 请求 `{ "id": "<实例 ID>", "instance": { ...配置字段 } }`，整体更新实例 |
-| GET | `/api/admin/plugins/instances/rollback-plan?id=<实例 ID>` | 只读列出当前版本、实例 revision 与按语义版本降序排列的已安装且已接受旧版候选，不启动插件 |
+| GET | `/api/admin/plugins/instances/version-plan?id=<实例 ID>&artifactSha256=<目标摘要>` | 只读生成版本设置草稿，不启动插件、不返回密钥值 |
+| POST | `/api/admin/plugins/instances/switch-version` | 请求 `{ "id": "<实例 ID>", "target": { "artifactSha256": "<已安装目标摘要>", "expectedRevision": 1 } }`，准备后切换版本 |
+| GET | `/api/admin/plugins/instances/rollback-plan?id=<实例 ID>` | 只读列出当前版本、实例 revision 与按语义版本降序排列的已安装、已接受且有配置快照的旧版候选，不启动插件 |
 | POST | `/api/admin/plugins/instances/rollback` | 请求 `{ "id": "<实例 ID>", "target": { "artifactSha256": "<已安装且已接受旧版摘要>", "expectedRevision": 1 } }`，校验后回滚 |
 | POST | `/api/admin/plugins/instances/disable` | 请求 `{ "id": "<实例 ID>" }`，停用实例并发布新集合 |
 | POST | `/api/admin/plugins/instances/delete` | 请求 `{ "id": "<实例 ID>" }`，删除已停用实例 |
@@ -1747,15 +1749,16 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 创建与更新的配置字段为 `name`、`artifactSha256`、`enabled`、`configuration` 和必填的 `bindings`，
 `secrets` 可选。输入严格拒绝未知字段；`trustedProcess` 和 `grants` 不是输入字段。`artifactSha256` 必须指向
 已接受的制品，其访问域由制品声明精确派生，实例不能增加或删减。`configuration` 是匹配插件 schema 的 JSON 对象；敏感字段必须
-放入 `secrets`，缺省保留已保存的值，空对象清除全部值。
+放入 `secrets`，空对象清除全部值。省略时同版本编辑保留当前值；跨版本编辑优先保留目标版本快照的密钥，没有快照则保留当前值。
 
 创建可传 `creationId`（标准小写 UUID），同一草稿重试复用该 ID，已保存且内容不同则返回 409，不创建副本或覆盖旧配置。
 相同内容的重试仍会重新准备并发布，不保证配置 revision 不变。更新可传 `expectedRevision`，与实例列表的 `revision`
 不一致时返回 409，管理员应重新加载后确认。创建不能传 `expectedRevision`，更新不能传 `creationId`。
-删除实例会一并删除其加密 secret 与私有状态，停用则保留这些数据。
+删除实例会一并删除其 secret、私有状态与版本配置快照，停用则保留这些数据。
 
 保存启用配置时，可传 `replaceInstances: [{ "id": "<旧配置 ID>", "expectedRevision": 1 }]`，
-明确确认同时停用的同插件配置（最多 256 项，不得包含当前配置或重复 ID）。省略时不自动停用其他配置。
+明确确认同时停用的同插件配置（最多 256 项，不得包含当前配置或重复 ID）。同一插件最多启用一个实例，省略且已有其他启用配置时返回 409。
+不能将已有实例切换成另一个插件。
 目标配置准备通过后，停用旧配置与保存目标在同一事务提交，旧配置及其密钥、私有状态保留。
 待停用配置必须仍启用且 revision 与确认时一致，否则返回 409，重新读取并确认后再提交。
 
@@ -1768,10 +1771,17 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 
 私有状态通过 [SDK 回调](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#私有状态)访问，不提供任意读写的管理 HTTP 接口。
 升级若需要迁移，实例可能暂时停用；迁移失败且发生并发配置变更时保持停用，不覆盖管理员的新配置。
-回滚只接受同一插件已安装且已接受的较早语义版本，`expectedRevision` 必须等于实例列表中的
-`revision`；过期确认返回 409。当前名称、配置、secret、绑定与启停状态保持不变，不从旧审计记录恢复配置；
-访问域改为目标制品已经接受的精确声明。目标版本重新执行平台、配置与状态兼容检查；失败不会直接交换可执行文件，
-不保证任意旧版都可重新启用。
+版本切换只接受同一插件已安装且已接受的制品，`expectedRevision` 必须等于实例列表中的 `revision`，过期请求返回 409。
+`version-plan` 返回 `instanceRevision`、`artifactSha256`、`configuration`、`secretFields`、`bindings` 和 `restored`，
+最后一项表示使用了目标版本的配置快照。没有快照时只补充缺失的 schema 默认值，保留当前显式值；功能范围按能力与阶段映射到目标声明，
+新能力使用默认绑定，已关闭的既有能力继续关闭，客户端认证仍须显式身份映射。草稿不代表已通过校验。
+
+`switch-version` 重新生成草稿并执行准备与提交，名称和启停状态保持不变，权限从目标制品派生。不兼容设置返回 400，当前设置不变；
+可读取草稿并通过 `instances/update` 携带原 `expectedRevision` 提交修正。不会推断字段改名或丢弃未知参数与密钥。
+
+每个实例、制品摘要保存一份最近启用时提交的配置快照，包含普通配置、secret 与 binding，停用草稿不覆盖快照。
+`rollback` 只接受有快照的较早语义版本，恢复该版本设置并重新检查平台、配置与私有状态，保留当前名称与启停状态。
+快照与实例修改共享事务，不从审计日志重建，也不恢复私有业务数据；删除实例或制品时删除对应快照。
 
 #### 访问域与受管资源
 

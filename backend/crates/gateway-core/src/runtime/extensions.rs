@@ -31,6 +31,11 @@ impl ExtensionSetId {
 /// 发布视图及在途请求持有引用；准备器只能用非拥有索引查找代次。
 pub trait ExtensionSetLease: Send + Sync {
     fn is_ready(&self) -> bool;
+
+    /// 局部故障已有请求级处理计划时，集合仍可提供服务。
+    fn can_serve(&self) -> bool {
+        self.is_ready()
+    }
 }
 
 #[derive(Clone)]
@@ -51,6 +56,10 @@ impl ExtensionSetReference {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.lease.is_ready()
+    }
+    #[must_use]
+    pub fn can_serve(&self) -> bool {
+        self.lease.can_serve()
     }
 }
 

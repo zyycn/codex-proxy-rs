@@ -7,16 +7,12 @@ use super::PluginsService;
 use crate::{
     model::{
         AdminError, MutationContext, Revision,
-        plugins::state::{PluginStateCommit, PluginStateConfiguration},
-        plugins::{
-            PluginArtifactMetadata,
-            instances::{
-                ConfigurePluginInstance, PluginInstance, PluginInstanceMutation,
-                PluginInstanceReplacement, PluginInstanceRuntime, PluginInstanceRuntimeStatus,
-                PluginInstanceSnapshot, PluginInstanceView, PluginPermissionGrant,
-                PluginRollbackPlan, PluginRollbackTarget, RollbackPluginInstance,
-            },
+        plugins::instances::{
+            ConfigurePluginInstance, PluginInstance, PluginInstanceMutation,
+            PluginInstanceReplacement, PluginInstanceRuntime, PluginInstanceRuntimeStatus,
+            PluginInstanceSnapshot, PluginInstanceView, PluginPermissionGrant,
         },
+        plugins::state::{PluginStateCommit, PluginStateConfiguration},
     },
     use_case::{map_store_error, publish_committed},
 };
@@ -32,7 +28,7 @@ impl PluginsService {
         let published_revision = published.as_ref().map(|snapshot| snapshot.revision().get());
         let published_ready = published
             .as_ref()
-            .is_some_and(|snapshot| snapshot.extensions().is_none_or(|set| set.is_ready()));
+            .is_some_and(|snapshot| snapshot.extensions().is_none_or(|set| set.can_serve()));
         let mut diagnostics = self
             .preparation
             .runtime_diagnostics(
@@ -146,101 +142,7 @@ impl PluginsService {
             .await
     }
 
-    pub async fn rollback_instance(
-        &self,
-        id: &str,
-        input: RollbackPluginInstance,
-        context: &MutationContext,
-    ) -> Result<PluginInstanceMutation, AdminError> {
-        let snapshot = self
-            .store
-            .load_instances()
-            .await
-            .map_err(|error| map_store_error(error, "plugin"))?;
-        let existing = snapshot
-            .instances
-            .iter()
-            .find(|instance| instance.id == id)
-            .cloned()
-            .ok_or_else(|| AdminError::not_found("插件实例不存在"))?;
-        if existing.revision.get() != input.expected_revision {
-            return Err(AdminError::conflict("插件实例已变更，请重新确认回滚目标"));
-        }
-        let artifacts = self.list().await?;
-        let current = artifacts
-            .iter()
-            .find(|artifact| artifact.metadata.sha256 == existing.artifact_sha256)
-            .ok_or_else(|| AdminError::not_found("当前插件制品不存在"))?;
-        let target = artifacts
-            .iter()
-            .find(|artifact| artifact.metadata.sha256 == input.artifact_sha256)
-            .ok_or_else(|| AdminError::not_found("回滚目标制品尚未安装"))?;
-        if rollback_version(&current.metadata, &target.metadata)?.is_none() {
-            return Err(AdminError::invalid("回滚目标必须是同一插件的较早版本"));
-        }
-        let configuration = ConfigurePluginInstance {
-            creation_id: None,
-            expected_revision: None,
-            replace_instances: Vec::new(),
-            name: existing.name.clone(),
-            artifact_sha256: input.artifact_sha256,
-            enabled: existing.enabled,
-            configuration: existing.configuration.clone(),
-            secrets: None,
-            bindings: existing.bindings.clone(),
-        };
-        // 沿用同一份快照的 CAS 和状态迁移流程，不能在检查目标后重新读取并覆盖并发配置。
-        self.configure_from_snapshot(snapshot, Some(existing), configuration, context)
-            .await
-    }
-
-    pub async fn rollback_plan(&self, id: &str) -> Result<PluginRollbackPlan, AdminError> {
-        let snapshot = self
-            .store
-            .load_instances()
-            .await
-            .map_err(|error| map_store_error(error, "plugin"))?;
-        let instance = snapshot
-            .instances
-            .iter()
-            .find(|instance| instance.id == id)
-            .ok_or_else(|| AdminError::not_found("插件实例不存在"))?;
-        let artifacts = self.list().await?;
-        let current = artifacts
-            .iter()
-            .find(|artifact| artifact.metadata.sha256 == instance.artifact_sha256)
-            .ok_or_else(|| AdminError::not_found("当前插件制品不存在"))?;
-        let mut targets = Vec::new();
-        for artifact in artifacts
-            .iter()
-            .filter(|artifact| artifact.accepted_at.is_some())
-        {
-            if let Some(version) = rollback_version(&current.metadata, &artifact.metadata)? {
-                targets.push((
-                    version,
-                    PluginRollbackTarget {
-                        artifact_sha256: artifact.metadata.sha256.clone(),
-                        version: artifact.metadata.version.clone(),
-                        platforms: artifact.metadata.platforms.clone(),
-                    },
-                ));
-            }
-        }
-        targets.sort_by(|(left, left_target), (right, right_target)| {
-            right.cmp_precedence(left).then_with(|| {
-                left_target
-                    .artifact_sha256
-                    .cmp(&right_target.artifact_sha256)
-            })
-        });
-        Ok(PluginRollbackPlan {
-            instance_revision: instance.revision.get(),
-            current_version: current.metadata.version.clone(),
-            targets: targets.into_iter().map(|(_, target)| target).collect(),
-        })
-    }
-
-    async fn configure_from_snapshot(
+    pub(super) async fn configure_from_snapshot(
         &self,
         mut snapshot: PluginInstanceSnapshot,
         existing: Option<PluginInstance>,
@@ -261,6 +163,46 @@ impl PluginsService {
         if artifact.accepted_at.is_none() {
             return Err(AdminError::invalid("请先安装并接受该版本声明的权限"));
         }
+        let same_plugin = |digest: &str| {
+            artifacts.iter().any(|item| {
+                item.metadata.sha256 == digest
+                    && item.metadata.plugin_id == artifact.metadata.plugin_id
+            })
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|previous| !same_plugin(&previous.artifact_sha256))
+        {
+            return Err(AdminError::invalid("不能将已有配置切换为另一个插件"));
+        }
+        if input.enabled
+            && snapshot.instances.iter().any(|other| {
+                other.enabled
+                    && existing
+                        .as_ref()
+                        .is_none_or(|current| current.id != other.id)
+                    && same_plugin(&other.artifact_sha256)
+                    && !input
+                        .replace_instances
+                        .iter()
+                        .any(|replacement| replacement.id == other.id)
+            })
+        {
+            return Err(AdminError::conflict(
+                "此插件已有启用配置，请先切换或停用旧配置",
+            ));
+        }
+        let saved = if let Some(previous) = &existing
+            && previous.artifact_sha256 != input.artifact_sha256
+            && input.secrets.is_none()
+        {
+            self.store
+                .load_version_configuration(&previous.id, &input.artifact_sha256)
+                .await
+                .map_err(|error| map_store_error(error, "plugin"))?
+        } else {
+            None
+        };
         let instance = PluginInstance {
             id: existing.as_ref().map_or_else(
                 || {
@@ -276,11 +218,14 @@ impl PluginsService {
             enabled: input.enabled,
             trusted_process: true,
             configuration: input.configuration,
-            secrets: input.secrets.unwrap_or_else(|| {
-                existing
-                    .as_ref()
-                    .map_or_else(Default::default, |instance| instance.secrets.clone())
-            }),
+            secrets: input
+                .secrets
+                .or_else(|| saved.map(|saved| saved.secrets))
+                .unwrap_or_else(|| {
+                    existing
+                        .as_ref()
+                        .map_or_else(Default::default, |instance| instance.secrets.clone())
+                }),
             grants: artifact
                 .metadata
                 .requested_permissions
@@ -292,6 +237,19 @@ impl PluginsService {
             revision: candidate_revision,
         };
         validate_input(&instance)?;
+        if existing
+            .as_ref()
+            .is_some_and(|previous| previous.artifact_sha256 != instance.artifact_sha256)
+            && !self
+                .preparation
+                .configuration_ready(instance.clone(), &artifact.metadata)
+                .await?
+        {
+            return Err(AdminError::invalid(
+                "目标版本仍缺少必填设置，请补充后再切换",
+            ));
+        }
+
         let replacements = input.replace_instances;
         if !replacements.is_empty() {
             if !instance.enabled || replacements.len() > 256 {
@@ -395,6 +353,7 @@ impl PluginsService {
         // 即使最终保持停用，迁移也必须由目标制品的受控候选执行。
         let mut migration_instance = target.clone();
         migration_instance.enabled = true;
+        snapshot.config_revision = migration_instance.revision;
         snapshot
             .instances
             .retain(|instance| instance.id != migration_instance.id);
@@ -716,23 +675,6 @@ fn apply_replacements(
             instance.revision = snapshot.config_revision;
         }
     }
-}
-
-fn rollback_version(
-    current: &PluginArtifactMetadata,
-    target: &PluginArtifactMetadata,
-) -> Result<Option<semver::Version>, AdminError> {
-    if current.plugin_id != target.plugin_id {
-        return Ok(None);
-    }
-    let current_version = semver::Version::parse(&current.version)
-        .map_err(|_| AdminError::invalid("当前插件版本无效"))?;
-    let target_version = semver::Version::parse(&target.version)
-        .map_err(|_| AdminError::invalid("回滚目标版本无效"))?;
-    Ok(target_version
-        .cmp_precedence(&current_version)
-        .is_lt()
-        .then_some(target_version))
 }
 
 fn same_creation_request(existing: &PluginInstance, input: &ConfigurePluginInstance) -> bool {

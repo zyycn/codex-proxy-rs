@@ -113,7 +113,7 @@ impl RuntimeSnapshotHandle {
     pub fn acquire(&self) -> Result<Arc<RuntimeSnapshot>, RuntimeSnapshotUnavailable> {
         read_unpoisoned(&self.current)
             .clone()
-            .filter(|snapshot| snapshot.extensions().is_none_or(|set| set.is_ready()))
+            .filter(|snapshot| snapshot.extensions().is_none_or(|set| set.can_serve()))
             .ok_or(RuntimeSnapshotUnavailable)
     }
 }

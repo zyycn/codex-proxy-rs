@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import type { dashboardSnapshotView } from '../composables/useDashboard'
-import { Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
 
-import { formatProviderLabel } from '@/utils/providers'
+import { authenticationIcon, formatAuthenticationLabel, formatProviderLabel, providerIcon } from '@/utils/providers'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
 
@@ -17,18 +16,11 @@ const props = defineProps<{
 const email = computed(() => props.account.email?.trim() || String(props.account.id))
 const displayTitle = computed(() => email.value.split('@')[0] || email.value)
 const normalizedProvider = computed(() => props.account.provider?.trim().toLowerCase() || '')
-const normalizedAuthenticationKind = computed(() =>
-  props.account.authenticationKind?.trim().toLowerCase() || '',
-)
+const providerIconComponent = computed(() => normalizedProvider.value ? providerIcon(normalizedProvider.value) : undefined)
+const authenticationIconComponent = computed(() => authenticationIcon(props.account.authenticationKind))
 const providerLabel = computed(() => formatProviderLabel(props.account.provider, '未知平台'))
 
-const authenticationLabel = computed(() => {
-  if (normalizedAuthenticationKind.value === 'oauth')
-    return 'OAuth'
-  if (normalizedAuthenticationKind.value === 'api_key')
-    return 'API Key'
-  return props.account.authenticationKind?.trim() || '未知认证类型'
-})
+const authenticationLabel = computed(() => formatAuthenticationLabel(props.account.authenticationKind))
 
 const avatarToneClass = computed(() =>
   stablePresetVisualToneClass(props.account.id || props.account.email || email.value),
@@ -43,8 +35,7 @@ const avatarToneClass = computed(() =>
         :class="avatarToneClass"
         :title="providerLabel"
       >
-        <Openai v-if="normalizedProvider === 'openai'" class="size-3.5" />
-        <Xai v-else-if="normalizedProvider === 'xai'" class="size-3.5" />
+        <component :is="providerIconComponent" v-if="providerIconComponent" class="size-3.5" />
         <span v-else class="text-cp-xs font-heavy">?</span>
         <span class="sr-only">{{ providerLabel }}</span>
       </span>
@@ -53,8 +44,7 @@ const avatarToneClass = computed(() =>
         class="absolute -right-1 -bottom-1 inline-flex size-4 items-center justify-center rounded-[5px] bg-cp-bg-container text-cp-text shadow-cp-tertiary"
         :title="authenticationLabel"
       >
-        <LinkAlt v-if="normalizedAuthenticationKind === 'oauth'" class="size-2.5" />
-        <Key v-else-if="normalizedAuthenticationKind === 'api_key'" class="size-2.5" />
+        <component :is="authenticationIconComponent" v-if="authenticationIconComponent" class="size-2.5" />
         <span v-else class="text-[8px] font-heavy text-cp-text-quaternary">?</span>
         <span class="sr-only">{{ authenticationLabel }}</span>
       </span>

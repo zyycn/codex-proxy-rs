@@ -2,7 +2,6 @@
 import type { JsonSchema } from '../utils/model'
 import type { ConfigurePluginInstanceRequest, PluginArtifactMetadata, PluginInstance } from '@/api'
 import { BaseButton, BaseModal, BaseTag } from '@codex-proxy/ui'
-import { Power } from '@lucide/vue'
 import { computed } from 'vue'
 import PluginConfigurationSummary from './PluginConfigurationSummary.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
@@ -61,7 +60,6 @@ const parameters = computed(() => {
         </div>
         <ul class="m-0 max-h-40 list-none space-y-2 overflow-y-auto p-0">
           <li v-for="instance in replacements" :key="instance.id" class="flex items-center gap-3 rounded-cp bg-cp-fill-alter p-3">
-            <span class="flex size-8 shrink-0 items-center justify-center rounded-cp bg-cp-bg-container text-cp-text-secondary"><Power class="size-4" aria-hidden="true" /></span>
             <span class="min-w-0 flex-1 wrap-anywhere text-cp-sm font-emphasis">{{ instance.name }}</span>
             <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <BaseTag v-if="instance.version">

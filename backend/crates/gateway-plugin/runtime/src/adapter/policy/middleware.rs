@@ -120,6 +120,15 @@ async fn invoke_middleware(
     maximum_timeout: Duration,
     maximum_payload_bytes: usize,
 ) -> Result<MiddlewareResponse, MiddlewareError> {
+    let Some(invocation_ports) = &entry.invocation else {
+        return if entry.failure_policy
+            == gateway_admin::model::plugins::instances::PluginFailurePolicy::Delegate
+        {
+            next.run(request).await
+        } else {
+            Err(MiddlewareError::Fault)
+        };
+    };
     let remaining = context
         .deadline()
         .duration_since(SystemTime::now())
@@ -136,7 +145,7 @@ async fn invoke_middleware(
     if payload.len() > maximum_payload_bytes {
         return recover_invalid(entry, &invocation).await;
     }
-    let mut call_context = entry.session.context(
+    let mut call_context = invocation_ports.session.context(
         match entry.mount {
             MiddlewareMount::Request => Stage::Request,
             MiddlewareMount::Attempt => Stage::Attempt,
@@ -152,10 +161,14 @@ async fn invoke_middleware(
         .map(|account| account.as_str().to_owned());
     let _network_scope = context
         .execution_effects()
-        .map(|effects| entry.callbacks.prepare_data_plane(&call_context, effects))
+        .map(|effects| {
+            invocation_ports
+                .callbacks
+                .prepare_data_plane(&call_context, effects)
+        })
         .transpose()
         .map_err(|_| MiddlewareError::Fault)?;
-    let _binding = entry.callbacks.bind_middleware(
+    let _binding = invocation_ports.callbacks.bind_middleware(
         call_context.resource_scope_id.clone(),
         Arc::clone(&invocation),
     )?;
@@ -186,7 +199,7 @@ async fn invoke_middleware(
     let stream = tokio::select! {
         biased;
         () = context.cancellation().cancelled() => return Err(MiddlewareError::Fault),
-        result = entry.session.call_stream(
+        result = invocation_ports.session.call_stream(
             HANDLE_METHOD,
             call_context,
             serde_json::to_value(head).map_err(|_| MiddlewareError::InvalidState)?,

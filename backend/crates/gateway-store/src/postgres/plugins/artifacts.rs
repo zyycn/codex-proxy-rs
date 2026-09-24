@@ -87,6 +87,18 @@ impl PluginStore for PgPluginStore {
     ) -> AdminStoreResult<gateway_admin::model::plugins::instances::PluginInstanceSnapshot> {
         super::instances::load(&self.pool).await
     }
+    async fn load_version_configuration(
+        &self,
+        id: &str,
+        digest: &str,
+    ) -> AdminStoreResult<
+        Option<gateway_admin::model::plugins::instances::PluginVersionConfiguration>,
+    > {
+        super::instances::load_version_configuration(&self.pool, id, digest).await
+    }
+    async fn configuration_versions(&self, id: &str) -> AdminStoreResult<Vec<String>> {
+        super::instances::configuration_versions(&self.pool, id).await
+    }
     async fn save_instance(
         &self,
         instance: gateway_admin::model::plugins::instances::PluginInstance,

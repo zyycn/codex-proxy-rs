@@ -10,7 +10,7 @@ use crate::model::plugins::distribution::{
 };
 use crate::model::plugins::instances::{
     PluginInstance, PluginInstanceMutation, PluginInstanceReplacement, PluginInstanceRuntime,
-    PluginInstanceSnapshot,
+    PluginInstanceSnapshot, PluginVersionConfiguration,
 };
 use crate::model::plugins::state::{
     ApplyPluginStateMigration, DeletePluginState, PluginStateCommit, PluginStateConfiguration,
@@ -40,6 +40,7 @@ pub trait PluginPreparation: Send + Sync {
         instance: PluginInstance,
     ) -> Result<PluginStateConfiguration, AdminError>;
     /// 候选可使用未来 revision；其依赖的持久化事实必须按当前 source revision 读取。
+    /// 本次修改的实例 revision 必须等于候选 config_revision，准备失败时拒绝提交；历史故障可隔离。
     async fn prepare(
         &self,
         source_revision: Revision,
@@ -228,6 +229,18 @@ pub trait PluginStore: Send + Sync {
         target: &crate::model::plugins::management::PluginManagementTarget,
     ) -> AdminStoreResult<bool>;
     async fn load_instances(&self) -> AdminStoreResult<PluginInstanceSnapshot>;
+    /// 读取对应制品最近一次启用时提交的配置，密钥始终留在服务端。
+    async fn load_version_configuration(
+        &self,
+        _id: &str,
+        _digest: &str,
+    ) -> AdminStoreResult<Option<PluginVersionConfiguration>> {
+        Ok(None)
+    }
+    /// 只返回有可恢复配置的制品摘要，不读取敏感值。
+    async fn configuration_versions(&self, _id: &str) -> AdminStoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
     async fn save_instance(
         &self,
         instance: PluginInstance,

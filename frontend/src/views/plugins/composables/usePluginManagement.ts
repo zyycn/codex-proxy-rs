@@ -8,13 +8,13 @@ import type {
   PluginRollbackPlan,
   PluginSourceCredential,
   PluginUpdateSourceBinding,
+  PluginVersionPlan,
 } from '@/api'
 
 import { toast } from '@codex-proxy/ui'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import {
-  createPluginInstance,
   createPluginSourceCredential,
   deletePluginArtifact,
   deletePluginInstance,
@@ -25,13 +25,15 @@ import {
   getPluginRollbackPlan,
   getPluginSourceCredentials,
   getPluginUpdateSources,
+  getPluginVersionPlan,
   rollbackPluginInstance,
+  switchPluginVersion,
   updatePluginInstance,
 } from '@/api'
 import { ApiError } from '@/api/request'
 import { usePluginManagementViewsStore } from '@/stores/modules/plugin-management-views'
 import { errorMessage } from '@/utils/async'
-import { groupInstalledPlugins } from '../utils/catalog'
+import { configurationStatus, currentPluginInstance, groupInstalledPlugins } from '../utils/catalog'
 import { usePluginInstallation } from './usePluginInstallation'
 import { usePluginUninstall } from './usePluginUninstall'
 import { usePluginUpdateCheck } from './usePluginUpdateCheck'
@@ -50,17 +52,9 @@ export function usePluginManagement() {
   const showDetail = shallowRef(false)
   const detailSection = shallowRef<'configurations' | 'versions'>('configurations')
   const configurationArtifact = shallowRef<PluginArtifact | null>(null)
-  const defaultConfigurationName = computed(() => {
-    const existing = catalog.value.find(plugin => plugin.id === configurationArtifact.value?.metadata.pluginId)?.configurations ?? []
-    if (!existing.length)
-      return '默认配置'
-    let index = 2
-    while (existing.some(instance => instance.name === `配置 ${index}`)) index++
-    return `配置 ${index}`
-  })
-
   const showInstance = shallowRef(false)
-  const creationId = shallowRef('')
+  const configurationDraft = shallowRef<PluginVersionPlan | null>(null)
+  const configurationError = shallowRef('')
   const editingInstance = shallowRef<PluginInstance | null>(null)
   const savingInstance = shallowRef(false)
   const pendingEnable = shallowRef<{
@@ -85,8 +79,6 @@ export function usePluginManagement() {
 
   const showArtifactDelete = shallowRef(false)
   const pendingArtifact = shallowRef<PluginArtifact | null>(null)
-  const showInstanceDisable = shallowRef(false)
-  const pendingDisableInstance = shallowRef<PluginInstance | null>(null)
   const showInstanceDelete = shallowRef(false)
   const pendingDeleteInstance = shallowRef<PluginInstance | null>(null)
   const showCredentialDelete = shallowRef(false)
@@ -95,7 +87,7 @@ export function usePluginManagement() {
   const busyDigest = shallowRef('')
   const busyInstanceId = shallowRef('')
   const busyDistributionId = shallowRef('')
-  const pendingVersionSwitch = shallowRef<{ artifact: PluginArtifact, configurations: PluginInstance[], rejectedInstanceId?: string } | null>(null)
+  const pendingVersionSwitch = shallowRef<{ instance: PluginInstance, artifact: PluginArtifact, currentVersion: string } | null>(null)
   const showVersionSwitch = computed({
     get: () => pendingVersionSwitch.value !== null,
     set: (open: boolean) => {
@@ -103,7 +95,6 @@ export function usePluginManagement() {
         pendingVersionSwitch.value = null
     },
   })
-
   let refreshController: AbortController | undefined
   let rollbackController: AbortController | undefined
 
@@ -196,9 +187,16 @@ export function usePluginManagement() {
         return
       }
     }
-    detailSection.value = defaultInstanceId ? 'configurations' : 'versions'
+    const plugin = catalog.value.find(plugin => plugin.id === artifact.metadata.pluginId)
+    const current = plugin && currentPluginInstance(plugin)
+    if (current && current.artifactSha256 !== artifact.metadata.sha256) {
+      requestVersionSwitch(artifact)
+      return
+    }
+    detailSection.value = 'configurations'
     showDetail.value = true
   }
+
   function requestArtifactDelete(artifact: PluginArtifact) {
     pendingArtifact.value = artifact
     showArtifactDelete.value = true
@@ -231,25 +229,10 @@ export function usePluginManagement() {
     showDetail.value = true
   }
 
-  function openCreateInstance(artifact: PluginArtifact) {
-    if (!artifact.acceptedAt) {
-      installation.openAcceptance(artifact)
-      return
-    }
-    creationId.value = crypto.randomUUID()
-    configurationArtifact.value = artifact
-    selectedPluginId.value = artifact.metadata.pluginId
-    editingInstance.value = null
-    showInstance.value = true
-  }
-
-  function openEditInstance(instance: PluginInstance, artifact?: PluginArtifact) {
-    const targetArtifact = artifact ?? artifacts.value.find(value => value.metadata.sha256 === instance.artifactSha256) ?? null
-    if (targetArtifact && !targetArtifact.acceptedAt) {
-      installation.openAcceptance(targetArtifact)
-      return
-    }
-    configurationArtifact.value = targetArtifact
+  function openEditInstance(instance: PluginInstance) {
+    configurationDraft.value = null
+    configurationError.value = ''
+    configurationArtifact.value = artifacts.value.find(value => value.metadata.sha256 === instance.artifactSha256) ?? null
     selectedPluginId.value = configurationArtifact.value?.metadata.pluginId ?? ''
     editingInstance.value = instance
     showInstance.value = true
@@ -259,9 +242,9 @@ export function usePluginManagement() {
     if (savingInstance.value || pendingEnable.value)
       return
     const instance = editingInstance.value
-    const input = instance
-      ? { ...request, expectedRevision: instance.revision }
-      : { ...request, creationId: creationId.value }
+    if (!instance)
+      return
+    const input = { ...request, expectedRevision: configurationDraft.value?.instanceRevision ?? instance.revision }
     const result = await runAction(savingInstance, '插件配置保存失败', async () => {
       if (request.enabled) {
         const pending = await prepareInstanceEnable(input, instance?.id)
@@ -294,15 +277,15 @@ export function usePluginManagement() {
   }
 
   async function requestInstanceEnable(instance: PluginInstance) {
-    if (instance.enabled || savingInstance.value || pendingEnable.value)
+    if ((instance.enabled && configurationStatus(instance) !== 'failed') || savingInstance.value || pendingEnable.value)
       return
     if (instance.configurationRequired) {
-      toast.error('请先完善必填配置')
+      openEditInstance(instance)
       return
     }
     const result = await runAction(savingInstance, '启用配置加载失败', async () => {
       // 不传 secrets，沿用已保存密钥，不读取或回填明文。
-      pendingEnable.value = await prepareInstanceEnable({
+      const pending = await prepareInstanceEnable({
         expectedRevision: instance.revision,
         name: instance.name,
         artifactSha256: instance.artifactSha256,
@@ -310,6 +293,9 @@ export function usePluginManagement() {
         configuration: instance.configuration,
         bindings: instance.bindings,
       }, instance.id)
+      if (pending.replacements.length)
+        pendingEnable.value = pending
+      else await persistInstance(pending.request, instance.id)
       return true
     })
     if (!result)
@@ -334,83 +320,86 @@ export function usePluginManagement() {
   }
 
   async function persistInstance(request: ConfigurePluginInstanceRequest, instanceId?: string) {
-    if (instanceId)
-      await updatePluginInstance({ id: instanceId, instance: request }, { silent: true })
-    else await createPluginInstance(request, { silent: true })
+    if (!instanceId)
+      return
+    await updatePluginInstance({ id: instanceId, instance: request }, { silent: true })
     pendingEnable.value = null
     showInstance.value = false
     editingInstance.value = null
-    toast.success(request.replaceInstances?.length ? '已停用旧配置并启用当前配置' : request.enabled ? '配置已保存，正在发布启用' : '配置已保存，暂未启用')
+    toast.success(request.replaceInstances?.length ? '已切换当前配置' : request.enabled ? '插件设置已应用' : '设置已保存，插件保持停用')
     await refresh(true)
     detailSection.value = 'configurations'
     showDetail.value = true
   }
 
-  function requestInstanceDisable(instance: PluginInstance) {
-    pendingDisableInstance.value = instance
-    showInstanceDisable.value = true
-  }
-
-  function requestVersionSwitch(artifact: PluginArtifact) {
-    const plugin = catalog.value.find(plugin => plugin.id === artifact.metadata.pluginId)
-    const configurations = plugin?.configurations.filter(instance => instance.artifactSha256 !== artifact.metadata.sha256) ?? []
-    if (artifact.acceptedAt && configurations.length)
-      pendingVersionSwitch.value = { artifact, configurations }
-  }
-
-  async function confirmVersionSwitch(instance: PluginInstance) {
-    const pending = pendingVersionSwitch.value
-    if (!pending || busyInstanceId.value || !pending.configurations.includes(instance))
+  async function requestInstanceDisable(instance: PluginInstance) {
+    if (busyInstanceId.value)
       return
     busyInstanceId.value = instance.id
     try {
-      // 快速切换不重建表单或应用新版本默认值，密钥仍由服务端保留。
-      await updatePluginInstance({
-        id: instance.id,
-        instance: {
-          expectedRevision: instance.revision,
-          artifactSha256: pending.artifact.metadata.sha256,
-          name: instance.name,
-          enabled: instance.enabled,
-          configuration: instance.configuration,
-          bindings: instance.bindings,
-        },
-      }, { silent: true })
-      pendingVersionSwitch.value = null
-      toast.success(`已切换至 ${pending.artifact.metadata.version}`)
+      await disablePluginInstance({ id: instance.id }, { silent: true })
+      toast.success('插件已停用')
       await refresh(true)
     }
     catch (error) {
-      notifyError('版本切换失败', error)
-      await refresh(true, true)
-      const current = instances.value.find(value => value.id === instance.id)
-      if (error instanceof ApiError && error.status === 400 && current?.revision === instance.revision) {
-        // 校验拒绝没有提交配置，保留选择，修正只能由用户主动进入编辑。
-        pendingVersionSwitch.value = { ...pending, rejectedInstanceId: instance.id }
-      }
-      else {
-        pendingVersionSwitch.value = null
-      }
+      notifyError('插件停用失败', error)
     }
     finally {
       busyInstanceId.value = ''
     }
   }
 
-  function editVersionSwitch(instance: PluginInstance) {
-    const pending = pendingVersionSwitch.value
-    if (!pending || busyInstanceId.value || !pending.configurations.includes(instance))
+  function requestVersionSwitch(artifact: PluginArtifact) {
+    const plugin = catalog.value.find(plugin => plugin.id === artifact.metadata.pluginId)
+    const instance = plugin && currentPluginInstance(plugin)
+    if (!plugin || !instance || !artifact.acceptedAt || busyInstanceId.value || instance.artifactSha256 === artifact.metadata.sha256)
       return
-    pendingVersionSwitch.value = null
-    openEditInstance(instance, pending.artifact)
+    pendingVersionSwitch.value = { instance, artifact, currentVersion: plugin.artifact.metadata.version }
   }
 
-  function createVersionConfiguration() {
-    const pending = pendingVersionSwitch.value
-    if (!pending || busyInstanceId.value)
+  async function confirmVersionSwitch() {
+    if (!pendingVersionSwitch.value || busyInstanceId.value)
       return
-    pendingVersionSwitch.value = null
-    openCreateInstance(pending.artifact)
+    const { instance, artifact } = pendingVersionSwitch.value
+    busyInstanceId.value = instance.id
+    try {
+      await switchPluginVersion({
+        id: instance.id,
+        target: { artifactSha256: artifact.metadata.sha256, expectedRevision: instance.revision },
+      }, { silent: true })
+      pendingVersionSwitch.value = null
+      toast.success(`已切换至 ${artifact.metadata.version}`)
+      await refresh(true)
+      detailSection.value = 'configurations'
+      showDetail.value = true
+    }
+    catch (error) {
+      await refresh(true, true)
+      const current = instances.value.find(value => value.id === instance.id)
+      if (error instanceof ApiError && error.status === 400 && current?.revision === instance.revision) {
+        try {
+          const plan = await getPluginVersionPlan(instance.id, artifact.metadata.sha256, { silent: true })
+          if (plan.instanceRevision !== instance.revision)
+            throw new Error('插件设置已变更，请刷新后重试')
+          configurationArtifact.value = artifact
+          pendingVersionSwitch.value = null
+          configurationDraft.value = plan
+          configurationError.value = errorMessage(error, '请调整不兼容的设置后重试')
+          editingInstance.value = current
+          showDetail.value = false
+          showInstance.value = true
+        }
+        catch (planError) {
+          notifyError('版本设置加载失败', planError)
+        }
+      }
+      else {
+        notifyError('版本切换失败', error)
+      }
+    }
+    finally {
+      busyInstanceId.value = ''
+    }
   }
 
   async function openRollback(instance: PluginInstance) {
@@ -428,7 +417,7 @@ export function usePluginManagement() {
     }
     catch (error) {
       if (rollbackController === controller)
-        notifyError('回滚版本加载失败', error)
+        notifyError('回退版本加载失败', error)
     }
     finally {
       if (rollbackController === controller) {
@@ -450,31 +439,11 @@ export function usePluginManagement() {
       showRollback.value = false
       rollbackInstance.value = null
       rollbackPlan.value = null
-      toast.success(`已回滚 ${plan.currentVersion} → ${target.version}，已安装版本均保留`)
+      toast.success(`已回退至 ${target.version}，并恢复对应设置`)
       await refresh(true)
     }
     catch (error) {
-      notifyError('插件版本回滚失败', error)
-    }
-    finally {
-      busyInstanceId.value = ''
-    }
-  }
-
-  async function confirmInstanceDisable() {
-    const instance = pendingDisableInstance.value
-    if (!instance || busyInstanceId.value)
-      return
-    busyInstanceId.value = instance.id
-    try {
-      await disablePluginInstance({ id: instance.id }, { silent: true })
-      showInstanceDisable.value = false
-      pendingDisableInstance.value = null
-      toast.success('插件配置已停用，数据已保留')
-      await refresh(true)
-    }
-    catch (error) {
-      notifyError('插件实例停用失败', error)
+      notifyError('插件版本回退失败', error)
     }
     finally {
       busyInstanceId.value = ''
@@ -589,7 +558,8 @@ export function usePluginManagement() {
     detailSection,
     openDetail,
     configurationArtifact,
-    defaultConfigurationName,
+    configurationDraft,
+    configurationError,
     uninstall,
     artifacts,
     instances,
@@ -610,16 +580,12 @@ export function usePluginManagement() {
     openRollback,
     confirmRollback,
     savingCredential,
-    pendingVersionSwitch,
-    showVersionSwitch,
     requestVersionSwitch,
     confirmVersionSwitch,
-    editVersionSwitch,
-    createVersionConfiguration,
+    pendingVersionSwitch,
+    showVersionSwitch,
     showArtifactDelete,
     pendingArtifact,
-    showInstanceDisable,
-    pendingDisableInstance,
     showInstanceDelete,
     pendingDeleteInstance,
     showCredentialDelete,
@@ -630,12 +596,10 @@ export function usePluginManagement() {
     refresh,
     requestArtifactDelete,
     confirmArtifactDelete,
-    openCreateInstance,
     openEditInstance,
     saveInstance,
     requestInstanceEnable,
     requestInstanceDisable,
-    confirmInstanceDisable,
     requestInstanceDelete,
     confirmInstanceDelete,
     saveCredential,

@@ -1,3 +1,5 @@
+mod instance;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroUsize,
@@ -111,7 +113,7 @@ pub struct PluginRuntime {
     prepared: Mutex<BTreeMap<String, Weak<PreparedSet>>>,
     preparation_diagnostics: SyncMutex<BTreeMap<u64, PreparationDiagnostic>>,
     restart_circuits: Arc<RestartCircuits>,
-    shutting_down: AtomicBool,
+    shutting_down: Arc<AtomicBool>,
     shutdown_lock: Mutex<()>,
     processes: Arc<gateway_host::process::ProcessSupervisor>,
     validators: Arc<Semaphore>,
@@ -150,9 +152,43 @@ pub(super) struct PreparedSet {
         Option<Arc<dyn gateway_core::engine::authentication::FrontendAuthenticationPlan>>,
     _admin_providers: Arc<ProviderAdminRegistry>,
     sessions: Vec<PreparedInstance>,
+    failures: BTreeMap<String, PluginInstanceRuntimeFailure>,
+    shutting_down: Arc<AtomicBool>,
     commands: Vec<Arc<crate::adapter::command_line::PluginCommand>>,
     management: Vec<crate::adapter::management::ManagementEntry>,
     pub(super) maintenance: Vec<super::worker::MaintenanceEntry>,
+}
+
+#[derive(Default)]
+struct PreparedContributions {
+    sessions: Vec<PreparedInstance>,
+    providers: Vec<Arc<dyn Provider>>,
+    request_profile_providers: Vec<ProviderKind>,
+    admin_providers: Vec<Arc<dyn ProviderAdmin>>,
+    observer_entries: Vec<crate::adapter::observer::ObserverEntry>,
+    commands: Vec<Arc<crate::adapter::command_line::PluginCommand>>,
+    management: Vec<crate::adapter::management::ManagementEntry>,
+    maintenance: Vec<super::worker::MaintenanceEntry>,
+    policy_entries: Vec<crate::adapter::policy::PolicyEntry>,
+    authentication_entries:
+        Vec<crate::adapter::frontend_authentication::FrontendAuthenticationEntry>,
+}
+
+impl PreparedContributions {
+    fn append(&mut self, other: Self) {
+        self.sessions.extend(other.sessions);
+        self.providers.extend(other.providers);
+        self.request_profile_providers
+            .extend(other.request_profile_providers);
+        self.admin_providers.extend(other.admin_providers);
+        self.observer_entries.extend(other.observer_entries);
+        self.commands.extend(other.commands);
+        self.management.extend(other.management);
+        self.maintenance.extend(other.maintenance);
+        self.policy_entries.extend(other.policy_entries);
+        self.authentication_entries
+            .extend(other.authentication_entries);
+    }
 }
 
 struct PreparedInstance {
@@ -164,11 +200,22 @@ struct PreparedInstance {
     continuation_provider: Option<Arc<crate::adapter::provider::PluginProvider>>,
 }
 
-impl ExtensionSetLease for PreparedSet {
-    fn is_ready(&self) -> bool {
+impl PreparedSet {
+    fn sessions_ready(&self) -> bool {
         self.sessions
             .iter()
             .all(|instance| instance.session.is_ready())
+    }
+}
+
+impl ExtensionSetLease for PreparedSet {
+    fn is_ready(&self) -> bool {
+        self.sessions_ready() && self.can_serve()
+    }
+
+    fn can_serve(&self) -> bool {
+        // 发布的是可用能力和故障绑定组成的完整计划；单个进程退出不能使原生转发失效。
+        !self.shutting_down.load(Ordering::Acquire)
     }
 }
 
@@ -221,7 +268,7 @@ impl PluginRuntime {
             prepared: Mutex::new(BTreeMap::new()),
             preparation_diagnostics: SyncMutex::new(BTreeMap::new()),
             restart_circuits: RestartCircuits::new(restart_circuit),
-            shutting_down: AtomicBool::new(false),
+            shutting_down: Arc::new(AtomicBool::new(false)),
             shutdown_lock: Mutex::new(()),
             processes,
             validators: Arc::new(Semaphore::new(2)),
@@ -418,18 +465,13 @@ impl PluginRuntime {
         &self,
         source_revision: Revision,
         snapshot: PluginInstanceSnapshot,
+        required_revision: Option<Revision>,
     ) -> Result<ExtensionSetReference, AdminError> {
         let target_revision = snapshot.config_revision.get();
         self.record_preparation(target_revision, PreparationDiagnostic::Preparing);
-        let result = match tokio::time::timeout(
-            Duration::from_secs(30),
-            self.prepare_inner(source_revision, snapshot),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(AdminError::unavailable("插件集合准备超时")),
-        };
+        let result = self
+            .prepare_inner(source_revision, snapshot, required_revision)
+            .await;
         match &result {
             Ok(reference) => self.record_preparation(
                 target_revision,
@@ -449,6 +491,7 @@ impl PluginRuntime {
         &self,
         source_revision: Revision,
         snapshot: PluginInstanceSnapshot,
+        required_revision: Option<Revision>,
     ) -> Result<ExtensionSetReference, AdminError> {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(AdminError::unavailable("插件运行时正在关闭"));
@@ -460,17 +503,6 @@ impl PluginRuntime {
         let config_revision = ConfigRevision::new(source_revision.get())
             .map_err(|_| AdminError::invalid("插件候选事实版本无效"))?;
         let fingerprint = fingerprint(&snapshot)?;
-        let restart_identities = snapshot
-            .instances
-            .iter()
-            .filter(|instance| instance.enabled)
-            .map(|instance| {
-                Ok(RestartIdentity::new(
-                    instance.id.clone(),
-                    instance_fingerprint(instance)?,
-                ))
-            })
-            .collect::<Result<Vec<_>, AdminError>>()?;
         // 准备串行化与弱索引分锁；诊断和已发布请求不会等待外部 I/O。
         let _prepare = self.prepare_lock.lock().await;
         if self.shutting_down.load(Ordering::Acquire) {
@@ -482,17 +514,15 @@ impl PluginRuntime {
             prepared
                 .get(&fingerprint)
                 .and_then(Weak::upgrade)
-                .filter(|set| set.is_ready())
+                .filter(|set| set.sessions_ready())
         };
-        if restart_identities
-            .iter()
-            .any(|identity| self.restart_circuit_is_open(identity))
-        {
-            return Err(AdminError::unavailable(
-                "插件实例连续异常退出，已暂停自动重启；请检查配置后重新启用",
-            ));
-        }
         if let Some(set) = existing {
+            if snapshot.instances.iter().any(|instance| {
+                required_revision == Some(instance.revision)
+                    && set.failures.contains_key(&instance.id)
+            }) {
+                return Err(AdminError::unavailable("插件启动失败，请重新启用后重试"));
+            }
             self.validate_request_profile_configurations(
                 config_revision,
                 &set.providers,
@@ -501,298 +531,57 @@ impl PluginRuntime {
             .await?;
             return Ok(ExtensionSetReference::new(set.id.clone(), set));
         }
-        let mut sessions = Vec::new();
+        let mut contributions = PreparedContributions::default();
+        let mut failures = BTreeMap::new();
         let mut identities = BTreeSet::new();
-        let mut providers: Vec<Arc<dyn Provider>> = Vec::new();
-        let mut request_profile_providers = Vec::new();
-        let mut admin_providers: Vec<Arc<dyn ProviderAdmin>> = Vec::new();
-        let mut observer_entries = Vec::new();
-        let mut commands = Vec::new();
-        let mut management = Vec::new();
-        let mut maintenance = Vec::new();
-        let mut policy_entries = Vec::new();
-        let mut authentication_entries = Vec::new();
         for instance in snapshot
             .instances
-            .into_iter()
+            .iter()
             .filter(|instance| instance.enabled)
         {
             if !identities.insert(instance.id.clone()) {
                 return Err(AdminError::invalid("插件实例 ID 重复"));
             }
-            let authorization_binding = instance_fingerprint(&instance)?;
-            let artifact = self
-                .store
-                .load_artifact(&instance.artifact_sha256)
-                .await
-                .map_err(|_| AdminError::unavailable("插件制品不可用"))?;
-            let limits = self.config.package_limits;
-            let directory = self.config.cache_directory.clone();
-            let host_version = self.config.host_version.clone();
-            let grants = instance.grants.clone();
-            let validation_slot = self
-                .validators
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| AdminError::unavailable("插件校验繁忙"))?;
-            let (package, configuration, instance, granted_permissions, state_configuration) =
-                tokio::task::spawn_blocking(move || {
-                    let _validation_slot = validation_slot;
-                    let package = Arc::new(
-                        ValidatedPackage::read(
-                            artifact.archive,
-                            Some(&instance.artifact_sha256),
-                            limits,
-                        )
-                        .map_err(|_| AdminError::invalid("插件恢复包校验失败"))?,
-                    );
-                    let (configuration, permissions, state_configuration) =
-                        super::configuration::validate(&instance, package.manifest())?;
-                    crate::adapter::observer::validate_bindings(
-                        package.manifest(),
-                        &instance.bindings,
-                    )?;
-                    crate::adapter::policy::validate_bindings(
-                        package.manifest(),
-                        &instance.bindings,
-                    )?;
-                    crate::adapter::frontend_authentication::validate_bindings(
-                        package.manifest(),
-                        &instance.bindings,
-                    )?;
-                    // 发行清单与当前 Runtime 共用同一份能力声明，不能让二者分别漂移。
-                    if !crate::package::host_supports(package.manifest())? {
-                        return Err(AdminError::invalid("该插件声明的业务能力尚未接入运行时"));
-                    }
-                    let package = Arc::new(
-                        package
-                            .prepare(&directory, &host_version)
-                            .map_err(|_| AdminError::unavailable("插件制品准备失败"))?,
-                    );
-                    Ok((
-                        package,
-                        configuration,
-                        instance,
-                        permissions,
-                        state_configuration,
-                    ))
-                })
-                .await
-                .map_err(|_| AdminError::internal("插件校验任务失败"))??;
-            let manifest = package.package().manifest().clone();
-            let plugin_id = manifest
-                .plugin_id()
-                .map_err(|_| AdminError::invalid("插件身份无效"))?;
-            let instance_id = instance.id.clone();
-            let restart_identity =
-                RestartIdentity::new(instance_id.clone(), authorization_binding.clone());
-            let bindings = instance.bindings.clone();
-            let mut continuation_provider = None;
-            let owner = self
-                .state
-                .load_owner(
-                    gateway_admin::model::plugins::state::PluginStateOwnerRequest {
-                        instance_id: instance.id.clone(),
-                        artifact_sha256: instance.artifact_sha256.clone(),
-                        instance_revision: instance.revision,
-                        configuration: state_configuration.clone(),
-                    },
-                )
-                .await
-                .map_err(|error| match error.kind() {
-                    PluginStateStoreErrorKind::Unavailable => {
-                        AdminError::unavailable("插件状态存储暂不可用")
-                    }
-                    _ => AdminError::invalid("插件状态 owner 无法恢复"),
-                })?;
-            let private_state = Arc::new(PluginPrivateState::new(
-                self.state.clone(),
-                &manifest,
-                state_configuration,
-                owner,
-            )?);
-            let incarnation = uuid::Uuid::new_v4().to_string();
-            let lifecycle = self
-                .restart_circuits
-                .begin(restart_identity)
-                .ok_or_else(|| {
-                    AdminError::unavailable(
-                        "插件实例连续异常退出，已暂停自动重启；请检查配置后重新启用",
-                    )
-                })?;
-            let handshake = Handshake {
-                protocol_version: gateway_plugin_sdk::PROTOCOL_VERSION,
-                artifact_sha256: package.package().digest().into(),
-                plugin_id: plugin_id.clone(),
-                instance_id: instance_id.clone(),
-                generation: snapshot.config_revision.get(),
-                incarnation,
-                configuration,
-                permissions: granted_permissions.clone(),
-                contributes: manifest.contributes.clone(),
-            };
-            let callbacks = Arc::new(PluginCallbacks::new(
-                &grants,
-                self.config.rpc_limits.maximum_frame_bytes,
-                &manifest,
-                self.log_slots.clone(),
-                private_state.clone(),
-                PluginCallbackPorts::new(
-                    self.http.clone(),
-                    self.network_policy.clone(),
-                    self.account_ports.clone(),
-                    self.client_key_ports.clone(),
-                    self.model_ports.clone(),
-                    self.affinity_ports.clone(),
-                ),
-            )?);
-            let session = Arc::new(
-                RpcSession::start_supervised(
-                    package.clone(),
-                    handshake,
-                    self.config.rpc_limits,
-                    &self.processes,
-                    callbacks.clone(),
-                    lifecycle,
-                )
-                .await
-                .map_err(|_| AdminError::unavailable("插件进程握手失败"))?,
-            );
-            let registration = session
-                .call(
-                    "plugin.register",
-                    session.context(Stage::Registration, Duration::from_secs(5)),
-                    serde_json::json!({}),
-                    vec![],
-                )
-                .await
-                .map_err(|_| AdminError::invalid("插件注册失败"))?;
-            let descriptor: Registration = serde_json::from_value(registration.result)
-                .map_err(|_| AdminError::invalid("插件注册结果无效"))?;
-            if descriptor.contributes != manifest.contributes || !registration.payload.is_empty() {
-                return Err(AdminError::invalid("插件注册结果与清单不符"));
-            }
-            let is_provider = manifest.contributes.contains_key(&Capability::Executor);
-            let has_provider_only_capability = manifest.contributes.keys().any(|capability| {
-                matches!(
-                    capability,
-                    Capability::Models
-                        | Capability::Authentication
-                        | Capability::Quota
-                        | Capability::AccountManagement
-                        | Capability::Billing
-                        | Capability::Maintenance
-                        | Capability::RequestProfile
-                )
+            let result = tokio::time::timeout(
+                // 沿用准备阶段原有的 30 秒预算；打包校验与能力恢复也在预算内。
+                Duration::from_secs(30),
+                self.prepare_instance(instance.clone(), config_revision, snapshot.config_revision),
+            )
+            .await
+            .unwrap_or_else(|_| Err(AdminError::unavailable("插件启动超时")));
+            let result = result.and_then(|candidate| {
+                self.validate_provider_addition(&contributions, &candidate)?;
+                Ok(candidate)
             });
-            if has_provider_only_capability && descriptor.provider.is_none() {
-                return Err(AdminError::invalid(
-                    "插件声明了 Provider 专属能力但未注册 Provider",
-                ));
-            }
-            if descriptor.provider.is_some() != is_provider {
-                return Err(AdminError::invalid("插件 Provider 声明与执行能力不符"));
-            }
-            commands.extend(
-                crate::adapter::command_line::prepare(
-                    &instance,
-                    &manifest,
-                    session.clone(),
-                    callbacks.clone(),
-                )
-                .await?,
-            );
-            if let Some(entry) = crate::adapter::management::prepare(
-                &instance,
-                package.package(),
-                session.clone(),
-                callbacks.clone(),
-            )
-            .await?
-            {
-                management.push(entry);
-            }
-            if let Some(entry) = crate::adapter::frontend_authentication::prepare_entry(
-                &manifest,
-                &bindings,
-                session.clone(),
-                callbacks.clone(),
-            )
-            .await?
-            {
-                authentication_entries.push(entry);
-            }
-            if let Some(descriptor) = descriptor.provider {
-                let ports = self
-                    .provider_ports
-                    .as_ref()
-                    .ok_or_else(|| AdminError::unavailable("Provider 宿主端口不可用"))?;
-                let provider_binding = crate::adapter::provider::ProviderInstanceBinding::new(
-                    instance_id.clone(),
-                    authorization_binding,
-                    continuation_authorization_fingerprint(&instance, &plugin_id, &descriptor.id)?,
-                    Arc::downgrade(&self.continuations),
-                );
-                let provider = Arc::new(crate::adapter::provider::PluginProvider::prepare(
-                    descriptor,
-                    provider_binding,
-                    &manifest,
-                    &grants,
-                    session.clone(),
-                    ports.clone(),
-                    callbacks.clone(),
-                )?);
-                provider.register_continuation()?;
-                let provider_kind = ProviderKind::new(provider.name())
-                    .map_err(|_| AdminError::invalid("插件 Provider ID 无效"))?;
-                provider.restore_request_profiles().await?;
-                self.validate_provider_request_profiles(
-                    config_revision,
-                    &provider_kind,
-                    provider.as_ref(),
-                )
-                .await?;
-                request_profile_providers.push(provider_kind);
-                if provider.maintenance_enabled(&manifest, &bindings)? {
-                    maintenance.push(super::worker::MaintenanceEntry {
-                        instance_id: instance_id.clone(),
-                        artifact_sha256: instance.artifact_sha256.clone(),
-                        revision: instance.revision,
-                        provider: provider.clone(),
-                    });
+            match result {
+                Ok(candidate) => contributions.append(candidate),
+                Err(error) if required_revision == Some(instance.revision) => return Err(error),
+                Err(error) => {
+                    // 恢复失败只隔离该实例；绑定的拒绝策略仍保留，不能绕过认证或必需处理。
+                    contributions
+                        .policy_entries
+                        .extend(crate::adapter::policy::unavailable_entries(instance)?);
+                    if let Some(entry) =
+                        crate::adapter::frontend_authentication::unavailable_entry(instance)
+                    {
+                        contributions.authentication_entries.push(entry);
+                    }
+                    failures.insert(instance.id.clone(), runtime_failure_from_admin(&error));
                 }
-                admin_providers.push(provider.clone());
-                providers.push(provider.clone());
-                continuation_provider = Some(provider);
             }
-            if let Some(entry) = crate::adapter::observer::compile_entry(
-                &manifest,
-                &plugin_id,
-                &instance_id,
-                &bindings,
-                &granted_permissions,
-                session.clone(),
-                callbacks.clone(),
-            )? {
-                observer_entries.push(entry);
-            }
-            policy_entries.extend(crate::adapter::policy::compile_entries(
-                &manifest,
-                &instance_id,
-                &bindings,
-                &granted_permissions,
-                session.clone(),
-                callbacks.clone(),
-            )?);
-            sessions.push(PreparedInstance {
-                instance_id,
-                artifact_sha256: instance.artifact_sha256,
-                revision: instance.revision,
-                session,
-                private_state,
-                continuation_provider,
-            });
         }
+        let PreparedContributions {
+            sessions,
+            providers,
+            request_profile_providers,
+            admin_providers,
+            observer_entries,
+            commands,
+            management,
+            maintenance,
+            policy_entries,
+            authentication_entries,
+        } = contributions;
         let id = ExtensionSetId::new(uuid::Uuid::new_v4().to_string())
             .map_err(|_| AdminError::internal("插件集合 ID 无效"))?;
         let providers = self
@@ -861,12 +650,47 @@ impl PluginRuntime {
             commands,
             management,
             maintenance,
+            failures,
+            shutting_down: self.shutting_down.clone(),
         });
         self.prepared
             .lock()
             .await
             .insert(fingerprint, Arc::downgrade(&set));
         Ok(ExtensionSetReference::new(set.id.clone(), set))
+    }
+
+    fn validate_provider_addition(
+        &self,
+        current: &PreparedContributions,
+        candidate: &PreparedContributions,
+    ) -> Result<(), AdminError> {
+        // 先在私有候选中检查身份冲突，避免一个插件覆盖原生 Provider 或拖累其他实例。
+        let id = ExtensionSetId::new(uuid::Uuid::new_v4().to_string())
+            .map_err(|_| AdminError::internal("插件集合 ID 无效"))?;
+        let _providers = self
+            .providers
+            .register(
+                id.clone(),
+                current
+                    .providers
+                    .iter()
+                    .chain(&candidate.providers)
+                    .cloned(),
+            )
+            .map_err(|_| AdminError::invalid("插件 Provider 注册冲突"))?;
+        let _admin = self
+            .admin_providers
+            .register(
+                id,
+                current
+                    .admin_providers
+                    .iter()
+                    .chain(&candidate.admin_providers)
+                    .cloned(),
+            )
+            .map_err(|_| AdminError::invalid("插件管理 Provider 注册冲突"))?;
+        Ok(())
     }
 
     /// CLI 复用同一候选准备与弱索引；读取帮助不会发布 Core 快照或执行命令。
@@ -877,7 +701,7 @@ impl PluginRuntime {
             .await
             .map_err(|_| AdminError::unavailable("无法读取已安装插件"))?;
         let reference = self
-            .prepare_snapshot(snapshot.config_revision, snapshot)
+            .prepare_snapshot(snapshot.config_revision, snapshot, None)
             .await?;
         let set = self.prepared_set(&reference).await?;
         Ok(crate::PluginCommandSession::new(
@@ -1201,7 +1025,9 @@ impl PluginPreparation for PluginRuntime {
         source_revision: Revision,
         snapshot: PluginInstanceSnapshot,
     ) -> Result<ExtensionSetReference, AdminError> {
-        self.prepare_snapshot(source_revision, snapshot).await
+        let required_revision = snapshot.config_revision;
+        self.prepare_snapshot(source_revision, snapshot, Some(required_revision))
+            .await
     }
 
     async fn runtime_diagnostics(
@@ -1231,7 +1057,7 @@ impl PluginPreparation for PluginRuntime {
             .collect::<BTreeSet<_>>();
         let published_set = published
             .and_then(|reference| sets.iter().find(|set| set.id == *reference.id()).cloned());
-        let published_ready = published.is_some_and(ExtensionSetReference::is_ready);
+        let published_ready = published.is_some_and(ExtensionSetReference::can_serve);
         let preparation = self.preparation_diagnostic(snapshot.config_revision.get());
         let retained = self.continuations.retained_by_instance();
         let projection = InstanceRuntimeProjection {
@@ -1374,6 +1200,13 @@ impl InstanceRuntimeProjection<'_> {
             } else {
                 PluginInstanceRuntimeStatus::Disabled
             }
+        } else if target_is_published
+            && let Some(reason) = self
+                .published_set
+                .and_then(|set| set.failures.get(&expected.id))
+        {
+            failure = Some(reason.clone());
+            PluginInstanceRuntimeStatus::PreparationFailed
         } else if self.open_restart_circuits.contains(&expected.id) {
             failure = Some(runtime_failure(
                 "restart_circuit_open",
@@ -1507,7 +1340,7 @@ impl ExtensionPreparationPort for PluginRuntime {
             if snapshot.config_revision.get() != revision.get() {
                 return Err(ExtensionPreparationError);
             }
-            self.prepare_snapshot(snapshot.config_revision, snapshot)
+            self.prepare_snapshot(snapshot.config_revision, snapshot, None)
                 .await
                 .map_err(|_| ExtensionPreparationError)
         })

@@ -441,7 +441,7 @@ docker compose -f deploy/compose.yaml pull codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d --no-build --wait codex-proxy-rs
 ```
 
-源码构建需要克隆源码仓库并准备配置与数据目录。首次 UI 发布前，还需在宿主仓库同级准备 `codex-proxy-ui`，Compose 通过命名 build context 单独传入组件库，不复制回宿主源码树。以下命令从仓库根目录执行：
+源码构建需要克隆源码仓库并准备配置与数据目录。UI 组件库从锁定的 GitHub 提交下载，并在前端依赖安装阶段自动构建，无需准备同级源码仓库或额外 build context。以下命令从仓库根目录执行：
 
 ```bash
 docker compose -f deploy/compose.yaml build codex-proxy-rs
@@ -534,7 +534,7 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 
 ### 备份内容与限制
 
-- 插件包体、固定来源、下载凭据、制品接受事实、实例配置、敏感配置、能力/Provider 绑定和私有状态都保存在
+- 插件包体、固定来源、下载凭据、制品接受事实、实例配置、版本配置快照、敏感配置、能力/Provider 绑定和私有状态都保存在
   PostgreSQL，随数据库一起备份；插件 Provider 账号仍使用同库的通用账号表，不另建第二份账号权威。
   来源使用的出站代理及其认证也须随库恢复，不能只备份 `plugin_*` 表；来源代理与账号代理独立选择，
   不依赖进程代理环境，故障时不会自动回退直连。

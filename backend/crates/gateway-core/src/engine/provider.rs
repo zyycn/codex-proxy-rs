@@ -1136,7 +1136,7 @@ impl ProviderRegistry {
             return Ok(self.clone());
         };
         let reference = reference.ok_or(RegistryError::GenerationUnavailable)?;
-        if !reference.is_ready() {
+        if !reference.can_serve() {
             return Err(RegistryError::GenerationUnavailable);
         }
         let mut registry = index

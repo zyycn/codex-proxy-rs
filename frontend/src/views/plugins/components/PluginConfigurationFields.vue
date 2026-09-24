@@ -153,9 +153,10 @@ defineExpose({ focusInvalid, validationMessage })
 <template>
   <BaseEmpty
     v-if="!hasFields"
-    title="这个版本不需要配置"
+    title="无需填写插件参数"
     size="sm"
     surface="inset"
+    class="min-h-40 content-center"
   />
   <div v-else class="grid gap-5">
     <SchemaForm
