@@ -40,12 +40,13 @@
 }
 ```
 
-默认扩展项 ID 为 `<publisher>.<name>.<capability-kebab>`，版本固定为 `1`。除 `middleware` 外，阶段由
+默认扩展项 ID 为 `<publisher>.<name>.<capability-kebab>`，版本默认为 `1`；使用能力需求声明的 `middleware` 选择 `2`。除 `middleware` 外，阶段由
 capability 固定并由工具生成：
 
 | 阶段 | 能力 |
 | --- | --- |
 | `authentication` / `routing` / `scheduling` | `frontend_authentication` / `model_router` / `scheduler` |
+| `registration` / `retry` | `model_catalog` / `retry_policy` |
 | `observation` | `request_lifecycle`、`web_socket_observer`、`usage` |
 | `management` / `command_line` | `management` / `command_line` |
 
@@ -54,19 +55,20 @@ capability 固定并由工具生成：
 
 ## 权限
 
-权限只有五个稳定访问域：
+权限使用以下稳定访问域：
 
 | 标识 | 含义 |
 | --- | --- |
 | `network` | 使用宿主受管网络 |
 | `models` | 查询非秘密 Key 与模型并调用模型，可能产生消耗 |
 | `accounts` | 查询、读取原始凭据和修改账号 |
+| `data` | 仅在管理与命令阶段只读全部账号的基础信息和已有额度观测 |
 | `requests` | 查看和处理请求、响应、路由、调度与观察事实 |
 | `public_endpoints` | 提供无需登录即可访问的资源或回调 |
 
 安装时统一接受清单声明的域，不再填写逐方法、用途、Key、账号或 Provider 白名单。日志与清单声明的
 本插件私有状态是基础设施，无需单独 permission。权限并不替代方法阶段、父调用、Key 规则、账号 revision、
-资源归属和流生命周期校验，具体接口见[能力与回调](capabilities.md#五个访问域)。
+资源归属和流生命周期校验，具体接口见[能力与回调](capabilities.md#访问域)。
 
 ## 插件图标
 

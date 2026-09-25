@@ -28,8 +28,22 @@ use body::BodyResource;
 pub(crate) use body::MiddlewareBodyAuthority;
 use headers::{HeaderDirection, apply_header_mutations, project_headers, validate_headers};
 
+fn request_feature(
+    feature: gateway_plugin_sdk::call::middleware::RequestFeature,
+) -> gateway_core::operation::Feature {
+    use gateway_core::operation::Feature;
+    use gateway_plugin_sdk::call::middleware::RequestFeature as Wire;
+    match feature {
+        Wire::Tools => Feature::Tools,
+        Wire::Vision => Feature::Vision,
+        Wire::Reasoning => Feature::Reasoning,
+        Wire::JsonSchema => Feature::JsonSchema,
+    }
+}
+
 pub(crate) struct MiddlewareInvocation {
     requests_authorized: bool,
+    capabilities_allowed: bool,
     transport: ClientTransport,
     state: Mutex<InvocationState>,
     downstream_error: Arc<Mutex<Option<MiddlewareError>>>,
@@ -82,9 +96,13 @@ impl MiddlewareInvocation {
         request: MiddlewareRequest,
         next: Box<dyn MiddlewareNext>,
         requests_authorized: bool,
+        capability_version: u32,
     ) -> Arc<Self> {
         Arc::new(Self {
             requests_authorized,
+            capabilities_allowed: capability_version >= 2
+                && context.mount() == gateway_core::engine::middleware::MiddlewareMount::Request
+                && context.operation() == Some(gateway_core::operation::OperationKind::Generate),
             transport: context.transport(),
             state: Mutex::new(InvocationState {
                 closed: false,
@@ -258,7 +276,41 @@ impl MiddlewareInvocation {
         request: MiddlewareNextRequest,
         payload: Vec<u8>,
     ) -> Result<MiddlewareRequest, PluginFault> {
-        let (mut protocol, mut headers, original_body) = original.into_parts();
+        let (mut protocol, mut headers, original_body) = original.clone().into_parts();
+        let declaration = request
+            .capabilities
+            .map(|declaration| {
+                if !self.requests_authorized || !self.capabilities_allowed {
+                    return Err(denied());
+                }
+                if request.body != MiddlewareRequestBody::Replace {
+                    return Err(invalid());
+                }
+                let handled = declaration
+                    .handled
+                    .iter()
+                    .copied()
+                    .map(request_feature)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let required = declaration
+                    .required
+                    .iter()
+                    .copied()
+                    .map(request_feature)
+                    .collect::<std::collections::BTreeSet<_>>();
+                if handled.len() != declaration.handled.len()
+                    || required.len() != declaration.required.len()
+                {
+                    return Err(invalid());
+                }
+                Ok(
+                    gateway_core::engine::middleware::MiddlewareCapabilityDeclaration {
+                        handled,
+                        required,
+                    },
+                )
+            })
+            .transpose()?;
         if let Some(replacement) = request.protocol {
             if !self.requests_authorized {
                 return Err(denied());
@@ -282,7 +334,9 @@ impl MiddlewareInvocation {
             MiddlewareRequestBody::Replace if self.requests_authorized => Bytes::from(payload),
             MiddlewareRequestBody::Replace => return Err(denied()),
         };
-        Ok(MiddlewareRequest::new(protocol, headers, body))
+        original
+            .replace_parts(protocol, headers, body, declaration)
+            .map_err(|_| invalid())
     }
 
     async fn call_body_read(

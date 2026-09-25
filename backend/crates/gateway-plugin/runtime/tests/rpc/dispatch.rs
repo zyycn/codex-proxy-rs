@@ -234,3 +234,58 @@ async fn execution_allows_each_declared_callback_permission() {
 
     session.shutdown(Duration::from_secs(1)).await;
 }
+
+#[tokio::test]
+async fn data_callbacks_require_independent_grants_and_management_or_command_stage() {
+    for permissions in [vec![Permission::Accounts], vec![Permission::Data]] {
+        let authorized = permissions.contains(&Permission::Data);
+        let callbacks = Arc::new(Callbacks::default());
+        let (_cache, session) = session_with_permissions(Arc::clone(&callbacks), permissions).await;
+        for stage in [
+            Stage::Registration,
+            Stage::Configuration,
+            Stage::Routing,
+            Stage::Scheduling,
+            Stage::Request,
+            Stage::Attempt,
+            Stage::Retry,
+            Stage::Observation,
+            Stage::Authentication,
+            Stage::PublicManagement,
+            Stage::Management,
+            Stage::CommandLine,
+        ] {
+            for method in ["host.data.accounts.list", "host.data.quota.get"] {
+                let reply = invoke_callback(&session, stage, method).await;
+                if authorized && matches!(stage, Stage::Management | Stage::CommandLine) {
+                    assert!(reply.is_ok());
+                } else {
+                    assert_permission_denied(reply);
+                }
+            }
+        }
+        assert_eq!(
+            callbacks.called.load(Ordering::Relaxed),
+            if authorized { 4 } else { 0 }
+        );
+        session.shutdown(Duration::from_secs(1)).await;
+    }
+}
+
+#[tokio::test]
+async fn retry_stage_allows_only_logs_and_private_state() {
+    let callbacks = Arc::new(Callbacks::default());
+    let (_cache, session) = session(Arc::clone(&callbacks)).await;
+    for (method, _) in CALLBACK_PERMISSIONS {
+        assert_permission_denied(invoke_callback(&session, Stage::Retry, method).await);
+    }
+    for method in ["host.log", "host.state.get"] {
+        assert!(
+            invoke_callback(&session, Stage::Retry, method)
+                .await
+                .is_ok()
+        );
+    }
+    assert_eq!(callbacks.called.load(Ordering::Relaxed), 2);
+    session.shutdown(Duration::from_secs(1)).await;
+}

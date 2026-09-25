@@ -233,6 +233,8 @@ impl PluginRuntime {
             session.clone(),
             callbacks.clone(),
         )?);
+        let model_aliases =
+            crate::adapter::catalog::prepare(&manifest, &instance, &session).await?;
         sessions.push(PreparedInstance {
             instance_id,
             artifact_sha256: instance.artifact_sha256,
@@ -247,6 +249,7 @@ impl PluginRuntime {
             management,
             policy_entries,
             authentication_entries,
+            model_aliases,
         })
     }
 }

@@ -1782,13 +1782,14 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 
 #### 访问域与受管资源
 
-清单的 `requestedPermissions` 只接受五个稳定访问域，确认结果以制品摘要为边界；实例输入没有单独授权字段。
+清单的 `requestedPermissions` 接受 `network`、`models`、`accounts`、`data`、`requests`、`public_endpoints`，确认结果以制品摘要为边界；实例输入没有单独授权字段。
 
 | 标识 | 含义 |
 | --- | --- |
 | `network` | 访问网络 |
 | `models` | 查询模型和 Client Key 基本信息并调用模型，可能产生消耗 |
 | `accounts` | 读取和修改账号，包括访问原始凭据 |
+| `data` | 仅在管理或命令入口只读全部账号的基础信息和已有额度观测，不含凭据或预测 |
 | `requests` | 查看和处理请求、响应、路由及账号选择 |
 | `public_endpoints` | 提供无需登录即可访问的资源与回调入口 |
 

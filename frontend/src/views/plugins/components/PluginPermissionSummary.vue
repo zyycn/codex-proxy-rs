@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PluginPermissionDescription } from '@/api'
-import { Globe2, KeyRound, MessagesSquare, Network, ScanLine, Shield } from '@lucide/vue'
+import { Database, Globe2, KeyRound, MessagesSquare, Network, ScanLine, Shield } from '@lucide/vue'
 
 defineProps<{ permissions: PluginPermissionDescription[] }>()
 
@@ -8,6 +8,7 @@ const icons = {
   network: Globe2,
   models: MessagesSquare,
   accounts: KeyRound,
+  data: Database,
   requests: ScanLine,
   public_endpoints: Network,
 } as const

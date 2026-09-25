@@ -26,6 +26,14 @@ pub trait PluginAccountAccess: Send + Sync {
         account_id: &ProviderAccountId,
     ) -> Result<PluginAccountCredential, AdminError>;
 
+    /// 只读 Provider 已有额度观测；实现不得主动刷新上游或附加用量预测。
+    async fn get_quota(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderQuota, AdminError> {
+        Err(AdminError::unavailable("插件额度事实查询暂不可用"))
+    }
+
     async fn save(
         &self,
         command: PreparedPluginAccountSave,

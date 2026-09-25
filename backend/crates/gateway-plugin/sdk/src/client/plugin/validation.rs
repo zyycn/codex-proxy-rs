@@ -18,6 +18,8 @@ pub(super) fn validate(
         match capability {
             C::Middleware => required(crate::call::middleware::HANDLE_METHOD)?,
             C::ModelRouter => required(methods::ROUTE_MODEL.name)?,
+            C::ModelCatalog => required(methods::MODEL_CATALOG_REGISTER.name)?,
+            C::RetryPolicy => required(methods::RETRY_DECISION.name)?,
             C::Scheduler => required(methods::SCHEDULE_ACCOUNT.name)?,
             C::RequestLifecycle | C::Usage => required(methods::OBSERVE_REQUEST.name)?,
             C::WebSocketObserver => required(methods::OBSERVE_WEBSOCKET.name)?,

@@ -58,7 +58,7 @@ where
             return Err(SessionError::Configuration);
         };
         if contributes.len() != 1
-            || declaration.version != 1
+            || !matches!(declaration.version, 1 | 2)
             || declaration.stages.is_empty()
             || declaration.stages.len() > 2
             || declaration

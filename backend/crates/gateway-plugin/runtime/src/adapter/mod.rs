@@ -1,3 +1,4 @@
+pub(super) mod catalog;
 pub(super) mod command_line;
 pub(super) mod frontend_authentication;
 pub(super) mod management;

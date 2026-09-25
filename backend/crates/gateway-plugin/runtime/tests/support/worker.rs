@@ -297,6 +297,19 @@ impl Peer {
             return;
         }
         match method.as_str() {
+            "policy.retry_decision" => {
+                self.append_observation_marker("retry_marker", &params);
+                if let Some(delay) = self.configuration["retry_delay_ms"].as_u64() {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+                let result = self
+                    .configuration
+                    .get("retry_decision")
+                    .cloned()
+                    .unwrap_or_else(|| json!({"decision":"delegate"}));
+                self.send(Message::Result { id, result }, vec![]).await;
+                return;
+            }
             "frontend_auth.identifier" => {
                 self.send(
                     Message::Result {
@@ -348,6 +361,17 @@ impl Peer {
                 .await;
                 return;
             }
+            "model_catalog.register" => {
+                self.send(
+                    Message::Result {
+                        id,
+                        result: json!({}),
+                    },
+                    serde_json::to_vec(&self.configuration["model_catalog"]).unwrap(),
+                )
+                .await;
+                return;
+            }
             "management.register" => {
                 self.send(
                     Message::Result {
@@ -366,6 +390,35 @@ impl Peer {
                     "management_marker",
                     &json!({"method":request.method,"path":request.path}),
                 );
+                if let Some(queries) = self.configuration["data_queries"].as_array() {
+                    let mut results = vec![];
+                    for query in queries {
+                        let result = self
+                            .callback_payload(
+                                id,
+                                query["method"].as_str().unwrap(),
+                                json!({}),
+                                serde_json::to_vec(&query["query"]).unwrap(),
+                            )
+                            .await;
+                        results.push(match result {
+                            Ok((metadata, payload)) => {
+                                assert_eq!(metadata, json!({}));
+                                serde_json::from_slice::<Value>(&payload).unwrap()
+                            }
+                            Err(error) => json!({"error":error.code}),
+                        });
+                    }
+                    self.send(
+                        Message::Result {
+                            id,
+                            result: json!({"status":200,"content_type":"application/json"}),
+                        },
+                        serde_json::to_vec(&results).unwrap(),
+                    )
+                    .await;
+                    return;
+                }
                 if let Err(error) = self
                     .run_nested_model_fixture(
                         id,
@@ -679,6 +732,7 @@ impl Peer {
                             protocol: None,
                             header_mutations: Vec::new(),
                             body: MiddlewareRequestBody::Preserve,
+                            capabilities: None,
                         })
                         .unwrap(),
                         vec![],

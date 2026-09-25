@@ -25,7 +25,9 @@ SDK 仍处于实验阶段；能力是否可用取决于宿主支持、清单声�
 | `call::frontend_authentication` | 数据面认证信封、认证器标识与外部 principal 结果 |
 | `call::model` | 宿主模型调用的 canonical 事实、原生 wire 与有界事件编解码 |
 | `call::middleware` | 洋葱中间件请求/响应 head、single-use next 与惰性正文 frame 合同 |
-| `call::policy` | 模型路由、账号调度及终态用量观察合同 |
+| `call::policy` | 模型路由、账号调度、受约束重试及终态用量观察合同 |
+| `call::catalog` | 固定 Provider 的模型别名注册合同 |
+| `call::data` | 最小账号事实与已有额度观测的只读合同 |
 | `call::observation` | 实际上游 WebSocket 响应帧的只读观察合同 |
 | `call::host` | 账号、私有状态、受管 HTTP、模型、亲和、日志及调用内流的宿主回调合同 |
 | `call::management` | 管理 API、页面与资源声明、公开回调，以及 CLI 命令与待保存账号 |

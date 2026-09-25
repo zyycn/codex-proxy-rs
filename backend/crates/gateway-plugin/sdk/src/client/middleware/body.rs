@@ -85,6 +85,7 @@ impl MiddlewareBody {
     }
 
     /// 拉取下一完整 frame。调用后该 opaque handle 不能再作为未读直通返回。
+    /// 只读观察并原样交付时使用 [`Self::inspect_frames`]，由 SDK 保留源帧。
     pub async fn read(&mut self) -> Result<Option<MiddlewareBodyFrame>, PluginFault> {
         let MiddlewareBodySource::Host {
             body,
@@ -157,6 +158,24 @@ impl MiddlewareBody {
         }
         self.source = MiddlewareBodySource::Empty;
         Ok(())
+    }
+
+    /// 按下游 Credit 只读观察完整 frame，并原样交付其字节、顺序和源终态。
+    ///
+    /// 不预读或重编码正文；闭包只取得借用，不能改写正在交付的帧。
+    /// 与映射共用取消和背压边界，观察工作应保持有界。
+    ///
+    /// # Errors
+    ///
+    /// 正文来自插件自建流时返回错误；空正文直接保留。
+    pub fn inspect_frames<F>(self, mut inspect: F) -> Result<Self, PluginFault>
+    where
+        F: FnMut(&MiddlewareBodyFrame) + Send + 'static,
+    {
+        self.map_frames(move |frame| {
+            inspect(&frame);
+            Ok(vec![frame])
+        })
     }
 
     /// 按下游 Credit 惰性拉取并映射完整 frame；闭包可在单次调用内持有状态。

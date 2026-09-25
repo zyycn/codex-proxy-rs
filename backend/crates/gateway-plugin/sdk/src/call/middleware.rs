@@ -88,6 +88,24 @@ pub enum MiddlewareRequestBody {
     Replace,
 }
 
+/// 可声明的请求功能；原生续接始终由宿主与 Provider 管理，不能由声明豁免。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestFeature {
+    Tools,
+    Vision,
+    Reasoning,
+    JsonSchema,
+}
+
+/// middleware v2：插件承担的功能转换与额外上游需求，均不覆盖正文推导的事实。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityDeclaration {
+    pub handled: Vec<RequestFeature>,
+    pub required: Vec<RequestFeature>,
+}
+
 /// 单次 `host.middleware.next` 调用。`Replace` 的完整正文位于 binary payload。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,6 +115,8 @@ pub struct MiddlewareNextRequest {
     #[serde(default)]
     pub header_mutations: Vec<MiddlewareHeaderMutation>,
     pub body: MiddlewareRequestBody,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilityDeclaration>,
 }
 
 /// 受父调用约束的不透明响应正文句柄。

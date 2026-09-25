@@ -138,6 +138,21 @@ impl PluginBuilder {
         Ok(self)
     }
 
+    /// 冻结模型别名目录；目标校验与发布由宿主负责。
+    ///
+    /// # Errors
+    ///
+    /// 未声明模型目录能力或重复注册时失败。
+    pub fn model_catalog(
+        self,
+        registration: crate::call::catalog::ModelCatalogRegistration,
+    ) -> Result<Self, AuthorError> {
+        self.on(methods::MODEL_CATALOG_REGISTER, move |_| {
+            let registration = registration.clone();
+            async move { Ok(TypedReply::new(registration)) }
+        })
+    }
+
     /// 冻结管理页面／路由描述并绑定类型化业务函数。
     ///
     /// # Errors

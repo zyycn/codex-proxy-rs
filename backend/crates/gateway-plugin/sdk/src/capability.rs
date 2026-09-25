@@ -9,6 +9,8 @@ pub enum Capability {
     FrontendAuthentication,
     Scheduler,
     ModelRouter,
+    ModelCatalog,
+    RetryPolicy,
     Middleware,
     RequestLifecycle,
     WebSocketObserver,
@@ -25,6 +27,8 @@ impl Capability {
             Self::FrontendAuthentication => "frontend_authentication",
             Self::Scheduler => "scheduler",
             Self::ModelRouter => "model_router",
+            Self::ModelCatalog => "model_catalog",
+            Self::RetryPolicy => "retry_policy",
             Self::Middleware => "middleware",
             Self::RequestLifecycle => "request_lifecycle",
             Self::WebSocketObserver => "web_socket_observer",
@@ -41,6 +45,8 @@ impl Capability {
             Self::FrontendAuthentication => &[Stage::Authentication],
             Self::Scheduler => &[Stage::Scheduling],
             Self::ModelRouter => &[Stage::Routing],
+            Self::ModelCatalog => &[Stage::Registration],
+            Self::RetryPolicy => &[Stage::Retry],
             Self::Middleware => &[],
             Self::RequestLifecycle | Self::WebSocketObserver | Self::Usage => &[Stage::Observation],
             Self::CommandLine => &[Stage::CommandLine],
@@ -58,6 +64,7 @@ pub enum Stage {
     Authentication,
     Routing,
     Scheduling,
+    Retry,
     Request,
     Attempt,
     Observation,
@@ -134,16 +141,18 @@ pub enum Permission {
     Network,
     Models,
     Accounts,
+    Data,
     Requests,
     PublicEndpoints,
 }
 
 impl Permission {
     /// 当前公开访问域，安装摘要与授权校验复用同一集合。
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Network,
         Self::Models,
         Self::Accounts,
+        Self::Data,
         Self::Requests,
         Self::PublicEndpoints,
     ];
@@ -154,6 +163,7 @@ impl Permission {
             Self::Network => "network",
             Self::Models => "models",
             Self::Accounts => "accounts",
+            Self::Data => "data",
             Self::Requests => "requests",
             Self::PublicEndpoints => "public_endpoints",
         }
@@ -166,6 +176,7 @@ impl Permission {
             Self::Network => "联网",
             Self::Models => "模型调用",
             Self::Accounts => "账号与凭据",
+            Self::Data => "基础数据",
             Self::Requests => "请求处理",
             Self::PublicEndpoints => "公开入口",
         }
@@ -178,6 +189,9 @@ impl Permission {
             Self::Network => "访问网络",
             Self::Models => "查询模型与 API Key 信息并调用模型，可能产生消耗",
             Self::Accounts => "读取和修改账号，包括访问原始凭据",
+            Self::Data => {
+                "在管理或命令入口只读查询所有账号的基础信息与已有额度观测，不包含凭据或修改权限"
+            }
             Self::Requests => "查看和处理请求、响应、路由及账号选择",
             Self::PublicEndpoints => "提供无需登录即可访问的资源与回调入口",
         }

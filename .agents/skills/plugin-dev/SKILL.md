@@ -35,6 +35,9 @@ description: 开发 Codex Proxy RS 网关插件，包括选择扩展能力、编
 | --- | --- | --- |
 | 改写请求／响应、处理流式内容、协议转换 | `middleware` | [洋葱中间件](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#洋葱中间件) |
 | 改变模型选择或账号排序 | `model_router` / `scheduler` | [策略类型](../../../backend/crates/gateway-plugin/sdk/src/call/policy/mod.rs)，宿主继续复验范围、资格和租约 |
+| 发布模型别名 | `model_catalog` | [模型目录](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型目录)，注册时冻结直接目标，不需要请求绑定 |
+| 读取基础数据制作管理页面 | `management` + `data` 权限 | [基础事实](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#基础事实)，不需要账号凭据授权 |
+| 选择宿主允许的重试动作 | `retry_policy` | [重试决策](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#重试决策)，不能修改预算或自行重复调用 next |
 | 统计成功失败、用量或观察 WS 帧 | `request_lifecycle` / `usage` / `web_socket_observer` | [路由、调度与观察](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#路由调度与观察)，观察不改写业务结果 |
 | 接受外部客户端身份 | `frontend_authentication` | [数据面入口认证](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#数据面入口认证)，映射现有 Client Key，不接管后台登录 |
 | 增加插件页面与管理操作 | `management` | [管理页面、公开入口与 CLI](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#管理页面公开入口与-cli) |
@@ -60,7 +63,7 @@ description: 开发 Codex Proxy RS 网关插件，包括选择扩展能力、编
 - `request` 包裹整个逻辑请求，`attempt` 在每次选定账号的尝试中执行；根据作用范围选择，避免重试时重复副作用
 - `next` 只能消费一次。使用 SDK 的正文保留与流式映射能力，不自行拼一套 SSE／取消／流控机制；请求、响应及策略处理使用 `requests` 域
 - 持久化状态使用已声明命名空间的 `host.state.*`，账号读写使用 `host.auth.*`，不直接访问宿主数据库。见[账号与凭据](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#账号与凭据)和[状态、日志与迁移](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#状态日志与迁移)
-- 权限只声明 `network`、`models`、`accounts`、`requests`、`public_endpoints`；日志和自身状态无需授权项。安装器不配置 Key／账号白名单，资源选择属于插件业务
+- 权限只声明 `network`、`models`、`accounts`、`data`、`requests`、`public_endpoints`；日志和自身状态无需授权项。安装器不配置 Key／账号白名单，资源选择属于插件业务
 - 模型、网络和亲和查询使用当前父调用的受管回调。管理／CLI 等独立入口调用模型时传明确的 Key ID；请求处理阶段继承父身份。见[Key、模型与模型调用](../../../backend/crates/gateway-plugin/sdk/docs/capabilities.md#key模型与模型调用)
 - SDK 操作名不是管理员 HTTP 路由，不能据此拼接口地址；宿主身份、账单事实和调用授权也不能由插件覆盖
 - 路由与调度只读取宿主投影的请求事实，身份头可能被隐藏；使用已有会话和亲和合同，不依赖原始认证头或根据缓存键补造客户端身份

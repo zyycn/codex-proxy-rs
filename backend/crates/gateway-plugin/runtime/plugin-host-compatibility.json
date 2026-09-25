@@ -6,7 +6,9 @@
     { "capability": "frontend_authentication", "versions": [1] },
     { "capability": "scheduler", "versions": [1] },
     { "capability": "model_router", "versions": [1] },
-    { "capability": "middleware", "versions": [1] },
+    { "capability": "model_catalog", "versions": [1] },
+    { "capability": "retry_policy", "versions": [1] },
+    { "capability": "middleware", "versions": [1, 2] },
     { "capability": "request_lifecycle", "versions": [1] },
     { "capability": "web_socket_observer", "versions": [1] },
     { "capability": "usage", "versions": [1] },
@@ -17,6 +19,7 @@
     "network",
     "models",
     "accounts",
+    "data",
     "requests",
     "public_endpoints"
   ]

@@ -1,10 +1,10 @@
-//! 可发布能力集合的中立身份与保活合同；不解释包格式、进程或管理配置。
+//! 可发布能力集合的中立身份、静态目录与保活合同；不解释包格式、进程或管理配置。
 
 use std::{fmt, sync::Arc};
 
 use futures::future::BoxFuture;
 
-use crate::routing::ConfigRevision;
+use crate::routing::{ConfigRevision, ContributedModelAlias};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExtensionSetId(String);
@@ -31,6 +31,11 @@ impl ExtensionSetId {
 /// 发布视图及在途请求持有引用；准备器只能用非拥有索引查找代次。
 pub trait ExtensionSetLease: Send + Sync {
     fn is_ready(&self) -> bool;
+
+    /// 与集合一起冻结的目录事实，读取不调用插件进程。
+    fn model_aliases(&self) -> &[ContributedModelAlias] {
+        &[]
+    }
 
     /// 局部故障已有请求级处理计划时，集合仍可提供服务。
     fn can_serve(&self) -> bool {
@@ -60,6 +65,11 @@ impl ExtensionSetReference {
     #[must_use]
     pub fn can_serve(&self) -> bool {
         self.lease.can_serve()
+    }
+
+    #[must_use]
+    pub fn model_aliases(&self) -> &[ContributedModelAlias] {
+        self.lease.model_aliases()
     }
 }
 

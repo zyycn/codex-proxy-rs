@@ -37,7 +37,7 @@ const authenticationBinding = computed({
     bindings.value = binding ? [...others, cloneJsonValue(binding)] : others
   },
 })
-const hasRequestBindings = computed(() => Object.values(props.artifact?.metadata.contributes ?? {}).some(contribution => contribution.stages.some(stage => ['request', 'attempt', 'routing', 'scheduling', 'observation'].includes(stage))))
+const hasRequestBindings = computed(() => Object.values(props.artifact?.metadata.contributes ?? {}).some(contribution => contribution.stages.some(stage => ['request', 'attempt', 'routing', 'scheduling', 'retry', 'observation'].includes(stage))))
 const sections = computed(() => [
   { label: '插件参数', value: 'general', icon: Settings2 },
   ...(hasRequestBindings.value ? [{ label: '高级设置', value: 'requests', icon: Blocks }] : []),

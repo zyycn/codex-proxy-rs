@@ -1062,25 +1062,45 @@ where
                 Ok(stream) => stream,
                 Err(error) => {
                     record_trace_error(&attempt_trace, &error);
-                    if self.prepare_unavailable_native_continuation_replay(&error) {
-                        return Ok(Some(PullOutcome::AttemptDiscarded));
-                    }
-                    if matches!(
-                        error.kind(),
-                        ProviderErrorKind::AccountCapacityUnavailable
-                            | ProviderErrorKind::NoEligibleAccount
-                            | ProviderErrorKind::QuotaExhausted
-                            | ProviderErrorKind::ProviderInfrastructureUnavailable
-                            | ProviderErrorKind::ConcurrencyQueueFull
-                            | ProviderErrorKind::ConcurrencyQueueTimeout
-                    ) && error.send_state() == UpstreamSendState::NotSent
+                    let continuation_retry =
+                        self.prepare_unavailable_native_continuation_replay(&error);
+                    let candidate_retry = !continuation_retry
+                        && matches!(
+                            error.kind(),
+                            ProviderErrorKind::AccountCapacityUnavailable
+                                | ProviderErrorKind::NoEligibleAccount
+                                | ProviderErrorKind::QuotaExhausted
+                                | ProviderErrorKind::ProviderInfrastructureUnavailable
+                                | ProviderErrorKind::ConcurrencyQueueFull
+                                | ProviderErrorKind::ConcurrencyQueueTimeout
+                        )
+                        && error.send_state() == UpstreamSendState::NotSent
                         && self.current_send_state() == UpstreamSendState::NotSent
                         && matches!(
                             self.continuation_attempt,
                             ContinuationAttempt::None | ContinuationAttempt::ReplayAny
                         )
-                        && self.advance_provider_candidate()
-                    {
+                        && self.advance_provider_candidate();
+                    let retryable = self
+                        .apply_retry_policy(super::policy::RetryFacts {
+                            attempt_index: next_attempt,
+                            provider: candidate.provider().clone(),
+                            model: candidate
+                                .upstream_model()
+                                .map(|model| model.as_str().to_owned()),
+                            error_kind: error.kind(),
+                            upstream_status: error.upstream_status(),
+                            send_state: error.send_state(),
+                            remaining_routing_attempts: self
+                                .plan
+                                .max_attempts()
+                                .get()
+                                .saturating_sub(self.routing_attempts),
+                            remaining_deadline: Duration::ZERO,
+                            retry_allowed: continuation_retry || candidate_retry,
+                        })
+                        .await?;
+                    if retryable {
                         return Ok(Some(PullOutcome::AttemptDiscarded));
                     }
                     if matches!(
@@ -1511,6 +1531,35 @@ where
             || account_rotation_retry
             || transport_recovery.is_some();
 
+        let retryable = match self
+            .apply_retry_policy(super::policy::RetryFacts {
+                attempt_index: current.index,
+                provider: current.metadata.provider().clone(),
+                model: current
+                    .metadata
+                    .upstream_model()
+                    .map(|model| model.as_str().to_owned()),
+                error_kind: error.kind(),
+                upstream_status: error.upstream_status(),
+                send_state: attempt_send_state,
+                remaining_routing_attempts: self
+                    .plan
+                    .max_attempts()
+                    .get()
+                    .saturating_sub(self.routing_attempts),
+                remaining_deadline: Duration::ZERO,
+                retry_allowed: retryable,
+            })
+            .await
+        {
+            Ok(retryable) => retryable,
+            Err(error) => {
+                self.current = Some(current);
+                self.finish_interruption(&error).await?;
+                return Err(error);
+            }
+        };
+
         self.trace.attempt(current.index.get()).record("retry.decided", json!({
             "retryable": retryable, "continuationRetry": continuation_retry,
             "sameAccountRetry": same_account_retry, "accountRotationRetry": account_rotation_retry,
@@ -1606,6 +1655,41 @@ where
         self.finish_provider_error_with_send_state(&error, send_state)
             .await?;
         Err(provider_engine_error(error))
+    }
+
+    async fn apply_retry_policy(
+        &mut self,
+        mut facts: super::policy::RetryFacts,
+    ) -> Result<bool, EngineError> {
+        let Some(policy) = self.request_policy.clone() else {
+            return Ok(facts.retry_allowed);
+        };
+        facts.remaining_deadline = self
+            .deadline
+            .duration_since(SystemTime::now())
+            .unwrap_or_default();
+        facts.retry_allowed &= !facts.remaining_deadline.is_zero()
+            && !self.cancellation.is_cancelled()
+            && !self.execution_effect_observed();
+        let allowed = facts.retry_allowed;
+        let decision = {
+            let cancellation = self.cancellation.clone();
+            let cancelled = cancellation.cancelled().fuse();
+            let decision = policy.retry_decision(facts).fuse();
+            let mut deadline_timer = &mut self.deadline_timer;
+            pin_mut!(cancelled, decision);
+            select_biased! {
+                () = cancelled => Err(EngineError::Cancelled),
+                () = deadline_timer => Err(EngineError::Deadline),
+                decision = decision => Ok(decision),
+            }
+        }?;
+        // 策略只收窄宿主已允许的恢复，返回后仍复核期限和外部副作用。
+        Ok(allowed
+            && decision != super::policy::RetryDecision::Stop
+            && !self.execution_effect_observed()
+            && !self.cancellation.is_cancelled()
+            && SystemTime::now() < self.deadline)
     }
 
     fn observe_atomic_terminal_events(&mut self, events: &mut [ProviderEvent]) {

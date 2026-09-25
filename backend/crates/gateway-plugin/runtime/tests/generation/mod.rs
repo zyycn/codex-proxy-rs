@@ -1,7 +1,7 @@
 mod authentication;
 mod configuration;
+mod data;
 mod observer;
-mod observer_example;
 mod policy;
 mod prepare;
 mod private_state;
@@ -45,12 +45,20 @@ async fn setup_with_contributions_and_restart_circuit(
     contributes: Contributions,
     restart_circuit: PluginRestartCircuitConfig,
 ) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
+    setup_with_permissions(contributes, restart_circuit, vec![]).await
+}
+
+async fn setup_with_permissions(
+    contributes: Contributions,
+    restart_circuit: PluginRestartCircuitConfig,
+    permissions: Vec<gateway_plugin_sdk::Permission>,
+) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
     let cache = tempfile::tempdir().unwrap();
     let artifact = PackageInspector::new(PackageLimits::default(), "1.0.0".parse().unwrap())
         .inspect(
             crate::support::package_with_contributions(
                 crate::support::worker(),
-                Vec::new(),
+                permissions,
                 contributes,
             ),
             None,

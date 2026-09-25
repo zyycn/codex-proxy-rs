@@ -235,6 +235,37 @@ pub enum AccountScheduleDecision {
     Reject,
 }
 
+/// 重试策略只能收窄宿主决定；不能自行创造恢复路径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryDecision {
+    Delegate,
+    Stop,
+    Retry,
+}
+
+/// 协调器计算的安全失败事实；无凭据、原始错误或请求正文。
+#[derive(Debug, Clone)]
+pub struct RetryFacts {
+    pub attempt_index: NonZeroU32,
+    pub provider: ProviderKind,
+    pub model: Option<String>,
+    pub error_kind: crate::error::ProviderErrorKind,
+    pub upstream_status: Option<u16>,
+    pub send_state: super::UpstreamSendState,
+    pub remaining_routing_attempts: u32,
+    pub remaining_deadline: std::time::Duration,
+    pub retry_allowed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RetryInput {
+    pub request_id: super::ModelRequestId,
+    pub client_key_id: ClientApiKeyId,
+    pub account_group_ids: Arc<[AccountGroupId]>,
+    pub extension_scope: ExtensionCallScope,
+    pub facts: RetryFacts,
+}
+
 /// 策略调用失败不携带插件原始消息，避免跨层泄漏不可信诊断。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("request policy call failed")]
@@ -253,6 +284,13 @@ pub enum AccountPolicyError {
 
 /// 一个发布代次的不可变请求策略计划。
 pub trait RequestPolicyPlan: Send + Sync + fmt::Debug {
+    fn retry_decision(
+        &self,
+        _input: RetryInput,
+    ) -> BoxFuture<'static, Result<RetryDecision, RequestPolicyFault>> {
+        Box::pin(async { Ok(RetryDecision::Delegate) })
+    }
+
     fn route_model(
         &self,
         input: ModelRouteInput,
@@ -288,6 +326,25 @@ impl fmt::Debug for RequestPolicyContext {
 }
 
 impl RequestPolicyContext {
+    pub async fn retry_decision(&self, facts: RetryFacts) -> RetryDecision {
+        self.plan
+            .retry_decision(RetryInput {
+                request_id: self.request_id.clone(),
+                client_key_id: self.client_key_id.clone(),
+                account_group_ids: self.account_group_ids.clone(),
+                extension_scope: self.extension_scope.clone(),
+                facts,
+            })
+            .await
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    request_id = self.request_id.as_str(),
+                    "重试策略调用失败，使用宿主决定"
+                );
+                RetryDecision::Delegate
+            })
+    }
+
     #[must_use]
     pub fn new(
         plan: Arc<dyn RequestPolicyPlan>,

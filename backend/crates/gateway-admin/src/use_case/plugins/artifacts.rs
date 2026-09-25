@@ -377,7 +377,7 @@ pub(super) fn default_bindings(metadata: &PluginArtifactMetadata) -> Vec<PluginC
         .filter(|(capability, _)| {
             !matches!(
                 capability.as_str(),
-                "frontend_authentication" | "management" | "command_line"
+                "frontend_authentication" | "management" | "command_line" | "model_catalog"
             )
         })
         .flat_map(|(_, contribution)| {
@@ -390,6 +390,8 @@ pub(super) fn default_bindings(metadata: &PluginArtifactMetadata) -> Vec<PluginC
                     order: 0,
                     failure_policy: if stage == "observation" {
                         PluginFailurePolicy::Observe
+                    } else if stage == "retry" {
+                        PluginFailurePolicy::Delegate
                     } else {
                         PluginFailurePolicy::Reject
                     },

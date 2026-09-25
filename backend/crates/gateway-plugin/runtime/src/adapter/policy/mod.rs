@@ -1,4 +1,5 @@
 mod middleware;
+mod retry;
 mod route_schedule;
 
 use std::{fmt, sync::Arc, time::Duration};
@@ -17,6 +18,7 @@ const POLICY_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) enum PolicyEntry {
     Router(ModelRouterEntry),
     Scheduler(AccountSchedulerEntry),
+    Retry(RetryEntry),
     Middleware(MiddlewareEntry),
 }
 
@@ -24,6 +26,14 @@ pub(crate) enum PolicyEntry {
 struct PolicyInvocation {
     session: Arc<RpcSession>,
     callbacks: Arc<PluginCallbacks>,
+}
+
+pub(crate) struct RetryEntry {
+    order: i32,
+    plugin_id: String,
+    instance_id: String,
+    invocation: Option<PolicyInvocation>,
+    scope: BindingScope,
 }
 
 pub(crate) struct ModelRouterEntry {
@@ -46,6 +56,7 @@ pub(crate) struct AccountSchedulerEntry {
 }
 
 pub(crate) struct MiddlewareEntry {
+    capability_version: u32,
     order: i32,
     plugin_id: String,
     instance_id: String,
@@ -62,12 +73,16 @@ pub(crate) fn validate_bindings(
 ) -> Result<(), AdminError> {
     let mut has_router = false;
     let mut has_scheduler = false;
+    let mut has_retry = false;
     let mut middleware_stages = std::collections::BTreeSet::new();
     for binding in bindings {
         let capability = crate::contribution::resolve(manifest, binding)?.capability;
         if !matches!(
             capability,
-            Capability::ModelRouter | Capability::Scheduler | Capability::Middleware
+            Capability::ModelRouter
+                | Capability::Scheduler
+                | Capability::Middleware
+                | Capability::RetryPolicy
         ) {
             continue;
         }
@@ -80,6 +95,16 @@ pub(crate) fn validate_bindings(
             return Err(AdminError::invalid("数据面绑定的故障策略无效"));
         }
         match capability {
+            Capability::RetryPolicy => {
+                if std::mem::replace(&mut has_retry, true)
+                    || stage != Stage::Retry
+                    || binding.failure_policy != PluginFailurePolicy::Delegate
+                {
+                    return Err(AdminError::invalid(
+                        "重试策略只允许一次 retry 绑定，故障策略必须为 delegate",
+                    ));
+                }
+            }
             Capability::ModelRouter => {
                 if std::mem::replace(&mut has_router, true) || stage != Stage::Routing {
                     return Err(AdminError::invalid(
@@ -140,7 +165,10 @@ pub(crate) fn compile_entries(
             };
             matches!(
                 capability,
-                Capability::ModelRouter | Capability::Scheduler | Capability::Middleware
+                Capability::ModelRouter
+                    | Capability::Scheduler
+                    | Capability::Middleware
+                    | Capability::RetryPolicy
             )
             .then(|| {
                 compile_entry(
@@ -148,6 +176,7 @@ pub(crate) fn compile_entries(
                     instance_id,
                     binding,
                     capability,
+                    manifest.contributes[&capability].version,
                     Some(invocation.clone()),
                     permissions.contains(&Permission::Requests),
                 )
@@ -167,6 +196,7 @@ pub(crate) fn unavailable_entries(
             let capability = match binding.stage.as_str() {
                 "routing" => Capability::ModelRouter,
                 "scheduling" => Capability::Scheduler,
+                "retry" => Capability::RetryPolicy,
                 "request" | "attempt" => Capability::Middleware,
                 _ => return None,
             };
@@ -178,6 +208,7 @@ pub(crate) fn unavailable_entries(
                 &instance.id,
                 binding,
                 capability,
+                1,
                 None,
                 false,
             ))
@@ -190,11 +221,19 @@ fn compile_entry(
     instance_id: &str,
     binding: &PluginCapabilityBinding,
     capability: Capability,
+    capability_version: u32,
     invocation: Option<PolicyInvocation>,
     requests_authorized: bool,
 ) -> Result<PolicyEntry, AdminError> {
     let scope = BindingScope::compile(binding)?;
     Ok(match capability {
+        Capability::RetryPolicy => PolicyEntry::Retry(RetryEntry {
+            order: binding.order,
+            plugin_id: plugin_id.to_owned(),
+            instance_id: instance_id.to_owned(),
+            invocation,
+            scope,
+        }),
         Capability::ModelRouter => PolicyEntry::Router(ModelRouterEntry {
             order: binding.order,
             plugin_id: plugin_id.to_owned(),
@@ -213,6 +252,7 @@ fn compile_entry(
             requests_authorized,
         }),
         Capability::Middleware => PolicyEntry::Middleware(MiddlewareEntry {
+            capability_version,
             order: binding.order,
             plugin_id: plugin_id.to_owned(),
             instance_id: instance_id.to_owned(),
@@ -233,6 +273,7 @@ fn compile_entry(
 pub(crate) struct PluginRequestPolicyPlan {
     routers: Arc<[ModelRouterEntry]>,
     schedulers: Arc<[AccountSchedulerEntry]>,
+    retries: Arc<[RetryEntry]>,
     middleware: Arc<[MiddlewareEntry]>,
     policy_timeout: Duration,
     middleware_timeout: Duration,
@@ -244,6 +285,7 @@ impl fmt::Debug for PluginRequestPolicyPlan {
             .debug_struct("PluginRequestPolicyPlan")
             .field("router_count", &self.routers.len())
             .field("scheduler_count", &self.schedulers.len())
+            .field("retry_count", &self.retries.len())
             .field("middleware_count", &self.middleware.len())
             .finish_non_exhaustive()
     }
@@ -256,18 +298,31 @@ impl PluginRequestPolicyPlan {
     ) -> Result<Option<Arc<Self>>, AdminError> {
         let mut routers = Vec::new();
         let mut schedulers = Vec::new();
+        let mut retries = Vec::new();
         let mut middleware = Vec::new();
         for entry in entries {
             match entry {
                 PolicyEntry::Router(entry) => routers.push(entry),
                 PolicyEntry::Scheduler(entry) => schedulers.push(entry),
+                PolicyEntry::Retry(entry) => retries.push(entry),
                 PolicyEntry::Middleware(entry) => middleware.push(entry),
             }
         }
-        if routers.is_empty() && schedulers.is_empty() && middleware.is_empty() {
+        if routers.is_empty()
+            && schedulers.is_empty()
+            && middleware.is_empty()
+            && retries.is_empty()
+        {
             return Ok(None);
         }
         routers.sort_by(|left, right| {
+            (left.order, &left.plugin_id, &left.instance_id).cmp(&(
+                right.order,
+                &right.plugin_id,
+                &right.instance_id,
+            ))
+        });
+        retries.sort_by(|left, right| {
             (left.order, &left.plugin_id, &left.instance_id).cmp(&(
                 right.order,
                 &right.plugin_id,
@@ -299,6 +354,7 @@ impl PluginRequestPolicyPlan {
         Ok(Some(Arc::new(Self {
             routers: routers.into(),
             schedulers: schedulers.into(),
+            retries: retries.into(),
             middleware: middleware.into(),
             policy_timeout: maximum_call_timeout.min(POLICY_TIMEOUT),
             middleware_timeout: maximum_call_timeout,
@@ -307,7 +363,7 @@ impl PluginRequestPolicyPlan {
 
     #[must_use]
     pub(crate) fn has_request_policy(&self) -> bool {
-        !self.routers.is_empty() || !self.schedulers.is_empty()
+        !self.routers.is_empty() || !self.schedulers.is_empty() || !self.retries.is_empty()
     }
 
     #[must_use]

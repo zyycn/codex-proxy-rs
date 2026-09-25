@@ -4,6 +4,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::SendState;
 
+/// `retry` 只继续宿主已选定的恢复路径，不能改账号、延迟或预算。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryAction {
+    Stop,
+    Retry,
+}
+
+/// 重试输入只包含安全事实，不携带上游错误正文、凭据或请求内容。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetryDecisionRequest {
+    pub request_id: String,
+    pub attempt_index: u32,
+    pub provider: String,
+    pub model: Option<String>,
+    pub error_kind: String,
+    pub upstream_status: Option<u16>,
+    pub send_state: SendState,
+    pub remaining_routing_attempts: u32,
+    pub remaining_deadline_ms: u64,
+    pub allowed_actions: Vec<RetryAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RetryDecision {
+    Delegate,
+    Stop,
+    Retry,
+}
+
 /// 策略插件可见的安全 HTTP 头；值使用 base64 保留非 UTF-8 字节。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

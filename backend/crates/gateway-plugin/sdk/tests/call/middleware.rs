@@ -67,6 +67,7 @@ fn next_distinguishes_preserve_from_replace_empty_and_uses_incremental_headers()
         protocol: None,
         header_mutations: Vec::new(),
         body: MiddlewareRequestBody::Preserve,
+        capabilities: None,
     };
     assert_eq!(
         serde_json::to_value(preserve).unwrap(),
@@ -85,6 +86,7 @@ fn next_distinguishes_preserve_from_replace_empty_and_uses_incremental_headers()
             },
         ],
         body: MiddlewareRequestBody::Replace,
+        capabilities: None,
     };
     assert_eq!(
         serde_json::to_value(replace).unwrap(),

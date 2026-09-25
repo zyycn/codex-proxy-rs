@@ -11,6 +11,15 @@ use super::{
     ModelCapabilities, ModelPresentation, PublicModelId, PublicModelProfile, UpstreamModelId,
 };
 
+/// 扩展集合持有的直接模型别名；执行与元数据仍归属内置 Provider。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContributedModelAlias {
+    pub owner: String,
+    pub id: PublicModelId,
+    pub provider: ProviderKind,
+    pub target: UpstreamModelId,
+}
+
 /// Provider 客户端目录条目；缺少原生协议正文时使用已编译的通用画像。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelDescriptor {

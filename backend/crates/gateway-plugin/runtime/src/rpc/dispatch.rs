@@ -208,6 +208,10 @@ fn callback_allowed(method: &str, stage: Stage, permissions: &[Permission]) -> b
     ) {
         return true;
     }
+    // 失败后的策略不得产生额外出站调用或读取账号凭据。
+    if stage == Stage::Retry {
+        return false;
+    }
     if matches!(
         method,
         gateway_plugin_sdk::call::middleware::NEXT_METHOD
@@ -231,6 +235,11 @@ fn callback_allowed(method: &str, stage: Stage, permissions: &[Permission]) -> b
             Permission::Accounts
         }
         "host.affinity.lookup" => Permission::Requests,
+        "host.data.accounts.list" | "host.data.quota.get"
+            if matches!(stage, Stage::Management | Stage::CommandLine) =>
+        {
+            Permission::Data
+        }
         _ => return false,
     };
     permissions.contains(&permission)

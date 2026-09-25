@@ -723,6 +723,162 @@ struct FixedRoutingPolicy {
     inputs: Mutex<Vec<ModelRouteInput>>,
 }
 
+#[derive(Debug)]
+struct RetryTestPolicy {
+    decision: gateway_core::engine::policy::RetryDecision,
+    facts: Arc<Mutex<Vec<gateway_core::engine::policy::RetryFacts>>>,
+}
+
+impl RequestPolicyPlan for RetryTestPolicy {
+    fn route_model(
+        &self,
+        _: ModelRouteInput,
+    ) -> BoxFuture<'static, Result<ModelRouteDecision, RequestPolicyFault>> {
+        Box::pin(async { Ok(ModelRouteDecision::Unhandled) })
+    }
+    fn schedule_account(
+        &self,
+        _: AccountScheduleInput,
+    ) -> BoxFuture<'static, Result<AccountScheduleDecision, RequestPolicyFault>> {
+        Box::pin(async { Ok(AccountScheduleDecision::Delegate) })
+    }
+    fn retry_decision(
+        &self,
+        input: gateway_core::engine::policy::RetryInput,
+    ) -> BoxFuture<'static, Result<gateway_core::engine::policy::RetryDecision, RequestPolicyFault>>
+    {
+        self.facts.lock().unwrap().push(input.facts);
+        let decision = self.decision;
+        Box::pin(async move { Ok(decision) })
+    }
+}
+
+struct RetryTestProvider {
+    error: ProviderError,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Provider for RetryTestProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(vec![])
+    }
+    async fn execute(
+        self: Arc<Self>,
+        request: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) > 0 {
+            return Err(ProviderError::new(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            ));
+        }
+        let candidate = request.candidate();
+        let metadata = ProviderCallMetadata::new(
+            candidate.provider().clone(),
+            candidate.upstream_model().cloned().unwrap(),
+            ProviderAccountId::new("acct_openai").unwrap(),
+            UpstreamTransport::new("http").unwrap(),
+        );
+        Ok(ProviderStream::new(
+            metadata,
+            futures::stream::iter([Err(self.error.clone())]),
+            (),
+        ))
+    }
+}
+
+#[test]
+fn retry_policy_can_stop_but_cannot_bypass_replay_safety() {
+    use gateway_core::engine::policy::RetryDecision;
+    for (decision, send_state, replay_safe, expected_allowed, expected_calls) in [
+        (
+            RetryDecision::Stop,
+            UpstreamSendState::NotSent,
+            true,
+            true,
+            1,
+        ),
+        (
+            RetryDecision::Retry,
+            UpstreamSendState::NotSent,
+            true,
+            true,
+            2,
+        ),
+        (
+            RetryDecision::Retry,
+            UpstreamSendState::Ambiguous,
+            true,
+            false,
+            1,
+        ),
+        (
+            RetryDecision::Retry,
+            UpstreamSendState::Sent,
+            false,
+            false,
+            1,
+        ),
+    ] {
+        block_on(async {
+            let error = ProviderError::new(ProviderErrorKind::Transport, send_state);
+            let error = if replay_safe {
+                error.with_replay_safe()
+            } else {
+                error
+            };
+            let provider = Arc::new(RetryTestProvider {
+                error,
+                calls: AtomicUsize::new(0),
+            });
+            let facts = Arc::new(Mutex::new(vec![]));
+            let generation = super::extensions::reference("retry-policy");
+            let policies = RequestPolicyExtensionIndex::default();
+            let _owner = policies
+                .register(
+                    generation.id().clone(),
+                    Arc::new(RetryTestPolicy {
+                        decision,
+                        facts: facts.clone(),
+                    }),
+                )
+                .unwrap();
+            let service = DefaultExecutionService::new(
+                RuntimeSnapshotHandle::new(request_policy_snapshot(
+                    generation,
+                    &[ProviderKind::new("openai").unwrap()],
+                )),
+                Arc::new(TrackingExecutionStore::default()),
+                ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).unwrap(),
+                Arc::new(Admissions::default()),
+                Arc::new(UnusedContinuation),
+                Arc::new(RecordingClientApiKeyUsage::default()),
+            )
+            .with_request_policies(policies);
+            let mut started = service
+                .start(request(&service, ClientTransport::HttpJson))
+                .await
+                .unwrap();
+            assert!(started.session.collect_uncommitted().await.is_err());
+            assert_eq!(provider.calls.load(Ordering::SeqCst), expected_calls);
+            let observed = facts.lock().unwrap();
+            assert_eq!(observed[0].retry_allowed, expected_allowed);
+            assert_eq!(observed[0].send_state, send_state);
+            assert_eq!(observed[0].remaining_routing_attempts, 31);
+        });
+    }
+}
+
 impl RequestPolicyPlan for FixedRoutingPolicy {
     fn route_model(
         &self,
@@ -2957,11 +3113,34 @@ impl Provider for NativeCatalogProvider {
 
 #[test]
 fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models() {
+    #[derive(Debug)]
+    struct Aliases(Vec<gateway_core::routing::ContributedModelAlias>);
+    impl gateway_core::runtime::extensions::ExtensionSetLease for Aliases {
+        fn is_ready(&self) -> bool {
+            true
+        }
+        fn model_aliases(&self) -> &[gateway_core::routing::ContributedModelAlias] {
+            &self.0
+        }
+    }
     for fail in [false, true] {
-        let snapshot = start_snapshot().with_model_mappings(BTreeMap::from([
-            ("alias".to_owned(), "gpt-start".to_owned()),
-            ("missing-alias".to_owned(), "unavailable-model".to_owned()),
-        ]));
+        let snapshot = start_snapshot()
+            .with_model_mappings(BTreeMap::from([
+                ("alias".to_owned(), "gpt-start".to_owned()),
+                ("missing-alias".to_owned(), "unavailable-model".to_owned()),
+            ]))
+            .with_extensions(Some(ExtensionSetReference::new(
+                gateway_core::runtime::extensions::ExtensionSetId::new("catalog-aliases".into())
+                    .unwrap(),
+                Arc::new(Aliases(vec![
+                    gateway_core::routing::ContributedModelAlias {
+                        owner: "catalog-plugin".into(),
+                        id: PublicModelId::new("plugin-alias").unwrap(),
+                        provider: ProviderKind::new("openai").unwrap(),
+                        target: UpstreamModelId::new("gpt-start").unwrap(),
+                    },
+                ])),
+            )));
         let service = DefaultExecutionService::new(
             RuntimeSnapshotHandle::new(snapshot),
             Arc::new(TrackingExecutionStore::default()),
@@ -2993,9 +3172,13 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
             .collect::<Vec<_>>();
         assert_eq!(
             pairs.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-            ["gpt-start", "alias"]
+            ["gpt-start", "alias", "plugin-alias"]
         );
         assert_eq!(pairs[0].1, pairs[1].1, "Core preserves alias payload bytes");
+        assert_eq!(
+            pairs[0].1, pairs[2].1,
+            "插件别名使用相同原生对象，不伪造字段"
+        );
     }
 }
 

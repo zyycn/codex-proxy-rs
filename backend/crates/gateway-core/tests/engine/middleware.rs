@@ -169,6 +169,138 @@ fn operation() -> Operation {
     ))
 }
 
+fn body_operation(body: &Value) -> Operation {
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+    ))
+}
+
+#[test]
+fn capability_declaration_preserves_original_semantics_and_recomputes_upstream_needs() {
+    use gateway_core::{engine::middleware::MiddlewareCapabilityDeclaration, operation::Feature};
+    let original = json!({"model":"gpt-test","input":"answer", "tools":[{"type":"function"}],
+        "text":{"format":{"type":"json_schema","schema":{"type":"object"}}}});
+    let mut converted = original.clone();
+    converted.as_object_mut().unwrap().remove("text");
+    converted["input"] = json!(
+        "Return an object matching the supplied schema; the middleware validates the response."
+    );
+    let request = MiddlewareRequest::new(
+        "openai",
+        vec![],
+        serde_json::to_vec(&original).unwrap().into(),
+    )
+    .replace_parts(
+        "openai".into(),
+        vec![],
+        serde_json::to_vec(&converted).unwrap().into(),
+        Some(MiddlewareCapabilityDeclaration {
+            handled: [Feature::JsonSchema].into(),
+            required: [Feature::Reasoning].into(),
+        }),
+    )
+    .unwrap();
+    let operation = request
+        .apply_capabilities(body_operation(&converted))
+        .unwrap();
+    assert_eq!(
+        operation.original_capability_requirements(),
+        body_operation(&original).capability_requirements()
+    );
+    assert_eq!(
+        operation.capability_requirements().features(),
+        &[Feature::Tools, Feature::Reasoning].into()
+    );
+    assert_eq!(
+        request.body().as_ref(),
+        serde_json::to_vec(&converted).unwrap()
+    );
+
+    // 后续普通正文修改也不能删掉未承担的原始语义，或藏起实际新增的需求。
+    converted.as_object_mut().unwrap().remove("tools");
+    converted["input"] = json!([{"type":"input_image","image_url":"synthetic"}]);
+    let request = request
+        .replace_parts(
+            "openai".into(),
+            vec![],
+            serde_json::to_vec(&converted).unwrap().into(),
+            None,
+        )
+        .unwrap();
+    let operation = request
+        .apply_capabilities(body_operation(&converted))
+        .unwrap();
+    assert_eq!(
+        operation.capability_requirements().features(),
+        &[Feature::Tools, Feature::Reasoning, Feature::Vision].into()
+    );
+    let changed = operation
+        .replace_middleware_wire(
+            "openai",
+            serde_json::to_vec(&json!({"input":"answer","text":{"format":{"type":"json_schema"}}}))
+                .unwrap()
+                .into(),
+        )
+        .unwrap();
+    assert!(
+        changed
+            .capability_requirements()
+            .features()
+            .contains(&Feature::JsonSchema)
+    );
+}
+
+#[test]
+fn capability_declaration_cannot_erase_remaining_or_invented_features_or_native_continuation() {
+    use gateway_core::{engine::middleware::MiddlewareCapabilityDeclaration, operation::Feature};
+    let source = json!({"tools":[{"type":"function"}],"previous_response_id":"resp-original"});
+    let request = MiddlewareRequest::new(
+        "openai",
+        vec![],
+        serde_json::to_vec(&source).unwrap().into(),
+    );
+    for (handled, body) in [
+        (Feature::Tools, source),
+        (Feature::JsonSchema, json!({"input":"removed"})),
+        (Feature::NativeContinuation, json!({"input":"removed"})),
+    ] {
+        assert!(
+            request
+                .clone()
+                .replace_parts(
+                    "openai".into(),
+                    vec![],
+                    serde_json::to_vec(&body).unwrap().into(),
+                    Some(MiddlewareCapabilityDeclaration {
+                        handled: [handled].into(),
+                        required: Default::default()
+                    })
+                )
+                .is_err()
+        );
+    }
+    let converted = json!({"input":"tools converted"});
+    let request = request
+        .replace_parts(
+            "openai".into(),
+            vec![],
+            serde_json::to_vec(&converted).unwrap().into(),
+            Some(MiddlewareCapabilityDeclaration {
+                handled: [Feature::Tools].into(),
+                required: Default::default(),
+            }),
+        )
+        .unwrap();
+    assert!(
+        request
+            .apply_capabilities(body_operation(&converted))
+            .unwrap()
+            .capability_requirements()
+            .features()
+            .contains(&Feature::NativeContinuation)
+    );
+}
+
 #[test]
 fn attempt_middleware_consumes_owned_next_once_and_preserves_host_envelopes() {
     futures::executor::block_on(async {

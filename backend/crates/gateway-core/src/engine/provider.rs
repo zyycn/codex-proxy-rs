@@ -479,6 +479,9 @@ impl MiddlewareNext for ProviderMiddlewareNext {
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         Box::pin(async move {
             let fallback_protocol = self.operation.protocol().to_owned();
+            if request.has_capability_declaration() {
+                return Err(MiddlewareError::InvalidState);
+            }
             let (protocol, headers, body) = request.into_parts();
             validate_attempt_headers(&headers)?;
             let operation = self

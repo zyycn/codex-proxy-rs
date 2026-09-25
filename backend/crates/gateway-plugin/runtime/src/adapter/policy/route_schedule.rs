@@ -31,6 +31,14 @@ const MAX_HEADER_TOTAL_BYTES: usize = 64 * 1024;
 const OPAQUE_HEADERS_KEY: &str = "opaque_request_headers";
 
 impl RequestPolicyPlan for PluginRequestPolicyPlan {
+    fn retry_decision(
+        &self,
+        input: gateway_core::engine::policy::RetryInput,
+    ) -> BoxFuture<'static, Result<gateway_core::engine::policy::RetryDecision, RequestPolicyFault>>
+    {
+        super::retry::decide(self.retries.clone(), input, self.policy_timeout)
+    }
+
     fn route_model(
         &self,
         input: ModelRouteInput,

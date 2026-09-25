@@ -1,5 +1,6 @@
 mod accounts;
 mod affinity;
+mod data;
 mod http;
 mod keys;
 mod log;
@@ -62,6 +63,7 @@ impl PluginCallbackPorts {
 
 pub(crate) struct PluginCallbacks {
     accounts: Arc<accounts::PluginAccounts>,
+    data: Arc<data::PluginData>,
     keys: Arc<PluginClientKeyPortSlot>,
     models_authorized: bool,
     affinity: Arc<affinity::PluginAffinity>,
@@ -123,6 +125,7 @@ impl PluginCallbacks {
         ports: PluginCallbackPorts,
     ) -> Result<Self, AdminError> {
         Ok(Self {
+            data: Arc::new(data::PluginData::new(ports.accounts.clone(), grants)),
             accounts: Arc::new(accounts::PluginAccounts::new(ports.accounts, grants)),
             keys: ports.keys,
             models_authorized: grants.iter().any(|grant| grant.permission == "models"),
@@ -371,6 +374,7 @@ impl CallbackHandler for PluginCallbacks {
         let log = self.log.clone();
         let private_state = self.private_state.clone();
         let accounts = self.accounts.clone();
+        let data = self.data.clone();
         let keys = self.keys.clone();
         let models_authorized = self.models_authorized;
         let models = self.models.clone();
@@ -437,6 +441,13 @@ impl CallbackHandler for PluginCallbacks {
             let scope = Some(scope)
                 .filter(|scope| scope.authorizes(&context))
                 .ok_or_else(denied)?;
+            if matches!(
+                method.as_str(),
+                gateway_plugin_sdk::call::data::ACCOUNTS_LIST
+                    | gateway_plugin_sdk::call::data::QUOTA_GET
+            ) {
+                return data.call(&context, &method, params, &payload).await;
+            }
             if matches!(
                 method.as_str(),
                 "host.auth.list" | "host.auth.get" | "host.auth.get_runtime" | "host.auth.save"

@@ -1,5 +1,6 @@
 //! 可选的插件侧异步传输与会话辅助；SDK 不启动网关服务。
 
+mod data;
 mod frame;
 mod middleware;
 mod plugin;

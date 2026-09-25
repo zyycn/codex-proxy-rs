@@ -28,9 +28,18 @@ pub struct MiddlewareRequest {
     body_visible: bool,
     body_replaced: bool,
     header_mutations: Vec<MiddlewareHeaderMutation>,
+    capabilities: Option<crate::call::middleware::CapabilityDeclaration>,
 }
 
 impl MiddlewareRequest {
+    /// 仅 middleware v2 的 request 阶段可声明转换；须同时替换正文并负责响应还原。
+    pub fn declare_capabilities(
+        &mut self,
+        declaration: crate::call::middleware::CapabilityDeclaration,
+    ) {
+        self.capabilities = Some(declaration);
+    }
+
     /// 明确替换请求正文；空 Vec 也表示 replace-empty，而不是保留原正文。
     pub fn replace_body(&mut self, body: Vec<u8>) {
         self.body = body;
@@ -78,6 +87,7 @@ impl MiddlewareRequest {
                 protocol,
                 header_mutations,
                 body,
+                capabilities: self.capabilities,
             },
             payload,
         )
@@ -317,6 +327,7 @@ impl MiddlewareCall {
                 original_protocol,
                 original_headers,
                 header_mutations: Vec::new(),
+                capabilities: None,
                 head,
             },
             next: MiddlewareNext { host: host.clone() },

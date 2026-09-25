@@ -46,6 +46,8 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 | --- | --- |
 | `middleware` | `PluginBuilder::middleware` / `middleware.handle` |
 | `model_router` | `methods::ROUTE_MODEL` |
+| `model_catalog` | `PluginBuilder::model_catalog` / `methods::MODEL_CATALOG_REGISTER` |
+| `retry_policy` | `methods::RETRY_DECISION` |
 | `scheduler` | `methods::SCHEDULE_ACCOUNT` |
 | `request_lifecycle`、`usage` | `methods::OBSERVE_REQUEST`，同一实例的终态订阅合并调用 |
 | `web_socket_observer` | `methods::OBSERVE_WEBSOCKET`，线方法为 `websocket.response_event` |
@@ -53,7 +55,7 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 | `management` | `PluginBuilder::management`；公开回调另用 `methods::MANAGEMENT_CALLBACK` |
 | `command_line` | `PluginBuilder::command_line` |
 
-## 五个访问域
+## 访问域
 
 安装时接受清单声明的访问域，不存在另一套逐方法、逐用途或资源 ID 白名单。宿主仍会检查父调用、阶段、
 期限、实例代次、资源归属，以及 Key、账号和 Provider 自身的业务规则。
@@ -63,6 +65,7 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 | `network` | 通过 `host.http.*` 使用宿主受管出站网络；仍受统一代理、超时、大小和流控规则约束 |
 | `models` | 列出非秘密 Key、按所选 Key 查询模型，以及通过 `host.model.*` 调用模型；调用可能产生消耗 |
 | `accounts` | 查询账号、读取原始凭据及创建或替换账号；写入仍经过 revision CAS、审计和发布事务 |
+| `data` | 在管理／命令阶段只读全部账号的最小基础信息及已有额度观测，不包含凭据、写入或预测 |
 | `requests` | 参与请求／响应处理、路由、调度、观察及亲和查询 |
 | `public_endpoints` | 提供无需登录即可访问的已声明静态资源或一次性票据回调 |
 
@@ -72,6 +75,37 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 ## 宿主资源回调
 
 所有回调都通过当前 `TypedCall.host` 发起，并受父调用截止时间和取消信号约束。
+
+### 基础事实
+
+纯展示页面声明 `management` 和 `data` 即可，不需要请求处理 binding 或 `accounts` 权限。
+`data` 是独立的管理员授权域，只允许 `management`、`command_line` 阶段使用；请求链、注册及公开回调均拒绝。
+它可读取全部账号的下列最小事实，不继承或授予客户端 Key 的模型执行权。
+
+| SDK 方法 | 回调 | 查询与结果 |
+| --- | --- | --- |
+| `call.host.account_facts(query)` | `host.data.accounts.list` | `AccountFactsQuery`：可选 `provider_id`、`cursor`，必填 `limit`（1～200）；按账号 ID 升序，`next_cursor=null` 表示本页已结束 |
+| `call.host.quota_facts(query)` | `host.data.quota.get` | `QuotaFactsQuery { account_id }`：读取 Provider 现有观测，不访问上游刷新 |
+
+类型在 `call::data`。控制参数为 `{}`，查询和结果使用二进制 JSON；结果固定 `schema_version=1`。
+账号仅返回 `account_id`、`provider_id`、`group_ids`、`enabled` 和 `updated_at_ms`，不附带姓名、邮箱、令牌或代理信息。
+额度仅返回观测时间与窗口的 `key`、`window_seconds`、`used_percent`、`reset_at_ms`。
+时间均为 UTC Unix 毫秒，比例为百分数；未知值保留 `null`，不能解释为 0。`observed_at_ms=null` 表示没有可用观测时间，
+不保证当前缓存新鲜，不提供历史快照或多个查询之间的原子一致性。
+
+```rust,ignore
+use gateway_plugin_sdk::call::data::{AccountFactsQuery, QuotaFactsQuery};
+let page = call.host.account_facts(AccountFactsQuery {
+    provider_id: Some("openai".into()), cursor: None, limit: 100,
+}).await?;
+for account in page.accounts {
+    let quota = call.host.quota_facts(QuotaFactsQuery { account_id: account.account_id }).await?;
+    // 插件自行解释样本的新鲜度并计算展示或预测结果。
+}
+```
+
+已有 `usage` 观察提供请求最终用量、时间和结算事实；该投递有界、不是历史补偿接口。
+本接口不提供 SQL、池汇总、健康分、额度预测或历史使用记录查询；插件结果保存在自身 `host.state.*` 中。
 
 ### 账号与凭据
 
@@ -127,8 +161,79 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 `MiddlewareRequestBody::Preserve`，只有 `replace_body(Vec::new())` 才表示清空。Header 修改采用增量
 remove/append，保留合法多值。`MiddlewareBody::map_frames` 复用会话的流控和唯一终态，不建立插件全局流表。
 
+**不改写就 1:1 保留**：同一网关处理边界上，默认 `next.run(request)` 保留原始正文、未修改的 header 和响应流字节及顺序。
+只解析 `request.body` 不会触发替换；SDK 比较原投影，宿主持有的隐藏 header 不会被脱敏视图覆盖。
+只观察响应可使用 `response.body.inspect_frames(|frame| { /* 读取，不修改 */ })?`，保留来源信封、背压和取消语义。
+这一保证比较插件前后的同一边界，Provider 自身的协议适配、两次调用的随机值和网络分段不在比较范围内。
+
+需要声明功能转换时，在清单选择 `middleware.version=2`，普通 v1 插件仍可原样运行。
+`request.declare_capabilities(CapabilityDeclaration { handled, required })` 随单次 `next` 发出，必须同时显式替换正文且具有 `requests` 权限。
+当前仅允许 OpenAI 生成请求的 request 阶段，HTTP 与 WebSocket 共用规则；不扩展端点允许的协议或流模式。
+`handled` 只允许列举改写前确实存在、改写后已从实际请求移除的 `tools`、`vision`、`reasoning`、`json_schema`，
+插件须负责对应的提示词转换及普通响应、错误、流式响应还原。`required` 为额外上游需求，不能覆盖正文推导出的要求。
+重复项、同一项同时出现在两组、空声明、v1 使用声明、attempt 阶段使用声明均会拒绝。
+原始语义中未由插件承担的功能继续约束路由；实际正文重新加入某功能时，该需求仍生效。
+原生续接不能由声明豁免，attempt 阶段的既有冻结与保护字段检查继续生效。
+
+```rust,ignore
+use gateway_plugin_sdk::call::middleware::{CapabilityDeclaration, RequestFeature};
+// 将 JSON Schema 转为提示词前保留原 schema，响应返回时按它验证并还原。
+request.replace_body(convert_schema_to_prompt(&request.body)?);
+request.declare_capabilities(CapabilityDeclaration {
+    handled: vec![RequestFeature::JsonSchema], required: vec![],
+});
+let response = next.run(request).await?;
+restore_and_validate_response(response).await
+```
+
 仅实现中间件时也可使用轻量的 `MiddlewarePlugin`；需要与管理或其他方法组合时使用
 `PluginBuilder`，两者复用相同的 `MiddlewareCall` 和 `MiddlewareResponse`。
+
+### 模型目录
+
+`model_catalog` v1 在 registration 阶段一次提交 `ModelCatalogRegistration { models: Vec<ModelAlias> }`，不需要请求级 binding。
+每条 `ModelAlias { id, provider, model }` 定义公开 ID、内置 Provider（`openai` 或 `xai`）及直接上游目标。
+上游目标须已存在于该 Provider 的当前目录；同名原生模型、静态映射、其他插件条目、别名链和循环均拒绝发布。
+每实例最多 256 条，整个二进制 JSON 最多 64 KiB；不允许覆盖原生元数据或自行宣称目标不支持的功能。
+
+```rust,ignore
+use gateway_plugin_sdk::call::catalog::{ModelAlias, ModelCatalogRegistration};
+let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
+    .model_catalog(ModelCatalogRegistration { models: vec![ModelAlias {
+        id: "team-default".into(), provider: "openai".into(), model: "gpt-target".into(),
+    }] })?
+    .build()?;
+```
+
+有效目录、路由和目标能力随同一个不可变快照发布，`/v1/models`、详情、原生目录和 `host.models.list` 共用该事实及现有 Key／账号模型范围。
+原生别名继承目标的完整可公开对象；更新失败保留旧快照，禁用后新请求不再使用该别名，在途请求持有旧代次。
+v1 是直接别名，动态选择可组合 `model_router`；实际路由仍须通过宿主的权限和能力校验，不提供多目标虚拟模型注册合同。
+
+### 重试决策
+
+`retry_policy` v1 固定绑定 `retry` 阶段，故障策略只能为 `delegate`。使用 `methods::RETRY_DECISION` 处理 `RetryDecisionRequest`。
+输入包含失败分类、必要状态码、发送状态、attempt 序号、Provider／上游模型、剩余路由次数和期限，以及 `allowed_actions`。
+不发送账号凭据、请求正文或上游错误转储。路由次数不等同于 Provider 自有传输恢复预算。
+
+返回 `RetryDecision::Delegate`、`Stop` 或 `Retry`。`Retry` 必须出现在宿主允许动作中，并且仅继续宿主已经选定的恢复路径；
+不能指定账号、延迟、目标或提高预算。响应已交付、发送不明确、外部副作用及续接绑定等既有安全门不可绕过。
+Core 处理建立响应流前与流中的失败，并在策略返回后再次检查期限、取消和副作用。
+
+```rust,ignore
+use gateway_plugin_sdk::{client::TypedReply, call::policy::RetryDecision};
+let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
+    .on(methods::RETRY_DECISION, |call| async move {
+        let decision = if call.request.upstream_status == Some(429) {
+            RetryDecision::Stop
+        } else { RetryDecision::Delegate };
+        Ok(TypedReply::new(decision))
+    })?
+    .build()?;
+```
+
+按 binding 顺序、插件 ID、实例 ID 确定委托链，首个合法非委托结果生效。整条链最多等待 2 秒，并受请求剩余期限约束。
+退出、超时、未知字段及不允许的动作委托后续处理，最终回到宿主决定；故障不改写原始上游错误。
+本阶段宿主只开放日志与插件私有状态回调，不允许额外网络、模型调用或账号访问。middleware 的 `next` 仍最多调用一次。
 
 ### 路由、调度与观察
 

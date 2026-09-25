@@ -303,6 +303,8 @@ pub enum RuntimeSnapshotCompileError {
     RevisionChanged,
     #[error("runtime snapshot contains invalid frozen data")]
     InvalidData,
+    #[error("extension model aliases conflict with the provider catalog or model mappings")]
+    InvalidExtensionModels,
     #[error("provider model catalog changed while the snapshot was compiling")]
     CatalogChanged,
 }
@@ -420,13 +422,15 @@ impl RuntimeSnapshotCompiler {
                 {
                     return Err(RuntimeSnapshotCompileError::RevisionChanged);
                 }
-                return Ok(snapshot
+                let snapshot = snapshot
                     .with_provider_catalog_generations(if cached.is_some() {
                         BTreeMap::new()
                     } else {
                         observed_generations
                     })
-                    .with_extensions(extensions));
+                    .with_extensions(extensions);
+                snapshot.validate_extension_models()?;
+                return Ok(snapshot);
             }
         }
         Err(RuntimeSnapshotCompileError::CatalogChanged)
@@ -701,6 +705,47 @@ impl RuntimeSnapshot {
     pub const fn extensions(&self) -> Option<&crate::runtime::extensions::ExtensionSetReference> {
         self.extensions.as_ref()
     }
+
+    fn model_aliases(&self) -> &[super::ContributedModelAlias] {
+        self.extensions
+            .as_ref()
+            .map_or(&[], |set| set.model_aliases())
+    }
+
+    fn model_alias(&self, model: &str) -> Option<&super::ContributedModelAlias> {
+        self.model_aliases()
+            .iter()
+            .find(|alias| alias.id.as_str() == model)
+    }
+
+    fn validate_extension_models(&self) -> Result<(), RuntimeSnapshotCompileError> {
+        let mut ids = BTreeSet::new();
+        for alias in self.model_aliases() {
+            let valid = ids.insert(&alias.id)
+                && self.providers.contains(&alias.provider)
+                && !self.model_mappings.contains_key(alias.id.as_str())
+                && !self.model_mappings.contains_key(alias.target.as_str())
+                && !self
+                    .model_mappings
+                    .values()
+                    .any(|target| target == alias.id.as_str())
+                && self.model_alias(alias.target.as_str()).is_none()
+                && !self.provider_models.values().any(|models| {
+                    models
+                        .keys()
+                        .any(|model| model.as_str() == alias.id.as_str())
+                })
+                && self
+                    .provider_models
+                    .get(&alias.provider)
+                    .is_some_and(|models| models.contains_key(&alias.target));
+            if !valid {
+                tracing::warn!(owner = %alias.owner, model = %alias.id, "插件模型别名与宿主目录或映射冲突，拒绝发布候选快照");
+                return Err(RuntimeSnapshotCompileError::InvalidExtensionModels);
+            }
+        }
+        Ok(())
+    }
     #[must_use]
     pub fn with_pricing(mut self, pricing: Arc<crate::metering::PricingOverrides>) -> Self {
         self.pricing = pricing;
@@ -901,6 +946,12 @@ impl RuntimeSnapshot {
                 .keys()
                 .filter_map(|model| PublicModelId::new(model.clone()).ok()),
         );
+        models.extend(
+            self.model_aliases()
+                .iter()
+                .filter(|alias| &alias.provider == provider)
+                .map(|alias| alias.id.clone()),
+        );
         models.into_iter().collect()
     }
 
@@ -928,6 +979,15 @@ impl RuntimeSnapshot {
             };
             if let Ok(public_model) = PublicModelId::new(alias.clone()) {
                 profiles.insert(public_model, presentation.clone());
+            }
+        }
+        for alias in self
+            .model_aliases()
+            .iter()
+            .filter(|alias| &alias.provider == provider)
+        {
+            if let Some(presentation) = presentations.get(&alias.target) {
+                profiles.insert(alias.id.clone(), presentation.clone());
             }
         }
         profiles
@@ -999,6 +1059,12 @@ impl RuntimeSnapshot {
         if !self.providers.contains(provider) {
             return false;
         }
+        if self
+            .model_alias(public_model.as_str())
+            .is_some_and(|alias| &alias.provider != provider)
+        {
+            return false;
+        }
         if !self.exhaustive_provider_catalogs.contains(provider) {
             return true;
         }
@@ -1022,6 +1088,9 @@ impl RuntimeSnapshot {
 
     #[must_use]
     pub fn mapped_model(&self, requested: &str) -> String {
+        if let Some(alias) = self.model_alias(requested) {
+            return alias.target.as_str().to_owned();
+        }
         let original = requested;
         let mut current = original.to_owned();
         let mut seen = BTreeSet::new();
@@ -1122,6 +1191,12 @@ impl RuntimeSnapshot {
             if !self.providers.contains(provider) {
                 continue;
             }
+            if self
+                .model_alias(public_model.as_str())
+                .is_some_and(|alias| &alias.provider != provider)
+            {
+                continue;
+            }
             if context
                 .required_provider
                 .as_ref()
@@ -1132,7 +1207,9 @@ impl RuntimeSnapshot {
             }
             let requested_model = public_model.as_str();
             let mapped_model = self.mapped_model(requested_model);
-            let upstream_model = if self.model_mappings.contains_key(requested_model) {
+            let upstream_model = if self.model_mappings.contains_key(requested_model)
+                || self.model_alias(requested_model).is_some()
+            {
                 UpstreamModelId::new(mapped_model)
             } else {
                 UpstreamModelId::from_client_wire(mapped_model)

@@ -14,11 +14,12 @@ const stages: Record<string, string[]> = {
   middleware: ['request', 'attempt'],
   model_router: ['routing'],
   scheduler: ['scheduling'],
+  retry_policy: ['retry'],
   request_lifecycle: ['observation'],
   usage: ['observation'],
   web_socket_observer: ['observation'],
 }
-const stageLabels: Record<string, string> = { request: '请求开始', attempt: '每次尝试', routing: '模型路由', scheduling: '账号调度', observation: '请求结束' }
+const stageLabels: Record<string, string> = { request: '请求开始', attempt: '每次尝试', routing: '模型路由', scheduling: '账号调度', retry: '重试决策', observation: '请求结束' }
 const entries = computed(() => Object.entries(props.metadata.contributes).flatMap(([capability, contribution]) =>
   contribution.stages.filter(stage => stages[capability]?.includes(stage))
     .map(stage => ({ capability, contribution: contribution.id, stage, key: `${contribution.id}:${stage}` })),
@@ -44,7 +45,7 @@ function toggle(entry: typeof entries.value[number], enabled: boolean) {
   bindings.value = bindings.value.filter(binding => keyOf(binding) !== entry.key)
   if (enabled) {
     const order = entry.stage === 'observation' ? bindings.value.find(binding => binding.stage === 'observation')?.order ?? 0 : 0
-    bindings.value = [...bindings.value, { contribution: entry.contribution, stage: entry.stage, order, failurePolicy: entry.stage === 'observation' ? 'observe' : 'reject', providerIds: [], models: [], clientKeyIds: [], accountGroupIds: [], identityBindings: [] }]
+    bindings.value = [...bindings.value, { contribution: entry.contribution, stage: entry.stage, order, failurePolicy: entry.stage === 'observation' ? 'observe' : entry.stage === 'retry' ? 'delegate' : 'reject', providerIds: [], models: [], clientKeyIds: [], accountGroupIds: [], identityBindings: [] }]
   }
 }
 function setGlobal(key: string, value: boolean) {
@@ -107,7 +108,7 @@ watch(valid, value => emit('validityChange', value), { immediate: true })
             <BaseNumberInput :model-value="bindingFor(entry.key)!.order" label="执行顺序" size="md" :min="-2147483648" :max="2147483647" :disabled="disabled" class="w-full" @update:model-value="patch(entry.key, { order: $event })" />
           </BaseFormItem>
           <BaseFormItem label="插件失败时">
-            <BaseSelect :model-value="bindingFor(entry.key)!.failurePolicy" :options="[{ label: '拒绝请求', value: 'reject' }, { label: '交给后续处理', value: 'delegate' }]" :disabled="disabled" class="w-full" @update:model-value="patch(entry.key, { failurePolicy: $event as 'reject' | 'delegate' })" />
+            <BaseSelect :model-value="bindingFor(entry.key)!.failurePolicy" :options="entry.stage === 'retry' ? [{ label: '交给后续处理', value: 'delegate' }] : [{ label: '拒绝请求', value: 'reject' }, { label: '交给后续处理', value: 'delegate' }]" :disabled="disabled || entry.stage === 'retry'" class="w-full" @update:model-value="patch(entry.key, { failurePolicy: $event as 'reject' | 'delegate' })" />
           </BaseFormItem>
         </div>
       </template>

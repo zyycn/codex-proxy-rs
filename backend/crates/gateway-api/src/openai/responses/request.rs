@@ -272,6 +272,14 @@ pub struct DecodedResponsesRequest {
 }
 
 impl DecodedResponsesRequest {
+    pub(crate) fn with_middleware_capabilities(
+        mut self,
+        request: &gateway_core::engine::middleware::MiddlewareRequest,
+    ) -> Result<Self, gateway_core::engine::middleware::MiddlewareError> {
+        self.operation = request.apply_capabilities(self.operation)?;
+        Ok(self)
+    }
+
     /// 附着当前 WebSocket 连接保存的 Provider 私有上一轮状态。
     #[must_use]
     pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {

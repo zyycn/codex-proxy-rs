@@ -132,7 +132,13 @@ async fn invoke_middleware(
     if remaining.is_zero() || context.cancellation().is_cancelled() {
         return Err(MiddlewareError::Fault);
     }
-    let invocation = MiddlewareInvocation::new(&context, request, next, entry.requests_authorized);
+    let invocation = MiddlewareInvocation::new(
+        &context,
+        request,
+        next,
+        entry.requests_authorized,
+        entry.capability_version,
+    );
     let (protocol, headers, body_visible, payload) = match invocation.request_projection() {
         Ok(projection) => projection,
         Err(_) => return recover_invalid(entry, &invocation).await,

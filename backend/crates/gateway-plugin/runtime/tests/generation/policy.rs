@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::{NonZeroU32, NonZeroUsize},
     sync::{
         Arc,
@@ -97,6 +97,7 @@ async fn setup(
     manifest_permissions: Vec<Permission>,
 ) -> (tempfile::TempDir, PluginRuntime) {
     let contributes = Contributions::from([
+        crate::support::contribution(Capability::RetryPolicy, vec![Stage::Retry], vec![], vec![]),
         crate::support::contribution(
             Capability::ModelRouter,
             vec![Stage::Routing],
@@ -225,6 +226,124 @@ fn operation() -> Operation {
         .unwrap()
         .with_context(context),
     ))
+}
+
+#[tokio::test]
+async fn retry_policy_uses_ordered_delegation_and_rejects_disallowed_actions() {
+    use gateway_core::{
+        engine::policy::{RetryDecision, RetryFacts},
+        error::ProviderErrorKind,
+        upstream::UpstreamSendState,
+    };
+    for (reply, allowed, expected) in [
+        (
+            serde_json::json!({"decision":"delegate"}),
+            true,
+            RetryDecision::Stop,
+        ),
+        (
+            serde_json::json!({"decision":"retry"}),
+            true,
+            RetryDecision::Retry,
+        ),
+        (
+            serde_json::json!({"decision":"retry"}),
+            false,
+            RetryDecision::Stop,
+        ),
+        (
+            serde_json::json!({"decision":"retry","account_id":"acct_forbidden"}),
+            true,
+            RetryDecision::Stop,
+        ),
+    ] {
+        let records = tempfile::tempdir().unwrap();
+        let marker = records.path().join("retry.jsonl");
+        let (_cache, runtime) = setup(vec![
+            InstanceFixture { id: "retry-first", configuration: serde_json::json!({"retry_decision":reply,"retry_marker":marker}), grants: vec![],
+                bindings: vec![binding("test.example.retryPolicy", "retry", 0, PluginFailurePolicy::Delegate)] },
+            InstanceFixture { id: "retry-second", configuration: serde_json::json!({"retry_decision":{"decision":"stop"}}), grants: vec![],
+                bindings: vec![binding("test.example.retryPolicy", "retry", 1, PluginFailurePolicy::Delegate)] },
+        ], vec![]).await;
+        let context = policy_context(&runtime, prepare(&runtime).await, "req_retry");
+        let decision = context
+            .retry_decision(RetryFacts {
+                attempt_index: NonZeroU32::MIN,
+                provider: ProviderKind::new("openai").unwrap(),
+                model: Some("gpt-test".into()),
+                error_kind: ProviderErrorKind::RateLimited,
+                upstream_status: Some(429),
+                send_state: UpstreamSendState::NotSent,
+                remaining_routing_attempts: 1,
+                remaining_deadline: Duration::from_secs(3),
+                retry_allowed: allowed,
+            })
+            .await;
+        assert_eq!(decision, expected);
+        let facts = marker_lines(&marker, 1).await.remove(0);
+        assert_eq!(
+            facts["allowed_actions"],
+            if allowed {
+                serde_json::json!(["stop", "retry"])
+            } else {
+                serde_json::json!(["stop"])
+            }
+        );
+        assert_eq!(facts["error_kind"], "rate_limited");
+        assert!(facts.get("account_id").is_none());
+        runtime.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn retry_policy_timeout_exhausts_the_chain_budget_and_delegates() {
+    use gateway_core::{
+        engine::policy::{RetryDecision, RetryFacts},
+        error::ProviderErrorKind,
+        upstream::UpstreamSendState,
+    };
+    let records = tempfile::tempdir().unwrap();
+    let second_marker = records.path().join("second.jsonl");
+    let (_cache, runtime) = setup(
+        vec![
+            InstanceFixture {
+                id: "retry-delayed",
+                configuration: serde_json::json!({"retry_delay_ms":500,"retry_decision":{"decision":"stop"}}),
+                grants: vec![],
+                bindings: vec![binding("test.example.retryPolicy", "retry", 0, PluginFailurePolicy::Delegate)],
+            },
+            InstanceFixture {
+                id: "retry-next",
+                configuration: serde_json::json!({"retry_marker":second_marker,"retry_decision":{"decision":"stop"}}),
+                grants: vec![],
+                bindings: vec![binding("test.example.retryPolicy", "retry", 1, PluginFailurePolicy::Delegate)],
+            },
+        ],
+        vec![],
+    ).await;
+    let context = policy_context(&runtime, prepare(&runtime).await, "req_retry_timeout");
+    let decision = tokio::time::timeout(
+        Duration::from_secs(2),
+        context.retry_decision(RetryFacts {
+            attempt_index: NonZeroU32::MIN,
+            provider: ProviderKind::new("openai").unwrap(),
+            model: Some("gpt-test".into()),
+            error_kind: ProviderErrorKind::RateLimited,
+            upstream_status: Some(429),
+            send_state: UpstreamSendState::NotSent,
+            remaining_routing_attempts: 1,
+            remaining_deadline: Duration::from_millis(100),
+            retry_allowed: true,
+        }),
+    )
+    .await
+    .expect("the shared deadline bounds the whole retry chain");
+    assert_eq!(decision, RetryDecision::Delegate);
+    assert!(
+        !second_marker.exists(),
+        "later policies cannot restart an exhausted budget"
+    );
+    runtime.shutdown().await;
 }
 
 async fn marker_lines(path: &std::path::Path, count: usize) -> Vec<serde_json::Value> {
@@ -1053,6 +1172,270 @@ async fn instances_without_data_plane_bindings_publish_neither_plan() {
     assert!(runtime.middleware_registry().resolve(&generation).is_none());
     drop(generation);
     super::wait_until_empty(cache.path()).await;
+}
+
+struct TransparencyNext {
+    expected: MiddlewareRequest,
+    headers: Vec<MiddlewareHeader>,
+    frames: VecDeque<MiddlewareFrame>,
+}
+
+struct CapabilitiesNext(Arc<AtomicUsize>);
+
+impl MiddlewareNext for CapabilitiesNext {
+    fn run(
+        self: Box<Self>,
+        request: MiddlewareRequest,
+    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let body = serde_json::from_slice(request.body()).unwrap();
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body).unwrap(),
+            ));
+            let operation = request.apply_capabilities(operation)?;
+            assert!(
+                operation
+                    .original_capability_requirements()
+                    .features()
+                    .contains(&gateway_core::operation::Feature::JsonSchema)
+            );
+            assert!(
+                !operation
+                    .capability_requirements()
+                    .features()
+                    .contains(&gateway_core::operation::Feature::JsonSchema)
+            );
+            Ok(MiddlewareResponse::new(
+                "openai".into(),
+                200,
+                vec![],
+                Box::new(TransparencyBody(VecDeque::from([MiddlewareFrame::new(
+                    Bytes::from_static(br#"{"output":[]}"#),
+                    MiddlewareFraming::JsonDocument,
+                    true,
+                )]))),
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn sdk_capability_declarations_require_v2_authorization_and_request_stage() {
+    for (version, authorized, attempt) in [
+        (2, true, false),
+        (1, true, false),
+        (2, false, false),
+        (2, true, true),
+    ] {
+        let stage = if attempt {
+            Stage::Attempt
+        } else {
+            Stage::Request
+        };
+        let (capability, mut contribution) = crate::support::contribution(
+            Capability::Middleware,
+            vec![stage],
+            vec!["openai".into()],
+            vec!["openai".into()],
+        );
+        contribution.version = version;
+        let permissions = if authorized {
+            vec![Permission::Requests]
+        } else {
+            vec![]
+        };
+        let package = crate::support::package_with_contributions(
+            &std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap(),
+            permissions.clone(),
+            Contributions::from([(capability, contribution)]),
+        );
+        let (_cache, runtime) = setup_package(vec![InstanceFixture {
+            id: "capability-declaration",
+            configuration: serde_json::json!({"mode":"declare","middleware_version":version,"attempt":attempt,
+                "body":{"model":"gpt-test","input":"return JSON matching the original schema"},
+                "capabilities":{"handled":["json_schema"],"required":[]}}),
+            grants: permissions.into_iter().map(grant).collect(),
+            bindings: vec![binding(MIDDLEWARE_CONTRIBUTION, if attempt { "attempt" } else { "request" }, 0, PluginFailurePolicy::Reject)],
+        }], package).await;
+        let generation = prepare(&runtime).await;
+        let plan = runtime.middleware_registry().resolve(&generation).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let context = if attempt {
+            attempt_middleware_context(Arc::default())
+        } else {
+            middleware_context(ClientTransport::HttpJson)
+        };
+        let result = plan.handle(context, MiddlewareRequest::new("openai", vec![], Bytes::from_static(
+            br#"{"model":"gpt-test","input":"answer","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}"#,
+        )), Box::new(CapabilitiesNext(calls.clone()))).await;
+        if version == 2 && authorized && !attempt {
+            let mut body = result.unwrap().into_parts().3;
+            assert!(body.next_frame().await.unwrap().unwrap().terminal());
+            assert!(body.next_frame().await.unwrap().is_none());
+            body.close().await;
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        } else {
+            assert!(result.is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+        runtime.shutdown().await;
+    }
+}
+
+impl MiddlewareNext for TransparencyNext {
+    fn run(
+        self: Box<Self>,
+        request: MiddlewareRequest,
+    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+        Box::pin(async move {
+            assert_eq!(request.protocol(), self.expected.protocol());
+            assert_eq!(request.body(), self.expected.body());
+            assert_eq!(request.headers(), self.expected.headers());
+            Ok(MiddlewareResponse::new(
+                "openai".into(),
+                200,
+                self.headers,
+                Box::new(TransparencyBody(self.frames)),
+            ))
+        })
+    }
+}
+
+struct TransparencyBody(VecDeque<MiddlewareFrame>);
+
+impl MiddlewareBody for TransparencyBody {
+    fn next_frame(&mut self) -> BoxFuture<'_, Result<Option<MiddlewareFrame>, MiddlewareError>> {
+        Box::pin(async move { Ok(self.0.pop_front()) })
+    }
+
+    fn close(self: Box<Self>) -> BoxFuture<'static, ()> {
+        Box::pin(async {})
+    }
+}
+
+async fn assert_sdk_transparency(mode: &'static str, authorized: bool) {
+    let worker = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap();
+    let permissions = if authorized {
+        vec![Permission::Requests]
+    } else {
+        vec![]
+    };
+    let package = crate::support::package_with_contributions(
+        &worker,
+        permissions.clone(),
+        Contributions::from([crate::support::contribution(
+            Capability::Middleware,
+            vec![Stage::Request],
+            vec!["openai".into()],
+            vec!["openai".into()],
+        )]),
+    );
+    let (cache, runtime) = setup_package(
+        vec![InstanceFixture {
+            id: "transparency",
+            configuration: serde_json::json!({"mode": mode}),
+            grants: permissions.into_iter().map(grant).collect(),
+            bindings: vec![binding(
+                MIDDLEWARE_CONTRIBUTION,
+                "request",
+                0,
+                PluginFailurePolicy::Reject,
+            )],
+        }],
+        package,
+    )
+    .await;
+    let generation = prepare(&runtime).await;
+    let plan = runtime.middleware_registry().resolve(&generation).unwrap();
+    let mut headers = middleware_headers();
+    headers.extend([
+        MiddlewareHeader::new("X-Repeated", Bytes::from_static(b"first")),
+        MiddlewareHeader::new("X-Repeated", Bytes::from_static(b"second")),
+        MiddlewareHeader::new("x-binary", Bytes::from_static(b"\x80\xff")),
+    ]);
+    let response_headers = vec![
+        MiddlewareHeader::new("x-repeated", Bytes::from_static(b"first")),
+        MiddlewareHeader::new("x-repeated", Bytes::from_static(b"second")),
+        MiddlewareHeader::new("set-cookie", Bytes::from_static(b"test-hidden=kept")),
+        MiddlewareHeader::new("x-binary", Bytes::from_static(b"\x80\xff")),
+    ];
+    let json = Bytes::from_static(
+        br#" { "z": 18446744073709551615, "unknown": { "x": 1e2 }, "a": "\u0061" } "#,
+    );
+    let cases = [
+        (ClientTransport::HttpJson, MiddlewareFraming::JsonDocument, vec![json.clone()]),
+        (ClientTransport::HttpSse, MiddlewareFraming::SseEvent, vec![
+            Bytes::from_static(b": keep-alive\r\nevent: response.created\r\ndata: { \"z\": 1, \"a\": 2 }\r\n\r\n"),
+            Bytes::from_static(b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n"),
+        ]),
+    ];
+    for (transport, framing, payloads) in cases {
+        for request_body in [json.clone(), Bytes::new()] {
+            let request = MiddlewareRequest::new("openai", headers.clone(), request_body.clone());
+            let mut expected_headers = headers.clone();
+            let mut expected_response_headers = response_headers.clone();
+            if mode == "headers" {
+                expected_headers.push(MiddlewareHeader::new(
+                    "x-sdk-request",
+                    Bytes::from_static(b"active"),
+                ));
+                expected_response_headers.push(MiddlewareHeader::new(
+                    "x-sdk-response",
+                    Bytes::from_static(b"active"),
+                ));
+            }
+            let next = TransparencyNext {
+                expected: MiddlewareRequest::new("openai", expected_headers, request_body),
+                headers: response_headers.clone(),
+                frames: payloads
+                    .iter()
+                    .enumerate()
+                    .map(|(index, payload)| {
+                        MiddlewareFrame::new(payload.clone(), framing, index + 1 == payloads.len())
+                    })
+                    .collect(),
+            };
+            let response = plan
+                .handle(middleware_context(transport), request, Box::new(next))
+                .await
+                .unwrap();
+            let (protocol, status, actual_headers, mut body, _) = response.into_parts();
+            assert_eq!(protocol, "openai");
+            assert_eq!(status, 200);
+            assert_eq!(actual_headers, expected_response_headers);
+            for (index, expected) in payloads.iter().enumerate() {
+                let frame = body.next_frame().await.unwrap().unwrap();
+                assert!(
+                    !frame.transformed(),
+                    "read-only inspection must retain provenance"
+                );
+                assert_eq!(frame.terminal(), index + 1 == payloads.len());
+                assert_eq!(frame.into_bytes(), *expected);
+            }
+            assert!(body.next_frame().await.unwrap().is_none());
+            body.close().await;
+        }
+    }
+    drop(plan);
+    drop(generation);
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn sdk_passthrough_preserves_original_bytes_and_hidden_headers() {
+    assert_sdk_transparency("passthrough", true).await;
+    assert_sdk_transparency("passthrough", false).await;
+}
+
+#[tokio::test]
+async fn sdk_read_only_inspection_preserves_original_bytes_and_event_order() {
+    assert_sdk_transparency("inspect", true).await;
+}
+
+#[tokio::test]
+async fn sdk_header_mutations_preserve_original_body_and_other_headers() {
+    assert_sdk_transparency("headers", true).await;
 }
 
 #[tokio::test]

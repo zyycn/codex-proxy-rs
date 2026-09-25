@@ -16,13 +16,14 @@ const stageLabels: Record<string, string> = {
   attempt: '每次尝试',
   routing: '模型路由',
   scheduling: '账号调度',
+  retry: '重试决策',
   observation: '请求观察',
   management: '管理操作',
   execution: '模型执行',
   maintenance: '后台维护',
   authentication: '客户端认证',
 }
-const requestStages = new Set(['request', 'attempt', 'routing', 'scheduling', 'observation'])
+const requestStages = new Set(['request', 'attempt', 'routing', 'scheduling', 'retry', 'observation'])
 const groups = computed(() => {
   const result = new Map<string, { label: string, bindings: PluginCapabilityBinding[] }>()
   for (const binding of props.instance.bindings) {

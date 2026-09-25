@@ -37,6 +37,8 @@ export const PLUGIN_CAPABILITY_LABELS: Record<string, string> = {
   frontend_authentication: '客户端认证',
   scheduler: '请求调度',
   model_router: '模型路由',
+  model_catalog: '模型目录',
+  retry_policy: '重试策略',
   executor: 'Provider 执行',
   middleware: '请求中间件',
   request_lifecycle: '请求生命周期',

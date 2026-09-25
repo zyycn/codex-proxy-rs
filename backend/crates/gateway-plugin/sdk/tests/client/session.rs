@@ -340,7 +340,7 @@ fn middleware_plugin_rejects_declarations_without_matching_handlers() {
         (Capability::Scheduler, declaration.clone()),
     ]));
     let mut unsupported = declaration.clone();
-    unsupported.version = 2;
+    unsupported.version = 3;
     invalid.push(Contributions::from([(Capability::Middleware, unsupported)]));
     for stages in [
         vec![],

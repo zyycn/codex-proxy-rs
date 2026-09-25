@@ -54,11 +54,11 @@ where
         input,
         Box::new(move |prepared, request| {
             Box::pin(async move {
-                let (protocol, headers, body) = request_parts(request)?;
+                let (protocol, headers, body) = request_parts(request.clone())?;
                 if protocol != "openai" {
                     return Err(MiddlewareError::Rejected);
                 }
-                let operation = decode(body, &headers)?;
+                let operation = request.apply_capabilities(decode(body, &headers)?)?;
                 let started = match service
                     .start_prepared_provider_endpoint(
                         prepared, operation, client_ip, user_agent, endpoint,

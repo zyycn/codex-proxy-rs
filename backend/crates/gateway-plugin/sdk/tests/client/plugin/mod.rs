@@ -204,6 +204,92 @@ async fn composed_plugin_registers_and_dispatches_multiple_typed_entries() {
 }
 
 #[tokio::test]
+async fn catalog_and_retry_entries_use_typed_registration_and_stage_validation() {
+    use gateway_plugin_sdk::call::{
+        catalog::{ModelAlias, ModelCatalogRegistration},
+        policy::{RetryAction, RetryDecision, RetryDecisionRequest},
+    };
+    let source = author_manifest(json!({"model_catalog":{},"retry_policy":{}}), json!([]));
+    let manifest = gateway_plugin_sdk::Manifest::from_author_slice(&source).unwrap();
+    let contributions = manifest.contributes.clone();
+    let catalog = ModelCatalogRegistration {
+        models: vec![ModelAlias {
+            id: "public-model".into(),
+            provider: "openai".into(),
+            model: "upstream-model".into(),
+        }],
+    };
+    let plugin = PluginBuilder::from_manifest(manifest)
+        .unwrap()
+        .model_catalog(catalog.clone())
+        .unwrap()
+        .on(methods::RETRY_DECISION, |call| async move {
+            Ok(TypedReply::new(
+                if call.request.allowed_actions.contains(&RetryAction::Retry) {
+                    RetryDecision::Retry
+                } else {
+                    RetryDecision::Delegate
+                },
+            ))
+        })
+        .unwrap()
+        .build()
+        .unwrap();
+    let (mut host, task) = start_session(plugin, contributions).await;
+    send_call(
+        &mut host,
+        1,
+        "model_catalog.register",
+        Stage::Registration,
+        json!({}),
+        vec![],
+    )
+    .await;
+    let (result, payload) = unwrap_result(receive(&mut host).await, 1);
+    assert_eq!(result, json!({}));
+    assert_eq!(
+        serde_json::from_slice::<ModelCatalogRegistration>(&payload).unwrap(),
+        catalog
+    );
+    let request = serde_json::to_value(RetryDecisionRequest {
+        request_id: "req-example".into(),
+        attempt_index: 1,
+        provider: "openai".into(),
+        model: Some("upstream-model".into()),
+        error_kind: "rate_limited".into(),
+        upstream_status: Some(429),
+        send_state: gateway_plugin_sdk::SendState::NotSent,
+        remaining_routing_attempts: 1,
+        remaining_deadline_ms: 1_000,
+        allowed_actions: vec![RetryAction::Stop, RetryAction::Retry],
+    })
+    .unwrap();
+    send_call(
+        &mut host,
+        3,
+        "policy.retry_decision",
+        Stage::Request,
+        request.clone(),
+        vec![],
+    )
+    .await;
+    assert_invalid_input(receive(&mut host).await, 3);
+    send_call(
+        &mut host,
+        5,
+        "policy.retry_decision",
+        Stage::Retry,
+        request,
+        vec![],
+    )
+    .await;
+    let (result, payload) = unwrap_result(receive(&mut host).await, 5);
+    assert_eq!(result, json!({"decision":"retry"}));
+    assert!(payload.is_empty());
+    shutdown(&mut host, task).await;
+}
+
+#[tokio::test]
 async fn typed_dispatch_rejects_wrong_stage_and_payload_shape_before_handler() {
     let source = author_manifest(json!({"command_line": {}}), json!([]));
     let manifest = gateway_plugin_sdk::Manifest::from_author_slice(&source).unwrap();

@@ -164,7 +164,7 @@ pub(crate) async fn execute_prepared_responses(
         input,
         Box::new(move |prepared, request| {
             Box::pin(async move {
-                let (protocol, request_headers, request_body) = request_parts(request)?;
+                let (protocol, request_headers, request_body) = request_parts(request.clone())?;
                 if protocol != OPENAI_PROTOCOL {
                     return Err(MiddlewareError::Rejected);
                 }
@@ -174,7 +174,8 @@ pub(crate) async fn execute_prepared_responses(
                     maximum_body_bytes,
                 )
                 .map_err(|_| MiddlewareError::Rejected)?
-                .with_client_context(client_ip, user_agent);
+                .with_client_context(client_ip, user_agent)
+                .with_middleware_capabilities(&request)?;
                 if decoded.metadata().stream() != stream {
                     return Err(MiddlewareError::Rejected);
                 }
