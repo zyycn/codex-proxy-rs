@@ -79,7 +79,8 @@ flowchart TB
 4. 具体实现只在组合根相遇。
 
 `frontend/` 是独立的 Node 项目，自行管理依赖、pnpm 配置、锁文件和 ESLint；仓库根目录不建立前端 workspace。
-管理端与独立示例仓库分别依赖 `@codex-proxy/ui` 的固定 GitHub 标签，通过锁文件固定实际提交并校验源码归档完整性，不要求同级源码目录。安装与构建许可见 [贡献与审查](../CONTRIBUTING.md#验证)。
+管理端与独立示例仓库分别依赖 `@codex-proxy/ui` 的固定 GitHub 标签或提交，通过锁文件固定实际提交并校验源码归档完整性，不要求同级源码目录。安装与构建许可见 [贡献与审查](../CONTRIBUTING.md#验证)。
+`modules/ui` 与 `modules/plugins` 是可选的 Git 子模块，分别指向两个独立仓库；不加入宿主的 Cargo 或 pnpm workspace，不参与宿主发行构建。源码联调和版本指针维护见 [开发指南](development.md)。
 UI 包只公开组件、主题与样式入口；Pinia 持久化、登录、路由和管理请求仍由各自应用持有。
 插件页面把所需 UI、Vue 和 Tailwind CSS 4 样式编译进包内静态资源，通过隔离页面与受限消息桥使用自己的管理接口，
 不在运行时借用宿主 Vue 实例或内部模块。组件与主题扩展方式见 [管理端主题](theme.md)。

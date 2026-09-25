@@ -1,0 +1,6 @@
+[submodule "modules/ui"]
+	path = modules/ui
+	url = https://github.com/zyycn/codex-proxy-ui.git
+[submodule "modules/plugins"]
+	path = modules/plugins
+	url = https://github.com/zyycn/codex-proxy-plugins.git

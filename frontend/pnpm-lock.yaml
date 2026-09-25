@@ -170,8 +170,8 @@ importers:
         specifier: 1.0.1
         version: 1.0.1(vue@3.5.43(typescript@6.0.3))
       '@codex-proxy/ui':
-        specifier: github:zyycn/codex-proxy-ui#v0.1.1
-        version: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/fe4373db3239e81b56cb448c46f3cd395799c4f7(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vue@3.5.43(typescript@6.0.3))
+        specifier: github:zyycn/codex-proxy-ui#v0.2.0
+        version: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/3e4af442ecf44ce19d456ebbdae589f82a449f07(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vue@3.5.43(typescript@6.0.3))
       '@fontsource-variable/inter':
         specifier: ^5.3.0
         version: 5.3.0
@@ -378,9 +378,9 @@ packages:
     resolution: {integrity: sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==}
     engines: {node: '>= 20.12.0'}
 
-  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/fe4373db3239e81b56cb448c46f3cd395799c4f7':
-    resolution: {gitHosted: true, integrity: sha512-i20i8AsYJlP1ThwZQlrwUw5rK5R6TG8VY5VWhsikEGuDXqzm7WixUVdZ2BLLBJV5LbDY7LMmmv/HD8EIwwb5cw==, tarball: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/fe4373db3239e81b56cb448c46f3cd395799c4f7}
-    version: 0.1.1
+  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/3e4af442ecf44ce19d456ebbdae589f82a449f07':
+    resolution: {gitHosted: true, integrity: sha512-QTdvAYEK3hDybYnbctSYZGVBNRblKIj/KZoeorqplTaHVD1UZG4c27LO8+RSa3BWumExoXcJlta1HSgM7Fzd8A==, tarball: https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/3e4af442ecf44ce19d456ebbdae589f82a449f07}
+    version: 0.2.0
     engines: {node: '>=24'}
     peerDependencies:
       vue: ^3.5.0
@@ -2770,7 +2770,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/fe4373db3239e81b56cb448c46f3cd395799c4f7(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vue@3.5.43(typescript@6.0.3))':
+  '@codex-proxy/ui@https://codeload.github.com/zyycn/codex-proxy-ui/tar.gz/3e4af442ecf44ce19d456ebbdae589f82a449f07(axios@1.20.0(debug@4.4.3))(change-case@5.4.4)(vue@3.5.43(typescript@6.0.3))':
     dependencies:
       '@ant-design/colors': 8.0.1
       '@ant-design/fast-color': 3.0.1

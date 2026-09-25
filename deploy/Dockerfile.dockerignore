@@ -36,3 +36,6 @@ worktrees/
 .cargo/
 .reasonix/
 *.tmp
+
+# 独立源码仓库仅用于联调，发行构建消费锁定依赖。
+modules/

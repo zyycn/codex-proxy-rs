@@ -26,6 +26,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       container: ${{ steps.filter.outputs.container }}
+      source: ${{ steps.filter.outputs.source }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,6 +46,13 @@ jobs:
             frontend:
               - 'frontend/**'
               - '.github/workflows/**'
+            source:
+              - '.gitmodules'
+              - 'modules/ui'
+              - 'modules/plugins'
+              - 'frontend/**'
+              - 'backend/crates/gateway-plugin/sdk/**'
+              - '.github/workflows/ci.yml'
             container:
               - 'backend/**'
               - 'frontend/**'
@@ -72,3 +80,60 @@ jobs:
     uses: ./.github/workflows/_container.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  source-development:
+    needs: changes
+    if: needs.changes.outputs.source == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout with development modules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          submodules: recursive
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: frontend/package.json
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
+      - name: Check dependency pins
+        run: |
+          ui_revision="$(git -C modules/ui rev-parse HEAD)"
+          for lockfile in frontend/pnpm-lock.yaml modules/plugins/examples/workbench/frontend/pnpm-lock.yaml; do
+            locked_revision="$(sed -nE 's@.*codeload.github.com/zyycn/codex-proxy-ui/tar.gz/([a-f0-9]{40}).*@\1@p' "$lockfile" | sort -u)"
+            if [ "$locked_revision" != "$ui_revision" ]; then
+              echo "::error file=$lockfile::UI dependency must match modules/ui ($ui_revision)"
+              exit 1
+            fi
+          done
+      - name: Install development dependencies
+        run: |
+          pnpm --dir modules/ui install --frozen-lockfile
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir modules/plugins/examples/workbench/frontend install --frozen-lockfile
+      - name: Check UI source integration
+        run: |
+          pnpm --dir frontend build:source
+          pnpm --dir modules/plugins/examples/workbench/frontend build:source
+      - name: Check local SDK integration
+        env:
+          RUST_MIN_STACK: 16777216
+          CARGO_TARGET_DIR: ${{ github.workspace }}/backend/target/plugin-development
+        run: |
+          sdk_check_dir="$RUNNER_TEMP/plugin-source"
+          mkdir -p "$sdk_check_dir/backend"
+          cp modules/plugins/examples/workbench/backend/Cargo.{toml,lock} "$sdk_check_dir/backend/"
+          cp -R modules/plugins/examples/workbench/backend/{src,tests} "$sdk_check_dir/backend/"
+          cp modules/plugins/examples/workbench/plugin.json "$sdk_check_dir/"
+          cargo test --manifest-path "$sdk_check_dir/backend/Cargo.toml" \
+            --config "patch.\"https://github.com/zyycn/codex-proxy-rs.git\".gateway-plugin-sdk.path=\"$GITHUB_WORKSPACE/backend/crates/gateway-plugin/sdk\""
+      - name: Ensure source checks preserve lockfiles
+        run: |
+          git diff --exit-code -- frontend/package.json frontend/pnpm-lock.yaml backend/Cargo.lock
+          git -C modules/plugins diff --exit-code -- examples/workbench/frontend/package.json examples/workbench/frontend/pnpm-lock.yaml examples/workbench/backend/Cargo.lock

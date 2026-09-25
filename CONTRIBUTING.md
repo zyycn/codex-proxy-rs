@@ -112,7 +112,7 @@ PR 不接受根目录或子目录中 `AGENTS.md` 的新增、修改、删除或�
 
 AI 进行前端开发时，加载并使用 `$frontend-design` 技能。设计方案以本项目的用户任务、[管理端主题](docs/theme.md) 和已有组件为依据，在任务范围内改进布局、视觉与交互。
 
-开发前查找同类页面及同级 `codex-proxy-ui/src/components` 中的基础组件，优先使用已有主题 Token、交互和数据展示逻辑。需要扩展时在对应职责层修改；局部样式的适用范围遵循主题文档，不一律禁止，也不靠页面覆盖掩盖共用组件的问题。
+开发前查找同类页面及`modules/ui/src/components` 中的基础组件，优先使用已有主题 Token、交互和数据展示逻辑。需要扩展时在对应职责层修改；局部样式的适用范围遵循主题文档，不一律禁止，也不靠页面覆盖掩盖共用组件的问题。
 
 列表列宽、序号、按钮、分页和弹窗尺寸由实际任务与数据规模决定，以同类页面为参照。新增或调整交互时说明用户需要完成什么操作，不把某个页面的取舍推广成全局禁令。
 
@@ -132,15 +132,15 @@ AI 进行前端开发时，加载并使用 `$frontend-design` 技能。设计方
 | 依赖安全 | Cargo Audit、pnpm Audit | 本次变更的权限、数据与信任边界 |
 | 工作流与容器 | Actionlint、相关容器检查 | 改动涉及的运行行为 |
 
-UI 与示例源码分别在独立的 `codex-proxy-ui`、`codex-proxy-plugins` 仓库维护。前端的依赖、锁文件和 ESLint 配置均在 `frontend/` 管理，仓库根目录不维护 Node 包。UI 使用固定 GitHub 标签依赖，锁文件记录实际提交、源码归档地址及完整性摘要，常规开发和 CI 不需要检出同级仓库。安装时 pnpm 按 UI 自身锁文件准备构建依赖，再执行 `prepack` 生成 JS、CSS 和类型声明。开发服务通过 UI 包的 `development` 入口使用 Vue SFC，生产构建使用 `dist`。
+UI 与示例源码分别在独立的 `codex-proxy-ui`、`codex-proxy-plugins` 仓库维护。前端的依赖、锁文件和 ESLint 配置均在 `frontend/` 管理，仓库根目录不维护 Node 包。UI 使用固定 GitHub 标签或提交依赖，锁文件记录实际提交、源码归档地址及完整性摘要，常规开发和 CI 不需要检出同级仓库。安装时 pnpm 按 UI 自身锁文件准备构建依赖，再执行 `prepack` 生成 JS、CSS 和类型声明。开发服务通过 UI 包的 `development` 入口使用 Vue SFC，生产构建使用 `dist`。
 
-pnpm 版本由 `frontend/package.json` 的 `packageManager` 固定，CI 和 Docker 从该字段读取。`frontend/pnpm-workspace.yaml` 的 `allowBuilds` 按仓库放行自有 UI 包的构建脚本；升级标签时核对源码并更新锁文件，无需逐次修改构建许可，不开放全部依赖脚本。
+pnpm 版本由 `frontend/package.json` 的 `packageManager` 固定，CI 和 Docker 从该字段读取。`frontend/pnpm-workspace.yaml` 的 `allowBuilds` 按仓库放行自有 UI 包的构建脚本；升级依赖时核对源码并更新锁文件，无需逐次修改构建许可，不开放全部依赖脚本。
 
 ```bash
 pnpm --dir frontend install --frozen-lockfile
 ```
 
-需要修改组件库时，按 [UI 源码联调指南](https://github.com/zyycn/codex-proxy-ui/blob/main/playground/guide/development.md) 建立临时本地链接；提交前恢复发布依赖并核对锁文件，不能将开发机目录写入发行依赖。独立插件的 SDK 固定到包含所需合同的 Git 提交，不依赖浮动分支。
+需要联合修改组件库或插件时，使用 [源码联调](docs/development.md) 中的子模块与开发入口；联调只临时替换解析路径，不改写正式依赖或锁文件。独立插件的 SDK 固定到包含所需合同的 Git 提交，不依赖浮动分支。
 
 前端从仓库根目录执行：
 

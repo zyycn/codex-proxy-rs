@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "incremental": false,
+    "composite": false,
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "vue": [
+        "./node_modules/vue"
+      ],
+      "@codex-proxy/ui": [
+        "../modules/ui/src/index.ts"
+      ],
+      "@codex-proxy/ui/theme": [
+        "../modules/ui/src/theme/index.ts"
+      ],
+      "@codex-proxy/ui/*": [
+        "../modules/ui/src/components/*/index.ts"
+      ]
+    }
+  }
+}
