@@ -1,3 +1,5 @@
+mod capacity;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::num::NonZeroU32;
@@ -698,7 +700,7 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
 }
 
 const OFFICIAL_FIXTURE: &[u8] =
-    include_bytes!("../transport/fixtures/official_models_snapshot.json");
+    include_bytes!("../../transport/fixtures/official_models_snapshot.json");
 
 #[tokio::test]
 async fn replay_compatibility_should_remove_only_reasoning_status_on_both_transports() {
@@ -3411,30 +3413,47 @@ async fn standalone_search_returns_the_exact_upstream_error_response() {
 
 #[tokio::test]
 async fn capacity_selection_error_preserves_classification_and_retry_after() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_capacity_busy").await;
-    let leases = Arc::new(TestLeaseCoordinator::default());
-    *leases.busy.lock().expect("lease busy lock") = true;
+    for snapshot in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_capacity_busy").await;
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        if snapshot {
+            leases.signals.lock().unwrap().insert(
+                ProviderAccountId::new("acct_capacity_busy").unwrap(),
+                gateway_core::account::AccountRuntimeSignals {
+                    in_flight: u32::MAX,
+                    last_started_at: None,
+                    quota_reset_at: None,
+                    quota_remaining_rank: None,
+                    cooldown: None,
+                    failure_rate_basis_points: None,
+                    first_output_latency_ms: None,
+                },
+            );
+        } else {
+            *leases.busy.lock().unwrap() = true;
+        }
 
-    let error = match provider_with_leases(&store, leases)
-        .execute(
-            planned_request("openai", generate_operation()),
-            context("req_capacity_busy", CancellationToken::new()),
-        )
-        .await
-    {
-        Ok(_) => panic!("busy account selection must fail"),
-        Err(error) => error,
-    };
+        let error = match provider_with_leases(&store, leases)
+            .execute(
+                planned_request("openai", generate_operation()),
+                context("req_capacity_busy", CancellationToken::new()),
+            )
+            .await
+        {
+            Ok(_) => panic!("busy account selection must fail"),
+            Err(error) => error,
+        };
 
-    assert_eq!(
-        (error.kind(), error.send_state(), error.retry_after()),
-        (
-            ProviderErrorKind::AccountCapacityUnavailable,
-            UpstreamSendState::NotSent,
-            Some(Duration::from_millis(25)),
-        )
-    );
+        assert_eq!(
+            (error.kind(), error.send_state(), error.retry_after()),
+            (
+                ProviderErrorKind::AccountCapacityUnavailable,
+                UpstreamSendState::NotSent,
+                (!snapshot).then_some(Duration::from_millis(25)),
+            )
+        );
+    }
 }
 
 #[tokio::test]

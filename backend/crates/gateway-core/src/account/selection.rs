@@ -479,6 +479,7 @@ pub enum PreferredAccountSelection {
 pub struct AccountSelection<'a> {
     candidate: &'a AccountCandidate,
     preferred: PreferredAccountSelection,
+    policy_choice: bool,
 }
 
 impl<'a> AccountSelection<'a> {
@@ -490,6 +491,12 @@ impl<'a> AccountSelection<'a> {
     #[must_use]
     pub const fn preferred(self) -> PreferredAccountSelection {
         self.preferred
+    }
+
+    /// 显式策略选号不受 Provider 的软亲和等待覆盖；委托内置选号不属于显式选择。
+    #[must_use]
+    pub const fn is_policy_choice(self) -> bool {
+        self.policy_choice
     }
 }
 
@@ -536,6 +543,7 @@ impl AccountSelector {
         Some(AccountSelection {
             candidate,
             preferred,
+            policy_choice: true,
         })
     }
 
@@ -609,6 +617,7 @@ impl AccountSelector {
                 return Some(AccountSelection {
                     candidate,
                     preferred: PreferredAccountSelection::Hit,
+                    policy_choice: false,
                 });
             }
         }
@@ -664,6 +673,7 @@ impl AccountSelector {
         Some(AccountSelection {
             candidate,
             preferred,
+            policy_choice: false,
         })
     }
 
