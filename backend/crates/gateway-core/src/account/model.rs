@@ -1053,6 +1053,7 @@ pub struct LoadedCredential {
 /// Provider 已计算好时间边界的有界 OAuth refresh 候选查询。
 ///
 /// Store 只负责按持久事实筛选和稳定排序，不拥有提前量或恢复窗口语义。
+/// 调度启停不影响凭据续期；停用账号仍按 Provider 的凭据状态与时间边界刷新。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRefreshQuery {
     provider: ProviderKind,
@@ -1117,7 +1118,6 @@ impl ProviderRefreshQuery {
     #[must_use]
     pub fn contains(&self, account: &ProviderAccount) -> bool {
         account.provider() == &self.provider
-            && account.enabled()
             && account.has_refresh_token()
             && matches!(
                 account.credential_state(),

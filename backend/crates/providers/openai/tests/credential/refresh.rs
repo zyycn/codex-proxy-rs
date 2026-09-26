@@ -242,6 +242,94 @@ async fn seed_refreshable_account(
 }
 
 #[tokio::test]
+async fn scheduled_refresh_rotates_tokens_without_enabling_scheduling() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let refresher = SingleUseRefresher::new();
+    let service = refresh_service(&store, Arc::clone(&refresher), policy);
+    let account_id = "acct_disabled_refresh";
+    seed_refreshable_account(&store, account_id, SystemTime::now(), None).await;
+    let before = store.account(account_id).expect("seeded account");
+    store
+        .set_enabled(before.id(), false)
+        .await
+        .expect("disable scheduling");
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed { account_id: refreshed_id, .. }]
+            if refreshed_id == account_id
+    ));
+    assert_eq!(refresher.calls(), 1);
+    let after = store.account(account_id).expect("refreshed account");
+    assert!(!after.enabled());
+    assert_eq!(after.quota(), before.quota());
+    assert_eq!(
+        after.status_projection(SystemTime::now(), None).status,
+        AccountStatus::Disabled
+    );
+    let loaded = store
+        .load_credential(after.id(), after.revision())
+        .await
+        .expect("refreshed credential");
+    let runtime = CodexCredentialCodec::decode(&loaded.credential).expect("runtime credential");
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .expect("OAuth credential")
+            .access_token
+            .expose_secret(),
+        "refreshed-access-token"
+    );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_stops_retrying_rejected_disabled_credentials() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(FailingRefresher {
+            failure: RefreshFailure::InvalidGrant {
+                message: None,
+                upstream: None,
+            },
+        }),
+        Arc::new(RefreshLeases),
+        Arc::new(RefreshCredentialState),
+        MutableRuntimePolicy::new(Duration::from_secs(5 * 60)),
+    );
+    let account_id = "acct_disabled_rejected";
+    seed_refreshable_account(&store, account_id, SystemTime::now(), None).await;
+    let account = store.account(account_id).expect("seeded account");
+    store
+        .set_enabled(account.id(), false)
+        .await
+        .expect("disable scheduling");
+
+    assert!(matches!(
+        service
+            .refresh_due()
+            .await
+            .expect("refresh cycle")
+            .as_slice(),
+        [CodexCredentialRefreshOutcome::Invalidated { .. }]
+    ));
+    let account = store.account(account_id).expect("rejected account");
+    assert!(!account.enabled());
+    assert_eq!(account.credential_state(), CredentialState::Expired);
+    assert!(
+        service
+            .refresh_due()
+            .await
+            .expect("next refresh cycle")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_schedule() {
     let store = Arc::new(MemoryAccountStore::default());
     let policy = MutableRuntimePolicy::new(Duration::from_secs(1));

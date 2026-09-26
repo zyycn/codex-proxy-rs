@@ -295,23 +295,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         update.validate()?;
         let result = sqlx::query(
             "update provider_accounts
-             set credential_state = case
-                     when enabled then $3
-                     else credential_state
-                 end,
-                 credential_observed_at = case
-                     when enabled then $4
-                     else credential_observed_at
-                 end,
-                 last_error_reason = case
-                     when enabled then $5
-                     else last_error_reason
-                 end,
-                 last_error_message = case
-                     when enabled then $6
-                     else last_error_message
-                 end,
-                 updated_at = case when enabled then greatest(now(), updated_at, $4) else updated_at end
+             set credential_state = $3,
+                 credential_observed_at = $4,
+                 last_error_reason = $5,
+                 last_error_message = $6,
+                 updated_at = greatest(now(), updated_at, $4)
              where id = $1 and credential_revision = $2
                and (credential_observed_at is null or credential_observed_at <= $4)",
         )
@@ -834,16 +822,16 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
              credential_state = case
-                 when $15::boolean or not enabled then credential_state
+                 when $15::boolean then credential_state
                  when $11::boolean or credential_state <> 'unknown' then 'ready'
                  else 'unknown'
              end,
              credential_observed_at = case
-                 when $15::boolean or not enabled then credential_observed_at
+                 when $15::boolean then credential_observed_at
                  else now()
              end,
-             last_error_reason = case when enabled and not $15::boolean then null else last_error_reason end,
-             last_error_message = case when enabled and not $15::boolean then null else last_error_message end,
+             last_error_reason = case when not $15::boolean then null else last_error_reason end,
+             last_error_message = case when not $15::boolean then null else last_error_message end,
              updated_at = greatest(now(), updated_at)
          where id = $1 and provider_kind = $2
            and credential_revision = $3

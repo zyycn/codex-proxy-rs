@@ -114,11 +114,16 @@ async fn refresh_candidates_should_filter_order_and_bound_in_one_query() {
     disabled.has_refresh_token = true;
     disabled.access_token_expires_at = Some(now);
     disabled.enabled = false;
+    let mut expired = account("acct_refresh_expired", "user-expired");
+    expired.enabled = false;
+    expired.has_refresh_token = true;
+    expired.access_token_expires_at = Some(now - TimeDelta::hours(4));
+    expired.credential_state = CredentialState::Expired;
     let mut other_provider = account("acct_refresh_other", "user-other");
     other_provider.provider_kind = "xai".to_owned();
     other_provider.has_refresh_token = true;
     other_provider.access_token_expires_at = Some(now);
-    for candidate in [forced, due, retry_later, disabled, other_provider] {
+    for candidate in [forced, due, retry_later, disabled, expired, other_provider] {
         repository
             .insert_provider_account(candidate)
             .await
@@ -148,7 +153,7 @@ async fn refresh_candidates_should_filter_order_and_bound_in_one_query() {
             .iter()
             .map(|candidate| candidate.account.id().as_str())
             .collect::<Vec<_>>(),
-        vec!["acct_refresh_forced", "acct_refresh_due"]
+        vec!["acct_refresh_forced", "acct_refresh_disabled"]
     );
     assert!(candidates.iter().all(|candidate| {
         candidate.credential.expose_to_provider()["access_token"] == "initial-secret"
@@ -2935,7 +2940,83 @@ async fn xai_resettable_usage_limit_state_is_persisted() {
 }
 
 #[tokio::test]
-async fn disabled_account_preserves_user_state_during_refresh_writes() {
+async fn core_refresh_cas_updates_credentials_after_scheduling_is_disabled() {
+    let Some(database) = TestDatabase::create("disabled_core_refresh").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let account_id = ProviderAccountId::new("acct_disabled_core_refresh").unwrap();
+    repository
+        .insert_provider_account(account(account_id.as_str(), "user-disabled-core-refresh"))
+        .await
+        .unwrap();
+    let revision = CredentialRevision::new(1).unwrap();
+    repository
+        .apply_state_change(AccountStateChange {
+            account_id: account_id.clone(),
+            expected_revision: revision,
+            credential_state: CredentialState::Ready,
+            observed_at: SystemTime::now(),
+            error_reason: Some(AccountErrorReason::AccessTokenExpired),
+            message: Some("previous refresh failure".to_owned()),
+        })
+        .await
+        .unwrap();
+    let quota = QuotaState::exhausted(QuotaEvidence::UsageLimitReached, SystemTime::now(), None);
+    repository
+        .apply_quota_access(QuotaAccessChange {
+            account_id: account_id.clone(),
+            expected_revision: revision,
+            state: quota,
+        })
+        .await
+        .unwrap();
+    let refreshed = CredentialCasUpdate::new(
+        account_id.clone(),
+        revision,
+        ProviderAccountUpdate {
+            account_id: account_id.clone(),
+            name: "unused profile".to_owned(),
+            email: None,
+            plan_type: None,
+        },
+        plaintext_credential("refreshed-secret"),
+        true,
+        Some(SystemTime::now() + Duration::from_secs(3_600)),
+        None,
+    )
+    .unwrap()
+    .preserving_profile()
+    .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
+    // 模拟刷新在途时停用调度；提交新凭据不能重新启用账号，也不能丢弃刷新结果。
+    repository.set_enabled(&account_id, false).await.unwrap();
+    assert!(matches!(
+        repository
+            .compare_and_swap_credential(refreshed)
+            .await
+            .unwrap(),
+        CredentialCasOutcome::Updated(_)
+    ));
+    let current = repository
+        .load_current_credential(&account_id)
+        .await
+        .unwrap();
+    assert!(!current.account.enabled());
+    assert_eq!(current.account.name(), account_id.as_str());
+    assert_eq!(current.account.credential_state(), CredentialState::Ready);
+    assert_eq!(current.account.last_error_reason(), None);
+    assert_eq!(current.account.last_error_message(), None);
+    assert!(current.account.quota().is_exhausted());
+    assert_eq!(
+        current.credential.expose_to_provider()["access_token"],
+        "refreshed-secret"
+    );
+    assert_eq!(current.account.revision().get(), 2);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn disabled_account_updates_credentials_without_enabling_scheduling() {
     let Some(database) = TestDatabase::create("provider_account_disabled_refresh").await else {
         return;
     };
@@ -2946,7 +3027,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     let account_id = ProviderAccountId::new("acct_disabled_refresh").expect("account ID");
     let mut disabled = account(account_id.as_str(), "user-disabled-refresh");
     disabled.enabled = false;
-    disabled.credential_state = CredentialState::Expired;
+    disabled.credential_state = CredentialState::Ready;
     repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: None,
@@ -2964,15 +3045,28 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
 
     repository
         .apply_state_change(AccountStateChange {
-            message: None,
+            message: Some("refresh token expired".to_owned()),
             account_id: account_id.clone(),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
-            credential_state: CredentialState::Ready,
+            credential_state: CredentialState::Expired,
             observed_at: SystemTime::now(),
-            error_reason: None,
+            error_reason: Some(AccountErrorReason::CredentialExpired),
         })
         .await
-        .expect("disabled state write is a no-op");
+        .expect("record rejected credential while scheduling is disabled");
+    let rejected = repository
+        .load_current_credential(&account_id)
+        .await
+        .unwrap();
+    assert!(!rejected.account.enabled());
+    assert_eq!(
+        rejected.account.credential_state(),
+        CredentialState::Expired
+    );
+    assert_eq!(
+        rejected.account.last_error_message(),
+        Some("refresh token expired")
+    );
     repository
         .rotate_provider_account(RotateProviderAccount {
             settings: None,
@@ -2998,7 +3092,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     .await
     .expect("load disabled account after refresh writes");
     assert!(!current.0);
-    assert_eq!(current.1, "expired");
+    assert_eq!(current.1, "ready");
     assert_eq!(current.2["access_token"], "disabled-refreshed-secret");
     assert_eq!(current.3, 2);
 

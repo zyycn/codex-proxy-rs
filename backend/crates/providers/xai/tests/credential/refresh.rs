@@ -548,6 +548,70 @@ async fn set_token_deadlines(
 }
 
 #[tokio::test]
+async fn scheduled_refresh_rotates_tokens_without_enabling_scheduling() {
+    let input = due_input("disabled-refresh");
+    let id = input.account_id.clone();
+    let (store, _, _, service) =
+        fixture(input, [Ok(success_tokens(Some("new-refresh")))], true).await;
+    let before = store.account(&id).expect("seeded account");
+    store
+        .set_enabled(&id, false)
+        .await
+        .expect("disable scheduling");
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [GrokCredentialRefreshOutcome::Refreshed { account_id, .. }] if account_id == &id
+    ));
+    let after = store.account(&id).expect("refreshed account");
+    assert!(!after.enabled());
+    assert_eq!(after.quota(), before.quota());
+    assert_eq!(
+        after.status_projection(SystemTime::now(), None).status,
+        gateway_core::account::AccountStatus::Disabled
+    );
+    let credential = store.credential(&id).expect("refreshed credential");
+    assert_eq!(credential_object(&credential)["access_token"], "new-access");
+    assert_eq!(
+        credential_object(&credential)["refresh_token"],
+        "new-refresh"
+    );
+}
+
+#[tokio::test]
+async fn scheduled_refresh_stops_retrying_rejected_disabled_credentials() {
+    let input = due_input("disabled-rejected");
+    let id = input.account_id.clone();
+    let (store, _, _, service) =
+        fixture(input, [Err(GrokRefreshFailure::InvalidGrant)], true).await;
+    store
+        .set_enabled(&id, false)
+        .await
+        .expect("disable scheduling");
+
+    assert!(matches!(
+        service
+            .refresh_due()
+            .await
+            .expect("refresh cycle")
+            .as_slice(),
+        [GrokCredentialRefreshOutcome::Invalidated { .. }]
+    ));
+    let account = store.account(&id).expect("rejected account");
+    assert!(!account.enabled());
+    assert_eq!(account.credential_state(), CredentialState::Expired);
+    assert!(
+        service
+            .refresh_due()
+            .await
+            .expect("next refresh cycle")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn successful_refresh_rotates_plaintext_tokens_once() {
     let input = due_input("success");
     let id = input.account_id.clone();

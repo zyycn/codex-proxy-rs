@@ -425,7 +425,6 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select auto_location, detect
      left join (select id as location_proxy_id, auto_location, detected_location_json, location_country, location_region, location_city, location_timezone from outbound_proxies) proxy_location
        on outbound_proxy_id = location_proxy_id
      where provider_kind = $1
-       and enabled
        and has_refresh_token
        and credential_state in ('unknown', 'ready')
        and access_token_expires_at is not null

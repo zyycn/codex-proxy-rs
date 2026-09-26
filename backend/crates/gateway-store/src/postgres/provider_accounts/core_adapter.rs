@@ -187,16 +187,16 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                  has_refresh_token = $7, access_token_expires_at = $8,
                  next_refresh_at = $9,
                  credential_state = case
-                   when $10::text is not null and enabled
+                   when $10::text is not null
                    then $10 else credential_state end,
                  credential_observed_at = case
-                   when $10::text is not null and enabled
+                   when $10::text is not null
                    then $11 else credential_observed_at end,
                  last_error_reason = case
-                   when $10::text is not null and enabled
+                   when $10::text is not null
                    then $12 else last_error_reason end,
                  last_error_message = case
-                   when $10::text is not null and enabled
+                   when $10::text is not null
                    then $13 else last_error_message end,
                  updated_at = greatest(now(), updated_at, $11)
              where id = $1 and credential_revision = $2
