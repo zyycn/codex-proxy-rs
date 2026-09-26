@@ -8,6 +8,7 @@ import {
   CircleHelp,
   Download,
   ExternalLink,
+  History,
   Power,
   RefreshCw,
   Terminal,
@@ -15,7 +16,7 @@ import {
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import { normalizeSystemVersion, useSystemUpdateStore } from '@/stores/modules/system-update'
-import { formatTime } from '@/utils/format'
+import { formatDateTime, formatTime } from '@/utils/format'
 import { errorMessage } from '@/utils/operation'
 import {
   resolveSystemUpdateLogClasses,
@@ -37,6 +38,7 @@ const {
   updating,
   restarting,
   updateError,
+  lastFailedOperation,
   needRestart,
   updateLogs,
   updateStreaming,
@@ -294,6 +296,25 @@ watch(
         >
           {{ updateError || updateInfo?.warning }}
         </p>
+        <BasePopover v-if="lastFailedOperation" placement="bottom-start" class="justify-self-start">
+          <template #trigger>
+            <BaseButton variant="ghost" size="sm">
+              <template #icon>
+                <History class="size-3.5" />
+              </template>
+              上次操作失败
+            </BaseButton>
+          </template>
+          <div class="grid w-80 max-w-[calc(100vw-2rem)] gap-2 p-3 text-cp-sm">
+            <div v-if="lastFailedOperation.targetVersion || lastFailedOperation.finishedAt" class="flex flex-wrap gap-x-3 gap-y-1 text-cp-xs text-cp-text-quaternary">
+              <span v-if="lastFailedOperation.targetVersion">目标版本 v{{ lastFailedOperation.targetVersion }}</span>
+              <span v-if="lastFailedOperation.finishedAt">{{ formatDateTime(lastFailedOperation.finishedAt) }}</span>
+            </div>
+            <p class="m-0 wrap-anywhere text-cp-text-secondary">
+              {{ lastFailedOperation.error || lastFailedOperation.message || '操作失败' }}
+            </p>
+          </div>
+        </BasePopover>
       </section>
 
       <section
