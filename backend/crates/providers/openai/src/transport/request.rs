@@ -536,6 +536,9 @@ pub(crate) fn scope_request_to_account(
                 {
                     metadata.remove(*key);
                 }
+                // Guardian 顶层父引用指向原账号的响应；turn metadata 内的同名
+                // 扩展只是客户端关联信息，不能加入各层共用的清理名单。
+                metadata.remove("parent_response_id");
             }
             // 官方 Core 在 client_metadata 使用带 x-codex 前缀的键，
             // turn metadata 内仍使用 installation_id；两处均取当前账号的安装身份。

@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::transport::protocol::websocket::{
     websocket_event_frame, websocket_event_type, websocket_metadata_headers,
     websocket_metadata_turn_state, websocket_response_completed_id,
+    websocket_response_is_interrupted,
 };
 use crate::transport::response_meta;
 
@@ -15,6 +16,7 @@ use super::CodexWebSocketExchangeError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::transport::websocket) enum WebSocketTerminalKind {
     Completed,
+    Interrupted,
     Incomplete,
     Failed,
 }
@@ -29,6 +31,7 @@ pub(super) enum ExchangeAction {
 }
 
 pub(super) struct ReducedWebSocketEvent {
+    pub(super) created_response_id: Option<String>,
     pub(super) action: ExchangeAction,
     pub(super) diagnostic_event_type: Option<String>,
     pub(super) turn_state_update: Option<String>,
@@ -43,6 +46,7 @@ pub(super) fn reduce_websocket_event(
     // 不可解析的帧不承载可路由的事件类型，忽略。
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return Ok(ReducedWebSocketEvent {
+            created_response_id: None,
             action: ExchangeAction::Ignore,
             diagnostic_event_type: None,
             turn_state_update: None,
@@ -54,6 +58,7 @@ pub(super) fn reduce_websocket_event(
         metadata.rate_limit_headers.extend(headers);
         return Ok(ReducedWebSocketEvent {
             action: ExchangeAction::RateLimits(parsed),
+            created_response_id: None,
             diagnostic_event_type,
             turn_state_update: None,
         });
@@ -75,14 +80,15 @@ pub(super) fn reduce_websocket_event(
     });
 
     let event = websocket_event_type(&value);
-    if event == Some("response.completed")
-        && let Some(response_id) = websocket_response_completed_id(&value)
-    {
+    if let Some(response_id) = websocket_response_completed_id(&value) {
         continuation.record_completed(response_id);
     }
 
     let terminal = match event {
         Some("response.completed") => Some(WebSocketTerminalKind::Completed),
+        Some("response.incomplete") if websocket_response_is_interrupted(&value) => {
+            Some(WebSocketTerminalKind::Interrupted)
+        }
         Some("response.incomplete") => Some(WebSocketTerminalKind::Incomplete),
         Some("response.failed" | "error") => Some(WebSocketTerminalKind::Failed),
         _ => None,
@@ -92,6 +98,10 @@ pub(super) fn reduce_websocket_event(
         None => ExchangeAction::Ignore,
     };
     Ok(ReducedWebSocketEvent {
+        created_response_id: (event == Some("response.created"))
+            .then(|| value.pointer("/response/id").and_then(Value::as_str))
+            .flatten()
+            .map(ToOwned::to_owned),
         action,
         diagnostic_event_type,
         turn_state_update,

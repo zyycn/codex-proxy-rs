@@ -714,6 +714,11 @@ fn attempt_middleware_context(effects: Arc<ExecutionEffects>) -> MiddlewareConte
 fn middleware_headers() -> Vec<MiddlewareHeader> {
     vec![
         MiddlewareHeader::new("authorization", Bytes::from_static(b"Bearer private")),
+        MiddlewareHeader::new("X-OpenAI-Fedramp", Bytes::from_static(b"true")),
+        MiddlewareHeader::new(
+            "x-openai-account-routing-override",
+            Bytes::from_static(b"us_cr"),
+        ),
         MiddlewareHeader::new("connection", Bytes::from_static(b"x-hop")),
         MiddlewareHeader::new("x-hop", Bytes::from_static(b"hidden")),
         MiddlewareHeader::new("x_team", Bytes::from_static(b"team")),

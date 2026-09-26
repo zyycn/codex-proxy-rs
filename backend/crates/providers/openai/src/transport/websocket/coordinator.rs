@@ -581,6 +581,7 @@ fn continuation_unavailable(
 pub(crate) async fn execute_prepared_response_create_request_stream(
     request: &CodexWebSocketRequest,
     prepared: PreparedWebSocket,
+    response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     trace: gateway_core::diagnostics::TraceContext,
 ) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
     let PreparedWebSocket {
@@ -638,6 +639,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         reused,
         stream_idle_timeout,
         trace,
+        response_control,
     );
     exchange.pool_decision = pool_decision;
     exchange.connection_local_continuation = connection_local_available;

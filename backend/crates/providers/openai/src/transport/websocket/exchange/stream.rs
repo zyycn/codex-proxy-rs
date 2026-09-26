@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use gateway_core::diagnostics::{TraceContext, diagnostic_json};
+use gateway_core::engine::response_control::{ActiveResponseInterrupt, ResponseControl};
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -65,6 +66,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     reused_connection: bool,
     stream_idle_timeout: Option<Duration>,
     trace: TraceContext,
+    response_control: Option<ResponseControl>,
 ) -> CodexWebSocketStreamingExchange {
     let websocket_connection_id = websocket.connection_id();
     let response_metadata = metadata.clone();
@@ -85,6 +87,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         );
     let forward = async move {
         forward_websocket_response_stream(WebSocketStreamForwardState {
+            response_control,
             websocket,
             metadata,
             pool_return,
@@ -124,6 +127,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
 }
 
 struct WebSocketStreamForwardState {
+    response_control: Option<ResponseControl>,
     trace: TraceContext,
     websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
@@ -138,6 +142,7 @@ struct WebSocketStreamForwardState {
 
 async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     let WebSocketStreamForwardState {
+        response_control,
         trace,
         mut websocket,
         mut metadata,
@@ -155,6 +160,10 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         .map(|pool_return| std::mem::take(&mut pool_return.continuation))
         .unwrap_or_default();
     let mut last_event_type = None;
+    let mut active_interrupt: Option<ActiveResponseInterrupt> = None;
+    let mut interrupt_requested: futures::future::BoxFuture<'static, ()> =
+        Box::pin(std::future::pending());
+    let mut interrupt_sent = false;
     // 官方 run_websocket_response_stream 按响应消费 metadata 事件；它们不属于握手头。
     // 复用连接时恢复握手快照，避免上一轮模型信息及普通响应头随每次请求累积。
     let opening_response_metadata = metadata.response_metadata.clone();
@@ -164,6 +173,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             // 客户端断开下游 SSE 流：立即丢弃连接并释放池 slot，
             // 不再傻等上游 idle 超时（否则同会话后续请求会一直 bypass/busy）。
             () = tx.closed() => {
+                drop(active_interrupt.take());
                 trace.record("upstream.cancelled", json!({"reason": "receiver_dropped"}));
                 discard_stream_websocket(
                     websocket,
@@ -173,6 +183,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 return;
             }
             () = shutdown.cancelled() => {
+                drop(active_interrupt.take());
                 trace.record("upstream.cancelled", json!({"reason": "pool_shutdown"}));
                 discard_stream_websocket(
                     websocket,
@@ -180,6 +191,24 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                     StreamWebSocketDiscardReason::PoolShutdown,
                 ).await;
                 return;
+            }
+            () = &mut interrupt_requested, if !interrupt_sent => {
+                let Some(active) = active_interrupt.as_ref() else { continue };
+                let payload = json!({
+                    "type": "response.interrupt",
+                    "response_id": active.response_id(),
+                    "mode": "discard_partial_items",
+                }).to_string();
+                // 复用正在消费此响应的原 socket；信号不经过选号或新请求恢复。
+                if let Err(error) = super::super::handshake::send_websocket_request(&websocket, &payload).await {
+                    drop(active_interrupt.take());
+                    discard_stream_websocket(websocket, pool_return, StreamWebSocketDiscardReason::UpstreamReceiveFailed).await;
+                    let _ = tx.send(Err(error)).await;
+                    return;
+                }
+                interrupt_sent = true;
+                trace.record("upstream.interrupt.sent", json!({"mode": "discard_partial_items"}));
+                continue;
             }
             message = next_websocket_message(
                 &mut websocket,
@@ -189,6 +218,8 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         let message = match message {
             Ok(message) => message,
             Err(error) => {
+                // 先撤销 owner 再发布失败；下一次 attempt 不等待旧 socket 异步清理。
+                drop(active_interrupt.take());
                 let observation = connection_observation(&websocket, &error);
                 trace.record(
                     "upstream.read.failed",
@@ -224,6 +255,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         let raw = match message {
             tungstenite::Message::Text(text) => text.to_string(),
             tungstenite::Message::Binary(bytes) => {
+                drop(active_interrupt.take());
                 trace.capture("upstream.binary", &bytes);
                 let error = CodexWebSocketExchangeError::UnexpectedBinaryEvent;
                 let observation = connection_observation(&websocket, &error);
@@ -239,6 +271,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 return;
             }
             tungstenite::Message::Close(frame) => {
+                drop(active_interrupt.take());
                 if let Some(frame) = &frame {
                     trace.dump("upstream.close.reason", frame.reason.as_bytes());
                 }
@@ -277,6 +310,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         let reduced = match reduce_websocket_event(&raw, &mut metadata, &mut continuation) {
             Ok(reduced) => reduced,
             Err(error) => {
+                drop(active_interrupt.take());
                 let observation =
                     (!matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)))
                         .then(|| connection_observation(&websocket, &error));
@@ -297,6 +331,31 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         if let Some(event_type) = reduced.diagnostic_event_type {
             last_event_type = Some(event_type);
         }
+        if active_interrupt.is_none()
+            && let (Some(control), Some(response_id)) =
+                (&response_control, reduced.created_response_id)
+        {
+            active_interrupt = control.activate(response_id);
+            if let Some(active) = &active_interrupt {
+                // 跨消息复用同一个等待 future，避免每帧留下新的取消等待者。
+                interrupt_requested = Box::pin(active.requested());
+            }
+            if active_interrupt.is_none() {
+                discard_stream_websocket(
+                    websocket,
+                    pool_return,
+                    StreamWebSocketDiscardReason::FailedResponse,
+                )
+                .await;
+                let _ = tx
+                    .send(Err(CodexWebSocketExchangeError::PostSendAmbiguous {
+                        message: "response control already has an active owner".to_owned(),
+                        source: None,
+                    }))
+                    .await;
+                return;
+            }
+        }
         if let Some(turn_state) = reduced.turn_state_update {
             let mut pending = response_metadata_updates.lock().await;
             if pending.turn_state.is_none() {
@@ -314,7 +373,12 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             ExchangeAction::Forward { frame, terminal } => (frame, terminal),
             ExchangeAction::Ignore => continue,
         };
+        if terminal.is_some() {
+            // 先撤销控制权，再交付终态和归还连接，避免迟到的中断影响下一轮。
+            drop(active_interrupt.take());
+        }
         if tx.send(Ok(Bytes::from(frame))).await.is_err() {
+            drop(active_interrupt.take());
             trace.record(
                 "upstream.forward.failed",
                 json!({"reason": "receiver_dropped"}),
@@ -333,7 +397,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 json!({"kind": format!("{terminal:?}")}),
             );
             match terminal {
-                WebSocketTerminalKind::Completed => {
+                WebSocketTerminalKind::Completed | WebSocketTerminalKind::Interrupted => {
                     metadata.response_metadata = opening_response_metadata;
                     finish_stream_websocket(websocket, metadata, continuation, pool_return.take())
                         .await;
@@ -392,6 +456,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             last_event_type,
         },
     };
+    drop(active_interrupt.take());
     let observation = connection_observation(&websocket, &error);
     discard_stream_websocket(
         websocket,

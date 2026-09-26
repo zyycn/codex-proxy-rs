@@ -254,6 +254,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             }
         };
         let request_id = Arc::<str>::from(prepared.request_id().to_string());
+        let response_control = prepared.response_control();
         let capture = new_replay_capture();
         let validation = ResponseValidationFacts::default();
         let input = HttpMiddlewareInput {
@@ -343,6 +344,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             &mut replay,
             capture,
             validation,
+            response_control,
         )
         .await
             == ForwardOutcome::Disconnect

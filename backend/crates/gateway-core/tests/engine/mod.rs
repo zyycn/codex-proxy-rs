@@ -8,6 +8,7 @@ mod middleware;
 mod policy;
 mod probe;
 mod provider;
+mod response_control;
 
 use gateway_core::engine::AttemptTrigger;
 

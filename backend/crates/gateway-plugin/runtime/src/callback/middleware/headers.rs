@@ -137,7 +137,8 @@ fn connection_options(headers: &[MiddlewareHeader]) -> Vec<String> {
 }
 
 fn sensitive_or_identity_header(name: &str) -> bool {
-    name.contains("auth")
+    name == "x-openai-fedramp"
+        || name.contains("auth")
         || name.contains("credential")
         || name.contains("secret")
         || name.contains("token")

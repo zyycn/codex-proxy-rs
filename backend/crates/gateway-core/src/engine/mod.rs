@@ -14,6 +14,7 @@ pub mod observation;
 pub mod policy;
 pub mod probe;
 pub mod provider;
+pub mod response_control;
 
 pub use coordinator::{AttemptCoordinator, ResponseExecutionSession};
 
@@ -323,6 +324,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    response_control: Option<response_control::ResponseControl>,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     disable_fast: bool,
@@ -343,6 +345,15 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_response_control(
+        mut self,
+        control: Option<response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
+        self
+    }
+
     #[must_use]
     pub fn with_pricing(mut self, pricing: Arc<crate::metering::PricingOverrides>) -> Self {
         self.pricing = pricing;
@@ -376,6 +387,7 @@ impl RequestAttemptContext {
     #[must_use]
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
+            response_control: None,
             request_id,
             client_api_key_ref,
             request_profile: None,
@@ -527,6 +539,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn response_control(&self) -> Option<&response_control::ResponseControl> {
+        self.request.response_control.as_ref()
+    }
+
     #[must_use]
     pub fn pricing(&self) -> &crate::metering::PricingOverrides {
         &self.request.pricing

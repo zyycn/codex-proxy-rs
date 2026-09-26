@@ -863,6 +863,7 @@ impl CodexProvider {
                 })?
                 .with_authentication(lease.authentication())
                 .with_connection_budget(context.connection_budget().clone())
+                .with_response_control(context.response_control().cloned())
                 .with_middleware_headers(middleware_headers),
             response_origin: self.responses_url.clone(),
             request: upstream_request,

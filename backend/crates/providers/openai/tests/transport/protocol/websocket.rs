@@ -263,6 +263,18 @@ fn websocket_completed_id_should_read_the_id_without_validating_the_response_sha
 }
 
 #[test]
+fn websocket_interrupted_id_is_reusable_but_other_incomplete_reasons_are_not() {
+    for (reason, expected) in [
+        ("interrupted", Some("resp_interrupted".to_owned())),
+        ("max_output_tokens", None),
+        ("content_filter", None),
+    ] {
+        let event = json!({"type":"response.incomplete","response":{"id":"resp_interrupted","incomplete_details":{"reason":reason}}});
+        assert_eq!(websocket_response_completed_id(&event), expected);
+    }
+}
+
+#[test]
 fn websocket_completed_id_should_preserve_an_empty_opaque_id() {
     let event = json!({
         "type": "response.completed",

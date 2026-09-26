@@ -1,4 +1,7 @@
+mod account_isolation;
 mod capacity;
+mod live_account_isolation;
+mod response_interrupt;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -1232,8 +1235,16 @@ fn http_generate_operation() -> Operation {
 }
 
 fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest {
+    planned_request_for_model(provider_name, operation, "gpt-5.4")
+}
+
+fn planned_request_for_model(
+    provider_name: &str,
+    operation: Operation,
+    model: &str,
+) -> ProviderRequest {
     let provider = ProviderKind::new(provider_name).expect("provider");
-    let upstream_model = UpstreamModelId::new("gpt-5.4").expect("upstream model");
+    let upstream_model = UpstreamModelId::new(model).expect("upstream model");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
     let account_scope = Arc::new(FrozenAccountScope::new(
         Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
