@@ -39,6 +39,7 @@ store:
     password: &postgres_password ''
   redis:
     # Docker 内由 CPR_REDIS_URL 覆盖；密码不要写进 URL。
+    # ACL 用户写在 URL 中，例如 redis://u1@redis-host:6379/0；配置步骤见 deploy/README.md。
     url: 'redis://127.0.0.1:6379/'
     password: &redis_password ''
   # 可选：PostgreSQL 连接池预算；下列值与当前推荐默认一致。

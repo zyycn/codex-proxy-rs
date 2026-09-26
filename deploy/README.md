@@ -81,6 +81,25 @@ Linux 上应用容器以 `10001:10001` 运行。上述命令将应用数据和�
 配置设为 `0640`，均由当前用户持有、容器组 `10001` 访问。
 `config.yaml` 通过 Compose `configs` 只读挂载，普通 Compose 保留宿主机文件的 UID/GID 和 mode。
 
+### Redis ACL 用户
+
+连接已配置 ACL 用户的 Redis 时，把用户名写在 `store.redis.url` 中，密码仍单独填写：
+
+```yaml
+store:
+  redis:
+    url: 'redis://u1@redis-host:6379/0'
+    password: &redis_password '<u1 的 48 位十六进制密码>'
+```
+
+将这两项合并到已有配置，保留其他配置和密码锚点；Redis 服务端需事先创建并授权该用户。
+用户名中的 `@`、`:` 等特殊字符需要 URL 百分号编码。未填写用户名时使用 Redis 的 `default` 用户。
+
+环境变量 `CPR_REDIS_URL` 优先于 `store.redis.url`。默认 `deploy/compose.yaml` 已将它设为
+`redis://redis:6379/`，使用 ACL 用户时还需把应用服务的该环境变量改为
+`redis://u1@redis-host:6379/0`，其中主机名必须能从应用容器访问；只改 `config.yaml` 不会生效。
+默认 Compose Redis 服务使用密码认证，不会自动创建 ACL 用户。
+
 ## 启动
 
 ```bash

@@ -146,6 +146,21 @@ jobs:
         working-directory: backend
         run: cargo test --test main --locked
 
+      - name: Store tests with Redis ACL authentication
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          redis_acl_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$redis_acl_password"
+          docker exec "${{ job.services.redis.id }}" redis-cli -e --no-auth-warning \
+            -u "$CPR_TEST_REDIS_URL" --user default ACL SETUSER cpr_acl reset on \
+            ">$redis_acl_password" '~*' '&*' '+@all' >/dev/null
+          docker exec --env REDISCLI_AUTH="$redis_acl_password" "${{ job.services.redis.id }}" \
+            redis-cli -e --user cpr_acl ACL SETUSER default off >/dev/null
+          export CPR_TEST_REDIS_URL="redis://cpr_acl:${redis_acl_password}@127.0.0.1:6379"
+          cargo test -p gateway-store --test main --locked
+
   frontend:
     if: inputs.run_frontend
     runs-on: ubuntu-latest
