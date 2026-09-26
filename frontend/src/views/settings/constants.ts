@@ -5,6 +5,11 @@ export const rotationOptions = [
     description: '按负载、窗口用量、请求数和健康反馈评分，优先选择更空闲的账号',
   },
   {
+    label: '权重优先',
+    value: 'weight_priority',
+    description: '优先使用可用的高权重账号，满载时向低权重分流，恢复可用后优先切回',
+  },
+  {
     label: '额度重置优先',
     value: 'quota_reset_priority',
     description: '优先选择额度窗口更快重置的账号，适合在重置前消耗剩余额度',

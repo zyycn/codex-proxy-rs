@@ -481,6 +481,9 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 - scope 外账号、跨 Key 复用或不明确发送结果均 fail closed。
 
 会话亲和是优先选择提示，不是硬账号绑定；native continuation 才携带不可跨越的 owner 约束。
+内置 `weight_priority` 策略先过滤当前不可调度账号，再限定最高权重层，软亲和仅在该层内生效，
+无亲和时按账号 ID 的稳定顺序轮询。它复用现有额度、冷却和租约事实，允许容量不足时向低权重分流，
+恢复后在后续可重新选号的请求中优先回到高权重层，不迁移正在执行的请求或突破 continuation owner。
 
 ### 并发等待
 

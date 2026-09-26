@@ -97,6 +97,58 @@ async fn warmup_settings_round_trip_with_database_constraint() {
 }
 
 #[tokio::test]
+async fn weight_priority_upgrade_preserves_settings_and_accepts_the_new_strategy() {
+    let Some(database) = TestDatabase::create_through("weight_priority", 19).await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let mut previous = settings_with_margin(3_600);
+    previous.rotation_strategy = "sticky".to_owned();
+    repository
+        .update_runtime_settings(previous)
+        .await
+        .expect("old settings");
+    super::TEST_MIGRATOR
+        .run(&database.pool)
+        .await
+        .expect("upgrade");
+    let settings = repository
+        .load_runtime_settings()
+        .await
+        .expect("preserved settings");
+    assert_eq!(settings.rotation_strategy, "sticky");
+    assert_eq!(settings.refresh_margin_seconds, 3_600);
+
+    let mut update = settings_with_margin(3_600);
+    update.rotation_strategy = "weight_priority".to_owned();
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("new strategy");
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .expect("settings")
+            .rotation_strategy,
+        "weight_priority"
+    );
+    let error =
+        sqlx::query("update runtime_settings set rotation_strategy = 'unknown' where id = 1")
+            .execute(&database.pool)
+            .await
+            .expect_err("unknown strategies remain invalid");
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn unlimited_default_account_concurrency_round_trips_without_relaxing_other_limits() {
     let Some(database) = TestDatabase::create("unlimited_default_concurrency").await else {
         return;

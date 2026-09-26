@@ -115,6 +115,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
 fn rotation_strategy_parse_should_round_trip_stable_wire_values() {
     for strategy in [
         RotationStrategy::Smart,
+        RotationStrategy::WeightPriority,
         RotationStrategy::QuotaResetPriority,
         RotationStrategy::RoundRobin,
         RotationStrategy::Sticky,
@@ -398,6 +399,7 @@ fn selector_should_prioritize_the_highest_weight_for_every_rotation_strategy() {
 
     for strategy in [
         RotationStrategy::Smart,
+        RotationStrategy::WeightPriority,
         RotationStrategy::QuotaResetPriority,
         RotationStrategy::RoundRobin,
         RotationStrategy::Sticky,

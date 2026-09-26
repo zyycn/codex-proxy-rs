@@ -1198,7 +1198,12 @@ accountWarmupModel
 保存并发布成功后，新请求使用新值；已鉴权请求沿用原快照，无需重启。调高上限会增加大请求的内存占用，
 它不代表整个进程的内存预算。
 
-`rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
+`rotationStrategy` 可取 `smart`、`weight_priority`、`quota_reset_priority`、`round_robin`、`sticky`。
+`weight_priority` 在当前 Provider 的合格账号中优先选择最高权重，软会话亲和只在同权重内生效，
+无亲和时同权重账号轮询。高权重账号额度耗尽、并发满、冷却或受请求间隔限制时可使用低权重账号；
+确认恢复可用后，下一次允许重新选号的请求优先切回。已开始的请求和原生续写账号约束不变，
+额度恢复仍依赖 Provider 的观测流程，不因本地重置时间到期而直接恢复。
+调度插件显式选号时沿用插件决定，返回委托时才使用内置策略。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
 
 ### 模型定价

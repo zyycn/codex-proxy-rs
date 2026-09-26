@@ -105,6 +105,13 @@ fn attempt_with_required(
 }
 
 fn round_robin_attempt() -> AttemptContext {
+    strategy_attempt(RotationStrategy::RoundRobin, None)
+}
+
+fn strategy_attempt(
+    strategy: RotationStrategy,
+    continuation: Option<ContinuationBinding>,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new("req_codex_round_robin").expect("request id"),
@@ -113,13 +120,13 @@ fn round_robin_attempt() -> AttemptContext {
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         AccountSelectionPolicy::new(
-            RotationStrategy::RoundRobin,
+            strategy,
             NonZeroU32::new(2).expect("concurrency"),
             Duration::ZERO,
         ),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
-        None,
+        continuation,
         CancellationToken::new(),
     )
 }
@@ -945,6 +952,127 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
         ),
         ("acct_second", false, Some("quota_exhausted"), true)
     );
+}
+
+#[tokio::test]
+async fn weight_priority_reclaims_affinity_after_quota_and_lease_capacity_recover() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    create_account(&store, "acct_fallback", "at-fallback");
+    store.set_scheduling(
+        "acct_primary",
+        None,
+        AccountWeight::new(100).expect("weight"),
+    );
+    let provider = ProviderKind::new("openai").expect("provider");
+    let primary_id = ProviderAccountId::new("acct_primary").expect("primary");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let key = ProviderSessionAffinityKey::try_new("weight-priority-session").expect("key");
+    affinity
+        .bind(&provider, &key, &primary_id, Duration::from_secs(60))
+        .await
+        .expect("seed affinity");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector_with_affinity(&store, Arc::clone(&leases), Arc::clone(&affinity));
+    let request_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL");
+
+    for (exhausted, busy, expected, reason) in [
+        (true, false, "acct_fallback", "quota_exhausted"),
+        (false, false, "acct_primary", "higher_priority"),
+        (false, true, "acct_fallback", "lease_saturated"),
+        (false, false, "acct_primary", "higher_priority"),
+    ] {
+        let primary = store.account("acct_primary").expect("primary");
+        let observed_at = SystemTime::now();
+        store
+            .apply_quota_access(QuotaAccessChange {
+                account_id: primary_id.clone(),
+                expected_revision: primary.revision(),
+                state: if exhausted {
+                    QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed_at, None)
+                } else {
+                    QuotaState::allowed(observed_at)
+                },
+            })
+            .await
+            .expect("quota observation");
+        {
+            let mut busy_accounts = leases.busy_accounts.lock().expect("lease state");
+            if busy {
+                busy_accounts.insert(primary_id.clone());
+            } else {
+                busy_accounts.remove(&primary_id);
+            }
+        }
+        let previous = affinity
+            .load(&provider, &key)
+            .await
+            .expect("affinity")
+            .expect("bound");
+        let attempt = strategy_attempt(RotationStrategy::WeightPriority, None);
+        let selected = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+            })
+            .await
+            .expect("select account");
+        assert_eq!(selected.account_id().as_str(), expected);
+        assert_eq!(selected.escape_reason(), Some(reason));
+        selector
+            .record_success(selected.account(), Some(&key), &previous)
+            .await;
+        assert_eq!(
+            affinity
+                .load(&provider, &key)
+                .await
+                .expect("updated affinity")
+                .as_ref(),
+            Some(selected.account_id())
+        );
+    }
+}
+
+#[tokio::test]
+async fn weight_priority_keeps_native_continuation_on_its_lower_weight_owner() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original", "at-original");
+    create_account(&store, "acct_primary", "at-primary");
+    store.set_scheduling(
+        "acct_primary",
+        None,
+        AccountWeight::new(100).expect("weight"),
+    );
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let original = store.account("acct_original").expect("owner");
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("previous-response"),
+        PreviousResponseId::new("upstream-response"),
+        ClientApiKeyId::new("key_codex_contract").expect("key"),
+        ProviderKind::new("openai").expect("provider"),
+        original.id().clone(),
+    );
+    let attempt = strategy_attempt(
+        RotationStrategy::WeightPriority,
+        Some(ContinuationBinding::Pinned(pin)),
+    );
+    let request_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL");
+    let input = SelectCodexCredential {
+        upstream_model: "gpt-5.4",
+        request_url: &request_url,
+        attempt: &attempt,
+        session_affinity_key: None,
+    };
+    let selected = selector.select(&input).await.expect("native owner");
+    assert_eq!(selected.account_id(), original.id());
+    drop(selected);
+    persist_quota_exhaustion(&store, &original, None);
+    assert!(matches!(
+        selector.select(&input).await,
+        Err(CredentialSelectionError::QuotaExhausted)
+    ));
 }
 
 #[test]

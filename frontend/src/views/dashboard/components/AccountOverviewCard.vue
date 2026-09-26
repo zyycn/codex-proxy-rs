@@ -60,6 +60,7 @@ const strategyLabel = computed(() => {
     return '—'
   const map: Record<string, string> = {
     smart: '智能调度（推荐）',
+    weight_priority: '权重优先',
     quota_reset_priority: '额度重置优先',
     round_robin: '轮询',
     sticky: '粘滞',

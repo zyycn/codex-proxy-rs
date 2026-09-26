@@ -1,14 +1,96 @@
 use std::time::{Duration, Instant};
 
 use gateway_core::account::{
-    AccountAttemptFeedback, AccountCandidate, AccountFeedbackStats, AccountSelector,
-    ProviderAccountId, RotationStrategy,
+    AccountAttemptFeedback, AccountCandidate, AccountFeedbackStats, AccountSchedulingBlocker,
+    AccountSelectionPolicy, AccountSelector, PreferredAccountSelection, ProviderAccountId,
+    RotationStrategy,
 };
 use gateway_core::routing::ProviderKind;
 
-use super::{candidate, candidate_with_concurrency, context};
+use super::{candidate, candidate_with_concurrency, context, weighted_candidate};
 
 const FAILURE_RATE_HALF_LIFE: Duration = Duration::from_secs(15 * 60);
+
+#[test]
+fn weight_priority_overrides_lower_affinity_but_preserves_equal_weight_affinity() {
+    let mut candidates = [
+        weighted_candidate("acct_preferred", 1, 0),
+        weighted_candidate("acct_high", 100, 2),
+    ];
+    let mut context = context(RotationStrategy::WeightPriority);
+    context.preferred_account = Some(candidates[0].account.id().clone());
+    context.preferred_account_overrides_weight = true;
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("candidate");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_high");
+    assert_eq!(
+        selected.preferred(),
+        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::LowerWeight)
+    );
+
+    candidates[0] = weighted_candidate("acct_preferred", 100, 2);
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("candidate");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_preferred");
+    assert_eq!(selected.preferred(), PreferredAccountSelection::Hit);
+}
+
+#[test]
+fn weight_priority_spills_over_when_busy_and_returns_when_capacity_recovers() {
+    let mut candidates = [
+        weighted_candidate("acct_high", 100, 3),
+        weighted_candidate("acct_low", 1, 0),
+    ];
+    let mut context = context(RotationStrategy::WeightPriority);
+    context.preferred_account_overrides_weight = true;
+    context.preferred_account = Some(candidates[0].account.id().clone());
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("fallback");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_low");
+
+    context.preferred_account = Some(candidates[1].account.id().clone());
+    candidates[0].signals.in_flight = 2;
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("recovered");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_high");
+
+    context.policy = AccountSelectionPolicy::new(
+        RotationStrategy::WeightPriority,
+        std::num::NonZeroU32::new(3).expect("non-zero concurrency"),
+        Duration::from_secs(1),
+    );
+    candidates[0].signals.last_started_at = Some(context.now);
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("interval fallback");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_low");
+    context.now += Duration::from_secs(1);
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("interval elapsed");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_high");
+}
+
+#[test]
+fn weight_priority_rotates_only_the_highest_tier_without_affinity() {
+    let candidates = [
+        weighted_candidate("acct_high_b", 100, 2),
+        weighted_candidate("acct_low", 1, 0),
+        weighted_candidate("acct_high_a", 100, 0),
+    ];
+    let mut context = context(RotationStrategy::WeightPriority);
+    for (cursor, expected) in [(0, "acct_high_a"), (1, "acct_high_b"), (2, "acct_high_a")] {
+        context.round_robin_cursor = cursor;
+        let selected = AccountSelector
+            .select(&candidates, &context)
+            .expect("candidate");
+        assert_eq!(selected.candidate().account.id().as_str(), expected);
+    }
+}
 
 #[test]
 fn unlimited_account_concurrency_preserves_overrides_intervals_and_finite_scores() {
@@ -16,6 +98,7 @@ fn unlimited_account_concurrency_preserves_overrides_intervals_and_finite_scores
 
     for strategy in [
         RotationStrategy::Smart,
+        RotationStrategy::WeightPriority,
         RotationStrategy::RoundRobin,
         RotationStrategy::Sticky,
         RotationStrategy::QuotaResetPriority,

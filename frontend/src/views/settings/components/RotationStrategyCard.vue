@@ -14,7 +14,7 @@ const model = defineModel<RotationStrategy | ''>({ required: true })
 
 <template>
   <BaseCard title="调度策略">
-    <div class="grid max-w-6xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="grid max-w-6xl gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <button
         v-for="option in options"
         :key="option.value"

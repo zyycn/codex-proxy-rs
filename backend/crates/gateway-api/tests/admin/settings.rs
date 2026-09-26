@@ -350,6 +350,37 @@ async fn settings_post_should_replace_global_model_mappings() {
 }
 
 #[tokio::test]
+async fn settings_should_save_and_reload_weight_priority() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut body = update_body();
+    body["rotationStrategy"] = json!("weight_priority");
+    let response = app(fixture.state())
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body),
+        ))
+        .await
+        .expect("settings update response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"]["rotationStrategy"],
+        "weight_priority"
+    );
+
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .expect("settings response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"]["rotationStrategy"],
+        "weight_priority"
+    );
+}
+
+#[tokio::test]
 async fn client_downloads_should_return_validated_direct_links() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

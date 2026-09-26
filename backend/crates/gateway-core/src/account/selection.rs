@@ -15,6 +15,7 @@ use super::{AccountConcurrency, AccountStatus, ProviderAccount, ProviderAccountI
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RotationStrategy {
     Smart,
+    WeightPriority,
     QuotaResetPriority,
     RoundRobin,
     Sticky,
@@ -25,6 +26,7 @@ impl RotationStrategy {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Smart => "smart",
+            Self::WeightPriority => "weight_priority",
             Self::QuotaResetPriority => "quota_reset_priority",
             Self::RoundRobin => "round_robin",
             Self::Sticky => "sticky",
@@ -35,6 +37,7 @@ impl RotationStrategy {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "smart" => Some(Self::Smart),
+            "weight_priority" => Some(Self::WeightPriority),
             "quota_reset_priority" => Some(Self::QuotaResetPriority),
             "round_robin" => Some(Self::RoundRobin),
             "sticky" => Some(Self::Sticky),
@@ -412,7 +415,7 @@ pub struct AccountSelectionContext {
     pub now: SystemTime,
     pub excluded_accounts: BTreeSet<ProviderAccountId>,
     pub preferred_account: Option<ProviderAccountId>,
-    /// 优先账号可调度时，是否优先于其它账号的持久权重。
+    /// 优先账号可调度时，是否优先于其它账号的持久权重；权重优先策略不接受此软偏好。
     pub preferred_account_overrides_weight: bool,
     pub round_robin_cursor: u64,
     pub eligibility: AccountEligibilityPolicy,
@@ -620,7 +623,7 @@ impl AccountSelector {
                 });
                 eligible.first().copied()?
             }
-            RotationStrategy::RoundRobin => {
+            RotationStrategy::RoundRobin | RotationStrategy::WeightPriority => {
                 eligible.sort_by_key(|candidate| candidate.account.id().clone());
                 let index = context.round_robin_cursor as usize % eligible.len();
                 eligible.get(index).copied()?
@@ -663,7 +666,9 @@ impl AccountSelector {
         };
         match self.scheduling_blocker(candidate, context) {
             Some(blocker) => (PreferredAccountSelection::Blocked(blocker), None),
-            None if !context.preferred_account_overrides_weight
+            // 原生续写和指定账号已由 Provider 收窄候选，这里只裁决软亲和。
+            None if (!context.preferred_account_overrides_weight
+                || context.policy.strategy() == RotationStrategy::WeightPriority)
                 && candidate.account.weight() < highest_weight =>
             {
                 (

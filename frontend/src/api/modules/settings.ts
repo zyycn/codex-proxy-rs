@@ -3,7 +3,7 @@ import type { RequestLocation } from '../types/request-location'
 import type { ClientProfileSelection, ProviderRequestProfiles, ProviderRequestProfileUpdates, XaiClientProfileSelection } from './client-profiles'
 import request from '../request'
 
-export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
+export type RotationStrategy = 'smart' | 'weight_priority' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
 export interface RuntimeSettings {
   providerRequestProfiles: ProviderRequestProfiles
