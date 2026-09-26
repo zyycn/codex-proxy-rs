@@ -57,7 +57,7 @@ const detailsId = useId()
     <BaseTag v-else-if="!isCurrent && uses.length" size="sm">
       历史配置
     </BaseTag>
-    <dl :id="detailsId" v-show="detailsOpen" class="m-0 grid min-w-0 grid-cols-1 gap-x-8 gap-y-4 text-cp-xs text-cp-text-secondary sm:grid-cols-2" :class="!isCurrent ? 'order-last w-full pt-2' : undefined">
+    <dl v-show="detailsOpen" :id="detailsId" class="m-0 grid min-w-0 grid-cols-1 gap-x-8 gap-y-4 text-cp-xs text-cp-text-secondary sm:grid-cols-2" :class="!isCurrent ? 'order-last w-full pt-2' : undefined">
       <div class="grid min-w-0 content-start gap-1">
         <dt class="text-cp-sm font-emphasis text-cp-text">
           {{ sourceLabel(artifact.source) }}

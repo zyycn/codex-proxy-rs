@@ -2,6 +2,9 @@ import type { RequestConfig, RequestOptions } from '../request'
 import { API_BASE_URL } from '../constants'
 import request, { requestRaw } from '../request'
 
+// 管理路由可能执行长任务，HTTP 与页面桥使用同一等待上限。
+export const PLUGIN_MANAGEMENT_TIMEOUT_MS = 180_000
+
 const MAXIMUM_MANAGEMENT_BODY_BYTES = 1024 * 1024
 
 export interface PluginManagementTarget {
@@ -90,6 +93,7 @@ export function callPluginManagementRoute(
     method: call.method,
     data: call.body?.byteLength ? call.body : undefined,
     headers: call.contentType ? { 'Content-Type': call.contentType } : undefined,
+    timeout: PLUGIN_MANAGEMENT_TIMEOUT_MS,
     ...options,
   })
 }

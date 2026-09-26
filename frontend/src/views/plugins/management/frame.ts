@@ -6,7 +6,8 @@ import type {
 import { THEME_TOKEN_NAMES } from '@codex-proxy/ui/theme'
 import { generate, parse, walk } from 'css-tree'
 
-import { getPluginManagementResource } from '@/api'
+import { getPluginManagementResource, PLUGIN_MANAGEMENT_TIMEOUT_MS } from '@/api'
+import { API_TIMEOUT_MS } from '@/api/constants'
 
 export const PLUGIN_MANAGEMENT_BRIDGE = 'codex-proxy-plugin-management'
 export const PLUGIN_MANAGEMENT_BRIDGE_VERSION = 2
@@ -543,7 +544,7 @@ function createBridgeScript(input: {
         const timer = window.setTimeout(() => {
           pending.delete(id);
           reject(new Error('插件管理请求超时'));
-        }, 30000);
+        }, kind === 'request' ? ${PLUGIN_MANAGEMENT_TIMEOUT_MS} : ${API_TIMEOUT_MS});
         pending.set(id, { resolve, reject, timer });
         post(kind, id, payload, transfer);
       });
