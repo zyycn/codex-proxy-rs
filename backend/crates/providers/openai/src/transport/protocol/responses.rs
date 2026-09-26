@@ -121,7 +121,8 @@ pub enum TransportRequirement {
     HttpRequired,
     /// `generate=false + store=false` 预热必须保留在同一条 WebSocket。
     ExplicitWebSocketWarmup,
-    /// 客户端 WebSocket 的非持久化新链，必须在池化连接上建立后续续接状态。
+    /// 客户端 WebSocket 的非持久化新链，默认在池化连接上建立后续续接状态。
+    /// Provider 可在发送前对 OAuth 大新链选择 HTTP，后续由客户端完整重放。
     WebSocketNewChain,
     /// 只能使用持有指定 connection-local response 的精确 WebSocket。
     ExactWebSocketContinuation,
@@ -134,7 +135,7 @@ pub enum TransportRequirement {
 }
 
 impl TransportRequirement {
-    /// 是否必须使用 WebSocket，且禁止 HTTP fallback。
+    /// 默认是否要求 WebSocket；Provider 的 OAuth 大新链预检可在发送前选择 HTTP。
     pub fn requires_websocket(self) -> bool {
         matches!(
             self,
@@ -189,8 +190,8 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
                 TransportRequirement::ExternalUnknown
             }
         },
-        // 客户端会在下一轮提交 response ID；HTTP store=false 的成功响应无法
-        // 在池化 WebSocket 上续接，所以首轮也不能按普通快路径降级到 HTTP。
+        // HTTP store=false 的成功响应无法在池化 WebSocket 上续接，默认不走 HTTP 快路径；
+        // Provider 的 OAuth 大新链预检例外通过客户端完整重放恢复后续请求。
         None if request.downstream_websocket_connection_id.is_some() && !request.store() => {
             TransportRequirement::WebSocketNewChain
         }

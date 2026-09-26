@@ -225,6 +225,35 @@ pub fn websocket_response_create_payload_text(
     })
 }
 
+pub(crate) fn websocket_response_create_payload_len(
+    request: &CodexResponsesRequest,
+) -> Result<usize, serde_json::Error> {
+    struct ByteCount(usize);
+
+    impl std::io::Write for ByteCount {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("WebSocket payload size overflow"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut count = ByteCount(0);
+    serde_json::to_writer(
+        &mut count,
+        &ResponseCreateFrame {
+            body: request.body(),
+        },
+    )?;
+    Ok(count.0)
+}
+
 fn websocket_payload_keys(request: &CodexResponsesRequest) -> Vec<String> {
     let mut keys = Vec::with_capacity(request.body().len() + 1);
     keys.push("type".to_string());

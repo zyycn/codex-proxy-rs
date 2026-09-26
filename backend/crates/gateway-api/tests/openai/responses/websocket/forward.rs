@@ -523,6 +523,24 @@ async fn initial_quota_recovery_delivers_client_projection_instead_of_upstream_s
 }
 
 #[tokio::test]
+async fn initial_continuation_recovery_delivers_the_official_client_replay_signal() {
+    let provider = ProviderError::new(
+        ProviderErrorKind::ContinuationRecoveryRequired,
+        UpstreamSendState::NotSent,
+    )
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "Previous response was not found. Retrying the full request.",
+        Some("previous_response_not_found".to_owned()),
+        Some("invalid_request_error".to_owned()),
+    ));
+    let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["status"], 400);
+    assert_eq!(error["error"]["code"], "previous_response_not_found");
+    assert_eq!(error["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
 async fn locally_exhausted_account_pool_sends_one_official_usage_limit_error() {
     let provider = ProviderError::new(
         ProviderErrorKind::QuotaExhausted,
