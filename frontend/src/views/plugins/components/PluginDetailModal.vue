@@ -68,7 +68,7 @@ watch(() => props.initialSection, value => section.value = value)
           <BaseIconButton v-if="plugin.source?.source.kind === 'github' || plugin.source?.source.kind === 'url'" label="检查更新" variant="secondary" :disabled="busy" @click="$emit('checkUpdate', plugin)">
             <RefreshCw class="size-4" />
           </BaseIconButton>
-          <BaseIconButton label="更新插件" variant="secondary" :disabled="busy" @click="$emit('installVersion', plugin)">
+          <BaseIconButton label="手动安装版本" variant="secondary" :disabled="busy" @click="$emit('installVersion', plugin)">
             <ArrowInDownSquareHalf pack="filled" class="size-5" />
           </BaseIconButton>
         </div>

@@ -1,15 +1,19 @@
 import type { Ref } from 'vue'
 import type { InstalledPlugin } from '../utils/catalog'
-import type { PluginArtifact, PluginRelease, PluginSourceCredential, PluginUpdateSourceBinding, VerifiedPluginArtifact } from '@/api'
+import type { PluginArtifact, PluginInstance, PluginRelease, PluginSourceCredential, PluginUpdateSourceBinding, VerifiedPluginArtifact, VerifyRemotePluginRequest } from '@/api'
 import { isEqual } from 'es-toolkit'
 import { onScopeDispose, shallowRef, watch } from 'vue'
 import { checkPluginUpdate, getPluginUpdateSources, queryPluginRelease, verifyRemotePlugin } from '@/api'
+import { currentPluginInstance } from '../utils/catalog'
+import { selectPluginReleaseAsset } from '../utils/updates'
 
 export interface PluginUpdateSelection {
   binding: PluginUpdateSourceBinding
   credentialIds: string[]
   release?: PluginRelease
   artifact?: VerifiedPluginArtifact
+  request?: VerifyRemotePluginRequest
+  instance?: PluginInstance
 }
 
 export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>, notifyError: (title: string, error: unknown) => void) {
@@ -53,11 +57,23 @@ export function usePluginUpdateCheck(credentials: Ref<PluginSourceCredential[]>,
           ? await queryPluginRelease({ query: { repository: source.repository, tag: null, allowPrerelease: false }, credentialIds, outboundProxyId: binding.outboundProxyId }, options)
           : (await checkPluginUpdate({ pluginId: target.id, credentialIds }, options)).release
         candidate = { binding, credentialIds, release }
+        const asset = selectPluginReleaseAsset(release, target.artifact)
+        if (asset) {
+          candidate.request = {
+            expectedPluginId: target.id,
+            credentialIds,
+            outboundProxyId: binding.outboundProxyId,
+            location: { kind: 'github', repository: release.repository, tag: release.tag, asset: asset.name, allow_prerelease: release.prerelease, sha256: asset.sha256 },
+          }
+          candidate.artifact = await verifyRemotePlugin(candidate.request, options)
+        }
       }
       else {
-        const artifact = await verifyRemotePlugin({ expectedPluginId: target.id, credentialIds, outboundProxyId: binding.outboundProxyId, location: { kind: 'url', url: source.url, sha256: null } }, options)
-        candidate = { binding, credentialIds, artifact }
+        const request: VerifyRemotePluginRequest = { expectedPluginId: target.id, credentialIds, outboundProxyId: binding.outboundProxyId, location: { kind: 'url', url: source.url, sha256: null } }
+        const artifact = await verifyRemotePlugin(request, options)
+        candidate = { binding, credentialIds, artifact, request }
       }
+      candidate.instance = currentPluginInstance(target)
       const latest = (await getPluginUpdateSources(options)).find(value => value.pluginId === target.id)
       if (!isEqual(binding, latest))
         throw new Error('安装来源已变更，请重新检查')

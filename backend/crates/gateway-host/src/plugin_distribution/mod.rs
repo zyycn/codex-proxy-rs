@@ -153,7 +153,7 @@ impl PluginDistribution for HttpPluginDistribution {
         egress: Option<PluginDistributionEgress>,
     ) -> Result<PluginRelease, AdminError> {
         Ok(self
-            .release(query, &credentials, egress.as_ref())
+            .release(query, &credentials, egress.as_ref(), true)
             .await?
             .view)
     }

@@ -3,7 +3,7 @@ import type { PluginInstallMode } from '../components/PluginInstallModal.vue'
 import type { InstalledPlugin } from '../utils/catalog'
 import type { PluginInstallSelection } from '../utils/model'
 import type { PluginUpdateSelection } from './usePluginUpdateCheck'
-import type { PluginArtifact, PluginArtifactMutationResponse, PluginRelease, PluginUpdateSourceBinding, QueryPluginReleaseRequest, VerifiedPluginArtifact } from '@/api'
+import type { PluginArtifact, PluginArtifactMutationResponse, PluginInstance, PluginRelease, PluginUpdateSourceBinding, QueryPluginReleaseRequest, VerifiedPluginArtifact } from '@/api'
 import { toast } from '@codex-proxy/ui'
 import { isEqual } from 'es-toolkit'
 import { onScopeDispose, shallowRef, watch } from 'vue'
@@ -13,7 +13,7 @@ import { pluginInstallSelectionKey } from '../utils/model'
 interface InstallationContext {
   runAction: <T>(flag: Ref<boolean>, title: string, task: () => Promise<T>) => Promise<T | undefined>
   notifyError: (title: string, error: unknown) => void
-  onInstalled: (result: PluginArtifactMutationResponse) => Promise<void>
+  onInstalled: (result: PluginArtifactMutationResponse, switchTarget?: PluginInstance) => Promise<void>
   onSourceSaved: (source: PluginUpdateSourceBinding) => void
 }
 
@@ -151,6 +151,29 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
     await onInstalled(result)
   }
 
+  async function installUpdate(selection: PluginUpdateSelection) {
+    const { artifact, request, instance, binding } = selection
+    if (!artifact || !request || !instance)
+      return false
+    const completed = await runAction(installing, '插件升级失败', async () => {
+      const latest = (await getPluginUpdateSources({ silent: true })).find(value => value.pluginId === binding.pluginId)
+      if (!isEqual(binding, latest))
+        throw new Error('安装来源已变更，请重新检查更新')
+      const { pluginId, version, sha256 } = artifact.metadata
+      const result = await installRemotePlugin({
+        pluginId,
+        version,
+        credentialIds: request.credentialIds,
+        outboundProxyId: request.outboundProxyId,
+        location: { ...request.location, sha256 },
+      }, { silent: true })
+      // 使用检查时的实例 revision，避免下载期间的设置变更被升级覆盖。
+      await onInstalled(result, instance)
+      return true
+    })
+    return completed === true
+  }
+
   async function acceptArtifact(artifact: PluginArtifact) {
     if (acceptanceArtifact.value?.metadata.sha256 !== artifact.metadata.sha256) {
       toast.warning('请选择待安装的插件版本')
@@ -231,6 +254,7 @@ export function usePluginInstallation({ runAction, notifyError, onInstalled, onS
     resetReleaseQuery,
     queryRelease,
     installArtifact,
+    installUpdate,
     acceptArtifact,
   }
 }

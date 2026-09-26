@@ -26,6 +26,7 @@ use super::{
 pub(super) struct CachedRelease {
     result: Result<ResolvedRelease, AdminError>,
     until: Instant,
+    fetched_at: Instant,
 }
 
 #[derive(Clone)]
@@ -57,7 +58,9 @@ impl HttpPluginDistribution {
         mut query: GithubReleaseQuery,
         credentials: &[SourceCredential],
         egress: Option<&PluginDistributionEgress>,
+        refresh: bool,
     ) -> Result<ResolvedRelease, AdminError> {
+        let requested_at = Instant::now();
         validate_repository(&query.repository)?;
         query.repository.make_ascii_lowercase();
         let url = self.release_url(&query)?;
@@ -91,7 +94,11 @@ impl HttpPluginDistribution {
         tokio::time::timeout(Duration::from_secs(60), async {
             // 同一来源共用锁和结果；取消请求释放锁，下一位查询者可重新发起。
             let mut cached = slot.lock().await;
-            if let Some(entry) = cached.as_ref().filter(|entry| entry.until > Instant::now()) {
+            // 显式查询刷新成功结果；等待同一次请求的调用者仍共享结果，失败保留短缓存限流。
+            if let Some(entry) = cached.as_ref().filter(|entry| {
+                entry.until > Instant::now()
+                    && (!refresh || entry.fetched_at >= requested_at || entry.result.is_err())
+            }) {
                 return entry.result.clone();
             }
             let _permit = self
@@ -105,9 +112,11 @@ impl HttpPluginDistribution {
             } else {
                 Duration::from_secs(30)
             };
+            let fetched_at = Instant::now();
             *cached = Some(CachedRelease {
                 result: result.clone(),
-                until: Instant::now() + ttl,
+                until: fetched_at + ttl,
+                fetched_at,
             });
             result
         })
@@ -213,7 +222,7 @@ impl HttpPluginDistribution {
         credentials: &[SourceCredential],
         egress: Option<&PluginDistributionEgress>,
     ) -> Result<(Url, Option<String>, PluginSource, bool), AdminError> {
-        let release = self.release(query, credentials, egress).await?;
+        let release = self.release(query, credentials, egress, false).await?;
         let selected = release
             .assets
             .iter()

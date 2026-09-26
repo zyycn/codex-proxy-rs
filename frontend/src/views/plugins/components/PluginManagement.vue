@@ -67,11 +67,12 @@ const tabOptions = [
     </div>
 
     <PluginDetailModal
-      v-model="management.showDetail.value"
+      :model-value="management.showDetail.value && !management.updateCheck.open.value"
       :plugin="management.selectedPlugin.value"
       :initial-section="management.detailSection.value"
       :views="management.extensions.value"
       :busy="management.savingInstance.value || management.uninstall.busy.value || Boolean(management.busyInstanceId.value || management.busyDigest.value)"
+      @update:model-value="management.showDetail.value = $event"
       @accept="management.openAcceptance"
       @edit="management.openEditInstance"
       @enable="management.requestInstanceEnable"
@@ -116,7 +117,9 @@ const tabOptions = [
       :plugin="management.updateCheck.plugin.value"
       :result="management.updateCheck.result.value"
       :checking="management.updateCheck.checking.value"
+      :upgrading="management.installing.value"
       @install="management.updateCheck.open.value = false; management.openCheckedUpdate($event)"
+      @upgrade="management.upgradeCheckedPlugin"
     />
 
     <PluginConfigurationModal

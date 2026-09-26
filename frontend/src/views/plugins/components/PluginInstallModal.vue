@@ -19,8 +19,8 @@ import { CheckCircle2, Download, FileArchive, Link, PackageOpen } from '@lucide/
 import { useEventListener, useSessionStorage } from '@vueuse/core'
 import { isEqual } from 'es-toolkit'
 import { computed, nextTick, reactive, shallowRef, watch } from 'vue'
-import { formatDateTime } from '@/utils/date'
 import { formatPluginFileSize, normalizePluginRepository, pluginInstallSelectionKey } from '../utils/model'
+import { selectPluginReleaseAsset } from '../utils/updates'
 import PluginAssetPicker from './PluginAssetPicker.vue'
 import PluginDownloadAuthentication from './PluginDownloadAuthentication.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
@@ -80,7 +80,6 @@ interface InstallDraft {
   github: Omit<typeof githubForm, 'asset'>
 }
 const drafts = useSessionStorage<Record<string, InstallDraft>>('cp-plugin-install-drafts', {}, { flush: 'sync' })
-const draftKey = computed(() => props.updateSource ? `plugin:${props.updateSource.pluginId}` : 'install')
 let activeDraftKey: string | null = null
 const queriedGithubKey = shallowRef('')
 const pendingAuthentication = shallowRef(false)
@@ -204,7 +203,7 @@ async function verifySelected() {
 }
 
 function reset() {
-  activeDraftKey = props.acceptanceArtifact ? null : draftKey.value
+  activeDraftKey = props.acceptanceArtifact || props.updateSource ? null : 'install'
   uploadFile.value = null
   Object.assign(urlForm, {
     url: '',
@@ -236,7 +235,6 @@ function reset() {
   }
   if (previousGithub?.kind === 'github') {
     githubForm.repository = previousGithub.repository
-    githubForm.tag = previousGithub.tag
     githubForm.credentialIds = previousGithub.credential_ids.filter(id => props.credentials.some(credential => credential.id === id))
     githubForm.outboundProxyId = previousGithub.outbound_proxy?.id ?? ''
   }
@@ -254,12 +252,11 @@ function reset() {
     }
     githubForm.repository = source.source.repository
     githubForm.outboundProxyId = source.outboundProxyId ?? ''
-    if (source.policy.kind !== 'manual')
-      githubForm.tag = source.policy.kind === 'pinned' ? source.policy.tag : ''
+    githubForm.tag = source.policy.kind === 'pinned' ? source.policy.tag : ''
     githubForm.allowPrerelease = source.policy.kind === 'pinned' && source.policy.allow_prerelease
   }
-  const draft = drafts.value[draftKey.value]
-  if (draft && !props.acceptanceArtifact) {
+  const draft = activeDraftKey ? drafts.value[activeDraftKey] : null
+  if (draft) {
     Object.assign(urlForm, draft.url, { credentialIds: draft.url.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)) })
     Object.assign(githubForm, draft.github, { credentialIds: draft.github.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)) })
     emit('changeMode', draft.mode)
@@ -410,8 +407,8 @@ watch(
 watch(
   () => props.release,
   async (release) => {
-    // 唯一归档可直接解析，多个归档交给用户选择，平台兼容性仍由包检查器确认。
-    githubForm.asset = release && releaseAssets.value.length === 1 ? releaseAssets.value[0]!.name : ''
+    const previous = props.installedArtifacts.find(artifact => artifact.metadata.pluginId === props.updateSource?.pluginId)
+    githubForm.asset = release ? selectPluginReleaseAsset(release, previous)?.name ?? '' : ''
     if (githubForm.asset) {
       await nextTick()
       await verifySelected()
@@ -598,7 +595,7 @@ watch(
       <BaseButton v-if="verified && !acceptanceArtifact" variant="ghost" :disabled="busy" class="mr-auto" @click="$emit('resetVerification')">
         返回
       </BaseButton>
-      <BaseButton v-if="!verified && mode === 'github' && release" variant="secondary" :disabled="busy || authenticationIncomplete" :title="`缓存至 ${formatDateTime(release.expiresAt)}`" @click="queryRelease">
+      <BaseButton v-if="!verified && mode === 'github' && release" variant="secondary" :disabled="busy || authenticationIncomplete" @click="queryRelease">
         重新查询
       </BaseButton>
       <BaseButton variant="secondary" :disabled="busy" @click="open = false">

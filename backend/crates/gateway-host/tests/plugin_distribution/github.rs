@@ -110,6 +110,69 @@ async fn concurrent_queries_share_a_single_fetch_and_return_cache_times() {
 }
 
 #[tokio::test]
+async fn explicit_queries_refresh_a_new_release_before_the_cache_expires() {
+    let server = MockServer::start().await;
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    Mock::given(path("/repos/example/plugins/releases/latest"))
+        .respond_with(move |_: &wiremock::Request| {
+            let mut metadata = release();
+            if calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0 {
+                metadata["tag_name"] = json!("model-trace-v0.1.3");
+            }
+            ResponseTemplate::new(200).set_body_json(metadata)
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let distribution = transport(&server);
+    let previous = distribution
+        .query_release(query(None), vec![], None)
+        .await
+        .unwrap();
+    let latest = distribution
+        .query_release(query(None), vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(previous.tag, "v1.0.0");
+    assert_eq!(latest.tag, "model-trace-v0.1.3");
+    assert!(latest.queried_at < previous.expires_at);
+}
+
+#[tokio::test]
+async fn artifact_downloads_reuse_the_checked_fixed_release() {
+    let server = MockServer::start().await;
+    Mock::given(path("/repos/example/plugins/releases/tags/v1.0.0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(release()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/repos/example/plugins/releases/assets/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"package"))
+        .mount(&server)
+        .await;
+    let distribution = transport(&server);
+    distribution
+        .query_release(query(Some("v1.0.0")), vec![], None)
+        .await
+        .unwrap();
+    let downloaded = distribution
+        .download(
+            RemotePluginLocation::Github {
+                repository: "example/plugins".into(),
+                tag: "v1.0.0".into(),
+                asset: "example_1.0.0_linux_x86_64.tar.gz".into(),
+                allow_prerelease: false,
+                sha256: None,
+            },
+            vec![],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(downloaded.sha256, digest(b"package"));
+}
+
+#[tokio::test]
 async fn rate_limit_applies_to_other_repositories_using_the_same_identity_and_egress() {
     let server = MockServer::start().await;
     Mock::given(path("/repos/example/plugins/releases/latest"))

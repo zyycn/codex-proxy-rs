@@ -30,6 +30,7 @@
     "gsap": "^3.15.0",
     "pinia": "^4.0.3",
     "pinia-plugin-persistedstate": "^4.7.1",
+    "semver": "^7.8.5",
     "vue": "^3.5.43",
     "vue-router": "^5.3.1"
   },
@@ -38,6 +39,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@types/css-tree": "^3.2.0",
     "@types/node": "^26.6.2",
+    "@types/semver": "^7.8.0",
     "@vitejs/plugin-vue": "^6.0.9",
     "@vue/tsconfig": "^0.9.1",
     "eslint": "^10.11.0",

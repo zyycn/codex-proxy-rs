@@ -60,7 +60,7 @@ async fn cancelling_the_fetch_owner_releases_the_shared_slot_for_the_next_query(
                 response
             }
         })
-        .expect(2)
+        .expect(3)
         .mount(&server)
         .await;
     let distribution = Arc::new(transport(&server));
@@ -84,12 +84,12 @@ async fn cancelling_the_fetch_owner_releases_the_shared_slot_for_the_next_query(
     .unwrap();
     assert_eq!(recovered.tag, "v1.0.0");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    let cached = distribution
+    let refreshed = distribution
         .query_release(query("example/plugins"), vec![], None)
         .await
         .unwrap();
-    assert_eq!(cached.queried_at, recovered.queried_at);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(refreshed.queried_at > recovered.queried_at);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
@@ -101,7 +101,7 @@ async fn cancelling_a_cache_waiter_does_not_cancel_or_poison_the_fetch_owner() {
                 .set_body_json(release())
                 .set_delay(Duration::from_millis(500)),
         )
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let distribution = Arc::new(transport(&server));
@@ -124,12 +124,15 @@ async fn cancelling_a_cache_waiter_does_not_cancel_or_poison_the_fetch_owner() {
         .unwrap()
         .unwrap()
         .unwrap();
-    let cached = distribution
+    assert_eq!(first.tag, "v1.0.0");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    // 等待者取消不影响持有者完成，也不阻止之后的显式查询刷新结果。
+    let refreshed = distribution
         .query_release(query("example/plugins"), vec![], None)
         .await
         .unwrap();
-    assert_eq!(cached.queried_at, first.queried_at);
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(refreshed.queried_at > first.queried_at);
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
