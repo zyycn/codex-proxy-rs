@@ -655,6 +655,7 @@ pub(crate) struct TestLeaseCoordinator {
     pub(crate) requests: Mutex<Vec<ProviderSchedulingLeaseRequest>>,
     pub(crate) busy: Mutex<bool>,
     pub(crate) busy_accounts: Mutex<BTreeSet<ProviderAccountId>>,
+    pub(crate) signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
     round_robin_cursor: Mutex<u64>,
 }
 
@@ -666,21 +667,24 @@ impl ProviderLeasePort for TestLeaseCoordinator {
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
         Box::pin(async move {
+            let overrides = self.signals.lock().expect("scheduling signals lock");
             let signals = accounts
                 .iter()
-                .cloned()
                 .map(|account| {
                     (
-                        account,
-                        AccountRuntimeSignals {
-                            in_flight: 0,
-                            last_started_at: None,
-                            quota_reset_at: None,
-                            quota_remaining_rank: None,
-                            cooldown: None,
-                            failure_rate_basis_points: None,
-                            first_output_latency_ms: None,
-                        },
+                        account.clone(),
+                        overrides
+                            .get(account)
+                            .cloned()
+                            .unwrap_or(AccountRuntimeSignals {
+                                in_flight: 0,
+                                last_started_at: None,
+                                quota_reset_at: None,
+                                quota_remaining_rank: None,
+                                cooldown: None,
+                                failure_rate_basis_points: None,
+                                first_output_latency_ms: None,
+                            }),
                     )
                 })
                 .collect();

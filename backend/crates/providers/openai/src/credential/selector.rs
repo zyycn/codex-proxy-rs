@@ -609,7 +609,18 @@ impl CodexCredentialSelector {
                     excluded_accounts: base_excluded.clone(),
                     ..context.clone()
                 };
-                let wait_candidates = AccountSelector.wait_candidates(&candidates, &wait_context);
+                let mut wait_candidates =
+                    AccountSelector.wait_candidates(&candidates, &wait_context);
+                let preferred_wait = preferred.as_ref().filter(|account_id| {
+                    !diagnostic
+                        && queue_policy.max_waiting > 0
+                        && (pinned_account.is_some() || !affinity.inherited)
+                        && wait_candidates.contains(account_id)
+                });
+                if let Some(preferred) = preferred_wait {
+                    // 原绑定仍合格时只等待它；并发、请求间隔与已有队列均不应造成临时换号。
+                    wait_candidates.retain(|account_id| account_id == preferred);
+                }
                 let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
                 for candidate in &candidates {
                     if !waiting.can_try(candidate.account.id()) {
@@ -632,6 +643,19 @@ impl CodexCredentialSelector {
                         return Err(CredentialSelectionError::PolicyUnavailable);
                     }
                 };
+                // 可等待集合使用原始排除集；这里的 Excluded 只可能来自本轮租约争用或队列让位。
+                let selection = selection.filter(|selection| {
+                    preferred_wait.is_none()
+                        || selection.is_policy_choice()
+                        || !matches!(
+                            selection.preferred(),
+                            PreferredAccountSelection::Blocked(
+                                AccountSchedulingBlocker::ConcurrencyLimit
+                                    | AccountSchedulingBlocker::RequestInterval
+                                    | AccountSchedulingBlocker::Excluded
+                            )
+                        )
+                });
                 request.attempt.trace().account_selection(
                     &candidates,
                     &context,
@@ -673,12 +697,14 @@ impl CodexCredentialSelector {
                     let quota_exhausted = !diagnostic
                         && statuses.next() == Some(AccountStatus::QuotaExhausted)
                         && statuses.all(|status| status == AccountStatus::QuotaExhausted);
-                    return match shortest_retry {
-                        Some(retry_after) => Err(CredentialSelectionError::CapacityUnavailable {
-                            retry_after: Some(retry_after),
-                        }),
-                        None if quota_exhausted => Err(CredentialSelectionError::QuotaExhausted),
-                        None => Err(CredentialSelectionError::NoEligibleCredential),
+                    return if !wait_candidates.is_empty() || shortest_retry.is_some() {
+                        Err(CredentialSelectionError::CapacityUnavailable {
+                            retry_after: shortest_retry,
+                        })
+                    } else if quota_exhausted {
+                        Err(CredentialSelectionError::QuotaExhausted)
+                    } else {
+                        Err(CredentialSelectionError::NoEligibleCredential)
                     };
                 };
                 affinity.observe_preferred_selection(selection.preferred());
@@ -714,7 +740,9 @@ impl CodexCredentialSelector {
                     .await?
                 {
                     ProviderLeaseAcquisition::Busy { retry_after } => {
-                        affinity.observe_lease_busy(account.id());
+                        if preferred_wait != Some(account.id()) {
+                            affinity.observe_lease_busy(account.id());
+                        }
                         shortest_retry = minimum_duration(shortest_retry, retry_after);
                         excluded.insert(account.id().clone());
                     }
