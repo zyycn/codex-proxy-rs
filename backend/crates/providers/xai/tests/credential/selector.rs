@@ -1086,16 +1086,101 @@ fn queue_request(fixture: &SelectorFixture, timeout: Duration) -> GrokSessionSel
         request.upstream_model().clone(),
         BTreeSet::new(),
         None,
-        request.account_selection_policy().with_queue(
-            gateway_core::concurrency::ConcurrencyQueuePolicy {
+        request
+            .account_selection_policy()
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
                 max_waiting: 1,
                 timeout,
-            },
-        ),
+            })
+            .with_smart_scheduling(
+                gateway_core::account::SmartSchedulingConfig::new(
+                    [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
+                    false,
+                )
+                .unwrap(),
+            ),
         request.deadline(),
         request.account_scope().clone(),
         request.client_api_key_id().clone(),
     )
+}
+
+#[tokio::test]
+async fn smart_queue_weight_changes_the_selected_wait_queue_and_respects_required_account() {
+    use futures::FutureExt;
+    for queue_weight in [0.0, 0.2] {
+        let fixture = SelectorFixture::new(&["healthy", "unhealthy"]).await;
+        let healthy = account_id("healthy");
+        for signal in fixture.coordinator.signals.lock().unwrap().values_mut() {
+            signal.in_flight = 2;
+        }
+        for _ in 0..4 {
+            fixture.feedback.report(
+                &gateway_core::routing::ProviderKind::new("xai").unwrap(),
+                &account_id("unhealthy"),
+                AccountAttemptFeedback::Failed {
+                    first_output_ms: None,
+                },
+            );
+        }
+        let make_request = |required| {
+            let request = fixture.request(BTreeSet::new());
+            GrokSessionSelection::new(
+                request.upstream_model().clone(),
+                BTreeSet::new(),
+                required,
+                request
+                    .account_selection_policy()
+                    .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                        max_waiting: 2,
+                        timeout: Duration::from_secs(2),
+                    })
+                    .with_smart_scheduling(
+                        gateway_core::account::SmartSchedulingConfig::new(
+                            [0.0, 0.0, 1.0, 0.0, 0.0, queue_weight],
+                            false,
+                        )
+                        .unwrap(),
+                    ),
+                request.deadline(),
+                request.account_scope().clone(),
+                request.client_api_key_id().clone(),
+            )
+        };
+        let mut head = fixture.selector.select(make_request(Some(healthy.clone())));
+        assert!(head.as_mut().now_or_never().is_none());
+        let mut next = fixture.selector.select(make_request(None));
+        assert!(next.as_mut().now_or_never().is_none());
+        let mut probe = fixture.selector.select(make_request(Some(healthy.clone())));
+        match probe.as_mut().now_or_never() {
+            Some(Err(GrokSessionSelectorError::QueueRejected(
+                gateway_core::concurrency::QueueRejection::Full,
+            ))) => assert!(queue_weight > 0.0),
+            None => assert_eq!(queue_weight, 0.0),
+            other => panic!("unexpected queue probe: {other:?}"),
+        }
+        drop((next, probe));
+        // 其他账号先空闲不能解除 required account 限制。
+        fixture
+            .coordinator
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&account_id("unhealthy"))
+            .unwrap()
+            .in_flight = 0;
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        assert!(head.as_mut().now_or_never().is_none());
+        fixture
+            .coordinator
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&healthy)
+            .unwrap()
+            .in_flight = 0;
+        assert_eq!(head.await.unwrap().account_id(), &healthy);
+    }
 }
 
 #[tokio::test]

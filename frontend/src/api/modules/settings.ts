@@ -5,7 +5,19 @@ import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
+export interface SmartSchedulingConfig {
+  loadWeight: number
+  quotaWeight: number
+  healthWeight: number
+  latencyWeight: number
+  resetWeight: number
+  queueWeight: number
+  preferHigherWeight: boolean
+}
+
 export interface RuntimeSettings {
+  smartScheduling: SmartSchedulingConfig
+  smartSchedulingDefaults: SmartSchedulingConfig
   providerRequestProfiles: ProviderRequestProfiles
   openaiClientProfile: ClientProfileSelection | null
   xaiClientProfile: XaiClientProfileSelection | null
@@ -80,7 +92,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'smartSchedulingDefaults' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
   providerRequestProfiles: ProviderRequestProfileUpdates
 }
 

@@ -5,7 +5,7 @@ use serde_json::json;
 use super::TraceContext;
 use crate::account::{
     AccountCandidate, AccountSelection, AccountSelectionContext, AccountSelector, RotationStrategy,
-    SMART_SCORE_TOLERANCE, smart_score,
+    smart_score,
 };
 
 // 单个 trace 事件最多 4 KiB；优先保留实际选中的账号。
@@ -50,7 +50,7 @@ impl TraceContext {
                     "failureRateBasisPoints": signals.failure_rate_basis_points,
                     "firstOutputLatencyMs": signals.first_output_latency_ms,
                     "smartScore": smart.then(|| smart_score(
-                        candidate, context.policy.max_concurrent_per_account()
+                        candidate, context.policy.max_concurrent_per_account(), context.policy.smart_scheduling(), context.now
                     )),
                 })
             })
@@ -63,7 +63,7 @@ impl TraceContext {
                 "preferredAccountId": context.preferred_account.as_ref().map(|id| id.as_str()),
                 "preferredResult": selection.as_ref().map(|s| format!("{:?}", s.preferred())),
                 "roundRobinCursor": context.round_robin_cursor,
-                "smartScoreTolerance": smart.then_some(SMART_SCORE_TOLERANCE),
+                "smartScoreTolerance": smart.then(|| context.policy.smart_scheduling().score_tolerance()),
                 "candidateCount": candidates.len(),
                 "omittedCandidates": candidates.len().saturating_sub(observations.len()),
                 "candidates": observations,

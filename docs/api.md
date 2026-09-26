@@ -1163,6 +1163,7 @@ concurrencyWaitTimeoutSeconds
 responsesMaxDecompressedBodyBytes
 requestIntervalMs
 rotationStrategy
+smartScheduling
 minCodexDesktopVersion
 minCodexCliVersion
 usageRetentionDays
@@ -1211,6 +1212,35 @@ accountWarmupModel
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+`smartScheduling` 是必填的完整对象，仅在内置 `smart` 策略下生效，切换其他策略时仍保存其值：
+
+```json
+{
+  "loadWeight": 1.0,
+  "quotaWeight": 0.8,
+  "healthWeight": 1.0,
+  "latencyWeight": 0.5,
+  "resetWeight": 0.0,
+  "queueWeight": 0.0,
+  "preferHigherWeight": false
+}
+```
+
+六项系数分别调整负载、剩余额度、健康、首个有效输出延迟、额度重置和排队压力的评分偏好，范围 `0～10`、最多一位小数，
+至少一项大于 `0`。`0` 仅关闭对应评分维度，不放宽账号资格、额度或并发限制；系数不表示流量百分比。
+缺字段、`null`、未知字段及无效数值均返回 `422`，不写入配置。读取设置额外返回只读
+`smartSchedulingDefaults`，内容为上述默认对象，用于恢复默认与自定义状态比较，不可提交到更新接口。
+
+`resetWeight` 越大越偏向即将重置额度的账号，复用已有有效重置时间，未知或已过期时不加分。
+`queueWeight` 只在没有可立即使用的账号、需要选择等待队列时参与评分，越大越偏向等待人数少的账号。
+设为 `0` 时沿用最短队列规则；启用后结合其余五项评分选择队列。队列人数限于当前进程，只有开启账号排队才会生效，
+不影响已入队请求的位置、队内 FIFO、容量上限或等待超时。两项默认均为 `0`。
+
+`preferHigherWeight` 默认关闭。开启后，更高权重账号恢复可用时，后续允许重新选号的请求优先回切；
+同权重且可用的会话亲和继续保留。没有可用亲和时，在最高可用权重层内按配置评分。
+原生续写账号绑定仍是硬约束，不因回切而主动换号或触发历史重放。配置随运行设置原子保存和发布，
+新请求使用新值，已开始请求及其重试沿用原快照，无需重启。
 
 ### 模型定价
 

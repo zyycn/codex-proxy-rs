@@ -21,6 +21,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
+        smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
@@ -48,6 +49,39 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
 fn runtime_settings_keep_account_rotation_global() {
     let settings = settings_with_margin(3_600);
     assert!(settings.validate().is_ok());
+}
+
+#[tokio::test]
+async fn smart_settings_upgrade_preserves_selection_and_publishes_custom_config() {
+    use gateway_core::account::SmartSchedulingConfig;
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create_through("smart_config", 19).await else {
+        return;
+    };
+    // 升级前不能用包含新列的 Repository，直接写入旧版本已有字段。
+    sqlx::query("update runtime_settings set rotation_strategy = 'sticky', refresh_margin_seconds = 3600 where id = 1")
+        .execute(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(before.rotation_strategy, "sticky");
+    assert_eq!(before.refresh_margin_seconds, 3600);
+    assert_eq!(before.smart_scheduling, SmartSchedulingConfig::default());
+    let mut update = settings_with_margin(3600);
+    update.smart_scheduling =
+        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3], true).unwrap();
+    let expected = update.smart_scheduling;
+    repository.update_runtime_settings(update).await.unwrap();
+    let reloaded = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(reloaded.smart_scheduling, expected);
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.settings.smart_scheduling, expected);
+    assert!(snapshot.config_revision > before.config_revision);
+    assert_eq!(before.smart_scheduling, SmartSchedulingConfig::default());
+    database.close().await;
 }
 
 #[test]

@@ -2,8 +2,9 @@ export const rotationOptions = [
   {
     label: '智能调度（推荐）',
     value: 'smart',
-    description: '按负载、窗口用量、请求数和健康反馈评分，优先选择更空闲的账号',
+    description: '综合负载、剩余额度、健康和延迟评分，支持自定义偏好与权重回切',
   },
+
   {
     label: '额度重置优先',
     value: 'quota_reset_priority',

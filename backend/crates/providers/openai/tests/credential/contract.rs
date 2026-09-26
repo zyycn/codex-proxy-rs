@@ -124,6 +124,80 @@ fn round_robin_attempt() -> AttemptContext {
     )
 }
 
+#[tokio::test]
+async fn smart_reselection_respects_native_and_required_account_boundaries() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original", "test-original");
+    create_account(&store, "acct_primary", "test-primary");
+    store.set_scheduling("acct_original", None, AccountWeight::new(10).unwrap());
+    store.set_scheduling("acct_primary", None, AccountWeight::new(100).unwrap());
+    let original_id = ProviderAccountId::new("acct_original").unwrap();
+    let provider = ProviderKind::new("openai").unwrap();
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let key = ProviderSessionAffinityKey::try_new("smart-config-test").unwrap();
+    affinity
+        .bind(&provider, &key, &original_id, Duration::from_secs(60))
+        .await
+        .unwrap();
+    let selector =
+        selector_with_affinity(&store, Arc::new(TestLeaseCoordinator::default()), affinity);
+    let request_url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+    for enabled in [false, true] {
+        for binding in ["soft", "required", "native"] {
+            let continuation = (binding == "native").then(|| {
+                ContinuationBinding::Pinned(NativeContinuationPin::new(
+                    PreviousResponseId::new("client_response"),
+                    PreviousResponseId::new("upstream_response"),
+                    ClientApiKeyId::new("key_codex_contract").unwrap(),
+                    provider.clone(),
+                    original_id.clone(),
+                ))
+            });
+            let attempt = AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_smart_scope").unwrap(),
+                    ClientApiKeyId::new("key_codex_contract").unwrap(),
+                ),
+                NonZeroU32::new(1).unwrap(),
+                SystemTime::now() + Duration::from_secs(30),
+                account_policy().with_smart_scheduling(
+                    gateway_core::account::SmartSchedulingConfig::new(
+                        [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
+                        enabled,
+                    )
+                    .unwrap(),
+                ),
+                AccountAttemptContext::new(
+                    BTreeSet::new(),
+                    (binding == "required").then(|| original_id.clone()),
+                    None,
+                )
+                .with_account_scope(contract_account_scope()),
+                continuation,
+                CancellationToken::new(),
+            );
+            let selected = selector
+                .select(&SelectCodexCredential {
+                    upstream_model: "gpt-5.4",
+                    request_url: &request_url,
+                    attempt: &attempt,
+                    session_affinity_key: Some(&key),
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                selected.account_id().as_str(),
+                if enabled && binding == "soft" {
+                    "acct_primary"
+                } else {
+                    "acct_original"
+                },
+                "{binding}, switchback={enabled}"
+            );
+        }
+    }
+}
+
 fn selector(
     store: &Arc<MemoryAccountStore>,
     leases: Arc<TestLeaseCoordinator>,
@@ -1776,12 +1850,168 @@ fn queued_attempt(timeout: Duration) -> AttemptContext {
         .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
             max_waiting: 1,
             timeout,
-        }),
+        })
+        .with_smart_scheduling(
+            gateway_core::account::SmartSchedulingConfig::new(
+                [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
+                false,
+            )
+            .unwrap(),
+        ),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,
         CancellationToken::new(),
     )
+}
+
+#[test]
+fn smart_queue_weight_changes_the_selected_wait_queue() {
+    use futures::FutureExt;
+    for queue_weight in [0.0, 0.2] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "test-healthy");
+        create_account(&store, "acct_other", "test-unhealthy");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        *leases.busy.lock().unwrap() = true;
+        let feedback = Arc::new(AccountFeedbackStats::default());
+        for _ in 0..4 {
+            feedback.report(
+                &ProviderKind::new("openai").unwrap(),
+                &ProviderAccountId::new("acct_other").unwrap(),
+                AccountAttemptFeedback::Failed {
+                    first_output_ms: None,
+                },
+            );
+        }
+        let selector = selector_with_runtime(
+            &store,
+            leases,
+            Arc::new(MemorySessionAffinity::default()),
+            feedback,
+            Arc::new(MemoryCooldownPort::new()),
+        );
+        let make_attempt = |required| {
+            AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_queue_weight").unwrap(),
+                    ClientApiKeyId::new("key_codex_contract").unwrap(),
+                ),
+                NonZeroU32::new(1).unwrap(),
+                SystemTime::now() + Duration::from_secs(5),
+                account_policy()
+                    .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                        max_waiting: 2,
+                        timeout: Duration::from_secs(2),
+                    })
+                    .with_smart_scheduling(
+                        gateway_core::account::SmartSchedulingConfig::new(
+                            [0.0, 0.0, 1.0, 0.0, 0.0, queue_weight],
+                            false,
+                        )
+                        .unwrap(),
+                    ),
+                AccountAttemptContext::new(BTreeSet::new(), required, None)
+                    .with_account_scope(contract_account_scope()),
+                None,
+                CancellationToken::new(),
+            )
+        };
+        let head_attempt = make_attempt(Some(ProviderAccountId::new("acct_primary").unwrap()));
+        let next_attempt = make_attempt(None);
+        let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+        let head_request = SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &url,
+            attempt: &head_attempt,
+            session_affinity_key: None,
+        };
+        let next_request = SelectCodexCredential {
+            attempt: &next_attempt,
+            ..head_request
+        };
+        let mut head = Box::pin(selector.select(&head_request));
+        assert!(head.as_mut().now_or_never().is_none());
+        let mut next = Box::pin(selector.select(&next_request));
+        assert!(next.as_mut().now_or_never().is_none());
+        let mut probe = Box::pin(selector.select(&head_request));
+        match probe.as_mut().now_or_never() {
+            Some(Err(CredentialSelectionError::QueueRejected(
+                gateway_core::concurrency::QueueRejection::Full,
+            ))) => assert!(queue_weight > 0.0),
+            None => assert_eq!(queue_weight, 0.0),
+            other => panic!("unexpected queue probe: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn smart_queue_keeps_native_and_required_account_pins_when_another_account_is_free() {
+    use futures::FutureExt;
+    for native in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "test-pinned");
+        create_account(&store, "acct_primary", "test-free");
+        let original = ProviderAccountId::new("acct_original").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases
+            .busy_accounts
+            .lock()
+            .unwrap()
+            .insert(original.clone());
+        let selector = selector(&store, leases.clone());
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_queue_pin").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(5),
+            account_policy()
+                .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                    max_waiting: 1,
+                    timeout: Duration::from_secs(2),
+                })
+                .with_smart_scheduling(
+                    gateway_core::account::SmartSchedulingConfig::new(
+                        [1.0, 0.8, 1.0, 0.5, 10.0, 10.0],
+                        true,
+                    )
+                    .unwrap(),
+                ),
+            AccountAttemptContext::new(BTreeSet::new(), (!native).then(|| original.clone()), None)
+                .with_account_scope(contract_account_scope()),
+            native.then(|| {
+                ContinuationBinding::Pinned(NativeContinuationPin::new(
+                    PreviousResponseId::new("client_response"),
+                    PreviousResponseId::new("upstream_response"),
+                    ClientApiKeyId::new("key_codex_contract").unwrap(),
+                    ProviderKind::new("openai").unwrap(),
+                    original.clone(),
+                ))
+            }),
+            CancellationToken::new(),
+        );
+        let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+        let request = SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &url,
+            attempt: &attempt,
+            session_affinity_key: None,
+        };
+        let mut pending = Box::pin(selector.select(&request));
+        assert!(pending.as_mut().now_or_never().is_none());
+        leases.busy_accounts.lock().unwrap().clear();
+        assert_eq!(block_on(pending).unwrap().account_id(), &original);
+        assert!(
+            leases
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request.account_id() == &original)
+        );
+    }
 }
 
 #[test]

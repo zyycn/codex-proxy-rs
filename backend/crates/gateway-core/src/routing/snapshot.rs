@@ -42,6 +42,7 @@ pub struct SnapshotSettingsFacts {
     concurrency_wait_timeout_seconds: u32,
     responses_max_decompressed_body_bytes: u64,
     request_interval_ms: u64,
+    smart_scheduling: crate::account::SmartSchedulingConfig,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
     min_codex_desktop_version: Option<String>,
@@ -49,6 +50,15 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_smart_scheduling(
+        mut self,
+        config: crate::account::SmartSchedulingConfig,
+    ) -> Self {
+        self.smart_scheduling = config;
+        self
+    }
+
     #[must_use]
     pub fn with_pricing(mut self, pricing: crate::metering::PricingOverrides) -> Self {
         self.pricing = Arc::new(pricing);
@@ -114,6 +124,7 @@ impl SnapshotSettingsFacts {
             concurrency_wait_timeout_seconds: 30,
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             request_interval_ms,
+            smart_scheduling: crate::account::SmartSchedulingConfig::default(),
             rotation_strategy: rotation_strategy.into(),
             model_mappings,
             min_codex_desktop_version,
@@ -592,6 +603,7 @@ async fn compile_runtime_snapshot(
         AccountConcurrency::new(facts.settings.max_concurrent_per_account),
         Duration::from_millis(facts.settings.request_interval_ms),
     )
+    .with_smart_scheduling(facts.settings.smart_scheduling)
     .with_queue(ConcurrencyQueuePolicy {
         max_waiting: facts.settings.max_waiting_per_account,
         timeout: queue_timeout,

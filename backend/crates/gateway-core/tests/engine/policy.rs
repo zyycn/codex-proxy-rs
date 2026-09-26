@@ -170,6 +170,52 @@ fn delegated_scheduler_keeps_builtin_affinity() {
 }
 
 #[test]
+fn smart_switchback_does_not_override_explicit_plugin_choices_or_their_telemetry() {
+    block_on(async {
+        let mut candidates = [candidate("acct_a"), candidate("acct_b")];
+        candidates[0].account = candidates[0]
+            .account
+            .clone()
+            .with_scheduling(None, AccountWeight::new(10).unwrap());
+        let mut selection_context = context();
+        selection_context.policy = AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            NonZeroU32::new(2).unwrap(),
+            Duration::ZERO,
+        )
+        .with_smart_scheduling(
+            gateway_core::account::SmartSchedulingConfig::new([1.0, 0.8, 1.0, 0.5, 0.0, 0.0], true)
+                .unwrap(),
+        );
+        for chosen in [Some("acct_a"), Some("acct_b"), None] {
+            let selected = policy(chosen)
+                .select_account(
+                    NonZeroU32::new(1).unwrap(),
+                    &ProviderKind::new("openai").unwrap(),
+                    None,
+                    &candidates,
+                    &selection_context,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                selected.candidate().account.id().as_str(),
+                chosen.unwrap_or("acct_b")
+            );
+            let expected = match chosen {
+                Some("acct_a") => PreferredAccountSelection::Hit,
+                Some(_) => PreferredAccountSelection::OverriddenByPolicy,
+                None => PreferredAccountSelection::Blocked(
+                    gateway_core::account::AccountSchedulingBlocker::LowerWeight,
+                ),
+            };
+            assert_eq!(selected.preferred(), expected);
+        }
+    });
+}
+
+#[test]
 fn scheduler_cannot_select_outside_the_hard_bound_candidate_pool() {
     block_on(async {
         let candidates = [candidate("acct_a"), candidate("acct_b")];

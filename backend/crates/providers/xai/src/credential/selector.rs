@@ -354,15 +354,18 @@ impl GrokAccountSessionSelector {
             }
 
             if !diagnostic && queue_policy.max_waiting > 0 && !wait_candidates.is_empty() {
-                waiting.wait(&wait_candidates).await.map_err(|error| {
-                    tracing::info!(
-                        queue_layer = "account",
-                        queue_wait_ms = waiting.elapsed().as_millis() as u64,
-                        reason = %error,
-                        "xAI 账号排队请求被拒绝"
-                    );
-                    GrokSessionSelectorError::QueueRejected(error)
-                })?;
+                AccountSelector
+                    .wait_for_capacity(&mut waiting, &wait_candidates, &candidates, &context)
+                    .await
+                    .map_err(|error| {
+                        tracing::info!(
+                            queue_layer = "account",
+                            queue_wait_ms = waiting.elapsed().as_millis() as u64,
+                            reason = %error,
+                            "xAI 账号排队请求被拒绝"
+                        );
+                        GrokSessionSelectorError::QueueRejected(error)
+                    })?;
                 continue;
             }
             if capacity_denied {

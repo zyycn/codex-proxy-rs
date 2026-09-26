@@ -363,6 +363,49 @@ fn compiler_accepts_unlimited_default_account_concurrency() {
 }
 
 #[test]
+fn compiled_plans_keep_their_smart_config_after_a_new_snapshot_is_built() {
+    use gateway_core::account::SmartSchedulingConfig;
+    let configs = [
+        SmartSchedulingConfig::default(),
+        SmartSchedulingConfig::new([0.0, 2.0, 1.0, 0.5, 1.2, 2.3], true).unwrap(),
+    ];
+    let mut plans = Vec::new();
+    for (index, config) in configs.into_iter().enumerate() {
+        let facts = SnapshotFacts::new(
+            revision(index as u64 + 1),
+            revision(index as u64 + 1),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_smart_scheduling(config),
+            vec![],
+            vec![],
+            vec![SnapshotProviderAccountFacts::new(
+                gateway_core::account::ProviderAccountId::new("acct_config").unwrap(),
+                "alpha",
+            )],
+            vec![],
+        );
+        let compiler = RuntimeSnapshotCompiler::new(
+            Arc::new(TestSnapshotStore::new(Ok(facts))),
+            Arc::new(TestCatalog::Unavailable),
+        );
+        let snapshot = block_on(compiler.compile()).unwrap();
+        plans.push(
+            snapshot
+                .plan(
+                    &PublicModelId::new("any-model").unwrap(),
+                    &super::operation(),
+                    snapshot.all_account_scope(),
+                    &Default::default(),
+                )
+                .unwrap(),
+        );
+    }
+    for (plan, config) in plans.iter().zip(configs) {
+        assert_eq!(plan.account_selection_policy().smart_scheduling(), config);
+    }
+}
+
+#[test]
 fn withdrawn_provider_keeps_accounts_without_becoming_a_route_or_expanding_group_scope() {
     use gateway_core::{
         account::ProviderAccountId,

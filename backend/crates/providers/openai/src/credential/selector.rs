@@ -639,16 +639,24 @@ impl CodexCredentialSelector {
                 );
                 let Some(selection) = selection else {
                     if !diagnostic && queue_policy.max_waiting > 0 && !wait_candidates.is_empty() {
-                        waiting.wait(&wait_candidates).await.map_err(|error| {
-                            tracing::info!(
-                                request_id = request.attempt.request_id().as_str(),
-                                queue_layer = "account",
-                                queue_wait_ms = waiting.elapsed().as_millis() as u64,
-                                reason = %error,
-                                "OpenAI 账号排队请求被拒绝"
-                            );
-                            CredentialSelectionError::QueueRejected(error)
-                        })?;
+                        AccountSelector
+                            .wait_for_capacity(
+                                &mut waiting,
+                                &wait_candidates,
+                                &candidates,
+                                &wait_context,
+                            )
+                            .await
+                            .map_err(|error| {
+                                tracing::info!(
+                                    request_id = request.attempt.request_id().as_str(),
+                                    queue_layer = "account",
+                                    queue_wait_ms = waiting.elapsed().as_millis() as u64,
+                                    reason = %error,
+                                    "OpenAI 账号排队请求被拒绝"
+                                );
+                                CredentialSelectionError::QueueRejected(error)
+                            })?;
                         continue 'capacity;
                     }
                     // 只判断本次账号范围；空池、认证失效和租约失败不能伪装成额度耗尽。

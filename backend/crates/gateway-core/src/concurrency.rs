@@ -81,6 +81,18 @@ impl<K: Clone + Eq + Hash> ConcurrencyWaitQueue<K> {
         max_waiting: u32,
         deadline: Instant,
     ) -> Result<WaitTicket<K>, QueueRejection> {
+        self.enqueue_with_priority(keys, max_waiting, deadline, |_, waiting| -(waiting as f64))
+    }
+
+    /// 在同一锁内读取队长并入队，分数越大越优先，同分沿用候选顺序。
+    /// 回调只做内存评分，不得阻塞或再次访问本队列。
+    pub fn enqueue_with_priority(
+        &self,
+        keys: &[K],
+        max_waiting: u32,
+        deadline: Instant,
+        mut priority: impl FnMut(&K, usize) -> f64,
+    ) -> Result<WaitTicket<K>, QueueRejection> {
         if Instant::now() >= deadline {
             return Err(QueueRejection::Timeout);
         }
@@ -95,9 +107,9 @@ impl<K: Clone + Eq + Hash> ConcurrencyWaitQueue<K> {
             .iter()
             .filter_map(|key| {
                 let len = state.queues.get(key).map_or(0, VecDeque::len);
-                (len < max_waiting as usize).then_some((key, len))
+                (len < max_waiting as usize).then(|| (key, priority(key, len)))
             })
-            .min_by_key(|(_, len)| *len)
+            .min_by(|(_, left), (_, right)| right.total_cmp(left))
             .map(|(key, _)| key.clone())
             .ok_or(QueueRejection::Full)?;
         let waker = Arc::new(AtomicWaker::new());
@@ -237,6 +249,16 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
     }
 
     pub async fn wait(&mut self, keys: &[K]) -> Result<(), QueueRejection> {
+        self.wait_with_priority(keys, |_, waiting| -(waiting as f64))
+            .await
+    }
+
+    /// 只在首次入队或原账号不再合格时重新选队列，已取得的位置不因评分变化而移动。
+    pub async fn wait_with_priority(
+        &mut self,
+        keys: &[K],
+        priority: impl FnMut(&K, usize) -> f64,
+    ) -> Result<(), QueueRejection> {
         self.started_at.get_or_insert_with(Instant::now);
         let deadline = self
             .budget
@@ -249,10 +271,12 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
             self.ticket = None;
         }
         if self.ticket.is_none() {
-            self.ticket = Some(
-                self.queue
-                    .enqueue(keys, self.policy.max_waiting, deadline)?,
-            );
+            self.ticket = Some(self.queue.enqueue_with_priority(
+                keys,
+                self.policy.max_waiting,
+                deadline,
+                priority,
+            )?);
         }
         if let Some(ticket) = &self.ticket {
             ticket.retry().await?;

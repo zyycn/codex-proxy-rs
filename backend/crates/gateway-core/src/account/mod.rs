@@ -13,10 +13,12 @@ mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;
 mod selection;
+mod smart_scheduling;
 mod store;
 
 pub use error::CredentialError;
 pub use model::*;
+pub(crate) use selection::smart_score;
 pub use selection::*;
-pub(crate) use selection::{SMART_SCORE_TOLERANCE, smart_score};
+pub use smart_scheduling::{SmartSchedulingConfig, SmartSchedulingConfigError};
 pub use store::ProviderAccountStore;

@@ -159,3 +159,75 @@ fn creating_a_waiter_does_not_start_the_budget_before_queueing() {
         waiting.wait(&["account"]).await.unwrap();
     });
 }
+
+#[test]
+fn custom_priority_reads_live_counts_and_preserves_limits_and_fifo() {
+    block_on(async {
+        let queue = ConcurrencyWaitQueue::default();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let head = queue.enqueue(&["a"], 2, deadline).unwrap();
+        let mut observed = Vec::new();
+        let tail = queue
+            .enqueue_with_priority(&["a", "b"], 2, deadline, |key, count| {
+                observed.push((*key, count));
+                if *key == "a" { 10.0 } else { 0.0 }
+            })
+            .unwrap();
+        assert_eq!(observed, [("a", 1), ("b", 0)]);
+        assert_eq!(*tail.key(), "a");
+        assert!(tail.turn().now_or_never().is_none());
+        // 满队列不参与评分，不能因偏好而突破上限。
+        let fallback = queue
+            .enqueue_with_priority(&["a", "b"], 2, deadline, |key, count| {
+                assert_eq!((*key, count), ("b", 0));
+                0.0
+            })
+            .unwrap();
+        assert_eq!(*fallback.key(), "b");
+        drop(head);
+        tail.turn().await.unwrap();
+        drop((tail, fallback));
+        let tie = queue
+            .enqueue_with_priority(&["b", "a"], 2, deadline, |_, _| 1.0)
+            .unwrap();
+        assert_eq!(*tie.key(), "b");
+    });
+}
+
+#[test]
+fn changed_scores_keep_existing_position_until_account_becomes_ineligible() {
+    block_on(async {
+        let queue = ConcurrencyWaitQueue::default();
+        let budget = ConcurrencyWaitBudget::default();
+        let policy = ConcurrencyQueuePolicy {
+            max_waiting: 1,
+            timeout: Duration::from_secs(2),
+        };
+        let mut waiting = CapacityWait::new(
+            &queue,
+            policy,
+            SystemTime::now() + Duration::from_secs(2),
+            &budget,
+        );
+        waiting
+            .wait_with_priority(&["a", "b"], |key, _| if *key == "a" { 1.0 } else { 0.0 })
+            .await
+            .unwrap();
+        waiting
+            .wait_with_priority(&["a", "b"], |_, _| {
+                panic!("existing ticket must not be rescored")
+            })
+            .await
+            .unwrap();
+        assert!(queue.has_waiters(&"a"));
+        assert!(!queue.has_waiters(&"b"));
+        waiting
+            .wait_with_priority(&["b"], |_, _| 1.0)
+            .await
+            .unwrap();
+        assert!(!queue.has_waiters(&"a"));
+        assert!(queue.has_waiters(&"b"));
+        drop(waiting);
+        assert!(!queue.has_waiters(&"b"));
+    });
+}
