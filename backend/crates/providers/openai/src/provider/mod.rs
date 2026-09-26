@@ -392,10 +392,17 @@ impl Provider for CodexProvider {
         let snapshot = self.catalog.synchronize().await.map_err(|_| {
             provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
         })?;
+        let mut accounts = snapshot.model_catalog_accounts();
         Ok(snapshot
             .models()
             .iter()
-            .map(compile_model_capabilities)
+            .map(|model| {
+                compile_model_capabilities(model).with_catalog_accounts(
+                    accounts
+                        .remove(model.request_model().as_str())
+                        .unwrap_or_default(),
+                )
+            })
             .collect())
     }
 

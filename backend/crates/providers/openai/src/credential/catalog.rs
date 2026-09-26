@@ -112,7 +112,13 @@ impl CodexPlanCatalog {
 pub struct CodexCredentialCatalogSnapshot {
     observed_at: SystemTime,
     models: Vec<CodexCatalogModel>,
-    scope_models: BTreeMap<CodexCatalogScope, Vec<String>>,
+    scope_catalogs: BTreeMap<CodexCatalogScope, CatalogScopeSnapshot>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct CatalogScopeSnapshot {
+    models: Vec<String>,
+    accounts: BTreeSet<ProviderAccountId>,
 }
 
 impl CodexCredentialCatalogSnapshot {
@@ -131,7 +137,25 @@ impl CodexCredentialCatalogSnapshot {
         account: &ProviderAccount,
     ) -> Result<Option<&[String]>, CodexCredentialCatalogError> {
         let scope = CodexCatalogScope::for_account(account)?;
-        Ok(self.scope_models.get(&scope).map(Vec::as_slice))
+        Ok(self
+            .scope_catalogs
+            .get(&scope)
+            .map(|catalog| catalog.models.as_slice()))
+    }
+
+    /// 将 Provider 私有目录作用域投影为模型来源账号，供 Core 结合冻结政策过滤。
+    #[must_use]
+    pub fn model_catalog_accounts(&self) -> BTreeMap<&str, BTreeSet<ProviderAccountId>> {
+        let mut accounts = BTreeMap::<&str, BTreeSet<ProviderAccountId>>::new();
+        for catalog in self.scope_catalogs.values() {
+            for model in &catalog.models {
+                accounts
+                    .entry(model.as_str())
+                    .or_default()
+                    .extend(catalog.accounts.iter().cloned());
+            }
+        }
+        accounts
     }
 }
 
@@ -141,7 +165,7 @@ impl fmt::Debug for CodexCredentialCatalogSnapshot {
             .debug_struct("CodexCredentialCatalogSnapshot")
             .field("observed_at", &self.observed_at)
             .field("model_count", &self.models.len())
-            .field("scope_count", &self.scope_models.len())
+            .field("scope_count", &self.scope_catalogs.len())
             .finish()
     }
 }
@@ -585,10 +609,14 @@ impl CodexCredentialCatalogService {
         );
         let mut union = BTreeMap::<String, CodexCatalogModel>::new();
         let mut union_order = Vec::new();
-        let mut scope_models = BTreeMap::new();
+        let mut scope_catalogs = BTreeMap::new();
         let mut etags = Vec::new();
         let mut last_error = None;
         for (scope, candidates) in groups {
+            let accounts = candidates
+                .iter()
+                .map(|account| account.id().clone())
+                .collect();
             let fetched = match self.fetch_scope_models(&client, candidates).await {
                 Ok(fetched) => fetched,
                 Err(error) => {
@@ -620,7 +648,13 @@ impl CodexCredentialCatalogService {
                     }
                 }
             }
-            scope_models.insert(scope, entitlement);
+            scope_catalogs.insert(
+                scope,
+                CatalogScopeSnapshot {
+                    models: entitlement,
+                    accounts,
+                },
+            );
             etags.extend(fetched.etag);
         }
         if union.is_empty()
@@ -635,7 +669,7 @@ impl CodexCredentialCatalogService {
                 .into_iter()
                 .filter_map(|id| union.remove(&id))
                 .collect(),
-            scope_models,
+            scope_catalogs,
         };
         Ok(FetchedCatalog { snapshot, etags })
     }
@@ -1016,7 +1050,7 @@ fn same_catalog(
     left: &CodexCredentialCatalogSnapshot,
     right: &CodexCredentialCatalogSnapshot,
 ) -> bool {
-    left.models == right.models && left.scope_models == right.scope_models
+    left.models == right.models && left.scope_catalogs == right.scope_catalogs
 }
 
 fn validate_response_etag(etag: &str) -> Result<(), CodexCredentialCatalogError> {

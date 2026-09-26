@@ -2118,9 +2118,10 @@ impl ExecutionService for DefaultExecutionService {
                     .await?
                 else {
                     for profile in client.snapshot.public_model_profiles_for_provider(kind) {
-                        if !scope.allows_provider_model(
+                        if !client.snapshot.catalog_model_allowed_for_scope(
                             kind,
-                            &client.snapshot.mapped_model(profile.model().as_str()),
+                            profile.model(),
+                            scope,
                         ) {
                             continue;
                         }

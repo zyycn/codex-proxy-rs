@@ -168,19 +168,30 @@ fn committed_account_change_should_publish_without_waiting_for_provider_catalog(
     block_on(async {
         let store = Arc::new(TestSnapshotStore::new(Ok(scoped_facts(9, true))));
         let catalog = Arc::new(TestCatalog::default());
-        catalog
-            .models
-            .lock()
-            .expect("models lock")
-            .push(ProviderModelCapabilities::new(
+        catalog.models.lock().expect("models lock").push(
+            ProviderModelCapabilities::new(
                 UpstreamModelId::new("listed-model").expect("model"),
                 ModelCapabilities::new(Default::default(), None),
-            ));
+            )
+            .with_catalog_accounts(std::collections::BTreeSet::from([
+                ProviderAccountId::new("acct_audit_removed").expect("source account"),
+            ])),
+        );
         let compiler = Arc::new(catalog_compiler(store.clone(), catalog.clone()));
         let initial = compiler.compile().await.expect("initial snapshot");
         let provider = ProviderKind::new("audit").expect("provider");
         let initial_models = initial.public_models_for_provider(&provider);
-        let handle = RuntimeSnapshotHandle::new(initial);
+        let initial_scope = initial
+            .client_policies()
+            .next()
+            .unwrap()
+            .account_scope()
+            .clone();
+        assert_eq!(
+            initial.public_models_for_scope(&initial_scope),
+            initial_models
+        );
+        let handle = RuntimeSnapshotHandle::new(initial.clone());
         let publisher = RuntimeSnapshotPublisher::new(
             compiler,
             handle.clone(),
@@ -200,6 +211,16 @@ fn committed_account_change_should_publish_without_waiting_for_provider_catalog(
             initial_models
         );
         assert_eq!(catalog.queries.load(Ordering::SeqCst), 1);
+        let committed_scope = committed.client_policies().next().unwrap().account_scope();
+        assert!(
+            committed
+                .public_models_for_scope(committed_scope)
+                .is_empty()
+        );
+        assert_eq!(
+            initial.public_models_for_scope(&initial_scope),
+            initial_models
+        );
         assert_ne!(
             committed.provider_catalog_generations(),
             &catalog.catalog_generations(),

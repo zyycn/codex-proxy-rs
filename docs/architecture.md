@@ -211,6 +211,8 @@ HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [
 Provider 模型能力、目录代次与 `ProviderCatalogPort` 由 `routing::catalog` 定义。快照编译和对账只消费
 该只读合同，不反向依赖执行注册表；`ProviderRegistry` 实现目录端口，维护唯一的 Provider
 注册集合。已知空目录与查询失败的未知目录保持不同语义，目录替身无需实现请求执行。
+Provider 可为模型提供来源账号集合；Core 在公开目录查询时结合冻结账号范围与政策过滤来源，
+配置发布复用已缓存的来源事实。来源集合只约束目录展示，不改变发现型目录的推理准入语义。
 
 客户端原生模型目录同样由 Provider 拥有，通过 `ExecutionService` 和现有 Registry 的只读调用传递。
 `routing::catalog` 的原生条目只包含模型 ID 与不透明协议正文，Core 负责冻结账号范围和整对象模型映射，

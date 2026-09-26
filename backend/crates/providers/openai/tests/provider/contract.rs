@@ -11442,3 +11442,163 @@ async fn capture_grok_request(
     sent.remove("client_metadata");
     sent
 }
+
+#[tokio::test]
+async fn public_catalog_filters_each_api_account_before_union_without_gating_inference() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    use gateway_core::engine::provider::{Provider, ProviderRegistry};
+    use gateway_core::routing::snapshot::{
+        RuntimeSnapshotCompiler, SnapshotFacts, SnapshotProviderAccountFacts,
+        SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
+    };
+
+    struct CatalogStore(SnapshotFacts);
+    impl SnapshotStorePort for CatalogStore {
+        fn load_snapshot_facts(&self) -> BoxFuture<'_, Result<SnapshotFacts, SnapshotStoreError>> {
+            Box::pin(async { Ok(self.0.clone()) })
+        }
+        fn current_config_revision(
+            &self,
+        ) -> BoxFuture<'_, Result<ConfigRevision, SnapshotStoreError>> {
+            Box::pin(async { Ok(self.0.config_revision()) })
+        }
+    }
+
+    let first = MockServer::start().await;
+    let second = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    for (id, server, models) in [
+        (
+            "acct_aggregator",
+            &first,
+            vec!["gpt-5.4", "deepseek-v4.1-flash", "kimi-k2.5"],
+        ),
+        ("acct_gpt", &second, vec!["gpt-5.4"]),
+    ] {
+        store
+            .seed_api_key(
+                id,
+                server.uri(),
+                provider_openai::credential::ResponsesTransport::Http,
+            )
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": models.into_iter().map(|id| json!({"id": id})).collect::<Vec<_>>()
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+    let provider = provider_with_base_url(&store, first.uri());
+    let registry = Arc::new(ProviderRegistry::new([provider as Arc<dyn Provider>]).unwrap());
+    let policy = |mode, models: &[&str]| {
+        AccountModelAccess::new(mode, models.iter().map(|id| (*id).to_owned()).collect()).unwrap()
+    };
+    for (a_policy, b_policy) in [
+        (
+            policy(
+                AccountModelAccessMode::Allowlist,
+                &["gpt-5.4", "deepseek-v4.1-flash"],
+            ),
+            AccountModelAccess::all(),
+        ),
+        (
+            policy(AccountModelAccessMode::Denylist, &["kimi-k2.5"]),
+            AccountModelAccess::all(),
+        ),
+        (
+            policy(
+                AccountModelAccessMode::Allowlist,
+                &["gpt-5.4", "deepseek-v4.1-flash"],
+            ),
+            policy(AccountModelAccessMode::Allowlist, &["gpt-5.4"]),
+        ),
+    ] {
+        let revision = ConfigRevision::new(1).unwrap();
+        let facts = SnapshotFacts::new(
+            revision,
+            revision,
+            SnapshotSettingsFacts::new(
+                3,
+                0,
+                "smart",
+                BTreeMap::from([
+                    ("gpt-public".into(), "gpt-5.4".into()),
+                    ("kimi-public".into(), "kimi-k2.5".into()),
+                ]),
+                None,
+                None,
+            ),
+            vec![],
+            vec![],
+            vec![
+                SnapshotProviderAccountFacts::new(
+                    ProviderAccountId::new("acct_aggregator").unwrap(),
+                    "openai",
+                )
+                .with_model_access(a_policy),
+                SnapshotProviderAccountFacts::new(
+                    ProviderAccountId::new("acct_gpt").unwrap(),
+                    "openai",
+                )
+                .with_model_access(b_policy),
+            ],
+            vec![],
+        );
+        let snapshot =
+            RuntimeSnapshotCompiler::new(Arc::new(CatalogStore(facts)), registry.clone())
+                .compile()
+                .await
+                .unwrap();
+        let scope = snapshot.all_account_scope();
+        let listed = snapshot.public_models_for_scope(&scope);
+        assert_eq!(
+            listed.iter().map(PublicModelId::as_str).collect::<Vec<_>>(),
+            ["deepseek-v4.1-flash", "gpt-5.4", "gpt-public"]
+        );
+        assert_eq!(
+            snapshot
+                .public_model_profiles_for_scope(&scope)
+                .iter()
+                .map(|profile| profile.model())
+                .collect::<Vec<_>>(),
+            listed.iter().collect::<Vec<_>>()
+        );
+        for id in ["kimi-k2.5", "kimi-public"] {
+            let model = PublicModelId::new(id).unwrap();
+            assert!(!snapshot.contains_public_model_for_scope(&model, &scope));
+        }
+        // 目录来源只决定展示，发现型目录仍允许把请求交给政策合规的上游判断。
+        for id in ["kimi-k2.5", "kimi-public", "not-yet-discovered"] {
+            let model = PublicModelId::new(id).unwrap();
+            assert_eq!(
+                snapshot
+                    .plan(
+                        &model,
+                        &generate_operation(),
+                        scope.clone(),
+                        &RoutingContext::default()
+                    )
+                    .is_ok(),
+                scope.allows_provider_model(
+                    &ProviderKind::new("openai").unwrap(),
+                    &snapshot.mapped_model(id)
+                )
+            );
+        }
+        let only_gpt = scope.restricted_to(
+            &BTreeSet::new(),
+            &BTreeSet::from([ProviderAccountId::new("acct_gpt").unwrap()]),
+        );
+        assert_eq!(
+            snapshot
+                .public_models_for_scope(&only_gpt)
+                .iter()
+                .map(PublicModelId::as_str)
+                .collect::<Vec<_>>(),
+            ["gpt-5.4", "gpt-public"]
+        );
+    }
+}

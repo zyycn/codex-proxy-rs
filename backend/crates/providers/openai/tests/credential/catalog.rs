@@ -1463,3 +1463,34 @@ async fn disabled_account_can_export_native_catalog_without_a_cached_snapshot() 
     assert_eq!(models[0].document().protocol(), "codex");
     server.verify().await;
 }
+
+#[tokio::test]
+async fn catalog_account_membership_changes_advance_generation_without_model_changes() {
+    use std::collections::BTreeSet;
+    let store = Arc::new(MemoryAccountStore::default());
+    let first = seed_account(&store, "acct_source_a").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "models": [{"slug": "gpt-5.4", "display_name": "GPT-5.4"}]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let initial = service.synchronize().await.unwrap();
+    let generation = service.catalog_generation();
+    let second = seed_account(&store, "acct_source_b").await;
+    let refreshed = service.refresh_catalogs().await.unwrap();
+    assert_eq!(initial.models(), refreshed.models());
+    assert!(service.catalog_generation() > generation);
+    assert_eq!(
+        initial.model_catalog_accounts()["gpt-5.4"],
+        BTreeSet::from([first.id().clone()])
+    );
+    assert_eq!(
+        refreshed.model_catalog_accounts()["gpt-5.4"],
+        BTreeSet::from([first.id().clone(), second.id().clone()])
+    );
+}
