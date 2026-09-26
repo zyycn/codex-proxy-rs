@@ -52,6 +52,7 @@ enum AccountSelection {
 }
 
 pub(super) struct CoordinationExtensions {
+    response_control: Option<super::response_control::ResponseControl>,
     continuation: Option<ContinuationBinding>,
     observation: Option<RequestObservationDispatch>,
     request_policy: Option<super::policy::RequestPolicyContext>,
@@ -65,12 +66,21 @@ pub(super) struct CoordinationExtensions {
 }
 
 impl CoordinationExtensions {
+    pub(super) fn with_response_control(
+        mut self,
+        control: Option<super::response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
+        self
+    }
+
     pub(super) fn new(
         continuation: Option<ContinuationBinding>,
         observation: Option<RequestObservationDispatch>,
     ) -> Self {
         Self {
             continuation,
+            response_control: None,
             observation,
             request_policy: None,
             execution_effects: None,
@@ -230,6 +240,7 @@ where
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
         let CoordinationExtensions {
+            response_control,
             continuation,
             observation: request_observation,
             request_policy,
@@ -295,6 +306,7 @@ where
             .fuse(),
             pending_request: Some(request),
             request_persisted: false,
+            response_control,
             operation,
             plan,
             request_policy,
@@ -409,6 +421,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     deadline_timer: Fuse<Delay>,
     pending_request: Option<NewModelRequest>,
     request_persisted: bool,
+    response_control: Option<super::response_control::ResponseControl>,
     operation: Operation,
     plan: RoutingPlan,
     request_policy: Option<super::policy::RequestPolicyContext>,
@@ -996,6 +1009,7 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_response_control(self.response_control.clone())
                 .with_request_profile(self.request_profiles.get(candidate.provider()).cloned())
                 .with_disable_fast(self.plan.disable_fast())
                 .with_pricing(self.plan.pricing())

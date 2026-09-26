@@ -138,17 +138,27 @@ fn json_value_as_string(value: &Value) -> Option<String> {
     }
 }
 
-/// 从 `response.completed` 旁路提取 response ID，供连接池记录续接能力。
+/// 从正常完成或官方中断终态旁路提取 response ID，供连接池记录续接能力。
 ///
 /// 该值不参与客户端 wire 的可交付性判断；无法读取时只是不记录连接内续接状态。
 pub fn websocket_response_completed_id(value: &Value) -> Option<String> {
-    if value.get("type").and_then(Value::as_str) != Some("response.completed") {
+    if value.get("type").and_then(Value::as_str) != Some("response.completed")
+        && !websocket_response_is_interrupted(value)
+    {
         return None;
     }
     value
         .pointer("/response/id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+pub(crate) fn websocket_response_is_interrupted(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("response.incomplete")
+        && value
+            .pointer("/response/incomplete_details/reason")
+            .and_then(Value::as_str)
+            == Some("interrupted")
 }
 
 /// 生成 Responses WebSocket payload 审计快照。

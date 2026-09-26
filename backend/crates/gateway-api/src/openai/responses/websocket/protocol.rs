@@ -31,6 +31,44 @@ pub fn decode_response_create_with_context(
     decode_response_create_inner(payload, request_headers)
 }
 
+/// 中断只引用活动响应；普通创建帧仍交给原有解码与串行准入路径。
+pub(super) fn decode_response_interrupt(
+    payload: &str,
+) -> Result<Option<String>, ResponseCreateFrameError> {
+    #[derive(serde::Deserialize)]
+    struct FrameType {
+        #[serde(rename = "type")]
+        message_type: Option<String>,
+    }
+    // 非控制帧仍在原来的串行请求边界校验，不能抢先拒绝排队的普通请求。
+    // 只投影类型，避免为排队的大型 response.create 再构造完整 JSON 树。
+    let Ok(frame) = serde_json::from_str::<FrameType>(payload) else {
+        return Ok(None);
+    };
+    if frame.message_type.as_deref() != Some("response.interrupt") {
+        return Ok(None);
+    }
+    let value: Value =
+        serde_json::from_str(payload).map_err(|_| ResponseCreateFrameError::InvalidJson)?;
+    if value.get("mode").and_then(Value::as_str) != Some("discard_partial_items") {
+        return Err(ResponseCreateFrameError::Request(
+            RequestDecodeError::InvalidValue {
+                field: "mode".to_owned(),
+            },
+        ));
+    }
+    let id = value
+        .get("response_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            ResponseCreateFrameError::Request(RequestDecodeError::InvalidValue {
+                field: "response_id".to_owned(),
+            })
+        })?;
+    Ok(Some(id.to_owned()))
+}
+
 fn decode_response_create_inner(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,

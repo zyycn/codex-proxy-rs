@@ -917,6 +917,33 @@ async fn queued_binary_frame_should_be_rejected_after_the_active_response_finish
 }
 
 #[tokio::test]
+async fn requests_deferred_during_active_response_share_the_inbound_queue_limit() {
+    let (trace, mut socket, server) = start_active_response().await;
+    for _ in 0..33 {
+        if socket
+            .send(ClientMessage::Text(
+                json!({"type":"response.create","model":"model-a","input":"queued"})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        trace.cancellation_observed.notified(),
+    )
+    .await
+    .expect("queue overload cancels the active execution");
+    assert_eq!(trace.starts.load(Ordering::Acquire), 1);
+    assert!(trace.cancelled.load(Ordering::Acquire));
+    server.abort();
+}
+
+#[tokio::test]
 async fn client_close_should_cancel_active_execution_without_starting_queued_requests() {
     let (trace, mut socket, server) = start_active_response().await;
     socket

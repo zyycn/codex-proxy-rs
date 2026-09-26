@@ -1,6 +1,7 @@
 //! 下游客户端 WebSocket 的单 owner pump 与有界收发边界。
 
 use std::{
+    collections::VecDeque,
     fmt,
     sync::{
         Arc,
@@ -14,7 +15,7 @@ use futures::{Sink, SinkExt, Stream, StreamExt};
 use gateway_core::lifecycle::CancellationToken;
 use thiserror::Error;
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
     task::JoinHandle,
     time::{Instant, timeout},
 };
@@ -46,6 +47,21 @@ pub enum ConnectionEvent {
     Binary,
     Expired,
     Exited(PumpExitReason),
+}
+
+/// 接收队列与活动期间暂存的请求共用容量；移动帧不释放它占用的名额。
+pub(super) struct PendingConnectionEvent {
+    pub(super) event: ConnectionEvent,
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+impl PendingConnectionEvent {
+    fn exited(reason: PumpExitReason) -> Self {
+        Self {
+            event: ConnectionEvent::Exited(reason),
+            _permit: None,
+        }
+    }
 }
 
 /// 下游写入阶段；名称刻意使用 write，而不是暗示客户端已消费的 delivery。
@@ -213,7 +229,8 @@ pub struct ResponsesWebSocketConnection {
     opened_at: Instant,
     expired: Arc<AtomicBool>,
     commands: Option<mpsc::Sender<ConnectionCommand>>,
-    incoming: mpsc::Receiver<ConnectionEvent>,
+    incoming: mpsc::Receiver<PendingConnectionEvent>,
+    deferred: VecDeque<PendingConnectionEvent>,
     exited: oneshot::Receiver<PumpExitReason>,
     pump_task: Option<JoinHandle<()>>,
     stats: Arc<ConnectionStats>,
@@ -251,22 +268,52 @@ impl ResponsesWebSocketConnection {
 
     /// 等待下一个需要业务层处理的客户端事件。
     pub async fn next_event(&mut self) -> Option<ConnectionEvent> {
+        if self.exit_reason.is_none() {
+            match self.exited.try_recv() {
+                Ok(reason) => {
+                    self.exit_reason = Some(reason);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    self.exit_reason = Some(PumpExitReason::PumpStopped);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(reason) = self.exit_reason {
             return Some(ConnectionEvent::Exited(reason));
+        }
+        if let Some(event) = self.deferred.pop_front() {
+            return Some(event.event);
+        }
+        self.next_active_event().await.map(|event| event.event)
+    }
+
+    /// 活动响应期间只消费新到的帧，已排队的下一轮请求继续保持串行。
+    pub(super) async fn next_active_event(&mut self) -> Option<PendingConnectionEvent> {
+        if let Some(reason) = self.exit_reason {
+            return Some(PendingConnectionEvent::exited(reason));
         }
         let event = tokio::select! {
             biased;
             reason = &mut self.exited => {
-                Some(ConnectionEvent::Exited(reason.unwrap_or(PumpExitReason::PumpStopped)))
+                Some(PendingConnectionEvent::exited(reason.unwrap_or(PumpExitReason::PumpStopped)))
             }
             event = self.incoming.recv() => event,
         };
-        if let Some(ConnectionEvent::Exited(reason)) = event.as_ref() {
+        if let Some(PendingConnectionEvent {
+            event: ConnectionEvent::Exited(reason),
+            ..
+        }) = event.as_ref()
+        {
             self.exit_reason.get_or_insert(*reason);
         } else if event.is_none() {
             self.exit_reason.get_or_insert(PumpExitReason::PumpStopped);
         }
         event
+    }
+
+    pub(super) fn defer(&mut self, event: PendingConnectionEvent) {
+        self.deferred.push_back(event);
     }
 
     /// 等待连接退出，不消费留给后续串行请求的业务帧。
@@ -494,6 +541,7 @@ where
         expired,
         commands: Some(command_tx),
         incoming: incoming_rx,
+        deferred: VecDeque::new(),
         exited: exit_rx,
         pump_task: Some(pump_task),
         stats,
@@ -506,7 +554,7 @@ where
 async fn run_pump<S, E>(
     mut socket: S,
     mut commands: mpsc::Receiver<ConnectionCommand>,
-    incoming: mpsc::Sender<ConnectionEvent>,
+    incoming: mpsc::Sender<PendingConnectionEvent>,
     exited: oneshot::Sender<PumpExitReason>,
     connection_id: Arc<str>,
     cancellation: CancellationToken,
@@ -518,6 +566,7 @@ async fn run_pump<S, E>(
     S: Stream<Item = Result<Message, E>> + Sink<Message, Error = E> + Unpin,
     E: fmt::Display,
 {
+    let event_slots = Arc::new(Semaphore::new(INBOUND_EVENT_BUFFER));
     let deadline = tokio::time::sleep_until(opened_at + config.max_age);
     tokio::pin!(deadline);
     let mut deadline_elapsed = false;
@@ -536,11 +585,9 @@ async fn run_pump<S, E>(
                 expired.store(true, Ordering::Release);
                 // 满队列本身已能唤醒空闲协调层；到期标志仍阻止启动下一轮。
                 // 不能因无法追加 Expired 通知而中断正在收尾的响应。
-                match incoming.try_send(ConnectionEvent::Expired) {
-                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        break PumpExitReason::CoordinatorDropped;
-                    }
+                match emit_incoming(&incoming, &event_slots, ConnectionEvent::Expired) {
+                    Ok(()) | Err(PumpExitReason::InboundOverload) => {}
+                    Err(reason) => break reason,
                 }
             }
             command = commands.recv() => {
@@ -608,12 +655,12 @@ async fn run_pump<S, E>(
                 }
                 match message {
                     Some(Ok(Message::Text(payload))) => {
-                        if let Err(reason) = emit_incoming(&incoming, ConnectionEvent::Text(payload.to_string())) {
+                        if let Err(reason) = emit_incoming(&incoming, &event_slots, ConnectionEvent::Text(payload.to_string())) {
                             break reason;
                         }
                     }
                     Some(Ok(Message::Binary(_))) => {
-                        if let Err(reason) = emit_incoming(&incoming, ConnectionEvent::Binary) {
+                        if let Err(reason) = emit_incoming(&incoming, &event_slots, ConnectionEvent::Binary) {
                             break reason;
                         }
                     }
@@ -662,11 +709,20 @@ async fn run_pump<S, E>(
 }
 
 fn emit_incoming(
-    incoming: &mpsc::Sender<ConnectionEvent>,
+    incoming: &mpsc::Sender<PendingConnectionEvent>,
+    slots: &Arc<Semaphore>,
     event: ConnectionEvent,
 ) -> Result<(), PumpExitReason> {
-    incoming.try_send(event).map_err(|error| match error {
-        mpsc::error::TrySendError::Full(_) => PumpExitReason::InboundOverload,
-        mpsc::error::TrySendError::Closed(_) => PumpExitReason::CoordinatorDropped,
-    })
+    let permit = Arc::clone(slots)
+        .try_acquire_owned()
+        .map_err(|_| PumpExitReason::InboundOverload)?;
+    incoming
+        .try_send(PendingConnectionEvent {
+            event,
+            _permit: Some(permit),
+        })
+        .map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => PumpExitReason::InboundOverload,
+            mpsc::error::TrySendError::Closed(_) => PumpExitReason::CoordinatorDropped,
+        })
 }

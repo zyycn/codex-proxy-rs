@@ -313,6 +313,10 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         HeaderValue::from_static("client-attestation"),
     );
     headers.insert("x-oai-is", HeaderValue::from_static("client-is"));
+    for name in ["x-openai-account-routing-override", "x-openai-fedramp"] {
+        headers.append(name, HeaderValue::from_static("first"));
+        headers.append(name, HeaderValue::from_static("second"));
+    }
     headers.insert(
         "x-oai-is-update",
         HeaderValue::from_static("client-is-update"),
@@ -381,6 +385,8 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         "cookie",
         "chatgpt-account-id",
         "chatgpt-project-id",
+        "x-openai-account-routing-override",
+        "x-openai-fedramp",
         // 上游指纹由运行时画像统一生成，客户端不得覆盖。
         "user-agent",
         "originator",

@@ -217,6 +217,8 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 包括会话、线程、Lite 和其他业务扩展头。
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
+下游的 `x-openai-account-routing-override`、`x-openai-fedramp` 也不透传，
+工作区路由与合规属性不能从原账号继承；请求中间件不能重新注入这些托管身份头。
 
 Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和 `sec-fetch-*`
 携带的下游 SDK/浏览器环境或页面来源。过滤规则适用于所有下游客户端，与 User-Agent 无关；
@@ -250,10 +252,20 @@ Codex/OAuth 上游的历史回填按字段形状兼容，不以 User-Agent 品�
 
 请求头过滤不提供客户端匿名化；系统提示词、工具定义、工具结果、工作目录及其他业务 metadata
 保持原有语义，可能包含客户端环境信息。
+`client_metadata.parent_response_id` 是 Guardian 的账号内响应引用，只有归属可信且仍为同一账号时保留；
+切号或归属未知时移除。`x-codex-guardian`、`guardian_credits_requested` 和序列化
+`x-codex-turn-metadata` 内普通扩展的同名 `parent_response_id` 保持原样。
 
-Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧
+Responses WebSocket 接受文本 `response.create` 和 `response.interrupt`，创建请求在同一连接串行执行。当前响应期间收到的后续业务帧
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行。
+活动响应期间会即时处理 `{"type":"response.interrupt","response_id":"当前响应 ID","mode":"discard_partial_items"}`。
+中断只能发送到该执行占用的原上游 WS，不重新选号或创建推理 attempt；重复中断合并为一次发送。
+ID 不匹配、没有可中断响应、实际走 HTTP 或 Provider 不支持控制时返回 `400` 协议错误，原执行继续；
+客户端需要终止这类执行时可关闭连接，后续按既有续接合同恢复。
+中断后继续转发上游事件与终态；只有 `response.incomplete` 的 `incomplete_details.reason` 为
+`interrupted` 时，才按官方中断语义保留原连接续接能力。部分输出是否被丢弃以上游终态为准。
+控制帧发送成功不等于上游已确认中断；若上游仍返回 `response.completed`，按正常完成处理。
 
 OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选择上游 WebSocket；
 可将账号上游传输方式设为 `http`，固定使用 HTTP/SSE。API Key 账号默认使用 HTTP/SSE，

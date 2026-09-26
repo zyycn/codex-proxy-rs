@@ -65,6 +65,7 @@ impl CodexBackendClient {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
             connection_budget: None,
+            response_control: None,
             direct_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
@@ -453,6 +454,7 @@ impl CodexBackendClient {
                 let mut exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
+                    self.response_control.clone(),
                     context
                         .trace
                         .cloned()
