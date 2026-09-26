@@ -539,6 +539,15 @@ pub fn initialize_plugin_client_keys(
     Arc::new(use_case::plugin_client_keys::DefaultPluginClientKeyAccess::new(service))
 }
 
+/// 为 Runtime 组合实例自有资源写入；权限和归属在同一存储事务复核。
+#[must_use]
+pub fn initialize_plugin_resources(
+    store: Arc<dyn ports::plugin_resources::PluginResourceStore>,
+    snapshot: Arc<dyn SnapshotControl>,
+) -> Arc<dyn ports::plugin_resources::PluginResourceAccess> {
+    Arc::new(use_case::plugin_resources::DefaultPluginResourceAccess { store, snapshot })
+}
+
 /// Backup Worker 注册：单个可取消 Daemon，owner 固定为 `backup`。
 fn backup_worker_contribution(
     task: backup::task::BackupTask,

@@ -38,8 +38,11 @@ pub(super) fn validate(
     for binding in &instance.bindings {
         let resolved = crate::contribution::resolve(manifest, binding)?;
         let capability = resolved.capability;
-        if matches!(capability, Capability::Management | Capability::CommandLine) {
-            return Err(AdminError::invalid("管理页面与命令行无需功能绑定"));
+        if matches!(
+            capability,
+            Capability::Management | Capability::CommandLine | Capability::Maintenance
+        ) {
+            return Err(AdminError::invalid("管理页面、命令行与维护无需功能绑定"));
         }
         let stage: Stage = serde_json::from_value(serde_json::Value::String(binding.stage.clone()))
             .map_err(|_| AdminError::invalid("插件调用阶段不合法"))?;

@@ -377,7 +377,11 @@ pub(super) fn default_bindings(metadata: &PluginArtifactMetadata) -> Vec<PluginC
         .filter(|(capability, _)| {
             !matches!(
                 capability.as_str(),
-                "frontend_authentication" | "management" | "command_line" | "model_catalog"
+                "frontend_authentication"
+                    | "management"
+                    | "command_line"
+                    | "model_catalog"
+                    | "maintenance"
             )
         })
         .flat_map(|(_, contribution)| {

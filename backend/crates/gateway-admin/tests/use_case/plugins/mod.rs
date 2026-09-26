@@ -401,3 +401,46 @@ impl gateway_admin::ports::plugins::PluginDistribution for TestPluginPorts {
         Err(AdminError::invalid("unused plugin fixture"))
     }
 }
+
+#[async_trait::async_trait]
+impl gateway_admin::ports::plugin_resources::PluginResourceStore for TestPluginPorts {
+    async fn ensure_group(
+        &self,
+        _: &gateway_admin::model::plugin_resources::PluginResourceOwner,
+        _: String,
+        _: gateway_admin::model::account_groups::NewAccountGroup,
+        _: &gateway_admin::model::MutationContext,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::plugin_resources::ResourceMutation<
+            gateway_admin::model::plugin_resources::ManagedResource,
+        >,
+    > {
+        unreachable!("resource port is not used by this fixture")
+    }
+    async fn ensure_key(
+        &self,
+        _: &gateway_admin::model::plugin_resources::PluginResourceOwner,
+        _: String,
+        _: Vec<String>,
+        _: gateway_admin::model::client_keys::NewClientKey,
+        _: &gateway_admin::model::MutationContext,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::plugin_resources::ResourceMutation<
+            gateway_admin::model::plugin_resources::ManagedResource,
+        >,
+    > {
+        unreachable!("resource port is not used by this fixture")
+    }
+    async fn change_members(
+        &self,
+        _: &gateway_admin::model::plugin_resources::PluginResourceOwner,
+        _: gateway_admin::model::plugin_resources::GroupMembersChange,
+        _: &gateway_admin::model::MutationContext,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::plugin_resources::ResourceMutation<
+            gateway_admin::model::plugin_resources::GroupMembersChanged,
+        >,
+    > {
+        unreachable!("resource port is not used by this fixture")
+    }
+}

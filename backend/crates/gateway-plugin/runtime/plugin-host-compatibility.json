@@ -13,7 +13,8 @@
     { "capability": "web_socket_observer", "versions": [1] },
     { "capability": "usage", "versions": [1] },
     { "capability": "command_line", "versions": [1] },
-    { "capability": "management", "versions": [1] }
+    { "capability": "management", "versions": [1] },
+    { "capability": "maintenance", "versions": [1] }
   ],
   "permissions": [
     "network",
@@ -21,6 +22,8 @@
     "accounts",
     "data",
     "requests",
-    "public_endpoints"
+    "public_endpoints",
+    "groups",
+    "keys"
   ]
 }

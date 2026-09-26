@@ -515,9 +515,15 @@ pub struct AdminStorePorts {
     backup: BackupStorePorts,
     plugins: Arc<dyn super::plugins::PluginStore>,
     plugin_state: Arc<dyn super::plugins::PluginStateStore>,
+    plugin_resources: Arc<dyn super::plugin_resources::PluginResourceStore>,
 }
 
 impl AdminStorePorts {
+    #[must_use]
+    pub fn plugin_resources(&self) -> Arc<dyn super::plugin_resources::PluginResourceStore> {
+        self.plugin_resources.clone()
+    }
+
     #[must_use]
     pub fn plugins(&self) -> Arc<dyn super::plugins::PluginStore> {
         Arc::clone(&self.plugins)
@@ -542,6 +548,7 @@ impl AdminStorePorts {
         backup: BackupStorePorts,
         plugins: Arc<dyn super::plugins::PluginStore>,
         plugin_state: Arc<dyn super::plugins::PluginStateStore>,
+        plugin_resources: Arc<dyn super::plugin_resources::PluginResourceStore>,
     ) -> Self {
         Self {
             accounts,
@@ -552,6 +559,7 @@ impl AdminStorePorts {
             backup,
             plugins,
             plugin_state,
+            plugin_resources,
         }
     }
 

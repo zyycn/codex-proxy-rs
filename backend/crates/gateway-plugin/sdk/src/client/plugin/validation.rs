@@ -16,6 +16,7 @@ pub(super) fn validate(
     };
     for capability in manifest.contributes.keys() {
         match capability {
+            C::Maintenance => required(methods::RECONCILE.name)?,
             C::Middleware => required(crate::call::middleware::HANDLE_METHOD)?,
             C::ModelRouter => required(methods::ROUTE_MODEL.name)?,
             C::ModelCatalog => required(methods::MODEL_CATALOG_REGISTER.name)?,

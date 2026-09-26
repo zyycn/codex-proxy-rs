@@ -54,6 +54,7 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 | `frontend_authentication` | `methods::FRONTEND_IDENTIFIER`、`methods::FRONTEND_AUTHENTICATE` |
 | `management` | `PluginBuilder::management`；公开回调另用 `methods::MANAGEMENT_CALLBACK` |
 | `command_line` | `PluginBuilder::command_line` |
+| `maintenance` | `methods::RECONCILE`；无需功能绑定 |
 
 ## 访问域
 
@@ -65,9 +66,11 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 | `network` | 通过 `host.http.*` 使用宿主受管出站网络；仍受统一代理、超时、大小和流控规则约束 |
 | `models` | 列出非秘密 Key、按所选 Key 查询模型，以及通过 `host.model.*` 调用模型；调用可能产生消耗 |
 | `accounts` | 查询账号、读取原始凭据及创建或替换账号；写入仍经过 revision CAS、审计和发布事务 |
-| `data` | 在管理／命令阶段只读全部账号的最小基础信息及已有额度观测，不包含凭据、写入或预测 |
+| `data` | 在管理／命令／维护阶段只读全部账号的最小基础信息及已有额度观测，不包含凭据、写入或预测 |
 | `requests` | 参与请求／响应处理、路由、调度、观察及亲和查询 |
 | `public_endpoints` | 提供无需登录即可访问的已声明静态资源或一次性票据回调 |
+| `groups` | 创建本实例分组，允许将所有现有及未来新增账号加入或移出这些分组，保留其他分组关系 |
+| `keys` | 创建仅绑定本实例分组的 Key，返回非秘密身份；不授予其他 Key 的修改或明文读取权限 |
 
 `host.log` 和本插件声明的 `host.state.*` 是基础设施，不需要额外 permission。公开调用阶段不开放任何
 宿主回调；权限也不能把一个父调用的句柄、流或上下文转移到另一个调用。
@@ -79,7 +82,7 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 ### 基础事实
 
 纯展示页面声明 `management` 和 `data` 即可，不需要请求处理 binding 或 `accounts` 权限。
-`data` 是独立的管理员授权域，只允许 `management`、`command_line` 阶段使用；请求链、注册及公开回调均拒绝。
+`data` 是独立的管理员授权域，只允许 `management`、`command_line`、`maintenance` 阶段使用；请求链、注册及公开回调均拒绝。
 它可读取全部账号的下列最小事实，不继承或授予客户端 Key 的模型执行权。
 
 | SDK 方法 | 回调 | 查询与结果 |
@@ -117,6 +120,34 @@ for account in page.accounts {
 
 插件可以自行选择其业务需要的账号和 Provider，不需要安装器预先配置允许列表。宿主仍校验账号归属、资格、
 凭据版本和并发事务；原始凭据不得进入日志、审计正文或控制元数据。
+
+### 自有资源与维护
+
+声明 `maintenance` 并注册 `methods::RECONCILE`，宿主会在实例启用发布、进程恢复及配置变更后调用
+`plugin.reconcile`，并每 30 秒补偿一次。处理器必须幂等；调用可能重复，配置通知会合并，不表示逐条账号事件。
+每个实例串行执行，不同实例相互独立；调用限时 30 秒，失败后等待 5 秒重试。维护失败不回滚已经提交的资源，
+下一次对账继续补齐。只读校验、准备候选与 CLI 帮助不会启动维护；停用、替换和宿主关闭时取消旧任务。
+
+维护阶段允许日志、私有状态，以及已授权的 `data`、`groups`、`keys` 回调；不开放网络、凭据或模型执行。
+其他管理／命令入口也可使用下列资源方法：
+
+| SDK 方法 | 参数与行为 |
+| --- | --- |
+| `call.host.ensure_group(GroupEnsureRequest)` | `resource_key`、`name`、`color`、可选 `description`；首次创建，之后返回已有 `{id,name,enabled}` |
+| `call.host.change_group_members(GroupMembersChange)` | `resource_key`、`add`、`remove`；两列表合计最多 200 个账号 ID，不得重复或交叉，返回实际 `added`／`removed` 数量 |
+| `call.host.ensure_key(KeyEnsureRequest)` | `resource_key`、`name`、非空 `group_resource_keys`（最多 64 个）、`max_concurrency`、`requests_per_minute`、`daily_limit_usd`、`weekly_limit_usd`；返回 `{id,name,enabled}`，预算零值沿用原生无限制语义 |
+
+资源键使用 1～64 位小写字母、数字、`_`、`.`、`-`，首位为字母或数字，在实例和资源类型内唯一。
+归属由宿主签发，插件不能指定其他实例。`ensure` 只在首次创建时使用属性，不覆盖管理员对名称、启用状态或限制的修改；
+同名的管理员资源不会被接管，名称冲突会失败。账号已被删除时增量加入会忽略该 ID。
+无实际变化时不会写审计或递增配置版本。创建与归属登记、成员变更、授权复验均在同一事务完成。
+
+插件升级沿用实例资源；停用保留分组和 Key，其原生启用状态保持不变。删除实例解除归属，资源仍由管理员管理；
+重新安装为新实例不会接管旧资源。管理员删除自有资源后，仍启用的维护逻辑可在下次对账重新创建。
+Key 明文仍通过宿主管理面查看，插件模型调用使用返回的 Key ID。
+
+典型处理器先确保分组存在，再通过 `data` 分页查询账号并增量补齐成员，最后确保 Key 存在。
+安装 `groups` 域即授权纳入全部当前及未来账号；插件可按自己的配置筛选账号，但该筛选不构成宿主的权限边界。
 
 ### Key、模型与模型调用
 

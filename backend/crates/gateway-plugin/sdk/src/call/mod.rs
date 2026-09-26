@@ -10,3 +10,4 @@ pub mod model;
 pub mod observation;
 pub mod policy;
 pub mod registration;
+pub mod resources;

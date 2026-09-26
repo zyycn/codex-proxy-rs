@@ -6,6 +6,7 @@ pub mod plugin_accounts;
 pub mod plugin_client_keys;
 pub mod plugin_management;
 pub mod plugin_release;
+pub mod plugin_resources;
 pub mod plugins;
 pub mod pricing;
 pub mod provider;

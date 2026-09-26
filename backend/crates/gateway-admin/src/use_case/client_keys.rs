@@ -124,9 +124,7 @@ impl ClientKeyService for DefaultClientKeyService {
         let plaintext = if let Some(key) = command.custom_key {
             key.expose_for_auth().to_owned()
         } else {
-            let mut bytes = [0_u8; 32];
-            OsRng.fill_bytes(&mut bytes);
-            format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes))
+            generate_key()
         };
         let (config_revision, record) = self
             .store
@@ -256,4 +254,11 @@ fn validate_cursor(query: &ClientKeyListQuery) -> Result<(), AdminError> {
     } else {
         Err(AdminError::invalid("Client API Key 游标不合法"))
     }
+}
+
+// 原生与插件创建共用相同的密钥生成规则。
+pub(super) fn generate_key() -> String {
+    let mut bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    format!("sk_{}", URL_SAFE_NO_PAD.encode(bytes))
 }

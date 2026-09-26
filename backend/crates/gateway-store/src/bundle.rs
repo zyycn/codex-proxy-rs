@@ -179,6 +179,7 @@ async fn connect(
         }),
         backup_ports(pool.clone(), &config)?,
         plugins.clone(),
+        plugins.clone(),
         plugins,
     );
 

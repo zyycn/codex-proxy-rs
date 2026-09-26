@@ -220,6 +220,18 @@ fn callback_allowed(method: &str, stage: Stage, permissions: &[Permission]) -> b
     ) {
         return matches!(stage, Stage::Request | Stage::Attempt);
     }
+    if stage == Stage::Maintenance
+        && !matches!(
+            method,
+            "host.data.accounts.list"
+                | "host.data.quota.get"
+                | "host.groups.ensure"
+                | "host.groups.change_members"
+                | "host.keys.ensure"
+        )
+    {
+        return false;
+    }
     let permission = match method {
         "host.http.do"
         | "host.http.do_stream"
@@ -236,9 +248,28 @@ fn callback_allowed(method: &str, stage: Stage, permissions: &[Permission]) -> b
         }
         "host.affinity.lookup" => Permission::Requests,
         "host.data.accounts.list" | "host.data.quota.get"
-            if matches!(stage, Stage::Management | Stage::CommandLine) =>
+            if matches!(
+                stage,
+                Stage::Management | Stage::CommandLine | Stage::Maintenance
+            ) =>
         {
             Permission::Data
+        }
+        "host.groups.ensure" | "host.groups.change_members"
+            if matches!(
+                stage,
+                Stage::Management | Stage::CommandLine | Stage::Maintenance
+            ) =>
+        {
+            Permission::Groups
+        }
+        "host.keys.ensure"
+            if matches!(
+                stage,
+                Stage::Management | Stage::CommandLine | Stage::Maintenance
+            ) =>
+        {
+            Permission::Keys
         }
         _ => return false,
     };

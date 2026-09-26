@@ -37,7 +37,12 @@ impl PluginData {
         payload: &[u8],
     ) -> Result<RpcReply, PluginFault> {
         // 管理范围的只读授权不继承到客户端请求链，避免借数据查询扩大当前 Key 的范围。
-        if !self.authorized || !matches!(context.stage, Stage::Management | Stage::CommandLine) {
+        if !self.authorized
+            || !matches!(
+                context.stage,
+                Stage::Management | Stage::CommandLine | Stage::Maintenance
+            )
+        {
             return Err(denied());
         }
         if params != serde_json::json!({}) {

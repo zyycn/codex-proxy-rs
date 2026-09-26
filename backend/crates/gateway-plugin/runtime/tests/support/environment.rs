@@ -167,6 +167,16 @@ impl Environment {
             .map(|grant| serde_json::from_value(json!(grant.permission)).unwrap())
             .collect();
         let mut contributes = Contributions::new();
+        if configuration.get("maintenance_fixture").is_some() {
+            contributes.extend([super::contribution_for_id(
+                &plugin_id,
+                Capability::Maintenance,
+                vec![Stage::Maintenance],
+                vec![],
+                vec![],
+            )]);
+        }
+
         if configuration.get("command_registration").is_some() {
             contributes.extend([super::contribution_for_id(
                 &plugin_id,

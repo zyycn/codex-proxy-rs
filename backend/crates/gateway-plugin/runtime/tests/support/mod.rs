@@ -50,6 +50,7 @@ pub fn contribution_for_id(
         Capability::Usage => "usage",
         Capability::CommandLine => "commandLine",
         Capability::Management => "management",
+        Capability::Maintenance => "maintenance",
     };
     (
         capability,

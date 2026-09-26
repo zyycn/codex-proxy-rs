@@ -258,6 +258,7 @@ impl AdminHarness {
                 self.backup,
                 self.plugin_store,
                 Arc::new(plugins::TestPluginPorts),
+                Arc::new(plugins::TestPluginPorts),
             ),
             gateway_admin::AdminRuntimePorts {
                 plugin_preparation: Arc::new(plugins::TestPluginPorts),

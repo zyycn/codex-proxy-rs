@@ -289,3 +289,72 @@ async fn retry_stage_allows_only_logs_and_private_state() {
     assert_eq!(callbacks.called.load(Ordering::Relaxed), 2);
     session.shutdown(Duration::from_secs(1)).await;
 }
+
+#[tokio::test]
+async fn managed_resources_require_their_domains_and_control_plane_stages() {
+    for (method, permission) in [
+        ("host.groups.ensure", Permission::Groups),
+        ("host.groups.change_members", Permission::Groups),
+        ("host.keys.ensure", Permission::Keys),
+    ] {
+        for granted in [false, true] {
+            let callbacks = Arc::new(Callbacks::default());
+            let (_cache, session) = session_with_permissions(
+                callbacks.clone(),
+                if granted { vec![permission] } else { vec![] },
+            )
+            .await;
+            for stage in [
+                Stage::Registration,
+                Stage::Configuration,
+                Stage::PublicManagement,
+                Stage::Request,
+                Stage::Observation,
+                Stage::Management,
+                Stage::CommandLine,
+                Stage::Maintenance,
+            ] {
+                let reply = invoke_callback(&session, stage, method).await;
+                if granted
+                    && matches!(
+                        stage,
+                        Stage::Management | Stage::CommandLine | Stage::Maintenance
+                    )
+                {
+                    assert!(reply.is_ok());
+                } else {
+                    assert_permission_denied(reply);
+                }
+            }
+            session.shutdown(Duration::from_secs(1)).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn maintenance_has_data_and_state_access_but_cannot_execute_models_or_read_credentials() {
+    let callbacks = Arc::new(Callbacks::default());
+    let (_cache, session) = session(callbacks).await;
+    for method in [
+        "host.data.accounts.list",
+        "host.data.quota.get",
+        "host.state.put",
+        "host.log",
+    ] {
+        assert!(
+            invoke_callback(&session, Stage::Maintenance, method)
+                .await
+                .is_ok()
+        );
+    }
+    for method in [
+        "host.auth.get",
+        "host.auth.save",
+        "host.http.do",
+        "host.model.execute",
+        "host.keys.list",
+    ] {
+        assert_permission_denied(invoke_callback(&session, Stage::Maintenance, method).await);
+    }
+    session.shutdown(Duration::from_secs(1)).await;
+}

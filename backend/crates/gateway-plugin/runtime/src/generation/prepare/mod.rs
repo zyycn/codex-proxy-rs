@@ -1,4 +1,5 @@
 mod instance;
+mod maintenance;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -95,6 +96,7 @@ pub struct PluginRuntime {
     log_slots: Arc<Semaphore>,
     pub(super) account_ports: Arc<PluginAccountPortSlot>,
     client_key_ports: Arc<PluginClientKeyPortSlot>,
+    resource_ports: Arc<crate::callback::PluginResourcePorts>,
     model_ports: Arc<PluginModelPortSlot>,
     affinity_ports: Arc<PluginAffinityPortSlot>,
     observers: RequestObserverExtensionIndex,
@@ -159,6 +161,7 @@ struct PreparedInstance {
     revision: Revision,
     session: Arc<RpcSession>,
     private_state: Arc<PluginPrivateState>,
+    maintenance: bool,
 }
 
 impl PreparedSet {
@@ -228,6 +231,7 @@ impl PluginRuntime {
             validators: Arc::new(Semaphore::new(2)),
             account_ports: Arc::new(PluginAccountPortSlot::new()),
             client_key_ports: Arc::new(PluginClientKeyPortSlot::new()),
+            resource_ports: Arc::new(crate::callback::PluginResourcePorts::new()),
             model_ports: Arc::new(PluginModelPortSlot::new()),
             affinity_ports: Arc::new(PluginAffinityPortSlot::new()),
             observers: RequestObserverExtensionIndex::default(),
@@ -1218,4 +1222,13 @@ fn instance_fingerprint(
     value.sort_all_objects();
     let bytes = serde_json::to_vec(&value).map_err(|_| AdminError::invalid("插件配置无法编码"))?;
     Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+impl PluginRuntime {
+    pub fn bind_resource_ports(
+        &self,
+        access: &Arc<dyn gateway_admin::ports::plugin_resources::PluginResourceAccess>,
+    ) -> Result<(), AdminError> {
+        self.resource_ports.bind(access)
+    }
 }

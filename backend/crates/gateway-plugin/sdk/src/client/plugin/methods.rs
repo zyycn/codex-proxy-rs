@@ -126,3 +126,12 @@ pub const STATE_MIGRATE: Method<host::StateMigrationRequest, host::StateMigratio
         decode_payload,
         encode_payload,
     );
+
+/// 启用、恢复、配置变化及周期补偿共用的幂等入口；通知不代表逐条事件。
+pub const RECONCILE: Method<Empty, Empty> = Method::new(
+    "plugin.reconcile",
+    &[C::Maintenance],
+    &[S::Maintenance],
+    decode_metadata_without_payload,
+    encode_metadata,
+);

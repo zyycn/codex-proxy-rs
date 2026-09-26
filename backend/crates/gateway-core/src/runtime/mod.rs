@@ -69,6 +69,7 @@ pub struct RuntimeSnapshotUnavailable;
 #[derive(Clone, Default)]
 pub struct RuntimeSnapshotHandle {
     current: Arc<RwLock<Option<Arc<RuntimeSnapshot>>>>,
+    publications: Arc<SyncMutex<Vec<futures::channel::mpsc::Sender<()>>>>,
 }
 
 impl RuntimeSnapshotHandle {
@@ -76,15 +77,38 @@ impl RuntimeSnapshotHandle {
     pub fn new(initial: RuntimeSnapshot) -> Self {
         Self {
             current: Arc::new(RwLock::new(Some(Arc::new(initial)))),
+            publications: Default::default(),
         }
     }
 
     pub fn publish(&self, snapshot: RuntimeSnapshot) {
         *write_unpoisoned(&self.current) = Some(Arc::new(snapshot));
+        self.notify_publication();
     }
 
     pub fn suspend(&self) {
         *write_unpoisoned(&self.current) = None;
+        self.notify_publication();
+    }
+
+    /// 合并发布与暂停通知；订阅者收到后读取当前快照，不依赖逐条投递。
+    pub fn subscribe_publications(&self) -> futures::channel::mpsc::Receiver<()> {
+        let (sender, receiver) = futures::channel::mpsc::channel(0);
+        self.publications
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        receiver
+    }
+
+    fn notify_publication(&self) {
+        self.publications
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain_mut(|sender| match sender.try_send(()) {
+                Ok(()) => true,
+                Err(error) => error.is_full(),
+            });
     }
 
     #[must_use]

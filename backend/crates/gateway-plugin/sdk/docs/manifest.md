@@ -49,6 +49,7 @@ capability 固定并由工具生成：
 | `registration` / `retry` | `model_catalog` / `retry_policy` |
 | `observation` | `request_lifecycle`、`web_socket_observer`、`usage` |
 | `management` / `command_line` | `management` / `command_line` |
+| `maintenance` | `maintenance` |
 
 `middleware` 必须显式选择 `request`、`attempt` 或两者；协议格式等真实业务选择也不能省略。
 安装清单若携带不同的固定阶段会被拒绝，而不是在加载时静默改写。
@@ -62,8 +63,10 @@ capability 固定并由工具生成：
 | `network` | 使用宿主受管网络 |
 | `models` | 查询非秘密 Key 与模型并调用模型，可能产生消耗 |
 | `accounts` | 查询、读取原始凭据和修改账号 |
-| `data` | 仅在管理与命令阶段只读全部账号的基础信息和已有额度观测 |
+| `data` | 仅在管理、命令与维护阶段只读全部账号的基础信息和已有额度观测 |
 | `requests` | 查看和处理请求、响应、路由、调度与观察事实 |
+| `groups` | 创建本实例分组并管理所有当前及未来账号在这些分组中的成员关系 |
+| `keys` | 创建绑定本实例分组的 Key，不读取密钥明文 |
 | `public_endpoints` | 提供无需登录即可访问的资源或回调 |
 
 安装时统一接受清单声明的域，不再填写逐方法、用途、Key、账号或 Provider 白名单。日志与清单声明的

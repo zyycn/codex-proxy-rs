@@ -228,7 +228,6 @@ impl AccountGroupStore for PgAccountGroupRepository {
         command: NewAccountGroup,
         context: &MutationContext,
     ) -> AdminStoreResult<AccountGroupMutation> {
-        validate_group_fields(&command.name, command.description.as_deref())?;
         let id = command.id.clone();
         let audit = mutation_audit(
             context,
@@ -244,19 +243,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
         let revision = self
             .mutate(audit, |transaction| {
                 Box::pin(async move {
-                    sqlx::query(
-                        "insert into account_groups
-                         (id, name, description, color, disable_fast, enabled, created_at, updated_at)
-                         values ($1, $2, $3, $4, $5, true, now(), now())",
-                    )
-                    .bind(command.id.as_str())
-                    .bind(command.name)
-                    .bind(command.description)
-                    .bind(command.color.as_str())
-                    .bind(command.disable_fast)
-                    .execute(&mut **transaction)
-                    .await
-                    .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
+                    insert_account_group_in_transaction(transaction, &command).await?;
                     Ok(())
                 })
             })
@@ -668,4 +655,27 @@ fn invalid(message: &str) -> StoreError {
 
 fn unavailable(message: &'static str) -> StoreError {
     postgres_unavailable(message)
+}
+
+/// 原生管理与插件自有分组共用字段校验和写入规则。
+pub(crate) async fn insert_account_group_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    command: &NewAccountGroup,
+) -> StoreResult<()> {
+    validate_group_fields(&command.name, command.description.as_deref())
+        .map_err(|_| invalid("invalid account group fields"))?;
+    sqlx::query(
+        "insert into account_groups
+         (id, name, description, color, disable_fast, enabled, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, true, now(), now())",
+    )
+    .bind(command.id.as_str())
+    .bind(&command.name)
+    .bind(&command.description)
+    .bind(command.color.as_str())
+    .bind(command.disable_fast)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
+    Ok(())
 }

@@ -17,6 +17,7 @@ pub enum Capability {
     Usage,
     CommandLine,
     Management,
+    Maintenance,
 }
 
 impl Capability {
@@ -35,6 +36,7 @@ impl Capability {
             Self::Usage => "usage",
             Self::CommandLine => "command_line",
             Self::Management => "management",
+            Self::Maintenance => "maintenance",
         }
     }
 
@@ -51,6 +53,7 @@ impl Capability {
             Self::RequestLifecycle | Self::WebSocketObserver | Self::Usage => &[Stage::Observation],
             Self::CommandLine => &[Stage::CommandLine],
             Self::Management => &[Stage::Management],
+            Self::Maintenance => &[Stage::Maintenance],
         }
     }
 }
@@ -72,6 +75,8 @@ pub enum Stage {
     CommandLine,
     /// 公共登录回调不继承插件实例的任何宿主回调权限。
     PublicManagement,
+    /// 宿主针对已发布实例签发的幂等维护调用。
+    Maintenance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,17 +149,21 @@ pub enum Permission {
     Data,
     Requests,
     PublicEndpoints,
+    Groups,
+    Keys,
 }
 
 impl Permission {
     /// 当前公开访问域，安装摘要与授权校验复用同一集合。
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Network,
         Self::Models,
         Self::Accounts,
         Self::Data,
         Self::Requests,
         Self::PublicEndpoints,
+        Self::Groups,
+        Self::Keys,
     ];
 
     #[must_use]
@@ -166,6 +175,8 @@ impl Permission {
             Self::Data => "data",
             Self::Requests => "requests",
             Self::PublicEndpoints => "public_endpoints",
+            Self::Groups => "groups",
+            Self::Keys => "keys",
         }
     }
 
@@ -179,6 +190,8 @@ impl Permission {
             Self::Data => "基础数据",
             Self::Requests => "请求处理",
             Self::PublicEndpoints => "公开入口",
+            Self::Groups => "专用账号分组",
+            Self::Keys => "专用 API Key",
         }
     }
 
@@ -190,10 +203,14 @@ impl Permission {
             Self::Models => "查询模型与 API Key 信息并调用模型，可能产生消耗",
             Self::Accounts => "读取和修改账号，包括访问原始凭据",
             Self::Data => {
-                "在管理或命令入口只读查询所有账号的基础信息与已有额度观测，不包含凭据或修改权限"
+                "在管理、命令或维护入口只读查询所有账号的基础信息与已有额度观测，不包含凭据或修改权限"
             }
             Self::Requests => "查看和处理请求、响应、路由及账号选择",
             Self::PublicEndpoints => "提供无需登录即可访问的资源与回调入口",
+            Self::Groups => {
+                "创建本插件的分组，可将所有现有及未来新增账号加入或移出这些分组，不修改其他分组"
+            }
+            Self::Keys => "创建绑定本插件分组的 API Key，不读取密钥明文或修改管理员创建的 Key",
         }
     }
 }

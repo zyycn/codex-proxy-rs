@@ -34,7 +34,6 @@ impl PluginRuntime {
         let limits = self.config.package_limits;
         let directory = self.config.cache_directory.clone();
         let host_version = self.config.host_version.clone();
-        let grants = instance.grants.clone();
         let validation_slot = self
             .validators
             .clone()
@@ -145,7 +144,7 @@ impl PluginRuntime {
             contributes: manifest.contributes.clone(),
         };
         let callbacks = Arc::new(PluginCallbacks::new(
-            &grants,
+            &instance,
             self.config.rpc_limits.maximum_buffered_body_bytes,
             &manifest,
             self.log_slots.clone(),
@@ -157,6 +156,7 @@ impl PluginRuntime {
                 self.client_key_ports.clone(),
                 self.model_ports.clone(),
                 self.affinity_ports.clone(),
+                self.resource_ports.clone(),
             ),
         )?);
         let session = Arc::new(
@@ -241,6 +241,9 @@ impl PluginRuntime {
             revision: instance.revision,
             session,
             private_state,
+            maintenance: manifest
+                .contributes
+                .contains_key(&gateway_plugin_sdk::Capability::Maintenance),
         });
         Ok(PreparedContributions {
             sessions,

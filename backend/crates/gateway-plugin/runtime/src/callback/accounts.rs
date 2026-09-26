@@ -304,7 +304,7 @@ fn credential_facts(
     }
 }
 
-fn mutation_context(context: &CallContext) -> MutationContext {
+pub(super) fn mutation_context(context: &CallContext) -> MutationContext {
     MutationContext {
         actor: MutationActor::System,
         // RPC 回调使用真实 call_id，RPC 结果的后置提交仍使用原始上下文；scope 由宿主签发且全局唯一。
@@ -347,7 +347,7 @@ fn credential_timestamp(value: Option<i64>) -> Result<Option<DateTime<Utc>>, Plu
         .transpose()
 }
 
-fn encode(value: &impl serde::Serialize) -> Result<RpcReply, PluginFault> {
+pub(super) fn encode(value: &impl serde::Serialize) -> Result<RpcReply, PluginFault> {
     Ok(RpcReply {
         result: serde_json::json!({}),
         payload: serde_json::to_vec(value).map_err(|_| invalid())?,

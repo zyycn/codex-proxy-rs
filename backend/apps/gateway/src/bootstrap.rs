@@ -187,6 +187,14 @@ async fn launch(
             core.snapshot_control(),
         );
         or_shutdown!(plugin_runtime, plugin_runtime.bind_client_key_ports(&keys));
+        let plugin_resources = gateway_admin::initialize_plugin_resources(
+            store.admin_ports().plugin_resources(),
+            core.snapshot_control(),
+        );
+        or_shutdown!(
+            plugin_runtime,
+            plugin_runtime.bind_resource_ports(&plugin_resources)
+        );
         let core = or_shutdown!(plugin_runtime, core.activate().await);
         let nested_models = core.nested_model_execution_port();
         let affinity_lookup = core.affinity_lookup_port();
@@ -230,6 +238,14 @@ async fn launch(
     or_shutdown!(
         plugin_runtime,
         plugin_runtime.bind_client_key_ports(&plugin_keys)
+    );
+    let plugin_resources = gateway_admin::initialize_plugin_resources(
+        store.admin_ports().plugin_resources(),
+        core.snapshot_control(),
+    );
+    or_shutdown!(
+        plugin_runtime,
+        plugin_runtime.bind_resource_ports(&plugin_resources)
     );
     let mut core = or_shutdown!(plugin_runtime, core.activate().await);
     let nested_models = core.nested_model_execution_port();
@@ -322,6 +338,7 @@ async fn launch(
     plan.extend(openai.take_worker_contributions());
     plan.extend(xai.take_worker_contributions());
     plan.extend(admin.take_worker_contributions());
+    plan.push(plugin_runtime.maintenance_worker(core.snapshots())?);
     or_shutdown!(
         plugin_runtime,
         host.start_workers(plan, store.worker_leader_lease())
