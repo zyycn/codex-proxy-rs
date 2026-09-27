@@ -1,6 +1,7 @@
 //! OpenAI 上游失败分类、恢复决策与稳定错误投影。
 
 use super::*;
+use gateway_core::diagnostics::TraceContext;
 
 /// OpenAI 失败对 Smart 账号分数的结构化 reason 闭集。
 ///
@@ -83,23 +84,35 @@ pub(super) async fn wait_for_replay_grace(deadline: Option<Instant>) {
 
 /// 提交边界前的上游事件预取。
 ///
-/// 原始 chunk 计数而不是重编码后的 event 大小。时间与 64 KiB 共同限定无感换号
+/// 原始 chunk 计数而不是重编码后的 event 大小。时间与字节阈值共同限定无感换号
 /// 窗口；任一边界到达都会提交已缓存 wire，不能因网关私有资源规则伪造上游协议
 /// 失败。一旦提交，后续事件不再具备无痕重放资格。
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
-    replay_grace_deadline: Option<Instant>,
+    replay_grace_started_at: Option<Instant>,
     committed: bool,
+    trace: TraceContext,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PreCommitReleaseReason {
+    SemanticOutput,
+    Terminal,
+    ByteLimit,
+    GraceTimeout,
+    Eof,
 }
 
 impl PreCommitClientEvents {
-    pub(super) const fn new() -> Self {
+    pub(super) const fn new(trace: TraceContext) -> Self {
         Self {
             pending: Vec::new(),
             prefetched_bytes: 0,
-            replay_grace_deadline: None,
+            replay_grace_started_at: None,
             committed: false,
+            trace,
         }
     }
 
@@ -120,14 +133,17 @@ impl PreCommitClientEvents {
         }
         let starts_replay_grace = incoming.iter().any(ProviderEvent::has_client_event);
         self.pending.extend(incoming);
-        if timing_signals.semantic_output
-            || completed
-            || self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES
-        {
-            return self.commit_pending();
+        if timing_signals.semantic_output {
+            return self.commit_pending(PreCommitReleaseReason::SemanticOutput);
         }
-        if starts_replay_grace && self.replay_grace_deadline.is_none() {
-            self.replay_grace_deadline = Instant::now().checked_add(STREAM_REPLAY_GRACE);
+        if completed {
+            return self.commit_pending(PreCommitReleaseReason::Terminal);
+        }
+        if self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES {
+            return self.commit_pending(PreCommitReleaseReason::ByteLimit);
+        }
+        if starts_replay_grace && self.replay_grace_started_at.is_none() {
+            self.replay_grace_started_at = Some(Instant::now());
         }
         Vec::new()
     }
@@ -142,7 +158,7 @@ impl PreCommitClientEvents {
         if self.committed {
             events
         } else {
-            self.commit_pending()
+            self.commit_pending(PreCommitReleaseReason::Eof)
         }
     }
 
@@ -151,28 +167,38 @@ impl PreCommitClientEvents {
             return incoming;
         }
         self.pending.extend(incoming);
-        self.commit_pending()
+        // 此入口只在同批次已出现语义输出、随后失败时释放原始事件。
+        self.commit_pending(PreCommitReleaseReason::SemanticOutput)
     }
 
     pub(super) fn take_for_failure(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         self.pending.extend(incoming);
         self.prefetched_bytes = 0;
-        self.replay_grace_deadline = None;
+        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
 
-    pub(super) const fn replay_grace_deadline(&self) -> Option<Instant> {
-        self.replay_grace_deadline
+    pub(super) fn replay_grace_deadline(&self) -> Option<Instant> {
+        self.replay_grace_started_at
+            .and_then(|started| started.checked_add(STREAM_REPLAY_GRACE))
     }
 
     pub(super) const fn is_committed(&self) -> bool {
         self.committed
     }
 
-    pub(super) fn commit_pending(&mut self) -> Vec<ProviderEvent> {
+    pub(super) fn commit_pending(&mut self, reason: PreCommitReleaseReason) -> Vec<ProviderEvent> {
+        // Provider 只记录释放缓存的原因；实际下游提交仍由 Core 记录和裁决。
+        if self.trace.is_enabled() {
+            self.trace.record("provider.precommit.released", json!({
+                "reason": reason,
+                "prefetchedBytes": self.prefetched_bytes,
+                "waitMs": self.replay_grace_started_at.map_or(0, |started| started.elapsed().as_millis()),
+            }));
+        }
         self.committed = true;
         self.prefetched_bytes = 0;
-        self.replay_grace_deadline = None;
+        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
 }
