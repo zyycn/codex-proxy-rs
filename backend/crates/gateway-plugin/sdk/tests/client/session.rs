@@ -1645,6 +1645,10 @@ async fn typed_key_and_quota_calls_keep_payloads_and_do_not_retry_failures() {
                 };
                 assert_eq!(error.code, ErrorCode::Conflict);
             } else {
+                let mut response_payload = response.clone();
+                if matches!(entry, "key_facts" | "refresh_quota") {
+                    response_payload["future_fact"] = json!({"value":1});
+                }
                 write_frame(
                     &mut host.writer,
                     &Frame {
@@ -1652,7 +1656,7 @@ async fn typed_key_and_quota_calls_keep_payloads_and_do_not_retry_failures() {
                             id,
                             result: json!({}),
                         },
-                        payload: serde_json::to_vec(&response).unwrap(),
+                        payload: serde_json::to_vec(&response_payload).unwrap(),
                     },
                 )
                 .await
