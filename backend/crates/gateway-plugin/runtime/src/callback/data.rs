@@ -111,6 +111,8 @@ impl PluginData {
                         .map(|account| data::AccountFacts {
                             account_id: account.id,
                             provider_id: account.provider_kind.as_str().to_owned(),
+                            name: account.name,
+                            email: account.email,
                             group_ids: account
                                 .groups
                                 .into_iter()

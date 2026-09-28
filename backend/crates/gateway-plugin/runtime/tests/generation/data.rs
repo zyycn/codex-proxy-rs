@@ -22,7 +22,7 @@ use gateway_plugin_sdk::{Capability, Contributions, Permission, Stage};
 use serde_json::{Value, json};
 
 #[derive(Default)]
-struct Facts(AtomicUsize, AtomicUsize);
+struct Facts(AtomicUsize, AtomicUsize, Option<String>);
 
 fn account() -> AccountRecord {
     let at = "2026-01-01T00:00:00Z".parse().unwrap();
@@ -90,8 +90,10 @@ impl PluginAccountAccess for Facts {
         assert_eq!(query.limit.get(), 1);
         assert_eq!(query.provider_kind.unwrap().as_str(), "openai");
         assert_eq!(query.cursor.unwrap().as_str(), "acct_before");
+        let mut account = account();
+        account.email.clone_from(&self.2);
         Ok(PluginAccountPage {
-            accounts: vec![account()],
+            accounts: vec![account],
             next_cursor: Some(ProviderAccountId::new("acct_facts").unwrap()),
         })
     }
@@ -141,7 +143,12 @@ impl PluginAccountAccess for Facts {
 
 #[tokio::test]
 async fn management_facts_are_minimal_bounded_and_separately_authorized() {
-    for permission in [None, Some(Permission::Accounts), Some(Permission::Data)] {
+    for (permission, email) in [
+        (None, Some("private@example.invalid")),
+        (Some(Permission::Accounts), Some("private@example.invalid")),
+        (Some(Permission::Data), Some("private@example.invalid")),
+        (Some(Permission::Data), None),
+    ] {
         let (cache, store, runtime) = super::setup_with_permissions(
             Contributions::from([crate::support::contribution(
                 Capability::Management,
@@ -153,7 +160,11 @@ async fn management_facts_are_minimal_bounded_and_separately_authorized() {
             permission.into_iter().collect(),
         )
         .await;
-        let facts = Arc::new(Facts::default());
+        let facts = Arc::new(Facts(
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+            email.map(str::to_owned),
+        ));
         let port: Arc<dyn PluginAccountAccess> = facts.clone();
         runtime.bind_account_ports(&port).unwrap();
         {
@@ -205,9 +216,14 @@ async fn management_facts_are_minimal_bounded_and_separately_authorized() {
                 result[0],
                 json!({"schema_version":1,"accounts":[{
                 "account_id":"acct_facts","provider_id":"openai","group_ids":["grp_11111111111111111111111111111111"],
+                "name":"private name","email":email,
                 "enabled":true,"updated_at_ms":1767225600000i64
             }],"next_cursor":"acct_facts"})
             );
+            let page: gateway_plugin_sdk::call::data::AccountFactsPage =
+                serde_json::from_value(result[0].clone()).unwrap();
+            assert_eq!(page.accounts[0].name, "private name");
+            assert_eq!(page.accounts[0].email.as_deref(), email);
             assert_eq!(
                 result[1],
                 json!({"schema_version":1,"account_id":"acct_facts","observed_at_ms":null,

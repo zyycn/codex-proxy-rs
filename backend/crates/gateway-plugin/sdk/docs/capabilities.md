@@ -98,7 +98,9 @@ Provider 固定为宿主内置的 OpenAI 与 xAI。插件提供以下扩展能�
 `key_facts` 每次读取当前管理数据，返回 `client_key_id`、`enabled`、`group_ids`；不存在的 Key 沿用事实接口的 `rejected` 错误。它需要 `data` 权限，`keys`、`key_budgets` 和 `quota_observations` 权限不能替代。原有 Key 目录响应保持不变。旧宿主不支持新增方法，插件应将包含该方法的宿主版本声明为最低兼容版本。
 
 `group_ids` 表示显式绑定，包含停用分组，不是最终可路由账号集合；空绑定也不代表单账号范围。通过 `account_facts` 关联账号时需完整遍历分页，结果包含停用账号。跨查询关联及同步策略由插件负责，这些调用不构成跨查询事务，管理员修改绑定后应重新检查。
-账号仅返回 `account_id`、`provider_id`、`group_ids`、`enabled` 和 `updated_at_ms`，不附带姓名、邮箱、令牌或代理信息。
+账号仅返回 `account_id`、`provider_id`、`name`、`email`、`group_ids`、`enabled` 和 `updated_at_ms`，不附带令牌或代理信息。
+`name` 和 `email` 来自宿主已保存的账号资料；没有邮箱时 `email=null`，读取不会请求上游个人信息。
+使用该接口的插件需使用包含这两个字段的 SDK 重新构建，并与支持这些字段的宿主配套部署；旧 SDK 的严格反序列化会拒绝新增字段。
 额度仅返回观测时间与窗口的 `key`、`window_seconds`、`used_percent`、`reset_at_ms`。
 时间均为 UTC Unix 毫秒，比例为百分数；未知值保留 `null`，不能解释为 0。`observed_at_ms=null` 表示没有可用观测时间，
 不保证当前缓存新鲜，不提供历史快照或多个查询之间的原子一致性。

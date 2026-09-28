@@ -36,6 +36,8 @@ pub struct AccountFactsQuery {
 pub struct AccountFacts {
     pub account_id: String,
     pub provider_id: String,
+    pub name: String,
+    pub email: Option<String>,
     pub group_ids: Vec<String>,
     pub enabled: bool,
     pub updated_at_ms: i64,
