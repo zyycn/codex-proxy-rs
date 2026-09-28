@@ -21,7 +21,7 @@ gateway-plugin-sdk = { path = "../sdk", features = ["io"] }
 gateway-protocol = { path = "../../gateway-protocol" }
 hex = "0.4.3"
 image = { version = "0.25.8", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
-jsonschema = { version = "0.56.0", default-features = false }
+jsonschema = { version = "0.57.0", default-features = false }
 roxmltree = "0.21.1"
 semver = "1.0.27"
 secrecy = "0.10.3"
