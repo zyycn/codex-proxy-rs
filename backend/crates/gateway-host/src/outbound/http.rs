@@ -263,18 +263,18 @@ impl HttpClient {
             .as_str()
             .parse()
             .map_err(|_| HttpError::invalid("URL"))?;
-        let authority = uri
-            .authority()
-            .ok_or_else(|| HttpError::invalid("host"))?
-            .as_str();
-        headers.insert(
-            http::header::HOST,
-            HeaderValue::from_str(authority).map_err(|_| HttpError::invalid("host"))?,
-        );
         if url.scheme() == "http"
             && let Some(proxy) = proxy.filter(|proxy| proxy.expose_url().starts_with("http"))
         {
             // 正向代理接收数字地址的绝对 URI；Host 保留原始域名，禁止代理再次解析目标。
+            let authority = uri
+                .authority()
+                .ok_or_else(|| HttpError::invalid("host"))?
+                .as_str();
+            headers.insert(
+                http::header::HOST,
+                HeaderValue::from_str(authority).map_err(|_| HttpError::invalid("host"))?,
+            );
             let address = addresses
                 .first()
                 .ok_or_else(|| HttpError::invalid("address"))?;

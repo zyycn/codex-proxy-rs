@@ -129,6 +129,7 @@ impl Downloads {
                 continue;
             }
             if !(200..300).contains(&response.status) {
+                tracing::warn!(status = response.status, "插件来源返回非成功状态");
                 return Err(source_error());
             }
             if header(&response.headers, "content-length")

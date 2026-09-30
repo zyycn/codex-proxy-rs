@@ -36,6 +36,7 @@ pub struct Observation {
 #[derive(Clone, Copy)]
 pub enum Mode {
     Origin,
+    Http2Origin,
     HttpProxy,
     Socks,
 }
@@ -57,7 +58,7 @@ impl Server {
         let listener = TcpListener::bind(bind).await.unwrap();
         let address = listener.local_addr().unwrap();
         let (sender, received) = mpsc::unbounded_channel();
-        let acceptor = tls.then(tls_acceptor);
+        let acceptor = tls.then(|| tls_acceptor(matches!(mode, Mode::Http2Origin)));
         let task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
             loop {
@@ -104,6 +105,9 @@ async fn serve(
     mode: Mode,
     observations: mpsc::UnboundedSender<Observation>,
 ) -> io::Result<()> {
+    if matches!(mode, Mode::Http2Origin) {
+        return serve_http2(stream, sni, observations).await;
+    }
     if matches!(mode, Mode::Socks) {
         return socks(stream, observations).await;
     }
@@ -161,6 +165,50 @@ async fn serve(
     }
     tokio::io::copy_bidirectional(&mut stream, &mut upstream).await?;
     Ok(())
+}
+
+async fn serve_http2(
+    stream: Box<dyn Socket>,
+    sni: Option<String>,
+    observations: mpsc::UnboundedSender<Observation>,
+) -> io::Result<()> {
+    let service =
+        hyper::service::service_fn(move |request: http::Request<hyper::body::Incoming>| {
+            // 模拟 nginx 1.24：URI 已携带 :authority，额外的 Host 仍按重复头拒绝。
+            let status = if request.headers().contains_key(http::header::HOST) {
+                400
+            } else {
+                200
+            };
+            let mut head = format!(
+                "{} {} {:?}\r\n",
+                request.method(),
+                request.uri(),
+                request.version()
+            );
+            for (name, value) in request.headers() {
+                head.push_str(&format!("{name}: {}\r\n", value.to_str().unwrap()));
+            }
+            observations
+                .send(Observation {
+                    head,
+                    sni: sni.clone(),
+                    target: None,
+                    authentication: None,
+                })
+                .unwrap();
+            let response = http::Response::builder()
+                .status(status)
+                .body(http_body_util::Full::new(bytes::Bytes::from_static(
+                    b"secured",
+                )))
+                .unwrap();
+            async { Ok::<_, std::convert::Infallible>(response) }
+        });
+    hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+        .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+        .await
+        .map_err(io::Error::other)
 }
 
 async fn read_head(stream: &mut Box<dyn Socket>) -> io::Result<String> {
@@ -221,12 +269,12 @@ async fn socks(
     Ok(())
 }
 
-fn tls_acceptor() -> TlsAcceptor {
+fn tls_acceptor(http2: bool) -> TlsAcceptor {
     use rustls::{
         ServerConfig,
         pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     };
-    let config = ServerConfig::builder_with_provider(Arc::new(
+    let mut config = ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::aws_lc_rs::default_provider(),
     ))
     .with_safe_default_protocol_versions()
@@ -241,5 +289,8 @@ fn tls_acceptor() -> TlsAcceptor {
         )),
     )
     .unwrap();
+    if http2 {
+        config.alpn_protocols = vec![b"h2".to_vec()];
+    }
     TlsAcceptor::from(Arc::new(config))
 }

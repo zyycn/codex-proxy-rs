@@ -18,6 +18,37 @@ fn local_network() -> NetworkPolicy {
 }
 
 #[tokio::test]
+async fn managed_https_http2_uses_authority_without_an_extra_host_header() {
+    use std::sync::Arc;
+
+    use crate::support::network::{FixedDns, Mode, ROOT, Server};
+
+    let mut server = Server::start(Mode::Http2Origin, true, "127.0.0.1:0").await;
+    let url = format!("https://upstream.test:{}/query", server.address.port());
+    let client = HttpClient::with_root_certificates(vec![ROOT.to_vec()])
+        .unwrap()
+        .with_resolver(Arc::new(FixedDns(server.address.ip())));
+    let mut response = client
+        .open(
+            request(url.clone()),
+            None,
+            &local_network(),
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body.read(64).await.unwrap().unwrap(), "secured");
+    let observation = server.next().await;
+    assert!(
+        observation
+            .head
+            .starts_with(&format!("GET {url} HTTP/2.0\r\n"))
+    );
+    assert_eq!(observation.sni.as_deref(), Some("upstream.test"));
+}
+
+#[tokio::test]
 async fn managed_http_does_not_follow_redirects_or_fall_back_from_proxy() {
     let server = MockServer::start().await;
     Mock::given(any())
