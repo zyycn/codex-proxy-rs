@@ -25,6 +25,7 @@ export interface RuntimeSettings {
 
   requestLocationEnabled: boolean
   requestLocation: RequestLocation
+  codexTurnMetadataStripWorkspaces: boolean
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number

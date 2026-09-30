@@ -10,6 +10,8 @@ pub struct SettingsValues {
     pub(crate) request_profiles: Arc<BTreeMap<ProviderKind, crate::account::OpaqueProviderData>>,
     pub(crate) request_location_enabled: bool,
     pub(crate) request_location: crate::account::RequestLocation,
+    #[serde(default)]
+    pub(crate) codex_turn_metadata_strip_workspaces: bool,
     pub(crate) max_concurrent_per_account: u32,
     pub(crate) max_waiting_per_key: u32,
     pub(crate) max_waiting_per_account: u32,
@@ -24,6 +26,12 @@ pub struct SettingsValues {
 }
 
 impl SettingsValues {
+    #[must_use]
+    pub const fn with_codex_turn_metadata_strip_workspaces(mut self, enabled: bool) -> Self {
+        self.codex_turn_metadata_strip_workspaces = enabled;
+        self
+    }
+
     #[must_use]
     pub fn request_profiles(&self) -> &BTreeMap<ProviderKind, crate::account::OpaqueProviderData> {
         &self.request_profiles
@@ -100,6 +108,7 @@ impl SettingsValues {
             pricing: Arc::default(),
             request_location_enabled: false,
             request_location: crate::account::RequestLocation::default(),
+            codex_turn_metadata_strip_workspaces: false,
             max_concurrent_per_account,
             max_waiting_per_key: 0,
             max_waiting_per_account: 0,

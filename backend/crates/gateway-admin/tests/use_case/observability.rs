@@ -903,6 +903,7 @@ impl SettingsStore for FixtureSettingsStore {
             request_profiles: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
+            codex_turn_metadata_strip_workspaces: false,
             config_revision: Revision::new(1).expect("revision"),
             model_mappings: Default::default(),
             refresh_margin_seconds: 300,

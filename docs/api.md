@@ -1181,6 +1181,7 @@ openaiClientProfile
 xaiClientProfile
 requestLocationEnabled
 requestLocation
+codexTurnMetadataStripWorkspaces
 modelMappings
 refreshMarginSeconds
 refreshConcurrency
@@ -1221,6 +1222,13 @@ accountWarmupModel
 字段约束与[代理位置](#独立代理管理--managed-proxies)一致。全局自定义开启后，OpenAI Responses 使用全局位置，
 关联代理配置了自定义位置时优先使用代理值。保存后通过现有配置发布机制对新请求生效，
 已开始请求及其重试保持同一份全局值；普通文本、绝对时间戳和数据驻留要求不受影响
+
+`codexTurnMetadataStripWorkspaces` 是必填布尔值，默认 `false`。开启后，Codex OAuth 与 API Key 的
+Responses 请求在发往上游前删除 turn metadata 顶层大小写不敏感的 `workspaces` 键，覆盖
+`x-codex-turn-metadata` 请求头、正文 `client_metadata` 中的同一序列化字段和 WebSocket
+`response.create` 帧；其余键、字段顺序和未知扩展不受影响。官方 Core 只在该映射非空时发送这个键，
+删除后的报文仍是官方合法形状；被删除的键以本地工作区绝对路径为键名，并携带远端仓库地址与提交信息，
+多用户共用同一账号时可被用来关联同一台机器。关闭时保持既有透明转发行为。
 
 `maxConcurrentPerAccount` 是默认账号并发上限，取值 0～4294967295；`0` 表示不限制。
 账号的 `concurrencyLimit: null` 继承该默认值，单独设置的正数上限仍优先生效。

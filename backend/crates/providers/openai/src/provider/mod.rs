@@ -770,6 +770,7 @@ impl CodexProvider {
             &mut upstream_request,
             lease.installation_id(),
             account_scope,
+            context.codex_turn_metadata_strip_workspaces(),
         );
         let codex_oauth = matches!(
             lease.authentication(),

@@ -891,6 +891,54 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
 }
 
 #[test]
+fn codex_turn_metadata_strip_workspaces_should_be_frozen_when_snapshot_is_published() {
+    use gateway_core::account::ProviderAccountId;
+    use gateway_core::runtime::RuntimeSnapshotHandle;
+    let compile = |version, strip_workspaces| {
+        let facts = SnapshotFacts::new(
+            revision(version),
+            revision(version),
+            SettingsValues::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_codex_turn_metadata_strip_workspaces(strip_workspaces),
+            Vec::new(),
+            Vec::new(),
+            vec![SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_strip_workspaces").unwrap(),
+                "alpha",
+            )],
+            Vec::new(),
+        );
+        block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(TestCatalog::Unavailable),
+            )
+            .compile(),
+        )
+        .unwrap()
+    };
+    let handle = RuntimeSnapshotHandle::new(compile(1, true));
+    let frozen = handle.acquire().unwrap();
+    let plan = |snapshot: &gateway_core::routing::RuntimeSnapshot| {
+        snapshot
+            .plan(
+                &PublicModelId::new("public-model").unwrap(),
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &gateway_core::routing::RoutingContext::default(),
+            )
+            .unwrap()
+    };
+    assert!(plan(&frozen).codex_turn_metadata_strip_workspaces());
+    let recompiled = frozen.with_settings(frozen.settings()).unwrap();
+    assert!(plan(&recompiled).codex_turn_metadata_strip_workspaces());
+    handle.publish(compile(2, false));
+    assert!(!plan(&handle.acquire().unwrap()).codex_turn_metadata_strip_workspaces());
+    // 已冻结的请求计划沿用发布时的策略。
+    assert!(plan(&frozen).codex_turn_metadata_strip_workspaces());
+}
+
+#[test]
 fn decompression_setting_should_validate_and_remain_frozen_across_publication() {
     use gateway_core::runtime::RuntimeSnapshotHandle;
     let compile = |version, bytes| {

@@ -68,7 +68,8 @@ fn update_body() -> Value {
         "accountAutoFreezeAdaptiveConcurrency": true,
         "accountWarmupEnabled": false,
         "accountWarmupScheduleTime": "08:00",
-        "accountWarmupModel": null
+        "accountWarmupModel": null,
+        "codexTurnMetadataStripWorkspaces": false
     })
 }
 
@@ -202,6 +203,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         request_profiles: Default::default(),
         request_location_enabled: false,
         request_location: Default::default(),
+        codex_turn_metadata_strip_workspaces: false,
         config_revision: Revision::new(7).expect("revision"),
         model_mappings: BTreeMap::from_iter([
             (
@@ -254,6 +256,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "xaiClientProfile": null,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
+        "codexTurnMetadataStripWorkspaces": false,
             "modelMappings": {
                 "gpt-5.4": "gpt-5.5",
                 "grok-latest": "grok-4.5"
@@ -313,6 +316,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         request_profiles: Default::default(),
         request_location_enabled: false,
         request_location: Default::default(),
+        codex_turn_metadata_strip_workspaces: false,
         config_revision: Revision::new(7).expect("revision"),
         model_mappings: request
             .model_mappings

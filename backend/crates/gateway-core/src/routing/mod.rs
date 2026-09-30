@@ -554,6 +554,7 @@ impl ProviderCandidate {
 pub struct RoutingPlan {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_location: Option<crate::account::RequestLocation>,
+    codex_turn_metadata_strip_workspaces: bool,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -577,6 +578,12 @@ impl RoutingPlan {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()
+    }
+
+    /// 本次请求冻结的 Codex turn metadata workspaces 删除策略。
+    #[must_use]
+    pub const fn codex_turn_metadata_strip_workspaces(&self) -> bool {
+        self.codex_turn_metadata_strip_workspaces
     }
 
     #[must_use]

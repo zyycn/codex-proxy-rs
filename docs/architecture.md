@@ -355,8 +355,10 @@ API Key 默认 HTTP/SSE，可选 WS 优先；选号先验证传输资格，WS po
 OAuth 与 API Key 共用业务请求、响应和能力透传链路，差异限定在上游地址、认证、传输配置及明确的上游请求合同适配。
 OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配置的模型权限仍由 Core 与选号链路执行
 
-- OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
-  Search 的业务正文按原始字节转发，原生续写额度恢复遵循下述 continuation 例外。
+- OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序（运行设置
+  `codexTurnMetadataStripWorkspaces` 开启时按策略删除 turn metadata 的 `workspaces`）；SSE、
+  WebSocket、Images 与 standalone Search 的业务正文按原始字节转发，原生续写额度恢复遵循下述
+  continuation 例外。
   canonical facts 从同一数据旁路提取，用于路由、恢复判断、观测和计费。
   非流式 Responses 由 API 聚合 wire：终态省略或清空 `output` 时，使用同一响应的 `output_item.done`
   按 `output_index` 还原完整输出；已有非空终态输出不改写。完成项缺失或冲突时在下游提交前拒绝，

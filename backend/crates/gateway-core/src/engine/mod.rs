@@ -295,6 +295,7 @@ pub struct RequestAttemptContext {
     request_profile: Option<crate::account::OpaqueProviderData>,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
+    codex_turn_metadata_strip_workspaces: bool,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
     timing_started_at: Instant,
@@ -368,6 +369,12 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub const fn with_codex_turn_metadata_strip_workspaces(mut self, enabled: bool) -> Self {
+        self.codex_turn_metadata_strip_workspaces = enabled;
+        self
+    }
+
+    #[must_use]
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             response_control: None,
@@ -377,6 +384,7 @@ impl RequestAttemptContext {
             pricing: Arc::default(),
             disable_fast: false,
             request_location: None,
+            codex_turn_metadata_strip_workspaces: false,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
             concurrency_wait_budget: crate::concurrency::ConcurrencyWaitBudget::default(),
@@ -580,6 +588,12 @@ impl AttemptContext {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request.request_location.as_ref()
+    }
+
+    /// 全局冻结的 Codex turn metadata workspaces 删除策略。
+    #[must_use]
+    pub const fn codex_turn_metadata_strip_workspaces(&self) -> bool {
+        self.request.codex_turn_metadata_strip_workspaces
     }
 
     /// 当前 attempt 的诊断关联；克隆后可传给后台 transport 任务。

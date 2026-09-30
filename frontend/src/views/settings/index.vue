@@ -9,6 +9,7 @@ import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientProfileCard from './components/ClientProfileCard.vue'
+import CodexTurnMetadataCard from './components/CodexTurnMetadataCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestQueueCard from './components/RequestQueueCard.vue'
@@ -184,6 +185,10 @@ watch(section, (value) => {
             :disabled="disabled"
           />
           <RequestLocationCard v-model="form.requestLocation" v-model:enabled="form.requestLocationEnabled" :disabled="disabled" />
+          <CodexTurnMetadataCard
+            v-model:strip-workspaces="form.codexTurnMetadataStripWorkspaces"
+            :disabled="disabled"
+          />
           <ModelAliasesCard
             :mappings="mappings"
             :loading="loading"

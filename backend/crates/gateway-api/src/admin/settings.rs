@@ -46,6 +46,7 @@ pub struct RuntimeSettingsView {
     pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
+    pub codex_turn_metadata_strip_workspaces: bool,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -90,6 +91,7 @@ pub struct UpdateRuntimeSettingsRequest {
     pub xai_client_profile: Option<serde_json::Map<String, serde_json::Value>>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
+    pub codex_turn_metadata_strip_workspaces: bool,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -223,6 +225,7 @@ impl UpdateRuntimeSettingsRequest {
                 .request_location
                 .normalized()
                 .map_err(|_| WireValidationError::new("requestLocation"))?,
+            codex_turn_metadata_strip_workspaces: self.codex_turn_metadata_strip_workspaces,
             model_mappings: domain_model_mappings(self.model_mappings)?,
             refresh_margin_seconds: self.refresh_margin_seconds,
             refresh_concurrency: u32::try_from(self.refresh_concurrency)
@@ -274,6 +277,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             provider_request_profiles,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
+            codex_turn_metadata_strip_workspaces: settings.codex_turn_metadata_strip_workspaces,
             model_mappings: wire_model_mappings(settings.model_mappings),
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),

@@ -277,6 +277,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_profile_updates: Default::default(),
                 request_location_enabled: false,
                 request_location: Default::default(),
+                codex_turn_metadata_strip_workspaces: false,
                 model_mappings: Default::default(),
                 refresh_margin_seconds: 0,
                 refresh_concurrency: 1,

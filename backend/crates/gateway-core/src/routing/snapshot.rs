@@ -1138,6 +1138,10 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
+            codex_turn_metadata_strip_workspaces: self
+                .settings
+                .values
+                .codex_turn_metadata_strip_workspaces,
             account_selection_policy: self.settings.account_selection_policy,
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)
@@ -1205,6 +1209,10 @@ impl RuntimeSnapshot {
             config_revision: self.revision,
             pricing: Arc::clone(&self.settings.values.pricing),
             request_location: self.settings.request_location.clone(),
+            codex_turn_metadata_strip_workspaces: self
+                .settings
+                .values
+                .codex_turn_metadata_strip_workspaces,
             account_selection_policy: self.settings.account_selection_policy,
             operation: operation.kind(),
             max_attempts: NonZeroU32::new(super::MAX_REQUEST_ATTEMPTS)

@@ -12,6 +12,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         request_profile_updates: BTreeMap::new(),
         request_location_enabled: false,
         request_location: Default::default(),
+        codex_turn_metadata_strip_workspaces: false,
         refresh_margin_seconds,
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,
@@ -474,6 +475,30 @@ async fn request_location_defaults_and_updates_reach_the_runtime_snapshot() {
             .request_location,
         expected
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn codex_turn_metadata_strip_workspaces_defaults_off_and_reaches_the_runtime_snapshot() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("codex_strip_workspaces").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert!(!before.codex_turn_metadata_strip_workspaces);
+
+    let mut update = settings_with_margin(3_600);
+    update.codex_turn_metadata_strip_workspaces = true;
+    repository.update_runtime_settings(update).await.unwrap();
+    let settings = repository.load_runtime_settings().await.unwrap();
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert!(settings.codex_turn_metadata_strip_workspaces);
+    assert!(snapshot.settings.codex_turn_metadata_strip_workspaces);
+    assert!(snapshot.config_revision > before.config_revision);
     database.close().await;
 }
 

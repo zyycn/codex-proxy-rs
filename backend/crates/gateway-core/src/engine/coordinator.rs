@@ -1030,6 +1030,9 @@ where
                 .with_disable_fast(self.plan.disable_fast())
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
+                .with_codex_turn_metadata_strip_workspaces(
+                    self.plan.codex_turn_metadata_strip_workspaces(),
+                )
                 .with_concurrency_wait_budget(self.concurrency_wait_budget.clone())
                 .with_connection_budget(self.connection_budget.clone())
                 .with_timing_started_at(self.observation.timing_started_at)

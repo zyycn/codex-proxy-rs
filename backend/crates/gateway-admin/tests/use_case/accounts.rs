@@ -1105,6 +1105,7 @@ impl SettingsStore for StaticSettingsStore {
             request_profiles: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
+            codex_turn_metadata_strip_workspaces: false,
             config_revision: revision(1),
             model_mappings: Default::default(),
             refresh_margin_seconds: 300,

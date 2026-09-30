@@ -1574,6 +1574,32 @@ fn context_with_state_owner(request_id: &str, owner_account_id: &str) -> Attempt
     )
 }
 
+fn context_with_state_owner_and_strip_workspaces(
+    request_id: &str,
+    owner_account_id: &str,
+    strip_workspaces: bool,
+) -> AttemptContext {
+    let owner = ProviderAccountStateOwner::new(
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new(owner_account_id).expect("owner account id"),
+    );
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        )
+        .with_request_location(Some(global_request_location()))
+        .with_codex_turn_metadata_strip_workspaces(strip_workspaces),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner))
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+}
+
 fn context_with_state_owner_and_location(
     request_id: &str,
     owner_account_id: &str,
@@ -1686,7 +1712,26 @@ async fn capture_scoped_http_request(
     selected_account_id: &str,
     owner_account_id: &str,
     body: Map<String, serde_json::Value>,
+    protocol_context: Map<String, serde_json::Value>,
+) -> wiremock::Request {
+    capture_scoped_http_request_with_strip(
+        request_id,
+        selected_account_id,
+        owner_account_id,
+        body,
+        protocol_context,
+        false,
+    )
+    .await
+}
+
+async fn capture_scoped_http_request_with_strip(
+    request_id: &str,
+    selected_account_id: &str,
+    owner_account_id: &str,
+    body: Map<String, serde_json::Value>,
     mut protocol_context: Map<String, serde_json::Value>,
+    strip_workspaces: bool,
 ) -> wiremock::Request {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, selected_account_id).await;
@@ -1710,7 +1755,11 @@ async fn capture_scoped_http_request(
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", operation),
-            context_with_state_owner(request_id, owner_account_id),
+            context_with_state_owner_and_strip_workspaces(
+                request_id,
+                owner_account_id,
+                strip_workspaces,
+            ),
         )
         .await
         .expect("prepare scoped provider stream");
@@ -6168,6 +6217,124 @@ async fn cross_account_scope_sanitizes_only_known_turn_metadata_fields() {
         body.get("turn_metadata"),
         Some(&json!("future-opaque-shape"))
     );
+}
+
+#[tokio::test]
+async fn codex_turn_metadata_workspaces_are_stripped_only_when_the_switch_is_enabled() {
+    for strip_workspaces in [true, false] {
+        let raw = r#"{"installation_id":"client-installation","thread_id":"client-thread","turn_id":"client-turn","workspaces":{"/Users/mike/secret-project":{"has_changes":true}},"future":{"keep":true}}"#;
+        let request = capture_scoped_http_request_with_strip(
+            if strip_workspaces {
+                "req_strip_workspaces"
+            } else {
+                "req_keep_workspaces"
+            },
+            "acct_scope_same",
+            "acct_scope_same",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("hello")),
+                ("turnMetadata".to_owned(), json!(raw)),
+                (
+                    "client_metadata".to_owned(),
+                    json!({"x-codex-turn-metadata": raw}),
+                ),
+            ]),
+            Map::from_iter([("turn_metadata".to_owned(), json!(raw))]),
+            strip_workspaces,
+        )
+        .await;
+        let body = captured_request_body(&request);
+        let installation_id = body["client_metadata"]["x-codex-installation-id"]
+            .as_str()
+            .expect("account installation ID");
+        assert_ne!(installation_id, "client-installation");
+        let headers = captured_header_values(&request, "x-codex-turn-metadata");
+        assert_eq!(headers.len(), 1);
+        for encoded in [
+            String::from_utf8(headers[0].clone()).expect("UTF-8 header"),
+            body.pointer("/client_metadata/x-codex-turn-metadata")
+                .and_then(Value::as_str)
+                .expect("client metadata turn metadata")
+                .to_owned(),
+            body["turnMetadata"]
+                .as_str()
+                .expect("body turn metadata")
+                .to_owned(),
+        ] {
+            let metadata: Value = serde_json::from_str(&encoded).expect("metadata JSON");
+            assert_eq!(
+                metadata.get("workspaces").is_some(),
+                !strip_workspaces,
+                "unexpected workspaces handling: {encoded}"
+            );
+            assert_eq!(metadata["thread_id"], json!("client-thread"));
+            assert_eq!(metadata["turn_id"], json!("client-turn"));
+            assert_eq!(metadata["future"], json!({"keep": true}));
+            assert_eq!(metadata["installation_id"], json!(installation_id));
+        }
+    }
+}
+
+#[tokio::test]
+async fn websocket_account_scoping_strips_workspaces_when_the_switch_is_enabled() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_same").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("address"));
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("accept websocket");
+        let mut socket = accept_codex_test_websocket(socket).await;
+        let message = socket.next().await.expect("request").expect("valid frame");
+        let body: Value = serde_json::from_str(message.to_text().expect("text")).expect("JSON");
+        socket.send(Message::Text(json!({
+            "type": "response.completed",
+            "response": {"id": "resp_strip_workspaces", "model": "gpt-5.4", "status": "completed", "output": []}
+        }).to_string().into())).await.expect("complete response");
+        body
+    });
+    let raw = r#"{"installation_id":"client-installation","thread_id":"client-thread","workspaces":{"/tmp/secret-project":{"has_changes":true}}}"#;
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            (
+                "input".to_owned(),
+                json!([{"role": "user", "content": "hello"}]),
+            ),
+            (
+                "client_metadata".to_owned(),
+                json!({"x-codex-turn-metadata": raw}),
+            ),
+        ]),
+    )
+    .expect("payload")
+    .with_context(Map::from_iter([("turn_metadata".to_owned(), json!(raw))]));
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+            ),
+            context_with_state_owner_and_strip_workspaces("req_strip_ws", "acct_scope_same", true),
+        )
+        .await
+        .expect("provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("successful websocket response");
+    }
+    let body = server.await.expect("server");
+    let encoded = body
+        .pointer("/client_metadata/x-codex-turn-metadata")
+        .and_then(Value::as_str)
+        .expect("turn metadata");
+    let metadata: Value = serde_json::from_str(encoded).expect("metadata JSON");
+    assert!(
+        metadata.get("workspaces").is_none(),
+        "workspaces survived: {encoded}"
+    );
+    assert_eq!(metadata["thread_id"], json!("client-thread"));
+    assert_ne!(metadata["installation_id"], json!("client-installation"));
 }
 
 #[tokio::test]

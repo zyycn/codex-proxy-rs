@@ -26,6 +26,8 @@ const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 const ENVIRONMENT_CONTEXT_CONTENT_KIND: &str = "environments.environment_context";
+/// 官方 Core 只在工作区非空时发送该键；删除后请求形状仍属官方合法取值。
+const WORKSPACES_KEY: &str = "workspaces";
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
@@ -460,6 +462,7 @@ pub(crate) fn scope_request_to_account(
     request: &mut CodexResponsesRequest,
     installation_id: &str,
     account_scope: RequestAccountScope,
+    strip_workspaces: bool,
 ) {
     let reset_account_state = !account_scope.can_reuse_account_state();
     let client_metadata_turn_state = metadata_string(request, "x-codex-turn-state");
@@ -473,12 +476,23 @@ pub(crate) fn scope_request_to_account(
     } else {
         None
     };
-    let turn_metadata = request
-        .turn_metadata
-        .as_deref()
-        .and_then(|metadata| scope_turn_metadata(metadata, installation_id, reset_account_state));
-    let client_metadata_turn_metadata = metadata_string(request, "x-codex-turn-metadata")
-        .and_then(|metadata| scope_turn_metadata(&metadata, installation_id, reset_account_state));
+    let turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
+        scope_turn_metadata(
+            metadata,
+            installation_id,
+            reset_account_state,
+            strip_workspaces,
+        )
+    });
+    let client_metadata_turn_metadata =
+        metadata_string(request, "x-codex-turn-metadata").and_then(|metadata| {
+            scope_turn_metadata(
+                &metadata,
+                installation_id,
+                reset_account_state,
+                strip_workspaces,
+            )
+        });
 
     if reset_account_state {
         request.passthrough_headers.remove("x-codex-turn-state");
@@ -494,7 +508,8 @@ pub(crate) fn scope_request_to_account(
         for (name, value) in &mut request.passthrough_headers {
             if name == "x-codex-turn-metadata"
                 && let Ok(raw) = value.to_str()
-                && let Some(scoped) = scope_turn_metadata(raw, installation_id, false)
+                && let Some(scoped) =
+                    scope_turn_metadata(raw, installation_id, false, strip_workspaces)
                 && let Ok(scoped) = HeaderValue::from_str(&scoped)
             {
                 *value = scoped;
@@ -510,7 +525,14 @@ pub(crate) fn scope_request_to_account(
             .body()
             .get(*key)
             .and_then(Value::as_str)
-            .and_then(|value| scope_turn_metadata(value, installation_id, reset_account_state));
+            .and_then(|value| {
+                scope_turn_metadata(
+                    value,
+                    installation_id,
+                    reset_account_state,
+                    strip_workspaces,
+                )
+            });
         replace_existing_body_string(request, key, scoped.as_deref());
     }
 
@@ -525,7 +547,12 @@ pub(crate) fn scope_request_to_account(
                     (
                         key,
                         metadata.get(key).and_then(Value::as_str).and_then(|value| {
-                            scope_turn_metadata(value, installation_id, reset_account_state)
+                            scope_turn_metadata(
+                                value,
+                                installation_id,
+                                reset_account_state,
+                                strip_workspaces,
+                            )
                         }),
                     )
                 });
@@ -588,11 +615,24 @@ pub(crate) fn scope_turn_metadata(
     raw: &str,
     installation_id: &str,
     cross_account: bool,
+    strip_workspaces: bool,
 ) -> Option<String> {
     let Ok(Value::Object(mut metadata)) = serde_json::from_str::<Value>(raw) else {
         return (!cross_account).then(|| raw.to_owned());
     };
     let mut changed = false;
+    if strip_workspaces {
+        // 该键同时承载本地路径与远端仓库信息；官方客户端在工作区为空时根本不发送它。
+        let removable = metadata
+            .keys()
+            .filter(|key| key.trim().eq_ignore_ascii_case(WORKSPACES_KEY))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in removable {
+            metadata.remove(&key);
+            changed = true;
+        }
+    }
     if cross_account {
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()

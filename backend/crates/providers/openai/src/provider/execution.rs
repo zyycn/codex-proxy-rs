@@ -209,7 +209,12 @@ impl CodexProvider {
         // Standalone Provider 端点没有可证明的账号 owner；Search metadata 必须按
         // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity。
         let turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
-            crate::transport::request::scope_turn_metadata(metadata, lease.installation_id(), true)
+            crate::transport::request::scope_turn_metadata(
+                metadata,
+                lease.installation_id(),
+                true,
+                context.codex_turn_metadata_strip_workspaces(),
+            )
         });
         let events = cold_json_response_stream(ColdJsonResponse {
             client: self
