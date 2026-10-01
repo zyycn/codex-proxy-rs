@@ -13,7 +13,7 @@ use gateway_core::engine::execution::{
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::lifecycle::{ConnectionDraining, ConnectionGuard, ConnectionLifecycle};
 use gateway_core::routing::{
-    ProviderCatalogUnavailable, ProviderKind, PublicModelDescriptor, PublicModelId,
+    ProviderCatalogUnavailable, ProviderKind, PublicModelDescriptor, PublicModelId, UpstreamModelId,
 };
 use uuid::Uuid;
 
@@ -134,6 +134,7 @@ impl OpenAiService {
         &self,
         prepared: PreparedRootExecution,
         operation: gateway_core::operation::Operation,
+        upstream_model: Option<UpstreamModelId>,
         client_ip: Option<IpAddr>,
         user_agent: Option<String>,
         endpoint: String,
@@ -148,7 +149,7 @@ impl OpenAiService {
             .start_prepared_provider_endpoint(
                 prepared,
                 provider,
-                None,
+                upstream_model,
                 operation,
                 ExecutionRequestMetadata {
                     protocol: "openai".to_owned(),
@@ -168,6 +169,12 @@ impl OpenAiService {
         request: StartProviderExecution,
     ) -> Result<StartedExecution, GatewayError> {
         self.execution.start_provider_endpoint(request).await
+    }
+
+    /// Live 语音 sideband 能力；组合未提供时协议层回退到稳定 501。
+    #[must_use]
+    pub(crate) fn live_gateway(&self) -> Option<Arc<dyn gateway_core::live::LiveGateway>> {
+        self.execution.live_gateway()
     }
 
     pub(crate) fn try_register_connection(

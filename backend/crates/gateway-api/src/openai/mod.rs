@@ -4,6 +4,7 @@ pub mod auth;
 mod endpoint;
 pub mod error;
 pub mod images;
+pub(crate) mod live;
 pub(crate) mod middleware;
 pub mod models;
 pub mod responses;

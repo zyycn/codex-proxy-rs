@@ -98,10 +98,15 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
     pub session_affinity: Option<&'a CodexSessionAffinity>,
+    /// 本端点的上游模型；提供后按账号模型权限过滤候选（如 live 语音）。
+    pub upstream_model: Option<&'a str>,
+    /// 本端点只接受 OAuth 凭据时排除 API Key 账号，避免混合池选中后必然失败。
+    pub requires_oauth: bool,
 }
 
 struct CredentialSelectionInput<'a> {
     requires_websocket: bool,
+    requires_oauth: bool,
     request_url: &'a Url,
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
@@ -295,6 +300,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket: false,
+            requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -313,6 +319,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket,
+            requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -365,19 +372,23 @@ impl CodexCredentialSelector {
     /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号。
     ///
     /// 账号范围、健康度、配额、并发租约、cookie 与认证准备仍走同一套选择链路；
-    /// 原生端点没有 Responses 模型，不套用管理员配置的文本模型权限。
+    /// 原生端点默认没有 Responses 模型，不套用管理员配置的文本模型权限。
+    /// 端点有明确上游模型（如 live 语音）时通过 `upstream_model` 让账号
+    /// 模型权限参与候选过滤；`requires_oauth` 限定本端点支持的认证类型。
     pub(crate) async fn select_for_provider_endpoint(
         &self,
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket: false,
+            requires_oauth: request.requires_oauth,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity.map(CodexSessionAffinity::key),
             session_affinity_observation: request.session_affinity,
         };
-        self.select_inner(&input, None, None).await
+        self.select_inner(&input, None, request.upstream_model)
+            .await
     }
 
     async fn select_inner(
@@ -443,6 +454,8 @@ impl CodexCredentialSelector {
                                 .attempt
                                 .account_scope()
                                 .is_some_and(|scope| scope.allows(account.id())))
+                        && (!request.requires_oauth
+                            || account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH)
                         && (diagnostic
                             || upstream_model.is_none_or(|upstream_model| {
                                 let allowed =

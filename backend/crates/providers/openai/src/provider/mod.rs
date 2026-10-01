@@ -56,9 +56,9 @@ use uuid::Uuid;
 use crate::credential::{
     CodexAccountFailure, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
-    CodexCredentialRefreshService, CodexCredentialSelector, CodexCyberPolicyScope,
-    CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError, RuntimeCodexCookie,
-    SelectCodexCredential, SelectCodexProviderEndpointCredential,
+    CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
+    CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError,
+    RuntimeCodexCookie, SelectCodexCredential, SelectCodexProviderEndpointCredential,
     derive_codex_cyber_policy_session_key, derive_codex_endpoint_session_affinity,
     derive_codex_session_affinity, derive_previous_response_id_hash,
 };
@@ -93,18 +93,21 @@ use crate::transport::websocket::{
 };
 use crate::transport::{
     CODEX_ALPHA_SEARCH_PATH, CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH,
-    CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
-    CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
-    CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexResponseMetadataUpdates, CodexTransportMetrics, CodexUpstreamDiagnostics,
-    CodexWebSocketPool, endpoint_url, normalize_selected_codex_downstream_body,
+    CODEX_REALTIME_CALLS_PATH, CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry,
+    CodexBackendClient, CodexBackendJsonResponse, CodexBackendStreamingResponse,
+    CodexBackendTransport, CodexClientError, CodexRateLimitUpdates, CodexRequestContext,
+    CodexResponseMetadata, CodexResponseMetadataUpdates, CodexTransportMetrics,
+    CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
+    normalize_selected_codex_downstream_body,
 };
 
 mod execution;
 mod failure;
+mod live;
 mod observation;
 mod upstream_adapter;
 mod workers;
+pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
 pub(crate) use workers::ClientReleaseServices;
 
 use execution::*;
@@ -157,9 +160,12 @@ pub struct CodexProvider {
     image_generations_url: Url,
     image_edits_url: Url,
     search_url: Url,
+    live_calls_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
     stream_max_retries: u32,
+    live_registry: Arc<CodexLiveRegistry>,
+    live_gateway: Option<Arc<CodexLiveGateway>>,
 }
 
 struct PreparedGenerateRequest {
@@ -260,6 +266,8 @@ impl CodexProvider {
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let search_url = Url::parse(&endpoint_url(&base_url, CODEX_ALPHA_SEARCH_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let live_calls_url = Url::parse(&endpoint_url(&base_url, CODEX_REALTIME_CALLS_PATH))
+            .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let client =
             CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
         Ok(Self {
@@ -272,14 +280,29 @@ impl CodexProvider {
             image_generations_url,
             image_edits_url,
             search_url,
+            live_calls_url,
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             stream_max_retries,
+            live_registry: Arc::new(CodexLiveRegistry::default()),
+            live_gateway: None,
         })
     }
 
     pub(crate) fn with_session_identity(mut self, identity: CodexSessionIdentity) -> Self {
         self.session_identity = Some(identity);
+        self
+    }
+
+    /// 绑定 Live 语音支持：call 注册表 + 账号级 sideband 网关。
+    /// 需要凭据仓库句柄；未绑定时 Live 端点仍可选路但注册表为空。
+    pub(crate) fn with_live_support(mut self, repository: CodexCredentialRepository) -> Self {
+        let gateway = Arc::new(CodexLiveGateway::new(
+            Arc::clone(&self.live_registry),
+            repository,
+            self.client.clone(),
+        ));
+        self.live_gateway = Some(gateway);
         self
     }
 }
@@ -319,6 +342,12 @@ impl Provider for CodexProvider {
 
     fn name(&self) -> &'static str {
         PROVIDER_NAME
+    }
+
+    fn live_gateway(&self) -> Option<Arc<dyn gateway_core::live::LiveGateway>> {
+        self.live_gateway
+            .clone()
+            .map(|gateway| gateway as Arc<dyn gateway_core::live::LiveGateway>)
     }
 
     fn catalog_generation(&self) -> ProviderCatalogGeneration {
@@ -458,6 +487,11 @@ impl Provider for CodexProvider {
         }
         if let Operation::Search(search) = request.operation() {
             return self.execute_search(search, candidate, context).await;
+        }
+        if let Operation::ProviderHttp(request) = request.operation() {
+            return self
+                .execute_live_call(request.clone(), candidate.upstream_model(), context)
+                .await;
         }
         let Operation::Generate(generate) = request.operation() else {
             return Err(provider_error(

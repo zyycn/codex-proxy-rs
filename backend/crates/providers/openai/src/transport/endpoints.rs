@@ -6,6 +6,8 @@ pub const CODEX_IMAGE_GENERATIONS_PATH: &str = "/codex/images/generations";
 pub const CODEX_IMAGE_EDITS_PATH: &str = "/codex/images/edits";
 /// `/codex/alpha/search`
 pub const CODEX_ALPHA_SEARCH_PATH: &str = "/codex/alpha/search";
+/// `/codex/realtime/calls`；语音通话 SDP 引导端点。
+pub const CODEX_REALTIME_CALLS_PATH: &str = "/codex/realtime/calls";
 /// `/api/codex/usage`
 pub const CODEX_USAGE_API_PATH: &str = "/api/codex/usage";
 /// `/wham/usage`

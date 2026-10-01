@@ -118,6 +118,13 @@ pub fn responses_websocket_endpoint(base_url: &str) -> String {
     }
 }
 
+/// Live sideband 复用同一条拨号路径；不计入请求连接预算。
+pub(super) async fn connect_sideband_websocket(
+    connection: &CodexWebSocketConnection,
+) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
+    connect_websocket(connection, false).await
+}
+
 pub(super) async fn connect_pumped_websocket(
     connection: &CodexWebSocketConnection,
     keepalive: PumpKeepalive,

@@ -101,6 +101,9 @@ impl CodexProvider {
                 request_url: &request.response_origin,
                 attempt: &context,
                 session_affinity: request.session_affinity.as_ref(),
+                // 图像/搜索端点没有对应的上游模型权限，也不限定认证类型。
+                upstream_model: None,
+                requires_oauth: false,
             })
             .await
             .map_err(map_selection_error)?;

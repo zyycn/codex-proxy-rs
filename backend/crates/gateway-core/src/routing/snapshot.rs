@@ -1175,8 +1175,13 @@ impl RuntimeSnapshot {
                 provider: provider.as_str().to_owned(),
             });
         }
-        let model_binding_valid =
-            matches!(operation.kind(), OperationKind::CountTokens) == upstream_model.is_some();
+        // CountTokens 必须绑定目标模型；其余端点可选携带上游模型——Provider 原生
+        // 端点（如 live 语音）借此让账号模型权限参与路由检查。
+        let model_binding_valid = if matches!(operation.kind(), OperationKind::CountTokens) {
+            upstream_model.is_some()
+        } else {
+            true
+        };
         let model_capable = upstream_model.is_none_or(|model| {
             match self
                 .provider_models

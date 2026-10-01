@@ -714,6 +714,12 @@ pub trait ExecutionService: Send + Sync {
         &self,
         request: StartProviderExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
+
+    /// 返回 Provider 注册表中首个声明 Live sideband 能力的网关。
+    /// `None` 表示当前组合不含语音 sideband；协议 adapter 据此回退到稳定 501。
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        None
+    }
 }
 
 /// 只验证 Client API Key 并返回稳定 Key ID，不产生请求使用事实。
@@ -2377,6 +2383,12 @@ impl ExecutionService for DefaultExecutionService {
         request: StartProviderExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move { self.start_provider_endpoint_inner(request).await })
+    }
+
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        self.providers
+            .iter()
+            .find_map(|provider| provider.live_gateway())
     }
 }
 

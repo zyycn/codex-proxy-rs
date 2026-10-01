@@ -12,6 +12,7 @@ pub mod event;
 pub mod health;
 pub mod identity;
 pub mod lifecycle;
+pub mod live;
 pub mod metering;
 pub mod middleware;
 pub mod operation;

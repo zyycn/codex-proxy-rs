@@ -1012,6 +1012,12 @@ pub trait Provider: Send + Sync {
         request: ProviderRequest,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError>;
+
+    /// 返回 Provider 的 Live sideband 能力；不支持的 Provider 返回 `None`。
+    /// 实现必须只暴露已钉住账号的受限拨号，不得泄露凭据或放宽账号范围。
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        None
+    }
 }
 
 /// Provider Registry 构建错误。
@@ -1128,6 +1134,11 @@ impl ProviderRegistry {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
+    }
+
+    /// 按注册顺序遍历 adapter；仅用于能力发现类查询。
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Provider>> {
+        self.providers.values()
     }
 }
 

@@ -61,7 +61,9 @@ where
                 let operation = request.apply_capabilities(decode(body, &headers)?)?;
                 let started = match service
                     .start_prepared_provider_endpoint(
-                        prepared, operation, client_ip, user_agent, endpoint,
+                        prepared, operation,
+                        // 图像/搜索等原生端点没有对应的上游模型权限。
+                        None, client_ip, user_agent, endpoint,
                     )
                     .await
                 {
