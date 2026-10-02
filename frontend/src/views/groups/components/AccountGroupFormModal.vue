@@ -46,17 +46,17 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem label="Fast 模式" description="关闭后按标准模式处理">
+      <BaseFormItem label="Fast 模式">
         <BaseSegmented
-          :model-value="form.disableFast ? 'disabled' : 'default'"
-          class="w-48 max-w-full"
+          v-model="form.fastMode"
+          class="w-64 max-w-full"
           label="Fast 模式"
           :options="[
             { label: '默认', value: 'default' },
+            { label: '开启', value: 'enabled' },
             { label: '关闭', value: 'disabled' },
           ]"
           :disabled="saving"
-          @update:model-value="form.disableFast = $event === 'disabled'"
         />
       </BaseFormItem>
       <BaseFormItem label="描述（可选）">

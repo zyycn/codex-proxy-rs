@@ -127,6 +127,14 @@ async fn rejection_unmapped_principal_and_plugin_supplied_key_id_fail_closed() {
             authentication,
             Err(ClientAuthenticationError::InvalidKey)
         ));
+        assert!(
+            core.snapshots()
+                .acquire()
+                .unwrap()
+                .extensions()
+                .unwrap()
+                .is_ready()
+        );
         close(environment, runtime, core).await;
     }
 
@@ -150,6 +158,21 @@ async fn rejection_unmapped_principal_and_plugin_supplied_key_id_fail_closed() {
         authentication,
         Err(ClientAuthenticationError::ProviderUnavailable)
     ));
+    assert!(
+        !core
+            .snapshots()
+            .acquire()
+            .unwrap()
+            .extensions()
+            .unwrap()
+            .is_ready()
+    );
+    for probe in core.health_probes() {
+        assert!(matches!(
+            probe.check().await,
+            gateway_core::health::HealthState::Healthy
+        ));
+    }
     close(environment, runtime, core).await;
 }
 

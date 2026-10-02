@@ -2,6 +2,7 @@
 
 mod adapter;
 mod callback;
+mod compatibility;
 mod contribution;
 mod generation;
 mod package;

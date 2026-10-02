@@ -4,7 +4,7 @@ import { BaseIconButton, BaseTag } from '@codex-proxy/ui'
 import { Play, Power, Settings2, Trash2 } from '@lucide/vue'
 import { configurationStatus, PLUGIN_STATUS_LABELS, pluginStatusType } from '../utils/catalog'
 import { artifactForInstance } from '../utils/model'
-import PluginCompatibilityWarning from './PluginCompatibilityWarning.vue'
+import PluginStatusNotice from './PluginStatusNotice.vue'
 
 defineProps<{ instances: PluginInstance[], artifacts: PluginArtifact[], busy: boolean }>()
 defineEmits<{
@@ -31,8 +31,8 @@ defineEmits<{
       <BaseTag size="sm">
         {{ artifactForInstance(instance, artifacts)?.metadata.version }}
       </BaseTag>
-      <PluginCompatibilityWarning v-if="instance.compatibilityWarning" :instance="instance" />
-      <BaseTag v-else size="sm" :type="pluginStatusType(configurationStatus(instance))">
+      <PluginStatusNotice :instance="instance" />
+      <BaseTag size="sm" :type="pluginStatusType(configurationStatus(instance))">
         {{ PLUGIN_STATUS_LABELS[configurationStatus(instance)] }}
       </BaseTag>
       <div class="flex shrink-0 items-center gap-1">
@@ -42,7 +42,7 @@ defineEmits<{
         <BaseIconButton v-if="instance.enabled" label="停用历史配置" variant="secondary" size="sm" :disabled="busy" @click="$emit('disable', instance)">
           <Power class="size-4" />
         </BaseIconButton>
-        <BaseIconButton v-else label="启动" size="sm" variant="secondary" :disabled="busy || Boolean(instance.compatibilityWarning)" @click="$emit('enable', instance)">
+        <BaseIconButton v-else label="启动" size="sm" variant="secondary" :disabled="busy || Boolean(instance.loadError)" @click="$emit('enable', instance)">
           <Play class="size-4" />
         </BaseIconButton>
         <BaseIconButton v-if="!instance.enabled" label="删除历史配置" variant="secondary" size="sm" class="group" :disabled="busy" @click="$emit('delete', instance)">

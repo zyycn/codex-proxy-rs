@@ -48,7 +48,7 @@ tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-th
 
 [[bin]]
 name = "gateway-plugin-test-worker"
-path = "tests/support/worker.rs"
+path = "tests/support/worker/mod.rs"
 test = false
 bench = false
 doc = false

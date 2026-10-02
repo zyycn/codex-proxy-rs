@@ -68,6 +68,7 @@ impl MiddlewareRequest {
     }
 
     /// 在原始集合之后追加一个 header，保留同名多值。
+    /// request 与 attempt 阶段的请求头会传入上游，不用于保存插件内部状态。
     pub fn append_header(&mut self, name: impl Into<String>, value: Vec<u8>) {
         let name = name.into();
         self.head.headers.push(MiddlewareHeader {

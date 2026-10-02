@@ -28,8 +28,8 @@ cpr-plugin package \
 
 资源映射相对于作者清单所在目录解析。输出包括完整插件 ID、版本和目标 triple 命名的 `.tar.gz` 及 `.sha256`；归档根目录直接包含 `plugin.json`、可执行文件和已声明资源，不包含开发依赖
 
-作者清单可省略普通贡献项的 `id`、`version` 和固定阶段；`middleware` 必须显式声明版本 `3`，
-并从 `http`、`websocket`、`service`、`request`、`attempt` 中选择挂载阶段。
+作者清单可省略普通贡献项的 `id`、`version` 和固定阶段；`middleware` 必须显式声明版本 `4`，
+并从 `http`、`websocket`、`service`、`request`、`attempt` 中选择挂载阶段；`upstream_adapter` 必须显式声明版本 `2`。
 CLI 与 SDK 的 `Manifest::from_author_slice`、`PluginBuilder::from_json` 共用规范化入口；归档中的
 `plugin.json` 写入补全后的贡献项字段，不保留另一份作者声明。
 完整规则见 [SDK 清单](../../crates/gateway-plugin/sdk/docs/manifest.md)

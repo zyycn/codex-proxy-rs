@@ -7,6 +7,7 @@ use gateway_admin::{
     ports::plugin_resources::PluginResourceAccess,
 };
 use gateway_core::{
+    account::FastMode,
     lifecycle::CancellationToken,
     task::{WorkerContribution, WorkerRunnable},
 };
@@ -18,7 +19,7 @@ fn group(name: &str) -> CreateAccountGroup {
     CreateAccountGroup {
         name: name.into(),
         description: None,
-        disable_fast: false,
+        fast_mode: FastMode::Default,
         color: AccountGroupColor::parse("#2563EBFF").unwrap(),
     }
 }
@@ -163,6 +164,47 @@ async fn wait_done(path: &std::path::Path, after: usize) -> Value {
             std::fs::read_to_string(path).unwrap_or_default(),
         )
     })
+}
+
+#[tokio::test]
+async fn malformed_maintenance_response_does_not_stop_the_host_worker() {
+    let Some(environment) = Environment::create().await else {
+        return;
+    };
+    environment
+        .install_plugin(
+            json!({"maintenance_fixture":true,"invalid_response_method":"plugin.reconcile"}),
+        )
+        .await;
+    let (runtime, core, resources, stop, task) = start(&environment).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while core
+            .snapshots()
+            .acquire()
+            .unwrap()
+            .extensions()
+            .unwrap()
+            .is_ready()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!task.is_finished(), "单个插件失败不能终止宿主维护任务");
+    for probe in core.health_probes() {
+        assert!(matches!(
+            probe.check().await,
+            gateway_core::health::HealthState::Healthy
+        ));
+    }
+    stop.cancel();
+    task.await.unwrap();
+    drop(resources);
+    environment.release_plugin_accounts(&runtime);
+    drop(core);
+    drop(runtime);
+    environment.close().await;
 }
 
 #[tokio::test]

@@ -12,6 +12,7 @@ use gateway_admin::{
     ports::store::{AccountGroupStore, AdminStoreErrorKind, ClientKeyStore},
 };
 use gateway_core::{
+    account::FastMode,
     policy::{ClientApiKeyId, RateLimits},
     routing::AccountGroupId,
 };
@@ -21,6 +22,36 @@ use super::TestDatabase;
 
 const MIXED_GROUP: &str = "grp_00000000000000000000000000000001";
 const EMPTY_GROUP: &str = "grp_00000000000000000000000000000002";
+
+#[tokio::test]
+async fn fast_mode_migration_preserves_existing_group_choices() {
+    let Some(database) = TestDatabase::create_through("group_fast_mode_upgrade", 21).await else {
+        return;
+    };
+    for (id, disabled) in [(MIXED_GROUP, true), (EMPTY_GROUP, false)] {
+        sqlx::query("insert into account_groups (id, name, color, disable_fast, created_at, updated_at) values ($1, $1, '#2563EBFF', $2, now(), now())")
+            .bind(id)
+            .bind(disabled)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+    }
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let groups = sqlx::query_as::<_, (String, String)>(
+        "select id, fast_mode from account_groups order by id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        groups,
+        vec![
+            (MIXED_GROUP.to_owned(), "disabled".to_owned()),
+            (EMPTY_GROUP.to_owned(), "default".to_owned())
+        ]
+    );
+    database.close().await;
+}
 
 #[tokio::test]
 async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multiplication() {
@@ -49,7 +80,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     groups
         .create_account_group(
             NewAccountGroup {
-                disable_fast: false,
+                fast_mode: FastMode::Default,
                 id: mixed_group.clone(),
                 name: "Mixed Production".to_owned(),
                 description: Some("cross-provider".to_owned()),
@@ -62,7 +93,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     groups
         .create_account_group(
             NewAccountGroup {
-                disable_fast: false,
+                fast_mode: FastMode::Default,
                 id: empty_group.clone(),
                 name: "Empty Pool".to_owned(),
                 description: None,
@@ -272,7 +303,7 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
     groups
         .create_account_group(
             NewAccountGroup {
-                disable_fast: false,
+                fast_mode: FastMode::Default,
                 id: group_id(EMPTY_GROUP),
                 name: "Statusless Costs".to_owned(),
                 description: None,
@@ -456,10 +487,10 @@ async fn audit_count(pool: &sqlx::PgPool) -> u64 {
 }
 
 #[tokio::test]
-async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot_facts() {
+async fn fast_mode_group_updates_preserve_omitted_values_and_publish_snapshot_facts() {
     use gateway_admin::model::account_groups::UpdateAccountGroup;
     use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
-    let Some(database) = TestDatabase::create("disable_fast_group").await else {
+    let Some(database) = TestDatabase::create("fast_mode_group").await else {
         return;
     };
     let repository = PgAccountGroupRepository::new(database.pool.clone());
@@ -471,13 +502,19 @@ async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot
                 name: "Fast policy".to_owned(),
                 description: None,
                 color: group_color("#2563EBFF"),
-                disable_fast: true,
+                fast_mode: FastMode::Disabled,
             },
             &context("create-fast"),
         )
         .await
         .unwrap();
-    for (value, expected) in [(None, true), (Some(false), false), (Some(true), true)] {
+    for (value, expected) in [
+        (None, FastMode::Disabled),
+        (Some(FastMode::Enabled), FastMode::Enabled),
+        (None, FastMode::Enabled),
+        (Some(FastMode::Default), FastMode::Default),
+        (Some(FastMode::Disabled), FastMode::Disabled),
+    ] {
         let mutation = repository
             .update_account_group(
                 UpdateAccountGroup {
@@ -485,13 +522,13 @@ async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot
                     name: "Renamed policy".to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
-                    disable_fast: value,
+                    fast_mode: value,
                 },
                 &context("update-fast"),
             )
             .await
             .unwrap();
-        assert_eq!(mutation.record.unwrap().disable_fast, expected);
+        assert_eq!(mutation.record.unwrap().fast_mode, expected);
         let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
             .load_runtime_snapshot()
             .await
@@ -506,7 +543,7 @@ async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot
                 .iter()
                 .find(|group| group.id == id)
                 .unwrap()
-                .disable_fast,
+                .fast_mode,
             expected
         );
     }

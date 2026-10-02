@@ -65,25 +65,19 @@ impl PluginRuntime {
                     package.manifest(),
                     &instance.bindings,
                 )?;
-                // 发行清单与当前 Runtime 共用同一份能力声明，不能让二者分别漂移。
-                if !crate::package::host_supports(package.manifest())? {
-                    return Err(AdminError::invalid("该插件声明的业务能力尚未接入运行时"));
-                }
-                if !package
-                    .manifest()
-                    .engines
-                    .codex_proxy_rs
-                    .matches(&host_version)
+                let requirements = crate::package::compatibility_requirements(package.manifest())?;
+                if let Some(warning) =
+                    crate::package::compatibility_warning(&requirements, &host_version)?
                 {
-                    return Err(AdminError::invalid(format!(
-                        "插件要求宿主 {}，当前为 {}",
-                        package.manifest().engines.codex_proxy_rs,
-                        host_version
-                    )));
+                    tracing::warn!(
+                        instance_id = instance.id,
+                        warning,
+                        "插件版本未经宿主保证，尝试启动"
+                    );
                 }
                 let package = Arc::new(
                     package
-                        .prepare(&directory, &host_version)
+                        .prepare(&directory)
                         .map_err(|_| AdminError::unavailable("插件制品准备失败"))?,
                 );
                 Ok((package, configuration, instance, state_configuration))
@@ -95,6 +89,7 @@ impl PluginRuntime {
             .plugin_id()
             .map_err(|_| AdminError::invalid("插件身份无效"))?;
         let instance_id = instance.id.clone();
+        crate::compatibility::report(&manifest, &instance_id)?;
         let restart_identity =
             RestartIdentity::new(instance_id.clone(), authorization_binding.clone());
         let bindings = instance.bindings.clone();

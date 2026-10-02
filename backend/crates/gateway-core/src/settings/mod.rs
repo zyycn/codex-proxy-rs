@@ -9,6 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::account::FastMode;
 use crate::policy::{ClientApiKeyId, ClientPolicy, ClientSettings, RateLimits};
 use crate::routing::RuntimeSnapshot;
 
@@ -21,7 +22,7 @@ pub use values::SettingsValues;
 #[serde(deny_unknown_fields)]
 pub struct ExecutionSettings {
     pub runtime: SettingsValues,
-    pub disable_fast: bool,
+    pub fast_mode: FastMode,
     pub client_limits: RateLimits,
     /// 从本次请求开始计时，已经过去的时间不会因插件改写而重置。
     pub timeout_ms: u64,
@@ -40,7 +41,7 @@ struct ExecutionOverrides {
     defaults: Arc<ClientSettings>,
     client_key_id: String,
     input: Arc<ExecutionSettings>,
-    disable_fast: Option<SettingOverride<bool>>,
+    fast_mode: Option<SettingOverride<FastMode>>,
     client_limits: Option<SettingOverride<RateLimits>>,
     timeout_ms: Option<SettingOverride<u64>>,
 }
@@ -194,7 +195,7 @@ impl RequestSettings {
         let values = self.resolve_execution(policy.key_id().as_str(), policy.defaults(), 0);
         policy.with_settings(
             values.runtime.request_profiles(),
-            values.disable_fast,
+            values.fast_mode,
             values.client_limits,
         )
     }
@@ -210,7 +211,7 @@ impl RequestSettings {
             defaults: policy.defaults().clone(),
             client_key_id: policy.key_id().as_str().to_owned(),
             input: Arc::new(input),
-            disable_fast: previous.and_then(|scope| scope.disable_fast.clone()),
+            fast_mode: previous.and_then(|scope| scope.fast_mode.clone()),
             client_limits: previous.and_then(|scope| scope.client_limits.clone()),
             timeout_ms: previous.and_then(|scope| scope.timeout_ms.clone()),
         }));
@@ -247,9 +248,9 @@ impl RequestSettings {
         }
         ExecutionSettings {
             runtime,
-            disable_fast: overrides
-                .and_then(|scope| scope.disable_fast.as_ref())
-                .map_or(defaults.disable_fast, |change| change.value),
+            fast_mode: overrides
+                .and_then(|scope| scope.fast_mode.as_ref())
+                .map_or(defaults.fast_mode, |change| change.value),
             client_limits: overrides
                 .and_then(|scope| scope.client_limits.as_ref())
                 .map_or(defaults.limits, |change| change.value),
@@ -286,7 +287,7 @@ impl RequestSettings {
         let previous = self.execution_values().ok_or(InvalidSettings)?;
         let mut updated =
             self.replace_scoped(&previous.runtime, values.runtime.clone(), instance_id)?;
-        if previous.disable_fast == values.disable_fast
+        if previous.fast_mode == values.fast_mode
             && previous.client_limits == values.client_limits
             && previous.timeout_ms == values.timeout_ms
         {
@@ -298,11 +299,11 @@ impl RequestSettings {
         } else {
             updated.order
         };
-        if previous.disable_fast != values.disable_fast {
-            scope.disable_fast = Some(SettingOverride {
+        if previous.fast_mode != values.fast_mode {
+            scope.fast_mode = Some(SettingOverride {
                 instance_id: instance_id.to_owned(),
                 order,
-                value: values.disable_fast,
+                value: values.fast_mode,
             });
         }
         if previous.client_limits != values.client_limits {

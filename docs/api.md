@@ -1067,12 +1067,17 @@ PostgreSQL 或 Redis。OpenAI OAuth 与声明该能力的插件可使用，账�
 ## 6. 账号分组
 
 分组是 Provider-neutral 的账号集合；一个组可包含任意 Provider 账号，一个账号也可属于多个组。
-分组详情和列表返回 `disableFast`，创建时省略默认为 `false`，更新时省略或 `null` 保留现值。
-Client Key 绑定的任一分组开启此限制（包括已禁用分组）时，该 Key 的 OpenAI Responses 请求关闭 Fast；
-未绑定分组的 Key 不限制 Fast，不按最终所选账号的分组判断
+分组详情和列表返回 `fastMode`，取值为 `default`（默认）、`enabled`（开启）、`disabled`（关闭）。
+创建时省略默认为 `default`，更新时省略或 `null` 保留现值。
+策略取自 Client Key 绑定的分组，包括已禁用分组；多分组冲突时关闭优先，其次开启，最后默认。
+未绑定分组的 Key 跟随客户端，不按最终所选账号的分组判断
 
-关闭 Fast 只将顶层 `service_tier` 的 `priority`（含 `fast` 别名）改为显式 `default`，继续处理请求；
-不改变 `flex`、`ultrafast`、缺失值、默认档、嵌套字段或其他 Provider。宿主设置先形成 attempt 输入基线；已安装插件显式改写档位时，以改写后的实际发送值为准。
+- 默认：保留客户端的 `service_tier`
+- 开启：所选上游模型的目录声明 `priority` 时，将缺失、`null` 或显式 `default` 改为 `priority`；目录未声明则保留原值
+- 关闭：将 `priority`（含 `fast` 别名）改为显式 `default`，继续处理请求
+
+策略只作用于 OpenAI Responses 的顶层 `service_tier`，不改变 `flex`、`ultrafast` 等其他显式档位、嵌套字段或其他 Provider。
+宿主策略在 request 中间件之后应用，形成 attempt 输入基线；attempt 中间件继续改写档位时，以改写后的实际发送值为准。
 HTTP 和每个 WebSocket `response.create` 均使用请求开始时的分组策略，同一请求重试保持该策略；
 HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造；复用 WS 时不重发握手头，
 每个 `response.create` 仍独立应用档位策略，请求档位统计与本地费用估算使用各帧的最终出站档位
@@ -1080,8 +1085,8 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/api/admin/account-groups` | `page`、`pageSize`、`search`、`enabled` | 分页查询分组；返回账号可用性、并发槽位（Redis 不可用时 `usedSlots=null`）及成功请求 USD 用量 |
-| `POST` | `/api/admin/account-groups/create` | `{ name, description, color, disableFast? }` | 创建空分组；`color` 严格为 `#RRGGBBAA`，返回时统一大写 |
-| `POST` | `/api/admin/account-groups/update` | `{ id, name, description, color, disableFast? }` | 更新名称、描述、颜色和 Fast 限制 |
+| `POST` | `/api/admin/account-groups/create` | `{ name, description, color, fastMode? }` | 创建空分组；`color` 严格为 `#RRGGBBAA`，返回时统一大写 |
+| `POST` | `/api/admin/account-groups/update` | `{ id, name, description, color, fastMode? }` | 更新名称、描述、颜色和 Fast 模式 |
 | `POST` | `/api/admin/account-groups/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/account-groups/disable` | `{ id }` | 禁用；已绑定 Key 保持受限，不回退到全部账号 |
 | `POST` | `/api/admin/account-groups/delete` | `{ id }` | 删除未被 Client Key 引用的组 |
@@ -1704,7 +1709,7 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 | `GET` | `/api/admin/system/update/status` | 无 | 查询当前更新或回滚状态 |
 | `POST` | `/api/admin/system/rollback` | 无 | 回滚到保留的上一版本 |
 | `GET` | `/api/admin/system/restart/check` | 无 | 只读检查重启目标与启用插件 |
-| `POST` | `/api/admin/system/restart` | `{ confirmation? }` | 复核确认、停用不兼容插件并重启 |
+| `POST` | `/api/admin/system/restart` | `{ confirmation? }` | 复核兼容性风险确认并重启，保留插件启用配置 |
 
 在线更新遵循[版本命名与升级规则](../deploy/README.md#版本命名与升级规则)。版本接口的
 `updateChannel` 由当前版本推导，取值为 `stable`、`alpha`、`beta`、`rc`、`exp`，无法识别时为 `unknown`。
@@ -1727,15 +1732,15 @@ Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 
 执行，结果通过 `/update/status` 的 `operation` 查询：`status` 为 `idle`、`running`、`succeeded` 或 `failed`，
 终态包含 `finishedAt`，失败原因在 `error` 中。SSE 的 `operationId` 用于关联进度；终态事件发出前状态已落盘。
 连接中断不取消已受理任务；响应丢失时先查询状态，不自动重复提交。打开更新页面时也会恢复最近一次任务。
-下载并解包后校验发行身份，插件不兼容不阻止安装；回滚仍要求启用插件与备份发行兼容。
+下载并解包后校验发行身份，插件版本不匹配不阻止更新或回滚，兼容性风险在重启前提示。
 两条路径在文件交换前后复核全局配置版本，文件替换失败或取消时成组恢复二进制、Web 资源和官方插件目录
 
 详情响应的 `restartConfirmationSupported=true` 表示运行进程支持重启前确认。
 `restart/check` 返回 `targetVersion`、`releaseManifestSha256`、`configRevision` 和 `incompatiblePlugins`，
 每项包含 `instanceId`、`name`、`reason`，检查不修改插件状态。源码运行的目标版本与发行摘要为空，检查当前宿主兼容性。
 存在不兼容插件时，客户端展示列表并取得确认后，将完整检查结果作为 `confirmation` 提交重启请求。
-服务端在重启锁内重新检查，目标或配置变化返回 `40901`，须重新检查并确认；确认匹配才在单个事务中停用对应插件并发布配置。
-没有不兼容插件时可省略确认，不切换插件版本或接受其他制品。停用保留设置、密钥、版本配置和私有数据
+服务端在重启锁内重新检查，目标或配置变化返回 `40901`，须重新检查并确认。确认后保留启用配置，重启时逐个尝试加载插件。
+没有兼容性风险时可省略确认，不切换插件版本、接受其他制品或改写配置版本
 
 状态响应的 `currentVersion` 表示已安装文件的版本，运行中的版本仍以 `/version` 为准。
 `needRestart=true` 表示已验证的安装文件尚未在当前进程生效，此时应调用重启接口，不能重复发起更新或切换通道。
@@ -1925,10 +1930,14 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 待停用配置必须仍启用且 revision 与确认时一致，否则返回 409，重新读取并确认后再提交
 
 列表项包含 `id`、`name`、`artifactSha256`、`enabled`、`configurationRequired`、`configuration`、
-`secretFields`、`bindings`、`revision`、`running`、`publishedRevision`、`runtime` 和 `compatibilityWarning`。
-`compatibilityWarning` 为非空字符串时表示该固定制品无法在当前宿主启动，停用实例也返回原因，启用请求会拒绝。`configurationRequired`
-由当前制品 schema 与已保存的普通/敏感配置实时派生，不写入数据库；它只表示仍缺少必填值。停用实例也不能保存
+`secretFields`、`bindings`、`revision`、`running`、`publishedRevision`、`runtime`、`compatibilityWarning`、`loadError` 和 `apiDeprecations`。
+`compatibilityWarning` 表示宿主范围或能力版本不匹配，允许手动和自动启动，成功运行后仍保留提醒。
+`loadError` 表示包结构、平台等加载检查失败，非空时拒绝启用；两项无对应问题时为 `null`，停用实例也返回检查结果。运行故障通过 `runtime.failure` 返回，不改写 `enabled`。
+`configurationRequired` 由当前制品 schema 与已保存的普通/敏感配置实时派生，不写入数据库；它只表示仍缺少必填值。停用实例也不能保存
 类型错误、非法 schema 或把敏感字段混入普通配置
+
+`apiDeprecations` 为仍受支持的旧接口提示数组，包含 `capability`、`version`、`replacementVersion`、`introducedIn`、`remainingReleases` 和 `migration`。
+`introducedIn` 在首次正式发布前为 `null`；`remainingReleases` 表示还会支持的后续正式版本数，不计预发行。提示不改变启停状态或阻止安装，无弃用提示时为空数组
 
 #### 版本切换与私有状态
 
@@ -1963,7 +1972,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 `model_catalog`、`management`、`command_line` 和 `maintenance` 按清单声明注册，不接受 binding；
 `frontend_authentication` 必须由管理员显式配置身份映射，也不自动创建
 
-`middleware` v3 可绑定 `http`、`websocket`、`service`、`request` 和 `attempt`，按声明的挂载阶段分别配置。
+`middleware` v3 / v4 可绑定 `http`、`websocket`、`service`、`request` 和 `attempt`，按声明的挂载阶段分别配置。
 `http`、`websocket` 和 `service` 不使用 Key、分组、Provider 或模型范围，这些数组必须为空；插件在处理器内匹配路径、消息或服务操作。
 `request` 与 `routing` 支持 Key、分组和公开模型范围，Provider 范围必须为空；`attempt`、`upstream`、`scheduling`、`retry` 与 `observation` 可使用 Provider 范围
 

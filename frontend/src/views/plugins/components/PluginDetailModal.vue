@@ -3,16 +3,16 @@ import type { InstalledPlugin } from '../utils/catalog'
 import type { PluginArtifact, PluginInstance, PluginManagementView } from '@/api'
 import { ArrowInDownSquareHalf } from '@boxicons/vue'
 import { BaseButton, BaseEmpty, BaseIconButton, BaseModal, BaseSegmented, BaseTag } from '@codex-proxy/ui'
-import { ArrowUpRight, CircleAlert, History, Layers, Play, Power, RefreshCw, Settings2 } from '@lucide/vue'
+import { ArrowUpRight, History, Layers, Play, Power, RefreshCw, Settings2 } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { configurationStatus, currentPluginInstance, hasPluginSettings, PLUGIN_STATUS_LABELS, pluginStatusType } from '../utils/catalog'
 import { artifactForInstance } from '../utils/model'
 import { pluginPageLocation } from '../utils/navigation'
-import PluginCompatibilityWarning from './PluginCompatibilityWarning.vue'
 import PluginConfigurationSummary from './PluginConfigurationSummary.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
 import PluginLegacyConfigurations from './PluginLegacyConfigurations.vue'
+import PluginStatusNotice from './PluginStatusNotice.vue'
 import PluginVersionsPanel from './PluginVersionsPanel.vue'
 
 const props = defineProps<{ plugin: InstalledPlugin | null, initialSection: 'configurations' | 'versions', views: PluginManagementView[], busy: boolean }>()
@@ -43,8 +43,6 @@ function capabilities(instance: PluginInstance) {
 }
 function configurationNotes(instance: PluginInstance) {
   const notes: string[] = []
-  if (instance.runtime.failure)
-    notes.push(instance.runtime.failure.message)
   if (configurationStatus(instance) === 'pending')
     notes.push('配置已保存，等待生效，状态会自动刷新')
   if (configurationStatus(instance) === 'unconfigured')
@@ -89,9 +87,8 @@ watch(() => props.initialSection, value => section.value = value)
           <div class="flex flex-wrap items-center gap-2">
             <strong class="min-w-0 flex-1 wrap-break-word text-cp-sm">当前版本</strong>
             <BaseTag>{{ artifactForInstance(instance, plugin.artifacts)?.metadata.version ?? '版本不可用' }}</BaseTag>
-            <PluginCompatibilityWarning v-if="instance.compatibilityWarning" :instance="instance" />
-            <BaseTag v-else :type="pluginStatusType(configurationStatus(instance))">
-              <CircleAlert v-if="configurationStatus(instance) === 'failed'" class="mr-1 size-3.5" />
+            <PluginStatusNotice :instance="instance" />
+            <BaseTag :type="pluginStatusType(configurationStatus(instance))">
               {{ PLUGIN_STATUS_LABELS[configurationStatus(instance)] }}
             </BaseTag>
             <PluginHelpPopover v-if="configurationNotes(instance).length" :label="`${instance.name}配置状态说明`">
@@ -115,13 +112,13 @@ watch(() => props.initialSection, value => section.value = value)
             <BaseIconButton v-if="instance.configurationRequired || (currentArtifact && hasPluginSettings(currentArtifact))" size="sm" variant="secondary" label="设置" :disabled="busy" @click="$emit('edit', instance)">
               <Settings2 class="size-4" />
             </BaseIconButton>
-            <BaseIconButton v-if="configurationStatus(instance) === 'failed'" label="重新启动" size="sm" variant="secondary" :disabled="busy || Boolean(instance.compatibilityWarning)" @click="$emit('enable', instance)">
+            <BaseIconButton v-if="configurationStatus(instance) === 'failed'" label="重新启动" size="sm" variant="secondary" :disabled="busy || Boolean(instance.loadError)" @click="$emit('enable', instance)">
               <RefreshCw class="size-4" />
             </BaseIconButton>
             <BaseIconButton v-if="instance.enabled" label="停用" size="sm" variant="secondary" :disabled="busy" @click="$emit('disable', instance)">
               <Power class="size-4" />
             </BaseIconButton>
-            <BaseIconButton v-else :label="instance.configurationRequired ? '完成设置并启用' : '启用'" size="sm" variant="secondary" :disabled="busy || Boolean(instance.compatibilityWarning)" @click="$emit('enable', instance)">
+            <BaseIconButton v-else :label="instance.configurationRequired ? '完成设置并启用' : '启用'" size="sm" variant="secondary" :disabled="busy || Boolean(instance.loadError)" @click="$emit('enable', instance)">
               <Play class="size-4" />
             </BaseIconButton>
             <BaseIconButton v-if="plugin.artifacts.length > 1" label="回退版本" size="sm" variant="secondary" :disabled="busy" @click="$emit('rollback', instance)">

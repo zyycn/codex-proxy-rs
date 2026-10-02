@@ -20,7 +20,7 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
-use crate::account::AccountSelectionPolicy;
+use crate::account::{AccountSelectionPolicy, FastMode};
 use crate::operation::{CapabilityRequirements, Feature, OperationKind};
 use crate::validation::{IdentifierError, RoutingError, validate_text};
 
@@ -523,11 +523,18 @@ pub struct RoutingContext {
 pub struct ProviderCandidate {
     provider: ProviderKind,
     upstream_model: Option<UpstreamModelId>,
+    model_presentation: Option<ModelPresentation>,
     emulated_features: BTreeSet<Feature>,
     account_scope: Arc<FrozenAccountScope>,
 }
 
 impl ProviderCandidate {
+    /// 与路由计划冻结的上游模型目录，重试时不读取新的目录代次。
+    #[must_use]
+    pub const fn model_presentation(&self) -> Option<&ModelPresentation> {
+        self.model_presentation.as_ref()
+    }
+
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider
@@ -569,8 +576,8 @@ impl RoutingPlan {
     }
 
     #[must_use]
-    pub fn disable_fast(&self) -> bool {
-        self.account_scope.disable_fast()
+    pub fn fast_mode(&self) -> FastMode {
+        self.account_scope.fast_mode()
     }
 
     /// 本次请求冻结的全局位置，重试时沿用同一份配置。

@@ -126,9 +126,13 @@ async fn reconcile(session: Arc<RpcSession>, dirty: Arc<Notify>, cancellation: C
             () = cancellation.cancelled() => return,
             result = session.call("plugin.reconcile", context, serde_json::json!({}), Vec::new()) => result,
         };
-        if !result
-            .is_ok_and(|reply| reply.result == serde_json::json!({}) && reply.payload.is_empty())
-        {
+        if !result.is_ok_and(|reply| {
+            let valid = reply.result == serde_json::json!({}) && reply.payload.is_empty();
+            if !valid {
+                session.invalid_response(Stage::Maintenance);
+            }
+            valid
+        }) {
             tracing::warn!(%instance_id, "plugin maintenance failed; retrying after bounded delay");
             tokio::select! {
                 biased;

@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gateway_core::{account::AccountStatusFacts, routing::AccountGroupId};
+use gateway_core::{
+    account::{AccountStatusFacts, FastMode},
+    routing::AccountGroupId,
+};
 
 use super::{PageSize, Revision, observability::DecimalAmount};
 
@@ -80,7 +83,7 @@ pub struct AccountGroupListQuery {
 /// Complete account group summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRecord {
-    pub disable_fast: bool,
+    pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,
@@ -109,7 +112,7 @@ pub struct AccountGroupPage {
 /// Create an account group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateAccountGroup {
-    pub disable_fast: bool,
+    pub fast_mode: FastMode,
     pub name: String,
     pub description: Option<String>,
     pub color: AccountGroupColor,
@@ -118,7 +121,7 @@ pub struct CreateAccountGroup {
 /// Store-ready create command with a generated stable ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccountGroup {
-    pub disable_fast: bool,
+    pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,
@@ -128,7 +131,7 @@ pub struct NewAccountGroup {
 /// Update an account group's descriptive fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccountGroup {
-    pub disable_fast: Option<bool>,
+    pub fast_mode: Option<FastMode>,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,

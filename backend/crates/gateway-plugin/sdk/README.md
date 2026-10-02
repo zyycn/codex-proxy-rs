@@ -9,7 +9,7 @@ SDK 仍处于实验阶段；能力是否可用取决于宿主支持、清单声�
 | SDK 包 | `0.1.0` | Rust 开发依赖，独立于网关版本 |
 | `manifestVersion` | `2` | 安装清单格式 |
 | `package.protocolVersion` | `2` | 宿主与插件的进程通信 |
-| `contributes.*.version` | 默认 `1`，`middleware` 必须为 `3` | 单项能力合同，见[扩展项声明](docs/manifest.md#扩展项简写) |
+| `contributes.*.version` | 默认 `1`，`middleware` 为 `4`，`upstream_adapter` 为 `2` | 单项能力合同，见[扩展项声明](docs/manifest.md#扩展项简写) |
 
 开发顺序：编写[清单](docs/manifest.md) → 实现[能力处理器](docs/capabilities.md) → 用 [CLI](../../../apps/plugin-cli/README.md)
 打包 → [安装、配置与启用](../../../../docs/plugins.md)。完整可运行示例位于独立仓库

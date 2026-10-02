@@ -96,9 +96,14 @@ async fn call(
             .as_object()
             .is_none_or(|fields| fields.len() != 1)
     {
+        invocation.session.invalid_response(Stage::Retry);
         return Err(());
     }
-    match serde_json::from_value::<WireDecision>(reply.result).map_err(|_| ())? {
+    match invocation
+        .session
+        .decode_response::<WireDecision>(Stage::Retry, reply.result)
+        .map_err(|_| ())?
+    {
         WireDecision::Delegate => Ok(RetryDecision::Delegate),
         WireDecision::Stop => Ok(RetryDecision::Stop),
         WireDecision::Retry if input.facts.retry_allowed => Ok(RetryDecision::Retry),

@@ -17,9 +17,15 @@ use crate::{
     use_case::{map_store_error, publish_committed},
 };
 
+#[derive(Clone, Default)]
+pub(super) struct PackageStatus {
+    warning: Option<String>,
+    load_error: Option<String>,
+}
+
 impl PluginsService {
-    /// 只校验固定包体，不启动插件；停用的旧版本仍需向管理端说明不能启用的原因。
-    async fn compatibility_warning(&self, digest: &str) -> Result<Option<String>, AdminError> {
+    /// 只校验固定包体，不启动插件；停用实例也需区分兼容性提醒与加载错误。
+    async fn package_status(&self, digest: &str) -> Result<PackageStatus, AdminError> {
         // 运行宿主和摘要固定，缓存纯静态结论，避免管理页轮询反复解包。
         // 只缓存有限数量的确定结果，暂时性错误仍可重试。
         let mut cache = self.compatibility.lock().await;
@@ -33,13 +39,20 @@ impl PluginsService {
             .map_err(|error| map_store_error(error, "plugin"))?;
         let warning = match self
             .inspector
-            .inspect(artifact.archive, Some(digest.to_owned()))
+            .inspect(artifact.archive.clone(), Some(digest.to_owned()))
             .await
         {
-            Ok(_) => None,
-            Err(error) if error.kind() == AdminErrorKind::Invalid => {
-                Some(error.message().to_owned())
-            }
+            Ok(_) => PackageStatus {
+                warning: self
+                    .inspector
+                    .compatibility_warning(artifact.archive, digest.to_owned())
+                    .await?,
+                load_error: None,
+            },
+            Err(error) if error.kind() == AdminErrorKind::Invalid => PackageStatus {
+                warning: None,
+                load_error: Some(error.message().to_owned()),
+            },
             Err(error) => return Err(error),
         };
         if cache.len() < 128 {
@@ -82,10 +95,8 @@ impl PluginsService {
             let metadata = artifacts
                 .get(&instance.artifact_sha256)
                 .ok_or_else(|| AdminError::not_found("插件制品不存在"))?;
-            let compatibility_warning = self
-                .compatibility_warning(&instance.artifact_sha256)
-                .await?;
-            let configuration_required = compatibility_warning.is_none()
+            let package_status = self.package_status(&instance.artifact_sha256).await?;
+            let configuration_required = package_status.load_error.is_none()
                 && !self
                     .preparation
                     .configuration_ready(instance.clone(), metadata)
@@ -109,8 +120,14 @@ impl PluginsService {
                 }
             });
             views.push(PluginInstanceView {
+                api_deprecations: if package_status.load_error.is_none() {
+                    self.inspector.api_deprecations(metadata)?
+                } else {
+                    Vec::new()
+                },
                 configuration_required,
-                compatibility_warning,
+                compatibility_warning: package_status.warning,
+                load_error: package_status.load_error,
                 running: runtime.status == PluginInstanceRuntimeStatus::Running,
                 published_revision,
                 runtime,
@@ -198,7 +215,10 @@ impl PluginsService {
             return Err(AdminError::invalid("请先安装并接受该版本声明的权限"));
         }
         if input.enabled
-            && let Some(warning) = self.compatibility_warning(&input.artifact_sha256).await?
+            && let Some(warning) = self
+                .package_status(&input.artifact_sha256)
+                .await?
+                .load_error
         {
             return Err(AdminError::invalid(format!(
                 "{warning}，无法启动，请安装兼容版本"

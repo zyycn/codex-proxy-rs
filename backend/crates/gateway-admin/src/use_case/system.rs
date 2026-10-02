@@ -127,13 +127,12 @@ impl SystemService for DefaultSystemService {
     async fn restart(
         &self,
         confirmation: Option<SystemRestartPlan>,
-        context: &MutationContext,
+        _context: &MutationContext,
     ) -> Result<SystemOperationAccepted, AdminError> {
         self.operations
             .restart(Arc::new(ConfirmedPluginRestart {
                 preflight: self.preflight.clone(),
                 confirmation,
-                context: context.clone(),
             }))
             .await
             .map_err(map_system_error)

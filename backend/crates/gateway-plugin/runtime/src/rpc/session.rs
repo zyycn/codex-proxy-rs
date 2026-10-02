@@ -10,7 +10,7 @@ use std::{
 use futures::future::BoxFuture;
 use gateway_host::process::{ProcessControl, ProcessSpec, ProcessStartError, ProcessSupervisor};
 use gateway_plugin_sdk::{
-    CallContext, Frame, Handshake, Message, PROTOCOL_VERSION, PluginFault,
+    CallContext, Frame, Handshake, Message, PROTOCOL_VERSION, PluginFault, Stage,
     client::{read_frame, validate_frame, write_frame},
 };
 use tokio::sync::{Mutex as AsyncMutex, Semaphore, mpsc, oneshot, watch};
@@ -51,6 +51,8 @@ pub enum RpcError {
     Handshake,
     #[error("plugin protocol is invalid")]
     Protocol,
+    #[error("plugin returned an invalid response at {0:?}")]
+    InvalidResponse(Stage),
     #[error("plugin process or transport has stopped")]
     Closed,
     #[error("plugin call exceeded its deadline")]
@@ -139,6 +141,33 @@ pub struct RpcSession {
     limits: RpcLimits,
     callbacks: Arc<dyn CallbackHandler>,
     _lifecycle: Option<RpcSessionLifecycle>,
+}
+
+impl RpcSession {
+    /// 只用于已确认来自插件的合同错误，不接收业务错误或原始响应内容。
+    pub(crate) fn invalid_response(&self, stage: Stage) -> RpcError {
+        let error = RpcError::InvalidResponse(stage);
+        self.shared.fail(error.clone());
+        error
+    }
+
+    pub(crate) fn decode_response<T: serde::de::DeserializeOwned>(
+        &self,
+        stage: Stage,
+        value: serde_json::Value,
+    ) -> Result<T, RpcError> {
+        serde_json::from_value(value).map_err(|_| self.invalid_response(stage))
+    }
+
+    pub(crate) fn capability_version(
+        &self,
+        capability: gateway_plugin_sdk::Capability,
+    ) -> Option<u32> {
+        self.handshake
+            .contributes
+            .get(&capability)
+            .map(|declaration| declaration.version)
+    }
 }
 
 pub(crate) struct Shared {
@@ -630,6 +659,29 @@ impl RpcSession {
                 RpcError::Start(_) => ("process_start", "插件进程启动失败"),
                 RpcError::Handshake => ("handshake", "插件握手失败"),
                 RpcError::Protocol => ("protocol", "插件协议错误"),
+                RpcError::InvalidResponse(stage) => (
+                    "invalid_response",
+                    match stage {
+                        Stage::Registration => "注册阶段：插件返回了无效响应",
+                        Stage::Configuration => "配置阶段：插件返回了无效响应",
+                        Stage::Authentication => "认证阶段：插件返回了无效响应",
+                        Stage::Routing => "路由阶段：插件返回了无效响应",
+                        Stage::Scheduling => "调度阶段：插件返回了无效响应",
+                        Stage::Retry => "重试阶段：插件返回了无效响应",
+                        Stage::Http => "HTTP 中间件：插件返回了无效响应",
+                        Stage::Service => "服务中间件：插件返回了无效响应",
+                        Stage::WebSocket => "WebSocket 中间件：插件返回了无效响应",
+                        Stage::Request => "请求中间件：插件返回了无效响应",
+                        Stage::Attempt => "尝试中间件：插件返回了无效响应",
+                        Stage::Upstream => "上游适配阶段：插件返回了无效响应",
+                        Stage::Observation => "观察阶段：插件返回了无效响应",
+                        Stage::Management | Stage::PublicManagement => {
+                            "管理阶段：插件返回了无效响应"
+                        }
+                        Stage::CommandLine => "命令行阶段：插件返回了无效响应",
+                        Stage::Maintenance => "维护阶段：插件返回了无效响应",
+                    },
+                ),
                 RpcError::Closed => ("closed", "插件进程或传输已停止"),
                 RpcError::Timeout => ("timeout", "插件调用超时"),
                 RpcError::Cancelled => ("cancelled", "插件会话已取消"),

@@ -108,10 +108,24 @@ pub struct PluginInstanceRuntime {
     pub draining_revisions: Vec<u64>,
 }
 
+/// 可继续运行的旧接口提示，与无法启用的兼容性错误分开。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginApiDeprecation {
+    pub capability: String,
+    pub version: u32,
+    pub replacement_version: u32,
+    pub introduced_in: Option<String>,
+    pub remaining_releases: u32,
+    pub migration: String,
+}
+
 pub struct PluginInstanceView {
     pub instance: PluginInstance,
     pub configuration_required: bool,
     pub compatibility_warning: Option<String>,
+    pub load_error: Option<String>,
+    pub api_deprecations: Vec<PluginApiDeprecation>,
     pub running: bool,
     pub published_revision: Option<u64>,
     pub runtime: PluginInstanceRuntime,

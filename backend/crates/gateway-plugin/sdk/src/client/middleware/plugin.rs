@@ -24,7 +24,7 @@ use super::{
 ///
 /// let contributes = Contributions::from([(Capability::Middleware, ContributionDeclaration {
 ///     id: "acme.request-tags.tagRequest".into(),
-///     version: 3,
+///     version: 4,
 ///     stages: vec![Stage::Request],
 ///     input_formats: vec!["openai".into()],
 ///     output_formats: vec!["openai".into()],

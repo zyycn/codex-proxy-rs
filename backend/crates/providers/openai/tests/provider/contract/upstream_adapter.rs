@@ -1,5 +1,6 @@
 use super::*;
 use gateway_core::account::AccountRuntimeSignals;
+use gateway_core::account::FastMode;
 use gateway_core::engine::upstream_adapter::{
     UpstreamAccountConnection, UpstreamAdapter, UpstreamAdapterInvocation, UpstreamAdapterPlan,
 };
@@ -62,7 +63,7 @@ impl gateway_core::engine::upstream_adapter::UpstreamAdapter for AdapterProbe {
                 Some("chatgpt-acct_provider_contract".as_bytes().to_vec())
             );
             assert!(header("cookie").is_none());
-            assert!(invocation.context.disable_fast());
+            assert_eq!(invocation.context.fast_mode(), FastMode::Disabled);
             let Operation::Generate(generate) = &invocation.operation else {
                 panic!("adapter must receive the original operation kind");
             };
@@ -131,7 +132,7 @@ async fn upstream_adapter_reuses_selected_native_account_inside_attempt_onion_an
             ModelRequestId::new("req_adapter_native").unwrap(),
             ClientApiKeyId::new("key_openai_contract").unwrap(),
         )
-        .with_disable_fast(true)
+        .with_fast_mode(FastMode::Disabled)
         .with_upstream_adapters(Some(
             gateway_core::engine::upstream_adapter::FrozenUpstreamAdapterPlan::new(
                 Arc::new(AdapterProbe {

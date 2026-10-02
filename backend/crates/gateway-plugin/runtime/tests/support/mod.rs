@@ -55,10 +55,10 @@ pub fn contribution_for_id(
         capability,
         ContributionDeclaration {
             id: format!("{plugin_id}.{local_id}"),
-            version: if capability == Capability::Middleware {
-                3
-            } else {
-                1
+            version: match capability {
+                Capability::Middleware => 4,
+                Capability::UpstreamAdapter => 2,
+                _ => 1,
             },
             stages,
             input_formats,

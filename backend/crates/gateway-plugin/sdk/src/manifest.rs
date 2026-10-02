@@ -200,6 +200,19 @@ impl Manifest {
     ///
     /// 清单版本、身份、声明、路径、摘要、状态或安装包元数据不符合合同时返回错误。
     pub fn validate(&self) -> Result<(), ManifestError> {
+        self.validate_structure()?;
+        if self.contributes.iter().any(|(capability, declaration)| {
+            !capability
+                .contract_versions()
+                .contains(&declaration.version)
+        }) {
+            return Err(ManifestError::Invalid);
+        }
+        Ok(())
+    }
+
+    /// 校验可解析的包结构；能力版本是否受支持由宿主另行诊断。
+    pub fn validate_structure(&self) -> Result<(), ManifestError> {
         if self.manifest_version != MANIFEST_VERSION {
             return Err(ManifestError::Incompatible);
         }
@@ -239,11 +252,25 @@ impl Manifest {
         architecture: &str,
     ) -> Result<&Package, ManifestError> {
         self.validate()?;
+        if !self.engines.codex_proxy_rs.matches(host) {
+            return Err(ManifestError::Platform);
+        }
+        self.platform_package(os, architecture)
+    }
+
+    /// 选择可执行的平台包，不把宿主版本范围或能力版本声明作为启动禁令。
+    pub fn package_for_platform(
+        &self,
+        os: &str,
+        architecture: &str,
+    ) -> Result<&Package, ManifestError> {
+        self.validate_structure()?;
+        self.platform_package(os, architecture)
+    }
+
+    fn platform_package(&self, os: &str, architecture: &str) -> Result<&Package, ManifestError> {
         let package = self.package.as_ref().ok_or(ManifestError::Invalid)?;
-        if !self.engines.codex_proxy_rs.matches(host)
-            || package.target.os != os
-            || package.target.architecture != architecture
-        {
+        if package.target.os != os || package.target.architecture != architecture {
             return Err(ManifestError::Platform);
         }
         Ok(package)
@@ -259,9 +286,7 @@ impl Manifest {
             let stages = declaration.stages.iter().copied().collect::<BTreeSet<_>>();
             let input_formats = declaration.input_formats.iter().collect::<BTreeSet<_>>();
             let output_formats = declaration.output_formats.iter().collect::<BTreeSet<_>>();
-            if !capability
-                .contract_versions()
-                .contains(&declaration.version)
+            if declaration.version == 0
                 || declaration.id.len() > 128
                 || local_id.is_empty()
                 || !local_id.is_ascii()

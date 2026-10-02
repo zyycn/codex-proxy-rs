@@ -63,14 +63,20 @@ pub(super) async fn invoke(
         () = context.cancellation.cancelled() => return Err(MiddlewareError::Fault),
         reply = ports.session.call(HANDLE_METHOD, call, serde_json::to_value(input).map_err(|_| MiddlewareError::InvalidState)?, Vec::new()) => reply.map_err(crate::callback::error::rpc_middleware)?,
     };
-    let output: Option<wire::Message> =
-        serde_json::from_value(reply.result).map_err(|_| MiddlewareError::InvalidState)?;
+    let output: Option<wire::Message> = ports
+        .session
+        .decode_response(Stage::WebSocket, reply.result)
+        .map_err(|_| MiddlewareError::InvalidState)?;
+    let invalid = || {
+        ports.session.invalid_response(Stage::WebSocket);
+        MiddlewareError::InvalidState
+    };
     match output {
         Some(message) => invocation
             .decode(message, reply.payload)
             .map(Some)
-            .map_err(|_| MiddlewareError::InvalidState),
+            .map_err(|_| invalid()),
         None if reply.payload.is_empty() => Ok(None),
-        None => Err(MiddlewareError::InvalidState),
+        None => Err(invalid()),
     }
 }

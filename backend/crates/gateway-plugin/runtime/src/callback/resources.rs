@@ -71,7 +71,7 @@ impl PluginResources {
                         &self.owner,
                         request.resource_key,
                         CreateAccountGroup {
-                            disable_fast: false,
+                            fast_mode: gateway_core::account::FastMode::Default,
                             name: request.name,
                             description: request.description,
                             color: AccountGroupColor::parse(&request.color).ok_or_else(invalid)?,

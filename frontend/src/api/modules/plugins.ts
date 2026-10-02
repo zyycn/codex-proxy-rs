@@ -217,6 +217,8 @@ export interface PluginInstance {
   enabled: boolean
   configurationRequired: boolean
   compatibilityWarning: string | null
+  loadError: string | null
+  apiDeprecations: PluginApiDeprecation[]
   configuration: Record<string, unknown>
   secretFields: string[]
   bindings: PluginCapabilityBinding[]
@@ -224,6 +226,15 @@ export interface PluginInstance {
   running: boolean
   publishedRevision: number | null
   runtime: PluginInstanceRuntime
+}
+
+export interface PluginApiDeprecation {
+  capability: string
+  version: number
+  replacementVersion: number
+  introducedIn: string | null
+  remainingReleases: number
+  migration: string
 }
 
 export interface ConfigurePluginInstanceRequest {

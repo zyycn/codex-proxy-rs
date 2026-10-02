@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     PluginUpstreamAdapter,
-    event::{DecodedEvent, EventDecoder, invalid},
+    event::{DecodedEvent, EventDecodeError, EventDecoder, invalid},
 };
 use crate::{
     RpcError, RpcStream,
@@ -91,14 +91,26 @@ impl Execution {
             biased;
             () = cancellation.cancelled() => return Err(ProviderError::new(ProviderErrorKind::Cancelled, active.managed.send_state.get())),
             result = active.stream.next() => result.map_err(|error| rpc_error(error, active.managed.send_state.get()))?,
-        }.ok_or_else(|| invalid(active.managed.send_state.get()))?;
-        let mut decoded = self.decoder.decode(
-            &chunk,
-            &self.adapter.declaration.protocol,
-            self.adapter.declaration.transport.as_str(),
-            self.invocation.account.as_ref(),
-            active.managed.send_state.get(),
-        )?;
+        }.ok_or_else(|| {
+            self.adapter.session.invalid_response(Stage::Upstream);
+            invalid(active.managed.send_state.get())
+        })?;
+        let mut decoded = self
+            .decoder
+            .decode(
+                &chunk,
+                &self.adapter.declaration.protocol,
+                self.adapter.declaration.transport.as_str(),
+                self.invocation.account.as_ref(),
+                active.managed.send_state.get(),
+            )
+            .map_err(|error| match error {
+                EventDecodeError::Invalid(error) => {
+                    self.adapter.session.invalid_response(Stage::Upstream);
+                    error
+                }
+                EventDecodeError::Upstream(error) => error,
+            })?;
         if self.decoder.completed {
             // 先确认 RPC 正常终结，再发布唯一 Completed；否则 Core 不会继续 poll 尾部错误。
             let terminal = async {
@@ -108,6 +120,7 @@ impl Execution {
                     result = active.stream.next() => result.map_err(|error| rpc_error(error, active.managed.send_state.get()))?,
                 };
                 if tail.is_some() {
+                    self.adapter.session.invalid_response(Stage::Upstream);
                     return Err(invalid(active.managed.send_state.get()));
                 }
                 self.decoder.finish(active.managed.send_state.get())?;
@@ -215,7 +228,7 @@ impl Execution {
             credential_revision: invocation.account.credential_revision().get(),
             protocol: invocation.operation.protocol().to_owned(),
             client_transport: invocation.context.client_transport().as_str().to_owned(),
-            disable_fast: invocation.context.disable_fast(),
+            fast_mode: invocation.context.fast_mode().as_str().to_owned(),
             headers: invocation
                 .headers
                 .iter()
@@ -223,15 +236,16 @@ impl Execution {
                 .collect(),
             continuation: previous.map(|state| state.continuation),
         };
-        let payload = request
-            .encode(
-                invocation
-                    .operation
-                    .middleware_body()
-                    .map_err(|_| invalid())?
-                    .to_vec(),
-            )
-            .map_err(|_| invalid())?;
+        let payload = crate::compatibility::FastSettings::upstream_request(
+            &self.adapter.session,
+            request,
+            invocation
+                .operation
+                .middleware_body()
+                .map_err(|_| invalid())?
+                .to_vec(),
+        )
+        .map_err(|_| invalid())?;
         invocation.context.trace().record("plugin.upstream", serde_json::json!({ "instanceId": self.adapter.instance_id, "adapterId": declaration.id, "generation": context.generation, "transport": declaration.transport.as_str() }));
         let stream = tokio::select! {
             biased;
@@ -239,6 +253,7 @@ impl Execution {
             result = self.adapter.session.call_stream(EXECUTE_METHOD, context.clone(), serde_json::json!({}), payload) => result.map_err(|error| rpc_error(error, managed.send_state.get()))?,
         };
         if stream.initial.result != serde_json::json!({}) || !stream.initial.payload.is_empty() {
+            self.adapter.session.invalid_response(Stage::Upstream);
             return Err(super::event::invalid(managed.send_state.get()));
         }
         Ok(ActiveCall {

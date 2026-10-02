@@ -28,6 +28,6 @@ const source = computed(() => props.artifact.metadata.icon
       decoding="async"
       @error="failedSource = source"
     >
-    <Package v-else class="size-2/3" />
+    <Package v-else class="size-3/5" :stroke-width="1.6" />
   </span>
 </template>

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use gateway_core::account::FastMode;
 use gateway_protocol::openai::{
     CodexResponsesRequestSemantics as CodexRequestSemantics,
     codex_responses_request_semantics_with_turn_metadata, events,
@@ -614,19 +615,29 @@ impl CodexResponsesRequest {
         self.body.get("service_tier").and_then(Value::as_str)
     }
 
-    /// 只覆盖顶层 Fast 请求，显式使用官方标准档退出值。
-    pub(crate) fn apply_fast_policy(&mut self, disable_fast: bool) {
-        if disable_fast
-            && self.service_tier().is_some_and(|tier| {
-                let tier = tier.trim();
-                tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
-            })
-        {
-            self.body.insert(
-                "service_tier".to_owned(),
-                Value::String("default".to_owned()),
-            );
-        }
+    /// 只改写顶层档位；开启需要目录证据，其他显式档位保留客户端选择。
+    pub(crate) fn apply_fast_policy(&mut self, mode: FastMode, supports_priority: bool) -> bool {
+        let tier = self.service_tier().map(str::trim);
+        let target = match mode {
+            FastMode::Disabled
+                if tier.is_some_and(|tier| {
+                    tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
+                }) =>
+            {
+                "default"
+            }
+            FastMode::Enabled
+                if supports_priority
+                    && (matches!(self.body.get("service_tier"), None | Some(Value::Null))
+                        || tier.is_some_and(|tier| tier.eq_ignore_ascii_case("default"))) =>
+            {
+                "priority"
+            }
+            _ => return false,
+        };
+        self.body
+            .insert("service_tier".to_owned(), Value::String(target.to_owned()));
+        true
     }
 
     /// 前一个 response ID。

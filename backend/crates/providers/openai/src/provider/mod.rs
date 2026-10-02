@@ -472,38 +472,45 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        // 请求设置先形成原生正文基线；attempt 的显式改写进入终端后不再次被覆盖。
-        let mut operation = Operation::Generate(generate.clone());
-        if context.disable_fast()
-            && let Operation::Generate(generate) = &operation
-            && generate.protocol_payload().protocol() == PROVIDER_NAME
-        {
-            let mut request =
-                CodexResponsesRequest::from_body(generate.protocol_payload().body().clone());
-            request.apply_fast_policy(true);
-            let body = serde_json::to_vec(request.body()).map_err(|_| {
-                provider_error(
-                    ProviderErrorKind::InvalidRequest,
-                    UpstreamSendState::NotSent,
-                )
-            })?;
-            operation = operation
-                .replace_middleware_wire(PROVIDER_NAME, body.into())
-                .map_err(|_| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                })?;
-        }
-        let Operation::Generate(generate) = &operation else {
-            unreachable!("generate settings keep the operation kind")
-        };
         let Some(upstream_model) = candidate.upstream_model() else {
             return Err(provider_error(
                 ProviderErrorKind::Protocol,
                 UpstreamSendState::NotSent,
             ));
+        };
+        // 请求设置先形成原生正文基线；attempt 的显式改写进入终端后不再次被覆盖。
+        let mut operation = Operation::Generate(generate.clone());
+        if context.fast_mode() != gateway_core::account::FastMode::Default
+            && let Operation::Generate(generate) = &operation
+            && generate.protocol_payload().protocol() == PROVIDER_NAME
+        {
+            let mut request =
+                CodexResponsesRequest::from_body(generate.protocol_payload().body().clone());
+            let supports_priority = candidate.model_presentation().is_some_and(|model| {
+                model
+                    .service_tiers()
+                    .iter()
+                    .any(|tier| tier.id() == "priority")
+            });
+            if request.apply_fast_policy(context.fast_mode(), supports_priority) {
+                let body = serde_json::to_vec(request.body()).map_err(|_| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                })?;
+                operation = operation
+                    .replace_middleware_wire(PROVIDER_NAME, body.into())
+                    .map_err(|_| {
+                        provider_error(
+                            ProviderErrorKind::InvalidRequest,
+                            UpstreamSendState::NotSent,
+                        )
+                    })?;
+            }
+        }
+        let Operation::Generate(generate) = &operation else {
+            unreachable!("generate settings keep the operation kind")
         };
         let adapter = context.upstream_adapter(candidate.provider(), upstream_model)?;
         if adapter.is_none()

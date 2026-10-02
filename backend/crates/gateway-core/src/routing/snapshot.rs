@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use crate::account::ProviderAccountId;
+use crate::account::{FastMode, ProviderAccountId};
 use crate::concurrency::ConcurrencyQueuePolicy;
 use crate::operation::{Operation, OperationKind};
 use crate::policy::{
@@ -66,7 +66,7 @@ impl SnapshotClientPolicyFacts {
 /// Store 读取到的账号分组事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupFacts {
-    disable_fast: bool,
+    fast_mode: FastMode,
     id: AccountGroupId,
     name: String,
     enabled: bool,
@@ -74,8 +74,8 @@ pub struct SnapshotAccountGroupFacts {
 
 impl SnapshotAccountGroupFacts {
     #[must_use]
-    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
+    pub const fn with_fast_mode(mut self, fast_mode: FastMode) -> Self {
+        self.fast_mode = fast_mode;
         self
     }
 
@@ -85,7 +85,7 @@ impl SnapshotAccountGroupFacts {
             id,
             name,
             enabled,
-            disable_fast: false,
+            fast_mode: FastMode::Default,
         }
     }
 }
@@ -456,7 +456,7 @@ async fn compile_runtime_snapshot(
 
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
-        let mut disable_fast = false;
+        let mut fast_mode = FastMode::Default;
         let account_scope = if policy.group_ids.is_empty() {
             FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -473,8 +473,8 @@ async fn compile_runtime_snapshot(
                 let group = groups
                     .get(&group_id)
                     .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
-                // 禁用分组仅影响选号；Key 仍绑定其 Fast 限制。
-                disable_fast |= group.disable_fast;
+                // 禁用分组仅影响选号；Key 仍绑定其 Fast 策略。
+                fast_mode = fast_mode.merge(group.fast_mode);
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
                     group.name.clone(),
@@ -496,7 +496,7 @@ async fn compile_runtime_snapshot(
             policy.plaintext_key,
             Arc::new(
                 account_scope
-                    .with_disable_fast(disable_fast)
+                    .with_fast_mode(fast_mode)
                     .with_request_profiles(policy.request_profiles),
             ),
             true,
@@ -1109,6 +1109,11 @@ impl RuntimeSnapshot {
             };
             candidates.push(ProviderCandidate {
                 provider: provider.clone(),
+                model_presentation: self
+                    .provider_model_presentations
+                    .get(provider)
+                    .and_then(|models| models.get(&upstream_model))
+                    .cloned(),
                 upstream_model: Some(upstream_model),
                 emulated_features,
                 account_scope: Arc::clone(&account_scope),
@@ -1197,6 +1202,13 @@ impl RuntimeSnapshot {
         }
         let candidate = ProviderCandidate {
             provider: provider.clone(),
+            model_presentation: upstream_model
+                .and_then(|model| {
+                    self.provider_model_presentations
+                        .get(provider)
+                        .and_then(|models| models.get(model))
+                })
+                .cloned(),
             upstream_model: upstream_model.cloned(),
             emulated_features: BTreeSet::new(),
             account_scope: Arc::clone(&account_scope),

@@ -108,7 +108,9 @@ impl ManagementEntry {
             .map_err(|_| {
                 AdminError::unavailable("插件管理调用未完成；副作用可能已发生，请查询后再重试")
             })?;
-        decode_response(reply, &route.response_content_types, limits)
+        decode_response(reply, &route.response_content_types, limits).inspect_err(|_| {
+            self.session.invalid_response(Stage::Management);
+        })
     }
 }
 

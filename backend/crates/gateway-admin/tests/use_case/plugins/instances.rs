@@ -61,6 +61,35 @@ enum MigrationBehavior {
 
 #[async_trait]
 impl gateway_admin::ports::plugins::PluginPackageInspector for LifecycleFixture {
+    fn api_deprecations(
+        &self,
+        metadata: &PluginArtifactMetadata,
+    ) -> Result<Vec<gateway_admin::model::plugins::instances::PluginApiDeprecation>, AdminError>
+    {
+        Ok(metadata
+            .contributes
+            .get("middleware")
+            .filter(|declaration| declaration.version == 3)
+            .map(
+                |_| gateway_admin::model::plugins::instances::PluginApiDeprecation {
+                    capability: "middleware".into(),
+                    version: 3,
+                    replacement_version: 4,
+                    introduced_in: None,
+                    remaining_releases: 7,
+                    migration: "使用 fast_mode".into(),
+                },
+            )
+            .into_iter()
+            .collect())
+    }
+    async fn compatibility_warning(
+        &self,
+        _: Arc<[u8]>,
+        _: String,
+    ) -> Result<Option<String>, AdminError> {
+        Ok(self.data.lock().unwrap().compatibility_warning.clone())
+    }
     async fn inspect(
         &self,
         archive: Arc<[u8]>,
@@ -68,7 +97,7 @@ impl gateway_admin::ports::plugins::PluginPackageInspector for LifecycleFixture 
     ) -> Result<InspectedPluginArtifact, AdminError> {
         let data = self.data.lock().unwrap();
         if let Some(kind) = data.inspection_error {
-            return Err(AdminError::new(kind, "插件与当前宿主不兼容"));
+            return Err(AdminError::new(kind, "插件包无法解析"));
         }
         let metadata = data
             .artifacts
@@ -93,6 +122,7 @@ struct FixtureData {
     artifact_reads: usize,
     archive_reads: usize,
     inspection_error: Option<AdminErrorKind>,
+    compatibility_warning: Option<String>,
     change_during_artifact_read: bool,
     fail_preparation: bool,
     configuration_ready: bool,
@@ -138,6 +168,7 @@ impl LifecycleFixture {
                 artifact_reads: 0,
                 archive_reads: 0,
                 inspection_error: None,
+                compatibility_warning: None,
                 change_during_artifact_read: false,
                 fail_preparation: false,
                 configuration_ready: true,
@@ -1492,7 +1523,7 @@ async fn version_plan_preserves_observer_event_scopes_and_disabled_subscriptions
 }
 
 #[tokio::test]
-async fn incompatible_disabled_plugin_has_warning_and_cannot_be_enabled() {
+async fn malformed_disabled_plugin_has_load_error_and_cannot_be_enabled() {
     let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
     {
         let mut data = fixture.data.lock().unwrap();
@@ -1501,7 +1532,9 @@ async fn incompatible_disabled_plugin_has_warning_and_cannot_be_enabled() {
     }
     let service = service(fixture.clone(), Arc::new(Published::default()));
     let view = service.instances().await.unwrap().remove(0);
-    assert!(view.compatibility_warning.is_some());
+    assert!(view.compatibility_warning.is_none());
+    assert!(view.load_error.is_some());
+    assert!(view.api_deprecations.is_empty());
     assert!(!view.instance.enabled);
     let mut request = input();
     request.artifact_sha256 = OLD_ARTIFACT.into();
@@ -1522,6 +1555,27 @@ async fn incompatible_disabled_plugin_has_warning_and_cannot_be_enabled() {
 }
 
 #[tokio::test]
+async fn deprecated_contract_warning_preserves_enabled_configuration_and_readiness() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    fixture.data.lock().unwrap().artifacts[0]
+        .metadata
+        .contributes
+        .get_mut("middleware")
+        .unwrap()
+        .version = 3;
+    let before = fixture.snapshot();
+    let service = service(fixture.clone(), Arc::new(Published::default()));
+    let view = service.instances().await.unwrap().remove(0);
+    assert!(view.instance.enabled);
+    assert!(!view.configuration_required);
+    assert!(view.compatibility_warning.is_none());
+    assert_eq!(view.api_deprecations.len(), 1);
+    assert_eq!(view.api_deprecations[0].remaining_releases, 7);
+    assert_eq!(fixture.snapshot().config_revision, before.config_revision);
+    assert!(fixture.data.lock().unwrap().saves.is_empty());
+}
+
+#[tokio::test]
 async fn transient_compatibility_check_failure_can_be_retried() {
     let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
     fixture.data.lock().unwrap().inspection_error = Some(AdminErrorKind::Unavailable);
@@ -1534,4 +1588,29 @@ async fn transient_compatibility_check_failure_can_be_retried() {
             .is_none()
     );
     assert_eq!(fixture.data.lock().unwrap().archive_reads, 2);
+}
+
+#[tokio::test]
+async fn compatibility_warning_allows_enabling_and_persists_after_success() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    {
+        let mut data = fixture.data.lock().unwrap();
+        data.snapshot.instances[0].enabled = false;
+        data.compatibility_warning = Some("middleware v2 未声明兼容".into());
+    }
+    let service = service(fixture.clone(), Arc::new(Published::default()));
+    let view = service.instances().await.unwrap().remove(0);
+    assert!(view.compatibility_warning.is_some());
+    assert!(view.load_error.is_none());
+    let mut request = input();
+    request.artifact_sha256 = OLD_ARTIFACT.into();
+    let result = service
+        .configure_instance(Some(&view.instance.id), request, &context())
+        .await
+        .unwrap();
+    assert!(result.instance.enabled);
+    let view = service.instances().await.unwrap().remove(0);
+    assert!(view.instance.enabled);
+    assert!(view.compatibility_warning.is_some());
+    assert!(view.load_error.is_none());
 }

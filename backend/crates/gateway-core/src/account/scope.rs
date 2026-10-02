@@ -1,6 +1,6 @@
 //! 请求认证时冻结的账号范围与目录，不依赖路由选择器。
 
-use super::ProviderAccountId;
+use super::{FastMode, ProviderAccountId};
 use crate::identity::ProviderKind;
 use crate::validation::{IdentifierError, RoutingError};
 use std::{
@@ -247,7 +247,7 @@ impl ClientRoutingScope {
 /// 一次认证随 RuntimeSnapshot 冻结的账号目录与 Key 权限。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
-    disable_fast: bool,
+    fast_mode: FastMode,
     request_profiles: BTreeMap<ProviderKind, super::OpaqueProviderData>,
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
@@ -277,16 +277,16 @@ impl FrozenAccountScope {
         &self.request_profiles
     }
 
-    /// Key 绑定分组的冻结 Fast 限制，与账号成员资格无关。
+    /// Key 绑定分组的冻结 Fast 策略，与账号成员资格无关。
     #[must_use]
-    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
+    pub const fn with_fast_mode(mut self, fast_mode: FastMode) -> Self {
+        self.fast_mode = fast_mode;
         self
     }
 
     #[must_use]
-    pub const fn disable_fast(&self) -> bool {
-        self.disable_fast
+    pub const fn fast_mode(&self) -> FastMode {
+        self.fast_mode
     }
 
     #[must_use]
@@ -296,7 +296,7 @@ impl FrozenAccountScope {
             ClientRoutingScope::Restricted { provider_kinds, .. } => Arc::clone(provider_kinds),
         };
         Self {
-            disable_fast: false,
+            fast_mode: FastMode::Default,
             request_profiles: BTreeMap::new(),
             directory,
             client_scope,

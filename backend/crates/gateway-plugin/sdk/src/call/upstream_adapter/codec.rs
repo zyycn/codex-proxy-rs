@@ -37,7 +37,15 @@ pub(super) fn encode_request(
     request: UpstreamAdapterRequest,
     body: Vec<u8>,
 ) -> Result<Vec<u8>, ExecutionEncodingError> {
-    pack(*b"GPAQ", &request, [body])
+    encode_request_metadata(&request, body)
+}
+
+/// 封装按合同版本投影的请求元数据，保持 GPAQ 分帧与载荷限制统一。
+pub fn encode_request_metadata(
+    metadata: &impl Serialize,
+    body: Vec<u8>,
+) -> Result<Vec<u8>, ExecutionEncodingError> {
+    pack(*b"GPAQ", metadata, [body])
 }
 
 pub(super) fn decode_request(

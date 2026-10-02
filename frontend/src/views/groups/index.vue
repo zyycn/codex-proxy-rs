@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { BaseCard, BaseCheckbox, BaseConfirmModal, BasePageHeader, BaseTable, BaseTablePagination } from '@codex-proxy/ui'
+import { Zap, ZapOff } from '@lucide/vue'
 import { usePageSelection } from '@/composables/usePageSelection'
 import AccountGroupActions from './components/AccountGroupActions.vue'
 import AccountGroupFilters from './components/AccountGroupFilters.vue'
@@ -100,10 +101,17 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
                     {{ row.name }}
                   </strong>
                   <span
-                    v-if="row.disableFast"
-                    class="inline-flex h-6 shrink-0 items-center rounded-lg bg-cp-fill-tertiary px-2 text-cp-xs font-bold text-cp-text-secondary"
+                    v-if="row.fastMode !== 'default'"
+                    class="inline-flex size-4 shrink-0 items-center justify-center rounded-full"
+                    :class="row.fastMode === 'enabled'
+                      ? 'bg-cp-warning-container text-cp-warning-on-container'
+                      : 'bg-cp-fill-tertiary text-cp-text-tertiary'"
+                    :title="row.fastMode === 'enabled' ? 'Fast 已开启' : 'Fast 已关闭'"
+                    role="img"
+                    :aria-label="row.fastMode === 'enabled' ? 'Fast 已开启' : 'Fast 已关闭'"
                   >
-                    Fast 已关闭
+                    <Zap v-if="row.fastMode === 'enabled'" class="size-3" stroke-width="2.2" aria-hidden="true" />
+                    <ZapOff v-else class="size-3" stroke-width="2.2" aria-hidden="true" />
                   </span>
                 </div>
                 <span v-if="row.description" class="truncate text-cp-xs font-emphasis text-cp-text-quaternary">

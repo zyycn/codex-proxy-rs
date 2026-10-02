@@ -341,16 +341,21 @@ async fn system_update_accepts_compatible_enabled_plugins_at_the_same_revision()
 }
 
 #[tokio::test]
-async fn rollback_rejects_missing_target_capability() {
+async fn rollback_preserves_plugins_when_target_capability_is_missing() {
     let incompatible = Fixture::new(requirements("^1.0", "executor"), &[7]);
     let services = super::AdminHarness::new()
-        .plugins(incompatible.clone(), incompatible)
+        .plugins(incompatible.clone(), incompatible.clone())
         .system(Arc::new(PreflightingSystem {
             candidate: candidate("models"),
         }))
         .build()
         .await;
-    assert!(services.system().rollback().await.is_err());
+    services
+        .system()
+        .rollback()
+        .await
+        .expect("兼容性风险不阻止回滚");
+    assert!(incompatible.disabled.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -501,7 +506,7 @@ fn context() -> MutationContext {
 }
 
 #[tokio::test]
-async fn incompatible_restart_requires_exact_confirmation_before_disabling() {
+async fn incompatible_restart_requires_exact_confirmation_and_preserves_enabled_plugins() {
     let fixture = Fixture::new(requirements("^1.0", "executor"), &[7]);
     let services = super::AdminHarness::new()
         .plugins(fixture.clone(), fixture.clone())
@@ -539,15 +544,17 @@ async fn incompatible_restart_requires_exact_confirmation_before_disabling() {
         .restart(Some(plan), &context())
         .await
         .unwrap();
-    assert_eq!(*fixture.disabled.lock().unwrap(), ["enabled-fixture"]);
-    assert!(
+    assert!(fixture.disabled.lock().unwrap().is_empty());
+    assert_eq!(fixture.next_revision().get(), 7);
+    assert_eq!(
         services
             .system()
             .restart_plan()
             .await
             .unwrap()
             .incompatible_plugins
-            .is_empty()
+            .len(),
+        1
     );
 }
 

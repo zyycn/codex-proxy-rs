@@ -1,12 +1,12 @@
 # 受管上游适配器
 
-`upstream_adapter` v1 是现有生成请求洋葱链的终端，只挂到内置 `openai` / `xai`，不替换独立图像或压缩端点。
+`upstream_adapter` v2 是现有生成请求洋葱链的终端，只挂到内置 `openai` / `xai`，不替换独立图像或压缩端点。
 插件定义 Base URL、业务路径、请求编码和响应解析；宿主继续持有身份、ACL、选号、租约、凭据、代理、重试和账本。
 普通请求或响应加工使用 [middleware](capabilities.md#洋葱中间件)
 
 ## 声明与绑定
 
-清单声明 `upstream_adapter`、版本 `1`，以及匹配的 `inputFormats` / `outputFormats`；固定阶段 `upstream` 由作者清单规范化入口生成。
+清单声明 `upstream_adapter`、版本 `2`，以及匹配的 `inputFormats` / `outputFormats`；固定阶段 `upstream` 由作者清单规范化入口生成。
 使用 `PluginBuilder::on` 注册
 `methods::UPSTREAM_ADAPTER_REGISTER` 与 `methods::UPSTREAM_ADAPTER_EXECUTE`
 
@@ -27,7 +27,7 @@
 同一请求不能同时命中两个适配器；配置准备时拒绝重叠，执行时再次复核。适配器未命中时仍使用原生上游，
 已命中但不可用时拒绝请求。安装、配置、启停和升级使用已有插件管理
 
-能力版本、清单版本、进程 RPC 版本和宿主兼容声明格式版本分别判断，见[清单](manifest.md)。
+upstream_adapter v1 在[弃用窗口](manifest.md#接口弃用)内仍使用旧布尔投影，不能仅修改清单版本而继续使用旧 DTO。能力版本、清单版本、进程 RPC 版本和宿主兼容声明格式版本分别判断，见[清单](manifest.md)。
 Provider、业务协议和传输名称不能写入宿主兼容清单的 capability / RPC 版本位置
 
 ## 执行与受管出站
@@ -35,8 +35,8 @@ Provider、业务协议和传输名称不能写入宿主兼容清单的 capabili
 `TypedCall<UpstreamAdapterRequest>` 包含只读的 Key、账号、凭据版本、模型、协议、Header 和宿主续接投影；
 原始请求正文位于 `call.payload`，原始账号凭据不进入插件输入。宿主首次消费冷流才调用插件
 
-`disable_fast` 是本次模型执行的有效设置。OpenAI 在 attempt 中间件之前将 Fast 设置应用到正文基线，
-适配器收到经过中间件处理的正文；插件显式改写档位后，宿主不会在发送前再次恢复默认值。
+`fast_mode` 是本次模型执行的有效设置，取值为 `default`、`enabled` 或 `disabled`。OpenAI 在 attempt 中间件之前将 Fast 设置应用到正文基线，
+适配器收到经过 attempt 中间件处理的正文；attempt 中间件显式改写档位后，宿主不会在发送前再次应用 Fast 策略。
 其他请求设置与 Key 作用域的覆盖规则见[模型请求与 attempt](capabilities.md#模型请求与-attempt)
 
 HTTP 请求使用 `call.host.upstream_http(request, body).await?`，返回 `HostHttpResponse`：

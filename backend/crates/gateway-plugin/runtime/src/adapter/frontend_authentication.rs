@@ -214,10 +214,14 @@ impl FrontendAuthenticationPlan for PluginFrontendAuthenticationPlan {
                 .await
                 .map_err(|_| FrontendAuthenticationError)?;
             if reply.result != serde_json::json!({}) {
+                session.invalid_response(Stage::Authentication);
                 return Err(FrontendAuthenticationError);
             }
-            let result: FrontendAuthenticationResult =
-                serde_json::from_slice(&reply.payload).map_err(|_| FrontendAuthenticationError)?;
+            let result: FrontendAuthenticationResult = serde_json::from_slice(&reply.payload)
+                .map_err(|_| {
+                    session.invalid_response(Stage::Authentication);
+                    FrontendAuthenticationError
+                })?;
             match result {
                 FrontendAuthenticationResult::Authenticated { principal }
                     if valid_principal(&principal) =>
@@ -225,6 +229,7 @@ impl FrontendAuthenticationPlan for PluginFrontendAuthenticationPlan {
                     Ok(FrontendAuthenticationDecision::Authenticated { principal })
                 }
                 FrontendAuthenticationResult::Authenticated { .. } => {
+                    session.invalid_response(Stage::Authentication);
                     Err(FrontendAuthenticationError)
                 }
                 FrontendAuthenticationResult::NotMatched {} => {

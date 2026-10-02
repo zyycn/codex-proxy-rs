@@ -367,7 +367,7 @@ fn middleware_contributions() -> Contributions {
         Capability::Middleware,
         ContributionDeclaration {
             id: "test.example.middleware".into(),
-            version: 3,
+            version: 4,
             stages: vec![Stage::Request],
             input_formats: vec!["openai".into()],
             output_formats: vec!["openai".into()],

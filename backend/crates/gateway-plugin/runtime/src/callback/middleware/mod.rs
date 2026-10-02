@@ -84,6 +84,7 @@ fn request_feature(
 
 pub(crate) struct MiddlewareInvocation {
     instance_id: String,
+    settings_contract: crate::compatibility::FastSettings,
     capabilities_allowed: bool,
     transport: ClientTransport,
     state: Mutex<InvocationState>,
@@ -138,22 +139,28 @@ impl MiddlewareInvocation {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        serde_json::to_value(
-            state
-                .original_request
-                .settings()
-                .and_then(gateway_core::settings::RequestSettings::execution_values),
-        )
-        .map_err(|_| invalid())
+        state
+            .original_request
+            .settings()
+            .map(|settings| self.settings_contract.execution(settings))
+            .unwrap_or(Ok(serde_json::Value::Null))
+    }
+
+    pub(crate) fn settings_sources(&self) -> Result<serde_json::Value, PluginFault> {
+        self.request_settings()
+            .map(|settings| self.settings_contract.sources(&settings))
+            .unwrap_or(Ok(serde_json::Value::Null))
     }
     pub(crate) fn new(
         context: &MiddlewareContext,
         request: MiddlewareRequest,
         next: MiddlewareNext,
         instance_id: String,
+        settings_contract: crate::compatibility::FastSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
             instance_id,
+            settings_contract,
             capabilities_allowed: context.mount()
                 == gateway_core::engine::middleware::MiddlewareMount::Request
                 && context.operation() == Some(gateway_core::operation::OperationKind::Generate),
@@ -334,7 +341,7 @@ impl MiddlewareInvocation {
                     "execution settings are not available at this middleware boundary",
                 )
             })?;
-            let values = serde_json::from_value(settings).map_err(|_| invalid())?;
+            let values = self.settings_contract.decode(settings, current)?;
             let updated = current
                 .replace_execution(&values, &self.instance_id)
                 .map_err(|_| invalid())?;
@@ -493,9 +500,6 @@ impl MiddlewareInvocation {
         &self,
         response: MiddlewareResponseHead,
     ) -> Result<MiddlewareCompletion, MiddlewareError> {
-        if let Some(error) = self.take_downstream_error() {
-            return Err(error);
-        }
         let downstream = {
             let mut state = self
                 .state

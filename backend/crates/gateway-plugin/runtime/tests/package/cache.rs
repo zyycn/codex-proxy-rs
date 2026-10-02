@@ -13,12 +13,8 @@ fn new_preparation_never_modifies_an_existing_version_and_cache_is_reclaimable()
         )
         .unwrap(),
     );
-    let first = package
-        .prepare(cache.path(), &"1.0.0".parse().unwrap())
-        .unwrap();
-    let second = package
-        .prepare(cache.path(), &"1.0.0".parse().unwrap())
-        .unwrap();
+    let first = package.prepare(cache.path()).unwrap();
+    let second = package.prepare(cache.path()).unwrap();
     assert_ne!(first.directory(), second.directory());
     let first_path = first.directory().to_owned();
     drop(first);

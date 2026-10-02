@@ -1,0 +1,20 @@
+[
+  {
+    "capability": "middleware",
+    "version": 3,
+    "replacement_version": 4,
+    "introduced_in": null,
+    "last_counted_in": null,
+    "remaining_releases": 7,
+    "migration": "将执行设置和来源中的 disable_fast 改为 fast_mode，使用 default、enabled、disabled 三态，并将 middleware 声明升级到 v4"
+  },
+  {
+    "capability": "upstream_adapter",
+    "version": 1,
+    "replacement_version": 2,
+    "introduced_in": null,
+    "last_counted_in": null,
+    "remaining_releases": 7,
+    "migration": "使用新版 SDK 读取 fast_mode 三态，并将 upstream_adapter 声明升级到 v2"
+  }
+]

@@ -119,7 +119,7 @@ impl ValidatedPackage {
         let manifest_bytes = files.remove("plugin.json").ok_or(PackageError::Archive)?;
         let manifest: Manifest =
             serde_json::from_slice(&manifest_bytes).map_err(|_| PackageError::Archive)?;
-        manifest.validate()?;
+        manifest.validate_structure()?;
         // 源清单可以省略 package，但归档安装入口必须只接受构建后的单平台包。
         let package = manifest.package.as_ref().ok_or(ManifestError::Invalid)?;
         if files.len() != package.files.len() || files.len() > limits.file_count {
