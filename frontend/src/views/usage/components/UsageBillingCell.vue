@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { UsageDisplayRecord } from '../utils/records'
 
+import { Zap } from '@lucide/vue'
 import { computed } from 'vue'
 import { usageBilling, usageBillingText } from '../utils/records'
 import UsageDetailPopover from './UsageDetailPopover.vue'
@@ -62,28 +63,38 @@ function itemValueClass(tone?: string, accent?: boolean) {
       {{ usageBillingText(record) }}
     </span>
 
-    <UsageDetailPopover
-      v-if="billing"
-      :title="billing.longContextBillingApplied ? '长上下文计费明细' : '计费明细'"
-      :trigger-label="billing.longContextBillingApplied ? '查看长上下文计费明细' : '查看费用明细'"
-      :tone="billing.longContextBillingApplied ? 'warning' : 'primary'"
-    >
-      <div class="grid gap-1.5 text-cp-text-secondary">
-        <div v-for="item in amountItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
-          <span class="whitespace-nowrap">{{ item.label }}</span>
-          <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(undefined, item.accent)">
-            {{ item.value }}
-          </span>
+    <div v-if="billing" class="flex flex-col items-center gap-1">
+      <UsageDetailPopover
+        :title="billing.longContextBillingApplied ? '长上下文计费明细' : '计费明细'"
+        :trigger-label="billing.longContextBillingApplied ? '查看长上下文计费明细' : '查看费用明细'"
+        :tone="billing.longContextBillingApplied ? 'warning' : 'primary'"
+      >
+        <div class="grid gap-1.5 text-cp-text-secondary">
+          <div v-for="item in amountItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
+            <span class="whitespace-nowrap">{{ item.label }}</span>
+            <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(undefined, item.accent)">
+              {{ item.value }}
+            </span>
+          </div>
         </div>
-      </div>
-      <div class="mt-1 grid gap-1.5 rounded-cp bg-cp-fill-tertiary p-2 text-cp-text-secondary">
-        <div v-for="item in billingItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
-          <span class="whitespace-nowrap">{{ item.label }}</span>
-          <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(item.tone)">
-            {{ item.value }}
-          </span>
+        <div class="mt-1 grid gap-1.5 rounded-cp bg-cp-fill-tertiary p-2 text-cp-text-secondary">
+          <div v-for="item in billingItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
+            <span class="whitespace-nowrap">{{ item.label }}</span>
+            <span class="justify-self-end whitespace-nowrap font-mono font-heavy" :class="itemValueClass(item.tone)">
+              {{ item.value }}
+            </span>
+          </div>
         </div>
-      </div>
-    </UsageDetailPopover>
+      </UsageDetailPopover>
+      <span
+        v-if="billing.serviceTierDisplay === 'Fast'"
+        class="inline-flex size-4 items-center justify-center rounded-full bg-cp-warning-container text-cp-warning-on-container"
+        title="Fast 加速"
+        role="img"
+        aria-label="Fast 加速"
+      >
+        <Zap class="size-3" stroke-width="2.2" aria-hidden="true" />
+      </span>
+    </div>
   </div>
 </template>
