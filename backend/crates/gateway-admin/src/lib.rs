@@ -432,7 +432,6 @@ async fn initialize_inner(
     let system_preflight = Arc::new(use_case::plugin_update::PluginSystemUpdatePreflight::new(
         store.plugins(),
         plugin_inspector.clone(),
-        snapshot.clone(),
     ));
     let system = Arc::new(DefaultSystemService::new(system, system_preflight));
     let key_usage = Arc::new(use_case::key_usage::DefaultKeyUsageService::new(

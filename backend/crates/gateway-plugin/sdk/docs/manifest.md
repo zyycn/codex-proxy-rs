@@ -37,11 +37,24 @@
 
 安装包清单校验与已安装元数据读取是两个边界：清单拒绝未知字段，并检查必需字段、类型和版本；
 数据库元数据允许的字段增减见[持久化规则](../../../../../docs/architecture.md#发布与执行边界)，不改变清单或 RPC 合同。
-插件依赖新增接口或字段时，应通过 `engines.codex-proxy-rs` 声明所需宿主版本；字段语义不兼容时不能只修改版本号绕过校验
+插件依赖新增接口或字段时，应通过 `engines.codex-proxy-rs` 声明所需宿主版本。宿主范围和能力版本不匹配时持续提示风险，仍可尝试启动；包结构、平台与 RPC 封装校验失败仍阻止加载。CLI 的作者校验保持严格，不支持的能力合同须使用匹配的 SDK 构建
+
+## 接口弃用
+
+新合同与旧合同并行提供，管理端和插件加载日志会提示旧合同及迁移方式。新合同首次正式发布后，旧合同至少再兼容 7 个正式版本；主版本、次版本和补丁版本各计一次，alpha、beta、rc、exp 及同版本重试不计
+
+剩余窗口由宿主发行物中的 [弃用清单](../../runtime/plugin-api-deprecations.json) 给出，不通过版本号差值推算。窗口内提供旧合同转换；窗口结束后移除转换和支持声明，所有旧合同插件都应升级 SDK、处理器与清单再重新打包。仍允许尝试启动，但不再保证兼容，不按实际读取过哪些字段判断
+
+| 旧合同 | 替代合同 | 迁移内容 |
+| --- | --- | --- |
+| middleware v3 | middleware v4 | 执行设置及 `settings_sources.execution` 中的 `disable_fast` 改为 `fast_mode` 三态 |
+| upstream_adapter v1 | upstream_adapter v2 | 使用新版 `UpstreamAdapterRequest.fast_mode`，同步更新 SDK 和贡献版本 |
+
+旧布尔投影仅在 `disabled` 时为 `true`，`default` 和 `enabled` 均为 `false`。旧中间件原样回传布尔值时保留实际三态，修改其他设置不会丢失 `enabled`；实际从 `true` 改为 `false` 时设为 `default`。旧接口不能表达强制开启，需升级合同使用三态
 
 ## 扩展项简写
 
-作者声明可以省略 `id` 和固定阶段；默认版本为 `1`，中间件必须显式选择版本 `3`：
+作者声明可以省略 `id` 和固定阶段；默认版本为 `1`，新中间件显式选择版本 `4`，新版上游适配器 SDK 使用版本 `2`：
 
 ```json
 {
@@ -49,7 +62,7 @@
     "management": {},
     "command_line": {},
     "middleware": {
-      "version": 3,
+      "version": 4,
       "stages": ["request"],
       "inputFormats": ["openai"],
       "outputFormats": ["openai"]
@@ -58,7 +71,7 @@
 }
 ```
 
-默认扩展项 ID 为 `<publisher>.<name>.<capability-kebab>`。宿主只接受 middleware v3；使用 v1/v2 的插件须更新 SDK、处理器及清单后重新打包。除 `middleware` 外，阶段由
+默认扩展项 ID 为 `<publisher>.<name>.<capability-kebab>`。middleware v3 与 upstream_adapter v1 在[弃用窗口](#接口弃用)内仍可加载。除 `middleware` 外，阶段由
 capability 固定并由工具生成：
 
 | 阶段 | 能力 |

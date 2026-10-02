@@ -128,7 +128,7 @@ fn rejects_duplicate_resource_prefixes() {
 }
 
 #[test]
-fn packages_only_generated_resources_with_v3_metadata() {
+fn packages_only_generated_resources_with_current_metadata() {
     assert_packaged_resources("assets/icon.png", "image/png", b"png");
 }
 
@@ -248,7 +248,7 @@ fn source_manifest() -> &'static [u8] {
       "main":"bin/plugin",
       "runtime":"trustedProcess",
       "contributes":{
-        "middleware":{"version":3,"stages":["request"],"inputFormats":["openai"],"outputFormats":["openai"]},
+        "middleware":{"version":4,"stages":["request"],"inputFormats":["openai"],"outputFormats":["openai"]},
         "management":{}
       },
 

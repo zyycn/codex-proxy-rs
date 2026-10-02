@@ -1,4 +1,4 @@
-import type { AccountGroup, ApiKey } from '@/api'
+import type { AccountGroup, ApiKey, FastMode } from '@/api'
 import { normalizeRgbaHexColor, toast } from '@codex-proxy/ui'
 
 import { watchDebounced } from '@vueuse/core'
@@ -19,7 +19,7 @@ import { errorMessage } from '@/utils/operation'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
 export interface AccountGroupFormValue {
-  disableFast: boolean
+  fastMode: FastMode
   name: string
   description: string
   color: string
@@ -114,7 +114,7 @@ export function useAccountGroups() {
       name: group.name,
       description: group.description ?? '',
       color: group.color,
-      disableFast: group.disableFast,
+      fastMode: group.fastMode,
     }
     showFormModal.value = true
   }
@@ -136,16 +136,16 @@ export function useAccountGroups() {
     await savingAction.run(async () => {
       const updating = Boolean(editingGroup.value)
       const description = form.value.description.trim() || null
-      const disableFast = form.value.disableFast
+      const fastMode = form.value.fastMode
       if (editingGroup.value) {
-        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, disableFast })
+        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode })
       }
       else {
         await createAccountGroup({
           name,
           description,
           color,
-          disableFast,
+          fastMode,
         })
       }
       showFormModal.value = false
@@ -305,5 +305,5 @@ export function useAccountGroups() {
 }
 
 function emptyForm(): AccountGroupFormValue {
-  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, disableFast: false }
+  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default' }
 }

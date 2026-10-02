@@ -288,7 +288,12 @@ fn reused_client_uses_updated_limits_for_each_execution() {
         requests_per_minute: 1,
     };
     for (revision, limits) in [(2, limited), (3, RateLimits::unlimited())] {
-        snapshots.publish(start_snapshot_with_policy(revision, true, limits, false));
+        snapshots.publish(start_snapshot_with_policy(
+            revision,
+            true,
+            limits,
+            FastMode::Default,
+        ));
         let mut next = request(&service, ClientTransport::WebSocket);
         next.client = client.clone();
         let started = block_on(service.start(next)).expect("new execution");
@@ -321,7 +326,7 @@ fn reused_client_cannot_start_after_key_disable_or_snapshot_suspension() {
                 2,
                 false,
                 RateLimits::unlimited(),
-                false,
+                FastMode::Default,
             ));
         }
         let result = block_on(service.start(next));
@@ -713,7 +718,7 @@ fn detached_early_failure_resumes_cancelled_store_write_and_settles_once_for_all
 
 #[derive(Default)]
 struct ChargedProvider {
-    policies: Mutex<Vec<bool>>,
+    policies: Mutex<Vec<FastMode>>,
     fail: bool,
 }
 
@@ -2494,7 +2499,7 @@ impl Provider for ChargedProvider {
         request: ProviderRequest,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        self.policies.lock().unwrap().push(context.disable_fast());
+        self.policies.lock().unwrap().push(context.fast_mode());
         let candidate = request.candidate();
         let metadata = ProviderCallMetadata::new(
             candidate.provider().clone(),
@@ -2802,7 +2807,7 @@ use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
 use gateway_core::account::{
     AccountCandidate, AccountEligibilityPolicy, AccountModelAccess, AccountModelAccessMode,
     AccountRuntimeSignals, AccountSelectionContext, AccountWeight, CredentialRevision,
-    CredentialState, ProviderAccount, ProviderAccountId, QuotaState,
+    CredentialState, FastMode, ProviderAccount, ProviderAccountId, QuotaState,
 };
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
@@ -3836,14 +3841,14 @@ fn client_snapshot() -> RuntimeSnapshot {
 }
 
 fn start_snapshot() -> RuntimeSnapshot {
-    start_snapshot_with_policy(1, true, RateLimits::unlimited(), false)
+    start_snapshot_with_policy(1, true, RateLimits::unlimited(), FastMode::Default)
 }
 
 fn start_snapshot_with_policy(
     revision: u64,
     enabled: bool,
     limits: RateLimits,
-    disable_fast: bool,
+    fast_mode: FastMode,
 ) -> RuntimeSnapshot {
     let provider = ProviderKind::new("openai").expect("provider kind");
     let capabilities =
@@ -3864,7 +3869,7 @@ fn start_snapshot_with_policy(
                 account_scope(&provider, "acct_start")
                     .as_ref()
                     .clone()
-                    .with_disable_fast(disable_fast),
+                    .with_fast_mode(fast_mode),
             ),
             enabled,
             limits,
@@ -3962,7 +3967,7 @@ fn account_wait_inherits_the_budget_spent_during_client_admission() {
                 max_concurrency: 1,
                 requests_per_minute: 0,
             },
-            false,
+            FastMode::Default,
         );
         let settings = snapshot.settings().clone().with_concurrency_queues(1, 0, 1);
         let snapshot = snapshot.with_settings(&settings).unwrap();
@@ -4070,7 +4075,7 @@ fn queue_service(
             max_concurrency,
             requests_per_minute: 0,
         },
-        false,
+        FastMode::Default,
     );
     let settings = snapshot.settings().clone().with_concurrency_queues(
         max_waiting,
@@ -4211,12 +4216,16 @@ fn reused_websocket_client_gets_group_fast_policy_from_each_new_request_snapshot
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
     let client = service.authenticate("sk_start_test").unwrap();
-    for (revision, disable_fast) in [(2, true), (3, false)] {
+    for (revision, fast_mode) in [
+        (2, FastMode::Enabled),
+        (3, FastMode::Disabled),
+        (4, FastMode::Default),
+    ] {
         snapshots.publish(start_snapshot_with_policy(
             revision,
             true,
             RateLimits::unlimited(),
-            disable_fast,
+            fast_mode,
         ));
         let mut next = request(&service, ClientTransport::WebSocket);
         next.client = client.clone();
@@ -4224,7 +4233,10 @@ fn reused_websocket_client_gets_group_fast_policy_from_each_new_request_snapshot
         block_on(started.session.collect_uncommitted()).unwrap();
         block_on(started.session.detach_finalize());
     }
-    assert_eq!(*provider.policies.lock().unwrap(), vec![true, false]);
+    assert_eq!(
+        *provider.policies.lock().unwrap(),
+        vec![FastMode::Enabled, FastMode::Disabled, FastMode::Default]
+    );
 }
 
 #[test]
@@ -4235,7 +4247,7 @@ fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_
             max_concurrency: 3,
             requests_per_minute: 9,
         };
-        let snapshot = start_snapshot_with_policy(1, true, limits, true);
+        let snapshot = start_snapshot_with_policy(1, true, limits, FastMode::Disabled);
         let settings = snapshot
             .settings()
             .clone()
@@ -4261,7 +4273,7 @@ fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_
         settings["runtime"]["model_mappings"] = json!({"request-alias":"gpt-start"});
         settings["runtime"]["request_interval_ms"] = json!(0);
         settings["runtime"]["request_profiles"] = json!({"openai":{"identity":"request-local"}});
-        settings["disable_fast"] = json!(false);
+        settings["fast_mode"] = json!("default");
         settings["client_limits"] = json!({"max_concurrency":0,"requests_per_minute":0});
         settings["timeout_ms"] = json!(120_000);
         let settings = modified
@@ -4334,7 +4346,10 @@ fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_
             started.session.collect_uncommitted().await.unwrap();
             started.session.detach_finalize().await;
         }
-        assert_eq!(*provider.policies.lock().unwrap(), vec![false, true]);
+        assert_eq!(
+            *provider.policies.lock().unwrap(),
+            vec![FastMode::Default, FastMode::Disabled]
+        );
         assert_eq!(
             *admissions.limits.lock().unwrap(),
             vec![RateLimits::unlimited(), limits]
@@ -4350,7 +4365,7 @@ fn invalid_request_settings_leave_the_prepared_execution_unchanged() {
     let baseline = prepared.request_settings().execution_values().unwrap();
     let mut invalid = serde_json::to_value(&baseline).unwrap();
     invalid["runtime"]["responses_max_decompressed_body_bytes"] = json!(0);
-    invalid["disable_fast"] = json!(true);
+    invalid["fast_mode"] = json!("disabled");
     assert!(
         prepared
             .request_settings()
@@ -4516,7 +4531,7 @@ fn entry_settings_freeze_authentication_and_rebase_only_explicit_overrides() {
                 max_concurrency: 7,
                 requests_per_minute: 17,
             },
-            true,
+            FastMode::Disabled,
         ));
         let prepared = service.prepare_execution(client.clone()).await.unwrap();
         assert_eq!(prepared.client().snapshot().revision().get(), 1);
@@ -4545,12 +4560,13 @@ fn entry_settings_freeze_authentication_and_rebase_only_explicit_overrides() {
                 .max_concurrency,
             7
         );
-        assert!(
+        assert_eq!(
             prepared
                 .request_settings()
                 .execution_values()
                 .unwrap()
-                .disable_fast
+                .fast_mode,
+            FastMode::Disabled
         );
         assert_eq!(
             prepared
@@ -4588,7 +4604,7 @@ fn unchanged_and_precompiled_request_settings_reuse_the_frozen_snapshot() {
         2,
         true,
         RateLimits::unlimited(),
-        true,
+        FastMode::Disabled,
     ));
     let rebased = unchanged.rebase(fresh.clone()).unwrap();
     assert!(Arc::ptr_eq(&fresh, &rebased.snapshot()));
@@ -4670,7 +4686,7 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
                     account_scope(&provider, "acct_start")
                         .as_ref()
                         .clone()
-                        .with_disable_fast(true)
+                        .with_fast_mode(FastMode::Disabled)
                         .with_request_profiles(profiles(name)),
                 ),
                 true,
@@ -4715,7 +4731,7 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
         let configuration = RequestSettings::new(snapshots.acquire().unwrap())
             .with_execution(parent.client().policy(), previous.timeout_ms);
         let mut values = previous.clone();
-        values.disable_fast = false;
+        values.fast_mode = FastMode::Default;
         values.client_limits = RateLimits::unlimited();
         values.timeout_ms = 90_000;
         let mut runtime = serde_json::to_value(&values.runtime).unwrap();
@@ -4725,8 +4741,8 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
             .replace_execution(&values, "settings-plugin")
             .unwrap();
         for (token, expected_limit, expected_fast, expected_timeout, profile) in [
-            ("sk_parent", 0, false, 90, "parent-default"),
-            ("sk_child", 9, true, 600, "child-default"),
+            ("sk_parent", 0, FastMode::Default, 90, "parent-default"),
+            ("sk_child", 9, FastMode::Disabled, 600, "child-default"),
         ] {
             let request = ClientAuthenticationRequest::bearer(token)
                 .unwrap()
@@ -4743,7 +4759,7 @@ fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
                 Some(actual.clone())
             );
             assert_eq!(actual.client_limits.max_concurrency, expected_limit);
-            assert_eq!(actual.disable_fast, expected_fast);
+            assert_eq!(actual.fast_mode, expected_fast);
             assert_eq!(actual.timeout_ms, expected_timeout * 1000);
             let facts = serde_json::to_value(actual.runtime).unwrap();
             assert_eq!(facts["request_profiles"]["openai"]["identity"], profile);

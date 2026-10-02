@@ -69,6 +69,7 @@ use gateway_admin::{
 };
 use gateway_api::auth::SessionState;
 use gateway_core::{
+    account::FastMode,
     account::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
     engine::{
         execution::{ClientAuthenticationError, ClientKeyVerifier},
@@ -654,7 +655,7 @@ impl MemoryAccountGroupStore {
             (
                 primary_id.clone(),
                 AccountGroupRecord {
-                    disable_fast: false,
+                    fast_mode: FastMode::Default,
                     id: primary_id,
                     name: "Alpha routing".to_owned(),
                     description: Some("Primary traffic".to_owned()),
@@ -676,7 +677,7 @@ impl MemoryAccountGroupStore {
             (
                 secondary_id.clone(),
                 AccountGroupRecord {
-                    disable_fast: false,
+                    fast_mode: FastMode::Default,
                     id: secondary_id,
                     name: "Beta routing".to_owned(),
                     description: None,
@@ -792,7 +793,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         let mut state = self.state.lock().expect("account groups");
         let now = Utc::now();
         let record = AccountGroupRecord {
-            disable_fast: command.disable_fast,
+            fast_mode: command.fast_mode,
             id: command.id.clone(),
             name: command.name,
             description: command.description,
@@ -824,8 +825,8 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         record.name = command.name;
         record.description = command.description;
         record.color = command.color;
-        if let Some(disable_fast) = command.disable_fast {
-            record.disable_fast = disable_fast;
+        if let Some(fast_mode) = command.fast_mode {
+            record.fast_mode = fast_mode;
         }
         record.updated_at = Utc::now();
         mutation(&mut state, command.id, true)

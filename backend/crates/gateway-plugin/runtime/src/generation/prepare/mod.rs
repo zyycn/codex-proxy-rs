@@ -1085,10 +1085,13 @@ impl InstanceRuntimeProjection<'_> {
             failure = Some(reason.clone());
             PluginInstanceRuntimeStatus::PreparationFailed
         } else if self.open_restart_circuits.contains(&expected.id) {
-            failure = Some(runtime_failure(
-                "restart_circuit_open",
-                "插件实例连续异常退出，已暂停自动重启",
-            ));
+            let message = match diagnostic {
+                Some(crate::rpc::RpcSessionDiagnostic::Failed { message, .. }) => {
+                    format!("{message}，已暂停自动重启")
+                }
+                _ => "插件实例连续异常退出，已暂停自动重启".to_owned(),
+            };
+            failure = Some(runtime_failure("restart_circuit_open", &message));
             PluginInstanceRuntimeStatus::Faulted
         } else if actual_matches
             && let Some(crate::rpc::RpcSessionDiagnostic::Failed { code, message }) = diagnostic

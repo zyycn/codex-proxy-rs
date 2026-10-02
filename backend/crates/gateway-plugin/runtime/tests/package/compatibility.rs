@@ -42,6 +42,9 @@ fn host_compatibility_requires_the_trusted_middleware_contract() {
     assert!(!compatibility.supports_capability("middleware", 1));
     assert!(!compatibility.supports_capability("middleware", 2));
     assert!(compatibility.supports_capability("middleware", 3));
+    assert!(compatibility.supports_capability("middleware", 4));
+    assert!(compatibility.supports_capability("upstream_adapter", 1));
+    assert!(compatibility.supports_capability("upstream_adapter", 2));
     assert!(!compatibility.supports_capability("openai", 1));
 }
 
@@ -72,5 +75,63 @@ async fn package_inspector_returns_static_requirements_without_starting_the_plug
         requirements.protocol_version,
         gateway_plugin_sdk::PROTOCOL_VERSION
     );
-    assert_eq!(requirements.capabilities, vec![("middleware".into(), 3)]);
+    assert_eq!(requirements.capabilities, vec![("middleware".into(), 4)]);
+}
+
+#[tokio::test]
+async fn deprecated_contracts_are_loadable_and_only_old_versions_receive_notices() {
+    for legacy in [false, true] {
+        let mut middleware = crate::support::contribution(
+            Capability::Middleware,
+            vec![Stage::Request],
+            vec!["openai".into()],
+            vec!["openai".into()],
+        );
+        let mut upstream = crate::support::contribution(
+            Capability::UpstreamAdapter,
+            vec![Stage::Upstream],
+            vec!["openai".into()],
+            vec!["openai".into()],
+        );
+        if legacy {
+            middleware.1.version = 3;
+            upstream.1.version = 1;
+        }
+        let archive = crate::support::package_with_contributions(
+            b"not-an-executable",
+            Contributions::from([middleware, upstream]),
+        );
+        let inspector =
+            PackageInspector::new(PackageLimits::default(), semver::Version::new(1, 0, 0));
+        let artifact = inspector.inspect(archive, None).await.unwrap();
+        let notices = inspector.api_deprecations(&artifact.metadata).unwrap();
+        assert_eq!(notices.len(), if legacy { 2 } else { 0 });
+        for notice in notices {
+            assert!(notice.replacement_version > notice.version);
+            assert!(!notice.migration.is_empty());
+            assert!(notice.remaining_releases <= 7);
+        }
+    }
+}
+
+#[tokio::test]
+async fn host_and_capability_version_mismatches_are_warnings_only() {
+    let mut declaration = crate::support::contribution(
+        Capability::Middleware,
+        vec![Stage::Request],
+        vec!["openai".into()],
+        vec!["openai".into()],
+    );
+    declaration.1.version = 99;
+    let archive =
+        crate::support::package_with_contributions(b"fixture", Contributions::from([declaration]));
+    let inspector = PackageInspector::new(PackageLimits::default(), semver::Version::new(3, 19, 0));
+    let artifact = inspector.inspect(archive.clone(), None).await.unwrap();
+    let warning = inspector
+        .compatibility_warning(archive, artifact.metadata.sha256)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(warning.contains("middleware v99"));
+    assert!(warning.contains("3.19.0"));
 }

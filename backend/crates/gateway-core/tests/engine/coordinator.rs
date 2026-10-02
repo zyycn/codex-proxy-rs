@@ -14,6 +14,7 @@ use futures::StreamExt;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 
+use gateway_core::account::FastMode;
 use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
@@ -621,20 +622,25 @@ fn plan_with_location(
     account_selection_policy: AccountSelectionPolicy,
     request_location: gateway_core::account::RequestLocation,
 ) -> RoutingPlan {
-    plan_with_location_and_fast_policy(operation, account_selection_policy, request_location, false)
+    plan_with_location_and_fast_policy(
+        operation,
+        account_selection_policy,
+        request_location,
+        FastMode::Default,
+    )
 }
 
 fn plan_with_location_and_fast_policy(
     operation: &Operation,
     account_selection_policy: AccountSelectionPolicy,
     request_location: gateway_core::account::RequestLocation,
-    disable_fast: bool,
+    fast_mode: FastMode,
 ) -> RoutingPlan {
     plan_with_profiles(
         operation,
         account_selection_policy,
         request_location,
-        disable_fast,
+        fast_mode,
         Default::default(),
     )
 }
@@ -643,7 +649,7 @@ fn plan_with_profiles(
     operation: &Operation,
     account_selection_policy: AccountSelectionPolicy,
     request_location: gateway_core::account::RequestLocation,
-    disable_fast: bool,
+    fast_mode: FastMode,
     profiles: BTreeMap<ProviderKind, gateway_core::account::OpaqueProviderData>,
 ) -> RoutingPlan {
     let provider = ProviderKind::new("openai").expect("provider");
@@ -703,7 +709,7 @@ fn plan_with_profiles(
             operation,
             Arc::new(
                 FrozenAccountScope::new(directory, ClientRoutingScope::all_accounts())
-                    .with_disable_fast(disable_fast)
+                    .with_fast_mode(fast_mode)
                     .with_request_profiles(profiles),
             ),
             &RoutingContext {
@@ -4576,50 +4582,53 @@ fn deadline_before_first_event_is_persisted_as_failed_attempt() {
 
 #[test]
 fn global_location_and_group_fast_policy_reach_every_account_retry() {
-    let operation = generate_operation();
-    let location = gateway_core::account::RequestLocation {
-        timezone: "Asia/Tokyo".parse().unwrap(),
-        ..Default::default()
-    };
-    let route_plan = plan_with_location_and_fast_policy(
-        &operation,
-        plan(&operation).account_selection_policy(),
-        location.clone(),
-        true,
-    );
-    let (coordinator, _, provider) = coordinator(vec![
-        Script::Stream {
-            account_id: "acct_first",
-            items: vec![Err(ProviderError::new(
-                ProviderErrorKind::RateLimited,
-                UpstreamSendState::Sent,
-            )
-            .with_status(429)
-            .with_replay_safe())],
-        },
-        Script::Stream {
-            account_id: "acct_second",
-            items: complete_stream(None),
-        },
-    ]);
-    let mut session = block_on(coordinator.start(
-        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
-        operation,
-        route_plan,
-        None,
-        None,
-        CancellationToken::new(),
-    ))
-    .unwrap();
-    block_on(session.collect_uncommitted()).unwrap();
-    block_on(session.commit_downstream(Some(200))).unwrap();
-    let contexts = provider.contexts.lock().unwrap();
-    assert_eq!(contexts.len(), 2);
-    assert!(
-        contexts
-            .iter()
-            .all(|context| context.request_location() == Some(&location) && context.disable_fast())
-    );
+    for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
+        let operation = generate_operation();
+        let location = gateway_core::account::RequestLocation {
+            timezone: "Asia/Tokyo".parse().unwrap(),
+            ..Default::default()
+        };
+        let route_plan = plan_with_location_and_fast_policy(
+            &operation,
+            plan(&operation).account_selection_policy(),
+            location.clone(),
+            mode,
+        );
+        let (coordinator, _, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: vec![Err(ProviderError::new(
+                    ProviderErrorKind::RateLimited,
+                    UpstreamSendState::Sent,
+                )
+                .with_status(429)
+                .with_replay_safe())],
+            },
+            Script::Stream {
+                account_id: "acct_second",
+                items: complete_stream(None),
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        block_on(session.commit_downstream(Some(200))).unwrap();
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert!(
+            contexts
+                .iter()
+                .all(|context| context.request_location() == Some(&location)
+                    && context.fast_mode() == mode)
+        );
+    }
 }
 
 #[test]
@@ -4630,7 +4639,7 @@ fn first_resolved_profile_is_frozen_across_account_retries() {
         &operation,
         plan(&operation).account_selection_policy(),
         Default::default(),
-        false,
+        FastMode::Default,
         BTreeMap::from([(
             ProviderKind::new("openai").unwrap(),
             OpaqueProviderData::new(

@@ -1,6 +1,8 @@
 import type { RequestOptions } from '../request'
 import request from '../request'
 
+export type FastMode = 'default' | 'enabled' | 'disabled'
+
 export interface AccountGroupRef {
   id: string
   name: string
@@ -25,7 +27,7 @@ export interface AccountGroupUsage {
 }
 
 export interface AccountGroup extends AccountGroupRef {
-  disableFast: boolean
+  fastMode: FastMode
   description: string | null
   memberCount: number
   providerCounts: Record<string, number>
@@ -66,14 +68,14 @@ interface AccountGroupListParams {
 }
 
 interface AccountGroupCreateParam {
-  disableFast?: boolean
+  fastMode?: FastMode
   name: string
   description: string | null
   color: string
 }
 
 interface AccountGroupUpdateParam {
-  disableFast?: boolean
+  fastMode?: FastMode
   id: string
   name: string
   description: string | null

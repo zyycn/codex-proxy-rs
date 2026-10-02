@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { BaseIconButton, BasePopover } from '@codex-proxy/ui'
-import { Info, TriangleAlert } from '@lucide/vue'
+import { CircleAlert, Info, TriangleAlert } from '@lucide/vue'
 import { shallowRef, useId } from 'vue'
 
-defineProps<{ label: string, warning?: boolean }>()
+defineProps<{ label: string, tone?: 'warning' | 'error' }>()
 
 const open = shallowRef(false)
 const descriptionId = useId()
@@ -30,7 +30,8 @@ function handleKeydown(event: KeyboardEvent) {
         :aria-describedby="open ? descriptionId : undefined"
         @keydown="handleKeydown"
       >
-        <TriangleAlert v-if="warning" class="size-4 text-cp-warning" />
+        <CircleAlert v-if="tone === 'error'" class="size-4 text-cp-error-text" />
+        <TriangleAlert v-else-if="tone === 'warning'" class="size-4 text-cp-warning" />
         <Info v-else class="size-3.5" />
       </BaseIconButton>
     </template>

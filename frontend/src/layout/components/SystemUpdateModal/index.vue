@@ -504,9 +504,9 @@ watch(
 
   <BaseConfirmModal
     v-model="restartConfirmOpen"
-    title="发现不兼容插件"
-    description="配置与数据保留，兼容后可启用"
-    confirm-text="停用并重启"
+    title="插件兼容性提醒"
+    description="重启后保留启用配置，逐个尝试启动插件"
+    confirm-text="继续重启"
     :loading="restarting"
     @confirm="handleConfirmRestart"
   >

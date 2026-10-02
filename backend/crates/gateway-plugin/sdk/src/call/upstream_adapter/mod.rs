@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::model::ExecutionEvent;
 
 mod codec;
+pub use codec::encode_request_metadata;
 
 pub const REGISTER_METHOD: &str = "upstream_adapter.register";
 pub const EXECUTE_METHOD: &str = "upstream_adapter.execute";
@@ -96,8 +97,8 @@ pub struct UpstreamAdapterRequest {
     pub credential_revision: u64,
     pub protocol: String,
     pub client_transport: String,
-    /// 宿主冻结的强制策略；自定义上游编码同样不得请求 Fast / priority 档位。
-    pub disable_fast: bool,
+    /// 宿主冻结的 Fast 策略：default、enabled 或 disabled。
+    pub fast_mode: String,
     pub headers: Vec<(String, Vec<u8>)>,
     /// 只能来自同账号、同插件代次的宿主续接记录，不从客户端正文信任此值。
     pub continuation: Option<UpstreamContinuation>,

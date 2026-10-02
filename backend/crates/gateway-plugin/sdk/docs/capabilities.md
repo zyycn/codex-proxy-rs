@@ -46,7 +46,7 @@ session.run(plugin).await?;
 
 ## 能力与方法
 
-Provider 固定为宿主内置的 OpenAI 与 xAI。当前宿主开放以下 11 类扩展能力；`middleware` 使用 v3，其余使用 v1：
+Provider 固定为宿主内置的 OpenAI 与 xAI。当前宿主开放以下 11 类扩展能力；新插件的 `middleware` 使用 v4，`upstream_adapter` 使用 v2，其余使用 v1；旧合同见[弃用窗口](manifest.md#接口弃用)：
 
 | 能力 | 类型化方法 |
 | --- | --- |
@@ -227,7 +227,7 @@ SDK 不自动重试。超时或断连不能证明写入未提交；重试上限�
 
 ### 洋葱中间件
 
-`middleware.version` 为 `3`，所有挂载使用同一个 `ctx + next` 组合器。清单显式选择处理边界，绑定决定顺序；
+新插件使用 `middleware.version: 4`，所有挂载使用同一个 `ctx + next` 组合器。清单显式选择处理边界，绑定决定顺序；
 不按 URL、消息类型或每个内部步骤增加处理器。仅处理一个边界可直接声明其调用类型；跨边界插件使用 `MiddlewareCall`
 在一个处理器内匹配类型化视图，不感兴趣的调用交给 `call.forward().await`
 
@@ -334,11 +334,14 @@ Ping 的自动 Pong 与关闭握手属于底层 WebSocket 协议事实；插件�
 
 #### 模型请求与 attempt
 
-`RequestCall.request.head` 包含完整 Client Key 与分组归属。OpenAI 在进入 attempt 前应用宿主档位设置，插件显式改写后不再恢复默认值。
+`RequestCall.request.head` 包含完整 Client Key 与分组归属。request 中间件改写正文后，OpenAI 在进入 attempt 前应用宿主 Fast 策略；
+attempt 中间件在此基线上继续改写，终端不再应用 Fast 策略。
+request 与 attempt 阶段通过 `append_header` 添加的请求头会进入上游请求，不适合存放插件内部标记或仅供下游读取的信息。
 OpenAI 与 xAI 的上游 headers 先由账号和画像生成，插件同名字段覆盖基线，同名多值按插件顺序保留；不存在按认证、Cookie 或会话名称划分的保护列表。
 实际账号租约、凭据版本与计费归属仍记录真实选中事实，不随插件修改 header 名称而伪造
 
-request 阶段的 `request.head.settings` 是本次调用的有效设置对象，包含 `runtime`、`disable_fast`、`client_limits` 和 `timeout_ms`。
+middleware v4 的 request 阶段 `request.head.settings` 是本次调用的有效设置对象，包含 `runtime`、`fast_mode`、`client_limits` 和 `timeout_ms`。
+`fast_mode` 使用 `default`、`enabled`、`disabled` 三态，具体档位语义见[账号分组](../../../../../docs/api.md#6-账号分组)。
 `runtime` 使用宿主快照的设置字段，画像已合并 Client Key 设置；可以修改映射、画像、调度、位置及计价等执行参数。
 SDK 仅在对象改变时提交完整替换，`false`、`0`、空映射和合同允许的 `null` 不表示跳过；不做隐式深合并。
 多个插件按入站顺序读取前层改写后的值，终端在执行前从同一配置代次重算，改写不发布全局配置。
@@ -349,7 +352,7 @@ Responses 终端重新解码插件正文时读取改写后的正文上限；atte
 更早的改写使用上述 HTTP 请求的 `settings`。`request.head.settings_sources` 使用相同的来源结构，`execution.input` 表示进入当前 Key 作用域时的有效值。
 原生 Responses WebSocket 每轮请求读取当前宿主快照，重新认证并解析 Key 策略，同时保留握手阶段的显式改写；已开始的执行保持自己的冻结值
 
-`middleware.version` 必须为 `3`。插件可读取和改写完整请求、响应 headers、正文与响应帧，不要求
+middleware v3 / v4 均可读取和改写完整请求、响应 headers、正文与响应帧，不要求
 `requests` 权限，也不按字段名称过滤认证、Cookie、会话或连接头。安装者承担插件读取与修改这些数据的风险。
 类型、HTTP 格式、大小及资源生命周期仍需符合合同
 

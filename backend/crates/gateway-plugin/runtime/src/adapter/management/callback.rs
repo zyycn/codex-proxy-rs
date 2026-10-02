@@ -191,7 +191,11 @@ impl ManagementEntry {
             .map_err(|_| {
                 AdminError::unavailable("插件登录回调未完成；state 已消费，请重新发起登录")
             })?;
-        super::decode_response(reply, &descriptor.response_content_types, limits)
+        super::decode_response(reply, &descriptor.response_content_types, limits).inspect_err(
+            |_| {
+                self.session.invalid_response(Stage::PublicManagement);
+            },
+        )
     }
 }
 

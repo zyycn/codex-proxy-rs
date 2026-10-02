@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use gateway_core::{
+    account::FastMode,
     account::OpaqueProviderData,
     identity::ProviderKind,
     policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits},
@@ -42,7 +43,7 @@ fn policy(id: &str) -> ClientPolicy {
         Arc::new(
             FrozenAccountScope::new(Arc::default(), ClientRoutingScope::all_accounts())
                 .with_request_profiles(profiles(&[("openai", id)]))
-                .with_disable_fast(true),
+                .with_fast_mode(FastMode::Disabled),
         ),
         true,
         RateLimits {
@@ -114,7 +115,7 @@ fn scope_changes_recompute_defaults_and_inherit_only_explicit_overrides() {
     values.runtime = values
         .runtime
         .with_model_mappings(BTreeMap::from([("alias".into(), "model".into())]));
-    values.disable_fast = false;
+    values.fast_mode = FastMode::Default;
     values.client_limits = RateLimits::unlimited();
     values.timeout_ms = 90_000;
     let changed = original.replace_execution(&values, "plugin").unwrap();
@@ -129,14 +130,14 @@ fn scope_changes_recompute_defaults_and_inherit_only_explicit_overrides() {
         parent_values.runtime.request_profiles(),
         &profiles(&[("openai", "parent"), ("xai", "second")])
     );
-    assert!(!parent_values.disable_fast);
+    assert_eq!(parent_values.fast_mode, FastMode::Default);
     let child_settings = rebased.with_execution(&child, 60_000);
     let child_values = child_settings.execution_values().unwrap();
     assert_eq!(
         child_values.runtime.request_profiles(),
         &profiles(&[("openai", "child"), ("xai", "second")])
     );
-    assert!(child_values.disable_fast);
+    assert_eq!(child_values.fast_mode, FastMode::Disabled);
     assert_eq!(child_values.client_limits, child.limits());
     assert_eq!(child_values.timeout_ms, 60_000);
     assert_eq!(child_settings.snapshot().mapped_model("alias"), "model");

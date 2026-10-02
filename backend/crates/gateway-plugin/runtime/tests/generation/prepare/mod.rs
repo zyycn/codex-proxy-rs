@@ -962,7 +962,7 @@ async fn a_published_process_crash_preserves_the_serving_snapshot_and_other_plug
 }
 
 #[tokio::test]
-async fn an_incompatible_host_quarantines_the_plugin_with_a_specific_version_error() {
+async fn a_host_version_mismatch_still_restores_the_enabled_plugin() {
     use std::sync::Arc;
     let (cache, store, _) = super::setup().await;
     let runtime = gateway_plugin_runtime::PluginRuntime::new(
@@ -991,16 +991,16 @@ async fn an_incompatible_host_quarantines_the_plugin_with_a_specific_version_err
     )
     .await
     .unwrap();
-    let failure = diagnostics["instance-one"].failure.as_ref().unwrap();
-    assert!(
-        failure
-            .message
-            .contains("插件要求宿主 >=1.0.0, <2.0.0，当前为 3.0.0")
+    assert!(restored.is_ready());
+    assert!(snapshot.instances[0].enabled);
+    assert_eq!(
+        diagnostics["instance-one"].status,
+        PluginInstanceRuntimeStatus::Running
     );
-    assert!(
-        std::fs::read_dir(cache.path()).unwrap().next().is_none(),
-        "incompatible packages never start"
-    );
+    assert!(diagnostics["instance-one"].failure.is_none());
+    drop(restored);
+    runtime.shutdown().await;
+    super::wait_until_empty(cache.path()).await;
 }
 
 #[tokio::test]

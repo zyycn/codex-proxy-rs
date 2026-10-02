@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::account::{
-    AccountCandidate, AccountSelection, AccountSelectionContext, AccountSelectionPolicy,
+    AccountCandidate, AccountSelection, AccountSelectionContext, AccountSelectionPolicy, FastMode,
     ProviderAccountId,
 };
 use crate::engine::continuation::{ContinuationBinding, NativeContinuationPin};
@@ -293,7 +293,7 @@ pub struct RequestAttemptContext {
     response_control: Option<response_control::ResponseControl>,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
-    disable_fast: bool,
+    fast_mode: FastMode,
     request_location: Option<crate::account::RequestLocation>,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
@@ -353,8 +353,8 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
-    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
+    pub const fn with_fast_mode(mut self, fast_mode: FastMode) -> Self {
+        self.fast_mode = fast_mode;
         self
     }
 
@@ -375,7 +375,7 @@ impl RequestAttemptContext {
             client_api_key_ref,
             request_profile: None,
             pricing: Arc::default(),
-            disable_fast: false,
+            fast_mode: FastMode::Default,
             request_location: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -573,8 +573,8 @@ impl AttemptContext {
     }
 
     #[must_use]
-    pub const fn disable_fast(&self) -> bool {
-        self.request.disable_fast
+    pub const fn fast_mode(&self) -> FastMode {
+        self.request.fast_mode
     }
 
     #[must_use]

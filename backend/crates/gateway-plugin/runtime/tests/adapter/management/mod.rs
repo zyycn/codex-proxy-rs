@@ -281,6 +281,72 @@ async fn management_model_stream_retains_selected_identity_until_completion_and_
 }
 
 #[tokio::test]
+async fn invalid_management_responses_stop_the_plugin_but_business_statuses_do_not() {
+    for (response, faulted) in [
+        (
+            json!({"status":"invalid","content_type":"application/octet-stream"}),
+            true,
+        ),
+        (
+            json!({"status":429,"content_type":"application/octet-stream"}),
+            false,
+        ),
+    ] {
+        let Some(environment) = Environment::create().await else {
+            return;
+        };
+        install(
+            &environment,
+            json!({"management_registration":registration(),"management_response":response}),
+        )
+        .await;
+        let (runtime, core) = environment.runtime().await;
+        let service = PluginManagementService::new(
+            runtime.clone(),
+            environment.store.admin_ports().plugins(),
+            core.snapshots(),
+        );
+        let views = service.views().await.unwrap();
+        let result = service.handle(&views[0].target, request()).await;
+        if faulted {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap().status, 429);
+        }
+        assert_eq!(
+            core.snapshots()
+                .acquire()
+                .unwrap()
+                .extensions()
+                .unwrap()
+                .is_ready(),
+            !faulted
+        );
+        for probe in core.health_probes() {
+            assert!(matches!(
+                probe.check().await,
+                gateway_core::health::HealthState::Healthy
+            ));
+        }
+        assert!(
+            environment
+                .store
+                .admin_ports()
+                .plugins()
+                .load_instances()
+                .await
+                .unwrap()
+                .instances[0]
+                .enabled
+        );
+        drop(service);
+        drop(core);
+        drop(runtime);
+        environment.close().await;
+    }
+}
+
+#[tokio::test]
 async fn management_resources_and_raw_calls_are_version_bound_and_revocation_removes_pages() {
     let Some(environment) = Environment::create().await else {
         eprintln!("SKIP: plugin integration environment absent");

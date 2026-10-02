@@ -206,11 +206,7 @@ fn prepared_session() -> (
         )
         .unwrap(),
     );
-    let prepared = Arc::new(
-        package
-            .prepare(cache.path(), &"1.0.0".parse().unwrap())
-            .unwrap(),
-    );
+    let prepared = Arc::new(package.prepare(cache.path()).unwrap());
     let handshake = Handshake {
         protocol_version: gateway_plugin_sdk::PROTOCOL_VERSION,
         artifact_sha256: package.digest().into(),

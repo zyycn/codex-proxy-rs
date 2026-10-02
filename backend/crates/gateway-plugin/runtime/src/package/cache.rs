@@ -14,13 +14,9 @@ pub struct PreparedPackage {
 }
 
 impl ValidatedPackage {
-    pub fn prepare(
-        self: &Arc<Self>,
-        cache: &Path,
-        host_version: &semver::Version,
-    ) -> Result<PreparedPackage, PackageError> {
+    pub fn prepare(self: &Arc<Self>, cache: &Path) -> Result<PreparedPackage, PackageError> {
         self.manifest
-            .package_for(host_version, std::env::consts::OS, std::env::consts::ARCH)?;
+            .package_for_platform(std::env::consts::OS, std::env::consts::ARCH)?;
         fs::create_dir_all(cache).map_err(|_| PackageError::Cache)?;
         let directory = tempfile::Builder::new()
             .prefix("plugin-")

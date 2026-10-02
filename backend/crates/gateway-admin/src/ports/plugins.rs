@@ -173,6 +173,23 @@ pub trait PluginDistribution: Send + Sync {
 /// Runtime 只解释插件包格式；安装事务与来源选择归 Admin。
 #[async_trait]
 pub trait PluginPackageInspector: Send + Sync {
+    /// 可解析但版本范围未经宿主承诺的诊断，不决定启动资格。
+    async fn compatibility_warning(
+        &self,
+        _archive: Arc<[u8]>,
+        _expected_sha256: String,
+    ) -> Result<Option<String>, AdminError> {
+        Ok(None)
+    }
+
+    /// 按当前宿主的弃用计划提示旧接口，不改变安装和运行资格。
+    fn api_deprecations(
+        &self,
+        _metadata: &crate::model::plugins::PluginArtifactMetadata,
+    ) -> Result<Vec<crate::model::plugins::instances::PluginApiDeprecation>, AdminError> {
+        Ok(Vec::new())
+    }
+
     async fn inspect(
         &self,
         archive: Arc<[u8]>,

@@ -58,9 +58,12 @@ pub(super) async fn invoke(
         })?,
     };
     if !reply.payload.is_empty() {
+        ports.session.invalid_response(Stage::Service);
         return Err(core::Error::invalid("服务返回了意外的二进制正文"));
     }
-    let response: wire::Response = serde_json::from_value(reply.result)
+    let response: wire::Response = ports
+        .session
+        .decode_response(Stage::Service, reply.result)
         .map_err(|_| core::Error::invalid("服务结果类型无效"))?;
     response.map_err(|error| core::Error {
         kind: error.kind,

@@ -52,7 +52,7 @@ pub struct PluginsService {
     pub(super) preparation: Arc<dyn PluginPreparation>,
     pub(super) published: gateway_core::runtime::RuntimeSnapshotHandle,
     pub(super) state: PluginStateService,
-    pub(super) compatibility: tokio::sync::Mutex<BTreeMap<String, Option<String>>>,
+    pub(super) compatibility: tokio::sync::Mutex<BTreeMap<String, super::instances::PackageStatus>>,
 }
 
 impl PluginsService {

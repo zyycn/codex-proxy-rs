@@ -195,10 +195,16 @@ async fn invoke_middleware(
     if remaining.is_zero() || context.cancellation().is_cancelled() {
         return Err(MiddlewareError::Fault);
     }
-    let invocation = MiddlewareInvocation::new(&context, request, next, entry.instance_id.clone());
+    let invocation = MiddlewareInvocation::new(
+        &context,
+        request,
+        next,
+        entry.instance_id.clone(),
+        crate::compatibility::FastSettings::middleware(&invocation_ports.session),
+    );
     let (protocol, headers, payload) = match invocation.request_parts() {
         Ok(projection) => projection,
-        Err(_) => return recover_invalid(&entry, &invocation).await,
+        Err(_) => return recover_rpc(&entry, &invocation, RpcError::Context).await,
     };
     let mut call_context = invocation_ports.session.context(
         match entry.mount {
@@ -233,11 +239,9 @@ async fn invoke_middleware(
         scope,
     )?;
     let head = MiddlewareRequestHead {
-        settings_sources: crate::callback::MiddlewareCallback::request_settings(
-            invocation.as_ref(),
-        )
-        .map(|settings| settings.inspect())
-        .unwrap_or(serde_json::Value::Null),
+        settings_sources: invocation
+            .settings_sources()
+            .map_err(|_| MiddlewareError::InvalidState)?,
         settings: invocation
             .settings()
             .map_err(|_| MiddlewareError::InvalidState)?,
@@ -272,6 +276,7 @@ async fn invoke_middleware(
             .map(|account| account.as_str().to_owned()),
         headers,
     };
+    let stage = call_context.stage;
     let stream = tokio::select! {
         biased;
         () = context.cancellation().cancelled() => return Err(MiddlewareError::Fault),
@@ -287,36 +292,42 @@ async fn invoke_middleware(
     };
     if !stream.initial.payload.is_empty() {
         drop(stream);
-        return recover_invalid(&entry, &invocation).await;
+        return recover_invalid(&entry, &invocation, stage).await;
     }
     let response: MiddlewareResponseHead =
         match serde_json::from_value(stream.initial.result.clone()) {
             Ok(response) => response,
             Err(_) => {
                 drop(stream);
-                return recover_invalid(&entry, &invocation).await;
+                return recover_invalid(&entry, &invocation, stage).await;
             }
         };
+    if let Some(error) = invocation.take_downstream_error() {
+        return Err(error);
+    }
     let completion = match invocation.resolve_response(response).await {
         Ok(completion) => completion,
         Err(error) => {
+            invocation_ports.session.invalid_response(stage);
             drop(stream);
             return Err(error);
         }
     };
     let body: Box<dyn MiddlewareBody> = match completion.body {
         MiddlewareCompletionBody::PassThrough(body) => {
-            drain_empty_stream(stream, &invocation).await?;
+            drain_empty_stream(stream, &invocation, &invocation_ports.session, stage).await?;
             body
         }
         MiddlewareCompletionBody::Empty => {
-            drain_empty_stream(stream, &invocation).await?;
+            drain_empty_stream(stream, &invocation, &invocation_ports.session, stage).await?;
             Box::new(EmptyMiddlewareBody)
         }
         MiddlewareCompletionBody::Stream {
             framing,
             downstream,
         } => Box::new(PluginMiddlewareBody {
+            session: Arc::clone(&invocation_ports.session),
+            stage,
             stream: Some(stream),
             framing,
             terminal_seen: false,
@@ -376,7 +387,11 @@ async fn recover_rpc(
 async fn recover_invalid(
     entry: &MiddlewareEntry,
     invocation: &MiddlewareInvocation,
+    stage: Stage,
 ) -> Result<MiddlewareResponse, MiddlewareError> {
+    if let Some(ports) = &entry.invocation {
+        ports.session.invalid_response(stage);
+    }
     if entry.failure_policy == PluginFailurePolicy::Delegate
         && let Some((next, request)) = invocation.take_delegate()
     {
@@ -394,10 +409,15 @@ async fn recover_invalid(
 async fn drain_empty_stream(
     mut stream: RpcStream,
     invocation: &MiddlewareInvocation,
+    session: &crate::RpcSession,
+    stage: Stage,
 ) -> Result<(), MiddlewareError> {
     match stream.next().await {
         Ok(None) => invocation.take_downstream_error().map_or(Ok(()), Err),
-        Ok(Some(_)) => Err(MiddlewareError::InvalidState),
+        Ok(Some(_)) => {
+            session.invalid_response(stage);
+            Err(MiddlewareError::InvalidState)
+        }
         Err(error) => invocation
             .take_downstream_error()
             .map_or_else(|| Err(crate::callback::error::rpc_middleware(error)), Err),
@@ -417,6 +437,8 @@ impl MiddlewareBody for EmptyMiddlewareBody {
 }
 
 struct PluginMiddlewareBody {
+    session: Arc<crate::RpcSession>,
+    stage: Stage,
     stream: Option<RpcStream>,
     framing: MiddlewareFraming,
     terminal_seen: bool,
@@ -433,6 +455,10 @@ struct PluginMiddlewareBody {
 impl MiddlewareBody for PluginMiddlewareBody {
     fn next_frame(&mut self) -> BoxFuture<'_, Result<Option<MiddlewareFrame>, MiddlewareError>> {
         Box::pin(async move {
+            let invalid = || {
+                self.session.invalid_response(self.stage);
+                MiddlewareError::InvalidState
+            };
             if let Some(error) = take_error(&self.downstream_error) {
                 self.stream.take();
                 return Err(error);
@@ -458,16 +484,15 @@ impl MiddlewareBody for PluginMiddlewareBody {
                             None => false,
                         }
                     {
-                        return Err(MiddlewareError::InvalidState);
+                        return Err(invalid());
                     }
                     return take_error(&self.downstream_error).map_or(Ok(None), Err);
                 };
                 if self.terminal_seen {
                     self.stream.take();
-                    return Err(MiddlewareError::InvalidState);
+                    return Err(invalid());
                 }
-                let wire_frame = MiddlewareBodyFrame::decode(&chunk)
-                    .map_err(|_| MiddlewareError::InvalidState)?;
+                let wire_frame = MiddlewareBodyFrame::decode(&chunk).map_err(|_| invalid())?;
                 let source_id = wire_frame.source_id();
                 let disposition = wire_frame.disposition();
                 let frame = match (&self.downstream, disposition) {
@@ -480,7 +505,7 @@ impl MiddlewareBody for PluginMiddlewareBody {
                         .with_transformed(true),
                     ),
                     (Some(_), MiddlewareBodyDisposition::Standalone) | (None, _) => {
-                        return Err(MiddlewareError::InvalidState);
+                        return Err(invalid());
                     }
                     (Some(downstream), MiddlewareBodyDisposition::Only)
                     | (Some(downstream), MiddlewareBodyDisposition::Drop) => {
@@ -488,7 +513,7 @@ impl MiddlewareBody for PluginMiddlewareBody {
                             || source_id != self.next_source_id.saturating_add(1)
                             || wire_frame.payload.len() > MAXIMUM_MAPPED_BYTES_PER_SOURCE
                         {
-                            return Err(MiddlewareError::InvalidState);
+                            return Err(invalid());
                         }
                         self.next_source_id = source_id;
                         downstream
@@ -497,14 +522,15 @@ impl MiddlewareBody for PluginMiddlewareBody {
                                 disposition,
                                 Bytes::from(wire_frame.payload),
                             )
-                            .await?
+                            .await
+                            .map_err(|_| invalid())?
                     }
                     (Some(downstream), MiddlewareBodyDisposition::First) => {
                         if self.active_source.is_some()
                             || source_id != self.next_source_id.saturating_add(1)
                             || wire_frame.payload.len() > MAXIMUM_MAPPED_BYTES_PER_SOURCE
                         {
-                            return Err(MiddlewareError::InvalidState);
+                            return Err(invalid());
                         }
                         self.active_source = Some(source_id);
                         self.active_output_count = 1;
@@ -515,22 +541,23 @@ impl MiddlewareBody for PluginMiddlewareBody {
                                 disposition,
                                 Bytes::from(wire_frame.payload),
                             )
-                            .await?
+                            .await
+                            .map_err(|_| invalid())?
                     }
                     (Some(downstream), MiddlewareBodyDisposition::More) => {
                         self.active_output_count = self
                             .active_output_count
                             .checked_add(1)
-                            .ok_or(MiddlewareError::InvalidState)?;
+                            .ok_or_else(invalid)?;
                         self.active_output_bytes = self
                             .active_output_bytes
                             .checked_add(wire_frame.payload.len())
-                            .ok_or(MiddlewareError::InvalidState)?;
+                            .ok_or_else(invalid)?;
                         if self.active_source != Some(source_id)
                             || self.active_output_count > MAXIMUM_MAPPED_FRAMES_PER_SOURCE
                             || self.active_output_bytes > MAXIMUM_MAPPED_BYTES_PER_SOURCE
                         {
-                            return Err(MiddlewareError::InvalidState);
+                            return Err(invalid());
                         }
                         downstream
                             .resolve_source_output(
@@ -538,22 +565,23 @@ impl MiddlewareBody for PluginMiddlewareBody {
                                 disposition,
                                 Bytes::from(wire_frame.payload),
                             )
-                            .await?
+                            .await
+                            .map_err(|_| invalid())?
                     }
                     (Some(downstream), MiddlewareBodyDisposition::Last) => {
                         self.active_output_count = self
                             .active_output_count
                             .checked_add(1)
-                            .ok_or(MiddlewareError::InvalidState)?;
+                            .ok_or_else(invalid)?;
                         self.active_output_bytes = self
                             .active_output_bytes
                             .checked_add(wire_frame.payload.len())
-                            .ok_or(MiddlewareError::InvalidState)?;
+                            .ok_or_else(invalid)?;
                         if self.active_source != Some(source_id)
                             || self.active_output_count > MAXIMUM_MAPPED_FRAMES_PER_SOURCE
                             || self.active_output_bytes > MAXIMUM_MAPPED_BYTES_PER_SOURCE
                         {
-                            return Err(MiddlewareError::InvalidState);
+                            return Err(invalid());
                         }
                         self.active_source = None;
                         self.active_output_count = 0;
@@ -565,7 +593,8 @@ impl MiddlewareBody for PluginMiddlewareBody {
                                 disposition,
                                 Bytes::from(wire_frame.payload),
                             )
-                            .await?
+                            .await
+                            .map_err(|_| invalid())?
                     }
                 };
                 if disposition == MiddlewareBodyDisposition::Drop {
@@ -575,14 +604,14 @@ impl MiddlewareBody for PluginMiddlewareBody {
                     }
                     continue;
                 }
-                let mut frame = frame.ok_or(MiddlewareError::InvalidState)?;
+                let mut frame = frame.ok_or_else(invalid)?;
                 // 只有宿主来源事件本就没有 wire 时，空 payload 才是事实帧。
                 let facts_only = frame.bytes().is_empty()
                     && frame
                         .event()
                         .is_some_and(|event| event.wire_event().is_none());
                 if !facts_only && !valid_plugin_frame(self.framing, frame.bytes()) {
-                    return Err(MiddlewareError::InvalidState);
+                    return Err(invalid());
                 }
                 if self.pending_transformed {
                     frame = frame.with_transformed(true);
@@ -596,11 +625,14 @@ impl MiddlewareBody for PluginMiddlewareBody {
                         }
                     {
                         self.stream.take();
-                        return Err(MiddlewareError::InvalidState);
+                        return Err(invalid());
                     }
                     self.terminal_seen = true;
                     let terminal = stream.next().await;
                     self.stream.take();
+                    if matches!(&terminal, Ok(Some(_))) {
+                        self.session.invalid_response(self.stage);
+                    }
                     validate_terminal_end(terminal, &self.downstream_error)?;
                 }
                 return Ok(Some(frame));

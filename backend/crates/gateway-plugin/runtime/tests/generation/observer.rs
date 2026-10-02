@@ -526,6 +526,46 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
 }
 
 #[tokio::test]
+async fn malformed_observer_response_stops_only_the_observer() {
+    let marker_directory = tempfile::tempdir().unwrap();
+    let completed = marker_directory.path().join("healthy.jsonl");
+    let (cache, _store, runtime) = setup(
+        vec![
+            (
+                "invalid",
+                serde_json::json!({"invalid_response_method":"observer.observe"}),
+                vec![binding(EventKind::RequestCompleted, 1)],
+            ),
+            (
+                "healthy",
+                serde_json::json!({"observation_marker":completed}),
+                vec![binding(EventKind::RequestCompleted, 2)],
+            ),
+        ],
+        RpcLimits::default(),
+    )
+    .await;
+    let generation = gateway_core::runtime::extensions::ExtensionPreparationPort::prepare(
+        &runtime,
+        ConfigRevision::new(1).unwrap(),
+    )
+    .await
+    .unwrap();
+    let plan = runtime.observer_registry().resolve(&generation).unwrap();
+    plan.dispatch(
+        generation.clone(),
+        observation("req_invalid_observer", RequestObservationOutcome::Succeeded)
+            .with_provider(ProviderKind::new("openai").unwrap()),
+    );
+    wait_for_lines(&completed, 1).await;
+    assert!(!generation.is_ready());
+    assert!(generation.can_serve());
+    drop(plan);
+    drop(generation);
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
 async fn observer_failure_continues_the_plan_and_timeout_is_bounded() {
     let marker_directory = tempfile::tempdir().unwrap();
     let started = marker_directory.path().join("started.jsonl");

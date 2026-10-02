@@ -15,9 +15,9 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::{SinkExt, StreamExt, future::BoxFuture};
 use gateway_core::account::{
-    AccountFeedbackStats, AccountWeight, CredentialState, OpaqueProviderData, ProviderAccountId,
-    ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState, QuotaEvidence,
-    QuotaObservation, QuotaState,
+    AccountFeedbackStats, AccountWeight, CredentialState, FastMode, OpaqueProviderData,
+    ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState,
+    QuotaEvidence, QuotaObservation, QuotaState,
 };
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
@@ -116,7 +116,7 @@ async fn native_openai_translates_a_non_native_source_before_encoding() {
                         ("stream".to_owned(), json!(true)),
                     ]),
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -151,7 +151,7 @@ async fn native_openai_rejects_missing_translation_before_send() {
             context_with_middleware(
                 "req_native_translate_missing",
                 Arc::new(PassThroughMiddleware),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -194,7 +194,7 @@ async fn native_openai_rejects_capability_expanding_translation_before_send() {
                     .unwrap()
                     .clone(),
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -244,7 +244,7 @@ async fn native_openai_revalidates_translated_transport_without_reselecting() {
                     .unwrap()
                     .clone(),
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -290,7 +290,7 @@ async fn native_openai_claims_translated_session_affinity_before_send() {
                     .unwrap()
                     .clone(),
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -353,7 +353,7 @@ async fn attempt_middleware_overrides_resolved_settings_and_headers() {
                         ),
                     ],
                 }),
-                true,
+                FastMode::Disabled,
             ),
         )
         .await
@@ -394,7 +394,7 @@ async fn attempt_middleware_overrides_resolved_settings_and_headers() {
                         Bytes::from_static(b"plugin-value"),
                     )],
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -440,7 +440,7 @@ async fn attempt_middleware_rejects_non_text_websocket_headers_before_opening() 
                         Bytes::from_static(&[0x80]),
                     )],
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -494,7 +494,7 @@ async fn attempt_middleware_can_change_reasoning_before_native_encoding() {
                     replacement: ("reasoning".to_owned(), json!({"effort":"high"})),
                     request_headers: Vec::new(),
                 }),
-                false,
+                FastMode::Default,
             ),
         )
         .await
@@ -1257,6 +1257,15 @@ fn planned_request_for_model(
     operation: Operation,
     model: &str,
 ) -> ProviderRequest {
+    planned_request_with_presentation(provider_name, operation, model, None)
+}
+
+fn planned_request_with_presentation(
+    provider_name: &str,
+    operation: Operation,
+    model: &str,
+    presentation: Option<gateway_core::routing::ModelPresentation>,
+) -> ProviderRequest {
     let provider = ProviderKind::new(provider_name).expect("provider");
     let upstream_model = UpstreamModelId::new(model).expect("upstream model");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
@@ -1267,16 +1276,20 @@ fn planned_request_for_model(
         )]))),
         ClientRoutingScope::all_accounts(),
     ));
+    let mut catalog_model = ProviderModel::new(
+        provider.clone(),
+        upstream_model,
+        ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
+            .with_upstream_feature_validation(),
+    );
+    if let Some(presentation) = presentation {
+        catalog_model = catalog_model.with_presentation(presentation);
+    }
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         gateway_core::settings::SettingsValues::new(2, 10, "smart", Default::default(), None, None),
-        vec![provider.clone()],
-        vec![ProviderModel::new(
-            provider,
-            upstream_model,
-            ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
-                .with_upstream_feature_validation(),
-        )],
+        vec![provider],
+        vec![catalog_model],
         Vec::new(),
     )
     .expect("snapshot");
@@ -1475,7 +1488,7 @@ impl ExtensionSetLease for TestExtensionLease {
 fn context_with_middleware(
     request_id: &str,
     plan: Arc<dyn MiddlewarePlan>,
-    disable_fast: bool,
+    fast_mode: FastMode,
 ) -> AttemptContext {
     let plan = FrozenMiddlewarePlan::new(
         plan,
@@ -1489,7 +1502,7 @@ fn context_with_middleware(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
-        .with_disable_fast(disable_fast)
+        .with_fast_mode(fast_mode)
         .with_middleware(
             Some(plan),
             Arc::from([]),
@@ -1508,21 +1521,21 @@ fn context_with_middleware(
 }
 
 fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
-    context_with_fast_policy(request_id, cancellation, false)
+    context_with_fast_policy(request_id, cancellation, FastMode::Default)
 }
 
 fn context_with_fast_policy(
     request_id: &str,
     cancellation: CancellationToken,
-    disable_fast: bool,
+    fast_mode: FastMode,
 ) -> AttemptContext {
-    context_with_pricing(request_id, cancellation, disable_fast, Default::default())
+    context_with_pricing(request_id, cancellation, fast_mode, Default::default())
 }
 
 fn context_with_pricing(
     request_id: &str,
     cancellation: CancellationToken,
-    disable_fast: bool,
+    fast_mode: FastMode,
     pricing: gateway_core::metering::PricingOverrides,
 ) -> AttemptContext {
     AttemptContext::new(
@@ -1530,7 +1543,7 @@ fn context_with_pricing(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
-        .with_disable_fast(disable_fast)
+        .with_fast_mode(fast_mode)
         .with_pricing(Arc::new(pricing))
         .with_request_location(Some(global_request_location())),
         NonZeroU32::new(1).expect("attempt"),
@@ -2955,7 +2968,12 @@ async fn image_metering_events_with_pricing(
     let mut stream = provider
         .execute(
             planned_provider_endpoint_request("openai", operation),
-            context_with_pricing("req_image_usage", CancellationToken::new(), false, pricing),
+            context_with_pricing(
+                "req_image_usage",
+                CancellationToken::new(),
+                FastMode::Default,
+                pricing,
+            ),
         )
         .await
         .expect("prepare image stream");
@@ -7517,47 +7535,145 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
 #[tokio::test]
 async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_transports() {
     for use_websocket in [false, true] {
-        for (disable_fast, requested, reported, expected_tier, expected_cost) in [
+        for (fast_mode, supports_priority, requested, reported, expected_tier, expected_cost) in [
             (
+                FastMode::Default,
                 false,
-                Some("priority"),
+                Some(json!("priority")),
                 Some("default"),
                 Some("priority"),
                 Some(6_875_000),
             ),
             (
+                FastMode::Default,
                 false,
-                Some("priority"),
+                Some(json!("priority")),
                 None,
                 Some("priority"),
                 Some(6_875_000),
             ),
             (
+                FastMode::Default,
                 false,
-                Some("default"),
+                Some(json!("default")),
                 Some("priority"),
                 Some("default"),
                 Some(3_437_500),
             ),
-            (false, None, Some("priority"), None, Some(3_437_500)),
             (
-                true,
+                FastMode::Default,
+                false,
+                None,
                 Some("priority"),
+                None,
+                Some(3_437_500),
+            ),
+            (
+                FastMode::Disabled,
+                false,
+                Some(json!("priority")),
                 Some("priority"),
                 Some("default"),
                 Some(3_437_500),
             ),
-            (true, Some("fast"), None, Some("default"), Some(3_437_500)),
             (
-                true,
-                Some("default"),
+                FastMode::Disabled,
+                false,
+                Some(json!("fast")),
                 None,
                 Some("default"),
                 Some(3_437_500),
             ),
-            (true, None, None, None, Some(3_437_500)),
-            (true, Some("flex"), None, Some("flex"), Some(1_720_000)),
-            (true, Some("ultrafast"), None, Some("ultrafast"), None),
+            (
+                FastMode::Disabled,
+                false,
+                Some(json!("default")),
+                None,
+                Some("default"),
+                Some(3_437_500),
+            ),
+            (FastMode::Disabled, false, None, None, None, Some(3_437_500)),
+            (
+                FastMode::Disabled,
+                false,
+                Some(json!("flex")),
+                None,
+                Some("flex"),
+                Some(1_720_000),
+            ),
+            (
+                FastMode::Disabled,
+                false,
+                Some(json!("ultrafast")),
+                None,
+                Some("ultrafast"),
+                None,
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                None,
+                Some("default"),
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                Some(Value::Null),
+                Some("default"),
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                Some(json!("default")),
+                Some("default"),
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                Some(json!("priority")),
+                None,
+                Some("priority"),
+                Some(6_875_000),
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                Some(json!("flex")),
+                None,
+                Some("flex"),
+                Some(1_720_000),
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                Some(json!("ultrafast")),
+                None,
+                Some("ultrafast"),
+                None,
+            ),
+            (
+                FastMode::Enabled,
+                true,
+                Some(json!("auto")),
+                None,
+                Some("auto"),
+                None,
+            ),
+            (FastMode::Enabled, false, None, None, None, Some(3_437_500)),
+            (
+                FastMode::Enabled,
+                false,
+                Some(json!("default")),
+                None,
+                Some("default"),
+                Some(3_437_500),
+            ),
         ] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
@@ -7630,7 +7746,7 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
                     json!({"service_tier":"priority","text":"fast priority"}),
                 ),
             ]);
-            if let Some(requested) = requested {
+            if let Some(requested) = &requested {
                 body.insert("service_tier".to_owned(), json!(requested));
             }
             let payload = ProtocolPayload::json_object("openai", body.clone())
@@ -7643,11 +7759,23 @@ async fn responses_should_observe_and_bill_the_outbound_service_tier_on_both_tra
             let original = operation.clone();
             let mut stream = provider_with_base_url(&store, base_url)
                 .execute(
-                    planned_request("openai", operation.clone()),
+                    planned_request_with_presentation(
+                        "openai",
+                        operation.clone(),
+                        "gpt-5.4",
+                        supports_priority.then(|| {
+                            gateway_core::routing::ModelPresentation::new(None, None)
+                                .with_service_tiers(vec![
+                                    gateway_core::routing::ModelServiceTier::new(
+                                        "priority", "fast", "Fast",
+                                    ),
+                                ])
+                        }),
+                    ),
                     context_with_fast_policy(
                         "req_service_tier",
                         CancellationToken::new(),
-                        disable_fast,
+                        fast_mode,
                     ),
                 )
                 .await
@@ -11331,7 +11459,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                 // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定。
                 assert_eq!(
                     request.headers()["x-codex-routing-hint"],
-                    "model=gpt-5.4;tier=priority"
+                    "model=gpt-5.4;tier=default"
                 );
                 response.headers_mut().insert(
                     "sec-websocket-extensions",
@@ -11339,7 +11467,10 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                 );
             })
             .await;
-        for (index, tier) in ["priority", "default", "priority"].into_iter().enumerate() {
+        for (index, tier) in ["default", "priority", "default", "default"]
+            .into_iter()
+            .enumerate()
+        {
             let message = websocket.next().await.unwrap().unwrap();
             let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
             assert_eq!(frame["type"], "response.create");
@@ -11364,7 +11495,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
             timeout(Duration::from_millis(100), listener.accept())
                 .await
                 .is_err(),
-            "all three turns must use the same upstream connection"
+            "all four turns must use the same upstream connection"
         );
     });
     let provider = provider_with_base_url(&store, base_url);
@@ -11380,12 +11511,20 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         ]),
     )
     .unwrap();
-    for (index, disable_fast) in [false, true, false].into_iter().enumerate() {
+    for (index, fast_mode) in [
+        FastMode::Default,
+        FastMode::Enabled,
+        FastMode::Disabled,
+        FastMode::Default,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let previous = index
             .checked_sub(1)
             .map(|index| format!("resp_fast_turn_{index}"));
         let mut body =
-            json!({"model":"gpt-5.4","input":"next turn","service_tier":"priority","store":false});
+            json!({"model":"gpt-5.4","input":"next turn","service_tier":"default","store":false});
         if let Some(previous) = &previous {
             body["previous_response_id"] = json!(previous);
         }
@@ -11421,7 +11560,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
                 ModelRequestId::new(format!("req_fast_turn_{index}")).unwrap(),
                 key,
             )
-            .with_disable_fast(disable_fast),
+            .with_fast_mode(fast_mode),
             NonZeroU32::new(1).unwrap(),
             SystemTime::now() + Duration::from_secs(30),
             account_policy(),
@@ -11440,7 +11579,22 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
             ContinuationAttempt::None
         });
         let mut stream = Arc::clone(&provider)
-            .execute(planned_request("openai", operation), context)
+            .execute(
+                planned_request_with_presentation(
+                    "openai",
+                    operation,
+                    "gpt-5.4",
+                    Some(
+                        gateway_core::routing::ModelPresentation::new(None, None)
+                            .with_service_tiers(vec![
+                                gateway_core::routing::ModelServiceTier::new(
+                                    "priority", "fast", "Fast",
+                                ),
+                            ]),
+                    ),
+                ),
+                context,
+            )
             .await
             .unwrap();
         let mut costs = Vec::new();
@@ -11477,11 +11631,19 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         );
         assert_eq!(
             observed_tier.as_deref(),
-            Some(if disable_fast { "default" } else { "priority" })
+            Some(if fast_mode == FastMode::Enabled {
+                "priority"
+            } else {
+                "default"
+            })
         );
         assert_eq!(
             costs,
-            vec![if disable_fast { 3_437_500 } else { 6_875_000 }]
+            vec![if fast_mode == FastMode::Enabled {
+                6_875_000
+            } else {
+                3_437_500
+            }]
         );
     }
     server.await.unwrap();

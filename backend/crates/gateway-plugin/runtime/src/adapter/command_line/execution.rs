@@ -97,14 +97,18 @@ impl PluginCommand {
         if reply.result != serde_json::json!({})
             || reply.payload.len() > limits.maximum_buffered_body_bytes
         {
+            self.session.invalid_response(Stage::CommandLine);
             return Err("结果信封无效");
         }
-        let result: CommandResult =
-            serde_json::from_slice(&reply.payload).map_err(|_| "结果数据无效")?;
+        let result: CommandResult = serde_json::from_slice(&reply.payload).map_err(|_| {
+            self.session.invalid_response(Stage::CommandLine);
+            "结果数据无效"
+        })?;
         if result.stdout.len() > MAXIMUM_OUTPUT_BYTES
             || result.stderr.len() > MAXIMUM_OUTPUT_BYTES
             || result.accounts.len() > 32
         {
+            self.session.invalid_response(Stage::CommandLine);
             return Err("结果大小或账号范围无效");
         }
         if result.exit_code == 0 {
@@ -130,7 +134,7 @@ fn rpc_failure(error: RpcError) -> &'static str {
         RpcError::Timeout => "插件响应超时",
         RpcError::Cancelled => "调用已取消",
         RpcError::Closed | RpcError::Start(_) => "插件进程不可用",
-        RpcError::Handshake | RpcError::Protocol => "插件协议错误",
+        RpcError::Handshake | RpcError::Protocol | RpcError::InvalidResponse(_) => "插件协议错误",
         RpcError::Capacity => "插件调用容量不足",
         RpcError::Context => "调用上下文无效",
         RpcError::Remote(_) => "插件拒绝命令",
