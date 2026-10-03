@@ -212,6 +212,16 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             expire_connection(&mut connection).await;
             break;
         }
+        if let Some(rejection) = protocol::steering_rejection(&payload) {
+            if connection
+                .send_text(rejection, WriteContext::connection(FramePhase::Error))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        }
         request_count = request_count.saturating_add(1);
         let correlation_id = Arc::<str>::from(service.next_request_id());
         let decoded = match decode_response_create_with_context(&payload, &request_headers) {

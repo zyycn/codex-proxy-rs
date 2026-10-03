@@ -1,3 +1,5 @@
+mod omp;
+
 use std::collections::VecDeque;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};

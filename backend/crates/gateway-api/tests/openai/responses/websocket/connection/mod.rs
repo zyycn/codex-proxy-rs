@@ -545,7 +545,7 @@ async fn dropping_the_connection_aborts_and_drops_the_socket_owner() {
     assert!(dropped.load(Ordering::Acquire));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn idle_connection_reaches_the_official_limit_without_starting_an_execution() {
     let trace = Arc::new(AtomicFailureTrace::default());
     let execution = Arc::new(AtomicFailureExecution {
@@ -574,8 +574,23 @@ async fn idle_connection_reaches_the_official_limit_without_starting_an_executio
     let (mut socket, response) = connect_async(request).await.expect("upgrade WebSocket");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
 
+    // Wait for the socket pump before advancing its lifetime; real TCP readiness
+    // must not race the paused clock's automatic timeout advancement.
+    socket
+        .send(ClientMessage::Ping(vec![1].into()))
+        .await
+        .expect("send Ping before expiry");
+    let pong = tokio::time::timeout(Duration::from_secs(1), socket.next())
+        .await
+        .expect("Pong timeout before expiry")
+        .expect("connection remains open")
+        .expect("valid frame");
+    assert!(matches!(pong, ClientMessage::Pong(_)));
+
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(60 * 60)).await;
     tokio::task::yield_now().await;
+    tokio::time::resume();
     let text = loop {
         let message = tokio::time::timeout(Duration::from_secs(1), socket.next())
             .await

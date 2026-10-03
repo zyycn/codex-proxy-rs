@@ -1,5 +1,7 @@
 //! Responses WebSocket 入站请求与下行事件的纯协议映射。
 
+use std::borrow::Cow;
+
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use gateway_core::engine::EngineError;
 use gateway_core::error::ProviderErrorKind;
@@ -67,6 +69,31 @@ pub(super) fn decode_response_interrupt(
             })
         })?;
     Ok(Some(id.to_owned()))
+}
+
+/// Steering is not implemented: acknowledge rejection so the client retains queued input.
+pub(super) fn steering_rejection(payload: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct SteeringFrame<'a> {
+        #[serde(borrow, rename = "type")]
+        message_type: Cow<'a, str>,
+        #[serde(borrow)]
+        previous_response_id: Option<Cow<'a, str>>,
+    }
+    // Ignore the potentially large input tree; normal frames keep their existing decoder.
+    let frame: SteeringFrame<'_> = serde_json::from_str(payload).ok()?;
+    if frame.message_type != "response.steer" {
+        return None;
+    }
+    Some(json!({
+        "type": "response.steer.failed",
+        "steer": { "previous_response_id": frame.previous_response_id },
+        "error": {
+            "type": "invalid_request_error",
+            "code": "unsupported_steering",
+            "message": "Mid-turn steering is not supported; submit this input in the next response.create."
+        }
+    }).to_string())
 }
 
 fn decode_response_create_inner(

@@ -18,6 +18,7 @@ use crate::ApiState;
 
 // 公开协议路径由 API 层统一定义；Core 使用操作类型，不根据这些路径分派业务。
 pub(super) const RESPONSES_PATH: &str = "/v1/responses";
+const CODEX_RESPONSES_PATH: &str = "/v1/codex/responses";
 pub(super) const IMAGE_GENERATIONS_PATH: &str = "/v1/images/generations";
 pub(super) const IMAGE_EDITS_PATH: &str = "/v1/images/edits";
 pub(super) const SEARCH_PATH: &str = "/v1/alpha/search";
@@ -32,6 +33,10 @@ pub(crate) fn router() -> Router<ApiState> {
         .route(IMAGE_EDITS_PATH, post(image_edits))
         .route(SEARCH_PATH, post(standalone_search))
         .route(RESPONSES_PATH, get(responses_websocket).post(responses))
+        .route(
+            CODEX_RESPONSES_PATH,
+            get(responses_websocket).post(responses),
+        )
         .route(MODELS_PATH, get(models))
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束。
         .route(MODEL_DETAIL_PATH, get(model_detail))

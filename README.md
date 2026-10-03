@@ -98,6 +98,10 @@ API Key 持有者可在登录页切换身份，查看自己的用量与额度，
 
 完整步骤、生图配置与排障见[客户端配置](deploy/README.md#客户端配置)
 
+**OMP**：沿用 `openai-codex` provider，配置代理 `/v1` 基址、Client Key、
+`api: openai-codex-responses` 和 `openai-models-list` 发现即可接入对话与 hosted search，
+见 [OMP Codex 接入](docs/api.md#omp-codex-接入)。
+
 **其他 Responses API 客户端**：填写以下信息：
 
 | 配置 | 值 |

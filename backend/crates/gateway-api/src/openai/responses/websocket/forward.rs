@@ -25,7 +25,8 @@ use super::{
     super::{DecodedResponsesRequest, OpenAiResponsesEncoder, ProtocolErrorBody},
     connection::{ConnectionEvent, FramePhase, ResponsesWebSocketConnection, WriteContext},
     protocol::{
-        decode_response_interrupt, error_event, initial_engine_error_event, response_metadata_event,
+        decode_response_interrupt, error_event, initial_engine_error_event,
+        response_metadata_event, steering_rejection,
     },
 };
 
@@ -312,6 +313,12 @@ async fn next_body_input(
                 let Some(event) = event else { return BodyInput::Disconnect; };
                 match &event.event {
                     ConnectionEvent::Text(payload) => {
+                        if let Some(rejection) = steering_rejection(payload) {
+                            if connection.send_text(rejection, WriteContext::request(request_id, FramePhase::Error)).await.is_err() {
+                                return BodyInput::Disconnect;
+                            }
+                            continue;
+                        }
                         let error = match decode_response_interrupt(payload) {
                             Ok(Some(response_id)) => response_control.interrupt(&response_id).err().map(|_| {
                                 super::super::RequestDecodeError::InvalidValue { field: "response_id".to_owned() }.protocol_body()

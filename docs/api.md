@@ -191,6 +191,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
+| `POST` / `GET` | `/v1/codex/responses` | OMP Codex 兼容入口；与 `/v1/responses` 共用 JSON/SSE 与 WebSocket 处理链 |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/edits` | 通过 OpenAI Provider 发起图像编辑；JSON 请求与响应正文原样转发 |
@@ -222,6 +223,44 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 
 Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-openai-subagent` 请求头携带子代理类型；
 网关不提供独立的子代理请求路径
+
+### OMP Codex 接入
+
+OMP 的 `openai-codex` 会将 `/v1` 基址解析为 `/v1/codex/responses`。该入口直接复用
+`/v1/responses` 的 Client Key 鉴权、版本校验、中间件、账号调度与传输处理；内部逻辑 endpoint
+仍为 `/v1/responses`，不会建立独立的额度或会话域。原入口保持不变。
+
+在 OMP 的 `models.yml` 中合并以下 provider 配置；不要覆盖已有的其他 providers：
+
+```yaml
+providers:
+  openai-codex:
+    baseUrl: http://127.0.0.1:8080/v1
+    apiKey: CODEX_PROXY_API_KEY
+    api: openai-codex-responses
+    discovery:
+      type: openai-models-list
+```
+
+启动 OMP 前，将 `CODEX_PROXY_API_KEY` 环境变量设为管理端创建的 Client Key；远程部署将
+`baseUrl` 替换为实际 HTTPS `/v1` 根。使用 `/v1/models` 中当前 Key 可见的模型 ID。
+显式 `discovery` 使模型目录从代理的 `/v1/models` 获取，而不是内置的 Codex 目录地址。
+当前 OMP 在 provider 级启用 `discovery` 时要求显式 `api`；省略该项会在配置校验阶段失败，
+请求尚未到达代理。无需添加 `auth`、`compat.supportsSteering` 或 `remoteCompaction.enabled` 覆盖。
+
+对话和 Codex hosted search 共用该 Responses 入口。搜索保留 `web_search` 请求工具、
+`response.web_search_call.*` 事件、`web_search_call.action.sources`、`url_citation`、正文和
+终态用量；上游 `response.failed` 仍沿用原失败合同。`/v1/alpha/search` 继续用于独立搜索协议，
+不是 OMP hosted search 的替代入口。
+
+代理不提供原生 mid-turn steering：收到 `response.steer` 时及时返回
+`response.steer.failed`，以 `steer.previous_response_id` 关联请求，错误码为
+`unsupported_steering`。当前响应和连接继续运行；OMP 可将被拒输入留待下一轮
+`response.create`，代理不会自动执行或丢弃一轮请求。
+
+压缩沿用 OMP 对所选模型的默认能力判断。V2 的 `compaction_trigger`、压缩输出的
+`encrypted_content` 与后续重放经过同一 Responses 处理链，继续保留 continuation 路由要求。
+协议透传验证不代表所有真实上游账号或模型都支持 V2；不支持时返回原有明确失败，而非伪造摘要。
 
 ### Responses 请求与传输
 
