@@ -656,15 +656,7 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
         .as_ref()
         .and_then(RefreshErrorResponse::code)
         .map(str::to_ascii_lowercase);
-    // 生产策略故意与官方 Codex 的“任意 401 立即终态”不同：
-    // 显式 401 先进入有界恢复退避，避免瞬时授权故障直接失效账号。
-    if status == StatusCode::UNAUTHORIZED {
-        return RefreshFailure::Transport {
-            message,
-            upstream: upstream(),
-        };
-    }
-    // 非 401 响应仍与官方一致：三个明确的 RT 原因是永久失败。
+    // 与官方 Codex 一致：三个明确的 RT 拒绝原因是永久失败，任意状态码下都不重试。
     if matches!(
         normalized_code.as_deref(),
         Some("refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated")
@@ -680,6 +672,15 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
             .contains("account has been deactivated")
     }) {
         return RefreshFailure::Banned {
+            message,
+            upstream: upstream(),
+        };
+    }
+    // 与官方 Codex 一致（login/src/auth/manager.rs 将刷新 401 无条件映射为 Permanent）：
+    // 刷新端点 401 即凭据被拒绝，立即终态，不依赖响应体能否解析，也不为网络中间层的
+    // 伪 401 留兼容分支——在无效状态下反复提交同一凭据本身就是代理工具的典型特征。
+    if status == StatusCode::UNAUTHORIZED {
+        return RefreshFailure::InvalidGrant {
             message,
             upstream: upstream(),
         };

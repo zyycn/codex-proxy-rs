@@ -1233,8 +1233,8 @@ fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {
             CodexCredentialAdminError::AccountBanned { message }
         }
         RefreshFailure::RetryableTransport { .. } => CodexCredentialAdminError::RefreshUnavailable,
-        // Worker 的 Transport 分类还承担 401 退避；管理提示只按已收到的响应事实细分，
-        // 不改变后台刷新策略，也不把明确失败响应误报为租约冲突或执行结果未知。
+        // 管理提示只按已收到的响应事实细分，不改变后台刷新策略，
+        // 也不把明确失败响应误报为租约冲突或执行结果未知。
         RefreshFailure::Transport { message, upstream } => match upstream {
             Some(upstream) => CodexCredentialAdminError::RefreshUpstream {
                 status: upstream.status(),

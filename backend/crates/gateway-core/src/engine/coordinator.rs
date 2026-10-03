@@ -334,6 +334,8 @@ where
             attempts: 0,
             websocket_observation_sequence: 0,
             routing_attempts: 0,
+            last_attempt_account: None,
+            account_rotations: 0,
             candidate_index,
             excluded_accounts: BTreeSet::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
@@ -455,6 +457,15 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     websocket_observation_sequence: u64,
     /// 路由预算只统计正常选号/账号恢复，不被 Provider-owned 传输预算消耗。
     routing_attempts: u32,
+    /// 上一 attempt 实际选中的账号；与选号成功的 attempt 一一同步更新。
+    /// 旧 CurrentAttempt 在丢弃时被 drop、excluded_accounts 无序、持久化记录异步
+    /// best-effort，都不能还原「上一账号」，因此由本字段单独记账。
+    last_attempt_account: Option<crate::account::ProviderAccountId>,
+    /// 已发生的换号次数：选中账号与上一 attempt 不同的路由 attempt 计一次。
+    /// 首个 attempt 不计；同账号钉选重试（瞬态退避、传输恢复、凭据恢复重放、
+    /// continuation 精确重连）不消耗。预算耗尽后所有必然换号的重试门关闭，
+    /// 换号深度由 [`crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS`] 封顶。
+    account_rotations: u32,
     candidate_index: usize,
     excluded_accounts: BTreeSet<crate::account::ProviderAccountId>,
     credential_recovery_attempted_accounts: BTreeSet<crate::account::ProviderAccountId>,
@@ -1109,6 +1120,9 @@ where
                             self.continuation_attempt,
                             ContinuationAttempt::None | ContinuationAttempt::ReplayAny
                         )
+                        // 跨 Provider 候选推进必然换号（账号行按 Provider 隔离），
+                        // 预算耗尽后不再推进，交回容量类失败的原有终态语义。
+                        && self.account_rotations < crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS
                         && self.advance_provider_candidate();
                     let retryable = self
                         .apply_retry_policy(super::policy::RetryFacts {
@@ -1274,6 +1288,18 @@ where
             })
             .await?;
             return Err(EngineError::ContinuationPinMismatch);
+        }
+        // 换号预算按实际选中账号记账：与上一 attempt 选中账号不同即消耗一次。决策门
+        // （重试分类、候选推进、continuation 排除臂）已拦截预算耗尽后的必然换号，
+        // 这里是统一事实源，覆盖 Provider 自主换号（如 replay owner 重放）等路径；
+        // 首 attempt 与同账号钉选重试不计数。
+        if self.last_attempt_account.as_ref() != Some(metadata.provider_account_id())
+            && self
+                .last_attempt_account
+                .replace(metadata.provider_account_id().clone())
+                .is_some()
+        {
+            self.account_rotations = self.account_rotations.saturating_add(1);
         }
         if self.account_state_owner.is_none() {
             self.account_state_owner = Some(ProviderAccountStateOwner::new(
@@ -1554,11 +1580,21 @@ where
             && !self
                 .credential_recovery_attempted_accounts
                 .contains(current.metadata.provider_account_id());
+        // 排除当前账号的重选必然换号：ordinary 重选与显式 AccountRotation 标记都落入
+        // 同一排除分支。换号预算只在这里消耗；同账号分支（瞬态退避、传输恢复、
+        // 凭据恢复重放、continuation 精确重连）不消耗。不能直接把预算门写进
+        // ordinary_retry：它是同账号瞬态退避的前置条件，会被连带误伤。
+        let rotation_retry = !continuation_retry
+            && !same_account_retry
+            && transient_retry.is_none()
+            && transport_recovery.is_none()
+            && (ordinary_retry || account_rotation_retry)
+            && self.account_rotations < crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS;
         let retryable = continuation_retry
             || same_account_retry
-            || ordinary_retry
-            || account_rotation_retry
-            || transport_recovery.is_some();
+            || transient_retry.is_some()
+            || transport_recovery.is_some()
+            || rotation_retry;
 
         let retryable = match self
             .apply_retry_policy(super::policy::RetryFacts {
@@ -1594,6 +1630,7 @@ where
             "sameAccountRetry": same_account_retry, "accountRotationRetry": account_rotation_retry,
             "ordinaryRetry": ordinary_retry, "transportRecovery": transport_recovery.is_some(),
             "transientRetry": transient_retry.is_some(),
+            "rotationRetry": rotation_retry, "accountRotations": self.account_rotations,
             "connectionRetry": connection_retry_requested,
             "connectionRetries": self.connection_retries,
             "connectionBudgetRemainingMs": self.connection_budget.remaining().map(duration_ms),
@@ -1791,6 +1828,13 @@ where
             {
                 return false;
             }
+            // 两个排除臂都必然换号；预算耗尽后不再排除当前账号做跨账号续写重放，
+            // 落回不可重试路径以原始上游错误终态。
+            ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
+                if self.account_rotations >= crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS =>
+            {
+                return false;
+            }
             ContinuationAttempt::ReplayOwner => {
                 self.continuation_attempt = ContinuationAttempt::ReplayAny;
                 self.excluded_accounts
@@ -1835,6 +1879,11 @@ where
             .provider_session_state(pin.provider().as_str())
             .is_none()
         {
+            return false;
+        }
+        // Native 期间所有 attempt 都在 pin 账号上，到这里预算必未耗尽；
+        // 与其余换号路径保持同一预算门，防止状态机演化后破坏换号上限。
+        if self.account_rotations >= crate::routing::MAX_ACCOUNT_ROTATION_ATTEMPTS {
             return false;
         }
 

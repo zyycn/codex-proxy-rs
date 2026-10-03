@@ -1,6 +1,7 @@
 //! OpenAI 额度事实边界与展示快照回归。
 
 mod capacity_freeze;
+mod initial_sync;
 mod recovery;
 mod refresh_timing;
 mod scheduling;
@@ -10,7 +11,7 @@ mod subscription;
 mod warmup;
 
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone as _, Utc};
 use gateway_core::account::{
@@ -65,6 +66,17 @@ pub(super) fn quota_service_with_base_url(
     http: reqwest::Client,
     base_url: String,
 ) -> CodexCredentialQuotaService {
+    // 首查随机启动延迟只在 initial_sync 专项测试中注入非零值；
+    // 其余测试固定为零，保持「首轮即查」的确定性旧行为。
+    quota_service_with_initial_delays(store, http, base_url, Arc::new(|| Duration::ZERO))
+}
+
+pub(super) fn quota_service_with_initial_delays(
+    store: &Arc<MemoryAccountStore>,
+    http: reqwest::Client,
+    base_url: String,
+    delays: provider_openai::credential::CodexInitialSyncDelays,
+) -> CodexCredentialQuotaService {
     CodexCredentialQuotaService::new(
         store.repository(),
         wire_profile(),
@@ -74,6 +86,7 @@ pub(super) fn quota_service_with_base_url(
         Arc::new(crate::support::TestLeaseCoordinator::default()),
         crate::support::runtime_policy(),
     )
+    .with_initial_sync_delays(delays)
 }
 
 async fn create_account(store: &Arc<MemoryAccountStore>, account_id: &str) {

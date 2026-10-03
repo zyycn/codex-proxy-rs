@@ -65,7 +65,8 @@ async fn smart_settings_upgrade_preserves_selection_and_publishes_custom_config(
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let before = repository.load_runtime_settings().await.unwrap();
     assert_eq!(before.rotation_strategy, "sticky");
-    assert_eq!(before.refresh_margin_seconds, 3600);
+    // 0022 将仍为旧默认 3600 的行迁移到 300；管理员自定义值才会原样保留。
+    assert_eq!(before.refresh_margin_seconds, 300);
     assert_eq!(before.smart_scheduling, SmartSchedulingConfig::default());
     let mut update = settings_with_margin(3600);
     update.smart_scheduling =
@@ -166,6 +167,56 @@ async fn unlimited_default_account_concurrency_round_trips_without_relaxing_othe
             "{statement}"
         );
     }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn migrations_should_narrow_the_default_refresh_margin_to_the_codex_baseline() {
+    let Some(database) = TestDatabase::create("refresh_margin_default").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    // 新装实例：0001 种子行携带旧默认 3600，0022 数据迁移统一收敛到 300。
+    let settings = repository
+        .load_runtime_settings()
+        .await
+        .expect("load settings");
+    assert_eq!(settings.refresh_margin_seconds, 300);
+    // 列默认值同步收窄，重建行不会回退到旧值；目录查询限定本测试 schema，
+    // 同库并行测试里停留在旧迁移版本的 schema 仍保留 3600 旧默认，不能被读到。
+    let column_default: String = sqlx::query_scalar(
+        "select column_default from information_schema.columns \
+             where table_schema = current_schema() \
+               and table_name = 'runtime_settings' \
+               and column_name = 'refresh_margin_seconds'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("read column default");
+    assert_eq!(column_default, "300");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn refresh_margin_migration_should_preserve_admin_customized_values() {
+    // 升级语义：0021 之前部署的实例经 0022 迁移后，仅旧默认 3600 收敛到 300，
+    // 管理员自定义值原样保留。
+    let Some(database) = TestDatabase::create_through("refresh_margin_custom", 21).await else {
+        return;
+    };
+    sqlx::query("update runtime_settings set refresh_margin_seconds = 1800 where id = 1")
+        .execute(&database.pool)
+        .await
+        .expect("persist customized margin");
+    super::TEST_MIGRATOR
+        .run(&database.pool)
+        .await
+        .expect("apply remaining migrations");
+    let settings = PgRuntimeSettingsRepository::new(database.pool.clone())
+        .load_runtime_settings()
+        .await
+        .expect("load settings");
+    assert_eq!(settings.refresh_margin_seconds, 1_800);
     database.close().await;
 }
 

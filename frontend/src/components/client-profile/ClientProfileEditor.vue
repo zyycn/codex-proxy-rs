@@ -121,6 +121,7 @@ onMounted(() => load())
       :previewing="previewing"
       :error="previewError"
       :disabled="disabled || loading"
+      :max-version-lag="options?.maxVersionLag"
       :aria-busy="loading || undefined"
       @update:model-value="model = $event"
     />

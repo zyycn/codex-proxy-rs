@@ -884,6 +884,49 @@ impl ProviderRefreshPolicy {
             Err(_) => true,
         }
     }
+
+    /// 按账号派生 `[0, margin]` 内的整秒错峰偏移。
+    ///
+    /// 网关以固定周期扫描到期账号，到期时刻相同的账号会在同一轮齐刷，
+    /// 在 auth.openai.com 侧形成单 IP 批量刷新特征。偏移从账号 ID 的
+    /// 稳定哈希派生（与退避扰动同源、独立 salt），跨扫描与重启保持不变；
+    /// 只会增大有效提前量，不会比配置的 margin 更贴近过期时刻。
+    #[must_use]
+    pub fn refresh_stagger(self, account_id: &ProviderAccountId) -> Duration {
+        // margin 以整秒配置；秒级粒度在默认 300s 下对应约 10 个扫描槽位。
+        let bound = u32::try_from(self.margin.as_secs()).unwrap_or(u32::MAX);
+        Duration::from_secs(u64::from(stable_factor(
+            account_id.as_str(),
+            "refresh-stagger",
+            0,
+            bound,
+        )))
+    }
+
+    /// 含账号错峰偏移的到期判定；扫描路径先按 [`Self::staggered_refresh_bound`]
+    /// 取回候选超集，再用它在内存中收窄到本轮真正到期的账号。
+    #[must_use]
+    pub fn is_refresh_due_staggered(
+        self,
+        account_id: &ProviderAccountId,
+        access_token_expires_at: SystemTime,
+        observed_at: SystemTime,
+    ) -> bool {
+        let staggered_margin = self.margin.saturating_add(self.refresh_stagger(account_id));
+        match access_token_expires_at.duration_since(observed_at) {
+            Ok(remaining) => remaining <= staggered_margin,
+            Err(_) => true,
+        }
+    }
+
+    /// 错峰候选窗口上界；覆盖 margin 与最大偏移之和。
+    ///
+    /// 与 [`Self::refresh_stagger`] 的值域同址维护：偏移上限为 margin，
+    /// 因此 `2 × margin` 必然覆盖最大有效提前量。
+    #[must_use]
+    pub fn staggered_refresh_bound(self) -> Duration {
+        self.margin.saturating_mul(2)
+    }
 }
 
 /// 指数退避基准延迟；attempt=1 即为该值。

@@ -128,8 +128,7 @@ const MAX_STREAM_PREFETCH_BYTES: usize = 128 * 1024;
 /// 短暂保留 response.created 等结构事件，让随后到达的明确拒绝可以无感换号；
 /// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件。
 const STREAM_REPLAY_GRACE: Duration = Duration::from_millis(2_500);
-// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
-const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
+// 额度拒绝后的 usage 补查自身执行时长上限；结算等待的随机延迟见 jitter 模块。
 const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
 pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";

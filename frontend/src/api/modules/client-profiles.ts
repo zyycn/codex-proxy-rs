@@ -9,6 +9,7 @@ export interface PresetClientProfileSelection {
   client: 'desktop' | 'cli'
   platform: 'macos' | 'linux' | 'windows'
   versionMode: 'latest' | 'fixed'
+  versionLag?: number | null
   cliEntry?: 'tui' | 'exec' | null
   osType?: string | null
   originator: string | null
@@ -32,6 +33,7 @@ export type ClientProfileSelection = PresetClientProfileSelection | CustomClient
 export interface ClientProfileOptions {
   presets: ClientProfilePreset[]
   globalConfiguration: ClientProfileSelection
+  maxVersionLag: number
 }
 
 export interface ClientProfilePreview {
@@ -47,6 +49,7 @@ export interface ClientProfilePreview {
   desktopBuild: string | null
   userAgent: string
   versionSource: 'official' | 'custom'
+  versionLag: number | null
   recognized?: boolean
   verifiedAt: string | null
   verifiedAtDisplay: string | null

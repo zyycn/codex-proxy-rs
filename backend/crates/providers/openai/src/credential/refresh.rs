@@ -365,7 +365,7 @@ impl CodexCredentialRefreshService {
                 }
             }
             Err(RefreshFailure::Transport { message, upstream }) => {
-                // 上游瞬态（401/429/5xx/超时/畸形响应等）保留现有凭据、
+                // 上游瞬态（429/5xx/超时/畸形响应等）保留现有凭据、
                 // 记录最近一次失败并推进有界退避。
                 if self
                     .defer_refresh(
@@ -397,9 +397,12 @@ impl CodexCredentialRefreshService {
             .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
         let limit = NonZeroU32::new(MAX_REFRESH_BATCH)
             .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+        // 查询窗口按错峰上界（2×margin）放宽，先取回候选超集，
+        // 再在内存中按账号稳定偏移收窄；存储层谓词保持通用窗口语义。
         let query = ProviderRefreshQuery::new(
             provider,
-            now.checked_add(policy.margin()).unwrap_or(now),
+            now.checked_add(policy.staggered_refresh_bound())
+                .unwrap_or(now),
             now.checked_sub(REFRESH_RECOVERY_WINDOW)
                 .unwrap_or(SystemTime::UNIX_EPOCH),
             now,
@@ -410,6 +413,18 @@ impl CodexCredentialRefreshService {
         let mut due = Vec::with_capacity(candidates.len());
         let mut failures = Vec::new();
         for loaded in candidates {
+            // 按账号稳定错峰偏移收窄到本轮真正到期的账号，避免同批到期账号
+            // 同一轮齐刷；已过期账号 remaining 为负、偏移判定恒真，恢复窗口
+            // 的强制刷新不受错峰影响。无到期时间的账号不会成为候选。
+            if !loaded
+                .account
+                .access_token_expires_at()
+                .is_some_and(|expires_at| {
+                    policy.is_refresh_due_staggered(loaded.account.id(), expires_at, now)
+                })
+            {
+                continue;
+            }
             let account_id = loaded.account.id().to_string();
             match self.repository.decode_runtime_credential(&loaded) {
                 Ok(runtime)

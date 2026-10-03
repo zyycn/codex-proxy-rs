@@ -2173,14 +2173,12 @@ mod errors {
     }
 
     #[tokio::test]
-    async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
+    async fn manual_refresh_reports_deactivated_accounts_for_any_rejection_status() {
+        // 停用消息是与状态无关的账号级事实：401 也按官方语义终态并归为 Banned 提示；
+        // 手动刷新仍不改写账号状态，终态由 Worker 周期统一落库。
         for (status, kind, message) in [
             (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
-            (
-                401,
-                Kind::BadGateway,
-                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
-            ),
+            (401, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -2211,37 +2209,34 @@ mod errors {
 
     #[tokio::test]
     async fn manual_refresh_reports_known_upstream_failures_without_changing_account_state() {
+        // 401 与显式拒绝码一样映射为 Invalid + 重新授权提示（对齐官方终态语义）；
+        // 400 的 RFC invalid_grant、429/5xx 等仍按上游瞬态事实提示。
         for (status, code, expected_kind, expected_message) in [
             (
                 401,
                 "refresh_token_reused",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌已被使用，请重新授权",
             ),
             (
                 401,
                 "refresh_token_expired",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌已过期，请重新授权",
             ),
             (
                 401,
                 "refresh_token_invalidated",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌已被撤销，请重新授权",
             ),
             (
                 401,
                 "token_expired",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌不可用，请重新授权",
             ),
-            (
-                401,
-                "unknown",
-                Kind::BadGateway,
-                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
-            ),
+            (401, "unknown", Kind::Invalid, "刷新令牌已失效，请重新授权"),
             (
                 400,
                 "refresh_token_reused",

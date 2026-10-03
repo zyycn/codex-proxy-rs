@@ -266,7 +266,9 @@ async fn plugin_migration_preserves_main_settings_and_accepts_new_installations(
         return;
     };
     initialize_revision(&database).await;
-    sqlx::query("update runtime_settings set max_concurrent_per_account=0 where id=1")
+    // 0022 会把仍为旧默认 3600 的 margin 收敛到 300；预设自定义值，
+    // 让本测试继续验证「所有已自定义设置都原样保留」。
+    sqlx::query("update runtime_settings set max_concurrent_per_account=0, refresh_margin_seconds=1800 where id=1")
         .execute(&database.pool)
         .await
         .unwrap();

@@ -66,7 +66,11 @@ const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
 /// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
+/// 随机启动延迟已把候选摊到多轮，该上限仅作单轮安全边界。
 const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
+/// 新账号首查（含失败重排）随机启动延迟的上限；摊开导入批量的 /usage 突发。
+/// 导入即时可见额度由导入流程的每账号后台读取负责，worker 只兜底失败者。
+const INITIAL_QUOTA_SYNC_MAX_START_DELAY: Duration = Duration::from_secs(10 * 60);
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
@@ -312,7 +316,13 @@ pub struct CodexCredentialQuotaService {
     freeze_policy_cache: Mutex<Option<(ProviderFreezePolicy, Instant)>>,
     scheduling: CodexQuotaSchedulingProjection,
     reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
+    /// 首查随机延迟采样器；测试注入固定值获得确定性节奏。
+    initial_sync_delays: CodexInitialSyncDelays,
 }
+
+/// 首查随机延迟采样器：每次调用为一个账号返回独立随机延迟。
+#[doc(hidden)]
+pub type CodexInitialSyncDelays = Arc<dyn Fn() -> Duration + Send + Sync>;
 
 /// 冻结策略缓存活跃期；过期后下一次容量错误重新读取运行时设置。
 const FREEZE_POLICY_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -334,6 +344,7 @@ struct CodexQuotaProjectionState {
     next_version: u64,
     entries: BTreeMap<ProviderAccountId, CodexQuotaSchedulingEntry>,
     last_periodic_refresh_at: BTreeMap<ProviderAccountId, CodexQuotaRefreshAttempt>,
+    initial_refresh_not_before: BTreeMap<ProviderAccountId, Instant>,
 }
 
 struct CodexQuotaRefreshAttempt {
@@ -392,6 +403,7 @@ impl CodexQuotaSchedulingProjection {
         for account_id in account_ids {
             state.entries.remove(account_id);
             state.last_periodic_refresh_at.remove(account_id);
+            state.initial_refresh_not_before.remove(account_id);
         }
     }
 
@@ -555,6 +567,77 @@ impl CodexQuotaSchedulingProjection {
         }
         reserved
     }
+
+    /// 为尚无 quota 快照的账号分配随机首查时点，并返回本轮已到期的候选。
+    ///
+    /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
+    /// 首次进入候选的账号抽一次随机启动延迟记为到期时刻，避免新导入账号池
+    /// 在 worker 唤醒边界形成批量 `/usage` 突发；到期时刻跨轮保留，零延迟
+    /// （含随机源退化）时保持首轮即查的旧行为。单轮数量仍受
+    /// `INITIAL_QUOTA_SYNC_BATCH` 上限约束。
+    fn reserve_initial_refreshes(
+        &self,
+        accounts: &[ProviderAccount],
+        observed_ids: &BTreeSet<ProviderAccountId>,
+        now: SystemTime,
+        draw_start_delay: &dyn Fn() -> Duration,
+    ) -> Vec<ProviderAccount> {
+        let candidates = accounts
+            .iter()
+            .filter(|account| {
+                !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
+            })
+            .collect::<Vec<_>>();
+        let candidate_ids = candidates
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<BTreeSet<_>>();
+        let monotonic_now = Instant::now();
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // 已产生快照或离开候选集的账号不再保留首查状态。
+        state
+            .initial_refresh_not_before
+            .retain(|account_id, _| candidate_ids.contains(account_id));
+        candidates
+            .into_iter()
+            .filter(|account| {
+                let due_at = state
+                    .initial_refresh_not_before
+                    .entry(account.id().clone())
+                    .or_insert_with(|| monotonic_now + draw_start_delay());
+                *due_at <= monotonic_now
+            })
+            .take(INITIAL_QUOTA_SYNC_BATCH)
+            .cloned()
+            .collect()
+    }
+
+    /// 首查尝试后仍无快照的账号重抽随机延迟，避免失败账号回到固定 30s 重试节奏。
+    ///
+    /// 重排同时随机化每轮的候选集合，避免持续失败时按账号顺序只重试同一批。
+    fn defer_failed_initial_refreshes(
+        &self,
+        account_ids: &BTreeSet<ProviderAccountId>,
+        draw_start_delay: &dyn Fn() -> Duration,
+    ) {
+        if account_ids.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for account_id in account_ids {
+            // 账号是否仍在首查路径由下一轮 reserve 按候选集剪枝，这里无需区分。
+            state
+                .initial_refresh_not_before
+                .insert(account_id.clone(), now + draw_start_delay());
+        }
+    }
 }
 
 fn quota_refresh_candidate(
@@ -649,7 +732,21 @@ impl CodexCredentialQuotaService {
             freeze_policy_cache: Mutex::new(None),
             scheduling: CodexQuotaSchedulingProjection::default(),
             reset_consume_locks: Mutex::new(HashMap::new()),
+            initial_sync_delays: Arc::new(|| {
+                crate::jitter::uniform_delay(
+                    crate::jitter::random_u64(),
+                    INITIAL_QUOTA_SYNC_MAX_START_DELAY,
+                )
+            }),
         }
+    }
+
+    /// 注入首查随机延迟采样器（测试用确定性节奏）；生产默认均匀
+    /// `[0, INITIAL_QUOTA_SYNC_MAX_START_DELAY)`，零延迟等价旧行为。
+    #[doc(hidden)]
+    pub fn with_initial_sync_delays(mut self, delays: CodexInitialSyncDelays) -> Self {
+        self.initial_sync_delays = delays;
+        self
     }
 
     /// 读取容量熔断策略（带短 TTL 缓存）；读取失败退化为关闭，熔断不得放大失败。
@@ -947,7 +1044,15 @@ impl CodexCredentialQuotaService {
             .into_iter()
             .map(|observation| observation.account_id)
             .collect::<BTreeSet<_>>();
-        let initial = Self::initial_quota_sync_accounts(&accounts, &observed_ids, now);
+        let initial = self.scheduling.reserve_initial_refreshes(
+            &accounts,
+            &observed_ids,
+            now,
+            self.initial_sync_delays.as_ref(),
+        );
+        // 本轮首查后仍无快照的账号需要重排随机延迟。
+        let mut pending_initial: BTreeSet<ProviderAccountId> =
+            initial.iter().map(|account| account.id().clone()).collect();
         let periodic =
             self.scheduling
                 .reserve_periodic_refreshes(accounts, &observed_snapshots, now);
@@ -973,16 +1078,21 @@ impl CodexCredentialQuotaService {
             match self.fetch_usage(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
                     // 单账号解析或落库失败只影响该账号；其余账号继续同步。
-                    if let Err(error) = self
+                    match self
                         .apply_fetched_quota(&account, &value, observed_at, &mut summary)
                         .await
                     {
-                        summary.transient += 1;
-                        tracing::warn!(
-                            account_id = %account.id(),
-                            error = %error,
-                            "OpenAI quota synchronization skipped one account"
-                        );
+                        Ok(()) => {
+                            pending_initial.remove(account.id());
+                        }
+                        Err(error) => {
+                            summary.transient += 1;
+                            tracing::warn!(
+                                account_id = %account.id(),
+                                error = %error,
+                                "OpenAI quota synchronization skipped one account"
+                            );
+                        }
                     }
                 }
                 Err(CodexQuotaFetchError::InvalidCredential) => {
@@ -1023,6 +1133,9 @@ impl CodexCredentialQuotaService {
                 }
             }
         }
+        // 首查失败或未能落库的账号重排随机延迟；已成功落库的账号由快照事实自然退出首查路径。
+        self.scheduling
+            .defer_failed_initial_refreshes(&pending_initial, self.initial_sync_delays.as_ref());
         Ok(summary)
     }
 
@@ -1216,22 +1329,6 @@ impl CodexCredentialQuotaService {
         }
 
         Ok(summary)
-    }
-
-    /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
-    fn initial_quota_sync_accounts(
-        accounts: &[ProviderAccount],
-        observed_ids: &BTreeSet<ProviderAccountId>,
-        now: SystemTime,
-    ) -> Vec<ProviderAccount> {
-        accounts
-            .iter()
-            .filter(|account| {
-                !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
-            })
-            .take(INITIAL_QUOTA_SYNC_BATCH)
-            .cloned()
-            .collect()
     }
 
     /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。

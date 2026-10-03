@@ -432,7 +432,7 @@ async fn generic_invalid_grant_should_remain_transient_like_official_codex() {
 }
 
 #[tokio::test]
-async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
+async fn unauthorized_should_be_terminal_with_upstream_details() {
     let body = r#"{
         "error": {
             "message": "Invalid refresh token.",
@@ -443,8 +443,8 @@ async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
     }"#;
     let failure = refresh_failure(401, body).await;
 
-    let RefreshFailure::Transport { message, upstream } = failure else {
-        panic!("production policy gives every 401 a bounded recovery window");
+    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
+        panic!("official codex semantics treat every refresh 401 as terminal");
     };
     assert_eq!(message.as_deref(), Some("Invalid refresh token."));
     let upstream = upstream.expect("complete upstream failure");
@@ -455,19 +455,36 @@ async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
 }
 
 #[tokio::test]
-async fn unauthorized_should_back_off_even_with_a_recognized_refresh_code() {
+async fn unauthorized_with_a_recognized_refresh_code_should_be_terminal() {
+    let body = r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#;
+    let failure = refresh_failure(401, body).await;
+
+    assert_invalid_grant_failure(&failure, 401, Some("Refresh token expired."), body);
+}
+
+#[tokio::test]
+async fn unauthorized_with_unparseable_body_should_still_be_terminal() {
+    // 官方对刷新 401 不依赖响应体：未知 401 同样立即终态，只保留原始 body 供诊断。
+    let body = "<html>sign in</html>";
+    let failure = refresh_failure(401, body).await;
+
+    assert_invalid_grant_failure(&failure, 401, None, body);
+}
+
+#[tokio::test]
+async fn unauthorized_with_deactivated_account_should_be_banned() {
+    // 停用消息是与状态无关的账号级事实：401 也按 Banned 终态保留更精确分类。
     let failure = refresh_failure(
         401,
-        r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
+        r#"{"error":{"message":"account has been deactivated"}}"#,
     )
     .await;
 
-    assert_transport_failure(
-        &failure,
-        401,
-        Some("Refresh token expired."),
-        r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
-    );
+    let RefreshFailure::Banned { message, upstream } = failure else {
+        panic!("deactivated account must stay banned regardless of status");
+    };
+    assert_eq!(message.as_deref(), Some("account has been deactivated"));
+    assert_eq!(upstream.expect("complete upstream failure").status(), 401);
 }
 
 #[tokio::test]
@@ -535,6 +552,25 @@ async fn unknown_server_error_or_rate_limit_should_remain_transient() {
         let failure = refresh_failure(status, body).await;
         assert_transport_failure(&failure, status, Some("Try again."), body);
     }
+}
+
+fn assert_invalid_grant_failure(
+    failure: &RefreshFailure,
+    status: u16,
+    message: Option<&str>,
+    body: &str,
+) {
+    let RefreshFailure::InvalidGrant {
+        message: actual_message,
+        upstream,
+    } = failure
+    else {
+        panic!("status {status} must classify as terminal invalid grant");
+    };
+    assert_eq!(actual_message.as_deref(), message);
+    let upstream = upstream.as_deref().expect("complete upstream failure");
+    assert_eq!(upstream.status(), status);
+    assert_eq!(upstream.body(), body);
 }
 
 fn assert_transport_failure(

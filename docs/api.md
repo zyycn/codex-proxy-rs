@@ -1364,7 +1364,7 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 `openaiClientProfile` 与 `xaiClientProfile` 是同一映射的兼容字段：省略保留，不能显式提交 `null`；
 与通用字段同时提供时必须一致，否则整次更新拒绝。读取响应从映射派生这两个字段，不维护平行状态
 
-直接读取 `openai` 或 `xai` 的选项与预览。OpenAI 选项返回六个 `presets`，xAI 返回 `defaults`；
+直接读取 `openai` 或 `xai` 的选项与预览。OpenAI 选项返回六个 `presets` 与 `maxVersionLag`，xAI 返回 `defaults`；
 响应均包含 `globalConfiguration`
 
 ### OpenAI 上游客户端身份
@@ -1387,6 +1387,7 @@ UA 须为 1 至 4096 字节的单行可见 ASCII 文本，首尾不能含空白�
 | `client` | 必填，`desktop` 或 `cli` |
 | `platform` | 必填，`macos`、`linux` 或 `windows` |
 | `versionMode` | 必填，`latest` 或 `fixed` |
+| `versionLag` | 仅 `latest` 可选的滞后档位，1～8 的整数；`fixed` 必须省略或为 `null` |
 | `cliEntry` | CLI 可选 `tui` 或 `exec`，省略或 `null` 保留 Core 默认身份；Desktop 不接受此字段 |
 | `originator`、`osType`、`osVersion`、`arch`、`terminal` | 可选自定义参数，非空、最多 128 字节；只接受可见 ASCII，不能包含括号、分号、反斜杠及首尾空白 |
 | `codexVersion` | `fixed` 必填的 Core SemVer；`latest` 必须省略或为 `null` |
@@ -1400,6 +1401,18 @@ TUI 默认标识为 `codex-tui`，Exec 为 `codex_exec`，入口后缀使用同�
 `originator` 覆盖只更改产品名前缀和配套头，后缀仍表示所选入口。省略 `osType` 使用平台名称；
 自定义运行环境在自动更新时保持不变。未指定 `cliEntry` 时使用 `codex_cli_rs` 默认值且不添加入口后缀
 
+`terminal` 填写官方客户端的真实终端标记，如 `iTerm.app/3.5.0`、`vscode/1.99.0`、`Apple_Terminal`、
+`Ghostty`、`WindowsTerminal`、`tmux-256color`、`xterm-256color`。省略时使用 `unknown`：
+官方 Desktop 由 GUI 启动、无终端环境变量，其 UA 中的终端标记本就是 `unknown`，
+因此 Desktop 预设保持默认即可；CLI 预设建议配置真实值，多 Key 可通过各自的画像覆盖差异化
+
+`versionLag` 让 `latest` 模式跟随官方发布但滞后 N 个已观察版本采用，
+目标是避免全池随最新发布在同一周期齐步切换。官方 CLI 用户手动升级形成长尾分布，
+而 Desktop 客户端自动更新、聚集在最新版属正常形态，滞后档位主要适用于 CLI 预设。
+档位基于网关观察到的发布序列解析：启动种子与历次 24 小时检查的核验版本按时间倒序构成历史，
+取第 N 项；序列不足时回退最旧已核验版本，不会因此解析失败。历史仅保留在进程内，
+重启后从启动种子与制品缓存重新积累
+
 六套预设均支持自动更新：macOS Desktop 支持 arm64，Windows/Linux Desktop 及三套 CLI 支持 arm64、x86_64。
 预设接口的 `automaticAvailable`、`reason` 表示当前组合的可用性；自定义架构可能使自动解析不可用。
 每 24 小时后台检查官方稳定发布，失败保留同组合上次有效版本；固定值不受后台更新影响。
@@ -1407,7 +1420,7 @@ Desktop 的应用版本、Core 和构建号来自同一平台、架构的官方�
 Windows/Linux 通过 ETag 检查更新，未变化时复用已核验版本；CLI 依据官方 npm 稳定标签和对应平台依赖
 
 预览返回 `configuration`、`source`（`global` / `override`）、`userAgent`、解析后的环境和版本字段，
-以及 `versionSource`（`official` / `custom`）、`verifiedAt`、`checkedAt`、`error`。
+以及 `versionSource`（`official` / `custom`）、`versionLag`、`verifiedAt`、`checkedAt`、`error`。
 自定义预览中的 `recognized` 表示是否识别出配套请求头。
 `verifiedAt` 只表示版本资料核验，不能代表自定义运行环境或 TLS 已核验；固定版本返回 `null`。
 完整自定义配置不携带官方制品核验时间。

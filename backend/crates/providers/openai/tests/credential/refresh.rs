@@ -386,6 +386,50 @@ async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_s
 }
 
 #[tokio::test]
+async fn scheduled_refresh_staggers_accounts_sharing_the_same_expiry() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let refresher = SingleUseRefresher::new();
+    let service = refresh_service(&store, Arc::clone(&refresher), policy);
+    // margin=300s：寻找一个错峰偏移覆盖到 exp、一个未覆盖的账号，两者共享同一到期时刻。
+    let policy_value = refresh_policy(Duration::from_secs(5 * 60));
+    let mut covered = None;
+    let mut pending = None;
+    for index in 0..64 {
+        let candidate =
+            ProviderAccountId::new(format!("acct_stagger_{index}")).expect("valid account");
+        let stagger = policy_value.refresh_stagger(&candidate).as_secs();
+        if stagger >= 150 && covered.is_none() {
+            covered = Some(candidate.clone());
+        }
+        if stagger < 60 && pending.is_none() {
+            pending = Some(candidate);
+        }
+    }
+    let covered = covered.expect("an account covered by its stagger");
+    let pending = pending.expect("an account not yet covered by its stagger");
+    // exp = now+400s：covered 的有效提前量 ≥ 450s（到期）；pending 的 ≤ 360s，
+    // 即使种子与扫描之间存在秒级耗时也不会提前触发。
+    let expires_at = SystemTime::now()
+        .checked_add(Duration::from_secs(400))
+        .expect("test expiry");
+    seed_refreshable_account(&store, covered.as_str(), expires_at, None).await;
+    seed_refreshable_account(&store, pending.as_str(), expires_at, None).await;
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed { account_id, .. }] if account_id == covered.as_str()
+    ));
+    assert_eq!(refresher.calls(), 1);
+    // 未到错峰窗口的账号本轮零接触：不刷新、也不落退避计划。
+    let pending_account = store.account(pending.as_str()).expect("seeded account");
+    assert!(pending_account.next_refresh_at().is_none());
+    assert_eq!(pending_account.credential_state(), CredentialState::Ready);
+}
+
+#[tokio::test]
 async fn scheduled_refresh_rotates_tokens_while_quota_is_exhausted() {
     let store = Arc::new(MemoryAccountStore::default());
     let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
@@ -494,15 +538,15 @@ async fn scheduled_refresh_persists_the_original_upstream_error_message() {
 async fn scheduled_refresh_persists_retryable_message_inside_the_two_hour_window() {
     let store = Arc::new(MemoryAccountStore::default());
     let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
-    let upstream_message = "Invalid refresh token.";
+    let upstream_message = "Upstream refresh endpoint is unavailable.";
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+        .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
             "error": {
                 "message": upstream_message,
-                "type": "invalid_request_error",
-                "code": "invalid_refresh_token"
+                "type": "server_error",
+                "code": "temporarily_unavailable"
             }
         })))
         .expect(1)
@@ -525,7 +569,7 @@ async fn scheduled_refresh_persists_retryable_message_inside_the_two_hour_window
         Arc::new(RefreshCredentialState),
         policy,
     );
-    let account_id = "acct_retryable_unauthorized";
+    let account_id = "acct_retryable_unavailable";
     let expires_at = SystemTime::now()
         .checked_sub(Duration::from_secs(30 * 60))
         .expect("expired access token");
@@ -557,6 +601,76 @@ async fn scheduled_refresh_persists_retryable_message_inside_the_two_hour_window
     let projection = account.status_projection(SystemTime::now(), None);
     assert_eq!(projection.status, AccountStatus::Error);
     assert_eq!(projection.error_message.as_deref(), Some(upstream_message));
+}
+
+#[tokio::test]
+async fn scheduled_refresh_marks_unauthorized_refresh_terminal_immediately() {
+    // 与官方一致：刷新端点 401 不进入退避，即使在 2 小时恢复窗口内也立即终态；
+    // 账号按既有 InvalidGrant 链路落为 Expired，后续周期不再重试。
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let upstream_message = "Invalid refresh token.";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": {
+                "message": upstream_message,
+                "type": "invalid_request_error",
+                "code": "invalid_refresh_token"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = CodexCredentialRefreshService::new(
+        store.repository(),
+        Arc::new(OpenAiTokenClient::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("test HTTP client"),
+            TokenClientConfig {
+                client_id: "test-public-client".to_owned(),
+                token_endpoint: format!("{}/oauth/token", server.uri()),
+            },
+            provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
+        )),
+        Arc::new(RefreshLeases),
+        Arc::new(RefreshCredentialState),
+        policy,
+    );
+    let account_id = "acct_unauthorized_terminal";
+    let expires_at = SystemTime::now()
+        .checked_sub(Duration::from_secs(30 * 60))
+        .expect("expired access token");
+    seed_refreshable_account(&store, account_id, expires_at, None).await;
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Invalidated {
+            account_id: invalidated_account_id,
+        }] if invalidated_account_id == account_id
+    ));
+    let account = store.account(account_id).expect("invalidated account");
+    assert_eq!(account.credential_state(), CredentialState::Expired);
+    assert_eq!(
+        account.last_error_reason(),
+        Some(AccountErrorReason::CredentialExpired)
+    );
+    assert_eq!(account.last_error_message(), Some(upstream_message));
+    let projection = account.status_projection(SystemTime::now(), None);
+    assert_eq!(projection.status, AccountStatus::Error);
+    assert_eq!(projection.error_message.as_deref(), Some(upstream_message));
+    assert!(
+        service
+            .refresh_due()
+            .await
+            .expect("next refresh cycle")
+            .is_empty()
+    );
 }
 
 #[tokio::test]

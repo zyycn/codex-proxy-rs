@@ -26,6 +26,16 @@ use crate::validation::{IdentifierError, RoutingError, validate_text};
 
 const MAX_REQUEST_ATTEMPTS: u32 = 32;
 
+/// 单请求内允许的换号次数上限：选中账号与上一 attempt 不同的路由 attempt 记一次。
+///
+/// 服务端把「同一段 prompt 数秒内携带不同 account-id 依次出现」视为订阅共享的
+/// 直接动态证据；官方客户端单账号运行，任何重试都不换号（login manager 甚至拒绝
+/// reload 到 account id 不同的凭据）。网关保留换号容错，但把每请求的换号深度限制在
+/// 初始账号 + 2 次换号内：换号只服务账号级硬失败，瞬态故障已由同账号预算覆盖
+/// （瞬态退避、传输恢复与 32 次总路由预算），连续多个账号硬失败说明池级退化，
+/// 继续换号只放大共享特征。与 `MAX_REQUEST_ATTEMPTS` 一致先取常量，不进运行时设置。
+pub(crate) const MAX_ACCOUNT_ROTATION_ATTEMPTS: u32 = 2;
+
 /// 客户端请求中的模型名称。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 #[serde(transparent)]

@@ -114,6 +114,16 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     );
     assert_eq!(frozen.codex_version, "0.155.0");
 
+    // 缓存恢复与启动种子构成观察历史，滞后档位据此钉住上一版。
+    let lagged = ClientProfileSelection {
+        version_lag: Some(1),
+        ..automatic.clone()
+    };
+    assert_eq!(
+        lagged.resolve(&state).unwrap().user_agent(),
+        "codex-tui/0.155.0 (Alpine Linux 3.24.1; x86_64) xterm-256color (codex-tui; 0.155.0)"
+    );
+
     let restarted = CodexWireProfileState::new(super::wire_profile());
     CliReleaseService::new(provider, restarted.clone(), cache)
         .unwrap()

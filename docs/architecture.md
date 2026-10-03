@@ -343,6 +343,9 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开
+- 换号有独立的请求内预算：选中账号与上一 attempt 不同的路由 attempt 至多 2 次，跨 Provider 候选
+  推进与 continuation 排除重放同样受限；预算耗尽后不再换号，以最后一个原始上游错误终态。同账号重试
+  与总路由预算不受影响
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果
 
@@ -473,8 +476,9 @@ client，OIDC 的 JWKS 缓存与单飞归属对应出口状态。自动刷新提
 Provider 管理适配在仍持有结构化失败事实时选择静态 `public_message`；Admin 将其转为可安全展示的
 `AdminError.message`，API 保留其中的 502／503 具体原因，无公开消息时才使用通用回退。认证与未知
 内部异常仍保持固定文案，不能把任意 Provider／Store 的 message 直接放行。
-管理提示与 Worker 的处置分类是不同职责：例如 OpenAI 刷新已收到 401 时，可以提示已解析的令牌
-拒绝原因，但不因此改变现有有界恢复退避和账号终态判定。刷新繁忙、已知上游失败与结果未知分别映射为
+管理提示与 Worker 的处置分类是不同职责：OpenAI 刷新端点 401 与显式拒绝码一样按官方语义立即终态，
+手动刷新只提示重新授权，账号终态由 Worker 周期统一落库；429/5xx 等瞬态仍走有界恢复退避。
+刷新繁忙、已知上游失败与结果未知分别映射为
 409、50201、50202；结果未知不能触发自动重放一次性凭据，Vue 也不重新解析上游错误码或正文
 
 连接测试的 `gateway` / `provider` / `upstream` 来源以及 `not_sent` / `sent` / `ambiguous` 发送状态由 Core 在
@@ -690,6 +694,9 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - OpenAI 支持 OAuth、AT/RT、PAT 和上游 API Key。OAuth 身份来自官方 JWT claims，PAT 经官方身份接口验证，
   不信任导入文档顶层身份字段。RT-only 导入先换取 AT；AT-only、PAT 与 API Key 不参加 OAuth 自动续期。
   输入形态和适用操作见 [账号能力与导入](api.md#账号能力导入与-oauth)
+- OAuth 自动续期按运行时设置的提前量触发，默认 300 秒对齐官方客户端 exp 前 5 分钟的刷新窗口。
+  每个账号的有效提前量在 [margin, 2×margin] 内由账号 ID 派生稳定错峰偏移，到期时刻相同的账号
+  不会在同一轮齐刷；恢复窗口内的强制刷新不受偏移影响
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。刷新额度时同步查询官方实时订阅，
   只把套餐事实写入现有 quota JSON。明确无付费订阅的个人账号显示 Free；查询失败、缺失字段或
   团队身份不推断为 Free，订阅查询失败不影响额度观测

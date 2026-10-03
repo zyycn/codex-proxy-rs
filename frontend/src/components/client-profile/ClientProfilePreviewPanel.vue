@@ -3,7 +3,7 @@ import type { ClientProfilePreview } from '@/api/modules/client-profiles'
 import { BaseSkeleton } from '@codex-proxy/ui'
 
 defineProps<{
-  preview?: Pick<ClientProfilePreview, 'userAgent' | 'versionSource' | 'checkedAtDisplay' | 'error'>
+  preview?: Pick<ClientProfilePreview, 'userAgent' | 'versionSource' | 'checkedAtDisplay' | 'error'> & { versionLag?: number | null }
   previewing: boolean
   needsVersionInput: boolean
   error: string
@@ -36,6 +36,9 @@ defineProps<{
       <p class="m-0 text-cp-xs text-cp-text-tertiary">
         {{ preview.versionSource === 'custom' ? '固定身份' : '自动更新' }}
         <template v-if="preview.versionSource === 'official'">
+          <template v-if="preview.versionLag">
+            · 滞后 {{ preview.versionLag }} 版
+          </template>
           · {{ preview.checkedAtDisplay ? `检查于 ${preview.checkedAtDisplay}` : '待检查' }}
         </template>
       </p>

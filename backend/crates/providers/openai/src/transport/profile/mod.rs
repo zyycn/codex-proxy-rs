@@ -1,6 +1,6 @@
 //! Codex Desktop 上游请求画像。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -154,11 +154,31 @@ pub struct CodexWireProfileState {
 
 type ClientReleases = BTreeMap<(ClientKind, ClientPlatform, String), ClientReleaseObservation>;
 
+/// 每渠道保留的发布观察深度：当前版本加上全部滞后档位。
+const RELEASE_HISTORY_CAPACITY: usize = selection::MAX_VERSION_LAG as usize + 1;
+
 #[derive(Debug, Clone, Default)]
 struct ClientReleaseObservation {
     release: Option<ClientRelease>,
+    /// 本渠道倒序观察到的发布序列（含当前版本），仅进程内存；重启后从种子与缓存重新积累。
+    history: VecDeque<ClientRelease>,
     checked_at: Option<DateTime<Utc>>,
     error: Option<String>,
+}
+
+/// 观察到的发布进入历史：同版本刷新队首，新版本压入队首；超出深度丢弃最旧一项。
+fn observe_release(history: &mut VecDeque<ClientRelease>, release: ClientRelease) {
+    if history
+        .front()
+        .is_some_and(|front| front.same_identity(&release))
+    {
+        history[0] = release;
+    } else {
+        history.push_front(release);
+    }
+    while history.len() > RELEASE_HISTORY_CAPACITY {
+        history.pop_back();
+    }
 }
 
 impl CodexWireProfileState {
@@ -168,6 +188,20 @@ impl CodexWireProfileState {
             profile: Arc::new(RwLock::new(profile)),
             releases: Arc::default(),
         };
+        // macOS arm64 的当前发布来自初始画像（默认快照或恢复缓存）；补齐观察表项，
+        // 让滞后档位在首次 appcast 检查前也有历史可解析。
+        let initial = state.snapshot();
+        state.seed_client_release(
+            ClientKind::Desktop,
+            ClientPlatform::Macos,
+            "arm64",
+            ClientRelease {
+                codex_version: initial.codex_version,
+                desktop_version: Some(initial.desktop_version),
+                desktop_build: Some(initial.desktop_build),
+                verified_at: Some(initial.verified_at),
+            },
+        );
         cli_release::seed_releases(&state);
         platform_release::seed_releases(&state);
         state
@@ -215,6 +249,29 @@ impl CodexWireProfileState {
             .and_then(|state| state.release.clone())
     }
 
+    /// 按滞后档位解析发布：取观察历史的第 `lag` 项，历史不足时回退最旧一项。
+    ///
+    /// 滞后档位不引入新的失败模式：历史缺失时调用方回退到当前发布。
+    pub fn lagged_client_release(
+        &self,
+        client: ClientKind,
+        platform: ClientPlatform,
+        arch: &str,
+        lag: u32,
+    ) -> Option<ClientRelease> {
+        self.releases
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(client, platform, arch.to_owned()))
+            .and_then(|state| {
+                state
+                    .history
+                    .get(lag as usize)
+                    .or_else(|| state.history.back())
+                    .cloned()
+            })
+    }
+
     pub fn client_release_status(
         &self,
         client: ClientKind,
@@ -237,12 +294,16 @@ impl CodexWireProfileState {
         arch: &str,
         release: ClientRelease,
     ) {
-        self.releases
+        let mut states = self
+            .releases
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = states
             .entry((client, platform, arch.to_owned()))
-            .or_default()
-            .release = Some(release);
+            .or_default();
+        // 种子与缓存恢复同样构成观察：更晚恢复的版本会排在种子之前，形成启动历史。
+        observe_release(&mut state.history, release.clone());
+        state.release = Some(release);
     }
 
     pub(crate) fn record_client_release(
@@ -262,9 +323,11 @@ impl CodexWireProfileState {
         state.checked_at = Some(Utc::now());
         match result {
             Ok(release) => {
-                state.release = Some(release);
+                state.release = Some(release.clone());
                 state.error = None;
+                observe_release(&mut state.history, release);
             }
+            // 失败观察只更新状态，不改动发布历史。
             Err(error) => state.error = Some(error),
         }
     }
@@ -567,6 +630,20 @@ impl CodexDesktopReleaseService {
     ) -> Self {
         if let Some(verified) = verified.as_ref() {
             profile.update_bundled_release(verified);
+            // 缓存恢复与 CLI/平台渠道一样构成发布观察：只更新画像字段会让恢复版本
+            // 在首次检查发现新版时被跳过，滞后档位落回启动种子。这里补写进
+            // releases 历史，使「启动种子 → 恢复版本 → 新发现版本」形成完整序列。
+            profile.seed_client_release(
+                ClientKind::Desktop,
+                ClientPlatform::Macos,
+                "arm64",
+                ClientRelease {
+                    codex_version: verified.codex_version.clone(),
+                    desktop_version: Some(verified.desktop_version.clone()),
+                    desktop_build: Some(verified.desktop_build.clone()),
+                    verified_at: Some(verified.verified_at),
+                },
+            );
         }
         Self {
             transport,

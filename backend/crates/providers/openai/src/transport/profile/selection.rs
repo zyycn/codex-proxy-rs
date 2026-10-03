@@ -71,6 +71,12 @@ pub enum VersionMode {
     Fixed,
 }
 
+/// `latest` 模式允许的最大滞后档位；同样限制发布历史的保留深度。
+///
+/// 官方 CLI 用户手动升级形成长尾（活跃窗口约 40 个版本），档位只需打破
+/// 「全池随最新发布齐步切换」，不需要复刻完整分布，8 档已覆盖数周滞后。
+pub const MAX_VERSION_LAG: u32 = 8;
+
 /// 空的可选字段表示使用对应预设参数；Key 覆盖始终是一份完整选择。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -78,6 +84,8 @@ pub struct ClientProfileSelection {
     pub client: ClientKind,
     pub platform: ClientPlatform,
     pub version_mode: VersionMode,
+    /// `latest` 模式可选：跟随官方发布但滞后 N 个已观察版本。
+    pub version_lag: Option<u32>,
     pub cli_entry: Option<CliEntry>,
     pub originator: Option<String>,
     pub os_type: Option<String>,
@@ -95,6 +103,7 @@ impl Default for ClientProfileSelection {
             client: ClientKind::Desktop,
             platform: ClientPlatform::Macos,
             version_mode: VersionMode::Latest,
+            version_lag: None,
             cli_entry: None,
             originator: None,
             os_type: None,
@@ -163,7 +172,19 @@ impl ClientProfileSelection {
             {
                 return Err(ClientProfileError::Invalid);
             }
+            // 滞后档位只对 latest 有意义；与 fixed 版本字段同样按混用拒绝。
+            VersionMode::Latest => {
+                if self
+                    .version_lag
+                    .is_some_and(|lag| !(1..=MAX_VERSION_LAG).contains(&lag))
+                {
+                    return Err(ClientProfileError::Invalid);
+                }
+            }
             VersionMode::Fixed => {
+                if self.version_lag.is_some() {
+                    return Err(ClientProfileError::Invalid);
+                }
                 let version = self
                     .codex_version
                     .as_deref()
@@ -188,7 +209,6 @@ impl ClientProfileSelection {
                     }
                 }
             }
-            VersionMode::Latest => {}
         }
         if self.client == ClientKind::Cli
             && (self.desktop_version.is_some() || self.desktop_build.is_some())
@@ -204,9 +224,23 @@ impl ClientProfileSelection {
     ) -> Result<CodexWireProfile, ClientProfileError> {
         self.validate()?;
         let release = match self.version_mode {
-            VersionMode::Latest => state
-                .client_release(self.client, self.platform, self.architecture())
-                .ok_or(ClientProfileError::ReleaseUnavailable)?,
+            VersionMode::Latest => {
+                let latest = state
+                    .client_release(self.client, self.platform, self.architecture())
+                    .ok_or(ClientProfileError::ReleaseUnavailable)?;
+                // 滞后档位取已观察发布序列的第 N 项；序列不足时回退最旧版本，
+                // 滞后配置不能在观察积累期变成请求失败。
+                self.version_lag
+                    .and_then(|lag| {
+                        state.lagged_client_release(
+                            self.client,
+                            self.platform,
+                            self.architecture(),
+                            lag,
+                        )
+                    })
+                    .unwrap_or(latest)
+            }
             VersionMode::Fixed => ClientRelease {
                 codex_version: self
                     .codex_version
@@ -267,6 +301,15 @@ pub struct ClientRelease {
     pub verified_at: Option<DateTime<Utc>>,
 }
 
+impl ClientRelease {
+    /// 版本同一性判断，忽略核验时间；发布历史按版本元组判重。
+    pub(super) fn same_identity(&self, other: &ClientRelease) -> bool {
+        self.codex_version == other.codex_version
+            && self.desktop_version == other.desktop_version
+            && self.desktop_build == other.desktop_build
+    }
+}
+
 impl CodexWireProfileState {
     pub fn preview_selection(
         &self,
@@ -297,6 +340,7 @@ impl CodexWireProfileState {
             "desktopBuild": (profile.client_kind == ClientKind::Desktop).then_some(&profile.desktop_build),
             "userAgent": profile.user_agent(),
             "versionSource": if selection.version_mode == VersionMode::Fixed { "custom" } else { "official" },
+            "versionLag": selection.version_lag,
             "verifiedAt": (profile.verified_at != DateTime::UNIX_EPOCH).then_some(profile.verified_at),
             "checkedAt": status.0,
             "error": status.1,
@@ -325,7 +369,7 @@ impl CodexWireProfileState {
                 }));
             }
         }
-        object(&json!({ "presets": presets }))
+        object(&json!({ "presets": presets, "maxVersionLag": MAX_VERSION_LAG }))
     }
 }
 
