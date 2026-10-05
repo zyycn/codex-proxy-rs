@@ -23,7 +23,7 @@ pub const OFFICIAL_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Codex Desktop 使用的官方 token endpoint
 pub const OFFICIAL_CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 /// Codex Desktop loopback callback；管理员复制完整回调 URL 交回固定 complete API
-pub const OFFICIAL_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+pub const OFFICIAL_CODEX_REDIRECT_URI: &str = "http://127.0.0.1:1455/auth/callback";
 const PERSONAL_ACCESS_TOKEN_WHOAMI_PATH: &str = "/api/accounts/v1/user-auth-credential/whoami";
 
 /// PAT 验证失败；不保留令牌、响应体或可能包含秘密的底层 HTTP 错误

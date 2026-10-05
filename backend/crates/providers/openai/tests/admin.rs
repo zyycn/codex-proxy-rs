@@ -67,6 +67,42 @@ const COMPLETED_SESSION_SSE: &str = concat!(
 );
 
 #[tokio::test]
+async fn plan_display_should_distinguish_pro_tiers_and_preserve_other_official_names() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let admin = bundle.admin_provider();
+    for (raw, display) in [
+        ("prolite", "ProLite"),
+        ("pro", "Pro"),
+        ("promax", "ProMax"),
+        ("free", "Free"),
+        ("go", "Go"),
+        ("plus", "Plus"),
+        ("team", "Team"),
+        ("self_serve_business_prolite", "Self Serve Business ProLite"),
+        (
+            "self_serve_business_usage_based",
+            "Self Serve Business Usage Based",
+        ),
+        ("business", "Business"),
+        ("ent26", "Enterprise"),
+        ("enterprise", "Enterprise"),
+        ("hc", "Enterprise"),
+        ("enterprise_cbp_automation", "Enterprise (Automation)"),
+        ("enterprise_cbp_usage_based", "Enterprise CBP Usage Based"),
+        ("edu", "Edu"),
+        ("education", "Edu"),
+        ("edu_plus", "Edu Plus"),
+        ("edu_pro", "Edu Pro"),
+        ("future_plan", "future_plan"),
+    ] {
+        assert_eq!(admin.plan_type_display(raw), display);
+    }
+}
+
+#[tokio::test]
 async fn account_capabilities_distinguish_oauth_from_api_key_and_unknown_credentials() {
     let config = valid_config();
     let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
@@ -645,7 +681,7 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
                 request_id: "request-complete".to_owned(),
             },
             flow_id: started.flow_id,
-            callback_url: "http://localhost:1455/auth/callback?code=unused&state=unused".to_owned(),
+            callback_url: "http://127.0.0.1:1455/auth/callback?code=unused&state=unused".to_owned(),
         })
         .await
         .expect_err("wrong owner");

@@ -721,6 +721,25 @@ async fn oauth_import_uses_official_plan_alias_projection_and_user_id_fallback()
 }
 
 #[tokio::test]
+async fn oauth_import_should_preserve_pro_max_and_future_plan_claims() {
+    let service = CodexCredentialAdminService::new(
+        Arc::new(UnusedRefresher),
+        Arc::new(TestLeaseCoordinator::default()),
+        runtime_policy(),
+    );
+    for plan in ["prolite", "pro", "promax", "future_plan"] {
+        let access_token = test_jwt(serde_json::json!({"https://api.openai.com/auth":{
+            "chatgpt_user_id":"plan-user", "chatgpt_plan_type":plan
+        }}));
+        let prepared = service
+            .prepare_import_document(serde_json::json!({"accessToken":access_token}))
+            .await
+            .unwrap();
+        assert_eq!(prepared.accounts()[0].account.plan_type(), Some(plan));
+    }
+}
+
+#[tokio::test]
 async fn oauth_import_uses_id_token_then_access_token_for_missing_claims() {
     let id_token = test_jwt(serde_json::json!({
         "https://api.openai.com/profile": {"email": "id-token@example.com"},

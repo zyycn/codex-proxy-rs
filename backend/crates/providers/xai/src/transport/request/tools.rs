@@ -265,7 +265,10 @@ impl ToolNormalizer {
         }
         let mut converted = Vec::new();
         for child in children {
-            if child.pointer("/type").and_then(Value::as_str) != Some("function") {
+            if !matches!(
+                child.get("type").and_then(Value::as_str),
+                Some("function" | "custom")
+            ) {
                 return Err(GrokRequestEncodeError::InvalidRequestNormalization);
             }
             converted.extend(self.normalize_tool(child, name, client_search, force)?);

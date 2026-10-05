@@ -147,9 +147,9 @@ pub trait ProviderAdmin: Send + Sync {
         Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
     }
 
-    /// 将原始套餐值投影为展示名称；默认保留未知 Provider 的原始名称
+    /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式
     fn plan_type_display(&self, plan_type: &str) -> String {
-        plan_type.to_owned()
+        default_plan_type_display(plan_type)
     }
 
     /// 账号已经由控制面提交为不可调度状态，释放 Provider 持有的账号级运行时资源
@@ -354,7 +354,7 @@ impl ProviderAdminRegistry {
         self.plan_type_display(provider_kind, plan_type.as_deref())
     }
 
-    /// 账号页和 Dashboard 共用的大驼峰套餐展示名称，不修改原始套餐值
+    /// 账号页和 Dashboard 共用 Provider 的最终展示名称，不改写官方拼写或原始套餐值
     pub(crate) fn plan_type_display(
         &self,
         provider_kind: &str,
@@ -364,12 +364,10 @@ impl ProviderAdminRegistry {
         let provider = ProviderKind::new(provider_kind.to_owned())
             .ok()
             .and_then(|kind| self.require(&kind).ok());
-        let display = provider.map_or_else(
-            || plan_type.to_owned(),
+        Some(provider.map_or_else(
+            || default_plan_type_display(plan_type),
             |provider| provider.plan_type_display(plan_type),
-        );
-        // 所有 Provider 及未知套餐统一排版，保留 Plus 后缀的含义
-        Some(display.replace('+', " Plus ").to_upper_camel_case())
+        ))
     }
 
     /// 返回所有已注册 Provider 的 Dashboard 上游身份画像
@@ -397,4 +395,8 @@ impl ProviderAdminRegistry {
     ) -> Result<Option<CalculatedBillingBreakdown>, ProviderAdminError> {
         self.require(provider_kind)?.calculated_billing(input)
     }
+}
+
+fn default_plan_type_display(plan_type: &str) -> String {
+    plan_type.replace('+', " Plus ").to_upper_camel_case()
 }

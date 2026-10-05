@@ -305,7 +305,12 @@ impl ProviderAdmin for FakeProviderAdmin {
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
-        format!("{} display: {plan_type}", self.kind)
+        match plan_type {
+            "prolite" => "ProLite".to_owned(),
+            "pro" => "Pro".to_owned(),
+            "promax" => "ProMax".to_owned(),
+            _ => format!("{} display: {plan_type}", self.kind),
+        }
     }
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {
@@ -1911,7 +1916,7 @@ async fn accounts_list_should_return_complete_directory_semantics() {
         ),
         (
             Some("  self_serve_business_prolite  "),
-            Some("OpenaiDisplaySelfServeBusinessProlite"),
+            Some("openai display: self_serve_business_prolite"),
         )
     );
 
@@ -1931,25 +1936,33 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 #[tokio::test]
 async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_subtypes() {
     for (stored_plan, quota_plan, expected, expected_display) in [
-        (None, Some("free"), Some("free"), Some("OpenaiDisplayFree")),
+        (
+            None,
+            Some("free"),
+            Some("free"),
+            Some("openai display: free"),
+        ),
         (
             Some("  "),
             Some("free"),
             Some("free"),
-            Some("OpenaiDisplayFree"),
+            Some("openai display: free"),
         ),
         (
             Some("unknown"),
             Some("free"),
             Some("free"),
-            Some("OpenaiDisplayFree"),
+            Some("openai display: free"),
         ),
         (
             Some("self_serve_business_prolite"),
             Some("team"),
             Some("self_serve_business_prolite"),
-            Some("OpenaiDisplaySelfServeBusinessProlite"),
+            Some("openai display: self_serve_business_prolite"),
         ),
+        (Some("prolite"), None, Some("prolite"), Some("ProLite")),
+        (Some("pro"), None, Some("pro"), Some("Pro")),
+        (Some("promax"), None, Some("promax"), Some("ProMax")),
         (None, None, None, None),
     ] {
         let provider = FakeProviderAdmin::new("openai", events());

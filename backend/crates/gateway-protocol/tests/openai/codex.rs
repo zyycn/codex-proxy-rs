@@ -6,6 +6,25 @@ use gateway_protocol::openai::{
 use serde_json::{Map, Value, json};
 
 #[test]
+fn reasoning_effort_should_observe_unsigned_numbers_without_changing_the_body() {
+    for (effort, expected) in [
+        (json!(0), Some("0")),
+        (json!(64), Some("64")),
+        (json!(u64::MAX), Some("18446744073709551615")),
+        (json!(" high "), Some("high")),
+        (json!(-1), None),
+        (json!(1.5), None),
+        (json!(true), None),
+        (json!(null), None),
+    ] {
+        let body = object(json!({"reasoning":{"effort":effort}}));
+        let semantics = codex_responses_request_semantics(&body, &Map::new());
+        assert_eq!(semantics.reasoning_effort.as_deref(), expected);
+        assert_eq!(body["reasoning"]["effort"], effort);
+    }
+}
+
+#[test]
 fn codex_session_should_prefer_the_connection_identity_over_body_metadata() {
     let body = object(
         json!({"session_id":"body-session", "client_metadata":{"session_id":"metadata-session"}}),

@@ -328,7 +328,7 @@ async fn authorization_code_exchange_should_require_bounded_oidc_token_set_and_p
     assert!(body.contains("client_id=test-public-client"));
     assert!(body.contains("code=authorization+code"));
     assert!(body.contains("code_verifier=pkce-verifier-secret"));
-    assert!(body.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
+    assert!(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback"));
 }
 
 #[tokio::test]

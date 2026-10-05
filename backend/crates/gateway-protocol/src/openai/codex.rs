@@ -78,8 +78,12 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
     let reasoning_effort = body
         .get("reasoning")
         .and_then(Value::as_object)
-        .and_then(|reasoning| non_empty_string(reasoning.get("effort")))
-        .map(ToOwned::to_owned);
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|effort| {
+            non_empty_string(Some(effort))
+                .map(ToOwned::to_owned)
+                .or_else(|| effort.as_u64().map(|value| value.to_string()))
+        });
     let parsed_turn_metadata = turn_metadata
         .or_else(|| request_turn_metadata(body))
         .and_then(|value| serde_json::from_str::<Value>(value).ok());

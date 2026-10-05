@@ -20,6 +20,71 @@ fn client_key() -> ClientApiKeyId {
 }
 
 #[test]
+fn namespaced_custom_tools_should_preserve_grammar_choice_and_history() {
+    let grammar = "start: /.+/";
+    let request = raw_request(json!({
+        "model":"client",
+        "tools":[{"type":"namespace","name":"functions","tools":[
+            {"type":"function","name":"lookup","parameters":{"type":"object"}},
+            {"type":"custom","name":"exec","format":{"type":"grammar","syntax":"lark","definition":grammar}}
+        ]}],
+        "tool_choice":{"type":"custom","namespace":"functions","name":"exec"},
+        "input":[
+            {"type":"custom_tool_call","namespace":"functions","name":"exec","id":"ctc_exec","call_id":"call_exec","input":"echo hello"},
+            {"type":"custom_tool_call_output","call_id":"call_exec","output":"hello"}
+        ]
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).unwrap();
+    let body = Value::Object(encoded.body().clone());
+    assert_eq!(body["tools"][0]["name"], "functions__lookup");
+    assert_eq!(body["tools"][1]["name"], "functions__exec");
+    assert!(
+        body["tools"][1]["description"]
+            .as_str()
+            .unwrap()
+            .contains(grammar)
+    );
+    assert_eq!(body["tools"][1]["parameters"]["required"], json!(["input"]));
+    assert_eq!(
+        body["tool_choice"],
+        json!({"type":"function","name":"functions__exec"})
+    );
+    assert_eq!(body["input"][0]["name"], "functions__exec");
+    assert_eq!(body["input"][0]["id"], "fc_exec");
+    assert_eq!(body["input"][0]["call_id"], "call_exec");
+    assert_eq!(
+        body["input"][0]["arguments"],
+        json!("{\"input\":\"echo hello\"}")
+    );
+    assert_eq!(body["input"][1]["call_id"], "call_exec");
+}
+
+#[test]
+fn additional_tools_should_accept_namespaced_custom_tools() {
+    let request = raw_request(json!({
+        "model":"client", "input":[{"type":"additional_tools","tools":[
+            {"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]}
+        ]}]
+    }));
+    let encoded = GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()).unwrap();
+    assert_eq!(encoded.body()["tools"][0]["name"], "functions__exec");
+    assert_eq!(encoded.body()["input"], json!([]));
+}
+
+#[test]
+fn namespace_should_still_reject_non_function_or_custom_children() {
+    for kind in ["namespace", "web_search", "tool_search", "future_tool"] {
+        let request = raw_request(
+            json!({"tools":[{"type":"namespace","name":"functions","tools":[{"type":kind,"name":"invalid"}]}]}),
+        );
+        assert!(matches!(
+            GrokResponsesRequest::encode(&request, "grok-4.5", &client_key()),
+            Err(GrokRequestEncodeError::InvalidRequestField { field: "tools" })
+        ));
+    }
+}
+
+#[test]
 fn encoder_should_preserve_raw_images_hosted_tools_and_unknown_fields() {
     let request = raw_request(json!({
         "model": "client-model",

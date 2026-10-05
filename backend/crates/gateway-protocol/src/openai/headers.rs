@@ -1,4 +1,22 @@
-//! OpenAI 请求头的 HTTP 传输边界
+//! OpenAI 头部的传输边界与重试时间解析
+
+/// 解析 HTTP 和流内错误共用的 Retry-After，保留零延迟并向上取整剩余秒数
+pub fn parse_retry_after_seconds(value: &str) -> Option<u64> {
+    let now = std::time::SystemTime::now();
+    let value = value.trim();
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse().ok();
+    }
+    let remaining = httpdate::parse_http_date(value)
+        .ok()?
+        .duration_since(now)
+        .unwrap_or_default();
+    Some(
+        remaining
+            .as_secs()
+            .saturating_add(u64::from(remaining.subsec_nanos() != 0)),
+    )
+}
 
 /// 判断小写请求头是否属于传输层管理的字段，不得作为业务扩展头透传
 ///

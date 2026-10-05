@@ -35,6 +35,7 @@ const PERSISTABLE_UPSTREAM_CODES: &[&str] = &[
     "billing_limit",
     "cyber_policy",
     "deactivated_workspace",
+    "flex_unavailable",
     "identity_verification_required",
     "insufficient_quota",
     "invalid_api_key",
@@ -104,6 +105,8 @@ pub enum CodexFailureCategory {
     Timeout,
     /// 模型容量暂时不足，只影响当前请求，不证明账号健康异常
     CapacityUnavailable,
+    /// Flex 容量不足是当前请求的终止错误，不冷却账号或自动重放
+    FlexUnavailable,
     Unavailable,
     Transport,
 }
@@ -231,6 +234,9 @@ impl CodexUpstreamFailure {
     /// 返回该拒绝是否允许换号重放
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
+        if matches!(self.category, CodexFailureCategory::FlexUnavailable) {
+            return false;
+        }
         match self.send_phase {
             CodexUpstreamSendPhase::BeforePayload => true,
             CodexUpstreamSendPhase::Ambiguous => false,
@@ -431,6 +437,10 @@ fn classify_upstream_failure(
     let message = fields.message.to_ascii_lowercase();
     let body = body.to_ascii_lowercase();
 
+    if code == "flex_unavailable" {
+        return CodexFailureCategory::FlexUnavailable;
+    }
+
     // 容量拒绝可能带 400/429/503；仅用结构化错误字段识别，不能扫描任意正文
     if is_capacity_error(
         fields.code.as_deref(),
@@ -441,7 +451,7 @@ fn classify_upstream_failure(
     }
 
     // 与官方 Codex HTTP/WS 路径一致：429 只有结构化
-    // `error.type=usage_limit_reached` 才能确认额度窗口耗尽；其余 429 都是临时限流
+    // `error.type=usage_limit_reached` 才能确认额度窗口耗尽；排除容量错误后才按临时限流处理
     // SSE `response.failed` 的结构化字段形态不同，保留其 code/type 语义单独分类
     if matches!(source, UpstreamFailureSource::HttpResponse)
         && status == Some(StatusCode::TOO_MANY_REQUESTS)

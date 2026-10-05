@@ -1510,7 +1510,10 @@ where
                     && !self.delivery_pending
                     && attempt_send_state != UpstreamSendState::Ambiguous =>
             {
-                Some((AttemptTransport::Fallback, Duration::ZERO))
+                Some((
+                    AttemptTransport::Fallback,
+                    error.retry_after().unwrap_or_default(),
+                ))
             }
             _ => None,
         };
@@ -1536,7 +1539,10 @@ where
                     .or_default();
                 if *retries < max_retries.get() {
                     let multiplier = 1_u32.checked_shl(*retries).unwrap_or(u32::MAX);
-                    let delay = initial_delay.saturating_mul(multiplier).min(max_delay);
+                    // 服务器建议优先于本地退避，不能被本地上限缩短或再次指数放大
+                    let delay = error
+                        .retry_after()
+                        .unwrap_or_else(|| initial_delay.saturating_mul(multiplier).min(max_delay));
                     *retries = retries.saturating_add(1);
                     Some(delay)
                 } else {
@@ -1555,11 +1561,12 @@ where
             && !self
                 .credential_recovery_attempted_accounts
                 .contains(current.metadata.provider_account_id());
-        let retryable = continuation_retry
-            || same_account_retry
-            || ordinary_retry
-            || account_rotation_retry
-            || transport_recovery.is_some();
+        let retryable = !error.retry_is_prohibited()
+            && (continuation_retry
+                || same_account_retry
+                || ordinary_retry
+                || account_rotation_retry
+                || transport_recovery.is_some());
 
         let retryable = match self
             .apply_retry_policy(super::policy::RetryFacts {

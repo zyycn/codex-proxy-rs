@@ -23,6 +23,27 @@ fn classify(status: u16, body: &str) -> CodexFailureCategory {
 }
 
 #[test]
+fn flex_capacity_rejection_should_be_terminal_even_before_payload_send() {
+    for phase in [
+        CodexUpstreamSendPhase::BeforePayload,
+        CodexUpstreamSendPhase::AfterPayload,
+    ] {
+        let failure = CodexUpstreamFailure::from_response(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"type":"resource_unavailable","code":"flex_unavailable","message":"Flex capacity unavailable."}}"#,
+            Some(300),
+            &CodexUpstreamDiagnostics::default(),
+            None,
+            &[],
+            &[],
+            phase,
+        );
+        assert_eq!(failure.category(), CodexFailureCategory::FlexUnavailable);
+        assert!(!failure.replay_is_safe());
+    }
+}
+
+#[test]
 fn capacity_rejections_are_request_scoped_across_http_statuses() {
     for status in [400, 429, 503] {
         for body in [

@@ -194,7 +194,7 @@ async fn complete(
             owner_ref: "test-owner".to_owned(),
             flow_id: started.flow_id,
             callback_url: SecretString::from(format!(
-                "http://localhost:1455/auth/callback?code=code-from-browser&state={state}"
+                "http://127.0.0.1:1455/auth/callback?code=code-from-browser&state={state}"
             )),
         })
         .await?;
@@ -299,7 +299,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
     );
     assert_eq!(
         parameters.get("redirect_uri").map(String::as_str),
-        Some("http://localhost:1455/auth/callback")
+        Some("http://127.0.0.1:1455/auth/callback")
     );
     assert_eq!(
         parameters.get("scope").map(String::as_str),

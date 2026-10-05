@@ -3439,6 +3439,124 @@ fn transient_rejection() -> ProviderError {
 }
 
 #[test]
+fn server_retry_advice_should_override_local_backoff_and_transport_fallback() {
+    let advised_delay = Duration::from_millis(120);
+    for rejection in [
+        transient_rejection().with_transient_retry(
+            NonZeroU32::MIN,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        ),
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
+            .with_pre_delivery_transport_fallback(),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let (coordinator, _, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: vec![Err(rejection.with_retry_after(advised_delay))],
+            },
+            Script::Stream {
+                account_id: "acct_first",
+                items: complete_stream(None),
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let mut collection = Box::pin(session.collect_uncommitted());
+        assert!(block_on(async { futures::poll!(&mut collection) }).is_pending());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        block_on(collection).unwrap();
+        assert!(started.elapsed() >= advised_delay);
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[1].required_account(),
+            Some(&ProviderAccountId::new("acct_first").unwrap())
+        );
+    }
+}
+
+#[test]
+fn zero_server_retry_advice_should_override_nonzero_local_backoff() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, _, _) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(transient_rejection()
+                .with_transient_retry(
+                    NonZeroU32::MIN,
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                )
+                .with_retry_after(Duration::ZERO))],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let mut collection = Box::pin(session.collect_uncommitted());
+    assert!(matches!(
+        block_on(async { futures::poll!(&mut collection) }),
+        std::task::Poll::Ready(Ok(_))
+    ));
+}
+
+#[test]
+fn terminal_rejection_should_prevent_not_sent_rotation_and_explicit_transport_recovery() {
+    for fallback in [false, true] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let mut error =
+            ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                .with_replay_safe()
+                .with_retry_prohibited();
+        if fallback {
+            error = error.with_pre_delivery_transport_fallback();
+        }
+        assert!(error.stable_snapshot().retry_is_prohibited());
+        let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(error)],
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert!(matches!(
+            block_on(session.collect_uncommitted()),
+            Err(EngineError::Provider(_))
+        ));
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn transient_retries_back_off_on_the_same_account_then_rotate_with_a_fresh_budget() {
     let operation = generate_operation();
     let route_plan = plan(&operation);

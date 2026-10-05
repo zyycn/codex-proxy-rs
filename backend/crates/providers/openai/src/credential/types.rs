@@ -170,6 +170,7 @@ enum KnownChatgptPlan {
     Plus,
     Pro,
     ProLite,
+    ProMax,
     Team,
     #[serde(rename = "self_serve_business_prolite")]
     SelfServeBusinessProLite,
@@ -185,6 +186,10 @@ enum KnownChatgptPlan {
     Enterprise,
     #[serde(alias = "education")]
     Edu,
+    #[serde(rename = "edu_plus")]
+    EduPlus,
+    #[serde(rename = "edu_pro")]
+    EduPro,
 }
 
 impl KnownChatgptPlan {
@@ -195,6 +200,7 @@ impl KnownChatgptPlan {
             Self::Plus => "plus",
             Self::Pro => "pro",
             Self::ProLite => "prolite",
+            Self::ProMax => "promax",
             Self::Team => "team",
             Self::SelfServeBusinessProLite => "self_serve_business_prolite",
             Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
@@ -204,6 +210,8 @@ impl KnownChatgptPlan {
             Self::EnterpriseCbpUsageBased => "enterprise_cbp_usage_based",
             Self::Enterprise => "enterprise",
             Self::Edu => "edu",
+            Self::EduPlus => "edu_plus",
+            Self::EduPro => "edu_pro",
         }
     }
 }

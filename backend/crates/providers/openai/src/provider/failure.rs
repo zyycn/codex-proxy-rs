@@ -545,6 +545,10 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
+    // Flex 拒绝即使发生在 WS opening 阶段也必须直达客户端，不能转换成传输回退
+    if failure.error.retry_is_prohibited() {
+        return;
+    }
     // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算
     if failure.error.replay_is_safe()
         && (failure.account_failure.is_some()
@@ -1351,6 +1355,9 @@ pub(super) fn map_upstream_failure(
         provider_error_kind(category)
     };
     let mut error = provider_error(error_kind, send_state);
+    if category == CodexFailureCategory::FlexUnavailable {
+        error = error.with_retry_prohibited();
+    }
     error = error.with_raw_upstream_error(RawUpstreamError::new(failure.raw_body.clone()));
     if let Some(message) = failure.client_message.as_ref() {
         error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
@@ -1399,10 +1406,7 @@ pub(super) fn map_upstream_failure(
         let max_delay = Duration::from_secs(8);
         error = error.with_transient_retry(
             NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
-            failure
-                .retry_after_seconds
-                .map_or(Duration::from_millis(500), Duration::from_secs)
-                .min(max_delay),
+            Duration::from_millis(500),
             max_delay,
         );
     }
@@ -1474,6 +1478,7 @@ pub(super) const fn provider_error_kind(category: CodexFailureCategory) -> Provi
         CodexFailureCategory::QuotaExhausted => ProviderErrorKind::QuotaExhausted,
         CodexFailureCategory::CloudflareChallenge
         | CodexFailureCategory::CloudflarePathBlocked
+        | CodexFailureCategory::FlexUnavailable
         | CodexFailureCategory::Unavailable => ProviderErrorKind::Unavailable,
         CodexFailureCategory::CapacityUnavailable => ProviderErrorKind::UpstreamCapacityUnavailable,
         CodexFailureCategory::InvalidRequest => ProviderErrorKind::InvalidRequest,
@@ -1528,6 +1533,7 @@ pub(super) fn account_failure(
         | CodexFailureCategory::PermissionDenied
         | CodexFailureCategory::Timeout
         | CodexFailureCategory::CapacityUnavailable
+        | CodexFailureCategory::FlexUnavailable
         | CodexFailureCategory::Unavailable
         | CodexFailureCategory::Transport => None,
     }

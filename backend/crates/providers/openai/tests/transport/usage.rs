@@ -646,7 +646,7 @@ async fn retry_after_http_date_should_be_converted_to_remaining_seconds() {
 }
 
 #[tokio::test]
-async fn retry_after_http_date_in_the_past_should_be_ignored() {
+async fn retry_after_http_date_in_the_past_should_preserve_zero_delay() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
@@ -674,7 +674,7 @@ async fn retry_after_http_date_in_the_past_should_be_ignored() {
     else {
         panic!("expected an upstream rate-limit error");
     };
-    assert_eq!(retry_after_seconds, None);
+    assert_eq!(retry_after_seconds, Some(0));
 }
 
 #[tokio::test]

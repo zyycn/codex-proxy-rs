@@ -8025,10 +8025,11 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
             assert_eq!(error.upstream_status(), Some(status));
             assert!(error.replay_is_safe());
+            assert_eq!(error.retry_after(), Some(Duration::from_secs(129600)));
             assert!(
                 matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransientRetry {
                 max_retries, initial_delay, max_delay,
-            }) if max_retries.get() == 3 && initial_delay == Duration::from_secs(8) && max_delay == Duration::from_secs(8))
+            }) if max_retries.get() == 3 && initial_delay == Duration::from_millis(500) && max_delay == Duration::from_secs(8))
             );
             assert!(provider_openai::openai_failure_affects_account_score(
                 &error
@@ -8049,6 +8050,68 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
             assert_eq!(account.credential_state(), CredentialState::Ready);
         }
+    }
+}
+
+#[tokio::test]
+async fn flex_http_and_websocket_opening_rejections_should_not_retry_or_cool_down_accounts() {
+    use gateway_core::provider_ports::ProviderCooldownPort as _;
+    for use_websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_provider_contract";
+        create_account(&store, account_id).await;
+        let cooldowns = Arc::new(MemoryCooldownPort::new());
+        let server = MockServer::start().await;
+        let body = json!({"error":{"type":"resource_unavailable","code":"flex_unavailable","message":"Flex capacity unavailable."}});
+        Mock::given(method(if use_websocket { "GET" } else { "POST" }))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "300")
+                    .set_body_json(&body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let operation = if use_websocket {
+            generate_operation()
+        } else {
+            http_generate_operation()
+        };
+        let (provider, _) =
+            provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
+        let mut stream = provider
+            .execute(
+                planned_request("openai", operation),
+                context("req_flex", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let error = loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("expected Flex failure"),
+            }
+        };
+        assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+        assert_eq!(
+            error.upstream_code().map(|code| code.as_str()),
+            Some("flex_unavailable")
+        );
+        assert!(!error.replay_is_safe());
+        assert!(error.pre_delivery_retry().is_none());
+        assert!(error.retry_is_prohibited());
+        assert!(!provider_openai::openai_failure_affects_account_score(
+            &error
+        ));
+        let response = error.client_visible_upstream_response().unwrap();
+        assert_eq!(response.status(), 429);
+        assert_eq!(response.body().as_ref(), body.to_string().as_bytes());
+        let account = store.account(account_id).unwrap();
+        assert_eq!(account.credential_state(), CredentialState::Ready);
+        assert_eq!(account.quota().access(), QuotaAccessState::Unknown);
+        assert!(cooldowns.read(account.id()).await.unwrap().is_none());
     }
 }
 
@@ -8301,6 +8364,12 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
                     "slow_down",
                     ProviderErrorKind::UpstreamCapacityUnavailable,
                     true,
+                ),
+                (
+                    "flex_unavailable",
+                    "Flex capacity unavailable.",
+                    ProviderErrorKind::Unavailable,
+                    false,
                 ),
                 (
                     "invalid_prompt",
@@ -9589,20 +9658,21 @@ fn endpoint_observation_should_read_models_without_rewriting_or_requiring_a_cata
 #[test]
 fn request_observation_preserves_the_raw_reasoning_effort() {
     let store = Arc::new(MemoryAccountStore::default());
-    let payload = ProtocolPayload::json_object(
-        "openai",
-        Map::from_iter([("reasoning".to_owned(), json!({"effort": "future-value"}))]),
-    )
-    .expect("protocol payload");
-    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
-
-    let client_key_id = ClientApiKeyId::new("key_openai_observation").expect("client key");
-    let observation = provider(&store).request_observation(&operation, &client_key_id);
-
-    assert_eq!(
-        observation.reasoning_effort.as_deref(),
-        Some("future-value")
-    );
+    for (effort, expected) in [
+        (json!("future-value"), "future-value"),
+        (json!(64), "64"),
+        (json!(0), "0"),
+    ] {
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([("reasoning".to_owned(), json!({"effort":effort}))]),
+        )
+        .unwrap();
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+        let client_key_id = ClientApiKeyId::new("key_openai_observation").unwrap();
+        let observation = provider(&store).request_observation(&operation, &client_key_id);
+        assert_eq!(observation.reasoning_effort.as_deref(), Some(expected));
+    }
 }
 
 #[test]

@@ -694,6 +694,36 @@ fn decoder_should_restore_namespace_custom_search_and_apply_patch_wire_events() 
 }
 
 #[test]
+fn decoder_should_restore_namespaced_custom_tool_identity_and_raw_input() {
+    use serde_json::json;
+    let request = tool_request(json!({"model":"client", "input":"run",
+        "tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]}]
+    }));
+    let item = json!({"type":"function_call","id":"fc_exec","call_id":"call_exec","name":"functions__exec","arguments":"{\"input\":\"echo hello\"}"});
+    let body = [
+        json!({"type":"response.created","response":{"id":"resp_exec"}}),
+        json!({"type":"response.output_item.added","output_index":0,"item":item}),
+        json!({"type":"response.output_item.done","output_index":0,"item":item}),
+        json!({"type":"response.completed","response":{"id":"resp_exec","status":"completed","output":[item]}}),
+    ].iter().map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap())).collect::<String>();
+    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
+        .push(body.as_bytes())
+        .unwrap();
+    let wire = wire_events(&events);
+    let done = wire
+        .iter()
+        .find(|event| event.event_type() == Some("response.output_item.done"))
+        .unwrap();
+    let item = &done.data()["item"];
+    assert_eq!(item["type"], "custom_tool_call");
+    assert_eq!(item["namespace"], "functions");
+    assert_eq!(item["name"], "exec");
+    assert_eq!(item["id"], "ctc_exec");
+    assert_eq!(item["call_id"], "call_exec");
+    assert_eq!(item["input"], "echo hello");
+}
+
+#[test]
 fn decoder_should_restore_custom_apply_patch_arguments_as_raw_input() {
     let patch = concat!(
         "*** Begin Patch\n",
