@@ -1,3 +1,5 @@
+//! 验证 OpenAI 路由暴露范围、请求体限制与跨域行为
+
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header::AUTHORIZATION},
@@ -13,6 +15,11 @@ const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 async fn browser_origin_controls_http_admin_sessions_without_configuration() {
     use axum::body::to_bytes;
     use serde_json::{Value, json};
+    let app = api_router_with_origins(ModelsExecution::new(), Vec::new())
+        .await
+        .layer(axum::Extension(axum::extract::ConnectInfo(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 41000)),
+        )));
     for (origins, secure) in [
         (vec!["http://admin.example.test"], false),
         (vec!["http://192.0.2.1:8080"], false),
@@ -29,11 +36,6 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
             true,
         ),
     ] {
-        let app = api_router_with_origins(ModelsExecution::new(), Vec::new())
-            .await
-            .layer(axum::Extension(axum::extract::ConnectInfo(
-                std::net::SocketAddr::from(([127, 0, 0, 1], 41000)),
-            )));
         let request = |path: &str| {
             let mut builder = Request::post(path)
                 .header("content-type", "application/json")
@@ -99,6 +101,7 @@ async fn browser_origin_controls_http_admin_sessions_without_configuration() {
         }
 
         let response = app
+            .clone()
             .oneshot(
                 Request::get("/api/auth/status")
                     .header("cookie", &session)
@@ -173,8 +176,8 @@ async fn responses_body_should_accept_payload_above_the_removed_private_limit() 
         .await
         .expect("route request above the removed limit");
 
-    // The handler sees the body and rejects the missing credentials. A restored body limit
-    // would return 413 before authentication runs.
+    // 请求进入处理器后应因缺少凭据而被拒绝
+    // 若提前施加正文大小限制，则会在认证前返回 413
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 

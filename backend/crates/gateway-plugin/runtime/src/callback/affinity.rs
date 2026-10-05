@@ -1,8 +1,8 @@
-//! Provider 会话亲和读取；只查询既有记录，不推导或写入亲和事实。
+//! Provider 会话亲和读取；只查询既有记录，不推导或写入亲和事实
 
 use std::sync::{Arc, OnceLock, Weak};
 
-use gateway_admin::model::{AdminError, plugins::instances::PluginPermissionGrant};
+use gateway_admin::model::AdminError;
 use gateway_core::{
     engine::{ModelRequestId, nested::AffinityLookupPort},
     identity::ProviderKind,
@@ -40,15 +40,11 @@ impl PluginAffinityPortSlot {
 
 pub(super) struct PluginAffinity {
     slot: Arc<PluginAffinityPortSlot>,
-    authorized: bool,
 }
 
 impl PluginAffinity {
-    pub(super) fn new(slot: Arc<PluginAffinityPortSlot>, grants: &[PluginPermissionGrant]) -> Self {
-        Self {
-            slot,
-            authorized: grants.iter().any(|grant| grant.permission == "requests"),
-        }
+    pub(super) fn new(slot: Arc<PluginAffinityPortSlot>) -> Self {
+        Self { slot }
     }
 
     pub(super) async fn call(
@@ -67,9 +63,6 @@ impl PluginAffinity {
             .as_ref()
             .ok_or_else(denied)
             .and_then(|request_id| ModelRequestId::new(request_id.clone()).map_err(|_| denied()))?;
-        if !self.authorized {
-            return Err(denied());
-        }
         let provider = ProviderKind::new(request.provider).map_err(|_| invalid())?;
         let result = self
             .slot
@@ -80,7 +73,7 @@ impl PluginAffinity {
                 key: ProviderSessionAffinityKey::try_new(request.key).map_err(|_| invalid())?,
             })
             .await
-            .map_err(super::model::gateway_fault)?;
+            .map_err(super::error::gateway)?;
         Ok(RpcReply {
             result: serde_json::to_value(AffinityLookupResult {
                 account_id: result.map(|result| result.account().as_str().to_owned()),

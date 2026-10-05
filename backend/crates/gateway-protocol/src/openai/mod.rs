@@ -1,20 +1,20 @@
-//! OpenAI wire contract。
+//! 共享的 OpenAI 线协议类型、解析与编码入口
 
-/// Codex Responses Lite 的 HTTP 请求头。
+/// Codex Responses Lite 的 HTTP 请求头
 pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
-/// Codex Responses Lite 在 WebSocket `client_metadata` 中的投影键。
+/// Codex Responses Lite 在 WebSocket `client_metadata` 中的投影键
 pub const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_codex_responses_lite";
-/// Codex memory consolidation 请求标记。
+/// Codex memory consolidation 请求标记
 pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 
-/// OpenAI Responses 请求中携带的 Codex 专属语义。
+/// OpenAI Responses 请求中携带的 Codex 专属语义
 pub mod codex;
-/// OpenAI/Codex 事件语义、用量与限流字段编解码。
+/// OpenAI/Codex 事件语义、用量与限流字段编解码
 pub mod events;
 mod headers;
-/// Server-Sent Events 帧的解析与编码。
+/// Server-Sent Events 帧的解析与编码
 pub mod sse;
 
 pub use codex::{

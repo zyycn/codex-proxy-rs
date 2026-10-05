@@ -1,3 +1,5 @@
+//! 验证客户端下载信息的版本选择、过期处理与官方地址回退
+
 use chrono::{TimeZone as _, Utc};
 use gateway_admin::model::client_distribution::{
     ClientArchitecture, ClientDownloadPackage, ClientDownloadSource,

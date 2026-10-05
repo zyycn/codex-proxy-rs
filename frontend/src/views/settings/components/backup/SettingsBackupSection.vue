@@ -14,6 +14,7 @@ const props = defineProps<{
 
 const {
   loading: settingsLoading,
+  busy,
   savingStorage,
   testing,
   savingSchedule,
@@ -39,6 +40,7 @@ const {
   refreshing,
   deleting,
   deleteTarget,
+  showDelete,
   downloadStates,
   load: loadRecords,
   refresh,
@@ -57,11 +59,11 @@ const showR2Guide = ref(false)
 const storageConfigured = computed(
   () =>
     Boolean(
-      storage.endpoint.trim()
-      && storage.region.trim()
-      && storage.bucket.trim()
-      && storage.accessKeyId.trim()
-      && storage.secretAccessKey.trim(),
+      storage.value.endpoint.trim()
+      && storage.value.region.trim()
+      && storage.value.bucket.trim()
+      && storage.value.accessKeyId.trim()
+      && storage.value.secretAccessKey.trim(),
     ),
 )
 
@@ -96,7 +98,7 @@ watch(
   <div class="grid w-full gap-5">
     <BackupStorageCard
       v-model:storage="storage"
-      :loading="settingsLoading"
+      :disabled="busy || !loaded"
       :saving="savingStorage"
       :testing="testing"
       :verified="verified"
@@ -107,13 +109,14 @@ watch(
 
     <BackupScheduleCard
       v-model:schedule="schedule"
-      :loading="settingsLoading"
+      :disabled="busy || !loaded"
       :saving="savingSchedule"
       :storage-ready="storageReady"
       @save="saveSchedule()"
     />
 
     <BackupRecordsCard
+      v-model:delete-open="showDelete"
       :records="records"
       :page="page"
       :page-size="pageSize"
@@ -133,7 +136,6 @@ watch(
       @download="downloadBackup($event)"
       @request-delete="requestDelete($event)"
       @confirm-delete="confirmDelete()"
-      @cancel-delete="deleteTarget = null"
     />
 
     <R2GuideModal v-model="showR2Guide" />

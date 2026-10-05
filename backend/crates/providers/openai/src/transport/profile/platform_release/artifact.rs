@@ -1,4 +1,4 @@
-//! 从 Windows MSIX 和 Linux DEB 的同一制品读取应用元数据与 bundled Core。
+//! 从 Windows MSIX 和 Linux DEB 的同一制品读取应用元数据与 bundled Core
 
 use super::super::desktop_artifact::CoreVersionScanner;
 use super::super::selection::{ClientPlatform, ClientRelease};

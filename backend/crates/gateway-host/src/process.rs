@@ -1,4 +1,4 @@
-//! 受管子进程的创建、退出通知与回收，不解释插件或其他业务协议。
+//! 受管子进程的创建、退出通知与回收，不解释插件或其他业务协议
 
 use std::{num::NonZeroUsize, path::PathBuf, process::Stdio, sync::Arc};
 
@@ -35,7 +35,7 @@ pub enum ProcessStartError {
     Pipes,
 }
 
-/// 组合根提供共享监督入口，容量直到子进程被回收后才归还。
+/// 组合根提供共享监督入口，容量直到子进程被回收后才归还
 pub struct ProcessSupervisor {
     slots: Arc<Semaphore>,
 }
@@ -66,7 +66,7 @@ impl ProcessSupervisor {
     }
 }
 
-/// 通信资源和监督控制分离；最后一个控制引用释放时也必须回收进程。
+/// 通信资源和监督控制分离；最后一个控制引用释放时也必须回收进程
 pub struct ProcessConnection {
     pub input: ChildStdin,
     pub output: ChildStdout,
@@ -97,7 +97,7 @@ impl ProcessControl {
     }
 }
 
-/// 可信原生程序仍拥有当前 OS 用户权限；清空环境和独立进程不等于安全沙箱。
+/// 可信原生程序仍拥有当前 OS 用户权限；清空环境和独立进程不等于安全沙箱
 fn spawn_process(
     spec: ProcessSpec,
     slot: tokio::sync::OwnedSemaphorePermit,
@@ -110,7 +110,7 @@ fn spawn_process(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        // 只保留错误类别与 OS 编号，不把进程路径、环境或输出带入诊断。
+        // 只保留错误类别与 OS 编号，不把进程路径、环境或输出带入诊断
         .map_err(|error| ProcessStartError::Spawn {
             kind: error.kind(),
             os_code: error.raw_os_error(),
@@ -141,7 +141,7 @@ fn spawn_process(
                 }
             }
         };
-        // stderr 是不可信诊断，不写宿主日志；业务日志必须经过有界脱敏接口。
+        // stderr 是不可信诊断，不写宿主日志；业务日志必须经过有界脱敏接口
         if !matches!(reason, ProcessExit::Exited(_)) {
             let _ = child.kill().await;
         }

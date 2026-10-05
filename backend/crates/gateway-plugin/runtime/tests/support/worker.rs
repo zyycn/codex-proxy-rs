@@ -1,4 +1,4 @@
-//! 真实子进程协议对端；只依赖公开 SDK，Cargo 为集成测试构建此辅助二进制。
+//! 真实子进程协议对端；只依赖公开 SDK，Cargo 为集成测试构建此辅助二进制
 
 use std::{
     collections::BTreeMap,
@@ -17,6 +17,11 @@ use gateway_plugin_sdk::{
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+
+use gateway_plugin_sdk::call::{
+    model::{ExecutionEvent, WireEvent, WirePayload},
+    upstream_adapter::{UpstreamAdapterEvent, UpstreamAdapterRequest},
+};
 
 type CallbackResult = Result<(Value, Vec<u8>), PluginFault>;
 struct PendingCallback {
@@ -124,9 +129,16 @@ impl Peer {
         method: &str,
         value: Value,
     ) -> Result<Value, PluginFault> {
-        let (result, payload) = self
+        let reply = self
             .callback_payload(id, method, json!({}), serde_json::to_vec(&value).unwrap())
-            .await?;
+            .await;
+        if self.configuration["maintenance_fixture"] == true {
+            self.append_observation_marker(
+                "maintenance_marker",
+                &json!({"phase":"callback", "method":method, "error":reply.as_ref().err().map(|error| error.code)}),
+            );
+        }
+        let (result, payload) = reply?;
         assert_eq!(result, json!({}));
         Ok(serde_json::from_slice(&payload).unwrap())
     }
@@ -396,6 +408,23 @@ impl Peer {
             return;
         }
         match method.as_str() {
+            "upstream_adapter.register" => {
+                self.send(
+                    Message::Result {
+                        id,
+                        result: json!({}),
+                    },
+                    serde_json::to_vec(&self.configuration["upstream_registration"]).unwrap(),
+                )
+                .await;
+                return;
+            }
+            "upstream_adapter.execute" => {
+                if let Err(error) = self.upstream_adapter(id, payload).await {
+                    self.send(Message::Error { id, error }, vec![]).await;
+                }
+                return;
+            }
             "plugin.reconcile" => {
                 let result = if let Some(results) = self.data_queries(id).await {
                     self.append_observation_marker(
@@ -537,13 +566,16 @@ impl Peer {
                     self.send(Message::Error { id, error }, vec![]).await;
                     return;
                 }
-                let response = self
+                let mut response = self
                     .configuration
                     .get("management_response")
                     .cloned()
                     .unwrap_or_else(
                         || json!({"status":200,"content_type":"application/octet-stream"}),
                     );
+                if self.configuration["management_echo_headers"] == true {
+                    response["headers"] = serde_json::to_value(request.headers).unwrap();
+                }
                 self.send(
                     Message::Result {
                         id,
@@ -555,6 +587,8 @@ impl Peer {
                 return;
             }
             "management.callback" => {
+                let request: gateway_plugin_sdk::call::management::ManagementRequest =
+                    serde_json::from_value(params).unwrap();
                 for method in [
                     "host.auth.list",
                     "host.auth.save",
@@ -563,13 +597,13 @@ impl Peer {
                     "host.log",
                 ] {
                     assert!(
-                        matches!(self.callback(id, method, json!({})).await, Err(error) if error.code == ErrorCode::PermissionDenied)
+                        !matches!(self.callback(id, method, json!({})).await, Err(error) if error.code == ErrorCode::PermissionDenied)
                     );
                 }
                 self.send(
                     Message::Result {
                         id,
-                        result: json!({"status":200,"content_type":"text/plain"}),
+                        result: json!({"status":200,"content_type":"text/plain","headers":request.headers}),
                     },
                     b"callback received".to_vec(),
                 )
@@ -581,7 +615,7 @@ impl Peer {
                     for method in ["host.http.do", "host.auth.save", "host.state.put"] {
                         let reply = self.callback(id, method, json!({})).await;
                         assert!(
-                            matches!(reply, Err(ref error) if error.code == ErrorCode::PermissionDenied)
+                            !matches!(reply, Err(ref error) if error.code == ErrorCode::PermissionDenied)
                         );
                     }
                 }
@@ -635,7 +669,20 @@ impl Peer {
                     .await;
                     return;
                 }
-                let result = if let Some(results) = self.data_queries(id).await {
+                let result = if let Some(request) =
+                    self.configuration.get("command_service_request")
+                {
+                    let (result, payload) = self
+                        .callback(
+                            id,
+                            gateway_plugin_sdk::call::services::CALL_METHOD,
+                            request.clone(),
+                        )
+                        .await
+                        .unwrap();
+                    assert!(payload.is_empty());
+                    json!({"stdout":serde_json::to_string(&result).unwrap(),"stderr":"","exit_code":0})
+                } else if let Some(results) = self.data_queries(id).await {
                     json!({"stdout":serde_json::to_string(&results).unwrap(),"stderr":"","exit_code":0})
                 } else if self.configuration["command_echo"] == true {
                     json!({"stdout":serde_json::to_string(&invocation).unwrap(),"stderr":"typed command\n","exit_code":0})
@@ -813,7 +860,6 @@ impl Peer {
                         "mount":request.mount,
                         "protocol":request.protocol,
                         "headers":request.headers,
-                        "body_visible":request.body_visible,
                         "body":String::from_utf8_lossy(&payload),
                     }),
                 );
@@ -838,6 +884,7 @@ impl Peer {
                         id,
                         NEXT_METHOD,
                         serde_json::to_value(MiddlewareNextRequest {
+                            settings: None,
                             protocol: None,
                             header_mutations: Vec::new(),
                             body: MiddlewareRequestBody::Preserve,
@@ -887,9 +934,9 @@ impl Peer {
                     .await;
                     let mut mapped = Vec::with_capacity(14 + source.len());
                     mapped.extend_from_slice(b"GMB1");
-                    mapped.push(1); // Only: 一个输出消费完整源 frame。
+                    mapped.push(1); // Only: 一个输出消费完整源 frame
                     mapped.extend_from_slice(&read.source_id.to_be_bytes());
-                    mapped.push(0); // mapped frame 的 terminal 由 Runtime 从源事实恢复。
+                    mapped.push(0); // mapped frame 的 terminal 由 Runtime 从源事实恢复
                     mapped.extend_from_slice(&source);
                     let credits = self.streams.lock().await.get(&id).unwrap().clone();
                     credits.take(mapped.len() as u64).await;
@@ -931,195 +978,198 @@ impl Peer {
                 self.send(Message::End { id, error: None }, vec![]).await;
                 return;
             }
-            "websocket.response_event" => {
-                let observation: gateway_plugin_sdk::call::observation::ObserveWebSocketResponse =
-                    serde_json::from_value(params).unwrap();
-                let payload_text = (payload.len() <= 4096)
-                    .then(|| std::str::from_utf8(&payload).ok())
-                    .flatten();
-                let marked = json!({
-                    "label": self.configuration.get("observation_label"),
-                    "observation": observation,
-                    "payload_bytes": payload.len(),
-                    "payload_text": payload_text,
-                });
-                self.append_observation_marker("websocket_observation_started_marker", &marked);
-                if let Some(delay) = self
-                    .configuration
-                    .get("websocket_observation_delay_ms")
-                    .and_then(Value::as_u64)
-                {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                }
-                self.append_observation_marker("websocket_observation_marker", &marked);
-                if self.configuration.get("websocket_observation_fault") == Some(&Value::Bool(true))
-                {
+            "observer.observe" => match serde_json::from_value::<
+                gateway_plugin_sdk::call::observation::Event,
+            >(params)
+            .unwrap()
+            {
+                gateway_plugin_sdk::call::observation::Event::WebSocketResponse(observation) => {
+                    let payload_text = (payload.len() <= 4096)
+                        .then(|| std::str::from_utf8(&payload).ok())
+                        .flatten();
+                    let marked = json!({
+                        "label": self.configuration.get("observation_label"),
+                        "observation": observation,
+                        "payload_bytes": payload.len(),
+                        "payload_text": payload_text,
+                    });
+                    self.append_observation_marker("websocket_observation_started_marker", &marked);
+                    if let Some(delay) = self
+                        .configuration
+                        .get("websocket_observation_delay_ms")
+                        .and_then(Value::as_u64)
+                    {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    self.append_observation_marker("websocket_observation_marker", &marked);
+                    if self.configuration.get("websocket_observation_fault")
+                        == Some(&Value::Bool(true))
+                    {
+                        self.send(
+                            Message::Error {
+                                id,
+                                error: PluginFault::new(
+                                    ErrorCode::Fault,
+                                    "fixture WebSocket observation failure",
+                                ),
+                            },
+                            vec![],
+                        )
+                        .await;
+                        return;
+                    }
                     self.send(
-                        Message::Error {
+                        Message::Result {
                             id,
-                            error: PluginFault::new(
-                                ErrorCode::Fault,
-                                "fixture WebSocket observation failure",
-                            ),
+                            result: Value::Null,
                         },
                         vec![],
                     )
                     .await;
                     return;
                 }
-                self.send(
-                    Message::Result {
-                        id,
-                        result: Value::Null,
-                    },
-                    vec![],
-                )
-                .await;
-                return;
-            }
-            "policy.observe_request" => {
-                let observation: gateway_plugin_sdk::call::policy::ObserveRequest =
-                    serde_json::from_slice(&payload).unwrap();
-                let marked = json!({
-                    "label": self.configuration.get("observation_label"),
-                    "observation": observation,
-                });
-                self.append_observation_marker("observation_started_marker", &marked);
-                if let Some(fixture) = self.configuration.get("state_fixture") {
-                    let namespace = fixture["namespace"].as_str().unwrap();
-                    let key = fixture["key"].as_str().unwrap();
-                    let value = fixture["value"].clone();
-                    let put = gateway_plugin_sdk::call::host::StatePutRequest {
-                        namespace: namespace.into(),
-                        key: key.into(),
-                        value: value.clone(),
-                        expected_version: None,
-                    };
-                    let put = match self
-                        .callback(id, "host.state.put", serde_json::to_value(put).unwrap())
-                        .await
-                    {
-                        Ok((result, payload)) if payload.is_empty() => serde_json::from_value::<
-                            gateway_plugin_sdk::call::host::StatePutResult,
-                        >(
-                            result
-                        )
-                        .unwrap(),
-                        Ok(_) => panic!("state put returned an unexpected payload"),
-                        Err(error) => {
-                            self.send(Message::Error { id, error }, vec![]).await;
-                            return;
+                gateway_plugin_sdk::call::observation::Event::RequestCompleted(observation) => {
+                    let marked = json!({
+                        "label": self.configuration.get("observation_label"),
+                        "observation": observation,
+                    });
+                    self.append_observation_marker("observation_started_marker", &marked);
+                    if let Some(fixture) = self.configuration.get("state_fixture") {
+                        let namespace = fixture["namespace"].as_str().unwrap();
+                        let key = fixture["key"].as_str().unwrap();
+                        let value = fixture["value"].clone();
+                        let put = gateway_plugin_sdk::call::host::StatePutRequest {
+                            namespace: namespace.into(),
+                            key: key.into(),
+                            value: value.clone(),
+                            expected_version: None,
+                        };
+                        let put = match self
+                            .callback(id, "host.state.put", serde_json::to_value(put).unwrap())
+                            .await
+                        {
+                            Ok((result, payload)) if payload.is_empty() => {
+                                serde_json::from_value::<
+                                    gateway_plugin_sdk::call::host::StatePutResult,
+                                >(result)
+                                .unwrap()
+                            }
+                            Ok(_) => panic!("state put returned an unexpected payload"),
+                            Err(error) => {
+                                self.send(Message::Error { id, error }, vec![]).await;
+                                return;
+                            }
+                        };
+                        let get = gateway_plugin_sdk::call::host::StateGetRequest {
+                            namespace: namespace.into(),
+                            key: key.into(),
+                        };
+                        let get = match self
+                            .callback(id, "host.state.get", serde_json::to_value(get).unwrap())
+                            .await
+                        {
+                            Ok((result, payload)) if payload.is_empty() => {
+                                serde_json::from_value::<
+                                    gateway_plugin_sdk::call::host::StateGetResult,
+                                >(result)
+                                .unwrap()
+                            }
+                            Ok(_) => panic!("state get returned an unexpected payload"),
+                            Err(error) => {
+                                self.send(Message::Error { id, error }, vec![]).await;
+                                return;
+                            }
+                        };
+                        let record = get.record.unwrap();
+                        assert_eq!(record.value, value);
+                        assert_eq!(record.version, put.version);
+                        if let Some(denied_namespace) =
+                            fixture.get("denied_namespace").and_then(Value::as_str)
+                        {
+                            let denied = self
+                                .callback(
+                                    id,
+                                    "host.state.get",
+                                    serde_json::to_value(
+                                        gateway_plugin_sdk::call::host::StateGetRequest {
+                                            namespace: denied_namespace.into(),
+                                            key: key.into(),
+                                        },
+                                    )
+                                    .unwrap(),
+                                )
+                                .await;
+                            assert!(matches!(
+                                denied,
+                                Err(error) if error.code == ErrorCode::PermissionDenied
+                            ));
                         }
-                    };
-                    let get = gateway_plugin_sdk::call::host::StateGetRequest {
-                        namespace: namespace.into(),
-                        key: key.into(),
-                    };
-                    let get = match self
-                        .callback(id, "host.state.get", serde_json::to_value(get).unwrap())
-                        .await
-                    {
-                        Ok((result, payload)) if payload.is_empty() => serde_json::from_value::<
-                            gateway_plugin_sdk::call::host::StateGetResult,
-                        >(
-                            result
-                        )
-                        .unwrap(),
-                        Ok(_) => panic!("state get returned an unexpected payload"),
-                        Err(error) => {
-                            self.send(Message::Error { id, error }, vec![]).await;
-                            return;
-                        }
-                    };
-                    let record = get.record.unwrap();
-                    assert_eq!(record.value, value);
-                    assert_eq!(record.version, put.version);
-                    if let Some(denied_namespace) =
-                        fixture.get("denied_namespace").and_then(Value::as_str)
-                    {
-                        let denied = self
+                        let deleted = match self
                             .callback(
                                 id,
-                                "host.state.get",
+                                "host.state.delete",
                                 serde_json::to_value(
-                                    gateway_plugin_sdk::call::host::StateGetRequest {
-                                        namespace: denied_namespace.into(),
+                                    gateway_plugin_sdk::call::host::StateDeleteRequest {
+                                        namespace: namespace.into(),
                                         key: key.into(),
+                                        expected_version: put.version,
                                     },
                                 )
                                 .unwrap(),
                             )
-                            .await;
-                        assert!(matches!(
-                            denied,
-                            Err(error) if error.code == ErrorCode::PermissionDenied
-                        ));
-                    }
-                    let deleted = match self
-                        .callback(
-                            id,
-                            "host.state.delete",
-                            serde_json::to_value(
-                                gateway_plugin_sdk::call::host::StateDeleteRequest {
-                                    namespace: namespace.into(),
-                                    key: key.into(),
-                                    expected_version: put.version,
-                                },
-                            )
-                            .unwrap(),
-                        )
-                        .await
-                    {
-                        Ok((result, payload)) if payload.is_empty() => {
-                            serde_json::from_value::<
-                                gateway_plugin_sdk::call::host::StateDeleteResult,
-                            >(result)
-                            .unwrap()
-                        }
-                        Ok(_) => panic!("state delete returned an unexpected payload"),
-                        Err(error) => {
-                            self.send(Message::Error { id, error }, vec![]).await;
-                            return;
-                        }
-                    };
-                    assert!(deleted.deleted);
-                    self.append_observation_marker(
+                            .await
+                        {
+                            Ok((result, payload)) if payload.is_empty() => {
+                                serde_json::from_value::<
+                                    gateway_plugin_sdk::call::host::StateDeleteResult,
+                                >(result)
+                                .unwrap()
+                            }
+                            Ok(_) => panic!("state delete returned an unexpected payload"),
+                            Err(error) => {
+                                self.send(Message::Error { id, error }, vec![]).await;
+                                return;
+                            }
+                        };
+                        assert!(deleted.deleted);
+                        self.append_observation_marker(
                         "state_marker",
                         &json!({"version": put.version, "schema_version": record.schema_version}),
                     );
-                }
-                if let Some(delay) = self
-                    .configuration
-                    .get("observation_delay_ms")
-                    .and_then(Value::as_u64)
-                {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                }
-                self.append_observation_marker("observation_marker", &marked);
-                if self.configuration.get("observation_fault") == Some(&Value::Bool(true)) {
+                    }
+                    if let Some(delay) = self
+                        .configuration
+                        .get("observation_delay_ms")
+                        .and_then(Value::as_u64)
+                    {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    self.append_observation_marker("observation_marker", &marked);
+                    if self.configuration.get("observation_fault") == Some(&Value::Bool(true)) {
+                        self.send(
+                            Message::Error {
+                                id,
+                                error: PluginFault::new(
+                                    ErrorCode::Fault,
+                                    "fixture observation failure",
+                                ),
+                            },
+                            vec![],
+                        )
+                        .await;
+                        return;
+                    }
                     self.send(
-                        Message::Error {
+                        Message::Result {
                             id,
-                            error: PluginFault::new(
-                                ErrorCode::Fault,
-                                "fixture observation failure",
-                            ),
+                            result: Value::Null,
                         },
                         vec![],
                     )
                     .await;
                     return;
                 }
-                self.send(
-                    Message::Result {
-                        id,
-                        result: Value::Null,
-                    },
-                    vec![],
-                )
-                .await;
-                return;
-            }
+            },
             "slow" => tokio::time::sleep(Duration::from_millis(400)).await,
             "hang" | "hang_uncancellable" => return,
             "crash" => std::process::exit(7),
@@ -1129,7 +1179,7 @@ impl Peer {
                 } else {
                     "host.log".into()
                 };
-                // 分配与入队保持同一顺序，避免并发回调制造不合法 ID 序列。
+                // 分配与入队保持同一顺序，避免并发回调制造不合法 ID 序列
                 let mut callbacks = self.callbacks.lock().await;
                 let callback = self.next_callback.fetch_add(2, Ordering::Relaxed);
                 callbacks.insert(
@@ -1293,10 +1343,10 @@ async fn main() {
                     "malformed_truncated_frame" | "malformed_frame_length"
                 ) {
                     let bytes: &[u8] = if method == "malformed_truncated_frame" {
-                        // 声明 16 字节元数据，却只写入一个字节后退出。
+                        // 声明 16 字节元数据，却只写入一个字节后退出
                         &[0, 0, 0, 16, 0, 0, 0, 0, b'{']
                     } else {
-                        // 元数据长度超过公开的 64 KiB 上限，读取端必须在分配前拒绝。
+                        // 元数据长度超过公开的 64 KiB 上限，读取端必须在分配前拒绝
                         &[0, 1, 0, 1, 0, 0, 0, 0]
                     };
                     let mut output = tokio::io::stdout();
@@ -1308,7 +1358,12 @@ async fn main() {
                 if method == "hang_uncancellable" {
                     uncancellable.insert(id);
                 }
-                if method.starts_with("stream") || matches!(method.as_str(), "middleware.handle") {
+                if method.starts_with("stream")
+                    || matches!(
+                        method.as_str(),
+                        "middleware.handle" | "upstream_adapter.execute"
+                    )
+                {
                     peer.streams
                         .lock()
                         .await
@@ -1383,5 +1438,113 @@ async fn main() {
             Message::Shutdown => break,
             _ => {}
         }
+    }
+}
+
+impl Peer {
+    async fn upstream_adapter(&self, id: u64, payload: Vec<u8>) -> Result<(), PluginFault> {
+        let (request, body) = UpstreamAdapterRequest::decode(&payload).unwrap();
+        // 假凭据用于检测宿主是否把已选账号令牌放入了插件输入
+        assert!(!String::from_utf8_lossy(&payload).contains("fixture-native-token"));
+        self.append_observation_marker("upstream_marker", &json!({"key":request.client_key_id,"account":request.account_id,"continuation":request.continuation}));
+        self.send(
+            Message::Result {
+                id,
+                result: json!({}),
+            },
+            vec![],
+        )
+        .await;
+        let mut response_body = vec![];
+        for callback in self.configuration["upstream_callbacks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let callbacks = callback
+                .as_array()
+                .map_or_else(|| std::slice::from_ref(callback), Vec::as_slice);
+            let results = futures::future::try_join_all(callbacks.iter().map(|callback| {
+                let payload = if callback["body"] == "request" {
+                    body.clone()
+                } else {
+                    callback["body"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .as_bytes()
+                        .to_vec()
+                };
+                self.callback_payload(
+                    id,
+                    callback["method"].as_str().unwrap(),
+                    callback["params"].clone(),
+                    payload,
+                )
+            }))
+            .await?;
+            for (result, payload) in results {
+                if let Some(stream) = result["stream"].as_str() {
+                    loop {
+                        let (result, chunk) = self
+                            .callback_payload(
+                                id,
+                                "host.upstream.http.stream_read",
+                                json!({"stream":stream,"maximum_bytes":65536}),
+                                vec![],
+                            )
+                            .await?;
+                        response_body.extend(chunk);
+                        if result["eof"] == true {
+                            break;
+                        }
+                    }
+                } else if !payload.is_empty() {
+                    response_body = payload;
+                }
+            }
+        }
+        let events = self.configuration["upstream_events"].as_array().unwrap();
+        let credits = self.streams.lock().await.get(&id).unwrap().clone();
+        for (sequence, event) in events.iter().enumerate() {
+            let mut message = UpstreamAdapterEvent::new(
+                serde_json::from_value::<ExecutionEvent>(event["event"].clone()).unwrap(),
+            );
+            message.service_tier = event["service_tier"].as_str().map(str::to_owned);
+            message.continuation = event
+                .get("continuation")
+                .map(|value| serde_json::from_value(value.clone()).unwrap());
+            message.failure = event
+                .get("failure")
+                .map(|value| serde_json::from_value(value.clone()).unwrap());
+            if event["wire"] == "http" {
+                message.event.wire = Some(WireEvent {
+                    protocol: request.protocol.clone(),
+                    payload: WirePayload::RawJson {
+                        body: response_body.clone(),
+                    },
+                });
+            } else if event["wire"] == "sse" {
+                message.event.wire = Some(WireEvent {
+                    protocol: request.protocol.clone(),
+                    payload: WirePayload::RawSse {
+                        frame: response_body.clone(),
+                    },
+                });
+            }
+            let payload = message.encode().unwrap();
+            credits.take(payload.len() as u64).await;
+            self.send(
+                Message::Stream {
+                    id,
+                    sequence: sequence as u64,
+                },
+                payload,
+            )
+            .await;
+        }
+        let error = (self.configuration["upstream_tail_error"] == true)
+            .then(|| PluginFault::new(ErrorCode::Fault, "fixture terminal fault"));
+        self.send(Message::End { id, error }, vec![]).await;
+        Ok(())
     }
 }

@@ -1,4 +1,4 @@
-//! 过渡期展示格式化；目标迁移到 Vue presenter。
+//! 观测领域事实到管理页面的展示投影
 
 use super::*;
 
@@ -42,16 +42,6 @@ pub(crate) fn display_rate(value: f64) -> String {
 
 fn basis_points_rate(value: u64) -> f64 {
     value as f64 / 10_000.0
-}
-
-pub(crate) fn china_datetime(value: &DateTime<Utc>) -> String {
-    (*value + Duration::hours(8))
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-}
-
-pub(crate) fn china_label(value: DateTime<Utc>, format: &str) -> String {
-    (value + Duration::hours(8)).format(format).to_string()
 }
 
 pub(crate) fn outcome_name(outcome: &domain::RequestOutcome) -> &str {
@@ -270,10 +260,13 @@ pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<Bil
     }
 }
 
-pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageListRecordView {
+pub(crate) fn usage_list_record_view(
+    record: domain::UsageListRecord,
+    time: crate::time::TimePresenter,
+) -> UsageListRecordView {
     let token_details = usage_list_token_details(&record);
     let billing = billing_view(record.billing.as_ref());
-    let created_at_display = china_datetime(&record.started_at);
+    let created_at_display = time.datetime(&record.started_at);
     let model = record
         .upstream_model_id
         .clone()
@@ -287,6 +280,8 @@ pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageLi
         account_email: record.provider_account_email,
         account_name: record.provider_account_name,
         account_notes: record.provider_account_notes,
+        account_plan_type: record.provider_account_plan_type,
+        account_plan_type_display: record.provider_account_plan_type_display,
         route: record.endpoint,
         model,
         requested_model: record.requested_model_id,
@@ -324,7 +319,10 @@ pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageLi
     }
 }
 
-pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
+pub(crate) fn usage_record_view(
+    record: domain::UsageRecord,
+    time: crate::time::TimePresenter,
+) -> UsageRecordView {
     let tokens = token_details(&record);
     let billing = billing_view(record.billing.as_ref());
     let costs = record
@@ -430,7 +428,7 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         message,
         metadata,
         created_at: record.started_at,
-        created_at_display: china_datetime(&record.started_at),
+        created_at_display: time.datetime(&record.started_at),
         client_ip: record.client_ip,
         user_agent: record.user_agent,
         reasoning_effort: record.reasoning_effort,
@@ -533,11 +531,14 @@ pub(crate) fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptV
     }
 }
 
-pub(crate) fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetailView {
+pub(crate) fn usage_detail_view(
+    detail: domain::UsageDetail,
+    time: crate::time::TimePresenter,
+) -> UsageRecordDetailView {
     UsageRecordDetailView {
         trace: detail.trace,
         related_requests: detail.related_requests,
-        request: usage_record_view(detail.request),
+        request: usage_record_view(detail.request, time),
         attempts: detail
             .attempts
             .into_iter()
@@ -547,16 +548,26 @@ pub(crate) fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetai
     }
 }
 
-pub(crate) fn usage_page_view(page: domain::UsagePage) -> PageData<UsageListRecordView> {
+pub(crate) fn usage_page_view(
+    page: domain::UsagePage,
+    time: crate::time::TimePresenter,
+) -> PageData<UsageListRecordView> {
     PageData {
-        items: page.items.into_iter().map(usage_list_record_view).collect(),
+        items: page
+            .items
+            .into_iter()
+            .map(|value| usage_list_record_view(value, time))
+            .collect(),
         current_page: page.current_page,
         page_size: page.page_size,
         total: page.total,
     }
 }
 
-pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
+pub(crate) fn ops_error_view(
+    error: domain::OpsError,
+    time: crate::time::TimePresenter,
+) -> OpsErrorView {
     let account_label = error
         .provider_account_email
         .as_ref()
@@ -581,6 +592,8 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
         account_id: error.provider_account_ref,
         account_name: error.provider_account_name,
         account_email: error.provider_account_email,
+        account_plan_type: error.provider_account_plan_type,
+        account_plan_type_display: error.provider_account_plan_type_display,
         route: error.endpoint.unwrap_or_else(|| "—".to_owned()),
         model,
         requested_model: error.requested_model_id,
@@ -624,22 +637,32 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
             recovery_total_latency_ms: error.recovery_total_latency_ms,
         },
         created_at: error.occurred_at,
-        created_at_display: china_datetime(&error.occurred_at),
+        created_at_display: time.datetime(&error.occurred_at),
     }
 }
 
-pub(crate) fn ops_page_view(page: domain::OpsErrorPage) -> PageData<OpsErrorView> {
+pub(crate) fn ops_page_view(
+    page: domain::OpsErrorPage,
+    time: crate::time::TimePresenter,
+) -> PageData<OpsErrorView> {
     PageData {
-        items: page.items.into_iter().map(ops_error_view).collect(),
+        items: page
+            .items
+            .into_iter()
+            .map(|value| ops_error_view(value, time))
+            .collect(),
         current_page: page.current_page,
         page_size: page.page_size,
         total: page.total,
     }
 }
 
-pub(crate) fn trend_point_view(point: domain::TrendPoint) -> TrendPointView {
-    let local_time = china_label(point.bucket_start, "%H:%M");
-    let label = china_label(point.bucket_start, "%m-%d %H:%M");
+pub(crate) fn trend_point_view(
+    point: domain::TrendPoint,
+    time: crate::time::TimePresenter,
+) -> TrendPointView {
+    let local_time = time.label(point.bucket_start, "%H:%M");
+    let label = time.label(point.bucket_start, "%m-%d %H:%M");
     let success_rate_value = point.success_rate.map(|value| value * 100.0);
     TrendPointView {
         time: local_time,
@@ -762,11 +785,19 @@ pub(crate) fn trend_summary_view(
     }
 }
 
-pub(crate) fn trend_view(trend: domain::Trend, kind: TrendKind) -> TrendData {
+pub(crate) fn trend_view(
+    trend: domain::Trend,
+    kind: TrendKind,
+    time: crate::time::TimePresenter,
+) -> TrendData {
     TrendData {
         kind,
         summary: trend_summary_view(kind, &trend.summary),
-        points: trend.points.into_iter().map(trend_point_view).collect(),
+        points: trend
+            .points
+            .into_iter()
+            .map(|value| trend_point_view(value, time))
+            .collect(),
     }
 }
 
@@ -785,7 +816,10 @@ pub(crate) fn reliability_display(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_owned(), |value| format!("{value:.1}%"))
 }
 
-pub(crate) fn health_timeline_view(timeline: domain::HealthTimeline) -> HealthTimelineView {
+pub(crate) fn health_timeline_view(
+    timeline: domain::HealthTimeline,
+    time: crate::time::TimePresenter,
+) -> HealthTimelineView {
     HealthTimelineView {
         title: "请求健康时间线".to_owned(),
         description: "有效请求可用性".to_owned(),
@@ -799,25 +833,25 @@ pub(crate) fn health_timeline_view(timeline: domain::HealthTimeline) -> HealthTi
         points: timeline
             .points
             .into_iter()
-            .enumerate()
-            .map(|(index, point)| {
-                let elapsed_minutes = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(15);
-                HealthTimelinePointView {
-                    time: format!("{:02}:{:02}", elapsed_minutes / 60, elapsed_minutes % 60),
-                    status: health_status_name(point.status).to_owned(),
-                    reliability_display: reliability_display(point.reliability_percent),
-                    success_requests: point.success_requests,
-                    failed_requests: point.failed_requests,
-                    cancelled_requests: point.cancelled_requests,
-                    incomplete_requests: point.incomplete_requests,
-                    caller_error_requests: point.caller_error_requests,
-                }
+            .map(|point| HealthTimelinePointView {
+                bucket_start: point.bucket_start,
+                time: time.label(point.bucket_start, "%H:%M"),
+                status: health_status_name(point.status).to_owned(),
+                reliability_display: reliability_display(point.reliability_percent),
+                success_requests: point.success_requests,
+                failed_requests: point.failed_requests,
+                cancelled_requests: point.cancelled_requests,
+                incomplete_requests: point.incomplete_requests,
+                caller_error_requests: point.caller_error_requests,
             })
             .collect(),
     }
 }
 
-pub(crate) fn wire_profile_view(profile: domain::DashboardWireProfile) -> DashboardWireProfileView {
+pub(crate) fn wire_profile_view(
+    profile: domain::DashboardWireProfile,
+    time: crate::time::TimePresenter,
+) -> DashboardWireProfileView {
     DashboardWireProfileView {
         provider: profile.provider,
         product: profile.product,
@@ -838,9 +872,11 @@ pub(crate) fn wire_profile_view(profile: domain::DashboardWireProfile) -> Dashbo
                 value: attribute.value,
             })
             .collect(),
+        verified_at_display: profile.verified_at.map(|value| time.datetime(&value)),
         verified_at: profile.verified_at,
         release: profile.release.map(|release| DashboardDesktopReleaseView {
             status: release.status.into(),
+            checked_at_display: release.checked_at.map(|value| time.datetime(&value)),
             checked_at: release.checked_at,
             latest_version: release.latest_version,
             latest_build: release.latest_build,
@@ -849,29 +885,10 @@ pub(crate) fn wire_profile_view(profile: domain::DashboardWireProfile) -> Dashbo
     }
 }
 
-pub(crate) fn relative_time(value: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
-    let Some(value) = value else {
-        return "从未使用".to_owned();
-    };
-    let elapsed = now.signed_duration_since(value);
-    if elapsed.num_seconds() < 0 {
-        return china_datetime(&value);
-    }
-    if elapsed.num_seconds() < 60 {
-        return "刚刚".to_owned();
-    }
-    if elapsed.num_minutes() < 60 {
-        return format!("{} 分钟前", elapsed.num_minutes());
-    }
-    if elapsed.num_hours() < 24 {
-        return format!("{} 小时前", elapsed.num_hours());
-    }
-    format!("{} 天前", elapsed.num_days())
-}
-
 pub(crate) fn dashboard_view(
     result: domain::DashboardResult,
     kind: TrendKind,
+    time: crate::time::TimePresenter,
 ) -> DashboardDataView {
     let domain::DashboardResult {
         observation,
@@ -935,21 +952,19 @@ pub(crate) fn dashboard_view(
                 .total_tokens
                 .map_or_else(|| "—".to_owned(), format_compact_number),
             request_count: credential.request_count,
-            request_buckets: credential
-                .request_buckets
-                .iter()
-                .map(|bucket| DashboardAccountRequestBucketView {
-                    bucket_start: bucket.bucket_start,
-                    request_count: bucket.request_count,
-                })
-                .collect(),
+            request_buckets: time.request_buckets(
+                credential
+                    .request_buckets
+                    .iter()
+                    .map(|bucket| (bucket.bucket_start, bucket.request_count)),
+            ),
             quota_used_percent: credential.quota_used_percent,
             usage_window: credential
                 .quota_window
-                .map(crate::admin::accounts::quota_window_view),
+                .map(|window| crate::admin::accounts::quota_window_view(window, time)),
             metric_label,
             metric_value,
-            last_used: relative_time(credential.last_used_at, range.end),
+            last_used: time.relative_optional(credential.last_used_at, range.end),
         });
     }
     let unavailable_accounts = provider_accounts
@@ -957,6 +972,8 @@ pub(crate) fn dashboard_view(
         .saturating_sub(provider_accounts.normal);
 
     DashboardDataView {
+        as_of: range.end,
+        as_of_display: time.datetime(&range.end),
         cards: DashboardCardsView {
             credentials: DashboardCredentialsCardView {
                 total: provider_accounts.total.to_string(),
@@ -990,13 +1007,16 @@ pub(crate) fn dashboard_view(
                 average_first_token_latency_ms: display_duration(average_first_token_latency_ms),
             },
         },
-        trend: trend_view(trend, kind),
-        health_timeline: health_timeline_view(health_timeline),
-        wire_profiles: wire_profiles.into_iter().map(wire_profile_view).collect(),
+        trend: trend_view(trend, kind, time),
+        health_timeline: health_timeline_view(health_timeline, time),
+        wire_profiles: wire_profiles
+            .into_iter()
+            .map(|value| wire_profile_view(value, time))
+            .collect(),
         account_usage: account_usage_views,
         usage_records: recent_requests
             .into_iter()
-            .map(usage_list_record_view)
+            .map(|value| usage_list_record_view(value, time))
             .collect(),
         pool_summary: DashboardPoolSummaryView {
             total: provider_accounts.total,
@@ -1031,14 +1051,17 @@ pub(crate) fn usage_summary_view(summary: domain::UsageSummary) -> UsageSummaryV
     }
 }
 
-pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsightsOverviewView {
+pub(crate) fn usage_insights_view(
+    insights: domain::UsageInsights,
+    time: crate::time::TimePresenter,
+) -> UsageInsightsOverviewView {
     let health_points = insights
         .health
         .points
         .iter()
         .map(|point| OverviewHealthPointView {
             bucket: point.bucket_start,
-            label: china_label(point.bucket_start, "%m-%d %H:%M"),
+            label: time.label(point.bucket_start, "%m-%d %H:%M"),
             total_requests: point.total_requests,
             success_requests: point.success_requests,
             failed_requests: point.failed_requests,
@@ -1054,7 +1077,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
         .iter()
         .map(|point| OverviewPerformancePointView {
             bucket: point.bucket_start,
-            label: china_label(point.bucket_start, "%m-%d %H:%M"),
+            label: time.label(point.bucket_start, "%m-%d %H:%M"),
             latency_p50_ms: point.latency_percentiles.p50_ms.map(|value| value.as_f64()),
             latency_p95_ms: point.latency_percentiles.p95_ms.map(|value| value.as_f64()),
             latency_p99_ms: point.latency_percentiles.p99_ms.map(|value| value.as_f64()),
@@ -1103,7 +1126,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
         .iter()
         .map(|point| OverviewCostPointView {
             bucket: point.bucket_start,
-            label: china_label(point.bucket_start, "%m-%d %H:%M"),
+            label: time.label(point.bucket_start, "%m-%d %H:%M"),
             input_tokens: point.input_tokens,
             output_tokens: point.output_tokens,
             cached_tokens: point.cached_tokens,
@@ -1283,6 +1306,8 @@ pub(crate) fn diagnostics_view(
                     item.name
                 },
                 request_count: item.request_count,
+                account_plan_type: item.account_plan_type,
+                account_plan_type_display: item.account_plan_type_display,
                 success_count: item.success_count,
                 error_count: item.error_count,
                 error_rate: item.error_rate,

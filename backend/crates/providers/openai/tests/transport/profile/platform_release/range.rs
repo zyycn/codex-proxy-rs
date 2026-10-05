@@ -1,3 +1,5 @@
+//! 验证 HTTP Range 的 ETag、精确范围与取消传播
+
 use provider_openai::transport::profile::platform_release::range::RemoteFile;
 use std::io::{self, Read};
 use std::sync::Arc;
@@ -60,7 +62,7 @@ async fn cancelled_reads_should_terminate_standard_read_helpers() {
     cancellation.cancel();
 
     tokio::task::spawn_blocking(move || {
-        // 先验证单次 read，回归时直接失败，避免 read_exact 的自动重试挂住测试进程。
+        // 先验证单次 read，回归时直接失败，避免 read_exact 的自动重试挂住测试进程
         assert_eq!(
             reader.read(&mut [0]).unwrap_err().kind(),
             io::ErrorKind::Other,

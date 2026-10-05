@@ -1,3 +1,5 @@
+//! 验证 Codex HTTP 与 WebSocket 的请求身份、头部顺序与脱敏
+
 use provider_openai::transport::websocket::CodexWebSocketConnection;
 use serde_json::Value;
 

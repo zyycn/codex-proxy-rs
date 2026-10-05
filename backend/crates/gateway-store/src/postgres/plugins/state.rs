@@ -1,3 +1,5 @@
+//! 插件私有状态的 PostgreSQL 读写、代次隔离、配额与迁移事务
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
@@ -926,7 +928,7 @@ async fn writable_generation(
     })
 }
 
-/// 实例与状态代次在同一事务绑定；只有这里会晋升 staging generation。
+/// 实例与状态代次在同一事务绑定；只有这里会晋升 staging generation
 pub(super) async fn commit_configuration(
     transaction: &mut Transaction<'_, Postgres>,
     instance: &PluginInstance,
@@ -1041,7 +1043,7 @@ pub(super) async fn commit_configuration(
             return Err(admin_conflict());
         }
         let staging_id: uuid::Uuid = staging.try_get("id").map_err(|_| admin_unavailable())?;
-        // 先解除迁移来源，再替换活动代次；任一步失败都会连同配置和旧记录一起回滚。
+        // 先解除迁移来源，再替换活动代次；任一步失败都会连同配置和旧记录一起回滚
         sqlx::query("update plugin_state_generations set source_generation_id=null where id=$1")
             .bind(staging_id)
             .execute(&mut **transaction)
@@ -1115,7 +1117,7 @@ pub(super) async fn commit_configuration(
     Ok(())
 }
 
-/// 紧急停用不依赖损坏包的 schema 解析；只允许原制品续绑并立即轮换 fence。
+/// 紧急停用不依赖损坏包的 schema 解析；只允许原制品续绑并立即轮换 fence
 pub(super) async fn rebind_existing_configuration(
     transaction: &mut Transaction<'_, Postgres>,
     instance_id: &str,

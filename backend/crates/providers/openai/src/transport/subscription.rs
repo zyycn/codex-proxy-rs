@@ -1,4 +1,4 @@
-//! 当前绑定账号的订阅周期安全投影，与令牌有效期和额度状态无关。
+//! 当前绑定账号的订阅周期安全投影，与令牌有效期和额度状态无关
 
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ pub struct CodexSubscription {
 }
 
 impl CodexBackendClient {
-    /// 可选展示查询失败只返回未知；自定义路由的 404 回退也计入同一查询预算。
+    /// 可选展示查询失败只返回未知；自定义路由的 404 回退也计入同一查询预算
     pub async fn fetch_subscription(
         &self,
         context: CodexRequestContext<'_>,

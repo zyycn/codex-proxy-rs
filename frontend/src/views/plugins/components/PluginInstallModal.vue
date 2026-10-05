@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PluginUpdateSelection } from '../composables/usePluginUpdateCheck'
-import type { PluginInstallSelection } from '../utils/model'
+import type { PluginInstallMode, PluginInstallSelection } from '../utils/model'
 import type {
   CreatePluginSourceCredentialRequest,
   PluginArtifact,
@@ -24,10 +24,7 @@ import { selectPluginReleaseAsset } from '../utils/updates'
 import PluginAssetPicker from './PluginAssetPicker.vue'
 import PluginDownloadAuthentication from './PluginDownloadAuthentication.vue'
 import PluginHelpPopover from './PluginHelpPopover.vue'
-import PluginPermissionSummary from './PluginPermissionSummary.vue'
 import PluginSourceProxyField from './PluginSourceProxyField.vue'
-
-export type PluginInstallMode = 'upload' | 'url' | 'github'
 
 const props = defineProps<{
   mode: PluginInstallMode
@@ -147,9 +144,6 @@ const verified = computed<VerifiedPluginArtifact | null>(() => {
 const previousArtifact = computed(() => props.installedArtifacts
   .filter(artifact => artifact.acceptedAt && artifact.metadata.pluginId === verified.value?.metadata.pluginId)
   .sort((left, right) => right.acceptedAt!.localeCompare(left.acceptedAt!))[0])
-const addedPermissions = computed(() => verified.value?.metadata.permissionDescriptions.filter(permission =>
-  !previousArtifact.value?.metadata.requestedPermissions.includes(permission.permission),
-) ?? [])
 const installationLabel = computed(() => previousArtifact.value ? '安装新版本' : '安装')
 const sourceDraft = computed<PluginUpdateSourceBinding | null>(() => {
   const previous = props.updateSource
@@ -261,7 +255,7 @@ function reset() {
     Object.assign(githubForm, draft.github, { credentialIds: draft.github.credentialIds.filter(id => props.credentials.some(credential => credential.id === id)) })
     emit('changeMode', draft.mode)
   }
-  // 明确选择的检查结果优先于旧草稿，仍需重新校验包并确认安装权限。
+  // 明确选择的检查结果优先于旧草稿，仍需重新校验包并确认信任来源。
   const selection = props.updateSelection
   if (selection?.binding.source.kind === 'github' && selection.release) {
     Object.assign(githubForm, {
@@ -381,9 +375,12 @@ watch(open, (isOpen) => {
   }
   else {
     rememberDraft()
-    credentialDraft.value = null
   }
 })
+
+function clearCredentials() {
+  credentialDraft.value = null
+}
 watch(() => props.mode, () => {
   pendingAuthentication.value = false
   credentialDraft.value = null
@@ -421,9 +418,10 @@ watch(
   <BaseModal
     v-model="open"
     :title="updateSource ? '更新插件' : '安装插件'"
-    :description="acceptanceArtifact ? '确认访问权限后安装' : updateSource ? '检查设置兼容性后切换版本' : '支持本地插件包、URL 与 GitHub'"
+    :description="acceptanceArtifact ? '确认来源与版本后安装' : updateSource ? '检查设置兼容性后切换版本' : '支持本地插件包、URL 与 GitHub'"
     size="md"
     :dismissible="!busy"
+    @after-leave="clearCredentials"
   >
     <BaseSegmented
       v-if="!acceptanceArtifact && !verified"
@@ -491,7 +489,6 @@ watch(
 
     <div v-if="!verified && mode !== 'upload'" class="mt-4 grid gap-4">
       <PluginDownloadAuthentication
-        v-if="open"
         :key="mode"
         v-model="connectionForm.credentialIds"
         v-model:pending="pendingAuthentication"
@@ -538,7 +535,7 @@ watch(
         </div>
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 class="m-0 min-w-0 break-words text-cp-sm font-emphasis text-cp-text">
+            <h3 class="m-0 min-w-0 wrap-break-word text-cp-sm font-emphasis text-cp-text">
               {{ verified.metadata.displayName }}
             </h3>
             <BaseTag>{{ verified.metadata.version }}</BaseTag>
@@ -556,7 +553,7 @@ watch(
         <dt class="text-cp-text-secondary">
           发布者
         </dt>
-        <dd class="m-0 min-w-0 break-words">
+        <dd class="m-0 min-w-0 wrap-break-word">
           {{ verified.metadata.publisher }}
         </dd>
         <dt class="text-cp-text-secondary">
@@ -568,20 +565,8 @@ watch(
           </BaseTag>
         </dd>
       </dl>
-      <div class="mt-4 grid gap-3">
-        <p v-if="previousArtifact" class="m-0 text-cp-sm font-emphasis">
-          {{ addedPermissions.length ? '新增访问权限' : '没有新增访问权限' }}
-        </p>
-        <PluginPermissionSummary v-if="!previousArtifact || addedPermissions.length" :permissions="addedPermissions" />
-        <details v-if="previousArtifact && verified.metadata.permissionDescriptions.length" class="text-cp-xs text-cp-text-secondary">
-          <summary class="cursor-pointer py-1 outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline">
-            全部访问权限
-          </summary>
-          <PluginPermissionSummary class="mt-3" :permissions="verified.metadata.permissionDescriptions" />
-        </details>
-      </div>
       <p class="mt-4 mb-0 text-cp-xs leading-relaxed text-cp-text-secondary">
-        安装即授权，插件以网关身份运行，请仅安装可信来源
+        插件可访问全部网关数据与配置，安装前请确认来源可信
       </p>
       <div v-if="previousArtifact" class="mt-2 flex items-center gap-1.5 text-cp-xs text-cp-text-secondary">
         <span>安装后确认切换到新版本</span>

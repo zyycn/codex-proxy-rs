@@ -33,18 +33,22 @@ export interface KeyUsageBudget {
   dailyLimitUsd: string
   dailyUsedUsd: string
   dailyResetsAt: string | null
+  dailyResetsAtDisplay: string | null
   weeklyLimitUsd: string
   weeklyUsedUsd: string
   weeklyResetsAt: string | null
+  weeklyResetsAtDisplay: string | null
 }
 
 export interface KeyUsageTrendPoint extends KeyUsageMetrics {
   time: string
   bucketSeconds: number
+  label: string
 }
 
 export interface KeyUsageOverview {
   asOf: string
+  asOfDisplay: string
   startTime: string
   endTime: string
   key: KeyUsageBudget
@@ -58,6 +62,7 @@ export type KeyUsageRecordKind = 'success' | 'error'
 export interface KeyUsageRecord {
   id: string
   createdAt: string
+  createdAtDisplay: string
   model: string | null
   route: string | null
   reasoningEffort: string | null
@@ -82,8 +87,8 @@ export interface KeyUsagePage {
 }
 
 export interface KeyUsageQuery {
-  startTime: string
-  endTime: string
+  period: 'today' | '7d' | '30d'
+  asOf: number
   model?: string
 }
 

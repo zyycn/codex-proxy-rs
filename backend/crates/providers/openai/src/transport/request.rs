@@ -1,4 +1,4 @@
-//! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
+//! 核心 Generate operation 到 Codex Responses wire request 的严格编码
 
 use std::io;
 
@@ -88,7 +88,7 @@ impl RequestAccountScope {
     }
 }
 
-/// Provider 专属编码错误；不保存 prompt、schema 或 option 值。
+/// Provider 专属编码错误；不保存 prompt、schema 或 option 值
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CodexRequestEncodeError {
     #[error("Codex request is missing its OpenAI protocol payload")]
@@ -131,7 +131,7 @@ pub(crate) fn align_structured_location_fields(
     now: DateTime<Utc>,
     location: &CodexRequestLocation,
 ) {
-    // 只改写带环境标记的日期和时区；epoch 时间戳保持绝对时间原值。
+    // 只改写带环境标记的日期和时区；epoch 时间戳保持绝对时间原值
     let current_date = now
         .with_timezone(&location.timezone)
         .format("%Y-%m-%d")
@@ -285,8 +285,8 @@ impl ExtractedRequestContext {
         let client_metadata = body.get("client_metadata").and_then(Value::as_object);
         Self {
             // 官方 downstream WebSocket 无法逐帧更新 HTTP header，因此把
-            // response.metadata 返回的 turn state 放回下一帧 client_metadata。
-            // Provider 仍会在账号/turn 归属确定后决定是否允许复用该状态。
+            // response.metadata 返回的 turn state 放回下一帧 client_metadata
+            // Provider 仍会在账号/turn 归属确定后决定是否允许复用该状态
             turn_state: body_string(body, "turnState").or_else(|| {
                 client_metadata.and_then(|metadata| {
                     string_value(metadata.get(X_CODEX_TURN_STATE_CLIENT_METADATA_KEY))
@@ -305,12 +305,12 @@ impl ExtractedRequestContext {
                     .and_then(|metadata| string_value(metadata.get(TURN_ID_CLIENT_METADATA_KEY)))
             }),
             // Responses Lite 在 WebSocket body 中的这个键是官方 header 投影，
-            // 不是普通上下文字段的 metadata 回退。
+            // 不是普通上下文字段的 metadata 回退
             responses_lite: client_metadata.and_then(|metadata| {
                 string_value(metadata.get(WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY))
             }),
             // Memory consolidation 只由官方请求头提供；body 中同名字段不参与
-            // transport 事实提取。
+            // transport 事实提取
             memgen_request: None,
         }
     }
@@ -353,8 +353,8 @@ pub(crate) fn derive_conversation_anchor(
     })
 }
 
-/// `thread_spawn` 与父任务共享根会话，但它本身是独立的子任务执行。
-/// 因此子线程必须拥有独立的 continuation/WebSocket 传输身份；账号亲和另行派生。
+/// `thread_spawn` 与父任务共享根会话，但它本身是独立的子任务执行
+/// 因此子线程必须拥有独立的 continuation/WebSocket 传输身份；账号亲和另行派生
 fn thread_spawn_conversation_anchor(
     request: &CodexResponsesRequest,
 ) -> Option<(&'static str, String)> {
@@ -450,12 +450,13 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
     rest.to_owned()
 }
 
-/// 把客户端正文收敛到当前 lease 的账号身份边界。
+/// 把客户端正文收敛到当前 lease 的账号身份边界
 ///
 /// 真实 account ID 由随后构造的 `CodexRequestContext` 注入请求头；installation ID
-/// 统一写入 Core 的 `client_metadata["x-codex-installation-id"]`，并替换原有兼容字段。
-/// 绝不接受客户端提供的 token、cookie 或账号身份。`input` 是 Responses 的可回放会话正文，
-/// item ID、encrypted content 和 compaction 都必须原样保留。
+/// 统一写入 Core 的 `client_metadata["x-codex-installation-id"]`，并替换原有兼容字段
+/// 绝不接受客户端提供的 token、cookie 或账号身份
+/// `input` 是 Responses 的可回放会话正文，
+/// item ID、encrypted content 和 compaction 都必须原样保留
 pub(crate) fn scope_request_to_account(
     request: &mut CodexResponsesRequest,
     installation_id: &str,
@@ -490,7 +491,7 @@ pub(crate) fn scope_request_to_account(
             request.body_mut().remove(*key);
         }
     } else {
-        // 同账号的透传 turn metadata 也会覆盖重建的请求头，安装身份须同步改写。
+        // 同账号的透传 turn metadata 也会覆盖重建的请求头，安装身份须同步改写
         for (name, value) in &mut request.passthrough_headers {
             if name == "x-codex-turn-metadata"
                 && let Ok(raw) = value.to_str()
@@ -537,11 +538,11 @@ pub(crate) fn scope_request_to_account(
                     metadata.remove(*key);
                 }
                 // Guardian 顶层父引用指向原账号的响应；turn metadata 内的同名
-                // 扩展只是客户端关联信息，不能加入各层共用的清理名单。
+                // 扩展只是客户端关联信息，不能加入各层共用的清理名单
                 metadata.remove("parent_response_id");
             }
             // 官方 Core 在 client_metadata 使用带 x-codex 前缀的键，
-            // turn metadata 内仍使用 installation_id；两处均取当前账号的安装身份。
+            // turn metadata 内仍使用 installation_id；两处均取当前账号的安装身份
             metadata.insert(
                 "x-codex-installation-id".to_owned(),
                 Value::String(installation_id.to_owned()),
@@ -616,9 +617,9 @@ pub(crate) fn scope_turn_metadata(
             metadata.insert((*key).to_owned(), Value::String(installation_id.to_owned()));
         }
     }
-    // Codex 的 turn metadata 同时承载于 HTTP header 与 WS client_metadata。
+    // Codex 的 turn metadata 同时承载于 HTTP header 与 WS client_metadata
     // 改写安装 ID 后仍须保持官方 to_ascii_json_string 的编码合同；普通
-    // to_string 会把中文工作区路径还原成 UTF-8，触发上游 WS metadata 后 Close 1000。
+    // to_string 会把中文工作区路径还原成 UTF-8，触发上游 WS metadata 后 Close 1000
     let mut bytes = Vec::new();
     metadata
         .serialize(&mut serde_json::Serializer::with_formatter(
@@ -688,7 +689,7 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
 
 // 迁移契约是 header-authoritative:连接边界解析出的协议上下文(官方请求头)
 // 优先;body 顶层别名只在 header 缺失时兜底(例如 WebSocket 帧无法逐轮携带
-// 请求头的场景)。
+// 请求头的场景)
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
     request.passthrough_headers = decode_passthrough_headers(context);
     request.turn_state =

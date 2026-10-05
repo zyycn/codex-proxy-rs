@@ -1,4 +1,4 @@
-//! Grok CLI 运行时 wire profile。
+//! Grok CLI 运行时 wire profile
 
 use std::{
     sync::{Arc, RwLock},
@@ -11,7 +11,7 @@ use reqwest::{Client, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-/// Grok CLI 运行时身份；默认值作为官方发布检查的内置基线。
+/// Grok CLI 运行时身份；默认值作为官方发布检查的内置基线
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct XaiWireProfile {
     pub client_identifier: String,
@@ -38,7 +38,7 @@ impl Default for XaiWireProfile {
 impl XaiWireProfile {
     #[must_use]
     pub fn user_agent(&self) -> String {
-        // Grok CLI 的产品名独立于 x-grok-client-identifier；自定义请求头不替换 UA 产品名。
+        // Grok CLI 的产品名独立于 x-grok-client-identifier；自定义请求头不替换 UA 产品名
         let arch = match self.target_arch.as_str() {
             "arm64" => "aarch64",
             arch => arch,
@@ -211,7 +211,7 @@ impl GrokCliReleaseService {
     }
 }
 
-/// 最近一次官方 Grok CLI 发布检查结果。
+/// 最近一次官方 Grok CLI 发布检查结果
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GrokCliReleaseSnapshot {
     pub checked_at: Option<DateTime<Utc>>,
@@ -219,7 +219,7 @@ pub struct GrokCliReleaseSnapshot {
     pub last_error: Option<String>,
 }
 
-/// Provider 内共享的 Grok CLI 发布检查观察状态。
+/// Provider 内共享的 Grok CLI 发布检查观察状态
 #[derive(Debug, Clone, Default)]
 pub struct GrokCliReleaseStatus {
     snapshot: Arc<RwLock<GrokCliReleaseSnapshot>>,

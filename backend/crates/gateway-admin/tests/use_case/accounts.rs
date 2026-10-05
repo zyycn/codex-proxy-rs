@@ -1,4 +1,9 @@
-use std::sync::{Arc, Mutex};
+//! 账号管理用例测试及共享 Provider、存储替身
+
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
@@ -55,7 +60,8 @@ use gateway_admin::{
             ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind, ProviderAdminRegistry,
         },
         store::{
-            AccountStore, AdminStoreError, AdminStoreErrorKind, AdminStoreResult, SettingsStore,
+            AccountRuntimeStore, AccountStore, AdminStoreError, AdminStoreErrorKind,
+            AdminStoreResult, SettingsStore,
         },
     },
 };
@@ -668,6 +674,12 @@ impl FakeAccountStore {
             last_error_message: account.last_error_message.clone(),
         };
         AccountPageItem {
+            capacity: gateway_admin::model::accounts::AccountCapacity {
+                used_slots: None,
+                total_slots: account
+                    .concurrency_limit
+                    .map(|limit| u64::from(limit.get())),
+            },
             account,
             projection: resolve_account_status(&facts, std::time::SystemTime::now()),
         }
@@ -716,7 +728,7 @@ impl AccountStore for FakeAccountStore {
         _: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<Option<AccountPageItem>> {
         self.record("store.load_account");
-        // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询。
+        // probe 后的账号状态覆盖只对同一 id 生效；其余按账号列表查询
         let account = self
             .account_after_probe
             .lock()
@@ -1104,6 +1116,7 @@ impl SettingsStore for StaticSettingsStore {
             max_waiting_per_key: 0,
             max_waiting_per_account: 0,
             concurrency_wait_timeout_seconds: 30,
+            openai_guardian_reserved_concurrency: 0,
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
             rotation_strategy: RotationStrategy::Smart,
@@ -1466,7 +1479,7 @@ async fn plugin_account_reads_resolve_the_authoritative_provider_from_the_accoun
     let events = events();
     let store = FakeAccountStore::new("xai", events.clone());
     // 读取端口不能让调用方提供或伪造 Provider；注册表中即使只有另一 Provider，
-    // 也必须按 Store 中该 account ID 的权威事实返回。
+    // 也必须按 Store 中该 account ID 的权威事实返回
     let registered_provider = FakeProviderAdmin::new("openai", events.clone());
     let access = gateway_admin::initialize_plugin_accounts(
         ProviderAdminRegistry::new([registered_provider as Arc<dyn ProviderAdmin>]).unwrap(),
@@ -1645,6 +1658,7 @@ async fn accounts_recover_disabled_should_only_enable_scheduling_and_preserve_qu
             );
         }
         let quota = ProviderQuota {
+            credits: None,
             observed_at: Some(Utc::now()),
             windows: vec![ProviderQuotaWindow {
                 key: "primary".to_owned(),
@@ -1983,6 +1997,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
     let events = events();
     let openai = FakeProviderAdmin::new("openai", events.clone());
     openai.set_quota(ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2084,7 +2099,7 @@ async fn accounts_list_should_prefer_credential_error_over_quota_exhaustion() {
 
 #[tokio::test]
 async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
-    // Unknown 不可调度，Admin 不得显示为 normal。
+    // Unknown 不可调度，Admin 不得显示为 normal
     let provider = FakeProviderAdmin::new("openai", events());
     let mut account = account_record("openai");
     account.credential_state = CredentialState::Unknown;
@@ -2115,6 +2130,7 @@ async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
 async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2163,6 +2179,7 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
 async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2214,6 +2231,7 @@ async fn quota_forecast_reads_raw_snapshot_and_limits_usage_to_observation_time(
     let observed = now - TimeDelta::hours(1);
     let reset = now + TimeDelta::days(1);
     provider.set_quota(ProviderQuota {
+        credits: None,
         observed_at: Some(observed),
         limit_reached: true,
         windows: vec![ProviderQuotaWindow {
@@ -2228,7 +2246,7 @@ async fn quota_forecast_reads_raw_snapshot_and_limits_usage_to_observation_time(
             used_percent: Some(20.0),
             reset_at: Some(reset),
             limit_reached: true,
-            // Provider 自带的统计不保证与快照同一时间，预测必须重新采样。
+            // Provider 自带的统计不保证与快照同一时间，预测必须重新采样
             local_usage: Some(quota_local_usage("acct_test", 999_999)),
             provider_data: None,
         }],
@@ -2368,6 +2386,7 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
     let added = now - TimeDelta::hours(5);
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        credits: None,
         plan_type: Some("pro".to_owned()),
         observed_at: Some(observed),
         windows: vec![ProviderQuotaWindow {
@@ -2420,7 +2439,6 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
         .unwrap();
     assert!(result.forecasts[0].unavailable_reason.is_none());
     assert_eq!(result.forecasts[0].estimated_tokens, Some(5_000));
-    assert_eq!(result.forecasts[0].remaining_tokens, Some(3_000));
     assert_eq!(store.quota_window_queries()[0].range.start, added);
     store
         .quota_forecast_history
@@ -2440,7 +2458,7 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
             .unwrap()
             .contains("不连续")
     );
-    // 新额度段已有足够观测后恢复预测，但总量不能带回重置前的累计用量。
+    // 新额度段已有足够观测后恢复预测，但总量不能带回重置前的累计用量
     let mut first = make_point(1, 5.0, 1_750, 0);
     first.completed_at = now - TimeDelta::minutes(45);
     first.started_at = first.completed_at - TimeDelta::seconds(10);
@@ -2461,7 +2479,6 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
     let cycle = &result.forecasts[0];
     assert!(cycle.unavailable_reason.is_none());
     assert_eq!(cycle.source.as_ref().unwrap().tokens, Some(250));
-    assert_eq!(cycle.remaining_tokens, Some(429));
     assert_eq!(cycle.estimated_tokens, Some(679));
 }
 
@@ -2516,6 +2533,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     provider.set_quota(ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2565,7 +2583,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
         .as_ref()
         .expect("quota window local usage");
     assert_eq!(usage.total_tokens, Some(4_330_000));
-    // 短期额度条保留自己的本地用量，但不作为周/月统计面板的回退。
+    // 短期额度条保留自己的本地用量，但不作为周/月统计面板的回退
     assert!(item.usage.is_none());
 
     let queries = store.quota_window_queries();
@@ -2673,6 +2691,7 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::days(7);
     provider.set_quota(ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2974,6 +2993,7 @@ pub(super) fn document() -> ProviderDocument {
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -3435,4 +3455,106 @@ async fn plugin_quota_refresh_uses_native_provider_without_changing_configuratio
         ]
     );
     assert!(!recorded(&events).contains(&"snapshot.publish_committed"));
+}
+
+struct CapacityRuntime {
+    counts: Option<BTreeMap<String, u64>>,
+    fail: bool,
+    reads: Mutex<Vec<Vec<String>>>,
+}
+
+#[async_trait]
+impl AccountRuntimeStore for CapacityRuntime {
+    async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        Ok(AccountRuntimeSnapshot::default())
+    }
+
+    async fn account_runtime(&self, ids: &[String]) -> AdminStoreResult<AccountRuntimeSnapshot> {
+        self.reads.lock().unwrap().push(ids.to_vec());
+        if self.fail {
+            return Err(store_unavailable());
+        }
+        Ok(AccountRuntimeSnapshot {
+            in_flight: self.counts.clone(),
+            ..Default::default()
+        })
+    }
+
+    async fn active_freezes(
+        &self,
+    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn capacity_peaks(&self, _: &[String]) -> AdminStoreResult<BTreeMap<String, u32>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn finish_freeze(
+        &self,
+        _: &str,
+        _: &gateway_admin::model::accounts::AccountFreeze,
+        _: Option<chrono::DateTime<Utc>>,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+}
+
+#[tokio::test]
+async fn account_capacity_should_batch_page_ids_and_distinguish_idle_from_unavailable() {
+    for (counts, fail, expected) in [
+        (
+            Some(BTreeMap::from([("acct_test".to_owned(), 3)])),
+            false,
+            Some(3),
+        ),
+        (Some(BTreeMap::new()), false, Some(0)),
+        (None, false, None),
+        (None, true, None),
+    ] {
+        for empty in [false, true] {
+            let runtime = Arc::new(CapacityRuntime {
+                counts: counts.clone(),
+                fail,
+                reads: Mutex::default(),
+            });
+            let mut account = account_record("openai");
+            account.concurrency_limit = gateway_core::account::AccountConcurrencyLimit::new(5);
+            let store = FakeAccountStore::with_account(account, events());
+            if empty {
+                store.set_accounts(Vec::new());
+            }
+            let services = super::AdminHarness::new()
+                .accounts(store)
+                .account_runtime(runtime.clone())
+                .settings(Arc::new(StaticSettingsStore))
+                .provider(FakeProviderAdmin::new("openai", events()))
+                .build()
+                .await;
+            let page = services
+                .accounts()
+                .list(AccountListQuery {
+                    page: 1,
+                    page_size: gateway_admin::model::PageSize::new(20).unwrap(),
+                    provider_kind: None,
+                    group_filter: None,
+                    search: None,
+                    status: None,
+                    sort: None,
+                })
+                .await
+                .unwrap();
+            if empty {
+                assert!(page.items.is_empty());
+                assert!(runtime.reads.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(
+                    *runtime.reads.lock().unwrap(),
+                    [vec!["acct_test".to_owned()]]
+                );
+                assert_eq!(page.items[0].capacity.used_slots, expected);
+                assert_eq!(page.items[0].capacity.total_slots, Some(5));
+            }
+        }
+    }
 }

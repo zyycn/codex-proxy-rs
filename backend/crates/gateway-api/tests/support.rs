@@ -1,3 +1,5 @@
+//! API 测试共用的应用组装、认证请求与服务替身
+
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{Arc, atomic::Ordering},
@@ -133,7 +135,10 @@ impl SystemOperations for VersionSystem {
         unreachable!("client route must not roll back")
     }
 
-    async fn restart(&self) -> Result<SystemOperationAccepted, SystemOperationError> {
+    async fn restart(
+        &self,
+        _preflight: Arc<dyn gateway_admin::ports::system::SystemRestartPreflight>,
+    ) -> Result<SystemOperationAccepted, SystemOperationError> {
         unreachable!("client route must not restart")
     }
 }

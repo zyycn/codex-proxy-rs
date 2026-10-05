@@ -40,11 +40,12 @@ export function useAccountPersonalInfo({ accountId, open, capabilities }: {
 
   // 打开或切换账号只请求一次；关闭取消等待，刷新按钮复用同一入口。
   watch([open, accountId, () => capabilities.value.profile, () => capabilities.value.subscription], ([isOpen]) => {
-    request.invalidate()
+    request.invalidate({ resetLoading: isOpen })
+    if (!isOpen)
+      return
     info.value = null
     request.error.value = ''
-    if (isOpen)
-      void load()
+    void load()
   }, { immediate: true })
 
   return {

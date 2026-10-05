@@ -100,7 +100,15 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
     })
   }
 
-  watch(open, () => void refresh())
+  watch(open, (isOpen) => {
+    if (isOpen) {
+      void refresh()
+      return
+    }
+    controller?.abort()
+    clearTimeout(timer)
+  }, { flush: 'sync' })
+
   onMounted(() => void refresh())
   onScopeDispose(() => {
     disposed = true

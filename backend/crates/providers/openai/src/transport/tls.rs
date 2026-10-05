@@ -1,3 +1,5 @@
+//! OpenAI 出站 TLS 配置、系统根证书与自定义 CA 加载
+
 use std::{
     env, fs, io,
     path::PathBuf,
@@ -16,8 +18,9 @@ const CA_CERT_HINT: &str = "If you set CODEX_CA_CERTIFICATE or SSL_CERT_FILE, en
 type PemSection = (SectionKind, Vec<u8>);
 
 /// 与官方 Codex 的 rustls 路径一致，安装支持 P-521 和混合后量子密钥交换的
-/// aws-lc provider。依赖图也包含 ring，因此不能让 rustls 自动选择 provider。
-/// 与官方嵌入场景一致，保留宿主在初始化之前已经安装的 provider。
+/// aws-lc provider
+/// 依赖图也包含 ring，因此不能让 rustls 自动选择 provider
+/// 与官方嵌入场景一致，保留宿主在初始化之前已经安装的 provider
 pub fn ensure_rustls_provider() {
     static INSTALL: OnceLock<()> = OnceLock::new();
     INSTALL.get_or_init(|| {
@@ -25,17 +28,17 @@ pub fn ensure_rustls_provider() {
     });
 }
 
-/// 自定义 CA 证书环境变量名。
+/// 自定义 CA 证书环境变量名
 pub const CODEX_CA_CERT_ENV: &str = "CODEX_CA_CERTIFICATE";
-/// 系统 CA 文件环境变量名。
+/// 系统 CA 文件环境变量名
 pub const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
 
-/// 自定义 CA 错误。
+/// 自定义 CA 错误
 #[derive(Debug, Error)]
 pub enum CustomCaError {
     #[error("invalid account proxy configuration")]
     ProxyConfiguration,
-    /// 读取 CA 证书文件失败。
+    /// 读取 CA 证书文件失败
     #[error(
         "Failed to read CA certificate file {} selected by {}: {source}. {hint}",
         path.display(),
@@ -47,7 +50,7 @@ pub enum CustomCaError {
         path: PathBuf,
         source: io::Error,
     },
-    /// CA 证书文件格式无效。
+    /// CA 证书文件格式无效
     #[error(
         "Failed to load CA certificates from {} selected by {}: {detail}. {hint}",
         path.display(),
@@ -59,7 +62,7 @@ pub enum CustomCaError {
         path: PathBuf,
         detail: String,
     },
-    /// 证书无法注册为 reqwest 根证书。
+    /// 证书无法注册为 reqwest 根证书
     #[error(
         "Failed to parse certificate #{certificate_index} from {} selected by {}: {source}. {hint}",
         path.display(),
@@ -72,7 +75,7 @@ pub enum CustomCaError {
         certificate_index: usize,
         source: reqwest::Error,
     },
-    /// 证书无法注册到 rustls root store。
+    /// 证书无法注册到 rustls root store
     #[error(
         "Failed to register certificate #{certificate_index} from {} selected by {} in rustls root store: {source}. {hint}",
         path.display(),
@@ -85,39 +88,39 @@ pub enum CustomCaError {
         certificate_index: usize,
         source: rustls::Error,
     },
-    /// 使用自定义 CA 构建 reqwest client 失败。
+    /// 使用自定义 CA 构建 reqwest client 失败
     #[error("Failed to build HTTP client while using CA bundle from {} ({}): {source}", source_env, path.display())]
     BuildClientWithCustomCa {
         source_env: &'static str,
         path: PathBuf,
         source: reqwest::Error,
     },
-    /// 使用系统根证书构建 reqwest client 失败。
+    /// 使用系统根证书构建 reqwest client 失败
     #[error("Failed to build HTTP client while using system root certificates: {0}")]
     BuildClientWithSystemRoots(reqwest::Error),
-    /// 读取系统根证书失败。
+    /// 读取系统根证书失败
     #[error("Failed to load native root certificates for custom CA transport: {0}")]
     LoadNativeRoots(io::Error),
 }
 
-/// 自定义 CA 结果类型。
+/// 自定义 CA 结果类型
 pub type CustomCaResult<T> = Result<T, CustomCaError>;
 
-/// 在 reqwest builder 上应用自定义 CA。
+/// 在 reqwest builder 上应用自定义 CA
 pub fn build_reqwest_client_with_custom_ca(
     builder: reqwest::ClientBuilder,
 ) -> CustomCaResult<reqwest::Client> {
     build_reqwest_client_with_env(&ProcessEnv, builder)
 }
 
-/// 返回当前自定义 CA 的缓存键。
+/// 返回当前自定义 CA 的缓存键
 pub fn custom_ca_env_cache_key() -> Option<String> {
     ProcessEnv
         .configured_ca_bundle()
         .map(|bundle| format!("{}={}", bundle.source_env, bundle.path.display()))
 }
 
-/// 构建 rustls client config，若未配置自定义 CA 则返回 `None`。
+/// 构建 rustls client config，若未配置自定义 CA 则返回 `None`
 pub fn maybe_build_rustls_client_config_with_custom_ca() -> CustomCaResult<Option<Arc<ClientConfig>>>
 {
     maybe_build_rustls_client_config_with_env(&ProcessEnv)

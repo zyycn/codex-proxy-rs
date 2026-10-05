@@ -1,46 +1,20 @@
-import type { Dayjs } from 'dayjs'
-import dayjs from 'dayjs'
 import { computed, shallowRef } from 'vue'
 
-export type UsageTimeRange = 'today' | '7d' | '30d'
-
-export interface UsageTimeRangeParams extends Record<string, string> {
-  startTime: string
-  endTime: string
+type UsageTimeRange = 'today' | '7d' | '30d'
+export interface UsageTimeRangeParams {
+  period: UsageTimeRange
+  asOf: number
 }
 
 export function useUsageTimeRange(initialRange: UsageTimeRange = 'today') {
   const timeRange = shallowRef<UsageTimeRange>(initialRange)
-  const rangeEnd = shallowRef(dayjs())
-  const timeRangeParams = computed(() => buildTimeRange(timeRange.value, rangeEnd.value))
-
+  const rangeEnd = shallowRef(Date.now())
+  const timeRangeParams = computed(() => ({ period: timeRange.value, asOf: rangeEnd.value }))
   function refreshTimeRangeEnd() {
-    rangeEnd.value = dayjs()
+    rangeEnd.value = Date.now()
   }
-
   function latestTimeRangeParams() {
-    return buildTimeRange(timeRange.value, dayjs())
+    return { period: timeRange.value, asOf: Date.now() }
   }
-
-  return {
-    timeRange,
-    timeRangeParams,
-    refreshTimeRangeEnd,
-    latestTimeRangeParams,
-  }
-}
-
-function buildTimeRange(range: UsageTimeRange, end: Dayjs): UsageTimeRangeParams {
-  if (range === 'today') {
-    return {
-      startTime: end.startOf('day').toISOString(),
-      endTime: end.toISOString(),
-    }
-  }
-
-  const days = range === '30d' ? 29 : 6
-  return {
-    startTime: end.subtract(days, 'day').startOf('day').toISOString(),
-    endTime: end.toISOString(),
-  }
+  return { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
 }

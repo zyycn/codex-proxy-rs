@@ -1,4 +1,4 @@
-//! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`。
+//! Pg 观测 adapter：实现 `ObservabilityRepository` 与 `AdminObservabilityStore`
 
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use gateway_admin::ports::store::UsageCalculatedBillingStream;
@@ -16,6 +16,7 @@ use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepositor
 
 #[derive(Clone)]
 pub struct PgObservabilityRepository {
+    timezone: gateway_core::time::DeploymentTimeZone,
     pool: PgPool,
     cooldowns: Option<Arc<dyn ProviderCooldownPort>>,
     query_budget: ObservabilityQueryBudget,
@@ -29,13 +30,20 @@ impl PgObservabilityRepository {
         query_budget: ObservabilityQueryBudget,
     ) -> Self {
         Self {
+            timezone: Default::default(),
             pool,
             cooldowns,
             query_budget,
         }
     }
 
-    /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机。
+    #[must_use]
+    pub fn with_timezone(mut self, timezone: gateway_core::time::DeploymentTimeZone) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
+    /// 从账号事实和当前冷却一次性派生 Dashboard 五态；不在 SQL 中复制状态机
     async fn account_status_snapshot(
         &self,
         observed_at: DateTime<Utc>,
@@ -81,10 +89,10 @@ impl PgObservabilityRepository {
     }
 }
 
-/// `gateway-admin` 观测端口的 PostgreSQL adapter。
+/// `gateway-admin` 观测端口的 PostgreSQL adapter
 ///
 /// SQL 查询与内部投影继续由 [`PgObservabilityRepository`] 唯一拥有；本类型只负责
-/// Admin UTC 领域模型与持久化投影之间的无格式化转换。
+/// Admin UTC 领域模型与持久化投影之间的无格式化转换
 #[derive(Clone)]
 pub struct PgAdminObservabilityStore {
     repository: PgObservabilityRepository,
@@ -103,6 +111,11 @@ impl PgAdminObservabilityStore {
             repository: PgObservabilityRepository::new(pool, cooldowns, query_budget),
             runtime_signals,
         }
+    }
+    #[must_use]
+    pub fn with_timezone(mut self, timezone: gateway_core::time::DeploymentTimeZone) -> Self {
+        self.repository = self.repository.with_timezone(timezone);
+        self
     }
 }
 
@@ -126,7 +139,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             current_page: 1,
             page_size: ObservabilityPageSize::new(10)?,
         };
-        // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞。
+        // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞
         let (totals, (provider_accounts, _)) = futures::try_join!(
             self.query_budget.run(
                 "load dashboard lifetime totals",
@@ -137,7 +150,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
         let (trend, account_usage, recent_requests) = futures::try_join!(
             self.query_budget.run(
                 "load dashboard request trend",
-                dashboard_request_metric_series(&self.pool, range, &filter),
+                dashboard_request_metric_series(&self.pool, range, &filter, self.timezone),
             ),
             self.query_budget.run(
                 "load dashboard account usage",
@@ -165,7 +178,12 @@ impl ObservabilityRepository for PgObservabilityRepository {
         self.query_budget
             .run(
                 "load dashboard request trend",
-                dashboard_request_metric_series(&self.pool, range, &UsageRecordFilter::default()),
+                dashboard_request_metric_series(
+                    &self.pool,
+                    range,
+                    &UsageRecordFilter::default(),
+                    self.timezone,
+                ),
             )
             .await
     }
@@ -178,7 +196,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
         self.query_budget
             .run(
                 "load usage request trend",
-                request_metric_series(&self.pool, range, &filter),
+                request_metric_series(&self.pool, range, &filter, self.timezone),
             )
             .await
     }
@@ -190,7 +208,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
     ) -> BoxStream<'_, StoreResult<CalculatedUsageBillingFact>> {
         self.query_budget.run_stream(
             "load calculated usage billing facts",
-            calculated_usage_billing_facts(&self.pool, range, filter),
+            calculated_usage_billing_facts(&self.pool, range, filter, self.timezone),
         )
     }
 
@@ -261,7 +279,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
         dimension: DiagnosticDimension,
-    ) -> StoreResult<Vec<DiagnosticObservation>> {
+    ) -> StoreResult<DiagnosticsObservation> {
         self.query_budget
             .run(
                 "load usage diagnostics",
@@ -441,18 +459,17 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         range: admin_observability::TimeRange,
         filter: admin_observability::UsageFilter,
         dimension: admin_observability::DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<admin_observability::DiagnosticObservation>> {
-        self.repository
+    ) -> AdminStoreResult<admin_observability::DiagnosticsObservation> {
+        let observation = self
+            .repository
             .usage_diagnostics(
                 store_range(range)?,
                 store_usage_filter(filter),
                 store_diagnostic_dimension(dimension),
             )
             .await
-            .map_err(observability_error)?
-            .into_iter()
-            .map(admin_diagnostic_observation)
-            .collect()
+            .map_err(observability_error)?;
+        admin_diagnostics_observation(observation)
     }
 
     async fn list_ops_errors(

@@ -1,3 +1,5 @@
+//! 账号出站代理管理的 HTTP 请求校验、路由与展示投影
+
 use crate::auth::SessionState;
 
 use axum::{
@@ -153,13 +155,16 @@ struct ProxyView {
     revision: u64,
     account_count: u64,
     last_test_at: Option<String>,
+    last_test_at_display: Option<String>,
     last_test: Option<ProxyTestView>,
     created_at: String,
+    created_at_display: String,
     updated_at: String,
+    updated_at_display: String,
 }
 
-impl From<ProxyRecord> for ProxyView {
-    fn from(record: ProxyRecord) -> Self {
+impl From<(ProxyRecord, crate::time::TimePresenter)> for ProxyView {
+    fn from((record, time): (ProxyRecord, crate::time::TimePresenter)) -> Self {
         let endpoint = record.proxy.endpoint();
         Self {
             auto_location: record.auto_location,
@@ -171,9 +176,15 @@ impl From<ProxyRecord> for ProxyView {
             endpoint,
             revision: record.revision.get(),
             account_count: record.account_count,
+            last_test_at_display: record
+                .last_test_at
+                .as_ref()
+                .map(|value| time.datetime(value)),
             last_test_at: record.last_test_at.map(|at| at.to_rfc3339()),
             last_test: record.last_test.map(Into::into),
+            created_at_display: time.datetime(&record.created_at),
             created_at: record.created_at.to_rfc3339(),
+            updated_at_display: time.datetime(&record.updated_at),
             updated_at: record.updated_at.to_rfc3339(),
         }
     }
@@ -198,10 +209,10 @@ struct MutationView {
     config_revision: u64,
 }
 
-impl From<ProxyMutation> for MutationView {
-    fn from(value: ProxyMutation) -> Self {
+impl From<(ProxyMutation, crate::time::TimePresenter)> for MutationView {
+    fn from((value, time): (ProxyMutation, crate::time::TimePresenter)) -> Self {
         Self {
-            record: value.record.into(),
+            record: ProxyView::from((value.record, time)),
             config_revision: value.config_revision.get(),
         }
     }
@@ -244,6 +255,7 @@ async fn list<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let result = state
         .admin_services()
         .proxies()
@@ -259,7 +271,11 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(ProxyPageView {
-            items: result.items.into_iter().map(Into::into).collect(),
+            items: result
+                .items
+                .into_iter()
+                .map(|value| ProxyView::from((value, time)))
+                .collect(),
             page: PageMeta::new(
                 result.page,
                 u32::from(result.page_size),
@@ -336,6 +352,7 @@ async fn create<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let proxy = request
         .proxy_url
         .0
@@ -357,7 +374,7 @@ where
         .map_err(map_error)?;
     Ok(AdminResponse::new(
         StatusCode::CREATED,
-        AdminEnvelope::ok(MutationView::from(result)),
+        AdminEnvelope::ok(MutationView::from((result, time))),
     ))
 }
 
@@ -393,6 +410,7 @@ async fn update<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let proxy = request
         .proxy_url
         .map(|value| {
@@ -420,7 +438,7 @@ where
         .map_err(map_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(MutationView::from(result)),
+        AdminEnvelope::ok(MutationView::from((result, time))),
     ))
 }
 
@@ -480,6 +498,7 @@ async fn test<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let result = state
         .admin_services()
         .proxies()
@@ -493,6 +512,6 @@ where
         .map_err(map_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(ProxyView::from(result)),
+        AdminEnvelope::ok(ProxyView::from((result, time))),
     ))
 }

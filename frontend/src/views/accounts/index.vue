@@ -3,22 +3,22 @@ import { BaseCard, BaseCheckbox, BaseConfirmModal, BasePageHeader, BaseTable, Ba
 
 import { ChevronDown } from '@lucide/vue'
 import { ref } from 'vue'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
+import AccountCreateModal from './components/account-create-modal/index.vue'
+import AccountImportTasks from './components/account-import-tasks/index.vue'
+import AccountQuotaPanel from './components/account-quota-panel/index.vue'
+import AccountQuotaSummaryCell from './components/account-quota-summary-cell/index.vue'
+import AccountStatusBadge from './components/account-status-badge/index.vue'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
-import AccountCreateModal from './components/AccountCreateModal/index.vue'
 import AccountEditModal from './components/AccountEditModal.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
-import AccountImportTasks from './components/AccountImportTasks/index.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
-import AccountPlanBadge from './components/AccountPlanBadge.vue'
-import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
-import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
-import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
 import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
@@ -28,7 +28,7 @@ import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
-import { accountColumns, derivedAccountStatus } from './constants'
+import { accountColumns } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
 const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns } = useTableColumns(accountColumns, 'accounts')
@@ -75,6 +75,7 @@ const {
   showDeleteModal,
   showSingleDeleteModal,
   pendingDeleteAccount,
+  deleteCount,
   recoveringAccountIds,
   refreshingAccountIds,
   refreshingQuotaAccountIds,
@@ -93,6 +94,7 @@ const {
   handleCreate,
   handleAuthorizeOAuth,
   openCreateAccount,
+  clearCreate,
   openReauthorizeAccount,
   requestDeleteAccount,
   handleDelete,
@@ -152,6 +154,7 @@ const {
   modelAccess: batchModelAccess,
   hasChanges: batchHasChanges,
   catalogAccountId: batchCatalogAccountId,
+  editingCount: batchEditingCount,
   proxyMode: batchProxyMode,
   proxyId: batchProxyId,
   selectedGroupIds: batchGroupIds,
@@ -183,8 +186,8 @@ const {
   saving: savingAccountEdit,
   open: openAccountEdit,
   save: saveAccountEdit,
+  clearCredentials,
 } = useAccountEditor({
-  accounts,
   reloadAccounts: loadAccounts,
   reloadGroups: loadGroups,
 })
@@ -291,13 +294,14 @@ const {
 
             <template #status="{ row }">
               <AccountStatusBadge
-                :status="derivedAccountStatus(row)"
+                :status="row.status"
                 :error-reason="row.errorReason"
                 :error-message="row.errorMessage"
-                :rate-limited-until="row.quota.rateLimitedUntil"
+                :rate-limit-recovery-display="row.quota.rateLimitRecoveryDisplay"
                 :rate-limit-reason="row.quota.rateLimitReason"
                 :recovery-probe-required="row.quota.recoveryProbeRequired"
                 :next-refresh-at="row.nextRefreshAt"
+                :next-refresh-at-display="row.nextRefreshAtDisplay"
               />
             </template>
 
@@ -316,7 +320,7 @@ const {
             </template>
 
             <template #lastUsedAt="{ row }">
-              <LastUsedAtCell :value="row.usage.lastUsedAt" />
+              <LastUsedAtCell :value="row.usage.lastUsedAt" :display="row.usage.lastUsedAtDisplay" :full-display="row.usage.lastUsedAtFullDisplay" />
             </template>
 
             <template #actions="{ row }">
@@ -344,13 +348,11 @@ const {
                 <AccountQuotaPanel
                   :account="row"
                   :refreshing="refreshingQuotaAccountIds.has(row.id)"
+                  @account-updated="void replaceAccount($event)"
                   @quota-reset="handleQuotaReset"
                   @refresh-quota="handleRefreshQuota"
                 />
-                <AccountUsagePanel
-                  :account="row"
-                  @account-updated="void replaceAccount($event)"
-                />
+                <AccountUsagePanel :account="row" />
               </div>
             </template>
           </BaseTable>
@@ -394,6 +396,7 @@ const {
       @select="importTasks.select"
       @refresh="importTasks.refresh"
       @stop="importTasks.stop"
+      @after-leave="importTasks.refresh(true)"
       @view-accounts="showImportTasks = false; loadAccounts()"
     />
 
@@ -410,6 +413,7 @@ const {
       :saving="creatingAccount"
       @create="handleCreate"
       @generate-oauth="handleAuthorizeOAuth"
+      @after-leave="clearCreate"
     />
 
     <AccountEditModal
@@ -431,6 +435,7 @@ const {
       :groups-loading="groupsLoading"
       :saving="savingAccountEdit"
       @save="saveAccountEdit"
+      @after-leave="clearCredentials"
     />
 
     <AccountBatchEditModal
@@ -443,7 +448,7 @@ const {
       v-model:proxy-id="batchProxyId"
       v-model:selected-group-ids="batchGroupIds"
       :catalog-account-id="batchCatalogAccountId"
-      :selected-count="selectedIds.size"
+      :selected-count="batchEditingCount"
       :groups="groups"
       :groups-loading="groupsLoading"
       :saving="savingBatchEdit"
@@ -461,7 +466,7 @@ const {
       @confirm="handleBatchDelete"
     >
       <p class="m-0">
-        确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销
+        确定要删除选中的 {{ deleteCount }} 个账号吗？此操作不可撤销
       </p>
     </BaseConfirmModal>
 

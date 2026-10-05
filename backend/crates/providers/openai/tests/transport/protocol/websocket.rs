@@ -1,3 +1,5 @@
+//! 验证 WebSocket 请求编码、事件处理与载荷审计脱敏
+
 use provider_openai::transport::protocol::responses::CodexResponsesRequest;
 use provider_openai::transport::protocol::websocket::{
     OpeningAuditSnapshot, websocket_audit_artifact_from_attempt, websocket_event_to_sse_frame,
@@ -92,7 +94,7 @@ fn websocket_response_create_payload_should_keep_explicit_empty_instructions() {
 
 #[test]
 fn websocket_response_create_payload_text_should_match_merged_map_serialization() {
-    // body 自带 type 键与未知字段：文本帧必须与「合并 Map 再序列化」逐字节一致。
+    // body 自带 type 键与未知字段：文本帧必须与「合并 Map 再序列化」逐字节一致
     let request = CodexResponsesRequest::from_body(
         json!({
             "model": "gpt-test",

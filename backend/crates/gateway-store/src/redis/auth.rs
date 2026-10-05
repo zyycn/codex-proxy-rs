@@ -1,4 +1,4 @@
-//! 控制面统一会话与双层固定窗口登录限流。
+//! 控制面统一会话与双层固定窗口登录限流
 
 use std::time::Duration;
 
@@ -21,13 +21,13 @@ end
 return 0
 "#;
 
-/// Redis 身份标签只由认证服务写入，不能从请求中的角色声明构造。
+/// Redis 身份标签只由认证服务写入，不能从请求中的角色声明构造
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionSubjectRecord {
     Admin {
         admin_user_id: String,
-        // 旧会话没有指纹，按未认证处理并要求重新登录。
+        // 旧会话没有指纹，按未认证处理并要求重新登录
         #[serde(default)]
         credential_fingerprint: String,
     },
@@ -49,7 +49,7 @@ impl SessionSubjectRecord {
     }
 }
 
-/// Redis 中不含密码或原始 API Key 的统一会话事实。
+/// Redis 中不含密码或原始 API Key 的统一会话事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSessionRecord {
     pub subject: SessionSubjectRecord,

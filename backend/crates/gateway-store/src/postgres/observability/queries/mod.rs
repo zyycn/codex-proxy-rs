@@ -1,4 +1,4 @@
-//! 观测查询族：dashboard / usage / ops / accounts。
+//! 观测查询族：dashboard / usage / ops / accounts
 
 mod accounts;
 mod dashboard;

@@ -1,3 +1,5 @@
+//! 验证 Client Key 管理接口的预算、密钥输入与查询合同
+
 use chrono::{DateTime, TimeZone as _, Utc};
 use gateway_api::admin::client_keys::{
     self, ClientKeyCursorData, ClientKeyCursorValue, ClientKeyListData, ClientKeyMutationRequest,
@@ -431,26 +433,29 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         .with_ymd_and_hms(2026, 7, 18, 8, 0, 0)
         .single()
         .expect("valid time");
-    let view = ClientKeyView::from(gateway_admin::model::client_keys::ClientKeyRecord {
-        request_profile_overrides: Default::default(),
-        budget: Default::default(),
-        id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
-        name: "visible".to_owned(),
-        label: None,
-        groups: Vec::new(),
-        provider_kinds: vec![
-            gateway_core::routing::ProviderKind::new("openai").expect("Provider kind"),
-        ],
-        prefix: "sk_visible12".to_owned(),
-        enabled: true,
-        limits: gateway_core::policy::RateLimits {
-            max_concurrency: 2,
-            requests_per_minute: 60,
+    let view = ClientKeyView::from((
+        gateway_admin::model::client_keys::ClientKeyRecord {
+            request_profile_overrides: Default::default(),
+            budget: Default::default(),
+            id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
+            name: "visible".to_owned(),
+            label: None,
+            groups: Vec::new(),
+            provider_kinds: vec![
+                gateway_core::routing::ProviderKind::new("openai").expect("Provider kind"),
+            ],
+            prefix: "sk_visible12".to_owned(),
+            enabled: true,
+            limits: gateway_core::policy::RateLimits {
+                max_concurrency: 2,
+                requests_per_minute: 60,
+            },
+            created_at,
+            updated_at: created_at,
+            last_used_at: Some(created_at),
         },
-        created_at,
-        updated_at: created_at,
-        last_used_at: Some(created_at),
-    });
+        gateway_api::TimePresenter::new(Default::default()),
+    ));
     let list =
         serde_json::to_value(ClientKeyListData::new(vec![view], None, 1)).expect("serialize list");
     assert!(list.get("configRevision").is_none());

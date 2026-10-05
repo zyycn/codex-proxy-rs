@@ -1,4 +1,4 @@
-//! Runtime settings 与管理员 API Key 用例。
+//! Runtime settings 与管理员 API Key 用例
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use crate::{
 
 use super::{map_store_error, publish_committed};
 
-/// API 消费的 Runtime settings 管理服务。
+/// API 消费的 Runtime settings 管理服务
 #[async_trait]
 pub trait SettingsService: Send + Sync {
     async fn preview_pricing_sync(
@@ -100,6 +100,53 @@ impl DefaultSettingsService {
             snapshot,
         }
     }
+}
+
+fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
+    let valid = command.request_location.validate().is_ok()
+        && command.responses_max_decompressed_body_bytes > 0
+        && isize::try_from(command.responses_max_decompressed_body_bytes).is_ok()
+        && command.refresh_margin_seconds > 0
+        && command.refresh_concurrency > 0
+        && command.max_waiting_per_key <= 1_000
+        && command.max_waiting_per_account <= 1_000
+        && (1..=120).contains(&command.concurrency_wait_timeout_seconds)
+        && crate::model::retention::RetentionPolicy::try_new(
+            command.usage_retention_days,
+            command.ops_event_retention_days,
+            command.audit_retention_days,
+        )
+        .is_ok()
+        && valid_client_version(command.min_codex_desktop_version.as_deref())
+        && valid_client_version(command.min_codex_cli_version.as_deref())
+        && valid_probe_model(command.account_auto_freeze_probe_model.as_deref())
+        && gateway_core::provider_ports::valid_warmup_schedule_time(
+            &command.account_warmup_schedule_time,
+        )
+        && valid_probe_model(command.account_warmup_model.as_deref())
+        && (!command.account_warmup_enabled || command.account_warmup_model.is_some())
+        && i64::try_from(command.request_interval_ms).is_ok()
+        && (2..=1_000).contains(&command.account_auto_freeze_threshold)
+        && (60..=3_600).contains(&command.account_auto_freeze_window_seconds)
+        && (300..=604_800).contains(&command.account_auto_freeze_duration_seconds);
+    if valid {
+        Ok(())
+    } else {
+        Err(AdminError::invalid("运行时设置不满足约束"))
+    }
+}
+
+fn valid_client_version(value: Option<&str>) -> bool {
+    value.is_none_or(|value| CodexClientVersion::parse(value).is_ok())
+}
+
+fn valid_probe_model(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value == value.trim()
+            && !value.bytes().any(|byte| byte.is_ascii_control())
+    })
 }
 
 #[async_trait]
@@ -365,7 +412,17 @@ impl SettingsService for DefaultSettingsService {
             .store
             .replace_runtime_settings(command, context)
             .await
-            .map_err(|error| map_store_error(error, "runtime settings"))?;
+            .map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    crate::ports::store::AdminStoreErrorKind::Conflict
+                        | crate::ports::store::AdminStoreErrorKind::StaleRevision
+                ) {
+                    AdminError::conflict("运行设置已被其他调用修改，请重新读取并确认后提交")
+                } else {
+                    map_store_error(error, "runtime settings")
+                }
+            })?;
         publish_committed(self.snapshot.as_ref(), settings.config_revision).await?;
         Ok(settings)
     }
@@ -405,48 +462,4 @@ impl SettingsService for DefaultSettingsService {
         publish_committed(self.snapshot.as_ref(), mutation.config_revision).await?;
         Ok(mutation)
     }
-}
-
-fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
-    let valid = command.request_location.validate().is_ok()
-        && command.responses_max_decompressed_body_bytes > 0
-        && isize::try_from(command.responses_max_decompressed_body_bytes).is_ok()
-        && command.refresh_margin_seconds > 0
-        && command.refresh_concurrency > 0
-        && command.max_waiting_per_key <= 1_000
-        && command.max_waiting_per_account <= 1_000
-        && (1..=120).contains(&command.concurrency_wait_timeout_seconds)
-        && command.usage_retention_days >= 31
-        && command.ops_event_retention_days > 0
-        && command.audit_retention_days > 0
-        && valid_client_version(command.min_codex_desktop_version.as_deref())
-        && valid_client_version(command.min_codex_cli_version.as_deref())
-        && valid_probe_model(command.account_auto_freeze_probe_model.as_deref())
-        && gateway_core::provider_ports::valid_warmup_schedule_time(
-            &command.account_warmup_schedule_time,
-        )
-        && valid_probe_model(command.account_warmup_model.as_deref())
-        && (!command.account_warmup_enabled || command.account_warmup_model.is_some())
-        && i64::try_from(command.request_interval_ms).is_ok()
-        && (2..=1_000).contains(&command.account_auto_freeze_threshold)
-        && (60..=3_600).contains(&command.account_auto_freeze_window_seconds)
-        && (300..=604_800).contains(&command.account_auto_freeze_duration_seconds);
-    if valid {
-        Ok(())
-    } else {
-        Err(AdminError::invalid("运行时设置不满足约束"))
-    }
-}
-
-fn valid_client_version(value: Option<&str>) -> bool {
-    value.is_none_or(|value| CodexClientVersion::parse(value).is_ok())
-}
-
-fn valid_probe_model(value: Option<&str>) -> bool {
-    value.is_none_or(|value| {
-        !value.is_empty()
-            && value.len() <= 128
-            && value == value.trim()
-            && !value.bytes().any(|byte| byte.is_ascii_control())
-    })
 }

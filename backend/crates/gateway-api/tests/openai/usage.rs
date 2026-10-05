@@ -1,3 +1,5 @@
+//! 验证当前 Key 预算查询的身份隔离与只读行为
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

@@ -22,6 +22,7 @@ const {
   editingGroup,
   pendingDeleteGroup,
   pendingDisableGroup,
+  deleteCount,
   form,
   saving,
   deleting,
@@ -182,7 +183,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       @confirm="confirmBatchDelete"
     >
       <p class="m-0">
-        确定删除选中的 {{ selectedIds.size }} 个分组吗？账号本身不会被删除
+        确定删除选中的 {{ deleteCount }} 个分组吗？账号本身不会被删除
       </p>
     </BaseConfirmModal>
 

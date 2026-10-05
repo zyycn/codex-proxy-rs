@@ -1,4 +1,4 @@
-//! 按大小轮转、压缩已关闭分片、按完整 UTC 日期组清理。
+//! 按大小轮转、压缩已关闭分片、按部署时区自然日期组清理
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -12,6 +12,7 @@ use flate2::{Compression, write::GzEncoder};
 use super::sink::LogHealth;
 
 pub(super) struct RotatingLogWriter {
+    timezone: gateway_core::time::DeploymentTimeZone,
     directory: PathBuf,
     prefix: &'static str,
     maximum_bytes: u64,
@@ -30,10 +31,11 @@ impl RotatingLogWriter {
         maximum_bytes: u64,
         retention_days: usize,
         health: Arc<LogHealth>,
+        timezone: gateway_core::time::DeploymentTimeZone,
     ) -> io::Result<Self> {
         fs::create_dir_all(&directory)?;
-        let date = Utc::now().date_naive();
-        cleanup_log_files(&directory, prefix, date, retention_days)?;
+        let date = timezone.local(Utc::now()).date_naive();
+        cleanup_log_files(&directory, prefix, date, retention_days, timezone)?;
         let latest = managed_log_files(&directory, prefix)?
             .into_iter()
             .filter(|entry| entry.date == date)
@@ -48,6 +50,7 @@ impl RotatingLogWriter {
         let path = directory.join(log_file_name(prefix, date, segment));
         let file = open_log_segment(&path)?;
         let writer = Self {
+            timezone,
             directory,
             prefix,
             maximum_bytes,
@@ -58,7 +61,7 @@ impl RotatingLogWriter {
             file,
             health,
         };
-        // Recover unfinished archive work after restart; the active file is never compressed.
+        // 重启后恢复未完成归档，正在写入的文件不参与压缩
         for entry in managed_log_files(&writer.directory, prefix)? {
             if !entry.compressed
                 && entry.path != path
@@ -71,7 +74,7 @@ impl RotatingLogWriter {
     }
 
     fn rotate_if_required(&mut self, incoming_bytes: usize) -> io::Result<()> {
-        let date = Utc::now().date_naive();
+        let date = self.timezone.local(Utc::now()).date_naive();
         let day_changed = date != self.date;
         let size_exceeded = self.bytes_written > 0
             && self.bytes_written.saturating_add(incoming_bytes as u64) > self.maximum_bytes;
@@ -96,7 +99,7 @@ impl RotatingLogWriter {
             .directory
             .join(log_file_name(self.prefix, date, segment));
         let file = open_log_segment(&path)?;
-        // Commit rotation state only after opening the new file succeeds.
+        // 新文件打开成功后才能提交轮转状态
         self.file = file;
         self.date = date;
         self.segment = segment;
@@ -104,10 +107,14 @@ impl RotatingLogWriter {
         if let Err(error) = compress_log_file(&previous) {
             self.health.maintenance_failed(error.kind());
         }
-        // Maintenance errors must not discard the record that triggered rotation.
-        if let Err(error) =
-            cleanup_log_files(&self.directory, self.prefix, date, self.retention_days)
-        {
+        // 维护失败不能丢弃触发轮转的日志记录
+        if let Err(error) = cleanup_log_files(
+            &self.directory,
+            self.prefix,
+            date,
+            self.retention_days,
+            self.timezone,
+        ) {
             self.health.maintenance_failed(error.kind());
         }
         Ok(())
@@ -197,6 +204,7 @@ fn cleanup_log_files(
     prefix: &str,
     today: NaiveDate,
     retention_days: usize,
+    timezone: gateway_core::time::DeploymentTimeZone,
 ) -> io::Result<()> {
     let days =
         u64::try_from(retention_days).map_err(|_| io::Error::other("log retention overflow"))?;
@@ -211,12 +219,11 @@ fn cleanup_log_files(
         if date >= cutoff {
             continue;
         }
-        // Keep a whole date if any segment was written more recently than its filename.
-        // This also protects archives recovered after clock corrections or manual restoration.
+        // 用较近的文件名日期或实际写入日期保护整组，避免时区切换后提前清理
         let mut latest = date;
         for path in &paths {
             let modified: chrono::DateTime<Utc> = path.metadata()?.modified()?.into();
-            latest = latest.max(modified.date_naive());
+            latest = latest.max(timezone.local(modified).date_naive());
         }
         if latest >= cutoff {
             continue;
@@ -233,7 +240,7 @@ fn compress_log_file(path: &Path) -> io::Result<()> {
     let modified = source.metadata()?.modified()?;
     let archive = path.with_extension("log.gz");
     let temporary = path.with_extension("log.gz.tmp");
-    // Only a closed, owner-managed segment can have this temporary archive.
+    // 只有已关闭且由当前写入器管理的分段才能拥有此临时归档
     let output = File::create(&temporary)?;
     let mut encoder = GzEncoder::new(output, Compression::fast());
     io::copy(&mut source, &mut encoder)?;
@@ -241,6 +248,6 @@ fn compress_log_file(path: &Path) -> io::Result<()> {
     output.set_modified(modified)?;
     output.sync_all()?;
     fs::rename(&temporary, &archive)?;
-    // The original survives until a complete, synced archive has been published.
+    // 完整归档同步并发布后才能删除原文件
     fs::remove_file(path)
 }

@@ -3,7 +3,6 @@ import type { ClientDownloadPackage, CodexDesktopWindowsDownloads } from '@/api'
 import { BaseButton, BaseEmpty, BaseIconButton, BaseSkeleton } from '@codex-proxy/ui'
 
 import { ArrowDownToLine, PackageOpen, RefreshCw } from '@lucide/vue'
-import { formatDateTime } from '@/utils/format'
 
 import ClientInstallCommandList from './ClientInstallCommandList.vue'
 
@@ -144,7 +143,7 @@ function formatFileSize(value: number | null): string {
             · {{ formatFileSize(packageItem.sizeBytes) }}
           </p>
           <p v-if="packageItem.expiresAt" class="mt-1.5 mb-0 text-cp-xs font-semibold text-cp-text-quaternary">
-            链接失效：{{ formatDateTime(packageItem.expiresAt) }}
+            链接失效：{{ packageItem.expiresAtDisplay ?? '—' }}
           </p>
         </div>
 

@@ -5,7 +5,7 @@ import { BaseButton, BaseEmpty, BaseTag } from '@codex-proxy/ui'
 import { Blocks, ExternalLink } from '@lucide/vue'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { pluginPageLocation, shortPluginInstanceId } from '../utils/navigation'
+import { pluginPageLocation, shortPluginInstanceId } from '@/utils/plugin'
 
 const props = defineProps<{
   views: PluginManagementView[]

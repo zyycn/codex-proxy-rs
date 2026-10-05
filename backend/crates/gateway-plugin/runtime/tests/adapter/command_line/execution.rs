@@ -1,8 +1,10 @@
+//! 验证插件命令复用宿主身份、计量、账号事务与审计边界
+
 use gateway_core::policy::{ClientApiKeyId, RateLimits};
 use gateway_plugin_runtime::PluginCommandError;
 use serde_json::json;
 
-use crate::support::environment::{Environment, account_grant};
+use crate::support::environment::Environment;
 
 #[tokio::test]
 async fn command_selects_key_at_call_time_and_uses_normal_model_ledger() {
@@ -29,34 +31,29 @@ async fn command_selects_key_at_call_time_and_uses_normal_model_ledger() {
         .path()
         .join("command-bound-model.jsonl");
     let command_marker = environment.directory.path().join("command-bound.jsonl");
-    let model_grant = account_grant("models");
-    let source_credentials = account_grant("accounts");
     environment
-        .install_plugin(
-            json!({
-                "plugin_id":"test.command-source",
-                "command_registration":{"commands":[
-                    {"name":"run","description":"执行模型"},
-                    {"name":"fail","description":"执行后失败"}
-                ]},
-                "command_nested_model_fixture":{
-                    "request":{
-                        "client_key_id":key_id,
-                        "model":crate::support::native::MODEL,
-                        "protocol":"openai",
-                        "operation":"generate",
-                        "provider":"openai",
-                        "account_id":account.as_str()
-                    },
-                    "body":{"model":crate::support::native::MODEL,"input":"bound command"}
+        .install_plugin(json!({
+            "plugin_id":"test.command-source",
+            "command_registration":{"commands":[
+                {"name":"run","description":"执行模型"},
+                {"name":"fail","description":"执行后失败"}
+            ]},
+            "command_nested_model_fixture":{
+                "request":{
+                    "client_key_id":key_id,
+                    "model":crate::support::native::MODEL,
+                    "protocol":"openai",
+                    "operation":"generate",
+                    "provider":"openai",
+                    "account_id":account.as_str()
                 },
-                "command_nested_model_marker":marker,
-                "command_marker":command_marker,
-                "command_error_after_nested_model":"fail",
-                "command_result":{"stdout":"ok\n","stderr":"","exit_code":0}
-            }),
-            vec![model_grant, source_credentials],
-        )
+                "body":{"model":crate::support::native::MODEL,"input":"bound command"}
+            },
+            "command_nested_model_marker":marker,
+            "command_marker":command_marker,
+            "command_error_after_nested_model":"fail",
+            "command_result":{"stdout":"ok\n","stderr":"","exit_code":0}
+        }))
         .await;
     let (runtime, core) = environment.command_plane().await;
     let snapshot = environment
@@ -164,9 +161,7 @@ async fn command_accounts_use_admin_cas_audit_and_report_partial_commit_without_
             {"action":"replace","account_id":existing.as_str(),"credential_revision":999,"facts":facts}
         ]}
     });
-    let (runtime, core) = environment
-        .plugin(config, vec![account_grant("accounts")])
-        .await;
+    let (runtime, core) = environment.plugin(config).await;
     let admin = environment.bind_admin_accounts(&runtime, &core).await;
     let snapshot = environment
         .store
@@ -249,9 +244,7 @@ async fn command_accounts_domain_does_not_need_separate_login_or_write_grants() 
             {"action":"create","provider_id":"openai","facts":{"name":"CLI created","authentication_kind":"api_key","material":{"key":"cli-test-only"}}}
         ]}
     });
-    let (runtime, core) = environment
-        .plugin(config, vec![account_grant("accounts")])
-        .await;
+    let (runtime, core) = environment.plugin(config).await;
     let admin = environment.bind_admin_accounts(&runtime, &core).await;
     let snapshot = environment
         .store

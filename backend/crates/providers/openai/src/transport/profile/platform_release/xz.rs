@@ -1,4 +1,4 @@
-//! 利用 XZ 索引跳过无关 tar 文件；每次只保留一个已校验的压缩块。
+//! 利用 XZ 索引跳过无关 tar 文件；每次只保留一个已校验的压缩块
 
 use super::range::{invalid, seek_position};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -122,7 +122,7 @@ impl<R: Read + Seek> Read for IndexedXz<R> {
             bytes.resize(12 + padded as usize, 0);
             self.source.seek(SeekFrom::Start(block.offset))?;
             self.source.read_exact(&mut bytes[12..])?;
-            // 重建单块 XZ 外壳，让 liblzma 同时校验原始块的校验和与解压长度。
+            // 重建单块 XZ 外壳，让 liblzma 同时校验原始块的校验和与解压长度
             let mut index = vec![0, 1];
             put_vli(block.compressed, &mut index);
             put_vli(block.unpacked, &mut index);

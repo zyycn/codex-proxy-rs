@@ -1,3 +1,5 @@
+//! 验证账号选择、容量限制与失败反馈的衰减和并发更新
+
 use std::time::{Duration, Instant};
 
 use gateway_core::account::{

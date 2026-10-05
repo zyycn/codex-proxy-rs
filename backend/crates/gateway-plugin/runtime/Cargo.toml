@@ -14,6 +14,9 @@ bytes = "1.11.1"
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
 flate2 = "1.1.9"
 futures = "0.3.32"
+http = "1.5.0"
+http-body = "1.0.1"
+http-body-util = "0.1.5"
 gateway-admin = { path = "../../gateway-admin" }
 gateway-core = { path = "../../gateway-core" }
 gateway-host = { path = "../../gateway-host" }
@@ -21,7 +24,7 @@ gateway-plugin-sdk = { path = "../sdk", features = ["io"] }
 gateway-protocol = { path = "../../gateway-protocol" }
 hex = "0.4.3"
 image = { version = "0.25.8", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
-jsonschema = { version = "0.56.0", default-features = false }
+jsonschema = { version = "0.58.4", default-features = false }
 roxmltree = "0.21.1"
 semver = "1.0.27"
 secrecy = "0.10.3"
@@ -37,6 +40,7 @@ uuid = { version = "1.23.3", features = ["v4"] }
 url = "2.5.8"
 
 [dev-dependencies]
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
 wiremock = "0.6.5"
 gateway-store = { path = "../../gateway-store" }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
@@ -55,7 +59,7 @@ path = "tests/main.rs"
 
 [[bin]]
 name = "gateway-plugin-test-middleware"
-path = "tests/support/middleware.rs"
+path = "tests/support/middleware/mod.rs"
 test = false
 bench = false
 doc = false

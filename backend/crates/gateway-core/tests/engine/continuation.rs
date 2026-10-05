@@ -1,3 +1,5 @@
+//! 验证原生续接标识的脱敏、账号绑定与 Client Key 隔离
+
 use gateway_core::account::ProviderAccountId;
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,

@@ -1,4 +1,4 @@
-//! 非流式响应在洋葱链返回后才提交；既有执行守卫保管唯一终结责任。
+//! 非流式响应在洋葱链返回后才提交；既有执行守卫保管唯一终结责任
 
 use futures::future::BoxFuture;
 use gateway_core::engine::middleware::{
@@ -29,13 +29,13 @@ pub(crate) fn pending_execution_response(
 struct BufferedExecutionBody {
     frame: Option<MiddlewareFrame>,
     execution: PendingExecution,
-    // 原生结果决定是否提交执行；外层改写状态不能把失败转成 Core 成功。
+    // 原生结果决定是否提交执行；外层改写状态不能把失败转成 Core 成功
     commit_execution: bool,
 }
 
 impl MiddlewareBody for BufferedExecutionBody {
     fn next_frame(&mut self) -> BoxFuture<'_, Result<Option<MiddlewareFrame>, MiddlewareError>> {
-        // EOF 只表示单文档已读完；外层仍须验证正文并调用 commit，不能在此取消会话。
+        // EOF 只表示单文档已读完；外层仍须验证正文并调用 commit，不能在此取消会话
         Box::pin(async { Ok(self.frame.take()) })
     }
 

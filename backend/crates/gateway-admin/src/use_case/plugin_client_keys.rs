@@ -1,4 +1,4 @@
-//! 插件 Client Key 管理；复用管理服务，只开放非秘密目录与预算操作。
+//! 插件 Client Key 管理；复用管理服务，只开放非秘密目录与预算操作
 
 use std::sync::Arc;
 
@@ -14,7 +14,8 @@ use crate::{
             ResetClientKeyBudget, SortDirection, UpdateClientKeyBudgetLimits,
         },
         plugin_client_keys::{
-            PluginClientKey, PluginClientKeyCursor, PluginClientKeyListQuery, PluginClientKeyPage,
+            PluginClientKey, PluginClientKeyCursor, PluginClientKeyFacts, PluginClientKeyListQuery,
+            PluginClientKeyPage,
         },
         plugin_resources::PluginResourceOwner,
     },
@@ -34,6 +35,15 @@ impl DefaultPluginClientKeyAccess {
 
 #[async_trait]
 impl PluginClientKeyAccess for DefaultPluginClientKeyAccess {
+    async fn facts(&self, id: &ClientApiKeyId) -> Result<PluginClientKeyFacts, AdminError> {
+        let key = self.service.get(id).await?;
+        Ok(PluginClientKeyFacts {
+            id: key.id,
+            enabled: key.enabled,
+            group_ids: key.groups.into_iter().map(|group| group.id).collect(),
+        })
+    }
+
     async fn budget(&self, id: &ClientApiKeyId) -> Result<ClientBudgetStatus, AdminError> {
         self.service.budget(id).await
     }

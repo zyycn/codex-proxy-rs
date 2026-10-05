@@ -1,3 +1,5 @@
+//! Grok 推理传输的请求、响应流、网络观测与错误端口合同
+
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -12,7 +14,7 @@ use zeroize::Zeroizing;
 
 use super::{GrokHeader, GrokSessionBinding};
 
-/// 交给注入的 HTTP SSE transport 的自持有请求。
+/// 交给注入的 HTTP SSE transport 的自持有请求
 pub struct GrokInferenceRequest {
     trace: gateway_core::diagnostics::TraceContext,
     endpoint: Url,
@@ -47,25 +49,25 @@ impl GrokInferenceRequest {
         &self.trace
     }
 
-    /// 返回严格限定的官方 Responses 端点。
+    /// 返回严格限定的官方 Responses 端点
     #[must_use]
     pub const fn endpoint(&self) -> &Url {
         &self.endpoint
     }
 
-    /// 返回类型化 header；适配层不得记录敏感值。
+    /// 返回类型化 header；适配层不得记录敏感值
     #[must_use]
     pub fn headers(&self) -> &[GrokHeader] {
         &self.headers
     }
 
-    /// 返回序列化后的类型化 Responses body。
+    /// 返回序列化后的类型化 Responses body
     #[must_use]
     pub fn body(&self) -> &[u8] {
         &self.body
     }
 
-    /// 返回假名化的 proxy/egress 查找绑定。
+    /// 返回假名化的 proxy/egress 查找绑定
     #[must_use]
     pub const fn binding(&self) -> &GrokSessionBinding {
         &self.binding
@@ -87,16 +89,16 @@ impl fmt::Debug for GrokInferenceRequest {
     }
 }
 
-/// POST 被接受后返回的原始 SSE 字节块流。
+/// POST 被接受后返回的原始 SSE 字节块流
 pub type GrokInferenceChunkStream =
     Pin<Box<dyn Stream<Item = Result<bytes::Bytes, GrokInferenceTransportError>> + Send + 'static>>;
 
-/// 账号隔离的推理 client 是否已在缓存中。
+/// 账号隔离的推理 client 是否已在缓存中
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokInferenceClientCacheStatus {
-    /// 绑定复用了已有的账号隔离 client。
+    /// 绑定复用了已有的账号隔离 client
     Hit,
-    /// 请求首次查缓存时该绑定不存在。
+    /// 请求首次查缓存时该绑定不存在
     Miss,
 }
 
@@ -110,12 +112,12 @@ impl GrokInferenceClientCacheStatus {
     }
 }
 
-/// 提供本次请求所用地址的解析器。
+/// 提供本次请求所用地址的解析器
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokInferenceDnsSource {
-    /// 系统解析器返回了完全公网的地址集合。
+    /// 系统解析器返回了完全公网的地址集合
     System,
-    /// 系统结果不可用，由受信 DoH 回退提供地址。
+    /// 系统结果不可用，由受信 DoH 回退提供地址
     TrustedDoh,
 }
 
@@ -129,7 +131,7 @@ impl GrokInferenceDnsSource {
     }
 }
 
-/// 建立上游连接期间观测到的 DNS 工作量。
+/// 建立上游连接期间观测到的 DNS 工作量
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrokInferenceDnsObservation {
     source: GrokInferenceDnsSource,
@@ -156,7 +158,7 @@ impl GrokInferenceDnsObservation {
     }
 }
 
-/// 单次推理请求的低基数 transport 耗时与连接池事实。
+/// 单次推理请求的低基数 transport 耗时与连接池事实
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GrokInferenceTransportMetrics {
     headers_ms: Option<u64>,
@@ -202,8 +204,9 @@ impl GrokInferenceTransportMetrics {
     }
 }
 
-/// 已被接受的推理响应。非成功 HTTP 响应必须改为返回
-/// [`GrokInferenceTransportError`]。
+/// 已被接受的推理响应
+/// 非成功 HTTP 响应必须改为返回
+/// [`GrokInferenceTransportError`]
 pub struct GrokInferenceResponse {
     body: GrokInferenceChunkStream,
     http_version: UpstreamHttpVersion,
@@ -213,7 +216,7 @@ pub struct GrokInferenceResponse {
 }
 
 impl GrokInferenceResponse {
-    /// 包装一个已被接受的 SSE 响应体。
+    /// 包装一个已被接受的 SSE 响应体
     #[must_use]
     pub fn new(
         body: GrokInferenceChunkStream,
@@ -277,44 +280,44 @@ impl fmt::Debug for GrokInferenceResponse {
     }
 }
 
-/// 不含密钥的 transport 失败分类。
+/// 不含密钥的 transport 失败分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokInferenceTransportErrorKind {
-    /// 官方代理拒绝了 canonical 请求语义。
+    /// 官方代理拒绝了 canonical 请求语义
     InvalidRequest,
-    /// 官方代理不支持请求的某项能力。
+    /// 官方代理不支持请求的某项能力
     Unsupported,
-    /// access token 被拒绝。
+    /// access token 被拒绝
     Unauthorized,
-    /// 会话缺少模型或特性授权。
+    /// 会话缺少模型或特性授权
     PermissionDenied,
-    /// 会话级或 Provider 级限流。
+    /// 会话级或 Provider 级限流
     RateLimited,
-    /// 账号付费额度或 spending limit 耗尽。
+    /// 账号付费额度或 spending limit 耗尽
     QuotaExhausted,
-    /// 账号订阅级免费额度耗尽。
+    /// 账号订阅级免费额度耗尽
     FreeQuotaExhausted,
-    /// 上游声明指定模型的免费用量耗尽；selector 会收敛为账号级可恢复额度状态。
+    /// 上游声明指定模型的免费用量耗尽；selector 会收敛为账号级可恢复额度状态
     ModelQuotaExhausted,
-    /// 当前账号只缺少指定模型的访问权限。
+    /// 当前账号只缺少指定模型的访问权限
     ModelAccessDenied,
-    /// 上游要求付费，但没有给出可证明账号额度耗尽的稳定信号。
+    /// 上游要求付费，但没有给出可证明账号额度耗尽的稳定信号
     PaymentRequired,
-    /// 当前请求被内容安全策略拒绝，不代表账号或模型不可用。
+    /// 当前请求被内容安全策略拒绝，不代表账号或模型不可用
     SafetyRejected,
-    /// 截止时间或 transport 超时。
+    /// 截止时间或 transport 超时
     Timeout,
-    /// 网络/TLS/连接失败。
+    /// 网络/TLS/连接失败
     Transport,
-    /// HTTP/SSE 响应违反预期契约。
+    /// HTTP/SSE 响应违反预期契约
     Protocol,
-    /// 官方 CLI 代理不可用。
+    /// 官方 CLI 代理不可用
     Unavailable,
-    /// transport 观测到调用方取消。
+    /// transport 观测到调用方取消
     Cancelled,
 }
 
-/// 已分类的 transport 错误，绝不包含上游响应体。
+/// 已分类的 transport 错误，绝不包含上游响应体
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrokInferenceTransportError {
     kind: GrokInferenceTransportErrorKind,
@@ -332,7 +335,7 @@ pub struct GrokInferenceTransportError {
 }
 
 impl GrokInferenceTransportError {
-    /// 以 transport 保守判定的发送状态创建已分类错误。
+    /// 以 transport 保守判定的发送状态创建已分类错误
     #[must_use]
     pub const fn new(kind: GrokInferenceTransportErrorKind, send_state: UpstreamSendState) -> Self {
         Self {
@@ -355,7 +358,7 @@ impl GrokInferenceTransportError {
         }
     }
 
-    /// 保存 transport 提取的安全诊断，避免 Provider 映射时丢失原因。
+    /// 保存 transport 提取的安全诊断，避免 Provider 映射时丢失原因
     #[must_use]
     pub fn with_diagnostic(mut self, diagnostic: ProviderDiagnostic) -> Self {
         self.diagnostic = Some(Box::new(diagnostic));
@@ -367,7 +370,7 @@ impl GrokInferenceTransportError {
         self.diagnostic.as_deref()
     }
 
-    /// 附着合法的 HTTP 状态码。
+    /// 附着合法的 HTTP 状态码
     #[must_use]
     pub fn with_status(mut self, status: u16) -> Self {
         if (100..=599).contains(&status) {
@@ -376,7 +379,7 @@ impl GrokInferenceTransportError {
         self
     }
 
-    /// 附着 transport 解析出的有界重试延迟。
+    /// 附着 transport 解析出的有界重试延迟
     #[must_use]
     pub const fn with_retry_after(mut self, retry_after: Duration) -> Self {
         self.retry_after = Some(retry_after);
@@ -394,14 +397,14 @@ impl GrokInferenceTransportError {
         self
     }
 
-    /// 附着从错误 JSON 中提取并清洗后的稳定机器码。
+    /// 附着从错误 JSON 中提取并清洗后的稳定机器码
     #[must_use]
     pub fn with_upstream_code(mut self, code: OpaqueUpstreamValue) -> Self {
         self.upstream_code = Some(Box::new(code));
         self
     }
 
-    /// 附着仅供原客户端协议展示的结构化上游错误。
+    /// 附着仅供原客户端协议展示的结构化上游错误
     #[must_use]
     pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
         self.client_visible_upstream_error = Some(Box::new(error));
@@ -423,32 +426,32 @@ impl GrokInferenceTransportError {
         self
     }
 
-    /// 丢弃可能敏感的上游响应体，仅保留「已丢弃」这一事实。
+    /// 丢弃可能敏感的上游响应体，仅保留「已丢弃」这一事实
     #[must_use]
     pub fn redact_sensitive_context(mut self, _value: impl AsRef<str>) -> Self {
         self.sensitive_context_redacted = true;
         self
     }
 
-    /// 返回稳定的 transport 分类。
+    /// 返回稳定的 transport 分类
     #[must_use]
     pub const fn kind(&self) -> GrokInferenceTransportErrorKind {
         self.kind
     }
 
-    /// 返回保守判定的 payload 发送状态。
+    /// 返回保守判定的 payload 发送状态
     #[must_use]
     pub const fn send_state(&self) -> UpstreamSendState {
         self.send_state
     }
 
-    /// 返回清洗后的 HTTP 状态码。
+    /// 返回清洗后的 HTTP 状态码
     #[must_use]
     pub const fn status(&self) -> Option<u16> {
         self.status
     }
 
-    /// 返回可选的重试延迟。
+    /// 返回可选的重试延迟
     #[must_use]
     pub const fn retry_after(&self) -> Option<Duration> {
         self.retry_after
@@ -484,7 +487,7 @@ impl GrokInferenceTransportError {
         self.credential_recovery_required
     }
 
-    /// 报告是否丢弃过敏感响应体。
+    /// 报告是否丢弃过敏感响应体
     #[must_use]
     pub const fn sensitive_context_was_redacted(&self) -> bool {
         self.sensitive_context_redacted
@@ -535,16 +538,17 @@ impl fmt::Display for GrokInferenceTransportError {
 
 impl std::error::Error for GrokInferenceTransportError {}
 
-/// 推理 transport 返回的 future。
+/// 推理 transport 返回的 future
 pub type GrokInferenceTransportFuture<'a> = Pin<
     Box<
         dyn Future<Output = Result<GrokInferenceResponse, GrokInferenceTransportError>> + Send + 'a,
     >,
 >;
 
-/// 运行时 HTTP SSE 端口。实现必须只发出一次 POST，用传入的 session binding
-/// 维持 egress 亲和，且不得重试、切换凭据或回退到其他端点。
+/// 运行时 HTTP SSE 端口
+/// 实现必须只发出一次 POST，用传入的 session binding
+/// 维持 egress 亲和，且不得重试、切换凭据或回退到其他端点
 pub trait GrokInferenceTransport: Send + Sync {
-    /// 发起一次官方 CLI 代理请求。
+    /// 发起一次官方 CLI 代理请求
     fn execute(&self, request: GrokInferenceRequest) -> GrokInferenceTransportFuture<'_>;
 }

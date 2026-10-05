@@ -1,3 +1,5 @@
+//! 验证 WebSocket 异常断开诊断保留事实并脱敏正文
+
 use super::*;
 use gateway_core::diagnostics::TraceContext;
 
@@ -29,7 +31,7 @@ async fn diagnostics_preserve_abrupt_disconnect_facts_without_response_content()
                     .await
                     .unwrap();
             }
-            // Drop the transport without the WebSocket close handshake.
+            // 直接丢弃传输连接，不执行 WebSocket 关闭握手
         });
         let trace = TraceContext::new("req_abrupt_disconnect");
         let attempt = trace.attempt(1);

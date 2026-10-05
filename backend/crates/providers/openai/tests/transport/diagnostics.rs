@@ -1,3 +1,5 @@
+//! 验证上游诊断的容量错误分类、请求标识与响应事实提取
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use provider_openai::transport::CodexUpstreamDiagnostics;
 use provider_openai::transport::diagnostics::{

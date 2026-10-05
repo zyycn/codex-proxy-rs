@@ -1,3 +1,5 @@
+//! Responses HTTP 流式交付、错误、取消与计量边界测试
+
 use std::collections::VecDeque;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
@@ -524,6 +526,72 @@ async fn http_request_with_body(
 }
 
 #[tokio::test]
+async fn http_requests_should_honor_stream_preference() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
+    for stream in [None, Some(false), Some(true)] {
+        let trace = Arc::new(Trace::default());
+        let streaming = stream == Some(true);
+        let session = if streaming {
+            FakeSession::streaming(
+                Arc::clone(&trace),
+                vec![
+                    NextStep::Event(delivery(started(), CommitRequirement::CommitBeforeDelivery)),
+                    NextStep::Event(delivery(completed(), CommitRequirement::AlreadyCommitted)),
+                    NextStep::FinalizeSuccess,
+                ],
+            )
+        } else {
+            FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()])
+        };
+        let execution = Arc::new(SessionExecution {
+            client: authenticated_client_for_provider("sk_stream_test", "openai"),
+            session: Mutex::new(Some(Box::new(session))),
+            middleware: None,
+        });
+        let mut body = json!({"model": "model-a", "input": "hello"});
+        if let Some(stream) = stream {
+            body["stream"] = json!(stream);
+        }
+        let response = crate::openai::api_router_with_admin_and_execution(admin.clone(), execution)
+            .oneshot(
+                Request::post("/v1/responses")
+                    .header(AUTHORIZATION, "Bearer sk_stream_test")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "stream={stream:?}");
+        assert_eq!(
+            response.headers()[CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            },
+            "stream={stream:?}",
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        if streaming {
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert!(body.contains("event: response.completed\n"));
+            assert!(body.ends_with("data: [DONE]\n\n"));
+        } else {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({
+                    "id": "resp_test", "model": "public-model", "status": "completed", "output": []
+                }),
+            );
+            assert_eq!(trace.snapshot(), vec!["collect", "commit"]);
+        }
+        assert!(!trace.is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn compressed_http_requests_should_preserve_execution_context_without_transport_headers() {
     let body = json!({
         "model": "model-a", "input": "hello", "previous_response_id": "resp_previous",
@@ -544,7 +612,7 @@ async fn compressed_http_requests_should_preserve_execution_context_without_tran
         let (response, observed) =
             http_request_with_body("openai", compressed.into(), headers, None).await;
         // 捕获执行器在解码成功后主动返回 500；正文和业务头应与未压缩请求一致，
-        // 压缩编码及长度不能泄漏到已解压正文的上游协议上下文。
+        // 压缩编码及长度不能泄漏到已解压正文的上游协议上下文
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(observed.as_ref(), Some(&expected), "{encoding}");
     }
@@ -662,7 +730,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
             operation_kind: OperationKind::Generate,
             input: Some(json!("hello")),
             client_metadata: None,
-            // 客户端 User-Agent 仅用于本地展示，不再透传给上游指纹上下文。
+            // 客户端 User-Agent 仅用于本地展示，不再透传给上游指纹上下文
             protocol_context: Some(json!({"opaque_request_headers": [
                 ["cf-connecting-ip", STANDARD.encode(b"198.51.100.1")],
                 ["x-real-ip", STANDARD.encode(b"198.51.100.2")],
@@ -859,6 +927,7 @@ async fn streaming_encodes_first_frame_before_commit_and_http_delivery() {
 
 #[tokio::test]
 async fn streaming_dropped_unknown_initial_batch_discards_without_committing() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let trace = Arc::new(Trace::default());
     let dropped_raw = Bytes::from_static(
         b"event: response.future_metadata\ndata: {\"type\":\"response.future_metadata\",\"dropped\":true}\n\n",
@@ -885,7 +954,8 @@ async fn streaming_dropped_unknown_initial_batch_discards_without_committing() {
         ResponseFrameAction::Continue,
     ]));
 
-    let response = response_with_middleware("openai", session, true, Some(middleware)).await;
+    let response =
+        response_with_middleware(&admin, "openai", session, true, Some(middleware)).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read filtered SSE response");
@@ -912,6 +982,7 @@ async fn streaming_dropped_unknown_initial_batch_discards_without_committing() {
 
 #[tokio::test]
 async fn streaming_modified_sse_rejects_out_of_order_tool_events_without_replay() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let trace = Arc::new(Trace::default());
     let added = super::openai_wire_event(
         vec![],
@@ -950,7 +1021,8 @@ async fn streaming_modified_sse_rejects_out_of_order_tool_events_without_replay(
         ResponseFrameAction::Replace(Bytes::from(out_of_order)),
     ]));
 
-    let response = response_with_middleware("openai", session, true, Some(middleware)).await;
+    let response =
+        response_with_middleware(&admin, "openai", session, true, Some(middleware)).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read rejected transformed SSE");
@@ -970,6 +1042,7 @@ async fn streaming_modified_sse_rejects_out_of_order_tool_events_without_replay(
 
 #[tokio::test]
 async fn streaming_modified_sse_rejects_wrong_tool_association_without_replay() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let trace = Arc::new(Trace::default());
     let added = super::openai_wire_event(
         vec![],
@@ -1022,7 +1095,8 @@ async fn streaming_modified_sse_rejects_wrong_tool_association_without_replay() 
         ResponseFrameAction::Replace(Bytes::from(wrong_association)),
     ]));
 
-    let response = response_with_middleware("openai", session, true, Some(middleware)).await;
+    let response =
+        response_with_middleware(&admin, "openai", session, true, Some(middleware)).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read rejected transformed SSE");
@@ -1046,6 +1120,7 @@ async fn streaming_modified_sse_rejects_wrong_tool_association_without_replay() 
 
 #[tokio::test]
 async fn streaming_modified_sse_cannot_change_terminal_classification() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let trace = Arc::new(Trace::default());
     let incomplete = encode_sse_event(
         "response.incomplete",
@@ -1071,7 +1146,8 @@ async fn streaming_modified_sse_cannot_change_terminal_classification() {
         ResponseFrameAction::Replace(Bytes::from(incomplete)),
     ]));
 
-    let response = response_with_middleware("openai", session, true, Some(middleware)).await;
+    let response =
+        response_with_middleware(&admin, "openai", session, true, Some(middleware)).await;
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read terminal-class rejection");
@@ -1090,6 +1166,7 @@ async fn streaming_modified_sse_cannot_change_terminal_classification() {
 
 #[tokio::test]
 async fn streaming_terminal_drop_fails_before_commit() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let trace = Arc::new(Trace::default());
     let session = FakeSession::streaming(
         Arc::clone(&trace),
@@ -1104,7 +1181,8 @@ async fn streaming_terminal_drop_fails_before_commit() {
     let middleware =
         Arc::new(responses_middleware().with_response_actions(vec![ResponseFrameAction::Drop]));
 
-    let response = response_with_middleware("openai", session, true, Some(middleware)).await;
+    let response =
+        response_with_middleware(&admin, "openai", session, true, Some(middleware)).await;
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     let body = to_bytes(response.into_body(), usize::MAX)
@@ -2214,7 +2292,7 @@ async fn buffered_response_collects_completed_output_items_without_rewriting_str
         "future_terminal_field": {"keep": true}
     });
     let mut events = vec![provider_event_for_fact(started())];
-    // 完成顺序不决定输出顺序；相同完成项重传不能产生重复正文。
+    // 完成顺序不决定输出顺序；相同完成项重传不能产生重复正文
     for (index, item) in [(1, &tool), (0, &message), (0, &message)] {
         events.push(super::openai_wire_event(
             vec![],
@@ -2372,7 +2450,8 @@ async fn buffered_response_never_merges_items_from_a_different_wire_response() {
 }
 
 #[tokio::test]
-async fn buffered_response_middleware_replaces_body_and_filters_unsafe_headers() {
+async fn buffered_response_middleware_replaces_body_and_preserves_explicit_headers() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let trace = Arc::new(Trace::default());
     let session = FakeSession::buffered(Arc::clone(&trace), vec![started(), completed()]);
     let middleware = Arc::new(
@@ -2384,14 +2463,15 @@ async fn buffered_response_middleware_replaces_body_and_filters_unsafe_headers()
             )])
             .with_response_headers(vec![
                 MiddlewareHeader::new("x-policy-result", Bytes::from_static(b"replaced")),
-                MiddlewareHeader::new("authorization", Bytes::from_static(b"hidden")),
+                MiddlewareHeader::new("authorization", Bytes::from_static(b"plugin-value")),
             ]),
     );
 
-    let response = response_with_middleware("openai", session, false, Some(middleware)).await;
+    let response =
+        response_with_middleware(&admin, "openai", session, false, Some(middleware)).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-policy-result"], "replaced");
-    assert!(response.headers().get(AUTHORIZATION).is_none());
+    assert_eq!(response.headers()[AUTHORIZATION], "plugin-value");
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read policy JSON body");
@@ -2408,6 +2488,7 @@ async fn buffered_response_middleware_replaces_body_and_filters_unsafe_headers()
 
 #[tokio::test]
 async fn buffered_response_middleware_rejects_missing_terminal_fields_or_duplicate_tool_identity() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     for replacement in [
         json!({"id": "resp_test", "output": []}),
         json!({"id": "resp_test", "status": "incomplete", "output": []}),
@@ -2432,7 +2513,8 @@ async fn buffered_response_middleware_rejects_missing_terminal_fields_or_duplica
             )),
         ]));
 
-        let response = response_with_middleware("openai", session, false, Some(middleware)).await;
+        let response =
+            response_with_middleware(&admin, "openai", session, false, Some(middleware)).await;
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
@@ -2550,6 +2632,7 @@ struct SessionExecution {
 
 #[tokio::test]
 async fn chatgpt_remote_responses_should_only_skip_missing_desktop_versions() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     for name in [
         "codex_chatgpt_android_remote",
         "codex_chatgpt_ios_remote",
@@ -2589,18 +2672,20 @@ async fn chatgpt_remote_responses_should_only_skip_missing_desktop_versions() {
             if let Some(version) = version {
                 request = request.header("version", version);
             }
-            let response = api_router(execution.clone())
-                .await
-                .oneshot(
-                    request
-                        .body(Body::from(
-                            json!({"model": "model-a", "input": "synthetic", "stream": true})
-                                .to_string(),
-                        ))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let response = crate::openai::api_router_with_admin_and_execution(
+                admin.clone(),
+                execution.clone(),
+            )
+            .oneshot(
+                request
+                    .body(Body::from(
+                        json!({"model": "model-a", "input": "synthetic", "stream": true})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
             let status = response.status();
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             if let Some(code) = expected_code {
@@ -2698,14 +2783,16 @@ impl ExecutionService for SessionExecution {
 }
 
 async fn response(
+    admin: &gateway_admin::AdminServices,
     provider: &str,
     session: FakeSession,
     streaming: bool,
 ) -> axum::response::Response {
-    response_with_middleware(provider, session, streaming, None).await
+    response_with_middleware(admin, provider, session, streaming, None).await
 }
 
 async fn response_with_middleware(
+    admin: &gateway_admin::AdminServices,
     provider: &str,
     session: FakeSession,
     streaming: bool,
@@ -2716,8 +2803,7 @@ async fn response_with_middleware(
         session: Mutex::new(Some(Box::new(session))),
         middleware: middleware.map(|middleware| middleware.frozen()),
     });
-    api_router(execution)
-        .await
+    crate::openai::api_router_with_admin_and_execution(admin.clone(), execution)
         .oneshot(
             Request::post("/v1/responses")
                 .header(AUTHORIZATION, "Bearer sk_correlation_test")
@@ -2755,6 +2841,7 @@ fn failed_session(streaming: bool, error: EngineError) -> FakeSession {
 
 #[tokio::test]
 async fn response_ids_are_provider_and_client_independent() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let cases: &[(&[(&str, &str)], &str)] = &[
         (&[], MODEL_REQUEST_ID),
         (&[("x-request-id", "upstream-primary")], "upstream-primary"),
@@ -2798,7 +2885,7 @@ async fn response_ids_are_provider_and_client_independent() {
                     FakeSession::buffered(trace, vec![started(), completed()])
                 }
                 .with_response_headers(headers(upstream_headers));
-                let response = response(provider, session, streaming).await;
+                let response = response(&admin, provider, session, streaming).await;
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(response.headers()["x-request-id"], *expected);
                 assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
@@ -2815,6 +2902,7 @@ async fn response_ids_are_provider_and_client_independent() {
 
 #[tokio::test]
 async fn failure_ids_prefer_the_actual_error_over_session_headers() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     for provider in ["openai", "xai"] {
         for streaming in [false, true] {
             for upstream_headers in [vec![], headers(&[("x-oai-request-id", "actual-error")])] {
@@ -2837,7 +2925,7 @@ async fn failure_ids_prefer_the_actual_error_over_session_headers() {
                         );
                 let session = failed_session(streaming, EngineError::Provider(error))
                     .with_response_headers(headers(&[("x-request-id", "earlier-session")]));
-                let response = response(provider, session, streaming).await;
+                let response = response(&admin, provider, session, streaming).await;
                 assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
                 assert_eq!(response.headers()["x-request-id"], expected);
                 assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
@@ -2853,7 +2941,7 @@ async fn failure_ids_prefer_the_actual_error_over_session_headers() {
                     ("x-request-id", "earlier-session"),
                     ("x-oai-request-id", "earlier-alias"),
                 ]));
-            let response = response(provider, session, streaming).await;
+            let response = response(&admin, provider, session, streaming).await;
             assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
             assert_eq!(response.headers()["x-request-id"], "body-read-error");
             assert_eq!(response.headers().get_all("x-request-id").iter().count(), 1);
@@ -2865,6 +2953,7 @@ async fn failure_ids_prefer_the_actual_error_over_session_headers() {
 
 #[tokio::test]
 async fn local_execution_failure_uses_the_existing_model_id() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     for provider in ["openai", "xai"] {
         for streaming in [false, true] {
             let session =
@@ -2873,7 +2962,7 @@ async fn local_execution_failure_uses_the_existing_model_id() {
                     ("x-oai-request-id", "opening-alias"),
                     ("x-codex-turn-state", "retained-turn-state"),
                 ]));
-            let response = response(provider, session, streaming).await;
+            let response = response(&admin, provider, session, streaming).await;
             assert_eq!(response.headers()["x-request-id"], MODEL_REQUEST_ID);
             assert_eq!(response.headers()["x-gateway-request-id"], MODEL_REQUEST_ID);
             assert!(response.headers().get("x-oai-request-id").is_none());
@@ -2887,6 +2976,7 @@ async fn local_execution_failure_uses_the_existing_model_id() {
 
 #[tokio::test]
 async fn compressed_http_request_above_default_limit_should_reach_execution_after_increase() {
+    let admin = crate::admin::AdminTestFixture::new().await.services;
     let body = json!({"model": "model-a", "input": "x".repeat(64 * 1024 * 1024)}).to_string();
     let compressed = super::request::encode_body("zstd", body.as_bytes());
     for limit in [64 * 1024 * 1024, 128 * 1024 * 1024] {
@@ -2899,8 +2989,7 @@ async fn compressed_http_request_above_default_limit_should_reach_execution_afte
                 limit,
             ),
         });
-        let response = api_router(execution)
-            .await
+        let response = crate::openai::api_router_with_admin_and_execution(admin.clone(), execution)
             .oneshot(
                 Request::post("/v1/responses")
                     .header(AUTHORIZATION, "Bearer sk_context_test")
@@ -2918,7 +3007,7 @@ async fn compressed_http_request_above_default_limit_should_reach_execution_afte
                     .unwrap();
             assert_eq!(error["error"]["code"], "request_too_large");
         } else {
-            // 捕获执行服务刻意返回 500；断言完整输入到达执行层，而不是只验证路由状态码。
+            // 捕获执行服务刻意返回 500；断言完整输入到达执行层，而不是只验证路由状态码
             let captured = observed
                 .lock()
                 .unwrap()

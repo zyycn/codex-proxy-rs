@@ -1,3 +1,5 @@
+//! 编译插件模型目录贡献并校验能力绑定
+
 use std::{collections::BTreeSet, time::Duration};
 
 use gateway_admin::model::{
@@ -66,7 +68,7 @@ pub(crate) fn validate_bindings(
     manifest: &Manifest,
     bindings: &[PluginCapabilityBinding],
 ) -> Result<(), AdminError> {
-    // 目录随实例完整发布；不接受请求级绑定，以免展示与执行的可见范围分叉。
+    // 目录随实例完整发布；不接受请求级绑定，以免展示与执行的可见范围分叉
     if let Some(declaration) = manifest.contributes.get(&Capability::ModelCatalog)
         && bindings
             .iter()

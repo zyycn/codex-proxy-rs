@@ -1,9 +1,9 @@
-//! 嵌套模型执行；只驱动 Core 会话，不拥有路由、重试或计费规则。
+//! 嵌套模型执行；只驱动 Core 会话，不拥有路由、重试或计费规则
 
 use std::sync::{Arc, OnceLock, Weak};
 
 use bytes::Bytes;
-use gateway_admin::model::{AdminError, plugins::instances::PluginPermissionGrant};
+use gateway_admin::model::AdminError;
 use gateway_core::{
     account::ProviderAccountId,
     engine::{
@@ -16,8 +16,7 @@ use gateway_core::{
             NestedModelExecutionRequest,
         },
     },
-    error::{GatewayError, GatewayErrorKind},
-    event::{ContentKind, FinishReason, GatewayEvent, ProtocolWireEvent, ProviderEvent},
+    event::ProviderEvent,
     identity::ProviderKind,
     operation::{
         GenerateRequest, ImageRequest, ImageRequestKind, Operation, ProtocolPayload,
@@ -28,16 +27,10 @@ use gateway_core::{
 };
 use gateway_plugin_sdk::{
     CallContext, ErrorCode, PluginFault,
-    call::{
-        host::{
-            ModelEventBatch, ModelExecuteRequest, ModelExecuteResult, ModelListRequest,
-            ModelListResult, ModelOperation, ModelStreamCloseRequest, ModelStreamReadRequest,
-            ModelStreamReadResult, ModelStreamResult,
-        },
-        model::{
-            CanonicalEvent, ContentKind as WireContentKind, ExecutionEvent,
-            FinishReason as WireFinishReason, Usage as WireUsage, WireEvent, WirePayload,
-        },
+    call::host::{
+        ModelEventBatch, ModelExecuteRequest, ModelExecuteResult, ModelListRequest,
+        ModelListResult, ModelOperation, ModelStreamCloseRequest, ModelStreamReadRequest,
+        ModelStreamReadResult, ModelStreamResult,
     },
 };
 
@@ -70,19 +63,13 @@ impl PluginModelPortSlot {
 
 pub(super) struct PluginModels {
     slot: Arc<PluginModelPortSlot>,
-    authorized: bool,
     maximum_payload: usize,
 }
 
 impl PluginModels {
-    pub(super) fn new(
-        slot: Arc<PluginModelPortSlot>,
-        grants: &[PluginPermissionGrant],
-        maximum_payload: usize,
-    ) -> Self {
+    pub(super) fn new(slot: Arc<PluginModelPortSlot>, maximum_payload: usize) -> Self {
         Self {
             slot,
-            authorized: grants.iter().any(|grant| grant.permission == "models"),
             maximum_payload,
         }
     }
@@ -95,9 +82,6 @@ impl PluginModels {
         params: serde_json::Value,
         payload: Vec<u8>,
     ) -> Result<RpcReply, PluginFault> {
-        if !self.authorized {
-            return Err(denied());
-        }
         match method {
             "host.models.list" => {
                 if !payload.is_empty() {
@@ -114,21 +98,19 @@ impl PluginModels {
                 let port = self.slot.upgrade()?;
                 let bound = port
                     .bind(BoundModelExecutionBinding {
+                        settings: call.request_settings(),
                         client_key_id: ClientApiKeyId::new(request.client_key_id)
                             .map_err(|_| invalid())?,
                         initiating_plugin_instance_id: context.instance_id.clone(),
-                        timeout: call
-                            .deadline
-                            .saturating_duration_since(tokio::time::Instant::now()),
                         cancellation: call.cancellation.child_token(),
                         extension_scope: call.scope.extension_scope.clone(),
                     })
                     .await
-                    .map_err(gateway_fault)?;
+                    .map_err(super::error::gateway)?;
                 let models = port
                     .models(bound, request.protocol, request.client_version)
                     .await
-                    .map_err(gateway_fault)?;
+                    .map_err(super::error::gateway)?;
                 encode_result(ModelListResult {
                     models: models
                         .into_iter()
@@ -144,24 +126,14 @@ impl PluginModels {
                 }
                 let port = self.slot.upgrade()?;
                 let stream = method == "host.model.execute_stream";
-                let started = if matches!(
-                    context.stage,
-                    gateway_plugin_sdk::Stage::Management
-                        | gateway_plugin_sdk::Stage::CommandLine
-                        | gateway_plugin_sdk::Stage::Authentication
-                        | gateway_plugin_sdk::Stage::Observation
-                ) {
-                    let client_key_id = request.client_key_id.take().ok_or_else(invalid)?;
+                let started = if let Some(client_key_id) = request.client_key_id.take() {
                     let bound = self.binding(&port, context, call, client_key_id).await?;
                     port.start_bound(self.bound_request(request, payload, stream, bound)?)
                         .await
-                        .map_err(gateway_fault)?
+                        .map_err(super::error::gateway)?
                 } else {
-                    if request.client_key_id.is_some() {
-                        return Err(invalid());
-                    }
                     let request = self.request(context, request, payload, stream)?;
-                    port.start(request).await.map_err(gateway_fault)?
+                    port.start(request).await.map_err(super::error::gateway)?
                 };
                 if method == "host.model.execute" {
                     execute_buffered(started, self.maximum_payload).await
@@ -257,11 +229,15 @@ impl PluginModels {
         client_key_id: String,
     ) -> Result<BoundModelExecutionContext, PluginFault> {
         let key = ClientApiKeyId::new(client_key_id.clone()).map_err(|_| invalid())?;
+        let settings = call.request_settings();
         let mut bindings = call.model_bindings.lock().await;
-        if let Some(bound) = bindings.get(&client_key_id) {
+        if let Some(bound) = bindings
+            .get(&client_key_id)
+            .filter(|bound| bound.request_settings() == settings.as_ref())
+        {
             return Ok(bound.clone());
         }
-        if bindings.len() >= MAX_MODEL_STREAMS_PER_CALL {
+        if !bindings.contains_key(&client_key_id) && bindings.len() >= MAX_MODEL_STREAMS_PER_CALL {
             return Err(PluginFault::new(
                 ErrorCode::Capacity,
                 "model identity capacity is exhausted",
@@ -269,18 +245,16 @@ impl PluginModels {
         }
         let bound = port
             .bind(BoundModelExecutionBinding {
+                settings,
                 client_key_id: key,
                 initiating_plugin_instance_id: context.instance_id.clone(),
-                timeout: call
-                    .deadline
-                    .saturating_duration_since(tokio::time::Instant::now()),
                 cancellation: call.cancellation.child_token(),
                 extension_scope: call.scope.extension_scope.clone(),
             })
             .await
-            .map_err(gateway_fault)?;
+            .map_err(super::error::gateway)?;
         // 调用持有身份直到 RPC 结束，流式执行不会因单次 callback 返回而提前取消；
-        // 同一 Key 复用 Core 调用图，不能通过重复 bind 重置深度与并发限制。
+        // 同一 Key 复用身份快照，每次执行由 Core 创建独立调用图
         bindings.insert(client_key_id, bound.clone());
         Ok(bound)
     }
@@ -292,11 +266,14 @@ impl PluginModels {
         body: Vec<u8>,
         stream: bool,
     ) -> Result<NestedModelExecutionRequest, PluginFault> {
-        let parent_request_id = context
-            .request_id
-            .as_ref()
-            .ok_or_else(denied)
-            .and_then(|request_id| ModelRequestId::new(request_id.clone()).map_err(|_| denied()))?;
+        let parent_request_id =
+            context
+                .request_id
+                .as_ref()
+                .ok_or_else(invalid)
+                .and_then(|request_id| {
+                    ModelRequestId::new(request_id.clone()).map_err(|_| invalid())
+                })?;
         let parent_account = context
             .account_id
             .as_ref()
@@ -340,9 +317,6 @@ impl PluginModels {
         body: Vec<u8>,
         stream: bool,
     ) -> Result<ModelRequestParts, PluginFault> {
-        if !self.authorized {
-            return Err(denied());
-        }
         let provider = request
             .provider
             .map(ProviderKind::new)
@@ -442,9 +416,7 @@ async fn execute_buffered(
     let events = match started.session.collect_uncommitted().await {
         Ok(events) => events,
         Err(error) => {
-            let fault = gateway_fault(gateway_core::engine::execution::gateway_error_from_engine(
-                &error,
-            ));
+            let fault = super::error::engine(&error);
             started.session.detach_finalize().await;
             return Err(fault);
         }
@@ -464,9 +436,7 @@ async fn execute_buffered(
         ));
     }
     if let Err(error) = started.session.commit_downstream(Some(200)).await {
-        let fault = gateway_fault(gateway_core::engine::execution::gateway_error_from_engine(
-            &error,
-        ));
+        let fault = super::error::engine(&error);
         started.session.detach_finalize().await;
         return Err(fault);
     }
@@ -557,9 +527,7 @@ impl ModelStream {
                         .commit_downstream(Some(200))
                         .await;
                     if let Err(error) = result {
-                        let fault = gateway_fault(
-                            gateway_core::engine::execution::gateway_error_from_engine(&error),
-                        );
+                        let fault = super::error::engine(&error);
                         let session = state.session.take();
                         drop(state);
                         if let Some(session) = session {
@@ -616,8 +584,7 @@ impl ModelStream {
                         }
                     };
                     if events == 0 {
-                        // 首次未提交批次即使只含 Core 内部事实，也必须释放交付屏障；
-                        // 已提交批次没有待交付状态，过滤后可直接继续读取下一帧。
+                        // 空批次仍需释放待交付屏障，已经提交的空批次直接继续拉取
                         if commit {
                             let result = state
                                 .session
@@ -681,9 +648,7 @@ impl ModelStream {
                     });
                 }
                 Err(error) => {
-                    let fault = gateway_fault(
-                        gateway_core::engine::execution::gateway_error_from_engine(&error),
-                    );
+                    let fault = super::error::engine(&error);
                     let session = state.session.take();
                     drop(state);
                     if let Some(session) = session {
@@ -714,7 +679,7 @@ impl ModelStream {
 fn encode_events(events: Vec<ProviderEvent>) -> Result<(Vec<u8>, u32), PluginFault> {
     let events = events
         .into_iter()
-        .filter_map(|event| project_event(event).transpose())
+        .map(super::facts::event)
         .collect::<Result<Vec<_>, _>>()?;
     let count = u32::try_from(events.len()).map_err(|_| invalid())?;
     if events.is_empty() {
@@ -724,144 +689,6 @@ fn encode_events(events: Vec<ProviderEvent>) -> Result<(Vec<u8>, u32), PluginFau
         .encode()
         .map_err(|_| PluginFault::new(ErrorCode::Capacity, "model event batch is too large"))?;
     Ok((payload, count))
-}
-
-fn project_event(event: ProviderEvent) -> Result<Option<ExecutionEvent>, PluginFault> {
-    let (facts, wire) = event.into_parts();
-    let facts = facts
-        .into_iter()
-        .filter_map(project_fact)
-        .collect::<Result<Vec<_>, _>>()?;
-    let wire = wire.map(project_wire).transpose()?;
-    if facts.is_empty() && wire.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(ExecutionEvent { facts, wire }))
-}
-
-fn project_fact(event: GatewayEvent) -> Option<Result<CanonicalEvent, PluginFault>> {
-    Some(Ok(match event {
-        GatewayEvent::Started(meta) => CanonicalEvent::Started {
-            id: meta.response_id().to_owned(),
-            model: meta.model().map(str::to_owned),
-        },
-        GatewayEvent::ContentAdded(item) => CanonicalEvent::ContentAdded {
-            index: item.index(),
-            kind: match item.kind() {
-                ContentKind::Text => WireContentKind::Text,
-                ContentKind::Reasoning => WireContentKind::Reasoning,
-                ContentKind::ToolCall => WireContentKind::ToolCall,
-                ContentKind::Image => WireContentKind::Image,
-                ContentKind::Audio => WireContentKind::Audio,
-                _ => {
-                    return Some(Err(PluginFault::new(
-                        ErrorCode::Unsupported,
-                        "unknown content kind",
-                    )));
-                }
-            },
-        },
-        GatewayEvent::TextDelta(delta) => CanonicalEvent::TextDelta {
-            index: delta.content_index,
-            text: delta.text,
-        },
-        GatewayEvent::ReasoningDelta(delta) => CanonicalEvent::ReasoningDelta {
-            index: delta.content_index,
-            text: delta.text,
-        },
-        GatewayEvent::ToolCallDelta(delta) => CanonicalEvent::ToolCallDelta {
-            index: delta.content_index,
-            id: delta.call_id,
-            name: delta.name,
-            arguments: delta.arguments_delta,
-        },
-        GatewayEvent::Usage(usage) => CanonicalEvent::Usage {
-            usage: WireUsage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cached_tokens: usage.cached_tokens,
-                cache_write_tokens: usage.cache_write_tokens,
-                reasoning_tokens: usage.reasoning_tokens,
-                image_input_tokens: usage.image_input_tokens,
-                image_output_tokens: usage.image_output_tokens,
-                total_tokens: usage.total_tokens,
-            },
-        },
-        // 费用已经由子请求的 Core 结算；不把它重新作为父插件可上报的用量输入。
-        GatewayEvent::CalculatedCost(_) | GatewayEvent::ProviderCost(_) => return None,
-        GatewayEvent::Completed(meta) => CanonicalEvent::Completed {
-            id: meta.response_id().to_owned(),
-            model: meta.model().map(str::to_owned),
-            reason: match meta.finish_reason().unwrap_or(FinishReason::Other) {
-                FinishReason::Stop => WireFinishReason::Stop,
-                FinishReason::Length => WireFinishReason::Length,
-                FinishReason::ToolCall => WireFinishReason::ToolCall,
-                FinishReason::ContentFilter => WireFinishReason::ContentFilter,
-                FinishReason::Other => WireFinishReason::Other,
-                _ => WireFinishReason::Other,
-            },
-        },
-        _ => {
-            return Some(Err(PluginFault::new(
-                ErrorCode::Unsupported,
-                "unknown model event",
-            )));
-        }
-    }))
-}
-
-fn project_wire(wire: ProtocolWireEvent) -> Result<WireEvent, PluginFault> {
-    let protocol = wire.protocol().to_owned();
-    let payload = if let Some(body) = wire.raw_http_body_bytes() {
-        WirePayload::RawBody {
-            body: body.to_vec(),
-        }
-    } else if let Some(body) = wire.raw_json_body() {
-        WirePayload::RawJson {
-            body: body.to_vec(),
-        }
-    } else if wire.has_json_data() {
-        WirePayload::Json {
-            event: wire.event_type().map(str::to_owned),
-            data: wire.data().clone(),
-            id: wire.sse_id().map(str::to_owned),
-            retry: wire.sse_retry(),
-            raw_sse: wire.raw_sse_frame().map(|frame| frame.to_vec()),
-        }
-    } else if let Some(frame) = wire.raw_sse_frame() {
-        WirePayload::RawSse {
-            frame: frame.to_vec(),
-        }
-    } else {
-        return Err(PluginFault::new(
-            ErrorCode::Fault,
-            "model wire event has no payload",
-        ));
-    };
-    Ok(WireEvent { protocol, payload })
-}
-
-pub(super) fn gateway_fault(error: GatewayError) -> PluginFault {
-    let code = match error.kind() {
-        GatewayErrorKind::InvalidRequest | GatewayErrorKind::MessageTooBig => {
-            ErrorCode::InvalidInput
-        }
-        GatewayErrorKind::Unsupported | GatewayErrorKind::ModelNotFound => ErrorCode::Unsupported,
-        GatewayErrorKind::Unauthorized => ErrorCode::PermissionDenied,
-        GatewayErrorKind::PolicyDenied => ErrorCode::Rejected,
-        GatewayErrorKind::AccountCapacityUnavailable
-        | GatewayErrorKind::ConcurrencyQueueFull
-        | GatewayErrorKind::ConcurrencyQueueTimeout
-        | GatewayErrorKind::RateLimited
-        | GatewayErrorKind::NoAvailableProvider => ErrorCode::Capacity,
-        GatewayErrorKind::Timeout => ErrorCode::Timeout,
-        GatewayErrorKind::Cancelled => ErrorCode::Cancelled,
-        GatewayErrorKind::UpstreamUnavailable
-        | GatewayErrorKind::ProviderInfrastructureUnavailable => ErrorCode::Upstream,
-        GatewayErrorKind::Internal => ErrorCode::Fault,
-        _ => ErrorCode::Fault,
-    };
-    PluginFault::new(code, "nested model execution failed")
 }
 
 fn encode_result(value: impl serde::Serialize) -> Result<RpcReply, PluginFault> {

@@ -1,4 +1,4 @@
-//! 通过真实路由验证会话隔离、范围收敛和对外字段白名单。
+//! 通过真实路由验证会话隔离、范围收敛和对外字段白名单
 
 use std::sync::atomic::Ordering;
 
@@ -7,8 +7,8 @@ use axum::{
     http::{Method, StatusCode, header},
     response::Response,
 };
-use chrono::{Duration, Utc};
-use gateway_admin::model::observability::{RequestMetrics, china_day_start};
+use chrono::Utc;
+use gateway_admin::model::observability::RequestMetrics;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -163,6 +163,8 @@ fn assert_fields(value: &Value, expected: &[&str]) {
 #[tokio::test]
 async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     let fixture = fixtures::fixture().await;
+    fixture.observations.lock().unwrap().trend.as_mut().unwrap()[0].bucket_start =
+        "2026-09-01T04:30:00Z".parse().unwrap();
     let app = crate::openai::api_router_with_admin(fixture.services.clone());
     let cookie = login(&app, "key").await;
     let response = get(&app, "overview", "&model=%20coding%20", &cookie).await;
@@ -172,6 +174,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
         &data,
         &[
             "asOf",
+            "asOfDisplay",
             "startTime",
             "endTime",
             "key",
@@ -190,9 +193,11 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
             "dailyLimitUsd",
             "dailyUsedUsd",
             "dailyResetsAt",
+            "dailyResetsAtDisplay",
             "weeklyLimitUsd",
             "weeklyUsedUsd",
             "weeklyResetsAt",
+            "weeklyResetsAtDisplay",
         ],
     );
     assert_eq!(data["key"]["dailyUsedUsd"], "0.640001");
@@ -203,6 +208,8 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     assert_eq!(data["summary"]["costUsd"], "0.123456");
     assert_eq!(data["summary"]["costIncomplete"], true);
     assert_eq!(data["trend"][0]["bucketSeconds"], 900);
+    assert_eq!(data["trend"][0]["time"], "2026-09-01T04:30:00Z");
+    assert_eq!(data["trend"][0]["label"], "09-01 12:30");
     assert_eq!(
         data["healthTimeline"]["points"].as_array().unwrap().len(),
         96
@@ -226,8 +233,20 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
         .iter()
         .find(|(_, filter)| filter.model.is_none())
         .unwrap();
-    assert_eq!(health.0.start, china_day_start(health.0.end));
-    assert!((Utc::now() - health.0.end) < Duration::seconds(5));
+    assert_eq!(
+        health.0.start,
+        gateway_core::time::DeploymentTimeZone::default()
+            .day_start(health.0.end)
+            .unwrap()
+    );
+    assert_eq!(
+        health.0.end,
+        data["asOf"]
+            .as_str()
+            .unwrap()
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -254,6 +273,7 @@ async fn records_keep_pagination_and_hide_admin_and_upstream_data() {
             &[
                 "id",
                 "createdAt",
+                "createdAtDisplay",
                 "model",
                 "route",
                 "reasoningEffort",

@@ -1,15 +1,25 @@
+//! Responses WebSocket 事件转发、错误去重与连接恢复测试
+
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use axum::http::{StatusCode, header::AUTHORIZATION};
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, future::BoxFuture};
+use gateway_core::engine::middleware::{
+    FrozenMiddlewarePlan, MiddlewareContext, MiddlewareError, MiddlewareNext, MiddlewarePlan,
+    MiddlewareRequest, MiddlewareResponse,
+};
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{ProtocolWireEvent, ProviderEvent, ProviderResponseHeader};
+use gateway_core::runtime::extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference};
 use gateway_core::upstream::{OpaqueUpstreamValue, UpstreamSendState};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
@@ -23,7 +33,7 @@ use crate::openai::{api_router, authenticated_client};
 
 type TestSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-// 全部使用合成响应事实和真实 API 路由，不读取账号、日志或请求转储。
+// 全部使用合成响应事实和真实 API 路由，不读取账号、日志或请求转储
 struct TestServer(tokio::task::JoinHandle<()>);
 
 impl Drop for TestServer {
@@ -96,7 +106,7 @@ async fn next_error(socket: &mut TestSocket) -> Value {
 }
 
 async fn assert_no_duplicate_failure(socket: &mut TestSocket) {
-    // 后续入站帧只会在本轮收敛后处理，比固定等待窗口更可靠地检查没有重复失败终态。
+    // 后续入站帧只会在本轮收敛后处理，比固定等待窗口更可靠地检查没有重复失败终态
     socket.send(Message::Text("{".into())).await.unwrap();
     let error = next_event(socket).await;
     assert_eq!(error["error"]["code"], "invalid_json");
@@ -142,9 +152,66 @@ fn upstream_failure(
         )
 }
 
+#[derive(Debug)]
+struct InspectFailureMiddleware(Arc<AtomicUsize>);
+
+impl ExtensionSetLease for InspectFailureMiddleware {
+    fn is_ready(&self) -> bool {
+        true
+    }
+}
+
+impl MiddlewarePlan for InspectFailureMiddleware {
+    fn handle(
+        &self,
+        _: MiddlewareContext,
+        request: MiddlewareRequest,
+        next: MiddlewareNext,
+    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+        let drops = Arc::clone(&self.0);
+        Box::pin(async move {
+            let response = next.run(request).await?;
+            assert_eq!(
+                drops.load(Ordering::Acquire),
+                0,
+                "next must retain the failed execution until the onion chain returns"
+            );
+            assert_eq!(response.status_code(), 503);
+            Ok(response)
+        })
+    }
+}
+
+#[tokio::test]
+async fn initial_failure_retains_execution_until_request_middleware_returns() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let middleware = Arc::new(InspectFailureMiddleware(Arc::clone(&drops)));
+    let trace = Arc::new(AtomicFailureTrace {
+        initial_errors: Mutex::new(VecDeque::from([EngineError::EmptyRoutingPlan])),
+        session_drops: Arc::clone(&drops),
+        middleware: Some(FrozenMiddlewarePlan::new(
+            middleware.clone(),
+            ExtensionSetReference::new(
+                ExtensionSetId::new("failure-inspector".to_owned()).unwrap(),
+                middleware,
+            ),
+        )),
+        ..AtomicFailureTrace::default()
+    });
+    let (mut socket, _server) = connect(Arc::clone(&trace), vec![]).await;
+    send_request(&mut socket).await;
+    let error = next_error(&mut socket).await;
+    assert_eq!(error["status"], 503);
+    assert_eq!(error["error"]["code"], "no_available_provider");
+    assert_no_duplicate_failure(&mut socket).await;
+    assert_eq!(drops.load(Ordering::Acquire), 1);
+    assert!(!trace.committed.load(Ordering::Acquire));
+    socket.close(None).await.unwrap();
+}
+
 #[tokio::test]
 async fn initial_http_or_opening_failure_preserves_status_and_structured_error() {
-    // 分类故意都用 Unavailable：不能把收到的 401/429/500 等按网关分类改成 502。
+    // 分类故意都用 Unavailable：不能把收到的 401/429/500 等按网关分类改成 502
     for status in [302, 400, 401, 403, 429, 500, 502, 503] {
         let provider = upstream_failure(
             status,
@@ -395,7 +462,7 @@ async fn opening_ids_stay_in_metadata_but_do_not_identify_initial_failures() {
         )
         .await;
         send_request(&mut socket).await;
-        // metadata 仍交付原会话观测；opening ID 不能因此成为当前失败的请求身份。
+        // metadata 仍交付原会话观测；opening ID 不能因此成为当前失败的请求身份
         assert_eq!(
             next_event(&mut socket).await,
             json!({

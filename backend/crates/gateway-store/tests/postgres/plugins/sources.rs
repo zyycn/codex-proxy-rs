@@ -1,3 +1,5 @@
+//! 验证插件更新来源、制品引用、并发安装与代理版本约束
+
 use gateway_admin::{
     model::{
         plugins::{

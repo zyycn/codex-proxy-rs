@@ -1,6 +1,8 @@
+//! 插件中间件链的执行、失败回退与响应正文生命周期管理
+
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -10,6 +12,7 @@ use gateway_core::engine::middleware::{
     MiddlewareBody, MiddlewareContext, MiddlewareError, MiddlewareFrame, MiddlewareFraming,
     MiddlewareMount, MiddlewareNext, MiddlewarePlan, MiddlewareRequest, MiddlewareResponse,
 };
+use gateway_core::middleware::{Middleware, Next};
 use gateway_plugin_sdk::{
     ErrorCode, SendState, Stage,
     call::middleware::{
@@ -30,89 +33,151 @@ use super::{MiddlewareEntry, PluginRequestPolicyPlan};
 const MAXIMUM_MAPPED_FRAMES_PER_SOURCE: usize = 64;
 const MAXIMUM_MAPPED_BYTES_PER_SOURCE: usize = 8 * 1024 * 1024;
 
+// 协议适配只提供选择条件与单层调用；顺序、上下文捕获和续体拼接共用这一个入口
+type Invoke<Context, Input, Output, Error> = fn(
+    Arc<MiddlewareEntry>,
+    Context,
+    Input,
+    Next<Input, Output, Error>,
+    Duration,
+) -> BoxFuture<'static, Result<Output, Error>>;
+
+impl PluginRequestPolicyPlan {
+    fn chain<Context, Input, Output, Error>(
+        &self,
+        mount: MiddlewareMount,
+        context: Context,
+        select: impl Fn(&MiddlewareEntry, &Context) -> bool,
+        invoke: Invoke<Context, Input, Output, Error>,
+        next: Next<Input, Output, Error>,
+    ) -> Next<Input, Output, Error>
+    where
+        Context: Clone + Send + 'static,
+        Input: Send + 'static,
+        Output: Send + 'static,
+        Error: Send + 'static,
+    {
+        let Some(entries) = self.middleware.get(&mount) else {
+            return next;
+        };
+        let layers = entries
+            .iter()
+            .filter(|entry| select(entry, &context))
+            .map(|entry| -> Middleware<Input, Output, Error> {
+                let entry = Arc::clone(entry);
+                let context = context.clone();
+                let timeout = self.middleware_timeout;
+                Box::new(move |input, next| invoke(entry, context, input, next, timeout))
+            })
+            .collect();
+        gateway_core::middleware::compose(layers, move |input| next.run(input))
+    }
+}
+
 impl MiddlewarePlan for PluginRequestPolicyPlan {
+    fn has_service(&self) -> bool {
+        self.middleware.contains_key(&MiddlewareMount::Service)
+    }
+    fn handle_service(
+        &self,
+        context: gateway_core::middleware::service::Context,
+        input: gateway_core::middleware::service::Value,
+        next: gateway_core::middleware::service::Next,
+    ) -> BoxFuture<
+        'static,
+        Result<gateway_core::middleware::service::Value, gateway_core::middleware::service::Error>,
+    > {
+        self.chain(
+            MiddlewareMount::Service,
+            context,
+            |entry, context| !context.extensions.contains(&entry.instance_id),
+            |entry, context, input, next, timeout| {
+                Box::pin(super::service::invoke(entry, context, input, next, timeout))
+            },
+            next,
+        )
+        .run(input)
+    }
+
+    fn has_websocket(&self) -> bool {
+        self.middleware.contains_key(&MiddlewareMount::WebSocket)
+    }
+    fn handle_websocket(
+        &self,
+        context: gateway_core::middleware::websocket::Context,
+        message: gateway_core::middleware::websocket::Message,
+        next: gateway_core::middleware::websocket::Next,
+    ) -> BoxFuture<
+        'static,
+        Result<Option<gateway_core::middleware::websocket::Message>, MiddlewareError>,
+    > {
+        self.chain(
+            MiddlewareMount::WebSocket,
+            context,
+            |_entry, _context| true,
+            |entry, context, message, next, timeout| {
+                Box::pin(super::websocket::invoke(
+                    entry, context, message, next, timeout,
+                ))
+            },
+            next,
+        )
+        .run(message)
+    }
+    fn has_http(&self) -> bool {
+        self.middleware.contains_key(&MiddlewareMount::Http)
+    }
+
+    fn handle_http(
+        &self,
+        context: gateway_core::middleware::http::Context,
+        request: gateway_core::middleware::http::Request,
+        next: gateway_core::middleware::http::Next,
+    ) -> BoxFuture<'static, Result<gateway_core::middleware::http::Response, MiddlewareError>> {
+        self.chain(
+            MiddlewareMount::Http,
+            context,
+            |entry, context| !context.extensions.contains(&entry.instance_id),
+            |entry, context, request, next, timeout| {
+                Box::pin(super::http::invoke(entry, context, request, next, timeout))
+            },
+            next,
+        )
+        .run(request)
+    }
+
     fn handle(
         &self,
         context: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
-        let applicable = self
-            .middleware
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                (entry.mount == context.mount()
-                    && !context.extension_scope().contains(&entry.instance_id)
+        self.chain(
+            context.mount(),
+            context,
+            |entry, context| {
+                !context.extension_scope().contains(&entry.instance_id)
                     && entry.scope.matches_processing(
                         context.client_key_id(),
                         context.account_group_ids(),
                         context.provider(),
                         context.model(),
-                    ))
-                .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        Box::new(MiddlewareChainNext {
-            entries: Arc::clone(&self.middleware),
-            applicable: applicable.into(),
-            index: 0,
-            context,
-            terminal: Some(next),
-            timeout: self.middleware_timeout,
-        })
+                    )
+            },
+            |entry, context, request, next, timeout| {
+                Box::pin(invoke_middleware(entry, context, request, next, timeout))
+            },
+            next,
+        )
         .run(request)
     }
 }
 
-struct MiddlewareChainNext {
-    entries: Arc<[MiddlewareEntry]>,
-    applicable: Arc<[usize]>,
-    index: usize,
-    context: MiddlewareContext,
-    terminal: Option<Box<dyn MiddlewareNext>>,
-    timeout: Duration,
-}
-
-impl MiddlewareNext for MiddlewareChainNext {
-    fn run(
-        mut self: Box<Self>,
-        request: MiddlewareRequest,
-    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
-        Box::pin(async move {
-            let Some(entry_index) = self.applicable.get(self.index).copied() else {
-                return self
-                    .terminal
-                    .take()
-                    .ok_or(MiddlewareError::InvalidState)?
-                    .run(request)
-                    .await;
-            };
-            let next = Box::new(Self {
-                entries: Arc::clone(&self.entries),
-                applicable: Arc::clone(&self.applicable),
-                index: self.index + 1,
-                context: self.context.clone(),
-                terminal: self.terminal.take(),
-                timeout: self.timeout,
-            });
-            invoke_middleware(
-                &self.entries[entry_index],
-                self.context,
-                request,
-                next,
-                self.timeout,
-            )
-            .await
-        })
-    }
-}
-
 async fn invoke_middleware(
-    entry: &MiddlewareEntry,
+    entry: Arc<MiddlewareEntry>,
     context: MiddlewareContext,
     request: MiddlewareRequest,
-    next: Box<dyn MiddlewareNext>,
+    next: MiddlewareNext,
     maximum_timeout: Duration,
 ) -> Result<MiddlewareResponse, MiddlewareError> {
     let Some(invocation_ports) = &entry.invocation else {
@@ -124,27 +189,20 @@ async fn invoke_middleware(
             Err(MiddlewareError::Fault)
         };
     };
-    let remaining = context
-        .deadline()
-        .duration_since(SystemTime::now())
-        .map_err(|_| MiddlewareError::Fault)?
-        .min(maximum_timeout);
+    let remaining = context.deadline().bounded(maximum_timeout);
     if remaining.is_zero() || context.cancellation().is_cancelled() {
         return Err(MiddlewareError::Fault);
     }
-    let invocation = MiddlewareInvocation::new(
-        &context,
-        request,
-        next,
-        entry.requests_authorized,
-        entry.capability_version,
-    );
-    let (protocol, headers, body_visible, payload) = match invocation.request_projection() {
+    let invocation = MiddlewareInvocation::new(&context, request, next, entry.instance_id.clone());
+    let (protocol, headers, payload) = match invocation.request_parts() {
         Ok(projection) => projection,
-        Err(_) => return recover_invalid(entry, &invocation).await,
+        Err(_) => return recover_invalid(&entry, &invocation).await,
     };
     let mut call_context = invocation_ports.session.context(
         match entry.mount {
+            MiddlewareMount::Http | MiddlewareMount::WebSocket | MiddlewareMount::Service => {
+                return Err(MiddlewareError::InvalidState);
+            }
             MiddlewareMount::Request => Stage::Request,
             MiddlewareMount::Attempt => Stage::Attempt,
         },
@@ -157,22 +215,41 @@ async fn invoke_middleware(
     call_context.account_id = context
         .account_id()
         .map(|account| account.as_str().to_owned());
-    let _network_scope = context
-        .execution_effects()
-        .map(|effects| {
-            invocation_ports
-                .callbacks
-                .prepare_data_plane(&call_context, effects)
-        })
-        .transpose()
+    let scope = invocation_ports
+        .callbacks
+        .prepare_data_plane(
+            &call_context,
+            context.execution_effects(),
+            context.extension_scope().clone(),
+            context.plan(),
+            context.cancellation().clone(),
+        )
         .map_err(|_| MiddlewareError::Fault)?;
     let _binding = invocation_ports.callbacks.bind_middleware(
         call_context.resource_scope_id.clone(),
-        Arc::clone(&invocation),
+        invocation.clone(),
+        scope,
     )?;
     let head = MiddlewareRequestHead {
+        settings_sources: crate::callback::MiddlewareCallback::request_settings(
+            invocation.as_ref(),
+        )
+        .map(|settings| settings.inspect())
+        .unwrap_or(serde_json::Value::Null),
+        settings: invocation
+            .settings()
+            .map_err(|_| MiddlewareError::InvalidState)?,
+        client_key_id: context.client_key_id().as_str().to_owned(),
+        account_group_ids: context
+            .account_group_ids()
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect(),
         request_id: context.request_id().as_str().to_owned(),
         mount: match context.mount() {
+            MiddlewareMount::Http | MiddlewareMount::WebSocket | MiddlewareMount::Service => {
+                return Err(MiddlewareError::InvalidState);
+            }
             MiddlewareMount::Request => WireMiddlewareMount::Request,
             MiddlewareMount::Attempt => WireMiddlewareMount::Attempt,
         },
@@ -192,7 +269,6 @@ async fn invoke_middleware(
             .account_id()
             .map(|account| account.as_str().to_owned()),
         headers,
-        body_visible,
     };
     let stream = tokio::select! {
         biased;
@@ -204,19 +280,19 @@ async fn invoke_middleware(
             payload,
         ) => match result {
             Ok(stream) => stream,
-            Err(error) => return recover_rpc(entry, &invocation, error).await,
+            Err(error) => return recover_rpc(&entry, &invocation, error).await,
         }
     };
     if !stream.initial.payload.is_empty() {
         drop(stream);
-        return recover_invalid(entry, &invocation).await;
+        return recover_invalid(&entry, &invocation).await;
     }
     let response: MiddlewareResponseHead =
         match serde_json::from_value(stream.initial.result.clone()) {
             Ok(response) => response,
             Err(_) => {
                 drop(stream);
-                return recover_invalid(entry, &invocation).await;
+                return recover_invalid(&entry, &invocation).await;
             }
         };
     let completion = match invocation.resolve_response(response).await {
@@ -292,11 +368,7 @@ async fn recover_rpc(
         );
         return next.run(request).await;
     }
-    if rejected {
-        Err(MiddlewareError::Rejected)
-    } else {
-        Err(MiddlewareError::Fault)
-    }
+    Err(crate::callback::error::rpc_middleware(error))
 }
 
 async fn recover_invalid(
@@ -324,9 +396,9 @@ async fn drain_empty_stream(
     match stream.next().await {
         Ok(None) => invocation.take_downstream_error().map_or(Ok(()), Err),
         Ok(Some(_)) => Err(MiddlewareError::InvalidState),
-        Err(_) => invocation
+        Err(error) => invocation
             .take_downstream_error()
-            .map_or(Err(MiddlewareError::Fault), Err),
+            .map_or_else(|| Err(crate::callback::error::rpc_middleware(error)), Err),
     }
 }
 
@@ -369,11 +441,10 @@ impl MiddlewareBody for PluginMiddlewareBody {
                 };
                 let chunk = match stream.next().await {
                     Ok(chunk) => chunk,
-                    Err(_) => {
+                    Err(error) => {
                         self.stream.take();
-                        return Err(
-                            take_error(&self.downstream_error).unwrap_or(MiddlewareError::Fault)
-                        );
+                        return Err(take_error(&self.downstream_error)
+                            .unwrap_or_else(|| crate::callback::error::rpc_middleware(error)));
                     }
                 };
                 let Some(chunk) = chunk else {
@@ -397,11 +468,6 @@ impl MiddlewareBody for PluginMiddlewareBody {
                     .map_err(|_| MiddlewareError::InvalidState)?;
                 let source_id = wire_frame.source_id();
                 let disposition = wire_frame.disposition();
-                if !matches!(disposition, MiddlewareBodyDisposition::Drop)
-                    && !valid_plugin_frame(self.framing, &wire_frame.payload)
-                {
-                    return Err(MiddlewareError::InvalidState);
-                }
                 let frame = match (&self.downstream, disposition) {
                     (None, MiddlewareBodyDisposition::Standalone) => Some(
                         MiddlewareFrame::new(
@@ -508,6 +574,14 @@ impl MiddlewareBody for PluginMiddlewareBody {
                     continue;
                 }
                 let mut frame = frame.ok_or(MiddlewareError::InvalidState)?;
+                // 只有宿主来源事件本就没有 wire 时，空 payload 才是事实帧
+                let facts_only = frame.bytes().is_empty()
+                    && frame
+                        .event()
+                        .is_some_and(|event| event.wire_event().is_none());
+                if !facts_only && !valid_plugin_frame(self.framing, frame.bytes()) {
+                    return Err(MiddlewareError::InvalidState);
+                }
                 if self.pending_transformed {
                     frame = frame.with_transformed(true);
                     self.pending_transformed = false;
@@ -579,11 +653,12 @@ fn validate_terminal_end(
     downstream_error: &Mutex<Option<MiddlewareError>>,
 ) -> Result<(), MiddlewareError> {
     // 只有插件在终帧后继续输出才属于状态无效；RPC 传输失败保持为调用故障，
-    // 两条失败路径都不能覆盖已经记录的下游域错误。
+    // 两条失败路径都不能覆盖已经记录的下游域错误
     match terminal {
         Ok(None) => Ok(()),
         Ok(Some(_)) => Err(take_error(downstream_error).unwrap_or(MiddlewareError::InvalidState)),
-        Err(_) => Err(take_error(downstream_error).unwrap_or(MiddlewareError::Fault)),
+        Err(error) => Err(take_error(downstream_error)
+            .unwrap_or_else(|| crate::callback::error::rpc_middleware(error))),
     }
 }
 

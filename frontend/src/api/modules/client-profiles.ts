@@ -49,7 +49,9 @@ export interface ClientProfilePreview {
   versionSource: 'official' | 'custom'
   recognized?: boolean
   verifiedAt: string | null
+  verifiedAtDisplay: string | null
   checkedAt: string | null
+  checkedAtDisplay: string | null
   error: string | null
 }
 
@@ -92,7 +94,9 @@ export interface XaiClientProfilePreview extends Omit<XaiClientProfileSelection,
   userAgent: string
   versionSource: 'official' | 'custom'
   verifiedAt: string | null
+  verifiedAtDisplay: string | null
   checkedAt: string | null
+  checkedAtDisplay: string | null
   error: string | null
 }
 

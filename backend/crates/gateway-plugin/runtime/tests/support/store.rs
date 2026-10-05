@@ -1,3 +1,5 @@
+//! 插件运行时测试使用的内存存储与状态迁移替身
+
 use std::{collections::BTreeMap, sync::Mutex};
 
 use async_trait::async_trait;

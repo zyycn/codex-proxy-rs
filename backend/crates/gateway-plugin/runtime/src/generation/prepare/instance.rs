@@ -1,3 +1,5 @@
+//! 准备单个插件实例的进程、RPC 会话与能力贡献
+
 use super::{
     AdminError, Arc, Duration, Handshake, PluginCallbackPorts, PluginCallbacks, PluginInstance,
     PluginPrivateState, PluginRuntime, PluginStateStoreErrorKind, PreparedContributions,
@@ -39,7 +41,7 @@ impl PluginRuntime {
             .clone()
             .try_acquire_owned()
             .map_err(|_| AdminError::unavailable("插件校验繁忙"))?;
-        let (package, configuration, instance, granted_permissions, state_configuration) =
+        let (package, configuration, instance, state_configuration) =
             tokio::task::spawn_blocking(move || {
                 let _validation_slot = validation_slot;
                 let package = Arc::new(
@@ -50,18 +52,22 @@ impl PluginRuntime {
                     )
                     .map_err(|_| AdminError::invalid("插件恢复包校验失败"))?,
                 );
-                let (configuration, permissions, state_configuration) =
+                let (configuration, state_configuration) =
                     super::super::configuration::validate(&instance, package.manifest())?;
                 crate::adapter::observer::validate_bindings(
                     package.manifest(),
                     &instance.bindings,
                 )?;
                 crate::adapter::policy::validate_bindings(package.manifest(), &instance.bindings)?;
+                crate::adapter::upstream_adapter::validate_bindings(
+                    package.manifest(),
+                    &instance.bindings,
+                )?;
                 crate::adapter::frontend_authentication::validate_bindings(
                     package.manifest(),
                     &instance.bindings,
                 )?;
-                // 发行清单与当前 Runtime 共用同一份能力声明，不能让二者分别漂移。
+                // 发行清单与当前 Runtime 共用同一份能力声明，不能让二者分别漂移
                 if !crate::package::host_supports(package.manifest())? {
                     return Err(AdminError::invalid("该插件声明的业务能力尚未接入运行时"));
                 }
@@ -82,13 +88,7 @@ impl PluginRuntime {
                         .prepare(&directory, &host_version)
                         .map_err(|_| AdminError::unavailable("插件制品准备失败"))?,
                 );
-                Ok((
-                    package,
-                    configuration,
-                    instance,
-                    permissions,
-                    state_configuration,
-                ))
+                Ok((package, configuration, instance, state_configuration))
             })
             .await
             .map_err(|_| AdminError::internal("插件校验任务失败"))??;
@@ -140,7 +140,6 @@ impl PluginRuntime {
             generation: target_revision.get(),
             incarnation,
             configuration,
-            permissions: granted_permissions.clone(),
             contributes: manifest.contributes.clone(),
         };
         let callbacks = Arc::new(PluginCallbacks::new(
@@ -150,8 +149,8 @@ impl PluginRuntime {
             self.log_slots.clone(),
             private_state.clone(),
             PluginCallbackPorts::new(
+                self.service_ports.clone(),
                 self.http.clone(),
-                self.network_policy.clone(),
                 self.account_ports.clone(),
                 self.client_key_ports.clone(),
                 self.model_ports.clone(),
@@ -219,7 +218,6 @@ impl PluginRuntime {
             &plugin_id,
             &instance_id,
             &bindings,
-            &granted_permissions,
             session.clone(),
             callbacks.clone(),
         )? {
@@ -229,12 +227,18 @@ impl PluginRuntime {
             &manifest,
             &instance_id,
             &bindings,
-            &granted_permissions,
             session.clone(),
             callbacks.clone(),
         )?);
         let model_aliases =
             crate::adapter::catalog::prepare(&manifest, &instance, &session).await?;
+        let upstream_entries = crate::adapter::upstream_adapter::prepare(
+            &manifest,
+            &instance,
+            Arc::clone(&session),
+            Arc::clone(&callbacks),
+        )
+        .await?;
         sessions.push(PreparedInstance {
             instance_id,
             artifact_sha256: instance.artifact_sha256,
@@ -251,6 +255,7 @@ impl PluginRuntime {
             commands,
             management,
             policy_entries,
+            upstream_entries,
             authentication_entries,
             model_aliases,
         })

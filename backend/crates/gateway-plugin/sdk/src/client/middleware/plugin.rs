@@ -1,3 +1,5 @@
+//! 将中间件处理函数适配为可注册的插件处理器
+
 use std::future::Future;
 
 use crate::{
@@ -7,79 +9,97 @@ use crate::{
 
 use super::{
     super::session::{CallFuture, CallReply, PluginCall, PluginHandler, SessionError},
-    MiddlewareCall, MiddlewareResponse,
+    MiddlewareInput, MiddlewareOutput, RequestCall,
 };
 
-/// 单个中间件插件的作者入口；自动注册并将 RPC 分派到类型化业务函数。
+/// 单个中间件插件的作者入口；自动注册并将 RPC 分派到类型化业务函数
 ///
-/// 传入作者清单的完整能力列表，不从宿主握手照抄未实现的能力。此入口仅承载
-/// 一个 middleware 处理器；复合插件仍使用 [`PluginHandler`]，不能虚报其他能力。
-/// 会话、授权和生命周期分别由既有 SDK 会话与宿主负责，不在此建立第二套状态。
+/// 传入作者清单的完整能力列表，不从宿主握手照抄未实现的能力
+/// 此入口仅承载
+/// 一个 middleware 处理器；复合插件仍使用 [`PluginHandler`]，不能虚报其他能力
+/// 会话和生命周期分别由既有 SDK 会话与宿主负责，不在此建立第二套状态
 ///
 /// # Examples
 ///
 /// ```
 /// use gateway_plugin_sdk::{Capability, ContributionDeclaration, Contributions, Stage};
-/// use gateway_plugin_sdk::client::{MiddlewareCall, MiddlewarePlugin};
+/// use gateway_plugin_sdk::client::{RequestCall, MiddlewarePlugin};
 ///
 /// let contributes = Contributions::from([(Capability::Middleware, ContributionDeclaration {
 ///     id: "acme.request-tags.tagRequest".into(),
-///     version: 1,
+///     version: 3,
 ///     stages: vec![Stage::Request],
 ///     input_formats: vec!["openai".into()],
 ///     output_formats: vec!["openai".into()],
 /// })]);
-/// let plugin = MiddlewarePlugin::new(&contributes, |call: MiddlewareCall| async move {
-///     let MiddlewareCall { mut request, next, .. } = call;
+/// let plugin = MiddlewarePlugin::new(&contributes, |call: RequestCall| async move {
+///     let RequestCall { mut request, next, .. } = call;
 ///     request.append_header("x-team", b"research".to_vec());
 ///     next.run(request).await
 /// })?;
-/// // 将 plugin 交给 PluginSession::run；请求头修改仍需管理员授权。
+/// // 将 plugin 交给 PluginSession::run；请求头修改直接作用于当前调用
 /// # Ok::<(), gateway_plugin_sdk::client::SessionError>(())
 /// ```
-pub struct MiddlewarePlugin<F> {
+pub struct MiddlewarePlugin<F, C = RequestCall> {
+    input: std::marker::PhantomData<fn(C)>,
     contributes: Contributions,
     handler: F,
 }
 
-impl<F, Fut> MiddlewarePlugin<F>
+impl<F, C, Fut> MiddlewarePlugin<F, C>
 where
-    F: Fn(MiddlewareCall) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<MiddlewareResponse, PluginFault>> + Send + 'static,
+    C: MiddlewareInput,
+    F: Fn(C) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<C::Output, PluginFault>> + Send + 'static,
 {
-    /// 绑定清单中唯一的中间件声明与业务处理函数。
+    /// 绑定清单中唯一的中间件声明与业务处理函数
     ///
     /// # Errors
     ///
-    /// 空声明、其他能力、重复能力、不支持的能力版本或挂载阶段返回配置错误。
-    /// 包格式、资源和权限仍由宿主校验；此处不根据代码推断或扩张授权。
+    /// 空声明、其他能力、重复能力、不支持的能力版本或挂载阶段返回配置错误
+    /// 包格式与资源生命周期由宿主校验；入口不根据处理器代码推断清单
     pub fn new(contributes: &Contributions, handler: F) -> Result<Self, SessionError> {
         let Some(declaration) = contributes.get(&Capability::Middleware) else {
             return Err(SessionError::Configuration);
         };
         if contributes.len() != 1
-            || !matches!(declaration.version, 1 | 2)
+            || !Capability::Middleware
+                .contract_versions()
+                .contains(&declaration.version)
             || declaration.stages.is_empty()
-            || declaration.stages.len() > 2
+            || declaration.stages.len() > 5
+            || declaration.stages.iter().any(|stage| {
+                !matches!(
+                    stage,
+                    Stage::Http
+                        | Stage::WebSocket
+                        | Stage::Service
+                        | Stage::Request
+                        | Stage::Attempt
+                ) || !C::accepts(*stage)
+            })
             || declaration
                 .stages
                 .iter()
-                .any(|stage| !matches!(stage, Stage::Request | Stage::Attempt))
-            || (declaration.stages.len() == 2 && declaration.stages[0] == declaration.stages[1])
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != declaration.stages.len()
         {
             return Err(SessionError::Configuration);
         }
         Ok(Self {
+            input: std::marker::PhantomData,
             contributes: contributes.clone(),
             handler,
         })
     }
 }
 
-impl<F, Fut> PluginHandler for MiddlewarePlugin<F>
+impl<F, C, Fut> PluginHandler for MiddlewarePlugin<F, C>
 where
-    F: Fn(MiddlewareCall) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<MiddlewareResponse, PluginFault>> + Send + 'static,
+    C: MiddlewareInput,
+    F: Fn(C) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<C::Output, PluginFault>> + Send + 'static,
 {
     fn call(&self, call: PluginCall) -> CallFuture<'_> {
         Box::pin(async move {
@@ -111,8 +131,8 @@ where
                     if !declaration.stages.contains(&call.context.stage) {
                         return Err(super::invalid_input());
                     }
-                    let call = MiddlewareCall::try_from(call)?;
-                    (self.handler)(call).await?.into_reply()
+                    let call = C::decode(call)?;
+                    (self.handler)(call).await?.encode()
                 }
                 _ => Err(PluginFault::new(
                     ErrorCode::Unsupported,

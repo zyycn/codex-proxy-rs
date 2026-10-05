@@ -1,9 +1,11 @@
+//! Grok 会话选择、亲和键、账号租约与凭据失败反馈的传输合同
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use gateway_core::account::{
     AccountCapacitySnapshot, AccountEligibilityPolicy, AccountSelectionPolicy, CredentialRevision,
@@ -16,16 +18,16 @@ use sha2::{Digest as _, Sha256};
 
 use crate::SecretValue;
 
-/// 注入的推理 transport 可识别的不透明假名化 egress/session 键。
+/// 注入的推理 transport 可识别的不透明假名化 egress/session 键
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GrokSessionBinding(String, Option<gateway_core::account::OutboundProxy>);
 
 impl GrokSessionBinding {
-    /// 创建有界的非敏感绑定引用。
+    /// 创建有界的非敏感绑定引用
     ///
     /// # Errors
     ///
-    /// 值为空、超长、含控制字符或使用保留前缀时返回错误。
+    /// 值为空、超长、含控制字符或使用保留前缀时返回错误
     pub fn new(value: impl Into<String>) -> Result<Self, GrokSessionDataError> {
         let value = value.into();
         if value.is_empty()
@@ -38,7 +40,7 @@ impl GrokSessionBinding {
         Ok(Self(value, None))
     }
 
-    /// 返回假名化的 transport 查找键。
+    /// 返回假名化的 transport 查找键
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -64,7 +66,7 @@ impl fmt::Debug for GrokSessionBinding {
     }
 }
 
-/// 下游租户与显式会话共同派生的账号亲和键。
+/// 下游租户与显式会话共同派生的账号亲和键
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrokSessionAffinityKey([u8; 32]);
 
@@ -73,7 +75,7 @@ impl GrokSessionAffinityKey {
         Self(digest)
     }
 
-    /// 为候选账号计算稳定 rendezvous 分值，原始会话值不会离开 Provider。
+    /// 为候选账号计算稳定 rendezvous 分值，原始会话值不会离开 Provider
     pub(crate) fn score(&self, account_id: &ProviderAccountId) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"xai-account-affinity-v1\0");
@@ -90,12 +92,12 @@ impl fmt::Debug for GrokSessionAffinityKey {
     }
 }
 
-/// 由 selector 持有的凭据、容量与 egress 亲和守卫。
+/// 由 selector 持有的凭据、容量与 egress 亲和守卫
 pub trait GrokSessionLeaseGuard: Send + Sync + 'static {}
 
 impl<T> GrokSessionLeaseGuard for T where T: Send + Sync + 'static {}
 
-/// 一个选中的 OAuth 会话及其持有的活跃 lease。
+/// 一个选中的 OAuth 会话及其持有的活跃 lease
 pub struct SelectedGrokSession {
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
@@ -109,11 +111,11 @@ pub struct SelectedGrokSession {
 }
 
 impl SelectedGrokSession {
-    /// 从 Provider 持有的明文 OAuth 材料构造选中会话。
+    /// 从 Provider 持有的明文 OAuth 材料构造选中会话
     ///
     /// # Errors
     ///
-    /// 快照缺少凭据，或 auth/header 值格式非法时返回错误。
+    /// 快照缺少凭据，或 auth/header 值格式非法时返回错误
     pub fn new(
         account_id: ProviderAccountId,
         credential_revision: CredentialRevision,
@@ -144,7 +146,7 @@ impl SelectedGrokSession {
         })
     }
 
-    /// 标记禁用账号的管理端诊断只读取真实上游结果，不回写账号状态。
+    /// 标记禁用账号的管理端诊断只读取真实上游结果，不回写账号状态
     #[must_use]
     pub(crate) const fn without_account_state_mutation(mut self) -> Self {
         self.allows_account_state_mutation = false;
@@ -160,37 +162,37 @@ impl SelectedGrokSession {
         self
     }
 
-    /// 返回选中的账号 ID。
+    /// 返回选中的账号 ID
     #[must_use]
     pub const fn account_id(&self) -> &ProviderAccountId {
         &self.account_id
     }
 
-    /// 返回 selector 冻结的凭据 revision。
+    /// 返回 selector 冻结的凭据 revision
     #[must_use]
     pub const fn credential_revision(&self) -> CredentialRevision {
         self.credential_revision
     }
 
-    /// 返回用于显式构造 header 的 OAuth access token。
+    /// 返回用于显式构造 header 的 OAuth access token
     #[must_use]
     pub const fn access_token(&self) -> &SecretValue {
         &self.access_token
     }
 
-    /// 返回用于官方代理 header 的已验证 user ID。
+    /// 返回用于官方代理 header 的已验证 user ID
     #[must_use]
     pub const fn user_id(&self) -> &SecretValue {
         &self.user_id
     }
 
-    /// 返回用于官方代理 header 的可选已验证 email。
+    /// 返回用于官方代理 header 的可选已验证 email
     #[must_use]
     pub const fn email(&self) -> Option<&SecretValue> {
         self.email.as_ref()
     }
 
-    /// 返回假名化的 egress/session transport 绑定。
+    /// 返回假名化的 egress/session transport 绑定
     #[must_use]
     pub const fn binding(&self) -> &GrokSessionBinding {
         &self.binding
@@ -226,7 +228,7 @@ impl fmt::Debug for SelectedGrokSession {
     }
 }
 
-/// 单次 selector 调用的入参，持有冻结且不含密钥的尝试视图。
+/// 单次 selector 调用的入参，持有冻结且不含密钥的尝试视图
 #[derive(Debug, Clone)]
 pub struct GrokSessionSelection {
     upstream_model: UpstreamModelId,
@@ -235,7 +237,8 @@ pub struct GrokSessionSelection {
     account_selection_policy: AccountSelectionPolicy,
     eligibility: AccountEligibilityPolicy,
     affinity: Option<GrokSessionAffinityKey>,
-    deadline: SystemTime,
+    deadline: gateway_core::lifecycle::Deadline,
+    cancellation: gateway_core::lifecycle::CancellationToken,
     account_scope: Arc<FrozenAccountScope>,
     client_api_key_id: ClientApiKeyId,
     concurrency_wait_budget: gateway_core::concurrency::ConcurrencyWaitBudget,
@@ -244,14 +247,26 @@ pub struct GrokSessionSelection {
 }
 
 impl GrokSessionSelection {
-    /// 创建不可变的选择请求。
+    pub(crate) fn with_cancellation(
+        mut self,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    pub(crate) fn cancellation(&self) -> &gateway_core::lifecycle::CancellationToken {
+        &self.cancellation
+    }
+
+    /// 创建不可变的选择请求
     #[must_use]
     pub fn new(
         upstream_model: UpstreamModelId,
         excluded_accounts: BTreeSet<ProviderAccountId>,
         required_account: Option<ProviderAccountId>,
         account_selection_policy: AccountSelectionPolicy,
-        deadline: SystemTime,
+        deadline: impl Into<gateway_core::lifecycle::Deadline>,
         account_scope: Arc<FrozenAccountScope>,
         client_api_key_id: ClientApiKeyId,
     ) -> Self {
@@ -262,7 +277,8 @@ impl GrokSessionSelection {
             account_selection_policy,
             eligibility: AccountEligibilityPolicy::Enforce,
             affinity: None,
-            deadline,
+            deadline: deadline.into(),
+            cancellation: gateway_core::lifecycle::CancellationToken::new(),
             account_scope,
             client_api_key_id,
             concurrency_wait_budget: gateway_core::concurrency::ConcurrencyWaitBudget::default(),
@@ -271,7 +287,7 @@ impl GrokSessionSelection {
         }
     }
 
-    /// 附着普通数据面请求冻结的插件策略；管理诊断保持空值。
+    /// 附着普通数据面请求冻结的插件策略；管理诊断保持空值
     #[must_use]
     pub(crate) fn with_request_policy(
         mut self,
@@ -283,14 +299,14 @@ impl GrokSessionSelection {
         self
     }
 
-    /// 附着仅由显式客户端会话派生的账号亲和键。
+    /// 附着仅由显式客户端会话派生的账号亲和键
     #[must_use]
     pub fn with_affinity(mut self, affinity: Option<GrokSessionAffinityKey>) -> Self {
         self.affinity = affinity;
         self
     }
 
-    /// 延续 Core 的请求级排队预算。
+    /// 延续 Core 的请求级排队预算
     #[must_use]
     pub(crate) fn with_concurrency_wait_budget(
         mut self,
@@ -306,7 +322,7 @@ impl GrokSessionSelection {
         &self.concurrency_wait_budget
     }
 
-    /// 为固定账号的管理端诊断指定本地可用性判定策略。
+    /// 为固定账号的管理端诊断指定本地可用性判定策略
     #[must_use]
     pub(crate) const fn with_eligibility_policy(
         mut self,
@@ -316,25 +332,25 @@ impl GrokSessionSelection {
         self
     }
 
-    /// 返回冻结的上游模型。
+    /// 返回冻结的上游模型
     #[must_use]
     pub const fn upstream_model(&self) -> &UpstreamModelId {
         &self.upstream_model
     }
 
-    /// 返回协调方已尝试过的账号。
+    /// 返回协调方已尝试过的账号
     #[must_use]
     pub const fn excluded_accounts(&self) -> &BTreeSet<ProviderAccountId> {
         &self.excluded_accounts
     }
 
-    /// 返回 Core 约束下本次调用唯一允许的账号。
+    /// 返回 Core 约束下本次调用唯一允许的账号
     #[must_use]
     pub const fn required_account(&self) -> Option<&ProviderAccountId> {
         self.required_account.as_ref()
     }
 
-    /// 返回冻结的全局账号调度策略。
+    /// 返回冻结的全局账号调度策略
     #[must_use]
     pub const fn account_selection_policy(&self) -> AccountSelectionPolicy {
         self.account_selection_policy
@@ -345,15 +361,15 @@ impl GrokSessionSelection {
         self.eligibility
     }
 
-    /// 返回不含原始客户端会话值的账号亲和键。
+    /// 返回不含原始客户端会话值的账号亲和键
     #[must_use]
     pub const fn affinity(&self) -> Option<&GrokSessionAffinityKey> {
         self.affinity.as_ref()
     }
 
-    /// 返回限定调度租约的绝对截止时间。
+    /// 返回限定调度租约的绝对截止时间
     #[must_use]
-    pub const fn deadline(&self) -> SystemTime {
+    pub const fn deadline(&self) -> gateway_core::lifecycle::Deadline {
         self.deadline
     }
 
@@ -378,71 +394,71 @@ impl GrokSessionSelection {
     }
 }
 
-/// Grok session selector 返回的 future。
+/// Grok session selector 返回的 future
 pub type GrokSessionSelectorFuture<'a> = Pin<
     Box<dyn Future<Output = Result<SelectedGrokSession, GrokSessionSelectorError>> + Send + 'a>,
 >;
 
-/// 已脱敏的上游失败反馈；selector 决定账号持久状态或细粒度运行时 cooldown。
+/// 已脱敏的上游失败反馈；selector 决定账号持久状态或细粒度运行时 cooldown
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrokCredentialFailure {
-    /// 选中的 OAuth token 被拒绝。
+    /// 选中的 OAuth token 被拒绝
     Unauthorized,
-    /// 选中的 OAuth 账号被限流。
+    /// 选中的 OAuth 账号被限流
     RateLimited {
-        /// 已解析并脱敏的延迟；不保留上游原始 header。
+        /// 已解析并脱敏的延迟；不保留上游原始 header
         retry_after: Option<Duration>,
     },
-    /// 选中的 OAuth 账号付费额度耗尽。
+    /// 选中的 OAuth 账号付费额度耗尽
     QuotaExhausted,
-    /// 选中的 OAuth 账号订阅级免费额度耗尽。
+    /// 选中的 OAuth 账号订阅级免费额度耗尽
     FreeQuotaExhausted,
-    /// HTTP 402 没有给出可证明账号额度耗尽的稳定信号。
+    /// HTTP 402 没有给出可证明账号额度耗尽的稳定信号
     PaymentRequired {
-        /// 已解析并脱敏的延迟；缺失时由 selector 使用短暂默认值。
+        /// 已解析并脱敏的延迟；缺失时由 selector 使用短暂默认值
         retry_after: Option<Duration>,
     },
-    /// 上游声明指定模型的免费用量耗尽；selector 会收敛为账号级可恢复额度状态。
+    /// 上游声明指定模型的免费用量耗尽；selector 会收敛为账号级可恢复额度状态
     ModelQuotaExhausted {
         upstream_model: UpstreamModelId,
         retry_after: Option<Duration>,
     },
-    /// 选中账号只缺少指定模型的访问权限。
+    /// 选中账号只缺少指定模型的访问权限
     ModelAccessDenied {
         upstream_model: UpstreamModelId,
         retry_after: Option<Duration>,
     },
-    /// 非内容策略的 403：当前账号的访问资格暂不可用。
+    /// 非内容策略的 403：当前账号的访问资格暂不可用
     AccessDenied,
-    /// 上游明确报告模型容量不足；重模型按模型隔离，其余账号短暂冷却。
+    /// 上游明确报告模型容量不足；重模型按模型隔离，其余账号短暂冷却
     ModelCapacity { upstream_model: UpstreamModelId },
-    /// 上游返回空模型输出。
+    /// 上游返回空模型输出
     EmptyUpstream,
-    /// 上游 5xx/529 暂时不可用。
+    /// 上游 5xx/529 暂时不可用
     UpstreamUnavailable,
-    /// 成功的 SSE 响应在终止 Responses 事件前结束。
+    /// 成功的 SSE 响应在终止 Responses 事件前结束
     StreamInterrupted,
 }
 
-/// 一次 best-effort 凭据反馈写入返回的 future。
+/// 一次 best-effort 凭据反馈写入返回的 future
 pub type GrokCredentialFeedbackFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 /// 运行时端口：选出恰好一个可用 OAuth 会话，并获取流生命周期所需的全部
-/// 凭据、容量与出口租约。
+/// 凭据、容量与出口租约
 pub trait GrokSessionSelector: Send + Sync {
-    /// 执行一次选择，不做 Provider 内部回退。
+    /// 执行一次选择，不做 Provider 内部回退
     fn select(&self, request: GrokSessionSelection) -> GrokSessionSelectorFuture<'_>;
 
-    /// 记录一条已分类的失败反馈，不重试也不替换原错误。
+    /// 记录一条已分类的失败反馈，不重试也不替换原错误
     fn record_failure<'a>(
         &'a self,
         session: &'a SelectedGrokSession,
         failure: GrokCredentialFailure,
     ) -> GrokCredentialFeedbackFuture<'a>;
 
-    /// 成功完成真实上游请求后收敛账号的可恢复状态。
+    /// 成功完成真实上游请求后收敛账号的可恢复状态
     ///
-    /// 默认实现让只关心选择或失败反馈的测试替身无需模拟持久状态写入。
+    /// 默认实现让只关心选择或失败反馈的测试替身无需模拟持久状态写入
     fn record_success<'a>(
         &'a self,
         _: &'a SelectedGrokSession,
@@ -451,53 +467,53 @@ pub trait GrokSessionSelector: Send + Sync {
     }
 }
 
-/// 不含密钥的选择器失败。
+/// 不含密钥的选择器失败
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GrokSessionSelectorError {
     #[error(transparent)]
     QueueRejected(#[from] gateway_core::concurrency::QueueRejection),
-    /// 没有会话同时满足模型、状态与排除约束。
+    /// 没有会话同时满足模型、状态与排除约束
     #[error("no eligible Grok Build session is available")]
     NoEligibleSession,
-    /// 所有可用会话当前均被租出或处于限速间隔。
+    /// 所有可用会话当前均被租出或处于限速间隔
     #[error("Grok Build session capacity is unavailable")]
     CapacityUnavailable {
-        /// 选择器推导出的可选延迟。
+        /// 选择器推导出的可选延迟
         retry_after: Option<Duration>,
     },
-    /// 每个可用会话都处于运行时冷却窗口内。
+    /// 每个可用会话都处于运行时冷却窗口内
     #[error("Grok Build account is cooling down")]
     AccountCoolingDown {
-        /// 最早恢复的会话剩余冷却时长。
+        /// 最早恢复的会话剩余冷却时长
         retry_after: Option<Duration>,
     },
-    /// 每个可用会话都只针对当前模型处于运行时冷却窗口内。
+    /// 每个可用会话都只针对当前模型处于运行时冷却窗口内
     #[error("Grok Build model is cooling down for the available accounts")]
     ModelCoolingDown {
-        /// 最早恢复的账号+模型组合剩余冷却时长。
+        /// 最早恢复的账号+模型组合剩余冷却时长
         retry_after: Option<Duration>,
     },
-    /// 会话元数据或 Provider 持有的明文密钥非法。
+    /// 会话元数据或 Provider 持有的明文密钥非法
     #[error("Grok Build session data is invalid")]
     InvalidSession,
-    /// 选择器依赖的后端服务不可用。
+    /// 选择器依赖的后端服务不可用
     #[error("Grok Build session selector is unavailable")]
     Unavailable,
-    /// 插件调度策略明确拒绝本次请求。
+    /// 插件调度策略明确拒绝本次请求
     #[error("account scheduling policy rejected the request")]
     PolicyRejected,
-    /// 插件调度策略调用失败且配置为拒绝。
+    /// 插件调度策略调用失败且配置为拒绝
     #[error("account scheduling policy is unavailable")]
     PolicyUnavailable,
 }
 
-/// 构造选中会话时的失败。
+/// 构造选中会话时的失败
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum GrokSessionDataError {
-    /// access token 或已验证身份头格式非法。
+    /// access token 或已验证身份头格式非法
     #[error("selected session contains an invalid secret value")]
     InvalidSecretValue,
-    /// 出口/会话绑定非法。
+    /// 出口/会话绑定非法
     #[error("selected session binding is invalid")]
     InvalidBinding,
 }

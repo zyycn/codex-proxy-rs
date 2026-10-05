@@ -1,4 +1,4 @@
-//! WebSocket 连接池 reservation、handoff 与 lease 生命周期。
+//! WebSocket 连接池 reservation、handoff 与 lease 生命周期
 
 use tokio::{
     sync::{OwnedSemaphorePermit, watch},
@@ -62,7 +62,7 @@ pub(crate) struct WebSocketPoolConnectLease {
     pub(super) started_at: Instant,
     pub(super) outcome: watch::Sender<WebSocketPoolConnectOutcome>,
     pub(super) cancellation: CancellationToken,
-    // slot 分配时即注册，封闭 acquire 与后台 task spawn 之间的 shutdown 竞态。
+    // slot 分配时即注册，封闭 acquire 与后台 task spawn 之间的 shutdown 竞态
     _task_registration: TaskTrackerToken,
     _connect_permit: OwnedSemaphorePermit,
     armed: bool,
@@ -123,7 +123,7 @@ impl WebSocketPoolConnectLease {
 
     pub(crate) async fn failed(mut self) {
         self.cancellation.cancel();
-        // 先唤醒共享等待者，pool mutex 清理不得延迟前台 transport 决策。
+        // 先唤醒共享等待者，pool mutex 清理不得延迟前台 transport 决策
         self.outcome
             .send_replace(WebSocketPoolConnectOutcome::Failed);
         self.pool.fail_connect(&self.key, self.id).await;

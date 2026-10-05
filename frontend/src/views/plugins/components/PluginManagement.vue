@@ -260,7 +260,7 @@ const tabOptions = [
       description="仍被使用时不可删除，删除后无法恢复"
       destructive
       confirm-text="确认删除"
-      :loading="Boolean(management.busyDistributionId.value)"
+      :loading="Boolean(management.busyCredentialId.value)"
       @confirm="management.confirmCredentialDelete"
     >
       <p class="m-0 wrap-anywhere text-cp-sm font-normal">

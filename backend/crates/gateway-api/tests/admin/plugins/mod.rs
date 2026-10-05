@@ -1,3 +1,5 @@
+//! 插件管理 HTTP 测试入口，以及制品、实例与权限合同测试
+
 use async_trait::async_trait;
 use gateway_admin::model::plugins::distribution::{
     DownloadedPlugin, GithubReleaseQuery, PluginRelease, RemotePluginLocation, SourceCredential,
@@ -61,7 +63,7 @@ fn artifact_metadata_wire_exposes_v2_identity_and_contributions() {
                 output_formats: vec!["openai".into()],
             },
         )]),
-        requested_permissions: vec![],
+
         configuration_schema: serde_json::json!({}),
         secret_fields: vec![],
         state_namespaces: vec![],
@@ -414,13 +416,15 @@ async fn artifact_acceptance_returns_the_flat_install_contract() {
     assert_eq!(result["defaultInstanceId"], serde_json::Value::Null);
     assert_eq!(result["configurationRequired"], false);
     assert_eq!(result["artifact"]["metadata"]["sha256"], "a".repeat(64));
-    assert_eq!(
-        result["artifact"]["metadata"]["permissionDescriptions"][0]["permission"],
-        "models"
+    assert!(
+        result["artifact"]["metadata"]
+            .get("permissionDescriptions")
+            .is_none()
     );
-    assert_eq!(
-        result["artifact"]["metadata"]["permissionDescriptions"][0]["label"],
-        "当前宿主标签"
+    assert!(
+        result["artifact"]["metadata"]
+            .get("requestedPermissions")
+            .is_none()
     );
     assert!(result["artifact"]["acceptedAt"].is_string());
     assert!(result.get("mutation").is_none());
@@ -520,7 +524,7 @@ async fn plugin_mutations_require_admin_and_validate_json_on_static_post_routes(
             assert_eq!(
                 response.status(),
                 if authenticated {
-                    // 字段缺失沿用 AdminJson 的结构校验合同。
+                    // 字段缺失沿用 AdminJson 的结构校验合同
                     StatusCode::UNPROCESSABLE_ENTITY
                 } else {
                     StatusCode::UNAUTHORIZED
@@ -540,7 +544,7 @@ pub(super) struct TestPluginPorts {
 
 #[async_trait]
 impl gateway_admin::ports::plugin_management::PluginManagement for TestPluginPorts {
-    async fn authorize_models(
+    async fn validate_target(
         &self,
         _: &gateway_core::runtime::extensions::ExtensionSetReference,
         _: &gateway_admin::model::plugins::management::PluginManagementTarget,
@@ -563,10 +567,12 @@ impl gateway_admin::ports::plugin_management::PluginManagement for TestPluginPor
         _: &gateway_core::runtime::extensions::ExtensionSetReference,
         _: &gateway_admin::model::plugins::management::PluginManagementTarget,
         _: &str,
-        _: gateway_admin::model::plugins::management::PluginManagementRequest,
+        request: gateway_admin::model::plugins::management::PluginManagementRequest,
     ) -> Result<gateway_admin::model::plugins::management::PluginManagementResponse, AdminError>
     {
-        Ok(management::resource_fixture("ui/index.html"))
+        let mut response = management::resource_fixture("ui/index.html");
+        response.headers = request.headers;
+        Ok(response)
     }
     async fn views(
         &self,
@@ -592,10 +598,33 @@ impl gateway_admin::ports::plugin_management::PluginManagement for TestPluginPor
         &self,
         _: &gateway_core::runtime::extensions::ExtensionSetReference,
         _: &gateway_admin::model::plugins::management::PluginManagementTarget,
-        _: gateway_admin::model::plugins::management::PluginManagementRequest,
+        request: gateway_admin::model::plugins::management::PluginManagementRequest,
     ) -> Result<gateway_admin::model::plugins::management::PluginManagementResponse, AdminError>
     {
-        Ok(management::resource_fixture("api/echo"))
+        let mut response = management::resource_fixture("api/echo");
+        response.headers = request.headers;
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginStateLifecycle for TestPluginPorts {
+    async fn activate_state(
+        &self,
+        _: &gateway_core::runtime::extensions::ExtensionSetReference,
+        _: &gateway_admin::model::plugins::instances::PluginInstance,
+    ) -> Result<(), AdminError> {
+        Ok(())
+    }
+    async fn quiesce_instance(&self, _: &str, _: &str, _: gateway_admin::model::Revision) {
+        panic!("unexpected instance drain")
+    }
+    async fn migrate_state(
+        &self,
+        _: &gateway_core::runtime::extensions::ExtensionSetReference,
+        _: gateway_admin::model::plugins::state::PluginStateTransition,
+    ) -> Result<(), AdminError> {
+        panic!("unexpected state migration")
     }
 }
 
@@ -621,7 +650,10 @@ impl gateway_admin::ports::plugins::PluginPreparation for TestPluginPorts {
     ) -> Result<gateway_core::runtime::extensions::ExtensionSetReference, AdminError> {
         Err(AdminError::invalid("unused plugin fixture"))
     }
+}
 
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginRuntimeDiagnostics for TestPluginPorts {
     async fn runtime_diagnostics(
         &self,
         snapshot: &gateway_admin::model::plugins::instances::PluginInstanceSnapshot,
@@ -677,7 +709,7 @@ fn icon_artifact(digest: &str) -> InspectedPluginArtifact {
             icon: (digest.as_bytes()[0] == b'f')
                 .then(|| PluginArtifactIcon::Path("assets/icon.png".into())),
             contributes: BTreeMap::new(),
-            requested_permissions: Vec::new(),
+
             configuration_schema: serde_json::json!({}),
             secret_fields: Vec::new(),
             state_namespaces: Vec::new(),
@@ -687,8 +719,7 @@ fn icon_artifact(digest: &str) -> InspectedPluginArtifact {
 }
 
 fn accepted_artifact() -> InstalledPluginArtifact {
-    let mut metadata = icon_artifact(&"a".repeat(64)).metadata;
-    metadata.requested_permissions = vec!["models".into()];
+    let metadata = icon_artifact(&"a".repeat(64)).metadata;
     InstalledPluginArtifact {
         metadata,
         source: PluginSource::Upload,
@@ -802,7 +833,7 @@ impl PluginStore for TestPluginPorts {
                         trusted_process: true,
                         configuration: serde_json::json!({}),
                         secrets: BTreeMap::new(),
-                        grants: Vec::new(),
+
                         bindings: Vec::new(),
                         revision: Revision::new(7).unwrap(),
                     }]
@@ -862,6 +893,12 @@ impl PluginStore for TestPluginPorts {
         Ok(vec![accepted_artifact()])
     }
     async fn load_artifact(&self, digest: &str) -> AdminStoreResult<InspectedPluginArtifact> {
+        if digest == "a".repeat(64) {
+            return Ok(InspectedPluginArtifact {
+                metadata: accepted_artifact().metadata,
+                archive: Arc::from([1_u8]),
+            });
+        }
         if matches!(digest.as_bytes().first(), Some(b'e' | b'f')) && digest.len() == 64 {
             return Ok(icon_artifact(digest));
         }
@@ -895,28 +932,15 @@ impl PluginStore for TestPluginPorts {
 
 #[async_trait]
 impl PluginPackageInspector for TestPluginPorts {
-    fn permission_descriptions(
-        &self,
-        permissions: &[String],
-    ) -> Vec<gateway_admin::model::plugins::PluginPermissionDescription> {
-        permissions
-            .iter()
-            .map(
-                |permission| gateway_admin::model::plugins::PluginPermissionDescription {
-                    permission: permission.clone(),
-                    label: "当前宿主标签".into(),
-                    description: "当前宿主说明".into(),
-                },
-            )
-            .collect()
-    }
-
     async fn inspect(
         &self,
         _: Arc<[u8]>,
         _: Option<String>,
     ) -> Result<InspectedPluginArtifact, AdminError> {
-        Err(AdminError::invalid("unused plugin fixture"))
+        Ok(InspectedPluginArtifact {
+            metadata: accepted_artifact().metadata,
+            archive: Arc::from([1_u8]),
+        })
     }
 
     async fn icon(

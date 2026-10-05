@@ -1,4 +1,4 @@
-//! OpenAI 请求、响应与 transport 观测事实归一化。
+//! OpenAI 请求、响应与 transport 观测事实归一化
 
 use super::*;
 
@@ -8,7 +8,7 @@ pub(super) fn endpoint_requested_model(
     if payload.protocol() != PROVIDER_NAME {
         return None;
     }
-    // 只读取 model，避免把编辑请求中的整张图片复制到观测数据。
+    // 只读取 model，避免把编辑请求中的整张图片复制到观测数据
     #[derive(Deserialize)]
     struct RequestModel {
         model: Option<Value>,
@@ -19,10 +19,10 @@ pub(super) fn endpoint_requested_model(
     gateway_core::routing::PublicModelId::new(model.as_str()?.to_owned()).ok()
 }
 
-/// OpenAI Responses 的观测状态完全归 Provider 所有。
+/// OpenAI Responses 的观测状态完全归 Provider 所有
 ///
 /// 每次原始 SSE/WS 事件推进状态后重新生成不可变 observation，Core 只负责携带、
-/// 持久化和展示这份安全快照，不解释任何 OpenAI 协议字段。
+/// 持久化和展示这份安全快照，不解释任何 OpenAI 协议字段
 pub(super) struct OpenAiResponseObservationState {
     transport: CodexBackendTransport,
     diagnostics: CodexUpstreamDiagnostics,
@@ -94,7 +94,7 @@ impl OpenAiResponseObservationState {
         &self,
         failure: Option<&ProviderError>,
     ) -> Option<ProviderResponseObservation> {
-        // 失败快照的请求 ID 来自当前错误；连接诊断仍保持 opening 原貌，不维护第二份可变 ID。
+        // 失败快照的请求 ID 来自当前错误；连接诊断仍保持 opening 原貌，不维护第二份可变 ID
         let failure_diagnostics = failure
             .filter(|_| self.transport == CodexBackendTransport::WebSocket)
             .map(|error| {
@@ -119,7 +119,7 @@ impl OpenAiResponseObservationState {
         if let Some(metadata) = self.provider_metadata() {
             observation = observation.with_provider_metadata(metadata);
         }
-        // 统计与计费采用最终发送档位；响应回显只作为独立诊断事实保留。
+        // 统计与计费采用最终发送档位；响应回显只作为独立诊断事实保留
         if let Some(service_tier) = &self.requested_service_tier {
             observation = observation.with_service_tier_if_valid(service_tier.clone());
         }
@@ -154,7 +154,7 @@ impl OpenAiResponseObservationState {
     ) -> bool {
         let mut changed = false;
         // 首个非前导输出事件（结构帧也算）开启首字计时；
-        // 真实语义首字由 first_reasoning_ms / first_text_ms 单独观测。
+        // 真实语义首字由 first_reasoning_ms / first_text_ms 单独观测
         if signals.output_start {
             changed |= insert_first_timing(&mut self.timings.first_token_ms, started_at);
         }
@@ -330,8 +330,8 @@ pub(super) fn codex_response_observation(
             WebSocketPoolKind::New
         });
     }
-    // WebSocket opening 的 101 是成功升级事实，不是业务请求的失败 HTTP 状态。
-    // opening 明确拒绝仍由 `codex_error_observation` 保存真实上游状态。
+    // WebSocket opening 的 101 是成功升级事实，不是业务请求的失败 HTTP 状态
+    // opening 明确拒绝仍由 `codex_error_observation` 保存真实上游状态
     if transport != CodexBackendTransport::WebSocket
         && let Some(status_code) = diagnostics.status_code
     {
@@ -576,8 +576,8 @@ pub(super) fn nonnegative_millis(value: Option<i64>) -> Option<u64> {
 }
 
 pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderModelCapabilities {
-    // Catalog membership is enough to publish Generate. `supported_in_api` is advisory;
-    // the upstream response is authoritative for normal and diagnostic requests.
+    // 模型进入目录即可发布 Generate 能力，`supported_in_api` 仅作提示
+    // 普通请求和诊断请求均以上游响应为准
     let capabilities = ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None)
         .with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
@@ -587,7 +587,7 @@ pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderM
 pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresentation {
     let capabilities = model.capabilities();
     let reasoning_efforts = capabilities.reasoning_efforts().to_vec();
-    // Codex 目录不声明默认 effort；有 medium 时对齐官方 picker 缺省，否则取首项。
+    // Codex 目录不声明默认 effort；有 medium 时对齐官方 picker 缺省，否则取首项
     let default_reasoning = reasoning_efforts
         .iter()
         .find(|effort| effort.as_str() == "medium")
@@ -616,7 +616,7 @@ pub(super) fn codex_model_presentation(model: &CodexCatalogModel) -> ModelPresen
             .map(std::num::NonZeroU64::get),
     )
     .with_image_input(capabilities.image_input() == CodexCatalogCapabilityEvidence::DeclaredNative)
-    // Codex Responses 工具协议随 API 支持一并可用；只有明确不支持才关闭。
+    // Codex Responses 工具协议随 API 支持一并可用；只有明确不支持才关闭
     .with_agent_tools(
         capabilities.responses_api() != CodexCatalogCapabilityEvidence::DeclaredUnsupported,
         capabilities.parallel_tool_calls() == CodexCatalogCapabilityEvidence::DeclaredNative,

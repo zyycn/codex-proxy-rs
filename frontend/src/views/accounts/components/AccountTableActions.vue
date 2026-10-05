@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import type { AccountRow } from '../constants'
+import type { Account } from '@/api'
+
 import { BaseIconButton, BaseMenuItem, BasePopover } from '@codex-proxy/ui'
 
 import { Download, KeyRound, MoreHorizontal, Pencil, Power, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 import { computed } from 'vue'
 
 const props = defineProps<{
-  account: AccountRow
+  account: Account
   deleting: boolean
   downloadingCatalog: boolean
   recovering: boolean
@@ -15,14 +16,14 @@ const props = defineProps<{
   togglingScheduling: boolean
 }>()
 const emit = defineEmits<{
-  edit: [account: AccountRow]
-  delete: [account: AccountRow]
+  edit: [account: Account]
+  delete: [account: Account]
   recover: [accountId: string]
-  test: [account: AccountRow]
+  test: [account: Account]
   refresh: [accountId: string]
-  reauthorize: [account: AccountRow]
-  downloadModelCatalog: [account: AccountRow]
-  toggleScheduling: [account: AccountRow]
+  reauthorize: [account: Account]
+  downloadModelCatalog: [account: Account]
+  toggleScheduling: [account: Account]
 }>()
 
 const credentialEligible = computed(() => props.account.authenticationKind === 'oauth')

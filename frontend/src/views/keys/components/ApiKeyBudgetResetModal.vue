@@ -46,7 +46,7 @@ async function resetBudget() {
   <BaseModal
     v-model="open"
     title="重置已用额度"
-    description="清零所选周期的已用金额，原重置时间保持不变"
+    description="清零所选周期的已用金额，下次使用时重新确定重置日期"
     size="sm"
     :dismissible="!loading"
   >

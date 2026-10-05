@@ -1,3 +1,5 @@
+//! 验证真实子进程的启动、停止、回收与容量释放
+
 #[cfg(unix)]
 use gateway_host::process::{ProcessExit, ProcessSpec, ProcessStartError, ProcessSupervisor};
 
@@ -82,7 +84,7 @@ async fn busy_and_blocked_children_can_be_stopped_and_reaped() {
                 .unwrap()
                 .unwrap();
         assert_eq!(ready, b'R');
-        // 就绪后保留输入句柄且不再读取输出，确保测试的是运行中的死循环或阻塞 I/O。
+        // 就绪后保留输入句柄且不再读取输出，确保测试的是运行中的死循环或阻塞 I/O
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(!directory.path().join("unblocked").exists());
         process.control.stop();
@@ -123,7 +125,7 @@ async fn allocation_failure_in_a_bounded_child_returns_process_capacity() {
     let mut spec = worker(directory.path(), "allocate");
     let executable = spec.executable.to_str().unwrap().replace('\'', "'\\''");
     let wrapper = directory.path().join("bounded-worker");
-    // 地址空间上限和禁用 core dump 仅保护测试机，不宣称生产监督器已施加 OS 内存隔离。
+    // 地址空间上限和禁用 core dump 仅保护测试机，不宣称生产监督器已施加 OS 内存隔离
     std::fs::write(
         &wrapper,
         format!("#!/bin/sh\nset -eu\nulimit -c 0\nulimit -v 65536\nexec '{executable}'\n"),

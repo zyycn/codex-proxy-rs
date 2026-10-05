@@ -1,3 +1,5 @@
+//! 管理控制面测试入口，以及通用分页、版本与查询值对象测试
+
 use std::str::FromStr as _;
 
 use chrono::{TimeDelta, Utc};
@@ -129,6 +131,7 @@ fn provider_document_debug_should_not_expose_opaque_material() {
 #[test]
 fn representative_quota_should_prefer_short_window_and_highest_usage() {
     let quota = ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -150,6 +153,7 @@ fn representative_quota_should_prefer_account_wide_window_over_model_specific_wi
     let mut model_specific = quota_window("shortTerm", Some(18_000), Some(64.0));
     model_specific.local_usage_attribution = QuotaLocalUsageAttribution::Unavailable;
     let quota = ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -187,6 +191,7 @@ fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
         models: Vec::new(),
     };
     let quota = ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -215,6 +220,7 @@ fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
 #[test]
 fn exhausted_quota_should_project_full_usage_to_only_the_representative_window() {
     let mut quota = ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -243,6 +249,7 @@ fn exhausted_quota_should_preserve_the_provider_identified_reached_window() {
     let mut reached = quota_window("monthly", Some(2_592_000), Some(98.0));
     reached.limit_reached = true;
     let mut quota = ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,

@@ -37,8 +37,9 @@ const connectionDescription = computed(() => props.proxy
   ? '留空保留当前连接和认证信息，填写新地址时，请包含所需的用户名和密码'
   : '支持 HTTP、HTTPS、SOCKS5 和 SOCKS5H，可在地址中包含用户名和密码')
 
-watch(open, () => {
-  showSecret.value = false
+watch(open, (value) => {
+  if (value)
+    showSecret.value = false
 })
 </script>
 

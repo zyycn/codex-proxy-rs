@@ -1,4 +1,4 @@
-//! 有界读取 Codex Desktop ZIP 内嵌的 arm64 Core 版本。
+//! 有界读取 Codex Desktop ZIP 内嵌的 arm64 Core 版本
 
 use std::cmp;
 
@@ -12,7 +12,7 @@ const OFFICIAL_ARTIFACT_HOST: &str = "persistent.oaistatic.com";
 const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
 const CENTRAL_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
 const LOCAL_SIGNATURE: &[u8; 4] = b"PK\x03\x04";
-// Core 位于独立的 CodexCLI.app 中，bin/codex 仅为启动脚本。
+// Core 位于独立的 CodexCLI.app 中，bin/codex 仅为启动脚本
 const CORE_PATH_SUFFIX: &[u8] = b"/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 const CORE_VERSION_ANCHOR: &[u8] = b"codex-mcp-client/";
 const MAX_EOCD_SEARCH_BYTES: u64 = 65_535 + 22;
@@ -59,18 +59,18 @@ struct CentralDirectory {
     entries: u16,
 }
 
-/// ZIP central directory 中已经校验的 Codex Core 条目。
+/// ZIP central directory 中已经校验的 Codex Core 条目
 #[derive(Debug)]
 pub struct CoreEntry {
-    /// ZIP 内完整条目名。
+    /// ZIP 内完整条目名
     pub name: Vec<u8>,
     flags: u16,
     compression: u16,
-    /// 压缩后的字节数。
+    /// 压缩后的字节数
     pub compressed_size: u64,
-    /// 解压后的字节数。
+    /// 解压后的字节数
     pub uncompressed_size: u64,
-    /// local file header 在制品内的偏移。
+    /// local file header 在制品内的偏移
     pub local_header_offset: u64,
 }
 
@@ -190,7 +190,7 @@ async fn read_range(
     Ok(body)
 }
 
-/// 解析严格的 `bytes start-end/size` Content-Range。
+/// 解析严格的 `bytes start-end/size` Content-Range
 #[must_use]
 pub fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
     let value = value.strip_prefix("bytes ")?;
@@ -248,11 +248,11 @@ fn parse_eocd(
     })
 }
 
-/// 在 central directory 中定位唯一的 bundled Codex Core。
+/// 在 central directory 中定位唯一的 bundled Codex Core
 ///
 /// # Errors
 ///
-/// ZIP 元数据无效、条目不受支持，或 Core 不唯一时返回制品错误。
+/// ZIP 元数据无效、条目不受支持，或 Core 不唯一时返回制品错误
 pub fn find_core_entry(
     central: &[u8],
     expected_entries: u16,
@@ -479,18 +479,18 @@ fn validate_macho_header(header: &[u8]) -> Result<(), CodexDesktopArtifactError>
     Ok(())
 }
 
-/// 跨分块查找 bundled Core 版本标记的有界扫描器。
+/// 跨分块查找 bundled Core 版本标记的有界扫描器
 #[derive(Default)]
 pub struct CoreVersionScanner {
     carry: Vec<u8>,
 }
 
 impl CoreVersionScanner {
-    /// 推入一个解压分块，并在发现完整合法版本时返回它。
+    /// 推入一个解压分块，并在发现完整合法版本时返回它
     ///
     /// # Errors
     ///
-    /// 标记后的版本超过限制或不满足受支持格式时返回制品错误。
+    /// 标记后的版本超过限制或不满足受支持格式时返回制品错误
     pub fn push(&mut self, bytes: &[u8]) -> Result<Option<String>, CodexDesktopArtifactError> {
         let mut window = Vec::with_capacity(self.carry.len() + bytes.len());
         window.extend_from_slice(&self.carry);

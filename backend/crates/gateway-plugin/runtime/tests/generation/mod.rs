@@ -1,3 +1,5 @@
+//! 插件发布代次、能力执行与生命周期的集成测试入口
+
 mod authentication;
 mod configuration;
 mod data;
@@ -6,6 +8,7 @@ mod observer;
 mod policy;
 mod prepare;
 mod private_state;
+mod upstream_adapter;
 
 use gateway_admin::{
     model::{
@@ -46,22 +49,10 @@ async fn setup_with_contributions_and_restart_circuit(
     contributes: Contributions,
     restart_circuit: PluginRestartCircuitConfig,
 ) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
-    setup_with_permissions(contributes, restart_circuit, vec![]).await
-}
-
-async fn setup_with_permissions(
-    contributes: Contributions,
-    restart_circuit: PluginRestartCircuitConfig,
-    permissions: Vec<gateway_plugin_sdk::Permission>,
-) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
     let cache = tempfile::tempdir().unwrap();
     let artifact = PackageInspector::new(PackageLimits::default(), "1.0.0".parse().unwrap())
         .inspect(
-            crate::support::package_with_contributions(
-                crate::support::worker(),
-                permissions,
-                contributes,
-            ),
+            crate::support::package_with_contributions(crate::support::worker(), contributes),
             None,
         )
         .await
@@ -74,7 +65,7 @@ async fn setup_with_permissions(
         trusted_process: true,
         configuration: serde_json::json!({}),
         secrets: BTreeMap::new(),
-        grants: vec![],
+
         bindings: vec![],
         revision: Revision::new(1).unwrap(),
     };

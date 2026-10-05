@@ -1,3 +1,5 @@
+//! 插件分发来源、凭据与远程制品安装的用例测试
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -519,7 +521,7 @@ fn preview_fixture() -> Fixture {
             platforms: vec!["linux-x86_64".into()],
             icon: None,
             contributes: Default::default(),
-            requested_permissions: vec!["log".into()],
+
             configuration_schema: serde_json::json!({"type":"object"}),
             secret_fields: vec![],
             state_namespaces: vec![],
@@ -635,7 +637,6 @@ async fn verifying_remote_package_uses_inspector_and_returns_fixed_facts_without
         .await
         .unwrap();
     assert_eq!(verified.metadata.sha256, "a".repeat(64));
-    assert_eq!(verified.metadata.requested_permissions, vec!["log"]);
     assert!(
         matches!(verified.source, PluginSource::Github { ref repository, ref tag, ref asset, .. }
         if repository == "owner/plugin" && tag == "v2.0.0" && asset == "plugin.tar.gz")

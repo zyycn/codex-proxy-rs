@@ -1,4 +1,4 @@
-//! 管理端账号目录的 HTTP 合同、凭据动作、路由处理与安全响应投影。
+//! 管理端账号目录的 HTTP 合同、凭据动作、路由处理与安全响应投影
 
 use std::{collections::BTreeSet, convert::Infallible, fmt};
 
@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
     AdminError as AdminServiceError, PageSize,

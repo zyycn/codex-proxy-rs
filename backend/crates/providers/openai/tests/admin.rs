@@ -1,4 +1,4 @@
-//! OpenAI Bundle 装配与管理能力契约验证
+//! 验证 OpenAI 管理能力、请求画像、Bundle 组装与额度投影
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -354,7 +354,14 @@ async fn copying_builtin_prices_keeps_cache_read_and_write_fallback_costs() {
         .await
         .unwrap();
     let prices = bundle.admin_provider().pricing_catalog();
-    for model in ["gpt-4", "gpt-4o", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+    for model in [
+        "gpt-4",
+        "gpt-4o",
+        "gpt-6-astra",
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-6-luna",
+    ] {
         let usage = OpenAiBillingUsage::new(100, 10, 20, 15);
         let inherited = openai_billing_breakdown(model, usage, None).unwrap();
         let copied =
@@ -554,7 +561,7 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
 
     assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
     assert_eq!(observation.subagent_kind.as_deref(), Some("review"));
-    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值。
+    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值
     assert_eq!(observation.reasoning_preset, None);
     assert!(observation.compact);
 }
@@ -881,6 +888,85 @@ async fn openai_admin_quota_refresh_updates_the_account_plan() {
             store.account("acct_upgraded_plan").unwrap().plan_type(),
             Some("pro")
         );
+    }
+}
+
+#[tokio::test]
+async fn openai_admin_quota_projects_credit_balance_from_refresh_and_cached_observation() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_credit_balance".to_owned(),
+            name: "credit balance".to_owned(),
+            secret: secret("credit-balance-test-token"),
+            verified_account: profile("chatgpt-credit-balance"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let account = store.account("acct_credit_balance").unwrap();
+    let server = MockServer::start().await;
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
+    let bundle = provider_openai::initialize(
+        config.config,
+        provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    for (wire, expected) in [
+        (
+            json!({"has_credits": true, "unlimited": false, "balance": "62500"}),
+            Some((true, false, Some("62500"))),
+        ),
+        (
+            json!({"has_credits": false, "unlimited": false, "balance": 0}),
+            Some((false, false, Some("0"))),
+        ),
+        (
+            json!({"has_credits": true, "unlimited": false, "balance": "9007199254740993.1234567890"}),
+            Some((true, false, Some("9007199254740993.1234567890"))),
+        ),
+        (
+            json!({"has_credits": true, "unlimited": false, "balance": null}),
+            Some((true, false, None)),
+        ),
+        (
+            json!({"has_credits": false, "unlimited": true}),
+            Some((false, true, None)),
+        ),
+        (Value::Null, None),
+    ] {
+        let _mock = Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "rate_limit": {"allowed": true, "primary_window": {"used_percent": 28}},
+                "credits": wire,
+            })))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        for refresh in [true, false] {
+            let quota = bundle
+                .admin_provider()
+                .quota(ProviderQuotaRequest {
+                    account_id: account.id().clone(),
+                    refresh,
+                    rolling_usage: None,
+                })
+                .await
+                .expect("quota with credits");
+            assert_eq!(
+                quota.credits.as_ref().map(|credits| (
+                    credits.has_credits,
+                    credits.unlimited,
+                    credits.balance.as_deref(),
+                )),
+                expected
+            );
+            assert_eq!(quota.windows[0].used_percent, Some(28.0));
+            assert!(!quota.limit_reached);
+        }
     }
 }
 
@@ -1275,7 +1361,7 @@ async fn openai_admin_preserves_expired_window_usage_and_exhaustion_attribution(
             .await
             .expect("project quota");
         assert_eq!(projected.limit_reached, exhausted);
-        // 账号接口还会归一化耗尽展示；过期周窗口不能把触顶错误转移到短期窗口。
+        // 账号接口还会归一化耗尽展示；过期周窗口不能把触顶错误转移到短期窗口
         projected.apply_limit_reached_display();
         let primary = projected
             .windows
@@ -1498,7 +1584,7 @@ fn initialized_provider_request(operation: Operation, account_id: &str) -> Provi
     let account_scope = initialized_account_scope(account_id);
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        account_policy(),
+        gateway_core::settings::SettingsValues::new(2, 10, "smart", Default::default(), None, None),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider,
@@ -2317,7 +2403,7 @@ mod errors {
             .prepare_refresh(command())
             .await
             .unwrap_err();
-        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界。
+        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界
         assert_eq!(error.kind(), Kind::Ambiguous);
         assert_eq!(
             error.public_message(),

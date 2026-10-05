@@ -1,3 +1,5 @@
+//! 验证账号模型访问设置的边界、去重与模型标识保留
+
 use gateway_core::account::AccountModelAccess;
 use serde_json::json;
 

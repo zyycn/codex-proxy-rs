@@ -1,4 +1,4 @@
-//! Provider-neutral account group commands and projections.
+//! 跨 Provider 账号分组的管理命令与查询投影
 
 use std::collections::BTreeMap;
 
@@ -7,7 +7,7 @@ use gateway_core::{account::AccountStatusFacts, routing::AccountGroupId};
 
 use super::{PageSize, Revision, observability::DecimalAmount};
 
-/// Canonical `#RRGGBBAA` color persisted with an account group.
+/// 账号分组持久化使用的标准 `#RRGGBBAA` 颜色
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupColor(String);
 
@@ -26,7 +26,7 @@ impl AccountGroupColor {
     }
 }
 
-/// Group member availability at the current observation time.
+/// 当前观测时刻的分组成员可用性
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountGroupAccountSummary {
     pub available: u64,
@@ -34,23 +34,23 @@ pub struct AccountGroupAccountSummary {
     pub total: u64,
 }
 
-/// Group scheduling slots derived from available accounts and runtime leases.
+/// 根据可用账号与运行时租约计算的分组调度槽位
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountGroupCapacity {
     pub used_slots: Option<u64>,
-    /// `None` 表示可用账号中存在不限制并发的账号。
+    /// `None` 表示可用账号中存在不限制并发的账号
     pub total_slots: Option<u64>,
 }
 
-/// Successful, downstream-committed USD request costs for group accounts.
+/// 分组账号成功且已向下游交付的请求美元费用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupUsage {
     pub today_usd: DecimalAmount,
-    /// 当前 usage retention 窗口内、按请求发生时 routing group 快照归属的累计成本。
+    /// 当前 usage retention 窗口内、按请求发生时 routing group 快照归属的累计成本
     pub retained_total_usd: DecimalAmount,
 }
 
-/// 当前页账号组 membership 对应的持久账号事实；运行态在 Admin query service 合并。
+/// 当前页账号组 membership 对应的持久账号事实；运行态在 Admin query service 合并
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupMemberFact {
     pub group_id: AccountGroupId,
@@ -59,7 +59,7 @@ pub struct AccountGroupMemberFact {
     pub total_slots: Option<u64>,
 }
 
-/// Lightweight group reference embedded in account and client-key views.
+/// 账号与 Client Key 视图内嵌的轻量分组引用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRef {
     pub id: AccountGroupId,
@@ -68,7 +68,7 @@ pub struct AccountGroupRef {
     pub enabled: bool,
 }
 
-/// Account group list query.
+/// 账号分组列表查询
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupListQuery {
     pub page: u32,
@@ -77,7 +77,7 @@ pub struct AccountGroupListQuery {
     pub enabled: Option<bool>,
 }
 
-/// Complete account group summary.
+/// 完整账号分组摘要
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRecord {
     pub disable_fast: bool,
@@ -96,7 +96,7 @@ pub struct AccountGroupRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Paginated account groups.
+/// 账号分组分页结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupPage {
     pub config_revision: Revision,
@@ -106,7 +106,7 @@ pub struct AccountGroupPage {
     pub page_size: u16,
 }
 
-/// Create an account group.
+/// 创建账号分组
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateAccountGroup {
     pub disable_fast: bool,
@@ -115,7 +115,7 @@ pub struct CreateAccountGroup {
     pub color: AccountGroupColor,
 }
 
-/// Store-ready create command with a generated stable ID.
+/// 已生成稳定标识、可直接提交存储的创建命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccountGroup {
     pub disable_fast: bool,
@@ -125,7 +125,7 @@ pub struct NewAccountGroup {
     pub color: AccountGroupColor,
 }
 
-/// Update an account group's descriptive fields.
+/// 更新账号分组的描述字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccountGroup {
     pub disable_fast: Option<bool>,
@@ -135,20 +135,20 @@ pub struct UpdateAccountGroup {
     pub color: AccountGroupColor,
 }
 
-/// Enable or disable an account group.
+/// 启用或停用账号分组
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetAccountGroupEnabled {
     pub id: AccountGroupId,
     pub enabled: bool,
 }
 
-/// Delete an account group that is not referenced by a client key.
+/// 删除未被 Client Key 引用的账号分组
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteAccountGroup {
     pub id: AccountGroupId,
 }
 
-/// Result of any account-group mutation.
+/// 账号分组变更结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupMutation {
     pub config_revision: Revision,

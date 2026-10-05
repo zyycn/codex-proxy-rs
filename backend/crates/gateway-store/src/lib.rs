@@ -1,7 +1,8 @@
-//! 多 Provider 网关的 PostgreSQL 持久化与 Redis 协调 adapter。
+//! 多 Provider 网关的 PostgreSQL 持久化与 Redis 协调 adapter
 //!
-//! 业务规则与 port 由 `gateway-core` / `gateway-admin` 拥有。本 crate 只负责把 PostgreSQL 业务表
-//! 和可丢失 Redis 状态映射为明确的基础设施操作。
+//! 业务规则与 port 由 `gateway-core` / `gateway-admin` 拥有
+//! 本 crate 只负责把 PostgreSQL 业务表
+//! 和可丢失 Redis 状态映射为明确的基础设施操作
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -12,7 +13,7 @@ use gateway_admin::model::settings::{
     AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
     RotationStrategy as AdminRotationStrategy, RuntimeSettings as AdminRuntimeSettings,
 };
-use gateway_admin::model::{MutationActor, MutationContext, Revision as AdminRevision};
+use gateway_admin::model::{MutationContext, Revision as AdminRevision};
 use gateway_admin::ports::backup::BackupStorePorts;
 use gateway_admin::ports::store::{
     AdminAccountStorePorts, AdminStoreError, AdminStoreErrorKind, AdminStorePorts,
@@ -32,6 +33,7 @@ use serde_json::{Map, Value};
 mod admin_adapter;
 mod bundle;
 mod config;
+mod lease_renewal;
 mod value;
 mod workers;
 

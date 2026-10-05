@@ -1,3 +1,5 @@
+//! 验证 OpenAI 令牌刷新、凭据状态与失败反馈的持久化
+
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -829,7 +831,7 @@ struct QuotaRejectionDuringRefresh {
 #[async_trait]
 impl TokenRefresher for QuotaRejectionDuringRefresh {
     async fn refresh(&self, _: &str) -> Result<TokenPair, RefreshFailure> {
-        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401。
+        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401
         if self.background_quota {
             assert_eq!(
                 self.quota

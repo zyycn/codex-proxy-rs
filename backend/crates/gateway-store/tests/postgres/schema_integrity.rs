@@ -1,3 +1,5 @@
+//! 验证数据库拒绝不完整请求事实、缺失快照与无效时间关系
+
 use super::TestDatabase;
 
 async fn seed_request(pool: &sqlx::PgPool) {

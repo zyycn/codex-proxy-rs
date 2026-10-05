@@ -1,7 +1,6 @@
 import type { AccountGroup, ApiKey } from '@/api'
 import { normalizeRgbaHexColor, toast } from '@codex-proxy/ui'
 
-import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   createAccountGroup,
@@ -15,7 +14,7 @@ import {
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useIdSet } from '@/composables/useIdSet'
 import { usePagedQuery } from '@/composables/usePagedQuery'
-import { formatDateTime } from '@/utils/format'
+import { useRequestState } from '@/composables/useRequestState'
 import { errorMessage } from '@/utils/operation'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
@@ -37,7 +36,9 @@ export function useAccountGroups() {
   const editingGroup = shallowRef<AccountGroup | null>(null)
   const pendingDeleteGroup = shallowRef<AccountGroup | null>(null)
   const pendingDisableGroup = shallowRef<AccountGroup | null>(null)
+  const deleteCount = shallowRef(0)
   const clientKeys = shallowRef<ApiKey[]>([])
+  const referenceKeysRequest = useRequestState()
   const form = ref<AccountGroupFormValue>(emptyForm())
   const savingAction = useAsyncAction()
   const deletingAction = useAsyncAction()
@@ -56,10 +57,7 @@ export function useAccountGroups() {
       }, options),
   })
 
-  const groups = computed(() => query.items.value.map(group => ({
-    ...group,
-    updatedAtDisplay: formatDateTime(group.updatedAt),
-  })))
+  const groups = query.items
   const pagination = computed(() => ({
     currentPage: query.page.value,
     pageSize: query.pageSize.value,
@@ -71,10 +69,14 @@ export function useAccountGroups() {
   const disabling = disablingAction.loading
   const updatingStatusGroupIds = updatingStatusGroups.ids
   const referencedKeyNames = computed(() => {
-    const groupId = pendingDisableGroup.value?.id ?? pendingDeleteGroup.value?.id
+    const groupId = pendingDisableGroup.value?.id
     if (!groupId)
       return []
     return referenceKeyNamesFor(groupId)
+  })
+  watch([showBatchDeleteModal, batchDeleting], ([open, busy]) => {
+    if (open && !busy)
+      deleteCount.value = selectedIds.value.size
   })
 
   function referenceKeyNamesFor(groupId: string) {
@@ -84,18 +86,26 @@ export function useAccountGroups() {
   }
 
   async function loadReferenceKeys() {
+    const requestId = referenceKeysRequest.start()
+    const requestOptions = { signal: referenceKeysRequest.signal }
     try {
       const items: ApiKey[] = []
       let cursor: string | undefined
       do {
-        const result = await getApiKeys({ limit: 200, cursor })
+        const result = await getApiKeys({ limit: 200, cursor }, requestOptions)
+        if (!referenceKeysRequest.isCurrent(requestId))
+          return
         items.push(...result.items)
         cursor = result.nextCursor ?? undefined
       } while (cursor)
       clientKeys.value = items
     }
     catch {
-      clientKeys.value = []
+      if (referenceKeysRequest.isCurrent(requestId))
+        clientKeys.value = []
+    }
+    finally {
+      referenceKeysRequest.finish(requestId)
     }
   }
 
@@ -146,8 +156,6 @@ export function useAccountGroups() {
         })
       }
       showFormModal.value = false
-      editingGroup.value = null
-      form.value = emptyForm()
       await Promise.all([query.execute(), loadReferenceKeys()])
       toast.success(updating ? '分组已更新' : '分组已创建')
     })
@@ -169,7 +177,6 @@ export function useAccountGroups() {
     await disablingAction.run(async () => {
       await disableAccountGroup({ id: group.id })
       showDisableModal.value = false
-      pendingDisableGroup.value = null
       await query.execute()
       toast.success('分组已禁用')
     })
@@ -202,7 +209,6 @@ export function useAccountGroups() {
       remaining.delete(group.id)
       selectedIds.value = remaining
       showDeleteModal.value = false
-      pendingDeleteGroup.value = null
       await query.execute()
       toast.success('分组已删除')
     }, { onError: () => void query.execute() })
@@ -258,21 +264,17 @@ export function useAccountGroups() {
     void query.execute()
   }
 
-  watchDebounced(searchQuery, () => {
-    query.page.value = 1
-    void query.execute()
-  }, { debounce: 250 })
+  watch(searchQuery, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
+      query.page.value = 1
+      void query.execute()
+    }, 250)
+    onCleanup(() => clearTimeout(timer))
+  })
   watch(statusQuery, () => {
     query.page.value = 1
     void query.execute()
   })
-  watch(showFormModal, (open) => {
-    if (!open && !saving.value) {
-      editingGroup.value = null
-      form.value = emptyForm()
-    }
-  })
-
   onMounted(() => {
     void Promise.all([query.execute(), loadReferenceKeys()])
   })
@@ -291,6 +293,7 @@ export function useAccountGroups() {
     editingGroup,
     pendingDeleteGroup,
     pendingDisableGroup,
+    deleteCount,
     form,
     saving,
     deleting,

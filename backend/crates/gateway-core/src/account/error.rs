@@ -1,8 +1,8 @@
-//! Provider credential 值对象构造错误。
+//! Provider credential 值对象构造错误
 
 use thiserror::Error;
 
-/// Credential 值对象构造错误。
+/// Credential 值对象构造错误
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum CredentialError {
     #[error("credential revision must be greater than zero")]

@@ -21,7 +21,7 @@ const model = defineModel<string>('model', { required: true })
       />
 
       <BaseFormItem
-        label="执行时间（北京时间）"
+        label="执行时间"
         description="HH:MM；多个时间用英文逗号分隔"
       >
         <BaseInput

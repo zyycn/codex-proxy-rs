@@ -1,4 +1,4 @@
-//! 官方 Grok Build 会话的 `gateway-core` Provider adapter。
+//! 官方 Grok Build 会话的 `gateway-core` Provider adapter
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -72,6 +72,7 @@ use crate::{GrokCatalogCapabilityEvidence, GrokCatalogModel};
 mod continuation;
 mod failure;
 mod stream;
+mod upstream_adapter;
 mod workers;
 
 use continuation::*;
@@ -86,11 +87,13 @@ const XAI_SESSION_OUTPUT_LIMIT: usize = 4_096;
 const REASONING_DECODE_FAILED_CODE: &str = "reasoning_decode_failed";
 const RESPONSE_NOT_FOUND_CODE: &str = "not_found";
 
-/// 官方 Grok Build Provider；会话选择与 HTTP SSE transport 均由外部注入。
+/// 官方 Grok Build Provider；会话选择与 HTTP SSE transport 均由外部注入
 ///
-/// 每次调用只选择一个 OAuth 会话。仅当 xAI 明确拒绝历史 reasoning 密文时，
-/// 允许在同账号、同凭据、同会话绑定上剥离密文后有界重试一次。凭据轮换、
-/// endpoint fallback 以及公开 xAI API key 推理都不在该 adapter 内。
+/// 每次调用只选择一个 OAuth 会话
+/// 仅当 xAI 明确拒绝历史 reasoning 密文时，
+/// 允许在同账号、同凭据、同会话绑定上剥离密文后有界重试一次
+/// 凭据轮换、
+/// endpoint fallback 以及公开 xAI API key 推理都不在该 adapter 内
 #[derive(Clone)]
 pub struct GrokBuildProvider {
     selector: Arc<dyn GrokSessionSelector>,
@@ -123,7 +126,7 @@ struct SelectedGrokAttempt {
 }
 
 impl GrokBuildProvider {
-    /// 在显式的会话与 transport 边界上创建 Provider。
+    /// 在显式的会话与 transport 边界上创建 Provider
     pub fn new(
         selector: Arc<dyn GrokSessionSelector>,
         transport: Arc<dyn GrokInferenceTransport>,
@@ -266,8 +269,17 @@ impl GrokBuildProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
+        let adapter =
+            context.upstream_adapter(candidate.provider(), candidate_upstream_model(candidate)?)?;
+        if adapter.is_none()
+            && generate
+                .provider_session_state(XAI_PROVIDER_NAME)
+                .is_some_and(|state| state.extension_owner().is_some())
+        {
+            return Err(invalid_continuation());
+        }
         let selected = self
-            .select_grok_attempt(generate, candidate, context)
+            .select_grok_attempt(generate, candidate, context, adapter.is_some())
             .await?;
         let provider_kind =
             ProviderKind::new(XAI_PROVIDER_NAME).map_err(|_| protocol_not_sent())?;
@@ -283,6 +295,14 @@ impl GrokBuildProvider {
                 account_id,
                 Box::new(move |operation, middleware_headers| {
                     Box::pin(async move {
+                        if let Some(adapter) = adapter {
+                            return provider.execute_upstream_adapter(
+                                operation,
+                                middleware_headers,
+                                selected,
+                                adapter,
+                            );
+                        }
                         provider
                             .execute_selected_grok(operation, middleware_headers, selected)
                             .await
@@ -297,10 +317,15 @@ impl GrokBuildProvider {
         generate: &GenerateRequest,
         candidate: &ProviderCandidate,
         context: AttemptContext,
+        adapted: bool,
     ) -> Result<SelectedGrokAttempt, ProviderError> {
         let upstream_model = candidate_upstream_model(candidate)?;
-        let previous_session = decode_xai_session_state(generate)?;
-        let native_source = generate.protocol_payload().protocol() == "openai";
+        let previous_session = if adapted {
+            None
+        } else {
+            decode_xai_session_state(generate)?
+        };
+        let native_source = !adapted && generate.protocol_payload().protocol() == "openai";
         let native_compaction = native_source
             && crate::transport::compaction::has_terminal_compaction_trigger(generate);
         let (selection_model, operation_account, affinity) = if native_compaction {
@@ -340,7 +365,7 @@ impl GrokBuildProvider {
             )
         } else {
             // 源协议由转换插件拥有；这里只使用冻结的候选模型与 Core 账号 owner，
-            // 不把未知 JSON 中的同名字段解释为 xAI 会话或亲和事实。
+            // 不把未知 JSON 中的同名字段解释为 xAI 会话或亲和事实
             let operation_account = continuation_account(&context, previous_session.as_ref())?;
             (
                 upstream_model.as_str().to_owned(),
@@ -452,7 +477,7 @@ impl GrokBuildProvider {
         if let Some(previous) = previous_session.as_ref() {
             upstream_request.inherit_session(previous.session_id.as_deref());
         }
-        // 首字计时的起点：账号选择完成之后、上游建立之前。
+        // 首字计时的起点：账号选择完成之后、上游建立之前
         let output_started_at = Instant::now();
         apply_continuation(
             &mut upstream_request,
@@ -622,7 +647,7 @@ impl GrokBuildProvider {
 }
 
 fn native_request_requirements(request: &GenerateRequest) -> CapabilityRequirements {
-    // 这里只读取本 Provider 已知的 Responses 字段；工具别名等原生保护字段另行校验。
+    // 这里只读取本 Provider 已知的 Responses 字段；工具别名等原生保护字段另行校验
     Operation::Generate(GenerateRequest::from_protocol_payload(
         request.protocol_payload().clone(),
     ))
@@ -647,6 +672,7 @@ async fn select_grok_session(
         Arc::clone(candidate.account_scope()),
         context.client_api_key_ref().clone(),
     )
+    .with_cancellation(context.cancellation().clone())
     .with_concurrency_wait_budget(context.concurrency_wait_budget().clone())
     .with_request_policy(
         context.request_policy_context().cloned(),
@@ -658,8 +684,12 @@ async fn select_grok_session(
         AccountEligibilityPolicy::Enforce
     })
     .with_affinity(affinity);
-    let selection_deadline = remaining(context.deadline())
-        .ok_or_else(|| provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent))?;
+    if context.deadline().is_elapsed() {
+        return Err(provider_error(
+            ProviderErrorKind::Timeout,
+            UpstreamSendState::NotSent,
+        ));
+    }
     let cancellation = context.cancellation().clone();
     let selected = tokio::select! {
         biased;
@@ -667,7 +697,7 @@ async fn select_grok_session(
             ProviderErrorKind::Cancelled,
             UpstreamSendState::NotSent,
         )),
-        _ = tokio::time::sleep(selection_deadline) => Err(provider_error(
+        _ = context.deadline().wait() => Err(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::NotSent,
         )),
@@ -782,7 +812,7 @@ fn tool_support(evidence: GrokCatalogCapabilityEvidence) -> SupportLevel {
         GrokCatalogCapabilityEvidence::DeclaredNative => SupportLevel::Native,
         GrokCatalogCapabilityEvidence::DeclaredUnsupported => SupportLevel::Unsupported,
         // catalog 省略该可选字段时，Grok Build 的 Responses 工具协议仍可用；
-        // 请求 adapter 会在发送前规范化仅客户端侧的工具结构。
+        // 请求 adapter 会在发送前规范化仅客户端侧的工具结构
         GrokCatalogCapabilityEvidence::Unknown => SupportLevel::Emulated,
     }
 }
@@ -889,7 +919,7 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
     )
     .with_reasoning(default_reasoning, reasoning_efforts)
     .with_context_window_tokens(context_window_tokens)
-    // Grok 目录只声明一个窗口，继续将它作为客户端可覆盖上限。
+    // Grok 目录只声明一个窗口，继续将它作为客户端可覆盖上限
     .with_max_context_window_tokens(context_window_tokens)
     .with_image_input(known_grok_4_5)
     .with_agent_tools(

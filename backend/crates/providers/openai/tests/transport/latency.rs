@@ -1,3 +1,5 @@
+//! 验证 WebSocket 冷建连时限、后台完成与续接请求的传输选择
+
 use provider_openai::transport::{
     protocol::responses::{CodexResponsesRequest, PreviousResponseScope},
     websocket::{

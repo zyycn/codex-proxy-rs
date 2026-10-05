@@ -1,3 +1,5 @@
+//! 验证密码变更与安全审计原子提交及审计字段限制
+
 use chrono::Utc;
 use gateway_store::postgres::{AdminAuditActorKind, AdminAuditEvent};
 
@@ -48,7 +50,7 @@ async fn password_change_commits_audit_atomically_and_rejects_concurrent_old_has
         .unwrap();
     assert_eq!(count, 1);
 
-    // 制造真实审计约束失败，确认密码更新随同事务回滚。
+    // 制造真实审计约束失败，确认密码更新随同事务回滚
     let mut invalid_audit = audit("invalid-change");
     invalid_audit.actor_admin_user_id = Some("missing-admin".into());
     assert!(

@@ -1,4 +1,4 @@
-//! 备份配置、手动创建、下载与删除用例。
+//! 备份配置、手动创建、下载与删除用例
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,10 +26,10 @@ use crate::ports::{
 
 use super::map_store_error;
 
-/// 默认下载地址有效期。
+/// 默认下载地址有效期
 const DOWNLOAD_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// API 消费的备份管理服务。
+/// API 消费的备份管理服务
 #[async_trait]
 pub trait BackupService: Send + Sync {
     async fn load_settings(&self) -> Result<BackupSettings, AdminError>;
@@ -76,6 +76,7 @@ pub trait BackupService: Send + Sync {
 }
 
 pub(crate) struct DefaultBackupService {
+    timezone: gateway_core::time::DeploymentTimeZone,
     repository: Arc<dyn BackupRepository>,
     object_store: Arc<dyn BackupObjectStorePort>,
     auth: Arc<dyn AuthStore>,
@@ -89,8 +90,10 @@ impl DefaultBackupService {
         object_store: Arc<dyn BackupObjectStorePort>,
         auth: Arc<dyn AuthStore>,
         snapshot: Arc<dyn SnapshotControl>,
+        timezone: gateway_core::time::DeploymentTimeZone,
     ) -> Self {
         Self {
+            timezone,
             repository,
             object_store,
             auth,
@@ -128,22 +131,20 @@ impl BackupService for DefaultBackupService {
         context: &MutationContext,
         command: UpdateBackupScheduleCommand,
     ) -> Result<BackupSettings, AdminError> {
-        validate_schedule(&command)?;
+        let schedule =
+            crate::backup::policy::BackupSchedule::parse(&command.cron_expression, self.timezone)
+                .map_err(map_backup_error)?;
         let next_run_at = if command.schedule_enabled {
             Some(
-                crate::backup::policy::BackupSchedule::parse(
-                    &command.cron_expression,
-                    &command.schedule_timezone,
-                )
-                .map_err(map_backup_error)?
-                .next_after(Utc::now())
-                .ok_or_else(|| AdminError::bad_request("无法从计划推导下次执行时间"))?,
+                schedule
+                    .next_after(Utc::now())
+                    .ok_or_else(|| AdminError::bad_request("无法从计划推导下次执行时间"))?,
             )
         } else {
             None
         };
         self.repository
-            .update_schedule_settings(command, next_run_at, context)
+            .update_schedule_settings(command, next_run_at, context, self.timezone)
             .await
             .map_err(|error| map_store_error(error, "backup schedule"))
     }
@@ -358,7 +359,7 @@ impl DefaultBackupService {
     }
 }
 
-/// 校验存储配置；空串视为非法，Secret 缺省表示保留旧值。
+/// 校验存储配置；空串视为非法，Secret 缺省表示保留旧值
 fn validate_storage(command: &UpdateBackupStorageCommand) -> Result<(), AdminError> {
     validate_endpoint(&command.endpoint)?;
     validate_nonempty("region", &command.region)?;
@@ -408,23 +409,10 @@ fn validate_length(field: &str, value: &str, max: usize) -> Result<(), AdminErro
     Ok(())
 }
 
-/// 校验调度配置并解析 Cron 与时区。
-fn validate_schedule(command: &UpdateBackupScheduleCommand) -> Result<(), AdminError> {
-    if command.cron_expression.trim().is_empty() {
-        return Err(AdminError::bad_request("cronExpression 不能为空"));
-    }
-    crate::backup::policy::BackupSchedule::parse(
-        &command.cron_expression,
-        &command.schedule_timezone,
-    )
-    .map_err(map_backup_error)?;
-    Ok(())
-}
-
-/// 备份基础设施错误到既有 `AdminErrorKind` 的唯一边界映射。
+/// 备份基础设施错误到既有 `AdminErrorKind` 的唯一边界映射
 fn map_backup_error(error: BackupError) -> AdminError {
     match error.code() {
-        code::INVALID_CONFIG | code::INVALID_CRON | code::INVALID_TIMEZONE => {
+        code::INVALID_CONFIG | code::INVALID_CRON => {
             AdminError::bad_request(error.message().to_owned())
         }
         code::RECORD_NOT_FOUND => AdminError::not_found(error.message().to_owned()),

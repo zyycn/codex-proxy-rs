@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView, MetricTone } from '../composables/useDashboard'
+import type { dashboardSnapshotView, MetricTone } from '../presenter'
 import { BaseCard, BaseEmpty } from '@codex-proxy/ui'
 
 import { CircleCheck, RefreshCw, ShieldAlert, TriangleAlert } from '@lucide/vue'
 import { computed } from 'vue'
+import AccountUsageWindow from '@/components/account/account-usage-window/index.vue'
 import { formatCompactNumber } from '@/utils/format'
-import AccountUsageWindow from '@/views/accounts/components/AccountUsageWindow/index.vue'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 import DashboardAccountIdentity from './DashboardAccountIdentity.vue'
 

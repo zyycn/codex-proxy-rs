@@ -1,0 +1,41 @@
+name: Build frontend
+description: Validate and build the frontend, optionally uploading release assets
+inputs:
+  upload-artifact:
+    description: Upload frontend-dist for downstream release jobs
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      with:
+        package_json_file: frontend/package.json
+
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24
+        cache: pnpm
+        cache-dependency-path: frontend/pnpm-lock.yaml
+
+    - name: Install frontend dependencies
+      shell: bash
+      run: pnpm --dir frontend install --frozen-lockfile
+
+    - name: Frontend format
+      shell: bash
+      run: pnpm --dir frontend format:check
+
+    - name: Frontend build
+      shell: bash
+      run: pnpm --dir frontend build
+
+    - name: Upload frontend artifact
+      if: inputs.upload-artifact == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: frontend-dist
+        path: frontend/dist
+        if-no-files-found: error
+        retention-days: 1

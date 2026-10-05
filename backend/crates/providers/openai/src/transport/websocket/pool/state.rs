@@ -1,4 +1,4 @@
-//! WebSocket 连接池状态和值对象。
+//! WebSocket 连接池状态和值对象
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -16,7 +16,7 @@ use super::super::super::{
 use super::super::pump::{PumpedWebSocket, WebSocketConnectionObservation};
 use super::lease::WebSocketPoolConnectOutcome;
 
-/// WebSocket 连接池 key。
+/// WebSocket 连接池 key
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CodexWebSocketPoolKey {
     base_url: String,
@@ -28,7 +28,7 @@ pub struct CodexWebSocketPoolKey {
 }
 
 impl CodexWebSocketPoolKey {
-    /// 构造连接池 key。
+    /// 构造连接池 key
     pub fn new(
         base_url: impl Into<String>,
         account_id: impl Into<String>,
@@ -44,13 +44,13 @@ impl CodexWebSocketPoolKey {
         }
     }
 
-    /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接。
+    /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接
     pub(crate) fn with_connection_profile(mut self, connection_profile: impl Into<String>) -> Self {
         self.connection_profile = connection_profile.into();
         self
     }
 
-    /// 隔离同一逻辑会话中由不同下游 WebSocket 驱动的并发响应链。
+    /// 隔离同一逻辑会话中由不同下游 WebSocket 驱动的并发响应链
     pub(crate) fn with_downstream_connection_id(
         mut self,
         connection_id: impl Into<String>,
@@ -173,7 +173,7 @@ pub(crate) struct PooledWebSocketConnection {
     pub(crate) created_at: Instant,
 }
 
-/// 只随具体 WebSocket 生命周期存在的续接状态。
+/// 只随具体 WebSocket 生命周期存在的续接状态
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct WebSocketContinuationState {
     latest_response_id: Option<String>,
@@ -231,7 +231,7 @@ pub(super) async fn close_pooled_connections(connections: Vec<PooledWebSocketCon
     }
 }
 
-/// idle 连接是否应从池中摘除：被后台 pump 标记死亡，或已超过 `max_age`。
+/// idle 连接是否应从池中摘除：被后台 pump 标记死亡，或已超过 `max_age`
 pub(super) fn should_close_idle_connection(
     connection: &PooledWebSocketConnection,
     now: Instant,

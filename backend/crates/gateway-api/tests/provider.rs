@@ -1,3 +1,5 @@
+//! Provider 原生入口的请求捕获、协议传递与响应交付测试
+
 use std::{
     sync::{
         Arc, Mutex,

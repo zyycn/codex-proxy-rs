@@ -1,4 +1,4 @@
-//! Codex 客户端下载信息用例。
+//! Codex 客户端下载信息用例
 
 use std::sync::Arc;
 

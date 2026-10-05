@@ -1,3 +1,5 @@
+//! 验证类型化插件处理器的组合注册、分派与能力声明一致性
+
 use std::{
     collections::BTreeMap,
     sync::{
@@ -32,7 +34,7 @@ const MAXIMUM_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
 fn author_manifest(contributes: Value, state: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "manifestVersion": 1,
+        "manifestVersion":2,
         "name": "composed",
         "displayName": "Composed",
         "publisher": "9acme",
@@ -92,6 +94,7 @@ async fn composed_plugin_registers_and_dispatches_multiple_typed_entries() {
             async move {
                 management_calls.fetch_add(1, Ordering::Relaxed);
                 Ok(TypedReply::new(ManagementResponse {
+                    headers: Vec::new(),
                     status: 201,
                     content_type: call
                         .request
@@ -150,6 +153,7 @@ async fn composed_plugin_registers_and_dispatches_multiple_typed_entries() {
         "management.handle",
         Stage::Management,
         serde_json::to_value(ManagementRequest {
+            headers: Vec::new(),
             method: "POST".into(),
             path: "echo".into(),
             query: String::new(),
@@ -450,7 +454,7 @@ async fn start_session<H: PluginHandler + 'static>(
                 generation: 1,
                 incarnation: "test-incarnation".into(),
                 configuration: json!({}),
-                permissions: Vec::new(),
+
                 contributes,
             },
         }),
@@ -492,6 +496,7 @@ async fn send_call(
                     incarnation: "test-incarnation".into(),
                     stage,
                     timeout_ms: 1_000,
+                    resource_stream: false,
                     resource_scope_id: format!("scope-{id}"),
                     request_id: None,
                     attempt_id: None,

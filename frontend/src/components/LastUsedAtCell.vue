@@ -1,20 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
-import { useUiClock } from '@/composables/useUiClock'
-import { formatDateTime, formatRelativeTime } from '@/utils/format'
-
-const props = defineProps<{
-  value: string | null
-}>()
-
-const now = useUiClock()
-const displayValue = computed(() => props.value ? formatRelativeTime(props.value, now.value) : '')
-const fullValue = computed(() => props.value ? formatDateTime(props.value) : undefined)
+defineProps<{ value: string | null, display: string, fullDisplay: string | null }>()
 </script>
 
 <template>
-  <span v-if="displayValue" :title="fullValue">
-    {{ displayValue }}
-  </span>
+  <span v-if="value" :title="fullDisplay ?? undefined">{{ display }}</span>
 </template>

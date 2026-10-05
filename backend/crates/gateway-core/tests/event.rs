@@ -1,3 +1,5 @@
+//! 验证 Provider 事件的协议保留、敏感值保护与事件序列约束
+
 use bytes::Bytes;
 use gateway_core::event::{
     ContentItem, ContentKind, EventSequenceError, EventSequenceValidator, GatewayEvent,

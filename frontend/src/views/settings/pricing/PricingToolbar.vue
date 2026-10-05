@@ -10,7 +10,7 @@ const props = defineProps<{
   disabled: boolean
   saving: boolean
   syncing: boolean
-  syncedAt?: string | null
+  syncedAtDisplay?: string | null
   providers: string[]
 }>()
 defineEmits<{ add: [], sync: [], setMultiplier: [], reset: [], clear: [] }>()
@@ -19,7 +19,7 @@ const provider = defineModel<string>('provider', { required: true })
 const source = defineModel<string>('source', { required: true })
 const syncInfoOpen = shallowRef(false)
 const syncInfoId = useId()
-const syncTime = computed(() => props.syncedAt ? new Date(props.syncedAt).toLocaleString() : '尚未同步')
+const syncTime = computed(() => props.syncedAtDisplay ?? '尚未同步')
 const providerOptions = computed(() => props.providers.map(value => ({
   label: formatProviderLabel(value),
   value,

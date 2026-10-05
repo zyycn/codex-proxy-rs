@@ -1,3 +1,5 @@
+//! 验证 OpenAI 凭据准备、事务提交、授权重试与额度刷新边界
+
 use std::sync::Arc;
 
 use gateway_core::account::ProviderAccountId;

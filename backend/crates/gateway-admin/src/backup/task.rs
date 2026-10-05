@@ -1,7 +1,8 @@
-//! Backup Worker 贡献：单个可取消 `DaemonTask` 承担调度、执行、删除收敛与保留清理。
+//! Backup Worker 贡献：单个可取消 `DaemonTask` 承担调度、执行、删除收敛与保留清理
 //!
-//! 当前部署边界是单副本，因此不需要 Redis lease、fencing token 或 heartbeat。长时间
-//! `pg_dump` 与上传由本 Daemon 自身持有；Host 只负责 panic 后重启、健康与关闭。
+//! 当前部署边界是单副本，因此不需要 Redis lease、fencing token 或 heartbeat
+//! 长时间
+//! `pg_dump` 与上传由本 Daemon 自身持有；Host 只负责 panic 后重启、健康与关闭
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,8 +17,8 @@ use tracing::{info, warn};
 
 use crate::{
     model::backup::{
-        BackupError, BackupObjectMetadata, BackupRecord, BackupStatus, BackupStorageConfig,
-        BackupTriggerKind, build_backup_seed, code,
+        BackupError, BackupObjectMetadata, BackupRecord, BackupStatus, BackupStatusTransition,
+        BackupStorageConfig, BackupTriggerKind, build_backup_seed, code,
     },
     ports::backup::{
         BackupObjectStorePort, BackupRepository, DatabaseDumpPort, DumpRequest,
@@ -33,24 +34,25 @@ impl From<BackupError> for WorkerTaskError {
 
 use super::policy::{BackupSchedule, decide_retention};
 
-/// 循环间隔：管理员修改 Cron 后该时长内生效；无工作时可取消等待。
+/// 循环间隔：管理员修改 Cron 后该时长内生效；无工作时可取消等待
 const BACKUP_LOOP_INTERVAL: Duration = Duration::from_secs(30);
-/// 每个循环最多执行的保留删除数量。
+/// 每个循环最多执行的保留删除数量
 const RETENTION_BATCH_SIZE: usize = 10;
-/// 保留扫描一次读取的 completed 计划备份上限。
+/// 保留扫描一次读取的 completed 计划备份上限
 const RETENTION_SCAN_LIMIT: u32 = 1000;
-/// 每个循环最多完成的待删除记录数量。
+/// 每个循环最多完成的待删除记录数量
 const PENDING_DELETION_BATCH: u32 = 20;
 
-/// 备份 Daemon 任务。
+/// 备份 Daemon 任务
 pub struct BackupTask {
+    timezone: gateway_core::time::DeploymentTimeZone,
     repository: Arc<dyn BackupRepository>,
     dump: Arc<dyn DatabaseDumpPort>,
     object_store: Arc<dyn BackupObjectStorePort>,
 }
 
 impl BackupTask {
-    /// 组合仓储、导出器与对象存储适配器。
+    /// 组合仓储、导出器与对象存储适配器
     #[must_use]
     pub fn new(
         repository: Arc<dyn BackupRepository>,
@@ -58,10 +60,17 @@ impl BackupTask {
         object_store: Arc<dyn BackupObjectStorePort>,
     ) -> Self {
         Self {
+            timezone: Default::default(),
             repository,
             dump,
             object_store,
         }
+    }
+
+    #[must_use]
+    pub fn with_timezone(mut self, timezone: gateway_core::time::DeploymentTimeZone) -> Self {
+        self.timezone = timezone;
+        self
     }
 }
 
@@ -86,13 +95,13 @@ impl BackupTask {
         }
     }
 
-    /// 执行一个周期：推进计划、恢复中间态、删除收敛、领取执行一个任务、保留清理。
+    /// 执行一个周期：推进计划、恢复中间态、删除收敛、领取执行一个任务、保留清理
     ///
-    /// 对外暴露以便集成测试逐周期驱动；daemon 循环内部复用。
+    /// 对外暴露以便集成测试逐周期驱动；daemon 循环内部复用
     ///
     /// # Errors
     ///
-    /// 仓储或基础设施不可用、任务执行失败时返回 [`WorkerTaskError`]。
+    /// 仓储或基础设施不可用、任务执行失败时返回 [`WorkerTaskError`]
     pub async fn run_cycle(&self, cancellation: &CancellationToken) -> Result<(), WorkerTaskError> {
         if cancellation.is_cancelled() {
             return Ok(());
@@ -105,29 +114,51 @@ impl BackupTask {
         Ok(())
     }
 
-    /// 推进到期计划并幂等插入 scheduled 任务。
+    /// 推进到期计划并幂等插入 scheduled 任务
     async fn advance_schedule(&self, now: DateTime<Utc>) -> Result<(), WorkerTaskError> {
         let settings = self.repository.load_settings().await.map_err(repo_error)?;
         if !settings.schedule_enabled {
             return Ok(());
         }
         let cron = settings.cron_expression.as_deref().unwrap_or_default();
-        let timezone = settings.schedule_timezone.as_deref().unwrap_or_default();
-        if cron.is_empty() || timezone.is_empty() {
+        let timezone = self.timezone.name();
+        if cron.is_empty() {
             return Ok(());
         }
-        let schedule = BackupSchedule::parse(cron, timezone)
+        let schedule = BackupSchedule::parse(cron, self.timezone)
             .map_err(|_| WorkerTaskError::safe("backup schedule is invalid"))?;
 
+        if settings.schedule_timezone.as_deref() != Some(timezone) {
+            // 时区切换只初始化未来游标，不把旧时区计划当作应补跑任务
+            if let Some(next_run_at) = schedule.next_after(now) {
+                self.repository
+                    .advance_schedule_cursor(
+                        next_run_at,
+                        cron,
+                        settings.schedule_timezone.as_deref(),
+                        settings.next_run_at,
+                        timezone,
+                    )
+                    .await
+                    .map_err(repo_error)?;
+            }
+            return Ok(());
+        }
         let due = match settings.next_run_at {
             Some(next_run_at) if next_run_at <= now => true,
             Some(_) => false,
             None => {
-                // 刚启用计划但尚无游标：直接初始化。
+                // 刚启用计划但尚无游标：直接初始化
                 if let Some(next_run_at) = schedule.next_after(now) {
                     let _ = self
                         .repository
-                        .advance_schedule_cursor(next_run_at, cron, timezone)
+                        .advance_schedule_cursor(
+                            next_run_at,
+                            cron,
+                            Some(timezone),
+                            settings.next_run_at,
+                            timezone,
+                        )
                         .await
                         .map_err(repo_error)?;
                 }
@@ -141,11 +172,17 @@ impl BackupTask {
         let scheduled_at = match schedule.last_firing_at_or_before(now) {
             Some(scheduled_at) => scheduled_at,
             None => {
-                // 无法从计划推导最近到期时间：推进游标避免反复触发。
+                // 无法从计划推导最近到期时间：推进游标避免反复触发
                 if let Some(next_run_at) = schedule.next_after(now) {
                     let _ = self
                         .repository
-                        .advance_schedule_cursor(next_run_at, cron, timezone)
+                        .advance_schedule_cursor(
+                            next_run_at,
+                            cron,
+                            Some(timezone),
+                            settings.next_run_at,
+                            timezone,
+                        )
                         .await
                         .map_err(repo_error)?;
                 }
@@ -168,25 +205,24 @@ impl BackupTask {
         .map_err(infra_error)?;
         let inserted = self
             .repository
-            .insert_scheduled_record(seed)
+            .insert_scheduled_record(
+                seed,
+                schedule.next_after(now),
+                cron,
+                timezone,
+                settings.next_run_at,
+            )
             .await
             .map_err(repo_error)?;
         if inserted {
             info!(scheduled_at = %scheduled_at, "计划备份任务已创建");
         } else {
-            warn!(scheduled_at = %scheduled_at, "计划时间点冲突，跳过并推进游标");
-        }
-        if let Some(next_run_at) = schedule.next_after(now) {
-            let _ = self
-                .repository
-                .advance_schedule_cursor(next_run_at, cron, timezone)
-                .await
-                .map_err(repo_error)?;
+            warn!(scheduled_at = %scheduled_at, "计划已变化或存在冲突，本轮未创建任务");
         }
         Ok(())
     }
 
-    /// 恢复中间状态（dumping/uploading/deleting）。
+    /// 恢复中间状态（dumping/uploading/deleting）
     async fn recover_intermediate(
         &self,
         cancellation: &CancellationToken,
@@ -206,7 +242,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// dumping：有完整暂存则继续上传，否则清理暂存并标记失败。
+    /// dumping：有完整暂存则继续上传，否则清理暂存并标记失败
     async fn recover_dumping(
         &self,
         record: &BackupRecord,
@@ -224,8 +260,7 @@ impl BackupTask {
                     .repository
                     .transition_status(
                         &record.id,
-                        BackupStatus::Dumping,
-                        BackupStatus::Uploading,
+                        status_transition(BackupStatus::Dumping, BackupStatus::Uploading)?,
                         update,
                         now,
                     )
@@ -253,7 +288,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// uploading：远端匹配则补记完成，有完整暂存则重试上传，否则失败。
+    /// uploading：远端匹配则补记完成，有完整暂存则重试上传，否则失败
     async fn recover_uploading(
         &self,
         record: &BackupRecord,
@@ -274,8 +309,7 @@ impl BackupTask {
             self.repository
                 .transition_status(
                     &record.id,
-                    BackupStatus::Uploading,
-                    BackupStatus::Completed,
+                    status_transition(BackupStatus::Uploading, BackupStatus::Completed)?,
                     StatusTransitionUpdate::default(),
                     now,
                 )
@@ -306,7 +340,7 @@ impl BackupTask {
         }
     }
 
-    /// 完成待删除记录（deleting → DeleteObject → 硬删除）。
+    /// 完成待删除记录（deleting → DeleteObject → 硬删除）
     async fn finish_pending_deletions(&self) -> Result<(), WorkerTaskError> {
         let settings = self.repository.load_settings().await.map_err(repo_error)?;
         let Some(config) = BackupStorageConfig::from_settings(&settings) else {
@@ -333,7 +367,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// 领取一个 queued 任务并执行导出、上传与远端校验。
+    /// 领取一个 queued 任务并执行导出、上传与远端校验
     async fn process_next_task(
         &self,
         cancellation: &CancellationToken,
@@ -358,7 +392,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// 执行单个任务；内部处理全部状态迁移。
+    /// 执行单个任务；内部处理全部状态迁移
     async fn execute_task(
         &self,
         record: &BackupRecord,
@@ -392,7 +426,7 @@ impl BackupTask {
             }
         };
 
-        // dumping → uploading，持久化 size/sha256。
+        // dumping → uploading，持久化 size/sha256
         let update = StatusTransitionUpdate {
             size_bytes: Some(artifact.size_bytes),
             sha256: Some(artifact.sha256.clone()),
@@ -402,8 +436,7 @@ impl BackupTask {
             .repository
             .transition_status(
                 &record.id,
-                BackupStatus::Dumping,
-                BackupStatus::Uploading,
+                status_transition(BackupStatus::Dumping, BackupStatus::Uploading)?,
                 update,
                 now,
             )
@@ -426,7 +459,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// 上传 + 远端校验，内部完成终态迁移。
+    /// 上传 + 远端校验，内部完成终态迁移
     async fn upload_and_verify(
         &self,
         record: &BackupRecord,
@@ -471,8 +504,7 @@ impl BackupTask {
                     .repository
                     .transition_status(
                         &record.id,
-                        BackupStatus::Uploading,
-                        BackupStatus::Completed,
+                        status_transition(BackupStatus::Uploading, BackupStatus::Completed)?,
                         StatusTransitionUpdate::default(),
                         Utc::now(),
                     )
@@ -532,7 +564,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// 把活跃任务写入失败终态并清理暂存。
+    /// 把活跃任务写入失败终态并清理暂存
     async fn fail_task(
         &self,
         record: &BackupRecord,
@@ -555,18 +587,23 @@ impl BackupTask {
         };
         let _ = self
             .repository
-            .transition_status(&record.id, record.status, BackupStatus::Failed, update, now)
+            .transition_status(
+                &record.id,
+                status_transition(record.status, BackupStatus::Failed)?,
+                update,
+                now,
+            )
             .await
             .map_err(repo_error)?;
         let _ = self.dump.cleanup_staging(&record.id).await;
         Ok(())
     }
 
-    /// 执行一小批到期保留清理：先处理 `expires_at` 已到期的记录，再按天数/份数清理计划备份。
+    /// 执行一小批到期保留清理：先处理 `expires_at` 已到期的记录，再按天数/份数清理计划备份
     async fn run_retention_batch(&self, now: DateTime<Utc>) -> Result<(), WorkerTaskError> {
         let settings = self.repository.load_settings().await.map_err(repo_error)?;
 
-        // 1. expires_at 已到期的记录（手动或计划）无条件进入删除。
+        // 1. expires_at 已到期的记录（手动或计划）无条件进入删除
         let expired = self
             .repository
             .list_expired_records(RETENTION_BATCH_SIZE as u32)
@@ -584,7 +621,7 @@ impl BackupTask {
             self.finalize_deletion(&record).await?;
         }
 
-        // 2. 计划备份按 retentionDays / retentionCount 清理。
+        // 2. 计划备份按 retentionDays / retentionCount 清理
         let records = self
             .repository
             .list_scheduled_completed_desc(RETENTION_SCAN_LIMIT)
@@ -610,7 +647,7 @@ impl BackupTask {
         Ok(())
     }
 
-    /// 对已进入 deleting 的记录执行对象删除并硬删除记录行。
+    /// 对已进入 deleting 的记录执行对象删除并硬删除记录行
     async fn finalize_deletion(&self, record: &BackupRecord) -> Result<(), WorkerTaskError> {
         let settings = self.repository.load_settings().await.map_err(repo_error)?;
         let Some(config) = BackupStorageConfig::from_settings(&settings) else {
@@ -637,6 +674,14 @@ fn classify_dump_error(error: BackupError) -> (&'static str, &'static str) {
         code::STAGING_SPACE_EXHAUSTED => (code::STAGING_SPACE_EXHAUSTED, "暂存磁盘空间不足"),
         _ => (code::PG_DUMP_FAILED, "数据库导出失败"),
     }
+}
+
+fn status_transition(
+    from: BackupStatus,
+    to: BackupStatus,
+) -> Result<BackupStatusTransition, WorkerTaskError> {
+    BackupStatusTransition::try_new(from, to)
+        .ok_or_else(|| WorkerTaskError::safe("backup status transition is invalid"))
 }
 
 fn repo_error(error: crate::ports::store::AdminStoreError) -> WorkerTaskError {

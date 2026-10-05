@@ -1,9 +1,10 @@
-//! 管理账号目录的数据库分页 read model。
+//! 管理账号目录的数据库分页 read model
 
 use super::*;
 
 pub(crate) struct AdminAccountPageRows {
     pub(crate) config_revision: AdminRevision,
+    pub(crate) default_concurrency: u64,
     pub(crate) accounts: Vec<ProviderAccountSummary>,
     pub(crate) total: u64,
     pub(crate) summary: AccountSummary,
@@ -112,7 +113,7 @@ pub(crate) async fn load_admin_account_page(
            select count(*)::bigint as filtered_total from filtered
          ),
          settings as (
-           select config_revision, usage_retention_days
+           select config_revision, usage_retention_days, max_concurrent_per_account
              from runtime_settings
             where id = 1
          )
@@ -127,7 +128,7 @@ pub(crate) async fn load_admin_account_page(
                 global_summary.summary_total, global_summary.summary_normal,
                 global_summary.summary_quota_exhausted, global_summary.summary_rate_limited,
                 global_summary.summary_disabled, global_summary.summary_error,
-                settings.config_revision
+                settings.config_revision, settings.max_concurrent_per_account
            from filtered_total
            cross join global_summary
            cross join settings
@@ -146,7 +147,7 @@ pub(crate) async fn load_admin_account_page(
            left join outbound_proxies p on p.id = a.outbound_proxy_id
           order by page.page_position"
     );
-    // 动态片段只来自上面的封闭排序枚举与固定 usage predicate；所有请求值仍使用 bind。
+    // 动态片段只来自上面的封闭排序枚举与固定 usage predicate；所有请求值仍使用 bind
     let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
         .bind(active_rate_limited_ids)
         .bind(now)
@@ -168,6 +169,7 @@ pub(crate) async fn load_admin_account_page(
         )
     })?;
     let config_revision = revision_from_row(metadata)?;
+    let default_concurrency = unsigned_metadata(metadata, "max_concurrent_per_account")?;
     let total = unsigned_metadata(metadata, "filtered_total")?;
     let summary = AccountSummary {
         total: unsigned_metadata(metadata, "summary_total")?,
@@ -190,6 +192,7 @@ pub(crate) async fn load_admin_account_page(
         .map_err(|error| admin_store_error(ENTITY, error))?;
     Ok(AdminAccountPageRows {
         config_revision,
+        default_concurrency,
         accounts,
         total,
         summary,

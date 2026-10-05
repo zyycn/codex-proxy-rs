@@ -3,6 +3,7 @@ import CodexProxyUI from '@codex-proxy/ui/vite'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
+import { pluginBridge } from './build/plugin-bridge.ts'
 
 export default defineConfig(({ mode }) => {
   const sourceUi = mode === 'source'
@@ -10,7 +11,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: '/',
-    plugins: [vue(), tailwindcss(), CodexProxyUI({ source: sourceUi ? uiRoot : undefined })],
+    plugins: [vue(), tailwindcss(), CodexProxyUI({ source: sourceUi ? uiRoot : undefined }), pluginBridge()],
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

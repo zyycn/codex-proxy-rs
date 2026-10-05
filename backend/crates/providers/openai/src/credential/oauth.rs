@@ -1,4 +1,4 @@
-//! Codex Authorization Code + PKCE/OIDC 管理流。
+//! Codex Authorization Code + PKCE/OIDC 管理流
 
 use std::{fmt, sync::Arc, time::Duration};
 
@@ -76,14 +76,14 @@ pub struct CompleteCodexOAuthAuthorization {
     pub callback_url: SecretString,
 }
 
-/// OAuth exchange 后返回的 Provider prepared credential 及其原始事务信封。
+/// OAuth exchange 后返回的 Provider prepared credential 及其原始事务信封
 pub struct CompletedCodexOAuthAuthorization<T> {
     pub mutation: PendingAuthorizationMutation,
     pub credential: T,
     authorization_guard: Box<dyn AuthorizationCommitGuard>,
 }
 
-/// OAuth exchange 后唯一的 credential preparation 结果。
+/// OAuth exchange 后唯一的 credential preparation 结果
 pub enum CompletedCodexOAuthCredential {
     Create(NewProviderAccount),
     Reauthorize(PreparedCodexCredentialRotation),
@@ -806,7 +806,7 @@ fn callback_parts(value: &str) -> Result<(SecretString, SecretString), CodexOAut
             "code" => set_unique_callback_parameter(&mut code, value.into_owned())?,
             "state" => set_unique_callback_parameter(&mut state, value.into_owned())?,
             // 回调地址只承载 query 参数；安全绑定由唯一的 code/state、
-            // 服务端保存的 state 和 PKCE token exchange 共同完成。
+            // 服务端保存的 state 和 PKCE token exchange 共同完成
             _ => {}
         }
     }

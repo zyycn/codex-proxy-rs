@@ -1,4 +1,4 @@
-//! Redis 丢失后从 `model_requests` 恢复客户端准入热状态。
+//! Redis 丢失后从 `model_requests` 恢复客户端准入热状态
 
 use std::collections::BTreeMap;
 

@@ -1,3 +1,5 @@
+//! 验证准入恢复读取精确时间窗口与运行中请求事实
+
 use chrono::{DateTime, Duration, Utc};
 use gateway_store::postgres::{
     ClientAdmissionRecentRequest, ClientAdmissionRecovery, ClientAdmissionRecoveryRepository,

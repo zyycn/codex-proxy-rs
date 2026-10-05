@@ -1,4 +1,4 @@
-//! 根会话的连续 WS 失败预算；耗尽后保持 HTTP，空闲过期后释放状态。
+//! 根会话的连续 WS 失败预算；耗尽后保持 HTTP，空闲过期后释放状态
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,7 +40,7 @@ impl CodexSessionTransportRecovery {
         matches!(session.state, TransportState::Http)
     }
 
-    /// 返回连续失败是否已耗尽首发加重试预算。
+    /// 返回连续失败是否已耗尽首发加重试预算
     pub(crate) fn record_websocket_failure(
         &self,
         key: &ProviderSessionAffinityKey,

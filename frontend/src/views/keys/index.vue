@@ -10,12 +10,14 @@ import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
 import ApiKeyBudgetResetModal from './components/ApiKeyBudgetResetModal.vue'
-import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
+import ApiKeyCreatedModal from './components/ApiKeyCreatedModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
+import ApiKeyFormModal from './components/ApiKeyFormModal.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
+import { useApiKeyEditor } from './composables/useApiKeyEditor'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
 import { useApiKeysQuery } from './composables/useApiKeysQuery'
 import { useApiKeyUse } from './composables/useApiKeyUse'
@@ -48,51 +50,52 @@ const {
 } = useAccountGroupCatalog({ immediate: false })
 
 const {
-  showFormModal,
-  showDeleteModal,
-  showSingleDeleteModal,
-  showKeyModal,
-  showAllAccountsConfirm,
+  showUseKeyModal,
+  selectedUseKey,
+  showCreatedKeyModal,
   createdKey,
-  createdKeyName,
-  editingKey,
-  pendingDeleteKey,
-  savingKey,
-  deletingKey,
-  batchDeleting,
-  updatingStatusKeyIds,
   revealingKeyIds,
+  openAiBaseUrl,
+  showCreatedKey,
+  clearCreatedKey,
+  copyToClipboard,
+  copyApiKey,
+  importCreatedKeyToCcs,
+  openUseKeyModal,
+  importToCcs,
+} = useApiKeyUse()
+
+const {
+  showFormModal,
+  showAllAccountsConfirm,
+  editingKey,
+  savingKey,
   form,
   openCreate,
   openEdit,
+  clearCustomKey,
   requestSave,
   confirmAllAccountsScope,
+} = useApiKeyEditor({ reload: loadApiKeys, onCreated: showCreatedKey })
+
+const {
+  showDeleteModal,
+  showSingleDeleteModal,
+  pendingDeleteKey,
+  deleteCount,
+  deletingKey,
+  batchDeleting,
+  updatingStatusKeyIds,
   requestDeleteKey,
   handleDelete,
   handleBatchDelete,
   handleToggleStatus,
-  copyToClipboard,
-  revealPlaintextKey,
-  copyApiKey,
 } = useApiKeyMutations({ selectedIds, reload: loadApiKeys })
 
 const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll } = usePageSelection(
   apiKeys,
   selectedIds,
 )
-
-const {
-  showUseKeyModal,
-  selectedUseKey,
-  openAiBaseUrl,
-  importCreatedKeyToCcs,
-  openUseKeyModal,
-  importToCcs,
-} = useApiKeyUse({
-  createdKey,
-  createdKeyName,
-  revealPlaintextKey,
-})
 
 watch(
   showFormModal,
@@ -184,7 +187,7 @@ watch(
               <ApiKeyStatusBadge :api-key="row" />
             </template>
             <template #lastUsedAt="{ row }">
-              <LastUsedAtCell :value="row.lastUsedAt" />
+              <LastUsedAtCell :value="row.lastUsedAt" :display="row.lastUsedAtDisplay" :full-display="row.lastUsedAtFullDisplay" />
             </template>
             <template #actions="{ row }">
               <ApiKeyActions
@@ -211,18 +214,23 @@ watch(
       </template>
     </BaseCard>
 
-    <ApiKeyCreateModal
+    <ApiKeyFormModal
       v-model="showFormModal"
-      v-model:created-open="showKeyModal"
       v-model:form="form"
       :groups="groups"
       :group-loading="loadingGroups"
       :editing="Boolean(editingKey)"
-      :created-key="createdKey"
       :saving="savingKey"
-      @copy="copyToClipboard"
       @save="requestSave"
+      @after-leave="clearCustomKey"
+    />
+
+    <ApiKeyCreatedModal
+      v-model="showCreatedKeyModal"
+      :created-key="createdKey"
+      @copy="copyToClipboard"
       @import-ccs="importCreatedKeyToCcs"
+      @after-leave="clearCreatedKey"
     />
 
     <ApiKeyBudgetResetModal
@@ -236,6 +244,7 @@ watch(
       :api-key="selectedUseKey"
       :api-base-url="openAiBaseUrl"
       @copy="copyToClipboard"
+      @after-leave="selectedUseKey = null"
     />
 
     <BaseConfirmModal
@@ -261,7 +270,7 @@ watch(
       @confirm="handleBatchDelete"
     >
       <p class="m-0">
-        确定删除选中的 {{ selectedIds.size }} 个 API Key 吗？
+        确定删除选中的 {{ deleteCount }} 个 API Key 吗？
       </p>
     </BaseConfirmModal>
 

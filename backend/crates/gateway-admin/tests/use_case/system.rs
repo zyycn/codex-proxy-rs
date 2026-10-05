@@ -1,3 +1,5 @@
+//! 验证系统升级、回滚与重启命令向宿主端口传递确认参数
+
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -106,7 +108,10 @@ impl SystemOperations for RecordingSystemOperations {
         })
     }
 
-    async fn restart(&self) -> Result<SystemOperationAccepted, SystemOperationError> {
+    async fn restart(
+        &self,
+        _preflight: std::sync::Arc<dyn gateway_admin::ports::system::SystemRestartPreflight>,
+    ) -> Result<SystemOperationAccepted, SystemOperationError> {
         Ok(SystemOperationAccepted::Restart {
             operation_id: "operation-restart".to_owned(),
             message: "accepted".to_owned(),

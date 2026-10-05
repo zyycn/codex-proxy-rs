@@ -1,4 +1,4 @@
-//! 备份调度与保留策略（backup/policy.rs）的纯逻辑测试。
+//! 备份调度与保留策略（backup/policy.rs）的纯逻辑测试
 
 use chrono::{Duration, TimeZone as _, Utc};
 
@@ -38,15 +38,15 @@ fn record(
 }
 
 #[test]
-fn parse_rejects_bad_cron_and_timezone() {
-    assert!(BackupSchedule::parse("61 * * * *", "Asia/Shanghai").is_err());
-    assert!(BackupSchedule::parse("0 2 * * *", "Not/AZone").is_err());
-    assert!(BackupSchedule::parse("0 2 * * *", "Asia/Shanghai").is_ok());
+fn parse_rejects_invalid_cron() {
+    assert!(BackupSchedule::parse("61 * * * *", "Asia/Shanghai".parse().unwrap()).is_err());
+
+    assert!(BackupSchedule::parse("0 2 * * *", "Asia/Shanghai".parse().unwrap()).is_ok());
 }
 
 #[test]
 fn next_after_is_strictly_later() {
-    let schedule = BackupSchedule::parse("0 2 * * *", "Asia/Shanghai").unwrap();
+    let schedule = BackupSchedule::parse("0 2 * * *", "Asia/Shanghai".parse().unwrap()).unwrap();
     let at = Utc.with_ymd_and_hms(2026, 8, 1, 18, 0, 0).unwrap();
     let next = schedule.next_after(at).unwrap();
     assert_eq!(next, Utc.with_ymd_and_hms(2026, 8, 2, 18, 0, 0).unwrap());
@@ -54,8 +54,8 @@ fn next_after_is_strictly_later() {
 
 #[test]
 fn last_firing_is_at_or_before() {
-    let schedule = BackupSchedule::parse("0 2 * * *", "Asia/Shanghai").unwrap();
-    // 北京时间 02:00 = 前一日 18:00 UTC。
+    let schedule = BackupSchedule::parse("0 2 * * *", "Asia/Shanghai".parse().unwrap()).unwrap();
+    // 北京时间 02:00 = 前一日 18:00 UTC
     let before = Utc.with_ymd_and_hms(2026, 8, 1, 17, 59, 0).unwrap();
     assert_eq!(
         schedule.last_firing_at_or_before(before).unwrap(),
@@ -69,7 +69,8 @@ fn last_firing_is_at_or_before() {
 
 #[test]
 fn dst_spring_forward_skips_missing_hour() {
-    let schedule = BackupSchedule::parse("30 2 * * *", "America/New_York").unwrap();
+    let schedule =
+        BackupSchedule::parse("30 2 * * *", "America/New_York".parse().unwrap()).unwrap();
     let at = Utc.with_ymd_and_hms(2026, 3, 8, 6, 29, 0).unwrap(); // 01:29 EST
     let next = schedule.next_after(at).unwrap();
     assert_eq!(next, Utc.with_ymd_and_hms(2026, 3, 9, 6, 30, 0).unwrap());
@@ -168,4 +169,28 @@ fn disabled_thresholds_delete_nothing() {
         ),
     ];
     assert!(decide_retention(0, 0, now, &records).is_empty());
+}
+
+#[test]
+fn cron_skips_dst_gap_and_runs_only_first_repeated_wall_time() {
+    let zone = "America/New_York".parse().unwrap();
+    let gap = BackupSchedule::parse("30 2 * * *", zone).unwrap();
+    assert_eq!(
+        gap.next_after("2026-03-08T05:00:00Z".parse().unwrap()),
+        Some("2026-03-09T06:30:00Z".parse().unwrap())
+    );
+    let fold = BackupSchedule::parse("30 1 * * *", zone).unwrap();
+    let first = "2026-11-01T05:30:00Z".parse().unwrap();
+    assert_eq!(
+        fold.next_after("2026-11-01T04:00:00Z".parse().unwrap()),
+        Some(first)
+    );
+    assert_eq!(
+        fold.next_after(first),
+        Some("2026-11-02T06:30:00Z".parse().unwrap())
+    );
+    assert_eq!(
+        fold.last_firing_at_or_before("2026-11-01T06:45:00Z".parse().unwrap()),
+        Some(first)
+    );
 }

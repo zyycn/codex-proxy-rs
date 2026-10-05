@@ -1,4 +1,4 @@
-//! 当前 Key 的单页用量 API；只暴露页面需要的只读字段。
+//! 当前 Key 的单页用量 API；只暴露页面需要的只读字段
 
 use axum::{
     Router,
@@ -83,19 +83,20 @@ async fn overview<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let overview = state
         .admin_services()
         .key_usage()
         .overview(
             session_cookie::value(&headers).as_deref(),
-            query.into_domain()?,
+            query.into_domain(state.admin_services().timezone())?,
         )
         .await
         .map_err(map_admin_service_error)?
         .ok_or_else(AdminError::session_required)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(presenter::overview(overview)),
+        AdminEnvelope::ok(presenter::overview(overview, time)),
     ))
 }
 
@@ -107,19 +108,20 @@ async fn records<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let records = state
         .admin_services()
         .key_usage()
         .records(
             session_cookie::value(&headers).as_deref(),
-            query.into_domain()?,
+            query.into_domain(state.admin_services().timezone())?,
         )
         .await
         .map_err(map_admin_service_error)?
         .ok_or_else(AdminError::session_required)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(presenter::records(records)),
+        AdminEnvelope::ok(presenter::records(records, time)),
     ))
 }
 

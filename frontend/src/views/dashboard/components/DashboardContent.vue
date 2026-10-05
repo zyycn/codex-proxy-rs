@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { dashboardSnapshotView, dashboardTrendView } from '../composables/useDashboard'
+import type { dashboardSnapshotView, dashboardTrendView } from '../presenter'
 import type { DashboardTrendKind } from '@/api/modules/dashboard'
 import { BaseIconButton, BasePageHeader } from '@codex-proxy/ui'
 
 import { RefreshCw } from '@lucide/vue'
 
+import RequestHealthTimelineCard from '@/components/usage/RequestHealthTimelineCard.vue'
 import AccountOverviewCard from './AccountOverviewCard.vue'
 import DashboardHeartbeat from './DashboardHeartbeat.vue'
 import MetricCard from './MetricCard.vue'
-import RequestHealthTimelineCard from './RequestHealthTimelineCard.vue'
 import RequestTrendCard from './RequestTrendCard.vue'
 import UsageRecordCard from './UsageRecordCard.vue'
 import WireProfileCard from './WireProfileCard.vue'

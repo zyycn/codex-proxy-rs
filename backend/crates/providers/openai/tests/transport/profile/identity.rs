@@ -1,3 +1,5 @@
+//! 验证自定义客户端身份、配套头部与注入防护
+
 use gateway_core::account::OpaqueProviderData;
 use provider_openai::transport::headers::build_codex_model_headers;
 use provider_openai::transport::profile::identity::RequestProfileSelection;

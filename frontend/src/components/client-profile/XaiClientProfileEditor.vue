@@ -63,11 +63,13 @@ async function load() {
 }
 
 watch([model, () => props.active], ([configuration, active], _, onCleanup) => {
+  if (!active)
+    return
   let cancelled = false
   preview.value = undefined
   previewError.value = ''
-  previewing.value = active && !needsVersionInput.value
-  if (!active || needsVersionInput.value)
+  previewing.value = !needsVersionInput.value
+  if (needsVersionInput.value)
     return
   const timer = setTimeout(async () => {
     try {

@@ -1,3 +1,5 @@
+//! 插件打包命令行的参数、归档校验与输出行为测试
+
 use std::{
     collections::BTreeMap,
     fs::{self, File},
@@ -237,7 +239,7 @@ fn assert_packaged_resources(icon_path: &str, icon_mime: &str, icon: &[u8]) {
 
 fn source_manifest() -> &'static [u8] {
     br#"{
-      "manifestVersion":1,
+      "manifestVersion":2,
       "name":"request-workbench",
       "displayName":"Request Workbench",
       "publisher":"codex-proxy",
@@ -248,10 +250,10 @@ fn source_manifest() -> &'static [u8] {
       "main":"bin/plugin",
       "runtime":"trustedProcess",
       "contributes":{
-        "middleware":{"stages":["request"],"inputFormats":["openai"],"outputFormats":["openai"]},
+        "middleware":{"version":3,"stages":["request"],"inputFormats":["openai"],"outputFormats":["openai"]},
         "management":{}
       },
-      "permissions":["requests","accounts"],
+
       "icon":"assets/icon.png",
       "resources":{"LICENSE":"text/plain","assets/icon.png":"image/png","web/index.html":"text/html","web/app.js":"text/javascript","web/app.css":"text/css"}
     }"#

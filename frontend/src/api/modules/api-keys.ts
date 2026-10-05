@@ -23,10 +23,16 @@ export interface ApiKey {
   dailyUsedUsd: string
   weeklyUsedUsd: string
   dailyResetsAt: string | null
+  dailyResetsAtDisplay: string | null
   weeklyResetsAt: string | null
+  weeklyResetsAtDisplay: string | null
   createdAt: string
+  createdAtDisplay: string
   updatedAt: string
+  updatedAtDisplay: string
   lastUsedAt: string | null
+  lastUsedAtDisplay: string
+  lastUsedAtFullDisplay: string | null
   routingScope: ApiKeyRoutingScope
   groups: AccountGroupRef[]
   providerKinds: string[]

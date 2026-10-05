@@ -1,3 +1,5 @@
+//! 系统更新测试入口，以及重启准备和操作互斥测试
+
 mod channels;
 mod installation;
 
@@ -32,10 +34,18 @@ use tar::{Builder, EntryType, Header};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+const OLD_RELEASE_MANIFEST: &str = r#"{"gateway_version":"1.0.0"}"#;
+
 const TARGET_VERSION: &str = "1.9.9";
 const CROSS_MAJOR_VERSION: &str = "2.0.0";
 
 struct AllowingUpdatePreflight;
+#[async_trait::async_trait]
+impl gateway_admin::ports::system::SystemRestartPreflight for AllowingUpdatePreflight {
+    async fn prepare(&self, _: Option<SystemUpdateCandidate>) -> Result<(), SystemOperationError> {
+        Ok(())
+    }
+}
 
 #[async_trait::async_trait]
 impl SystemUpdatePreflight for AllowingUpdatePreflight {
@@ -107,7 +117,10 @@ impl SystemUpdatePreflight for ChangingRollbackRevisionPreflight {
         candidate: SystemUpdateCandidate,
     ) -> Result<Revision, SystemOperationError> {
         assert_eq!(candidate.target_version, "1.0.0");
-        assert_eq!(candidate.release_manifest.as_ref(), b"old-manifest");
+        assert_eq!(
+            candidate.release_manifest.as_ref(),
+            OLD_RELEASE_MANIFEST.as_bytes()
+        );
         Ok(Revision::new(11).expect("revision"))
     }
 
@@ -135,7 +148,10 @@ impl SystemUpdatePreflight for BlockingRollbackPreflight {
         candidate: SystemUpdateCandidate,
     ) -> Result<Revision, SystemOperationError> {
         assert_eq!(candidate.target_version, "1.0.0");
-        assert_eq!(candidate.release_manifest.as_ref(), b"old-manifest");
+        assert_eq!(
+            candidate.release_manifest.as_ref(),
+            OLD_RELEASE_MANIFEST.as_bytes()
+        );
         Ok(Revision::new(13).expect("revision"))
     }
 
@@ -157,7 +173,12 @@ async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
     let shutdown = CancellationToken::new();
     let service = ProcessSystemOperations::new(shutdown.clone(), config);
 
-    assert!(service.restart().await.is_err());
+    assert!(
+        service
+            .restart(Arc::new(AllowingUpdatePreflight))
+            .await
+            .is_err()
+    );
     assert!(!shutdown.is_cancelled());
 }
 
@@ -169,7 +190,10 @@ async fn restart_should_request_process_restart_inside_docker() {
     config.deployment_mode = "docker".to_owned();
     let shutdown = CancellationToken::new();
     let service = ProcessSystemOperations::new(shutdown.clone(), config);
-    service.restart().await.expect("restart accepted");
+    service
+        .restart(Arc::new(AllowingUpdatePreflight))
+        .await
+        .expect("restart accepted");
 
     tokio::time::timeout(Duration::from_secs(2), shutdown.cancelled())
         .await
@@ -188,7 +212,7 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
 
     assert_eq!(
         service
-            .restart()
+            .restart(Arc::new(AllowingUpdatePreflight))
             .await
             .expect("replacement scheduled")
             .kind(),
@@ -206,11 +230,82 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
     .expect("replacement executed before fixture cleanup");
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn restart_should_use_startup_path_after_running_executable_is_renamed() {
+    const CHILD_ENV: &str = "CPR_TEST_RESTART_RENAMED_EXECUTABLE_CHILD";
+    let executable = std::env::current_exe().expect("test executable");
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // 用例只移动目录项，不修改旧程序内容；同盘硬链接避免复制整个调试二进制
+        let directory =
+            tempfile::tempdir_in(executable.parent().unwrap()).expect("isolated test directory");
+        let child = directory.path().join("restart-test");
+        fs::hard_link(&executable, &child).expect("link isolated test executable");
+        let output = std::process::Command::new(child)
+            .args([
+                "--exact",
+                "system_update::restart_should_use_startup_path_after_running_executable_is_renamed",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("CPR_RESTART_DELAY_MS", "1200")
+            .output()
+            .expect("isolated restart test");
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    if executable.file_name() == Some(std::ffi::OsStr::new("codex-proxy-rs.backup")) {
+        // 误启动旧程序时留下可观察结果并退出，避免旧副本再次发起重启
+        fs::write(
+            executable
+                .parent()
+                .expect("installation directory")
+                .join("replacement-version"),
+            "old",
+        )
+        .expect("old replacement marker");
+        return;
+    }
+
+    let fixture = Fixture::new_in(executable.parent().unwrap());
+    fs::rename(executable, fixture.executable()).expect("move isolated running executable");
+    let mut config = fixture.config("http://127.0.0.1:1/repos");
+    config.executable_path = None;
+    config.self_restart_enabled = true;
+    let service = ProcessSystemOperations::new(CancellationToken::new(), config);
+
+    let backup = fixture.root.path().join("codex-proxy-rs.backup");
+    fs::rename(fixture.executable(), &backup).expect("back up running executable");
+    fixture.write_executable("#!/bin/sh\nprintf new > \"${0%/*}/replacement-version\"\n");
+    assert_eq!(std::env::current_exe().expect("renamed executable"), backup);
+
+    service
+        .restart(Arc::new(AllowingUpdatePreflight))
+        .await
+        .expect("restart accepted");
+    let marker = fixture.root.path().join("replacement-version");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !marker.is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("replacement executed");
+    assert_eq!(
+        fs::read_to_string(marker).expect("replacement version"),
+        "new"
+    );
+}
+
 #[tokio::test]
 async fn restart_should_conflict_while_another_system_operation_is_running() {
     let fixture = Fixture::new();
     // 裸 TCP 监听不回包：update 持有操作锁后停在 release 拉取阶段，accept
-    // 信号保证断言时锁一定已被占用。
+    // 信号保证断言时锁一定已被占用
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("release listener");
@@ -240,7 +335,10 @@ async fn restart_should_conflict_while_another_system_operation_is_running() {
         .expect("update reaches release fetch while holding the operation lock")
         .expect("connected signal");
 
-    let error = service.restart().await.expect_err("restart during update");
+    let error = service
+        .restart(Arc::new(AllowingUpdatePreflight))
+        .await
+        .expect_err("restart during update");
     assert_eq!(error.kind(), SystemOperationErrorKind::Conflict);
     assert!(!shutdown.is_cancelled());
 
@@ -251,7 +349,10 @@ async fn restart_should_conflict_while_another_system_operation_is_running() {
         wait_for_update(&service).await.operation.status,
         SystemOperationStatus::Failed
     );
-    service.restart().await.expect("restart after lock release");
+    service
+        .restart(Arc::new(AllowingUpdatePreflight))
+        .await
+        .expect("restart after lock release");
 }
 
 #[tokio::test]
@@ -307,7 +408,7 @@ async fn rollback_should_restore_binary_web_and_version_state() {
     );
     assert_eq!(
         fs::read(fixture.official().join("plugin-release-manifest.json")).expect("manifest"),
-        b"old-manifest"
+        OLD_RELEASE_MANIFEST.as_bytes()
     );
     assert_eq!(
         fs::read(fixture.official().join("old-plugin.tar.gz")).expect("old plugin"),
@@ -373,7 +474,7 @@ async fn update_should_restore_all_files_when_plugin_revision_changes_during_swa
     );
     assert_eq!(
         fs::read(fixture.official().join("plugin-release-manifest.json")).expect("manifest"),
-        b"old-manifest"
+        OLD_RELEASE_MANIFEST.as_bytes()
     );
     assert!(fixture.official().join("old-plugin.tar.gz").is_file());
     assert!(!fixture.official().join("new-plugin.tar.gz").exists());
@@ -1583,7 +1684,7 @@ async fn update_should_restore_web_assets_when_binary_backup_fails() {
     );
     assert_eq!(
         fs::read(fixture.official().join("plugin-release-manifest.json")).expect("manifest"),
-        b"old-manifest"
+        OLD_RELEASE_MANIFEST.as_bytes()
     );
     assert!(fixture.official().join("old-plugin.tar.gz").is_file());
     assert!(!fixture.official().join("new-plugin.tar.gz").exists());
@@ -1658,7 +1759,7 @@ async fn accepted_update_should_survive_a_lost_http_response() {
                     .await
                     .expect("accepted");
                 accepted.notify_one();
-                // 模拟受理响应丢失，客户端断开会取消此 HTTP handler。
+                // 模拟受理响应丢失，客户端断开会取消此 HTTP handler
                 std::future::pending::<String>().await
             }
         }),
@@ -1752,7 +1853,7 @@ async fn host_shutdown_should_finish_an_accepted_update_and_release_its_lock() {
         cancellation.clone(),
         fixture.config(&format!("{}/repos", upstream.uri())),
     );
-    // 在后台任务第一次 poll 之前触发关闭，覆盖受理后的生命周期交接。
+    // 在后台任务第一次 poll 之前触发关闭，覆盖受理后的生命周期交接
     service
         .perform_test_update(Some(TARGET_VERSION.to_owned()))
         .await
@@ -1883,7 +1984,11 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().expect("system update root");
+        Self::new_in(std::env::temp_dir())
+    }
+
+    fn new_in(parent: impl AsRef<std::path::Path>) -> Self {
+        let root = tempfile::tempdir_in(parent).expect("system update root");
         let fixture = Self { root };
         fixture.write_executable("old-binary");
         fs::create_dir_all(fixture.web()).expect("web dir");
@@ -1891,7 +1996,7 @@ impl Fixture {
         fs::create_dir_all(fixture.official()).expect("official plugin dir");
         fs::write(
             fixture.official().join("plugin-release-manifest.json"),
-            "old-manifest",
+            OLD_RELEASE_MANIFEST,
         )
         .expect("manifest");
         fs::write(fixture.official().join("old-plugin.tar.gz"), "old-plugin").expect("plugin");
@@ -2157,4 +2262,44 @@ fn release_response(version: &str, assets: Vec<serde_json::Value>) -> ResponseTe
         "assets": assets,
     });
     ResponseTemplate::new(200).set_body_json(serde_json::json!([release]))
+}
+
+struct RejectingRestartPreflight;
+#[async_trait::async_trait]
+impl gateway_admin::ports::system::SystemRestartPreflight for RejectingRestartPreflight {
+    async fn prepare(
+        &self,
+        candidate: Option<SystemUpdateCandidate>,
+    ) -> Result<(), SystemOperationError> {
+        assert_eq!(candidate.unwrap().target_version, "1.0.0");
+        Err(SystemOperationError::new(
+            SystemOperationErrorKind::Conflict,
+            "plugins need confirmation",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn restart_checks_plugins_before_shutdown_and_releases_locks_on_rejection() {
+    let fixture = Fixture::new();
+    let mut config = fixture.config("http://127.0.0.1:1/repos");
+    config.self_restart_enabled = true;
+    config.deployment_mode = "docker".into();
+    let shutdown = CancellationToken::new();
+    let service = ProcessSystemOperations::new(shutdown.clone(), config);
+    assert!(
+        service
+            .restart(Arc::new(RejectingRestartPreflight))
+            .await
+            .is_err()
+    );
+    assert!(!shutdown.is_cancelled());
+    assert!(service.restart_candidate().await.unwrap().is_some());
+    service
+        .restart(Arc::new(AllowingUpdatePreflight))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), shutdown.cancelled())
+        .await
+        .unwrap();
 }

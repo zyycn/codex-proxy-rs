@@ -1,3 +1,5 @@
+//! 验证 Provider 注册唯一性与模型能力目录查询
+
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -274,6 +276,80 @@ fn provider_stream_should_not_sequence_gate_canonical_observation_attached_to_wi
         [GatewayEvent::TextDelta(delta)] if delta.text == "hello"
     ));
     assert!(futures::executor::block_on(provider_stream.next()).is_none());
+}
+
+#[test]
+fn provider_stream_should_validate_complete_facts_across_mixed_wire_events() {
+    for wire_started in [false, true] {
+        let metadata = ProviderCallMetadata::new(
+            ProviderKind::new("openai").unwrap(),
+            UpstreamModelId::new("gpt-5").unwrap(),
+            ProviderAccountId::new("acct_mixed").unwrap(),
+            UpstreamTransport::new("http_json").unwrap(),
+        );
+        let response = ResponseMeta::new("response-mixed", "gpt-5");
+        let wire = || ProtocolWireEvent::json("openai", None, json!({})).unwrap();
+        let started = GatewayEvent::Started(response.clone());
+        let started = if wire_started {
+            ProviderEvent::canonical_with_wire(vec![started], wire())
+        } else {
+            ProviderEvent::canonical(started)
+        };
+        let events = vec![
+            Ok(started),
+            Ok(ProviderEvent::canonical(GatewayEvent::Usage(
+                gateway_core::metering::Usage {
+                    input_tokens: Some(7),
+                    ..Default::default()
+                },
+            ))),
+            Ok(ProviderEvent::canonical_with_wire(
+                vec![GatewayEvent::Completed(response)],
+                wire(),
+            )),
+        ];
+        let mut provider = ProviderStream::new(metadata, Box::pin(stream::iter(events)), ());
+        futures::executor::block_on(async {
+            for _ in 0..3 {
+                assert!(provider.next().await.unwrap().is_ok());
+            }
+            assert!(provider.next().await.is_none());
+        });
+    }
+}
+
+#[test]
+fn provider_stream_should_reject_invalid_wire_facts_when_canonical_output_is_used() {
+    for invalid_wire_first in [false, true] {
+        let metadata = ProviderCallMetadata::new(
+            ProviderKind::new("openai").unwrap(),
+            UpstreamModelId::new("gpt-5").unwrap(),
+            ProviderAccountId::new("acct_mixed").unwrap(),
+            UpstreamTransport::new("http_json").unwrap(),
+        );
+        let started = GatewayEvent::Started(ResponseMeta::new("response-mixed", "gpt-5"));
+        let canonical = ProviderEvent::canonical(started.clone());
+        let wire = ProviderEvent::canonical_with_wire(
+            vec![if invalid_wire_first {
+                GatewayEvent::Usage(Default::default())
+            } else {
+                started
+            }],
+            ProtocolWireEvent::json("openai", None, json!({})).unwrap(),
+        );
+        let events = if invalid_wire_first {
+            vec![Ok(wire), Ok(canonical)]
+        } else {
+            vec![Ok(canonical), Ok(wire)]
+        };
+        let mut provider = ProviderStream::new(metadata, Box::pin(stream::iter(events)), ());
+        futures::executor::block_on(async {
+            assert!(provider.next().await.unwrap().is_ok());
+            let error = provider.next().await.unwrap().unwrap_err();
+            assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+            assert!(provider.next().await.is_none());
+        });
+    }
 }
 
 #[test]

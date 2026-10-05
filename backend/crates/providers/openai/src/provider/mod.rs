@@ -1,4 +1,4 @@
-//! Codex 的 `gateway-core` Provider adapter。
+//! Codex 的 `gateway-core` Provider adapter
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -105,6 +105,7 @@ mod execution;
 mod failure;
 mod live;
 mod observation;
+mod upstream_adapter;
 mod workers;
 pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
 pub(crate) use workers::ClientReleaseServices;
@@ -120,16 +121,17 @@ const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const HTTP_JSON_TRANSPORT: &str = "http_json";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
-// 在已观测到的 Codex OAuth 上游 16 MiB 附近消息边界前留出传输 metadata 余量。
+// 在已观测到的 Codex OAuth 上游 16 MiB 附近消息边界前留出传输 metadata 余量
 const WEBSOCKET_HTTP_FALLBACK_THRESHOLD_BYTES: usize = 15 * 1024 * 1024;
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
-/// 提交边界前最多保留 64 KiB 原始上游 chunk；达到阈值后结束无感换号窗口，
-/// 但不会把上游数据改写成协议失败。
-const MAX_STREAM_PREFETCH_BYTES: usize = 64 * 1024;
+/// 提交边界前预取 128 KiB 原始上游 chunk；容纳携带配置回显的前导事件，
+/// 超过阈值后结束无感换号窗口（最后一个 chunk 可越过阈值），
+/// 但不会把上游数据改写成协议失败
+const MAX_STREAM_PREFETCH_BYTES: usize = 128 * 1024;
 /// 短暂保留 response.created 等结构事件，让随后到达的明确拒绝可以无感换号；
-/// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件。
-const STREAM_REPLAY_GRACE: Duration = Duration::from_millis(1_200);
-// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
+/// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件
+const STREAM_REPLAY_GRACE: Duration = Duration::from_millis(2_500);
+// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照
 const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
@@ -186,15 +188,11 @@ impl CodexProvider {
     fn prepare_generate_request(
         &self,
         generate: &GenerateRequest,
-        upstream_model: &UpstreamModelId,
+        mut upstream: CodexResponsesRequest,
         context: &AttemptContext,
-    ) -> Result<PreparedGenerateRequest, ProviderError> {
+    ) -> PreparedGenerateRequest {
         let previous_session = decode_openai_session_state(generate);
         let continuation_requested = generate.native_continuation_requested();
-        let mut upstream = encode_generate_request(generate, upstream_model.as_str(), None)
-            .map_err(map_request_error)?;
-        // 插件加工后仍重新应用宿主强制策略与本地会话身份。
-        upstream.apply_fast_policy(context.disable_fast());
         if let Some(conversation_id) = previous_session
             .as_ref()
             .and_then(|state| state.conversation_id.as_ref())
@@ -221,13 +219,13 @@ impl CodexProvider {
             derive_codex_session_affinity(&upstream, context.client_api_key_ref());
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream, context.client_api_key_ref());
-        Ok(PreparedGenerateRequest {
+        PreparedGenerateRequest {
             upstream,
             previous_session,
             continuation_requested,
             session_affinity,
             cyber_policy_session_key,
-        })
+        }
     }
 
     fn client_for_request(
@@ -244,7 +242,7 @@ impl CodexProvider {
         Ok(self.client.clone().with_request_profile(profile))
     }
 
-    // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权。
+    // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         selector: Arc<CodexCredentialSelector>,
@@ -289,13 +287,22 @@ impl CodexProvider {
         })
     }
 
+    #[must_use]
+    pub(crate) fn with_timezone(
+        mut self,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Self {
+        self.client = self.client.with_timezone(timezone);
+        self
+    }
+
     pub(crate) fn with_session_identity(mut self, identity: CodexSessionIdentity) -> Self {
         self.session_identity = Some(identity);
         self
     }
 
     /// 绑定 Live 语音支持：call 注册表 + 账号级 sideband 网关。
-    /// 需要凭据仓库句柄；未绑定时 Live 端点仍可选路但注册表为空。
+    /// 需要凭据仓库句柄；未绑定时不暴露 sideband 与 hangup 能力。
     pub(crate) fn with_live_support(mut self, repository: CodexCredentialRepository) -> Self {
         let gateway = Arc::new(CodexLiveGateway::new(
             Arc::clone(&self.live_registry),
@@ -476,7 +483,7 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         }
-        if remaining(context.deadline()).is_none() {
+        if context.deadline().is_elapsed() {
             return Err(provider_error(
                 ProviderErrorKind::Timeout,
                 UpstreamSendState::NotSent,
@@ -499,17 +506,61 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
+        // 请求设置先形成原生正文基线；attempt 的显式改写进入终端后不再次被覆盖
+        let mut operation = Operation::Generate(generate.clone());
+        if context.disable_fast()
+            && let Operation::Generate(generate) = &operation
+            && generate.protocol_payload().protocol() == PROVIDER_NAME
+        {
+            let mut request =
+                CodexResponsesRequest::from_body(generate.protocol_payload().body().clone());
+            request.apply_fast_policy(true);
+            let body = serde_json::to_vec(request.body()).map_err(|_| {
+                provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                )
+            })?;
+            operation = operation
+                .replace_middleware_wire(PROVIDER_NAME, body.into())
+                .map_err(|_| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                })?;
+        }
+        let Operation::Generate(generate) = &operation else {
+            unreachable!("generate settings keep the operation kind")
+        };
         let Some(upstream_model) = candidate.upstream_model() else {
             return Err(provider_error(
                 ProviderErrorKind::Protocol,
                 UpstreamSendState::NotSent,
             ));
         };
+        let adapter = context.upstream_adapter(candidate.provider(), upstream_model)?;
+        if adapter.is_none()
+            && generate
+                .provider_session_state(PROVIDER_NAME)
+                .is_some_and(|state| state.extension_owner().is_some())
+        {
+            return Err(continuation_replay_required_error("scope_unavailable"));
+        }
         // 其他协议必须先取得真实账号，再按固定 attempt 阶段调用转换器；选号前不能
-        // 把未知正文当成 OpenAI wire 解释会话、亲和或传输字段。
-        let preselection = (generate.protocol_payload().protocol() == PROVIDER_NAME)
-            .then(|| self.prepare_generate_request(generate, upstream_model, &context))
-            .transpose()?;
+        // 把未知正文当成 OpenAI wire 解释会话、亲和或传输字段
+        let upstream = (generate.protocol_payload().protocol() == PROVIDER_NAME)
+            .then(|| encode_generate_request(generate, upstream_model.as_str(), None))
+            .transpose()
+            .map_err(map_request_error)?;
+        // 固定调度约束：Guardian 分类先于选号，不能随原生/适配器发送路径改变
+        // 复用编码器的权威 metadata 解析，但只为原生路径准备会话与传输状态
+        let guardian = upstream
+            .as_ref()
+            .is_some_and(CodexResponsesRequest::is_guardian);
+        let preselection = upstream
+            .filter(|_| adapter.is_none())
+            .map(|upstream| self.prepare_generate_request(generate, upstream, &context));
         let (selection_session_affinity, selection_cyber_policy_key, requires_websocket) =
             preselection.map_or((None, None, false), |prepared| {
                 let requires_websocket =
@@ -541,11 +592,12 @@ impl Provider for CodexProvider {
                     selection_cyber_policy_key.as_ref(),
                     selection_session_affinity.as_ref(),
                     requires_websocket,
+                    guardian,
                 )
                 .await
                 .map_err(map_selection_error)
         };
-        // 恢复期间排队也消耗启动窗口；只包住选账号，不限制业务响应时长。
+        // 恢复期间排队也消耗启动窗口；只包住选账号，不限制业务响应时长
         let lease = if let Some(remaining) = context.connection_budget().startup_remaining() {
             tokio::time::timeout(remaining, selection)
                 .await
@@ -572,6 +624,18 @@ impl Provider for CodexProvider {
                 account_id,
                 Box::new(move |operation, middleware_headers| {
                     Box::pin(async move {
+                        if let Some(adapter) = adapter {
+                            return provider.execute_upstream_adapter(
+                                operation,
+                                middleware_headers,
+                                terminal_model,
+                                terminal_context,
+                                lease,
+                                account_selection_wait_ms,
+                                frozen_requirements,
+                                adapter,
+                            );
+                        }
                         provider
                             .execute_selected_generate(
                                 operation,
@@ -625,7 +689,9 @@ impl CodexProvider {
             ));
         }
         validate_openai_reasoning(generate.protocol_payload().body())?;
-        let processed = self.prepare_generate_request(&generate, &upstream_model, &context)?;
+        let upstream = encode_generate_request(&generate, upstream_model.as_str(), None)
+            .map_err(map_request_error)?;
+        let processed = self.prepare_generate_request(&generate, upstream, &context);
         let mut upstream_request = processed.upstream;
         let previous_session = processed.previous_session;
         let continuation_requested = processed.continuation_requested;
@@ -749,7 +815,7 @@ impl CodexProvider {
             })
         {
             // HTTP store=false 没有原生续链，完整历史仍由客户端持有；不能把 delta
-            // 当作独立新请求发送，也不能用 previous_response_id 猜测上游存储状态。
+            // 当作独立新请求发送，也不能用 previous_response_id 猜测上游存储状态
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
         scope_request_to_account(
@@ -929,7 +995,7 @@ impl CodexProvider {
 }
 
 fn native_request_requirements(request: &GenerateRequest) -> CapabilityRequirements {
-    // 此处只解释已知 OpenAI wire；不在 Core 的通用转换路径推断任意目标协议。
+    // 此处只解释已知 OpenAI wire；不在 Core 的通用转换路径推断任意目标协议
     Operation::Generate(GenerateRequest::from_protocol_payload(
         request.protocol_payload().clone(),
     ))

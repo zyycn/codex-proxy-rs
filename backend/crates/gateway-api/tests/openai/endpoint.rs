@@ -1,3 +1,5 @@
+//! OpenAI 端点测试共用的缓冲响应、失败结果与交付状态替身
+
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
 
 use bytes::Bytes;

@@ -2,7 +2,7 @@
 //!
 //! 通话引导走 Provider HTTP 端点通道（保留客户端账号范围、准入与请求记录）；
 //! 通话建立后的 sideband 中继走 [`gateway_core::live::LiveGateway`] 的钉住
-//! 账号拨号。上游合同以 CLIProxyAPI 对 Codex 语音的观测为准：
+//! 账号拨号。上游合同对应官方 Codex 的 realtime_call 与 realtime_websocket：
 //! `POST /v1/live` 引导 WebRTC SDP，`GET /v1/live/{call_id}` 提供事件 sideband。
 
 mod http;
@@ -27,7 +27,7 @@ use crate::openai::error::openai_error_response;
 pub(crate) use http::{hangup, live_call};
 pub(crate) use websocket::{realtime_get, sideband};
 
-/// 语音引导正文上限；与观测到的 Codex 客户端行为一致（16 MiB）。
+/// 语音引导正文上限，同时约束 JSON、SDP 与 multipart 入口。
 pub(crate) const MAX_LIVE_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// Provider 侧识别 realtime calls 端点的符号名；endpoint 字段只允许
 /// 单段安全符号，真实上游路径 `/codex/realtime/calls` 由 Provider 映射。

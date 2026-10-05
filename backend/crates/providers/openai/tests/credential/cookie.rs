@@ -1,3 +1,5 @@
+//! 验证 Codex Cookie 接收范围与回放时的主机和安全属性限制
+
 use url::Url;
 
 use provider_openai::credential::{CodexCookiePolicy, CookiePolicyError};

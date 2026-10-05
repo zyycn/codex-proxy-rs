@@ -1,4 +1,4 @@
-//! 跨 Provider 的标准化用量与单次请求总费用。
+//! 跨 Provider 的标准化用量与单次请求总费用
 
 use std::fmt;
 use std::str::FromStr;
@@ -13,20 +13,20 @@ pub use pricing::{
 const DECIMAL_SCALE: u128 = 10_000_000_000;
 const MAX_SCALED_DECIMAL: u128 = 99_999_999_999_999_999_999;
 
-/// 与 PostgreSQL `numeric(20, 10)` 对齐的非负十进制定点值。
+/// 与 PostgreSQL `numeric(20, 10)` 对齐的非负十进制定点值
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Decimal(u128);
 
 impl Decimal {
     pub const ZERO: Self = Self(0);
-    /// 数据库可表示的最大非负金额。
+    /// 数据库可表示的最大非负金额
     pub const MAX: Self = Self(MAX_SCALED_DECIMAL);
 
-    /// 从按十位小数缩放的整数创建。
+    /// 从按十位小数缩放的整数创建
     ///
     /// # Errors
     ///
-    /// 超出数据库范围时返回错误。
+    /// 超出数据库范围时返回错误
     pub const fn from_scaled(value: u128) -> Result<Self, MeteringError> {
         if value > MAX_SCALED_DECIMAL {
             return Err(MeteringError::InvalidDecimal);
@@ -39,7 +39,7 @@ impl Decimal {
         self.0
     }
 
-    /// 非负金额相减，超支时返回零。
+    /// 非负金额相减，超支时返回零
     #[must_use]
     pub const fn saturating_sub(self, other: Self) -> Self {
         Self(self.0.saturating_sub(other.0))
@@ -53,7 +53,7 @@ impl Decimal {
             .map(Self)
     }
 
-    /// 除以非零整数，保留最多十位小数。
+    /// 除以非零整数，保留最多十位小数
     #[must_use]
     pub fn checked_div_u64(self, divisor: u64) -> Option<Self> {
         let divisor = u128::from(divisor);
@@ -63,7 +63,7 @@ impl Decimal {
             .and_then(|value| Self::from_scaled(value).ok())
     }
 
-    /// 去尾零的 canonical 字符串，用于 wire 序列化。
+    /// 去尾零的 canonical 字符串，用于 wire 序列化
     #[must_use]
     pub fn canonical(self) -> String {
         let integer = self.0 / DECIMAL_SCALE;
@@ -125,16 +125,16 @@ impl fmt::Display for Decimal {
     }
 }
 
-/// 三字符大写货币代码。
+/// 三字符大写货币代码
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CurrencyCode([u8; 3]);
 
 impl CurrencyCode {
-    /// 校验货币代码。
+    /// 校验货币代码
     ///
     /// # Errors
     ///
-    /// 输入不是三个大写 ASCII 字符时返回错误。
+    /// 输入不是三个大写 ASCII 字符时返回错误
     pub fn new(value: &str) -> Result<Self, MeteringError> {
         let bytes = value.as_bytes();
         if bytes.len() != 3 || !bytes.iter().all(u8::is_ascii_uppercase) {
@@ -155,7 +155,7 @@ impl fmt::Display for CurrencyCode {
     }
 }
 
-/// 带货币的非负总金额。
+/// 带货币的非负总金额
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Money {
     amount: Decimal,
@@ -189,7 +189,7 @@ impl Money {
     }
 }
 
-/// `model_requests` 的公共 Token 事实。
+/// `model_requests` 的公共 Token 事实
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Usage {
     pub input_tokens: Option<u64>,
@@ -199,7 +199,7 @@ pub struct Usage {
     pub reasoning_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
-    /// Provider/协议报告的独立事实，不从其他列相加推导。
+    /// Provider/协议报告的独立事实，不从其他列相加推导
     pub total_tokens: Option<u64>,
 }
 
@@ -218,7 +218,7 @@ impl Usage {
         }
     }
 
-    /// 合并同一最终上游结果的增量观测；每个字段以较新的非空值为准。
+    /// 合并同一最终上游结果的增量观测；每个字段以较新的非空值为准
     pub fn merge(&mut self, newer: &Self) {
         if newer.input_tokens.is_some() {
             self.input_tokens = newer.input_tokens;
@@ -247,7 +247,7 @@ impl Usage {
     }
 }
 
-/// 费用金额的来源。
+/// 费用金额的来源
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CostSource {
     ProviderReported,
@@ -266,7 +266,7 @@ impl CostSource {
     }
 }
 
-/// Provider 或受控代码对当次请求总费用的可信程度。
+/// Provider 或受控代码对当次请求总费用的可信程度
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CostEstimateStatus {
     Known,
@@ -283,7 +283,7 @@ impl CostEstimateStatus {
     }
 }
 
-/// 单次模型请求的总费用及当次确定的本地计算明细。
+/// 单次模型请求的总费用及当次确定的本地计算明细
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostEstimate {
     status: CostEstimateStatus,
@@ -292,25 +292,25 @@ pub struct CostEstimate {
     breakdown: Option<std::sync::Arc<CalculatedCostBreakdown>>,
 }
 
-/// Provider 在单次请求终态上报的实际已计费总额。
+/// Provider 在单次请求终态上报的实际已计费总额
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProviderReportedCost {
     total: Money,
 }
 
-/// Provider 域依据公开单价和实际用量算出的单次总额。
+/// Provider 域依据公开单价和实际用量算出的单次总额
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedCost {
     total: Money,
     breakdown: Option<std::sync::Arc<CalculatedCostBreakdown>>,
 }
 
-/// Provider 受控价格规则计算出的运行时费用明细。
+/// Provider 受控价格规则计算出的运行时费用明细
 ///
-/// 随本地费用事件保存，以免后续改价改变历史明细。
+/// 随本地费用事件保存，以免后续改价改变历史明细
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedCostBreakdown {
-    // Provider 选中的价格区间事实，与服务档位和自定义倍率独立。
+    // Provider 选中的价格区间事实，与服务档位和自定义倍率独立
     long_context_billing_applied: bool,
     image: Option<ImageCostBreakdown>,
     input_amount: Money,
@@ -328,7 +328,7 @@ pub struct CalculatedCostBreakdown {
     custom_multiplier_bps: u32,
 }
 
-/// 图像输入是总输入的子集，单独保留其价格，不能伪装成文本平均单价。
+/// 图像输入是总输入的子集，单独保留其价格，不能伪装成文本平均单价
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageCostBreakdown {
     pub input_tokens: u64,
@@ -339,7 +339,7 @@ pub struct ImageCostBreakdown {
     pub cache_read_price_per_million: Money,
 }
 
-/// 一次请求的费用组成，全部使用同一币种。
+/// 一次请求的费用组成，全部使用同一币种
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalculatedCostAmounts {
     input: Money,
@@ -371,7 +371,7 @@ impl CalculatedCostAmounts {
     }
 }
 
-/// 每百万 Token 的费率组成，全部使用同一币种。
+/// 每百万 Token 的费率组成，全部使用同一币种
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalculatedCostRates {
     input: Money,
@@ -514,7 +514,7 @@ impl CalculatedCostBreakdown {
         self.custom_multiplier_bps
     }
 
-    /// 统一调整金额和有效单价，保留服务档位倍率的独立含义。
+    /// 统一调整金额和有效单价，保留服务档位倍率的独立含义
     #[must_use]
     pub fn with_custom_multiplier(mut self, bps: u32) -> Option<Self> {
         if bps > 1_000_000 {
@@ -560,7 +560,7 @@ impl CalculatedCostBreakdown {
         self.cache_read_amount = scale(self.cache_read_amount)?;
         self.cache_write_amount = scale(self.cache_write_amount)?;
         self.standard_amount = scale(self.standard_amount)?;
-        // 各费用项独立四舍五入后求和，防止明细合计与账本金额相差一个 tick。
+        // 各费用项独立四舍五入后求和，防止明细合计与账本金额相差一个 tick
         let mut total = self
             .input_amount
             .amount()
@@ -589,11 +589,11 @@ impl CalculatedCostBreakdown {
 }
 
 impl ProviderReportedCost {
-    /// xAI 等 Provider 的 USD ticks 可直接传入；1 USD = 10^10 ticks。
+    /// xAI 等 Provider 的 USD ticks 可直接传入；1 USD = 10^10 ticks
     ///
     /// # Errors
     ///
-    /// ticks 超出数据库 `numeric(20, 10)` 范围时失败。
+    /// ticks 超出数据库 `numeric(20, 10)` 范围时失败
     pub fn from_usd_ticks(ticks: u128) -> Result<Self, MeteringError> {
         Ok(Self {
             total: Money::new(Decimal::from_scaled(ticks)?, CurrencyCode(*b"USD")),
@@ -617,11 +617,11 @@ impl ProviderReportedCost {
 }
 
 impl CalculatedCost {
-    /// 从精确 USD ticks 创建本地计算费用；1 USD = 10^10 ticks。
+    /// 从精确 USD ticks 创建本地计算费用；1 USD = 10^10 ticks
     ///
     /// # Errors
     ///
-    /// ticks 超出数据库 `numeric(20, 10)` 范围时失败。
+    /// ticks 超出数据库 `numeric(20, 10)` 范围时失败
     pub fn from_usd_ticks(ticks: u128) -> Result<Self, MeteringError> {
         Ok(Self {
             total: Money::new(Decimal::from_scaled(ticks)?, CurrencyCode(*b"USD")),

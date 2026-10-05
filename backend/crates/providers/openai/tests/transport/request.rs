@@ -1,3 +1,5 @@
+//! 验证生成请求编码的模型、位置覆盖与不透明字段保留
+
 use chrono::{Datelike as _, Utc};
 use chrono_tz::America::New_York;
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};

@@ -1,3 +1,5 @@
+//! 验证执行错误到 OpenAI 状态码、错误正文与重试提示的映射
+
 use axum::{body::to_bytes, http::StatusCode};
 use gateway_core::engine::EngineError;
 use gateway_core::error::{
@@ -703,8 +705,12 @@ mod model_routing {
             ),
         ] {
             for stream in [false, true] {
-                let snapshot = crate::openai::snapshot("sk_model_routing", "openai")
+                let snapshot = crate::openai::snapshot("sk_model_routing", "openai");
+                let settings = snapshot
+                    .settings()
+                    .clone()
                     .with_model_mappings(mappings.clone());
+                let snapshot = snapshot.with_settings(&settings).unwrap();
                 let response = request_model(snapshot, model, stream).await;
 
                 assert_eq!(

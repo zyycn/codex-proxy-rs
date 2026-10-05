@@ -1,4 +1,4 @@
-//! 终态配置表的一致性 `RuntimeSnapshot` 输入读取。
+//! 终态配置表的一致性 `RuntimeSnapshot` 输入读取
 
 use std::collections::BTreeMap;
 
@@ -8,10 +8,10 @@ use gateway_core::routing::{
     AccountGroupId, ConfigRevision,
     snapshot::{
         SnapshotAccountGroupFacts, SnapshotAccountGroupMemberFacts, SnapshotClientPolicyFacts,
-        SnapshotFacts, SnapshotProviderAccountFacts, SnapshotSettingsFacts, SnapshotStoreError,
-        SnapshotStorePort,
+        SnapshotFacts, SnapshotProviderAccountFacts, SnapshotStoreError, SnapshotStorePort,
     },
 };
+use gateway_core::settings::SettingsValues;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
@@ -32,6 +32,7 @@ pub struct SnapshotRuntimeSettings {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub openai_guardian_reserved_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub smart_scheduling: gateway_core::account::SmartSchedulingConfig,
     pub rotation_strategy: String,
@@ -152,7 +153,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 .map_err(|_| SnapshotStoreError::unavailable())?;
             let config_revision = core_revision(data.config_revision)?;
             let observed_current_revision = core_revision(data.observed_current_revision)?;
-            let settings = SnapshotSettingsFacts::new(
+            let settings = SettingsValues::new(
                 data.settings.max_concurrent_per_account,
                 data.settings.request_interval_ms,
                 data.settings.rotation_strategy,
@@ -162,6 +163,9 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             )
             .with_responses_max_decompressed_body_bytes(
                 data.settings.responses_max_decompressed_body_bytes,
+            )
+            .with_openai_guardian_reserved_concurrency(
+                data.settings.openai_guardian_reserved_concurrency,
             )
             .with_smart_scheduling(data.settings.smart_scheduling)
             .with_request_profiles(data.settings.request_profiles)
@@ -264,6 +268,7 @@ struct SnapshotSettingsRow {
     max_waiting_per_key: i64,
     max_waiting_per_account: i64,
     concurrency_wait_timeout_seconds: i64,
+    openai_guardian_reserved_concurrency: i64,
     request_location_json: sqlx::types::Json<gateway_core::account::RequestLocation>,
     request_location_enabled: bool,
     responses_max_decompressed_body_bytes: i64,
@@ -275,7 +280,7 @@ async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, smart_scheduling_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, smart_scheduling_json, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -313,6 +318,7 @@ async fn load_settings(
             max_waiting_per_key: to_u32(row.max_waiting_per_key)?,
             max_waiting_per_account: to_u32(row.max_waiting_per_account)?,
             concurrency_wait_timeout_seconds: to_u32(row.concurrency_wait_timeout_seconds)?,
+            openai_guardian_reserved_concurrency: to_u32(row.openai_guardian_reserved_concurrency)?,
         },
     ))
 }

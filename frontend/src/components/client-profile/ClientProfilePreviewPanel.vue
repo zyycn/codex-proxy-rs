@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import type { ClientProfilePreview } from '@/api/modules/client-profiles'
 import { BaseSkeleton } from '@codex-proxy/ui'
-import { formatDateTime } from '@/utils/format'
 
 defineProps<{
-  preview?: Pick<ClientProfilePreview, 'userAgent' | 'versionSource' | 'checkedAt' | 'error'>
+  preview?: Pick<ClientProfilePreview, 'userAgent' | 'versionSource' | 'checkedAtDisplay' | 'error'>
   previewing: boolean
   needsVersionInput: boolean
   error: string
@@ -37,7 +36,7 @@ defineProps<{
       <p class="m-0 text-cp-xs text-cp-text-tertiary">
         {{ preview.versionSource === 'custom' ? '固定身份' : '自动更新' }}
         <template v-if="preview.versionSource === 'official'">
-          · {{ preview.checkedAt ? `检查于 ${formatDateTime(preview.checkedAt)}` : '待检查' }}
+          · {{ preview.checkedAtDisplay ? `检查于 ${preview.checkedAtDisplay}` : '待检查' }}
         </template>
       </p>
       <p v-if="preview.error && preview.versionSource !== 'custom'" :title="preview.error" class="m-0 text-cp-sm text-cp-warning">

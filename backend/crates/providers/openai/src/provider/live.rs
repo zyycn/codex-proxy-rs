@@ -422,15 +422,16 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
             request.lease.account_switch(),
         );
 
-        let Some(handshake_deadline) = remaining(request.context.deadline()) else {
+        let deadline = request.context.deadline();
+        if deadline.is_elapsed() {
             Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent))?;
             return;
-        };
+        }
         let cancellation = request.context.cancellation().clone();
         let attempt = tokio::select! {
             biased;
             _ = cancellation.cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
-            _ = tokio::time::sleep(handshake_deadline) => Err(CodexHandshakeAttemptError::Timeout),
+            _ = deadline.wait() => Err(CodexHandshakeAttemptError::Timeout),
             response = request.client.post_live_call(
                 CODEX_REALTIME_CALLS_PATH,
                 request.endpoint_query.as_deref(),

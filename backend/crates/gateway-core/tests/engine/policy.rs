@@ -1,3 +1,5 @@
+//! 验证插件调度策略对软亲和的覆盖与宿主候选范围限制
+
 use std::{
     collections::BTreeSet,
     num::NonZeroU32,
@@ -116,6 +118,7 @@ fn context() -> AccountSelectionContext {
         round_robin_cursor: 0,
         eligibility: AccountEligibilityPolicy::Enforce,
         account_scope: None,
+        reserved_concurrency: 0,
     }
 }
 

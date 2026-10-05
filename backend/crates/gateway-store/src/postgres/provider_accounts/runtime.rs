@@ -1,4 +1,4 @@
-//! 持久账号事实与可丢失冷却事实的统一状态投影。
+//! 持久账号事实与可丢失冷却事实的统一状态投影
 
 use std::{collections::BTreeMap, time::SystemTime};
 
@@ -32,10 +32,11 @@ pub(crate) fn account_status_projection(
     )
 }
 
-/// 尽力读取账号当前有效的 429 冷却。
+/// 尽力读取账号当前有效的 429 冷却
 ///
 /// 冷却属于可丢失的账号级运行时事实：端口不可用、单条读取失败或脏账号 ID
-/// 都视为没有冷却，不污染持久账号状态。凭据轮换不会解除上游对同一账号的限流。
+/// 都视为没有冷却，不污染持久账号状态
+/// 凭据轮换不会解除上游对同一账号的限流
 pub(crate) async fn load_cooldown(
     cooldowns: Option<&dyn ProviderCooldownPort>,
     accounts: &[ProviderAccountSummary],

@@ -1,3 +1,5 @@
+//! 验证 OpenAI 入口的 Bearer 认证与插件可见认证信息边界
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -408,4 +410,166 @@ fn chatgpt_remote_suffix_created_by_header_truncation_should_not_skip_the_gate()
         identify_codex_client(&headers).expect("incomplete headers still require a version");
     assert_eq!(client.kind(), CodexClientKind::Desktop);
     assert!(client.version().is_none());
+}
+
+#[tokio::test]
+async fn http_settings_freeze_before_plan_resolution_and_apply_before_admission() {
+    use gateway_core::{
+        engine::middleware::*, middleware::http as contract, runtime::extensions::*,
+    };
+    struct Lease;
+    impl ExtensionSetLease for Lease {
+        fn is_ready(&self) -> bool {
+            true
+        }
+    }
+    #[derive(Debug)]
+    struct Entry;
+    impl MiddlewarePlan for Entry {
+        fn has_http(&self) -> bool {
+            true
+        }
+        fn handle_http(
+            &self,
+            _: contract::Context,
+            mut request: contract::Request,
+            next: contract::Next,
+        ) -> BoxFuture<'static, Result<contract::Response, MiddlewareError>> {
+            let settings = request
+                .extensions_mut()
+                .get_mut::<contract::Settings>()
+                .unwrap();
+            let context = settings.runtime.as_ref().unwrap();
+            let mut values = serde_json::to_value(context.values()).unwrap();
+            assert_eq!(values["responses_max_decompressed_body_bytes"], 32);
+            assert_eq!(values["min_codex_cli_version"], "0.40.0");
+            values["responses_max_decompressed_body_bytes"] = serde_json::json!(1024);
+            values["min_codex_cli_version"] = serde_json::Value::Null;
+            settings.runtime = Some(
+                context
+                    .replace(serde_json::from_value(values).unwrap(), "entry")
+                    .unwrap(),
+            );
+            next.run(request)
+        }
+        fn handle(
+            &self,
+            _: MiddlewareContext,
+            request: MiddlewareRequest,
+            next: MiddlewareNext,
+        ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
+            next.run(request)
+        }
+    }
+    let snapshot = super::snapshot("sk_entry", "openai");
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_min_codex_client_versions(super::CodexClientMinVersions::new(
+            None,
+            Some(super::CodexClientVersion::parse("0.40.0").unwrap()),
+        ))
+        .with_responses_max_decompressed_body_bytes(32);
+    let snapshot = snapshot.with_settings(&settings).unwrap();
+    let snapshots = super::RuntimeSnapshotHandle::new(snapshot);
+    let execution = Arc::new(super::DefaultExecutionService::new(
+        snapshots.clone(),
+        Arc::new(super::UnusedExecutionStore),
+        super::ProviderRegistry::default(),
+        Arc::new(super::UnusedAdmissions),
+        Arc::new(super::UnusedContinuation),
+        Arc::new(super::IgnoredClientApiKeyUsage),
+    ));
+    let admin = crate::admin::AdminTestFixture::new().await;
+    let bundle = gateway_api::initialize(
+        gateway_api::ApiConfig {
+            asset_directory: std::env::temp_dir(),
+            cors_allowed_origins: vec![],
+            request_timeout_seconds: None,
+            request_id_header: "x-request-id".into(),
+        },
+        execution,
+        admin.services,
+        vec![],
+        Arc::new(super::EmptyWorkerHealth),
+        Arc::new(super::TestLifecycle::default()),
+    )
+    .unwrap();
+    let baseline = bundle.dispatcher();
+    let plan = FrozenMiddlewarePlan::new(
+        Arc::new(Entry),
+        ExtensionSetReference::new(
+            ExtensionSetId::new("entry-settings".into()).unwrap(),
+            Arc::new(Lease),
+        ),
+    );
+    let publisher = snapshots.clone();
+    let router = bundle
+        .with_middleware(move |snapshot| {
+            let snapshot = snapshot.unwrap();
+            assert_eq!(snapshot.responses_max_decompressed_body_bytes(), 32);
+            publisher.publish(
+                snapshot
+                    .with_settings(
+                        &snapshot
+                            .settings()
+                            .clone()
+                            .with_responses_max_decompressed_body_bytes(64),
+                    )
+                    .unwrap(),
+            );
+            Some(plan.clone())
+        })
+        .router();
+    let invalid = format!("{}!", " ".repeat(100));
+    let compressed = zstd::stream::encode_all(invalid.as_bytes(), 0).unwrap();
+    let request = || {
+        axum::http::Request::post("/v1/responses")
+            .header(AUTHORIZATION, "Bearer sk_entry")
+            .header("user-agent", "codex_cli_rs/0.1.0")
+            .header("content-encoding", "zstd")
+            .body(axum::body::Body::from(compressed.clone()))
+            .unwrap()
+    };
+    let response = router.oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        body["error"]["code"], "invalid_json",
+        "the expanded body must reach the decoder"
+    );
+    let context = contract::Context {
+        request_id: "baseline".into(),
+        call_id: "baseline".into(),
+        parent_call_id: None,
+        plugin_instance_id: None,
+        plan: None,
+        extensions: Default::default(),
+        cancellation: Default::default(),
+    };
+    use http_body_util::BodyExt as _;
+    let response = baseline
+        .dispatch(
+            context,
+            request().map(|body| body.map_err(|error| Box::new(error) as _).boxed_unsync()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UPGRADE_REQUIRED,
+        "request changes must not alter the published baseline"
+    );
+    assert_eq!(
+        snapshots
+            .acquire()
+            .unwrap()
+            .responses_max_decompressed_body_bytes(),
+        64
+    );
 }

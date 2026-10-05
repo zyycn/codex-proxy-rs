@@ -1,3 +1,5 @@
+//! 验证 OpenAI HTTP 客户端的 CA、错误响应、SSE 与超时处理
+
 use super::*;
 
 #[test]
@@ -76,7 +78,7 @@ fn custom_ca_should_report_environment_cache_key_consistently() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        // libtest 匹配零个测试也返回成功；完成标记证明该环境分支执行了生产断言。
+        // libtest 匹配零个测试也返回成功；完成标记证明该环境分支执行了生产断言
         let stdout = String::from_utf8_lossy(&output.stdout);
         let completed = format!("{CASE_COMPLETED}{case}");
         assert_eq!(
@@ -547,8 +549,8 @@ async fn build_reqwest_client_should_reuse_cached_connection_pool() {
     });
 
     let url = format!("http://{addr}/reuse");
-    // 前后分别取得生产缓存中的客户端，避免只验证单个 reqwest client 自身能复用连接。
-    // 本地服务使用 HTTP/1.1；该断言不代表已验证 HTTP/2 的 idle ping 或保活间隔。
+    // 前后分别取得生产缓存中的客户端，避免只验证单个 reqwest client 自身能复用连接
+    // 本地服务使用 HTTP/1.1；该断言不代表已验证 HTTP/2 的 idle ping 或保活间隔
     let client = provider_openai::transport::build_reqwest_client().unwrap();
     client.get(&url).send().await.unwrap().text().await.unwrap();
     let client = provider_openai::transport::build_reqwest_client().unwrap();

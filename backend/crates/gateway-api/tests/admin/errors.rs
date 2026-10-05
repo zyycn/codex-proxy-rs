@@ -1,3 +1,5 @@
+//! 验证管理接口的错误封装、状态码与输入信息脱敏
+
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -337,6 +339,38 @@ mod provider {
     use super::*;
 
     #[tokio::test]
+    async fn unsupported_quota_should_preserve_account_capacity_wire() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        for (used_slots, total_slots) in [(Some(3), Some(5)), (Some(0), None), (None, Some(10))] {
+            let mut stored = account("openai");
+            stored.capacity = gateway_admin::model::accounts::AccountCapacity {
+                used_slots,
+                total_slots,
+            };
+            *fixture.account.lock().unwrap() = Some(stored);
+            let mut request = request(
+                Method::GET,
+                "/api/admin/accounts/quota?accountId=acct_error_test",
+                Body::empty(),
+            );
+            request
+                .headers_mut()
+                .insert(header::COOKIE, SESSION_COOKIE.parse().unwrap());
+            let response = app(fixture.state()).oneshot(request).await.unwrap();
+            let (status, _, body) = response_json(response).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body["data"]["account"]["capacity"],
+                json!({
+                    "usedSlots": used_slots,
+                    "totalSlots": total_slots,
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn provider_public_errors_survive_import_credential_and_quota_refresh_handlers() {
         let fixture = AdminTestFixture::new().await;
         fixture.auth.insert_session("valid-session");
@@ -422,7 +456,7 @@ mod provider {
             (Kind::Internal, 500, 50001, "服务内部错误"),
         ] {
             let error = ProviderAdminError::new(kind).with_message("private-provider-diagnostics");
-            // 即使 Provider 错标了公开文案，未知内部异常仍不得通过 500 信封下发。
+            // 即使 Provider 错标了公开文案，未知内部异常仍不得通过 500 信封下发
             *fixture.provider_error.lock().unwrap() = Some(if kind == Kind::Internal {
                 error.with_public_message("internal-detail-must-stay-hidden")
             } else {
@@ -472,6 +506,10 @@ mod provider {
             last_error_message: None,
         };
         AccountPageItem {
+            capacity: gateway_admin::model::accounts::AccountCapacity {
+                used_slots: None,
+                total_slots: None,
+            },
             account: AccountRecord {
                 notes: None,
                 model_access: Default::default(),

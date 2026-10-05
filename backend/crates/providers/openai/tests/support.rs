@@ -1,4 +1,4 @@
-//! Codex Provider 测试用内存 ports；不依赖 SQL、Redis 或 secret 加密。
+//! Codex Provider 测试用内存 ports；不依赖 SQL、Redis 或 secret 加密
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -261,7 +261,7 @@ impl ProviderAccountStore for MemoryAccountStore {
         if self.fail_provider_listing.load(Ordering::SeqCst) {
             return Err(store_error(StoreErrorKind::Unavailable));
         }
-        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选。
+        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选
         Ok(self
             .accounts
             .lock()
@@ -308,7 +308,7 @@ impl ProviderAccountStore for MemoryAccountStore {
             .lock()
             .expect("credential hook lock")
             .clone();
-        // 在列表快照与凭据读取之间确定性提交并发变更，不依赖线程调度或延时。
+        // 在列表快照与凭据读取之间确定性提交并发变更，不依赖线程调度或延时
         if let Some(hook) = hook {
             hook(self, account, count).await?;
         }
@@ -1022,11 +1022,11 @@ pub(crate) fn runtime_policy() -> Arc<dyn ProviderRuntimePolicyPort> {
     Arc::new(StaticRuntimePolicy)
 }
 
-/// 冻结策略可配置的运行时策略 fake；容量熔断触发测试用。
+/// 冻结策略可配置的运行时策略 fake；容量熔断触发测试用
 pub(crate) struct StaticFreezePolicy(ProviderFreezePolicy);
 
 impl StaticFreezePolicy {
-    /// 构造带固定冻结策略的端口句柄；命名沿用测试构造器语义。
+    /// 构造带固定冻结策略的端口句柄；命名沿用测试构造器语义
     #[must_use]
     pub(crate) fn policy_port(policy: ProviderFreezePolicy) -> Arc<dyn ProviderRuntimePolicyPort> {
         Arc::new(Self(policy))
@@ -1070,7 +1070,7 @@ pub(crate) fn account_policy() -> gateway_core::account::AccountSelectionPolicy 
 
 /// 内存 `ProviderCooldownPort`：实现 `read`/`put_if_later` 与容量失败计数
 /// 证据（openai selector 429 冷却与容量熔断路径用），scope 变体测试不涉及，
-/// 返回占位。
+/// 返回占位
 #[derive(Clone, Default)]
 pub(crate) struct MemoryCooldownPort {
     pub(crate) cooldowns: Arc<Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>>,
@@ -1083,7 +1083,7 @@ impl MemoryCooldownPort {
         Self::default()
     }
 
-    /// 测试断言用：窗口内累计失败次数与在途峰值。
+    /// 测试断言用：窗口内累计失败次数与在途峰值
     #[must_use]
     pub(crate) fn capacity_evidence(&self, account_id: &ProviderAccountId) -> Option<(u32, u32)> {
         self.capacity_failures

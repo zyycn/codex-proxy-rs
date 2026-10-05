@@ -1,15 +1,15 @@
-//! Store 值类型、错误与跨层映射。
+//! Store 值类型、错误与跨层映射
 
 use super::*;
 
-/// 发生错误的基础设施边界。
+/// 发生错误的基础设施边界
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreBackend {
     PostgreSql,
     Redis,
 }
 
-/// 上层状态机需要区分的稳定冲突类型。
+/// 上层状态机需要区分的稳定冲突类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictKind {
     StaleRevision,
@@ -22,7 +22,7 @@ pub enum ConflictKind {
     FencingTokenStale,
 }
 
-/// Store adapter 的稳定错误边界。
+/// Store adapter 的稳定错误边界
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
     #[error("{backend:?} store is unavailable: {message}")]
@@ -62,40 +62,27 @@ pub(crate) fn admin_revision(revision: Revision) -> AdminStoreResult<AdminRevisi
 
 pub(crate) fn mutation_audit(
     context: &MutationContext,
-    action: &str,
-    entity_kind: &str,
+    operation: gateway_admin::model::audit::MutationAuditOperation,
     entity_ref: &str,
     changed_fields: Vec<String>,
 ) -> postgres::AdminAuditEvent {
-    let (actor_kind, actor_admin_user_id, actor_ref) = match &context.actor {
-        MutationActor::AdminSession { admin_user_id } => (
-            postgres::AdminAuditActorKind::AdminSession,
-            Some(admin_user_id.clone()),
-            gateway_admin::model::auth::admin_session_actor_ref(admin_user_id),
-        ),
-        MutationActor::AdminApiKey => (
-            postgres::AdminAuditActorKind::AdminApiKey,
-            None,
-            "admin_api_key".to_owned(),
-        ),
-        MutationActor::System => (
-            postgres::AdminAuditActorKind::System,
-            None,
-            "system".to_owned(),
-        ),
-    };
+    let event = gateway_admin::model::audit::MutationAuditIntent {
+        operation,
+        entity_ref,
+    }
+    .event(context, changed_fields);
     postgres::AdminAuditEvent {
-        id: format!("audit_{}", uuid::Uuid::now_v7().simple()),
-        actor_kind,
-        actor_admin_user_id,
-        actor_ref,
-        admin_request_id: Some(context.request_id.clone()),
-        action: action.to_owned(),
-        entity_kind: entity_kind.to_owned(),
-        entity_ref: entity_ref.to_owned(),
+        id: event.id,
+        actor_kind: event.actor_kind.into(),
+        actor_admin_user_id: event.actor_admin_user_id,
+        actor_ref: event.actor_ref,
+        admin_request_id: event.request_id,
+        action: event.action,
+        entity_kind: event.entity_kind,
+        entity_ref: event.entity_ref,
         config_revision: None,
-        changed_fields,
-        created_at: chrono::Utc::now(),
+        changed_fields: event.changed_fields,
+        created_at: event.occurred_at,
     }
 }
 
@@ -136,7 +123,7 @@ impl Revision {
     }
 }
 
-/// `numeric(20,10)` 可无损表达的非负金额。
+/// `numeric(20,10)` 可无损表达的非负金额
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DecimalAmount(String);
 
@@ -189,7 +176,8 @@ impl FromStr for DecimalAmount {
     }
 }
 
-/// Provider-owned JSON object。Store 只验证 object 与大小，不解释内部 key。
+/// Provider-owned JSON object
+/// Store 只验证 object 与大小，不解释内部 key
 #[derive(Clone, PartialEq)]
 pub struct JsonObject(Map<String, Value>);
 

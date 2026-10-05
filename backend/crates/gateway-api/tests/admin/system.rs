@@ -1,3 +1,5 @@
+//! 验证系统升级 HTTP 接口的确认参数、异步状态与事件流
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -204,7 +206,10 @@ impl SystemOperations for ProgressSystem {
         Err(unavailable_system())
     }
 
-    async fn restart(&self) -> Result<SystemOperationAccepted, SystemOperationError> {
+    async fn restart(
+        &self,
+        _preflight: Arc<dyn gateway_admin::ports::system::SystemRestartPreflight>,
+    ) -> Result<SystemOperationAccepted, SystemOperationError> {
         Err(unavailable_system())
     }
 }

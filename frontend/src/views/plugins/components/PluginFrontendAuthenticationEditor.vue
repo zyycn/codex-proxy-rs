@@ -198,7 +198,6 @@ watch(() => props.active, (active, _, onCleanup) => {
   if (!active) {
     keyLoadController?.abort()
     keyLoadController = null
-    loadingKeys.value = false
     return
   }
   void loadClientKeys()

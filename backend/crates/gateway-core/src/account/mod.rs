@@ -1,4 +1,4 @@
-//! Provider 账号领域、持久化端口与同一 target 内的账号选择。
+//! Provider 账号领域、持久化端口与同一 target 内的账号选择
 
 mod error;
 mod location;

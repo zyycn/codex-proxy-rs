@@ -1,3 +1,5 @@
+//! 验证 Responses 请求解压、大小限制与原始字段保留
+
 use std::io::{Read, Write, copy, repeat};
 
 use axum::http::{HeaderMap, HeaderValue, header::CONTENT_ENCODING};
@@ -127,7 +129,7 @@ fn http_decode_should_reject_zstd_frames_with_an_excessive_window() {
     let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).expect("zstd encoder");
     encoder.window_log(27).expect("128 MiB window");
     encoder.write_all(REQUEST).expect("write JSON");
-    // 提前输出帧头，避免编码器根据最终小正文缩减窗口。
+    // 提前输出帧头，避免编码器根据最终小正文缩减窗口
     encoder.flush().expect("flush frame header");
     let compressed = encoder.finish().expect("finish frame");
     assert_eq!(
@@ -170,7 +172,7 @@ fn http_decode_should_reject_bodies_above_the_decompressed_limit() {
 fn http_decode_should_stop_at_limit_before_reading_invalid_trailing_frames() {
     for encoding in ["zstd", "gzip"] {
         // 尾部故意损坏：若先完整解压再检查长度，就会错误地返回 invalid_json，
-        // 这个断言验证越界时已经停止读取，而不只是最终返回了某个超限错误。
+        // 这个断言验证越界时已经停止读取，而不只是最终返回了某个超限错误
         let mut compressed = encode_body(encoding, repeat(0).take(DECOMPRESSED_LIMIT + 1));
         compressed.extend_from_slice(b"invalid trailing frame");
         let error = decode_request_with_headers(&compressed, &headers(encoding), 64 * 1024 * 1024)

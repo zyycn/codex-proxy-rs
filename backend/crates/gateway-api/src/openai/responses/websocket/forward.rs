@@ -1,4 +1,4 @@
-//! Responses WebSocket 洋葱响应体与串行 transport 交付。
+//! Responses WebSocket 洋葱响应体与串行 transport 交付
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -18,7 +18,7 @@ use gateway_core::event::ProviderResponseHeader;
 use gateway_core::operation::ProviderSessionState;
 
 use crate::openai::error::{gateway_error_contract, gateway_error_from_engine};
-use crate::openai::middleware::PendingExecution;
+use crate::openai::middleware::{PendingExecution, pending_execution_response};
 use crate::openai::responses::validation::{ResponseValidationFacts, ResponsesDeliveryValidator};
 
 use super::{
@@ -92,17 +92,17 @@ pub(super) async fn execution_response(
         let headers = body.response_headers().to_vec();
         let status = middleware_error_status(&error);
         let _ = body.record_client_status(status).await;
-        Box::new(body).close().await;
         if let MiddlewareError::Engine(error) = error {
             let response_headers = headers
                 .iter()
                 .map(|header| MiddlewareHeader::new(header.name(), header.value().clone()))
                 .collect();
-            return Ok(MiddlewareResponse::new(
+            // 失败也要保留会话到洋葱链返回，否则释放会话会取消仍在等待 next 的插件
+            return Ok(pending_execution_response(
                 "openai".to_owned(),
                 status,
                 response_headers,
-                Box::new(SingleFrameBody(Some(MiddlewareFrame::new(
+                MiddlewareFrame::new(
                     Bytes::from(initial_engine_error_event(
                         &error,
                         request_id.as_ref(),
@@ -110,9 +110,11 @@ pub(super) async fn execution_response(
                     )),
                     MiddlewareFraming::JsonDocument,
                     true,
-                )))),
+                ),
+                body.execution,
             ));
         }
+        Box::new(body).close().await;
         return Err(error);
     }
     let headers = body
@@ -126,18 +128,6 @@ pub(super) async fn execution_response(
         headers,
         Box::new(body),
     ))
-}
-
-struct SingleFrameBody(Option<MiddlewareFrame>);
-
-impl MiddlewareBody for SingleFrameBody {
-    fn next_frame(&mut self) -> BoxFuture<'_, Result<Option<MiddlewareFrame>, MiddlewareError>> {
-        Box::pin(async { Ok(self.0.take()) })
-    }
-
-    fn close(self: Box<Self>) -> BoxFuture<'static, ()> {
-        Box::pin(async move { drop(self) })
-    }
 }
 
 pub(super) async fn forward_response(
@@ -272,22 +262,24 @@ pub(super) async fn forward_response(
             (true, true) => FramePhase::Terminal,
             (true, false) => FramePhase::Data,
         };
-        if connection
+        match connection
             .send_text(message, WriteContext::request(&request_id, phase))
             .await
-            .is_err()
         {
-            detach_body(body);
-            return ForwardOutcome::Disconnect;
+            Ok(super::connection::WriteOutcome::Written) => first_frame_written = true,
+            Ok(super::connection::WriteOutcome::Suppressed) => {}
+            Err(_) => {
+                detach_body(body);
+                return ForwardOutcome::Disconnect;
+            }
         }
-        first_frame_written = true;
         terminal_seen = terminal;
     }
 }
 
 fn detach_body(body: Box<dyn MiddlewareBody>) {
     // 客户端已离线时不能让连接 handler 等待可能仍在结算的请求；close future
-    // 继续持有唯一正文和执行守卫，保证已启动的费用与租约清理不会被取消。
+    // 继续持有唯一正文和执行守卫，保证已启动的费用与租约清理不会被取消
     drop(tokio::spawn(body.close()));
 }
 
@@ -311,7 +303,7 @@ async fn next_body_input(
     response_control: &ResponseControl,
     request_id: &Arc<str>,
 ) -> BodyInput {
-    // 处理控制帧时继续持有同一个读取 future，不能取消正在加工正文的中间件。
+    // 处理控制帧时继续持有同一个读取 future，不能取消正在加工正文的中间件
     let frame = body.next_frame();
     tokio::pin!(frame);
     loop {
@@ -337,7 +329,7 @@ async fn next_body_input(
                         }
                     }
                     ConnectionEvent::Expired => {
-                        // 允许当前响应收尾，外层仍会在下一轮准入前关闭过期连接。
+                        // 允许当前响应收尾，外层仍会在下一轮准入前关闭过期连接
                     }
                     ConnectionEvent::Binary => {
                         connection.defer(event);
@@ -369,14 +361,18 @@ fn middleware_gateway_error(error: MiddlewareError) -> GatewayError {
         MiddlewareError::Gateway(error) => error,
         MiddlewareError::Engine(error) => gateway_error_from_engine(&error),
         MiddlewareError::Provider(error) => GatewayError::from_provider(&error),
-        MiddlewareError::Rejected => GatewayError::new(
-            GatewayErrorKind::PolicyDenied,
-            "request middleware rejected the request",
-        ),
-        MiddlewareError::Fault | MiddlewareError::InvalidState => GatewayError::new(
-            GatewayErrorKind::Internal,
-            "request middleware returned an invalid response",
-        ),
+        MiddlewareError::Rejected | MiddlewareError::Remote { rejected: true, .. } => {
+            GatewayError::new(
+                GatewayErrorKind::PolicyDenied,
+                "request middleware rejected the request",
+            )
+        }
+        MiddlewareError::Fault | MiddlewareError::Remote { .. } | MiddlewareError::InvalidState => {
+            GatewayError::new(
+                GatewayErrorKind::Internal,
+                "request middleware returned an invalid response",
+            )
+        }
     }
 }
 
@@ -393,8 +389,10 @@ fn middleware_error_status(error: &MiddlewareError) -> u16 {
                 .0
                 .as_u16()
         }
-        MiddlewareError::Rejected => StatusCode::FORBIDDEN.as_u16(),
-        MiddlewareError::Fault | MiddlewareError::InvalidState => {
+        MiddlewareError::Rejected | MiddlewareError::Remote { rejected: true, .. } => {
+            StatusCode::FORBIDDEN.as_u16()
+        }
+        MiddlewareError::Fault | MiddlewareError::Remote { .. } | MiddlewareError::InvalidState => {
             StatusCode::INTERNAL_SERVER_ERROR.as_u16()
         }
     }

@@ -1,3 +1,5 @@
+//! 验证运行设置接口的输入校验、完整投影与持久化结果
+
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -37,6 +39,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     json!({
+        "configRevision": 7,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
         "modelMappings": {
@@ -49,6 +52,7 @@ fn update_body() -> Value {
         "requestIntervalMs": 25,
         "maxWaitingPerKey": 0,
         "maxWaitingPerAccount": 0,
+        "openaiGuardianReservedConcurrency": 0,
         "concurrencyWaitTimeoutSeconds": 30,
         "responsesMaxDecompressedBodyBytes": 67108864,
         "rotationStrategy": "round_robin",
@@ -219,6 +223,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        openai_guardian_reserved_concurrency: 0,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
         rotation_strategy: RotationStrategy::RoundRobin,
@@ -243,10 +248,15 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             .expect("timestamp"),
     };
 
-    let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
+    let value = serde_json::to_value(RuntimeSettingsView::from((
+        settings,
+        gateway_api::TimePresenter::new(Default::default()),
+    )))
+    .expect("serialize view");
     assert_eq!(
         value,
         json!({
+            "configRevision": 7,
             "providerRequestProfiles": {},
             "openaiClientProfile": null,
             "xaiClientProfile": null,
@@ -262,6 +272,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "requestIntervalMs": 25,
             "maxWaitingPerKey": 0,
             "maxWaitingPerAccount": 0,
+            "openaiGuardianReservedConcurrency": 0,
             "concurrencyWaitTimeoutSeconds": 30,
             "responsesMaxDecompressedBodyBytes": 67108864,
             "rotationStrategy": "round_robin",
@@ -282,7 +293,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "accountWarmupEnabled": false,
                 "accountWarmupScheduleTime": "08:00",
                 "accountWarmupModel": null,
-                "updatedAt": "2026-08-02T10:30:00Z"
+                "updatedAt": "2026-08-02T10:30:00Z",
+                "updatedAtDisplay": "2026-08-02 18:30:00"
         })
     );
 }
@@ -330,6 +342,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        openai_guardian_reserved_concurrency: 0,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         smart_scheduling: request.smart_scheduling,
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
@@ -352,19 +365,22 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         updated_at: chrono::Utc::now(),
     };
 
-    let response_fields: BTreeSet<String> =
-        serde_json::to_value(RuntimeSettingsView::from(settings))
-            .expect("serialize view")
-            .as_object()
-            .expect("view object")
-            .keys()
-            .cloned()
-            .collect();
+    let response_fields: BTreeSet<String> = serde_json::to_value(RuntimeSettingsView::from((
+        settings,
+        gateway_api::TimePresenter::new(Default::default()),
+    )))
+    .expect("serialize view")
+    .as_object()
+    .expect("view object")
+    .keys()
+    .cloned()
+    .collect();
     let mut expected_fields = request_fields;
     expected_fields.insert("providerRequestProfiles".to_owned());
     expected_fields.insert("openaiClientProfile".to_owned());
     expected_fields.insert("xaiClientProfile".to_owned());
     expected_fields.insert("updatedAt".to_owned());
+    expected_fields.insert("updatedAtDisplay".to_owned());
     expected_fields.insert("smartSchedulingDefaults".to_owned());
 
     assert_eq!(response_fields, expected_fields);
@@ -420,7 +436,7 @@ async fn settings_post_should_replace_global_model_mappings() {
         .expect("settings update response");
     let data = response_json(response).await["data"].clone();
 
-    assert!(data.get("configRevision").is_none());
+    assert_eq!(data["configRevision"], 8);
     assert_eq!(data["modelMappings"]["gpt-5.4"], "gpt-5.5");
     assert_eq!(data["modelMappings"]["grok-latest"], "grok-4.5");
 }
@@ -543,7 +559,7 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     // 部署把 api.request_id_header 改名后，注入的 header 不再叫 x-request-id；
-    // 管理请求仍须拿到请求上下文，而不是退化为 500。
+    // 管理请求仍须拿到请求上下文，而不是退化为 500
     let custom = HeaderName::from_static("x-trace-id");
     let app = app(fixture.state()).layer(SetRequestIdLayer::new(custom, MakeRequestUuid));
     let unlabelled = Request::builder()
@@ -608,12 +624,12 @@ async fn request_location_should_normalize_toggle_and_round_trip() {
         .oneshot(request(Method::GET, "/api/admin/settings", None))
         .await
         .unwrap();
-    assert_eq!(
-        response_json(response).await["data"]["requestLocation"],
-        expected
-    );
+    let data = response_json(response).await["data"].clone();
+    assert_eq!(data["requestLocation"], expected);
+    let mut revision = data["configRevision"].clone();
     for enabled in [false, true] {
         let mut body = update_body();
+        body["configRevision"] = revision.clone();
         body["requestLocationEnabled"] = json!(enabled);
         body["requestLocation"] = expected.clone();
         let response = app(fixture.state())
@@ -630,6 +646,7 @@ async fn request_location_should_normalize_toggle_and_round_trip() {
             .await
             .unwrap();
         let data = response_json(response).await["data"].clone();
+        revision = data["configRevision"].clone();
         assert_eq!(data["requestLocationEnabled"], json!(enabled));
         assert_eq!(data["requestLocation"], expected);
     }
@@ -640,7 +657,7 @@ async fn request_location_should_reject_invalid_or_missing_fields_without_replac
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let original = update_body()["requestLocation"].clone();
-    // JSON 结构或时区解析失败由 Axum 返回 422，业务校验失败返回 400。
+    // JSON 结构或时区解析失败由 Axum 返回 422，业务校验失败返回 400
     let mut invalid = vec![
         (Value::Null, StatusCode::UNPROCESSABLE_ENTITY),
         (json!({}), StatusCode::UNPROCESSABLE_ENTITY),
@@ -1018,7 +1035,7 @@ async fn pricing_rejects_invalid_edits_and_tampered_sync_without_writes() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{scenario}");
     }
-    // JSON 合同错误沿用 AdminJson 的 422，业务校验错误为 400。
+    // JSON 合同错误沿用 AdminJson 的 422，业务校验错误为 400
     let response = app
         .clone()
         .oneshot(request(
@@ -1214,4 +1231,101 @@ async fn pricing_endpoints_require_administrator_authentication() {
             StatusCode::UNAUTHORIZED
         );
     }
+}
+
+#[tokio::test]
+async fn settings_update_rejects_a_stale_version_without_replacing_the_saved_value() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let router = app(fixture.state());
+    let first = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(update_body()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = response_json(first).await["data"].clone();
+    let mut stale = update_body();
+    stale["refreshMarginSeconds"] = json!(9999);
+    let conflict = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(stale.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let current = router
+        .clone()
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response_json(current).await["data"], first);
+    stale["configRevision"] = first["configRevision"].clone();
+    let retry = router
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(stale),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(retry).await["data"]["refreshMarginSeconds"],
+        9999
+    );
+}
+
+#[tokio::test]
+async fn guardian_reservation_round_trips_and_rejects_invalid_values() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    let mut revision = response_json(response).await["data"]["configRevision"].clone();
+    for reserved in [1_u32, u32::MAX, 0] {
+        let mut body = update_body();
+        body["configRevision"] = revision;
+        body["openaiGuardianReservedConcurrency"] = json!(reserved);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["data"]["openaiGuardianReservedConcurrency"],
+            reserved
+        );
+        let response = app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        let data = response_json(response).await["data"].clone();
+        revision = data["configRevision"].clone();
+        assert_eq!(data["openaiGuardianReservedConcurrency"], reserved);
+    }
+    for invalid in [json!(-1), json!(1.5), json!(4294967296_u64)] {
+        let mut body = update_body();
+        body["openaiGuardianReservedConcurrency"] = invalid;
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+    }
+    let mut omitted = update_body();
+    omitted
+        .as_object_mut()
+        .unwrap()
+        .remove("openaiGuardianReservedConcurrency");
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(omitted).is_err());
 }

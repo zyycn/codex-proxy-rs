@@ -1,5 +1,6 @@
-//! 命名代理持有认证信息，账号保留解析后的 URL 供 Provider 传输使用。
+//! 命名代理持有认证信息，账号保留解析后的 URL 供 Provider 传输使用
 
+use gateway_admin::model::audit::MutationAuditOperation;
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -49,8 +50,8 @@ impl PgProxyRepository {
 }
 
 struct PgProxyImportGuard {
-    // 独立会话持有咨询锁，避免空闲事务超时，也不给提交事务占用的连接池制造死锁。
-    // 每个仓储最多增加四个会话；取消请求或进程退出时，关闭连接会自动释放锁。
+    // 独立会话持有咨询锁，避免空闲事务超时，也不给提交事务占用的连接池制造死锁
+    // 每个仓储最多增加四个会话；取消请求或进程退出时，关闭连接会自动释放锁
     _connection: PgConnection,
     _slot: OwnedSemaphorePermit,
 }
@@ -267,7 +268,7 @@ async fn lock_url(
     Ok(())
 }
 
-/// 导入和旧版 URL 写入在账号事务内登记到共享代理目录。
+/// 导入和旧版 URL 写入在账号事务内登记到共享代理目录
 pub(crate) async fn ensure_proxy_for_url(
     transaction: &mut Transaction<'_, Postgres>,
     proxy: &OutboundProxy,
@@ -323,7 +324,7 @@ pub(crate) async fn resolve_proxy_selection(
 async fn audit(
     transaction: &mut Transaction<'_, Postgres>,
     context: &MutationContext,
-    action: &str,
+    action: MutationAuditOperation,
     id: &str,
     fields: &[&str],
     revision: Revision,
@@ -333,7 +334,6 @@ async fn audit(
         mutation_audit(
             context,
             action,
-            "outbound_proxy",
             id,
             fields.iter().map(|value| (*value).to_owned()).collect(),
         ),
@@ -358,7 +358,7 @@ impl ProxyStore for PgProxyRepository {
         let revision = bump_config_revision_in_transaction(&mut transaction)
             .await
             .map_err(store_error)?;
-        // 在同一条更新中校验绑定，避免旧弹窗清除账号后来选择的其他代理。
+        // 在同一条更新中校验绑定，避免旧弹窗清除账号后来选择的其他代理
         let updated = sqlx::query(
             "update provider_accounts
              set outbound_proxy_id = null, outbound_proxy_url = null,
@@ -377,8 +377,7 @@ impl ProxyStore for PgProxyRepository {
             &mut transaction,
             mutation_audit(
                 context,
-                "update",
-                "provider_account",
+                MutationAuditOperation::ProviderAccountUpdate,
                 account_id.as_str(),
                 vec!["outbound_proxy".to_owned()],
             ),
@@ -405,7 +404,7 @@ impl ProxyStore for PgProxyRepository {
             .begin()
             .await
             .map_err(|_| store_error(unavailable()))?;
-        // 数量和当前页共用只读快照，避免绑定变化使同一次响应的分页事实不一致。
+        // 数量和当前页共用只读快照，避免绑定变化使同一次响应的分页事实不一致
         sqlx::query("set transaction isolation level repeatable read, read only")
             .execute(&mut *transaction)
             .await
@@ -458,7 +457,7 @@ impl ProxyStore for PgProxyRepository {
         .collect::<StoreResult<Vec<_>>>()
         .map_err(store_error)?;
         if !items.is_empty() {
-            // 仅批量加载当前页的分组，并沿用同一快照，避免逐账号查询。
+            // 仅批量加载当前页的分组，并沿用同一快照，避免逐账号查询
             let account_ids: Vec<&str> = items.iter().map(|account| account.id.as_str()).collect();
             let rows = sqlx::query_as::<_, (String, String, String, String, bool)>(
                 "select m.provider_account_id, g.id, g.name, g.color, g.enabled
@@ -520,7 +519,7 @@ impl ProxyStore for PgProxyRepository {
         let record = match self.get(id).await {
             Ok(record) => record,
             Err(error) => {
-                // 拒绝预留时先等待数据库释放锁，避免连接关闭尚未生效就误挡后续代理操作。
+                // 拒绝预留时先等待数据库释放锁，避免连接关闭尚未生效就误挡后续代理操作
                 sqlx::query("select pg_advisory_unlock_shared(hashtextextended($1, 739219))")
                     .bind(id)
                     .execute(&mut connection)
@@ -634,7 +633,7 @@ impl ProxyStore for PgProxyRepository {
         audit(
             &mut transaction,
             context,
-            "create",
+            MutationAuditOperation::OutboundProxyCreate,
             &id,
             &["name", "proxy_url", "location", "auto_location"],
             revision,
@@ -720,7 +719,7 @@ impl ProxyStore for PgProxyRepository {
         audit(
             &mut transaction,
             context,
-            "update",
+            MutationAuditOperation::OutboundProxyUpdate,
             &command.id,
             &["name", "proxy_url", "location", "auto_location"],
             revision,
@@ -760,7 +759,7 @@ impl ProxyStore for PgProxyRepository {
             .execute(&mut *transaction)
             .await
             .map_err(|error| {
-                // PostgreSQL 18 为 RESTRICT 返回不同于普通外键违规的错误码。
+                // PostgreSQL 18 为 RESTRICT 返回不同于普通外键违规的错误码
                 if error.as_database_error().is_some_and(|error| {
                     error.is_foreign_key_violation() || error.code().as_deref() == Some("23001")
                 }) {
@@ -775,7 +774,7 @@ impl ProxyStore for PgProxyRepository {
         audit(
             &mut transaction,
             context,
-            "delete",
+            MutationAuditOperation::OutboundProxyDelete,
             id,
             &[],
             config_revision,
@@ -804,7 +803,7 @@ impl ProxyStore for PgProxyRepository {
         exclude_active_imports(&mut transaction, id)
             .await
             .map_err(store_error)?;
-        // 与配置编辑保持一致的锁顺序，检测结果只有生效位置变化时才推进全局版本。
+        // 与配置编辑保持一致的锁顺序，检测结果只有生效位置变化时才推进全局版本
         let config_revision: i64 = sqlx::query_scalar(
             "select config_revision from runtime_settings where id = 1 for update",
         )
@@ -815,7 +814,7 @@ impl ProxyStore for PgProxyRepository {
             .await
             .map_err(store_error)?;
         if current.revision != revision {
-            // Drop 只排队回滚，返回冲突前需释放事务锁，避免误挡紧接着的编辑。
+            // Drop 只排队回滚，返回冲突前需释放事务锁，避免误挡紧接着的编辑
             transaction
                 .rollback()
                 .await
@@ -843,7 +842,7 @@ impl ProxyStore for PgProxyRepository {
         audit(
             &mut transaction,
             context,
-            "test",
+            MutationAuditOperation::OutboundProxyTest,
             id,
             &["last_test", "detected_location"],
             revision,

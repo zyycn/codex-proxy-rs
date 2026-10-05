@@ -1,3 +1,5 @@
+//! 验证 OpenAI 账号导入的代理绑定、凭据解析与提交前校验
+
 use std::{
     num::NonZeroU32,
     sync::Arc,

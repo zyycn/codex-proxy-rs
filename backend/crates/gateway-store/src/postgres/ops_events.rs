@@ -1,4 +1,4 @@
-//! `ops_events` 中间失败与后台故障事实的 PostgreSQL owner。
+//! `ops_events` 中间失败与后台故障事实的 PostgreSQL owner
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

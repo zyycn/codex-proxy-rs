@@ -1,4 +1,4 @@
-//! 管理端账号连通性测试的真实执行链端口。
+//! 管理端账号连通性测试的真实执行链端口
 
 use std::fmt;
 
@@ -23,9 +23,9 @@ pub struct AccountProbeResult {
     pub text: Vec<String>,
 }
 
-/// 仅供当前管理端连接测试展示的原始上游失败响应。
+/// 仅供当前管理端连接测试展示的原始上游失败响应
 ///
-/// 正文不进入 `Debug`、日志或持久化；Core 只在探测终态从原始 Provider 错误显式复制。
+/// 正文不进入 `Debug`、日志或持久化；Core 只在探测终态从原始 Provider 错误显式复制
 #[derive(PartialEq, Eq)]
 pub struct AccountProbeUpstreamResponse {
     status: u16,
@@ -72,7 +72,7 @@ impl fmt::Debug for AccountProbeUpstreamResponse {
     }
 }
 
-/// 连接测试失败发生的稳定责任边界。
+/// 连接测试失败发生的稳定责任边界
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountProbeErrorSource {
     Gateway,
@@ -81,7 +81,7 @@ pub enum AccountProbeErrorSource {
 }
 
 impl AccountProbeErrorSource {
-    /// 返回管理端 wire 使用的稳定值。
+    /// 返回管理端 wire 使用的稳定值
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -92,9 +92,9 @@ impl AccountProbeErrorSource {
     }
 }
 
-/// 管理端连接测试的终态错误。
+/// 管理端连接测试的终态错误
 ///
-/// `gateway` 保留稳定分类，`upstream_response` 只面向本次认证管理请求展示源响应。
+/// `gateway` 保留稳定分类，`upstream_response` 只面向本次认证管理请求展示源响应
 #[derive(Debug)]
 pub struct AccountProbeError {
     gateway: GatewayError,
@@ -162,7 +162,7 @@ impl From<GatewayError> for AccountProbeError {
 }
 
 pub trait AccountProbe: Send + Sync {
-    /// 插件管理操作传入其冻结快照；其他调用可使用当前发布视图。
+    /// 插件管理操作传入其冻结快照；其他调用可使用当前发布视图
     fn probe(
         &self,
         request: AccountProbeRequest,

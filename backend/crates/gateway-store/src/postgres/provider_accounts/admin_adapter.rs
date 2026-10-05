@@ -1,5 +1,6 @@
-//! `gateway-admin` 账号端口的 PostgreSQL adapter。
+//! `gateway-admin` 账号端口的 PostgreSQL adapter
 
+use gateway_admin::model::audit::MutationAuditOperation;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -8,9 +9,23 @@ use gateway_core::provider_ports::ProviderCooldownPort;
 use super::*;
 use crate::postgres::ObservabilityQueryBudget;
 
-/// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力。
+fn account_capacity(
+    account: &AccountRecord,
+    default_concurrency: u64,
+    in_flight: Option<&BTreeMap<String, u64>>,
+) -> gateway_admin::model::accounts::AccountCapacity {
+    gateway_admin::model::accounts::AccountCapacity {
+        used_slots: in_flight.map(|counts| counts.get(&account.id).copied().unwrap_or(0)),
+        total_slots: account.concurrency_limit.map_or_else(
+            || (default_concurrency > 0).then_some(default_concurrency),
+            |limit| Some(u64::from(limit.get())),
+        ),
+    }
+}
+
+/// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力
 ///
-/// 三个 PostgreSQL adapter 都保持私有，调用方只能取得 [`AccountStore`] 暴露的领域能力。
+/// 三个 PostgreSQL adapter 都保持私有，调用方只能取得 [`AccountStore`] 暴露的领域能力
 #[derive(Clone)]
 pub struct PgAdminAccountStore {
     pub(super) pool: PgPool,
@@ -49,13 +64,7 @@ impl PgAdminAccountStore {
         let mut observations = Vec::with_capacity(account_ids.len());
         for account_ids in account_ids.chunks(ADMIN_USAGE_CHUNK_SIZE) {
             let query = ProviderAccountUsageQuery::for_accounts(range, account_ids.to_vec())
-                .and_then(|query| {
-                    if range.end.signed_duration_since(range.start) <= TimeDelta::hours(24) {
-                        query.with_hourly_request_buckets()
-                    } else {
-                        Ok(query)
-                    }
-                })
+                .and_then(ProviderAccountUsageQuery::with_hourly_request_buckets)
                 .map_err(|error| admin_store_error(ENTITY, error))?;
             observations.extend(
                 self.observability
@@ -215,7 +224,7 @@ impl PgAdminAccountStore {
         prepared: PreparedCredentialImport,
         settings: Option<AccountImportSettings>,
         context: &MutationContext,
-        action: &str,
+        action: MutationAuditOperation,
         outbound_proxy: Option<gateway_admin::model::proxies::ImportProxyBinding>,
     ) -> AdminStoreResult<CredentialImportResult> {
         let command = prepare_import(prepared, settings, context, action, outbound_proxy)?;
@@ -232,7 +241,7 @@ impl PgAdminAccountStore {
         prepared: PreparedCredentialRotationFacts,
         settings: Option<UpdateAccount>,
         context: &MutationContext,
-        action: &str,
+        action: MutationAuditOperation,
     ) -> AdminStoreResult<CredentialMutationResult> {
         let account_id = prepared.account_id.clone();
         let command = prepare_rotation(prepared, settings, context, action)?;
@@ -376,6 +385,11 @@ impl AccountStore for PgAdminAccountStore {
                 let mut account = admin_account_record(summary)?;
                 account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
                 Ok(AccountPageItem {
+                    capacity: account_capacity(
+                        &account,
+                        page.default_concurrency,
+                        runtime.in_flight.as_ref(),
+                    ),
                     account,
                     projection,
                 })
@@ -411,7 +425,21 @@ impl AccountStore for PgAdminAccountStore {
             .await?;
         let mut account = admin_account_record(record.summary)?;
         account.groups = groups.remove(&account_id).unwrap_or_default();
+        let default_concurrency: i64 = sqlx::query_scalar(
+            "select max_concurrent_per_account from runtime_settings where id = 1",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| admin_store_error(ENTITY, postgres_unavailable("load account concurrency")))?;
+        let default_concurrency = u64::try_from(default_concurrency).map_err(|_| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                ENTITY,
+                "invalid default account concurrency",
+            )
+        })?;
         Ok(Some(AccountPageItem {
+            capacity: account_capacity(&account, default_concurrency, runtime.in_flight.as_ref()),
             account,
             projection,
         }))
@@ -555,7 +583,7 @@ impl AccountStore for PgAdminAccountStore {
                 command.prepared,
                 command.settings,
                 context,
-                "import_document",
+                MutationAuditOperation::ProviderAccountImportDocument,
                 command.outbound_proxy,
             )
             .await?;
@@ -587,7 +615,7 @@ impl AccountStore for PgAdminAccountStore {
             command.prepared,
             command.settings,
             context,
-            "rotate_credential",
+            MutationAuditOperation::ProviderAccountRotateCredential,
         )
         .await
     }
@@ -604,8 +632,13 @@ impl AccountStore for PgAdminAccountStore {
                 "credential refresh cannot change account settings",
             ));
         }
-        self.commit_prepared_rotation(command.prepared, None, context, "refresh_credential")
-            .await
+        self.commit_prepared_rotation(
+            command.prepared,
+            None,
+            context,
+            MutationAuditOperation::ProviderAccountRefreshCredential,
+        )
+        .await
     }
 
     async fn update_account(
@@ -648,8 +681,7 @@ impl AccountStore for PgAdminAccountStore {
                 outbound_proxy: command.outbound_proxy,
                 audit: mutation_audit(
                     context,
-                    "update",
-                    "provider_account",
+                    MutationAuditOperation::ProviderAccountUpdate,
                     &command.account_id,
                     changed_fields,
                 ),
@@ -674,7 +706,7 @@ impl AccountStore for PgAdminAccountStore {
         })?;
         let result =
             async {
-                // 与管理写入采用相同锁顺序；锁住默认值后再检查账号最新设置，避免把旧快照写回。
+                // 与管理写入采用相同锁顺序；锁住默认值后再检查账号最新设置，避免把旧快照写回
                 let default_limit: i64 = sqlx::query_scalar(
                 "select max_concurrent_per_account from runtime_settings where id = 1 for update"
             ).fetch_one(&mut *transaction).await
@@ -697,13 +729,7 @@ impl AccountStore for PgAdminAccountStore {
                 let revision = bump_config_revision_in_transaction(&mut transaction).await?;
                 append_admin_audit_event_in_transaction(
                     &mut transaction,
-                    mutation_audit(
-                        context,
-                        "adapt_concurrency",
-                        "provider_account",
-                        account_id.as_str(),
-                        vec!["concurrency_limit".to_owned()],
-                    ),
+                    mutation_audit(context, MutationAuditOperation::ProviderAccountAdaptConcurrency, account_id.as_str(), vec!["concurrency_limit".to_owned()]),
                     revision,
                 )
                 .await?;
@@ -747,8 +773,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_id: account_id.as_str().to_owned(),
                 audit: mutation_audit(
                     context,
-                    "recover",
-                    "provider_account",
+                    MutationAuditOperation::ProviderAccountRecover,
                     account_id.as_str(),
                     vec!["status".to_owned(), "quota".to_owned()],
                 ),
@@ -815,8 +840,7 @@ impl AccountStore for PgAdminAccountStore {
                 outbound_proxy: command.outbound_proxy,
                 audit: mutation_audit(
                     context,
-                    "batch_update",
-                    "provider_account",
+                    MutationAuditOperation::ProviderAccountBatchUpdate,
                     &audit_target,
                     changed_fields,
                 ),
@@ -854,8 +878,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_ids: command.account_ids,
                 audit: mutation_audit(
                     context,
-                    "delete",
-                    "provider_account",
+                    MutationAuditOperation::ProviderAccountDelete,
                     &audit_target,
                     Vec::new(),
                 ),
@@ -908,8 +931,7 @@ impl AccountStore for PgAdminAccountStore {
                     &mut transaction,
                     mutation_audit(
                         context,
-                        "export_credentials",
-                        "provider_account",
+                        MutationAuditOperation::ProviderAccountExportCredentials,
                         account_id,
                         Vec::new(),
                     ),
@@ -930,7 +952,7 @@ pub(super) fn prepare_import(
     prepared: PreparedCredentialImport,
     settings: Option<AccountImportSettings>,
     context: &MutationContext,
-    action: &str,
+    action: MutationAuditOperation,
     outbound_proxy: Option<gateway_admin::model::proxies::ImportProxyBinding>,
 ) -> AdminStoreResult<ImportProviderAccounts> {
     let provider_kind = prepared.provider_kind.as_str().to_owned();
@@ -964,13 +986,7 @@ pub(super) fn prepare_import(
             provider_kind: provider_kind.clone(),
         },
         accounts,
-        audit: mutation_audit(
-            context,
-            action,
-            "provider_account",
-            &provider_kind,
-            changed_fields,
-        ),
+        audit: mutation_audit(context, action, &provider_kind, changed_fields),
     })
 }
 
@@ -1029,7 +1045,7 @@ pub(super) fn prepare_rotation(
     prepared: PreparedCredentialRotationFacts,
     settings: Option<UpdateAccount>,
     context: &MutationContext,
-    action: &str,
+    action: MutationAuditOperation,
 ) -> AdminStoreResult<RotateProviderAccount> {
     let account_id = prepared.account_id.clone();
     let scope = ProviderAccountAdminScope {
@@ -1070,13 +1086,7 @@ pub(super) fn prepare_rotation(
             preserve_profile: prepared.preserve_profile,
             preserve_credential_state: prepared.preserve_credential_state,
         },
-        audit: mutation_audit(
-            context,
-            action,
-            "provider_account",
-            account_id.as_str(),
-            changed_fields,
-        ),
+        audit: mutation_audit(context, action, account_id.as_str(), changed_fields),
     })
 }
 

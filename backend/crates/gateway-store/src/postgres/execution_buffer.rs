@@ -1,4 +1,4 @@
-//! 数据面执行观测的非阻塞 PostgreSQL 写入队列。
+//! 数据面执行观测的非阻塞 PostgreSQL 写入队列
 
 use std::mem::size_of;
 use std::num::NonZeroUsize;
@@ -23,20 +23,20 @@ const DEFAULT_QUEUE_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
 const PERSISTENCE_LANES: usize = 4;
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// 执行观测缓冲区的进程内累计状态。
+/// 执行观测缓冲区的进程内累计状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionBufferStats {
-    /// 尚未完成落库的队列项和当前写入项数量。
+    /// 尚未完成落库的队列项和当前写入项数量
     pub queued_items: usize,
-    /// 尚未完成落库的观测对象估算字节数。
+    /// 尚未完成落库的观测对象估算字节数
     pub queued_bytes: usize,
-    /// 进程启动后成功入队的累计数量。
+    /// 进程启动后成功入队的累计数量
     pub enqueued_total: u64,
-    /// 因队列、字节预算或关闭排空超时丢弃的累计数量。
+    /// 因队列、字节预算或关闭排空超时丢弃的累计数量
     pub dropped_total: u64,
-    /// 已成功写入底层 Store 的累计数量。
+    /// 已成功写入底层 Store 的累计数量
     pub persisted_total: u64,
-    /// 底层 Store 返回失败的累计数量。
+    /// 底层 Store 返回失败的累计数量
     pub write_failure_total: u64,
 }
 
@@ -153,14 +153,15 @@ fn saturating_increment(counter: &AtomicU64, increment: u64) {
     });
 }
 
-/// 将数据面观测写入转换为有界、非阻塞的进程内命令。
+/// 将数据面观测写入转换为有界、非阻塞的进程内命令
 ///
 /// 队列满、worker 尚未启动或已经退出时只丢弃观测并记录告警；协议数据面不会
-/// 等待 PostgreSQL，也不会看到 Store 错误。启动恢复仍直接访问底层 Store。
+/// 等待 PostgreSQL，也不会看到 Store 错误
+/// 启动恢复仍直接访问底层 Store
 pub struct BufferedExecutionStore<S: ?Sized> {
     inner: Arc<S>,
     // lane transport 本身没有独立容量；所有发送只能经 `enqueue` 的全局 item/byte
-    // 预留进入，`QueuedExecutionObservation::drop` 负责归还，不能增加旁路发送入口。
+    // 预留进入，`QueuedExecutionObservation::drop` 负责归还，不能增加旁路发送入口
     senders: Box<[mpsc::UnboundedSender<QueuedExecutionObservation>]>,
     next_unkeyed_lane: AtomicUsize,
     state: Arc<ExecutionBufferState>,
@@ -275,7 +276,7 @@ impl<S: ?Sized> BufferedExecutionStore<S> {
 }
 
 fn request_lane(request_id: &str, lane_count: usize) -> usize {
-    // request ID 由 Core 生成，不含用户选择的散列输入；固定散列只用于进程内顺序亲和。
+    // request ID 由 Core 生成，不含用户选择的散列输入；固定散列只用于进程内顺序亲和
     let hash = request_id
         .bytes()
         .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
@@ -289,6 +290,14 @@ impl<S> ExecutionStore for BufferedExecutionStore<S>
 where
     S: ExecutionStore + ?Sized,
 {
+    fn maintain_request(
+        &self,
+        request_id: &ModelRequestId,
+        deadline: gateway_core::lifecycle::Deadline,
+    ) -> Box<dyn gateway_core::lifecycle::LeaseGuard> {
+        self.inner.maintain_request(request_id, deadline)
+    }
+
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.enqueue(ExecutionObservationWrite::Create(Box::new(request)));
         Ok(())
@@ -383,9 +392,9 @@ where
     }
 }
 
-/// 由 Host 监督的固定并行写泵；同一 request ID 固定落在一个 lane 并按入队顺序落库。
+/// 由 Host 监督的固定并行写泵；同一 request ID 固定落在一个 lane 并按入队顺序落库
 ///
-/// lane transport 共享 Store 的全局 item/byte 预留，正在写入的项目同样计入总上限。
+/// lane transport 共享 Store 的全局 item/byte 预留，正在写入的项目同样计入总上限
 pub struct ExecutionObservationWriter<S: ?Sized> {
     inner: Arc<S>,
     receivers: Box<[Mutex<mpsc::UnboundedReceiver<QueuedExecutionObservation>>]>,
@@ -402,10 +411,10 @@ impl<S: ?Sized> ExecutionObservationWriter<S> {
         self.state.snapshot()
     }
 
-    /// 等待所有已接收写入结束一次持久化尝试。
+    /// 等待所有已接收写入结束一次持久化尝试
     ///
-    /// 队列计数包含正在写入的项目；失败沿用现有 fail-open 计数且不会由本方法重试。
-    /// 返回 `false` 表示到达截止时间时仍有排队或正在写入的项目。
+    /// 队列计数包含正在写入的项目；失败沿用现有 fail-open 计数且不会由本方法重试
+    /// 返回 `false` 表示到达截止时间时仍有排队或正在写入的项目
     pub async fn wait_until_idle(&self, deadline: Instant) -> bool {
         self.idle().wait_until(deadline).await
     }
@@ -419,7 +428,7 @@ impl<S: ?Sized> ExecutionObservationWriter<S> {
 
 impl ExecutionBufferIdle {
     /// 等待所有已接收写入结束一次持久化尝试；队列计数包含正在写入的项目，
-    /// 写入失败沿用现有 fail-open 计数且不在关闭路径重试。
+    /// 写入失败沿用现有 fail-open 计数且不在关闭路径重试
     pub(crate) async fn wait_until(&self, deadline: Instant) -> bool {
         loop {
             if self.state.queued_items.load(Ordering::Acquire) == 0 {
@@ -428,7 +437,7 @@ impl ExecutionBufferIdle {
             let idle = self.state.idle.notified();
             tokio::pin!(idle);
             let _ = idle.as_mut().enable();
-            // 在订阅前后各检查一次，覆盖最后一个写入恰好在注册等待时结束的竞态。
+            // 在订阅前后各检查一次，覆盖最后一个写入恰好在注册等待时结束的竞态
             if self.state.queued_items.load(Ordering::Acquire) == 0 {
                 return true;
             }
@@ -554,7 +563,8 @@ where
         return;
     };
     // Store 写入没有统一幂等键；超时可能表示已提交，不能在这里盲目重试并
-    // 制造重复 ops_events。失败会被计数并丢弃，数据面始终不等待补偿。
+    // 制造重复 ops_events
+    // 失败会被计数并丢弃，数据面始终不等待补偿
     match write.persist(store).await {
         Ok(()) => state.record_persisted(),
         Err(error) => {

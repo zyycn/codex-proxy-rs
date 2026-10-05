@@ -1,4 +1,4 @@
-//! Codex 客户端最低版本策略。
+//! Codex 客户端最低版本策略
 
 use std::fmt;
 
@@ -6,7 +6,7 @@ use semver::Version;
 
 const MAXIMUM_VERSION_LENGTH: usize = 64;
 
-/// 可被网关识别并限制最低版本的 Codex 客户端。
+/// 可被网关识别并限制最低版本的 Codex 客户端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexClientKind {
     Desktop,
@@ -23,12 +23,12 @@ impl CodexClientKind {
     }
 }
 
-/// 经严格 SemVer 校验的 Codex 客户端版本。
+/// 经严格 SemVer 校验的 Codex 客户端版本
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CodexClientVersion(Version);
 
 impl CodexClientVersion {
-    /// 仅接受没有前后空白、长度受限的标准 SemVer。
+    /// 仅接受没有前后空白、长度受限的标准 SemVer
     pub fn parse(value: &str) -> Result<Self, CodexClientVersionError> {
         if value.is_empty()
             || value.len() > MAXIMUM_VERSION_LENGTH
@@ -49,12 +49,12 @@ impl fmt::Display for CodexClientVersion {
     }
 }
 
-/// 客户端版本 wire 值不合法。
+/// 客户端版本 wire 值不合法
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("Codex client version must be a valid semantic version")]
 pub struct CodexClientVersionError;
 
-/// 运行快照中冻结的最低版本要求；`None` 表示该客户端不限制。
+/// 运行快照中冻结的最低版本要求；`None` 表示该客户端不限制
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodexClientMinVersions {
     desktop: Option<CodexClientVersion>,
@@ -85,7 +85,7 @@ impl CodexClientMinVersions {
         }
     }
 
-    /// 校验一个已识别客户端；配置未启用时直接放行。
+    /// 校验一个已识别客户端；配置未启用时直接放行
     pub fn enforce(
         &self,
         kind: CodexClientKind,
@@ -111,7 +111,7 @@ impl CodexClientMinVersions {
     }
 }
 
-/// 已识别客户端未满足冻结的最低版本要求。
+/// 已识别客户端未满足冻结的最低版本要求
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ClientVersionRejection {
     #[error("recognized Codex client did not provide a valid version")]

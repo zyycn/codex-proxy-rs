@@ -1,3 +1,5 @@
+//! 验证 OpenAI 上游失败分类与账号评分反馈规则
+
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;

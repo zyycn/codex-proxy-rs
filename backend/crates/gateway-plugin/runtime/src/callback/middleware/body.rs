@@ -1,3 +1,5 @@
+//! 插件中间件正文句柄的读取、交付事实与关闭生命周期
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -9,7 +11,7 @@ use gateway_core::engine::middleware::{
 };
 use gateway_plugin_sdk::{ErrorCode, PluginFault, call::middleware::MiddlewareBodyDisposition};
 
-use super::{denied, invalid};
+use super::{invalid, resource_unavailable};
 
 pub(super) struct BodyResource {
     expected_framing: MiddlewareFraming,
@@ -91,6 +93,14 @@ impl MiddlewareBodyAuthority {
         if disposition == MiddlewareBodyDisposition::Drop && terminal {
             return Err(MiddlewareError::InvalidState);
         }
+        let framing = if framing == MiddlewareFraming::RawBytes
+            && source_bytes.is_empty()
+            && !bytes.is_empty()
+        {
+            self.0.expected_framing
+        } else {
+            framing
+        };
         let output_transformed =
             transformed || disposition != MiddlewareBodyDisposition::Only || bytes != source_bytes;
         let mut frame = MiddlewareFrame::new(bytes, framing, finishes_source && terminal)
@@ -167,8 +177,8 @@ impl BodyResource {
     }
 
     pub(super) async fn read(&self, maximum: usize) -> Result<Option<BodyReadFrame>, PluginFault> {
-        // SDK 发出上一源的映射帧后即可请求下一源；消费者可能尚未处理排队帧。
-        // 等待归还而非报冲突，仍只保留一个源；父 RPC 的期限与取消约束等待。
+        // SDK 发出上一源的映射帧后即可请求下一源；消费者可能尚未处理排队帧
+        // 等待归还而非报冲突，仍只保留一个源；父 RPC 的期限与取消约束等待
         let mut state = loop {
             let released = self.source_released.notified();
             let state = self.state.lock().await;
@@ -179,7 +189,7 @@ impl BodyResource {
             released.await;
         };
         state.read_started = true;
-        let body = state.body.as_mut().ok_or_else(denied)?;
+        let body = state.body.as_mut().ok_or_else(resource_unavailable)?;
         let frame = match body.next_frame().await {
             Ok(frame) => frame,
             Err(error) => {
@@ -202,7 +212,10 @@ impl BodyResource {
         };
         let transformed = frame.transformed();
         let (bytes, framing, terminal, envelope) = frame.into_parts();
-        if framing != self.expected_framing || bytes.len() > maximum {
+        // canonical-only 事件没有客户端正文，仍须保留并允许读取其完整事实
+        let facts_only =
+            framing == MiddlewareFraming::RawBytes && bytes.is_empty() && envelope.is_some();
+        if (!facts_only && framing != self.expected_framing) || bytes.len() > maximum {
             return Err(invalid());
         }
         let source_id = state.next_source_id.checked_add(1).ok_or_else(invalid)?;
@@ -219,10 +232,32 @@ impl BodyResource {
         ));
         Ok(Some(BodyReadFrame {
             bytes,
-            framing,
+            framing: self.expected_framing,
             source_id,
             terminal,
         }))
+    }
+
+    pub(super) async fn facts(&self, source_id: u64) -> Result<Option<Vec<u8>>, PluginFault> {
+        let state = self.state.lock().await;
+        let (stored_id, source) = state.source.as_ref().ok_or_else(resource_unavailable)?;
+        if *stored_id != source_id {
+            return Err(invalid());
+        }
+        source
+            .envelope
+            .as_ref()
+            .map(|envelope| {
+                super::super::facts::snapshot(envelope.event())?
+                    .encode()
+                    .map_err(|_| {
+                        PluginFault::new(
+                            ErrorCode::Capacity,
+                            "middleware facts exceed the payload limit",
+                        )
+                    })
+            })
+            .transpose()
     }
 
     pub(super) async fn take_unread(&self) -> Option<Box<dyn MiddlewareBody>> {

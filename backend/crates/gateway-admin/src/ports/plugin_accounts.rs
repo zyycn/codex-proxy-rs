@@ -1,4 +1,4 @@
-//! 插件宿主访问账号权威所需的窄端口。
+//! 插件宿主访问账号权威所需的窄端口
 
 use async_trait::async_trait;
 use gateway_core::account::ProviderAccountId;
@@ -11,7 +11,7 @@ use crate::model::{
     },
 };
 
-/// Runtime 只取得账号读写用例，不接触 Store、SQL 或完整管理服务集合。
+/// Runtime 只取得账号读写用例，不接触 Store、SQL 或完整管理服务集合
 #[async_trait]
 pub trait PluginAccountAccess: Send + Sync {
     async fn list(&self, query: PluginAccountListQuery) -> Result<PluginAccountPage, AdminError>;
@@ -26,7 +26,7 @@ pub trait PluginAccountAccess: Send + Sync {
         account_id: &ProviderAccountId,
     ) -> Result<PluginAccountCredential, AdminError>;
 
-    /// 只读 Provider 已有额度观测；实现不得主动刷新上游或附加用量预测。
+    /// 只读 Provider 已有额度观测；实现不得主动刷新上游或附加用量预测
     async fn get_quota(
         &self,
         _account_id: &ProviderAccountId,
@@ -34,7 +34,7 @@ pub trait PluginAccountAccess: Send + Sync {
         Err(AdminError::unavailable("插件额度事实查询暂不可用"))
     }
 
-    /// 通过 Provider 原生管理路径刷新额度；不向插件暴露凭据或执行额度重置。
+    /// 通过 Provider 原生管理路径刷新额度；不向插件暴露凭据或执行额度重置
     async fn refresh_quota(
         &self,
         _account_id: &ProviderAccountId,

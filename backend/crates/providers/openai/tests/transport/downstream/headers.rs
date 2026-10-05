@@ -1,3 +1,5 @@
+//! 验证 HTTP 与 WebSocket 保留业务头部并过滤下游传输头
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use provider_openai::encode_generate_request;
@@ -194,7 +196,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         write_completed_sse_response(&mut stream).await;
         request
     });
-    // 不经 API 解码，直接构造协议上下文，验证 Provider 自身的过滤边界。
+    // 不经 API 解码，直接构造协议上下文，验证 Provider 自身的过滤边界
     let request = request_with_opaque_headers(false);
     let profile = test_wire_profile();
     let profile_snapshot = profile.snapshot();
@@ -231,7 +233,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         assert!(raw_header_values(&raw, name).is_empty(), "leaked {name}");
     }
     for &(name, _) in DOWNSTREAM_TRANSPORT_HEADERS {
-        // HTTP 正文由 transport 重编码为 zstd，不能沿用下游 Content-Encoding。
+        // HTTP 正文由 transport 重编码为 zstd，不能沿用下游 Content-Encoding
         if name == "content-encoding" {
             assert_eq!(raw_header_values(&raw, name), vec![b"zstd".to_vec()]);
         } else {
@@ -264,7 +266,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     ] {
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
-    // 指纹头由运行时画像生成，不透传客户端值。
+    // 指纹头由运行时画像生成，不透传客户端值
     assert_eq!(
         raw_header_values(&raw, "user-agent"),
         vec![expected_user_agent.as_bytes().to_vec()]

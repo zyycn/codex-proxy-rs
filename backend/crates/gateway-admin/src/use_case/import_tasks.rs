@@ -1,4 +1,4 @@
-//! 导入队列由 Host 管理生命周期，HTTP 只负责接受输入和读取快照。
+//! 导入队列由 Host 管理生命周期，HTTP 只负责接受输入和读取快照
 
 use std::{
     collections::VecDeque,
@@ -100,7 +100,7 @@ impl Entry {
         {
             self.finished_at = Some(Utc::now());
             self.finished_instant = Some(Instant::now());
-            // 终态仅保留结果，连已清空的输入槽位分配也一并释放。
+            // 终态仅保留结果，连已清空的输入槽位分配也一并释放
             self.inputs = Vec::new();
         }
     }
@@ -163,7 +163,7 @@ impl DefaultImportTasksService {
             .tasks
             .iter()
             .position(|entry| entry.inputs.iter().any(Option::is_some))?;
-        // 轮转任务，避免大批次独占后续全部执行机会。
+        // 轮转任务，避免大批次独占后续全部执行机会
         let mut entry = registry.tasks.remove(task_index)?;
         let index = entry.inputs.iter().position(Option::is_some)?;
         let input = entry.inputs[index].take()?;
@@ -192,7 +192,7 @@ impl DefaultImportTasksService {
                 item.account_ids = result.credential_ids;
             }
             Ok(Err(error)) => {
-                // 存储或发布异常也可能发生在提交之后；不自动重放可能轮换 RT 的操作。
+                // 存储或发布异常也可能发生在提交之后；不自动重放可能轮换 RT 的操作
                 item.status = if matches!(
                     error.kind(),
                     AdminErrorKind::UpstreamResultUnknown
@@ -335,7 +335,7 @@ impl DaemonTask for ImportTaskWorker {
     fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
             let mut active = FuturesUnordered::new();
-            // 固定一个取消 future，避免循环反复注册中立 CancellationToken 的 waiter。
+            // 固定一个取消 future，避免循环反复注册中立 CancellationToken 的 waiter
             let cancelled = cancellation.cancelled();
             tokio::pin!(cancelled);
             let mut cleanup = tokio::time::interval(Duration::from_secs(60));
@@ -361,7 +361,7 @@ impl DaemonTask for ImportTaskWorker {
                     _ = cleanup.tick() => { drop(self.0.registry()); },
                 }
             }
-            // Host 提供总关闭预算；此处让已发出的交换与入库尽量完成。
+            // Host 提供总关闭预算；此处让已发出的交换与入库尽量完成
             while active.next().await.is_some() {}
             Ok(())
         })

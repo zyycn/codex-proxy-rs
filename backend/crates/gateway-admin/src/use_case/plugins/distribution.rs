@@ -1,3 +1,5 @@
+//! 插件更新来源与下载凭据管理，以及远程制品验证和安装编排
+
 use std::collections::BTreeSet;
 
 use super::PluginsService;
@@ -93,7 +95,7 @@ impl PluginsService {
                 binding.outbound_proxy_id.as_deref(),
             )
             .await?;
-        // 查询期间来源或策略被修改时返回冲突，不把旧来源的候选交给下一步安装。
+        // 查询期间来源或策略被修改时返回冲突，不把旧来源的候选交给下一步安装
         if !self.update_sources().await?.contains(&binding) {
             return Err(AdminError::conflict("插件更新来源已变更，请重新检查"));
         }
@@ -259,7 +261,7 @@ impl PluginsService {
         {
             return Err(AdminError::invalid("插件清单身份与安装选择不符"));
         }
-        // 首次解析前身份未知，按包内身份复核下载前的来源绑定。
+        // 首次解析前身份未知，按包内身份复核下载前的来源绑定
         let binding = bindings
             .iter()
             .find(|binding| binding.plugin_id == artifact.metadata.plugin_id);

@@ -1,3 +1,5 @@
+//! 插件集成测试的专用存储环境、账号与 Client Key 数据准备
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -14,7 +16,7 @@ use gateway_admin::{
             },
             instances::{
                 PluginCapabilityBinding, PluginFailurePolicy, PluginFrontendIdentityBinding,
-                PluginInstance, PluginPermissionGrant,
+                PluginInstance,
             },
         },
         pricing::PricingSyncPreview,
@@ -165,26 +167,17 @@ impl Environment {
     pub async fn plugin(
         &self,
         configuration: serde_json::Value,
-        grants: Vec<PluginPermissionGrant>,
     ) -> (Arc<PluginRuntime>, gateway_core::CoreBundle) {
-        self.install_plugin(configuration, grants).await;
+        self.install_plugin(configuration).await;
         self.runtime().await
     }
 
-    pub async fn install_plugin(
-        &self,
-        configuration: serde_json::Value,
-        grants: Vec<PluginPermissionGrant>,
-    ) {
+    pub async fn install_plugin(&self, configuration: serde_json::Value) {
         let plugin_id = configuration
             .get("plugin_id")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| super::DEFAULT_PLUGIN_ID.to_owned());
-        let permissions = grants
-            .iter()
-            .map(|grant| serde_json::from_value(json!(grant.permission)).unwrap())
-            .collect();
         let mut contributes = Contributions::new();
         if configuration.get("maintenance_fixture").is_some() {
             contributes.extend([super::contribution_for_id(
@@ -214,14 +207,45 @@ impl Environment {
                 vec![],
             )]);
         }
-        let has_middleware = configuration.get("middleware_marker").is_some();
+        let has_upstream_adapter = configuration.get("upstream_registration").is_some();
+        if has_upstream_adapter {
+            contributes.extend([super::contribution_for_id(
+                &plugin_id,
+                Capability::UpstreamAdapter,
+                vec![Stage::Upstream],
+                vec!["openai".into()],
+                vec!["openai".into()],
+            )]);
+        }
+        let has_service = configuration["service"] == true;
+        let has_http = configuration["http"] == true;
+        let has_middleware =
+            configuration.get("middleware_marker").is_some() || has_service || has_http;
         if has_middleware {
             contributes.extend([super::contribution_for_id(
                 &plugin_id,
                 Capability::Middleware,
-                vec![Stage::Request],
-                vec!["openai".into()],
-                vec!["openai".into()],
+                vec![if has_service {
+                    Stage::Service
+                } else if has_http {
+                    Stage::Http
+                } else {
+                    Stage::Request
+                }],
+                vec![if has_service {
+                    "service".into()
+                } else if has_http {
+                    "http".into()
+                } else {
+                    "openai".into()
+                }],
+                vec![if has_service {
+                    "service".into()
+                } else if has_http {
+                    "http".into()
+                } else {
+                    "openai".into()
+                }],
             )]);
         }
         let frontend_authentication = configuration
@@ -275,12 +299,10 @@ impl Environment {
                 vec![],
             )]);
         }
-        let archive = super::package_with_contributions_for_id(
-            super::worker(),
-            &plugin_id,
-            permissions,
-            contributes,
-        );
+        let service_worker = (has_service || has_http)
+            .then(|| std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap());
+        let worker = service_worker.as_deref().unwrap_or_else(|| super::worker());
+        let archive = super::package_with_contributions_for_id(worker, &plugin_id, contributes);
         let inspector = PackageInspector::new(PackageLimits::default(), "1.0.0".parse().unwrap());
         let artifact = inspector
             .inspect(Arc::clone(&archive), None)
@@ -304,14 +326,6 @@ impl Environment {
             .accept_artifact(&installed.artifact.metadata.sha256, &mutation)
             .await
             .unwrap();
-        let grants = installed
-            .artifact
-            .metadata
-            .requested_permissions
-            .iter()
-            .cloned()
-            .map(|permission| PluginPermissionGrant { permission })
-            .collect();
         let instance = PluginInstance {
             id: uuid::Uuid::new_v4().to_string(),
             name: "provider".into(),
@@ -320,8 +334,20 @@ impl Environment {
             trusted_process: true,
             configuration,
             secrets: BTreeMap::new(),
-            grants,
+
             bindings: [
+                has_upstream_adapter.then(|| PluginCapabilityBinding {
+                    contribution: format!("{plugin_id}.upstreamAdapter"),
+                    stage: "upstream".into(),
+                    order: 0,
+                    failure_policy: PluginFailurePolicy::Reject,
+                    client_key_ids: vec![],
+                    account_group_ids: vec![],
+                    provider_ids: vec![],
+                    models: vec![],
+                    event: None,
+                    identity_bindings: vec![],
+                }),
                 has_model_router.then(|| PluginCapabilityBinding {
                     contribution: format!("{plugin_id}.modelRouter"),
                     stage: "routing".into(),
@@ -331,6 +357,7 @@ impl Environment {
                     account_group_ids: vec![],
                     provider_ids: vec![],
                     models: vec![],
+                    event: None,
                     identity_bindings: vec![],
                 }),
                 has_scheduler.then(|| PluginCapabilityBinding {
@@ -342,6 +369,7 @@ impl Environment {
                     account_group_ids: vec![],
                     provider_ids: vec![],
                     models: vec![],
+                    event: None,
                     identity_bindings: vec![],
                 }),
                 frontend_authentication
@@ -359,6 +387,7 @@ impl Environment {
                         account_group_ids: vec![],
                         provider_ids: vec![],
                         models: vec![],
+                        event: None,
                         identity_bindings: vec![PluginFrontendIdentityBinding {
                             principal: principal.clone(),
                             client_key_id: key_id.clone(),
@@ -366,13 +395,20 @@ impl Environment {
                     }),
                 has_middleware.then(|| PluginCapabilityBinding {
                     contribution: format!("{plugin_id}.middleware"),
-                    stage: "request".into(),
+                    stage: if has_service {
+                        "service".into()
+                    } else if has_http {
+                        "http".into()
+                    } else {
+                        "request".into()
+                    },
                     order: 0,
                     failure_policy: PluginFailurePolicy::Reject,
                     client_key_ids: vec![],
                     account_group_ids: vec![],
                     provider_ids: vec![],
                     models: vec![],
+                    event: None,
                     identity_bindings: vec![],
                 }),
             ]
@@ -388,7 +424,14 @@ impl Environment {
     }
 
     pub async fn runtime(&self) -> (Arc<PluginRuntime>, gateway_core::CoreBundle) {
-        let runtime = self.plugin_runtime();
+        self.runtime_with_limits(RpcLimits::default()).await
+    }
+
+    pub async fn runtime_with_limits(
+        &self,
+        limits: RpcLimits,
+    ) -> (Arc<PluginRuntime>, gateway_core::CoreBundle) {
+        let runtime = self.plugin_runtime_with_limits(limits);
         let core = gateway_core::prepare(
             self.store.core_ports(),
             super::native::provider_registry(),
@@ -443,6 +486,10 @@ impl Environment {
     }
 
     fn plugin_runtime(&self) -> Arc<PluginRuntime> {
+        self.plugin_runtime_with_limits(RpcLimits::default())
+    }
+
+    fn plugin_runtime_with_limits(&self, rpc_limits: RpcLimits) -> Arc<PluginRuntime> {
         Arc::new(
             PluginRuntime::new(
                 self.store.admin_ports().plugins(),
@@ -451,7 +498,7 @@ impl Environment {
                     cache_directory: self.directory.path().join("cache"),
                     host_version: "1.0.0".parse().unwrap(),
                     package_limits: PackageLimits::default(),
-                    rpc_limits: RpcLimits::default(),
+                    rpc_limits,
                     restart_circuit: Default::default(),
                 },
                 Arc::new(gateway_host::outbound::HttpClient::new().unwrap()),
@@ -459,14 +506,7 @@ impl Environment {
                     std::num::NonZeroUsize::new(128).unwrap(),
                 )),
             )
-            .with_oauth_pending(self.store.provider_ports().oauth_pending())
-            .with_network_policy(
-                gateway_host::outbound::NetworkPolicy::new(&[
-                    "127.0.0.0/8".into(),
-                    "::1/128".into(),
-                ])
-                .unwrap(),
-            ),
+            .with_oauth_pending(self.store.provider_ports().oauth_pending()),
         )
     }
 
@@ -491,6 +531,15 @@ impl Environment {
             ClientConfig::default(),
             self.store.admin_ports(),
             gateway_admin::AdminRuntimePorts {
+                timezone: Default::default(),
+                service_middleware: {
+                    let snapshots = core.snapshots();
+                    let middleware = runtime.middleware_registry();
+                    std::sync::Arc::new(move || {
+                        let snapshot = snapshots.snapshot_for_diagnostics()?;
+                        middleware.resolve(snapshot.extensions()?)
+                    })
+                },
                 plugin_preparation: runtime.clone(),
                 plugin_management: runtime.clone(),
                 published_snapshot: core.snapshots(),
@@ -598,8 +647,24 @@ impl Environment {
     }
 
     async fn create_with_store_mode(command_line: bool) -> Option<Self> {
-        let database = std::env::var("CPR_PLUGIN_TEST_DATABASE_URL").ok()?;
-        let redis = std::env::var("CPR_PLUGIN_TEST_REDIS_URL").expect("isolated plugin Redis URL");
+        // 插件专用服务优先；CI 的标准测试服务同样通过随机 schema 隔离数据库
+        let (database, redis) = if let Ok(database) = std::env::var("CPR_PLUGIN_TEST_DATABASE_URL")
+        {
+            (
+                database,
+                std::env::var("CPR_PLUGIN_TEST_REDIS_URL").expect("isolated plugin Redis URL"),
+            )
+        } else {
+            let database = std::env::var("CPR_TEST_DATABASE_URL").ok();
+            assert!(
+                database.is_some() || std::env::var_os("CI").is_none(),
+                "CI requires plugin or standard test services"
+            );
+            (
+                database?,
+                std::env::var("CPR_TEST_REDIS_URL").expect("isolated test Redis URL"),
+            )
+        };
         let schema = format!("cpr_plugin_{}", uuid::Uuid::new_v4().simple());
         let admin = PgPoolOptions::new()
             .max_connections(1)
@@ -632,7 +697,7 @@ impl Environment {
         } else {
             gateway_store::initialize(config).await.unwrap()
         };
-        // 迁移可能已创建默认行；该场景只测租约释放，明确关闭相邻请求的间隔限制。
+        // 迁移可能已创建默认行；该场景只测租约释放，明确关闭相邻请求的间隔限制
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!("insert into {schema}.runtime_settings(id, config_revision, request_interval_ms, updated_at) values (1,1,0,now()) on conflict (id) do update set request_interval_ms=0")))
             .execute(&admin).await.unwrap();
         Some(Self {
@@ -665,6 +730,16 @@ impl Environment {
         .fetch_all(&self.admin)
         .await
         .unwrap()
+    }
+
+    pub async fn assert_upstream_accounting(&self, key: &str, account: &str) {
+        let rows: Vec<(String, String, i32, i64, i64, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select outcome, provider_account_ref, attempt_count, input_tokens, output_tokens, cost_amount > 0 from {}.model_requests where client_api_key_ref=$1", self.schema,
+        ))).bind(key).fetch_all(&self.admin).await.unwrap();
+        assert_eq!(
+            rows,
+            vec![("succeeded".into(), account.into(), 1, 7, 2, true)]
+        );
     }
 
     pub async fn bound_model_requests(&self, client_key_id: &str) -> Vec<(String, String)> {
@@ -793,7 +868,10 @@ impl SystemOperations for UnusedAdminRuntime {
         Err(unused_system())
     }
 
-    async fn restart(&self) -> Result<SystemOperationAccepted, SystemOperationError> {
+    async fn restart(
+        &self,
+        _preflight: Arc<dyn gateway_admin::ports::system::SystemRestartPreflight>,
+    ) -> Result<SystemOperationAccepted, SystemOperationError> {
         Err(unused_system())
     }
 }
@@ -809,11 +887,5 @@ pub fn mutation() -> MutationContext {
     MutationContext {
         actor: MutationActor::System,
         request_id: "plugin-host-account-test".into(),
-    }
-}
-
-pub fn account_grant(permission: &str) -> PluginPermissionGrant {
-    PluginPermissionGrant {
-        permission: permission.into(),
     }
 }

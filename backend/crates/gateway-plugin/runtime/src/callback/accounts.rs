@@ -1,4 +1,4 @@
-//! 账号域回调；账号归属与凭据版本由 Admin 复核，不接受插件伪造归属。
+//! 账号域回调；账号归属与凭据版本由 Admin 复核，不接受插件伪造归属
 
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use gateway_admin::{
     model::{
         AdminError, PageSize, Revision,
-        plugins::instances::PluginPermissionGrant,
         provider_credentials::{
             PluginAccountListQuery, PreparedCredentialCreate, PreparedCredentialRotationFacts,
             PreparedPluginAccountSave, ProviderDocument,
@@ -27,7 +26,7 @@ use gateway_plugin_sdk::{
 };
 
 use super::{
-    NetworkScope,
+    CallbackScope,
     admin::{encode, map_admin_error, mutation_context},
     invalid,
 };
@@ -60,21 +59,17 @@ impl PluginAccountPortSlot {
 
 pub(super) struct PluginAccounts {
     slot: Arc<PluginAccountPortSlot>,
-    authorized: bool,
 }
 
 impl PluginAccounts {
-    pub(super) fn new(slot: Arc<PluginAccountPortSlot>, grants: &[PluginPermissionGrant]) -> Self {
-        Self {
-            slot,
-            authorized: grants.iter().any(|grant| grant.permission == "accounts"),
-        }
+    pub(super) fn new(slot: Arc<PluginAccountPortSlot>) -> Self {
+        Self { slot }
     }
 
     pub(super) async fn call(
         &self,
         context: &CallContext,
-        scope: &NetworkScope,
+        scope: &CallbackScope,
         method: &str,
         params: serde_json::Value,
         payload: &[u8],
@@ -82,7 +77,6 @@ impl PluginAccounts {
         if params != serde_json::json!({}) {
             return Err(invalid());
         }
-        self.authorize()?;
         let access = self.slot.upgrade().map_err(map_admin_error)?;
         match method {
             "host.auth.list" => {
@@ -151,10 +145,9 @@ impl PluginAccounts {
     pub(super) async fn save(
         &self,
         context: &CallContext,
-        scope: &NetworkScope,
+        scope: &CallbackScope,
         request: AuthSaveRequest,
     ) -> Result<AuthSaveResult, PluginFault> {
-        self.authorize()?;
         let access = self.slot.upgrade().map_err(map_admin_error)?;
         let prepared = match request {
             AuthSaveRequest::Create { provider_id, facts } => {
@@ -197,13 +190,6 @@ impl PluginAccounts {
             account_id: result.account_id.as_str().to_owned(),
             credential_revision: result.credential_revision.get(),
         })
-    }
-
-    fn authorize(&self) -> Result<(), PluginFault> {
-        if !self.authorized {
-            return Err(denied());
-        }
-        Ok(())
     }
 }
 

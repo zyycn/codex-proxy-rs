@@ -1,4 +1,4 @@
-//! OpenAI history 到 Grok Build history 的重建与清理。
+//! OpenAI history 到 Grok Build history 的重建与清理
 
 use super::*;
 
@@ -20,7 +20,7 @@ pub(super) fn require_content_source(
 pub(super) fn sanitize_reasoning_input(item: &Map<String, Value>) -> Map<String, Value> {
     let mut converted =
         copy_non_null_history_fields(item, &["id", "summary", "content", "encrypted_content"]);
-    // Grok CLI 会在 summary/content 条目上注入 phase 等内部键。
+    // Grok CLI 会在 summary/content 条目上注入 phase 等内部键
     strip_grok_internal_entry_keys(&mut converted, &["summary", "content"]);
     converted.insert("type".to_owned(), Value::String("reasoning".to_owned()));
     if has_portable_reasoning_content(&converted) {
@@ -40,7 +40,7 @@ pub(super) fn normalize_compaction_input(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    // 密文只作为 reasoning 回放；可见摘要只读取 summary。
+    // 密文只作为 reasoning 回放；可见摘要只读取 summary
     let mut converted = Vec::with_capacity(2);
     if let Some(encrypted) = encrypted {
         converted.push(json!({
@@ -157,7 +157,7 @@ pub(super) fn sanitize_native_history_input(
     };
     let mut converted = copy_non_null_history_fields(item, fields);
     // Grok CLI 会在 shell_call 的 action object 里注入内部键与 null 占位
-    // 字段（如 `timeout_ms: null`）；只在这一层剥离，深层内容原样保留。
+    // 字段（如 `timeout_ms: null`）；只在这一层剥离，深层内容原样保留
     if item_type == "shell_call"
         && let Some(Value::Object(action)) = converted.get_mut("action")
     {

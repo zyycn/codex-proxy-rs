@@ -1,4 +1,4 @@
-//! Key 目录与预算回调；实例身份由宿主冻结，写入授权在存储事务复验。
+//! Key 目录与预算回调；实例身份由宿主冻结，写入授权在存储事务复验
 
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -144,7 +144,7 @@ impl PluginClientKeyPortSlot {
             .map_err(|_| AdminError::conflict("插件 Client Key 端口已经绑定"))
     }
 
-    fn upgrade(&self) -> Result<Arc<dyn PluginClientKeyAccess>, PluginFault> {
+    pub(super) fn upgrade(&self) -> Result<Arc<dyn PluginClientKeyAccess>, PluginFault> {
         self.access.get().and_then(Weak::upgrade).ok_or_else(denied)
     }
 

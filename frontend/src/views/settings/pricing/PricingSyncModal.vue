@@ -5,7 +5,8 @@ import { computed, shallowRef, watch } from 'vue'
 import { bands, effectivePrice, priceFields } from './model'
 
 const props = defineProps<{ preview?: PricingSyncPreview, catalog: PricingCatalog, saving: boolean }>()
-const emit = defineEmits<{ close: [], confirm: [models: Record<string, string[]>] }>()
+const emit = defineEmits<{ confirm: [models: Record<string, string[]>] }>()
+const open = defineModel<boolean>({ required: true })
 const selected = shallowRef(new Set<string>())
 const changes = computed(() => {
   const items: { id: string, provider: string, model: string, custom: boolean, details: { label: string, before: string, after: string }[] }[] = []
@@ -63,7 +64,7 @@ function confirm() {
 </script>
 
 <template>
-  <BaseModal :model-value="!!preview" title="确认同步来源价目" description="USD / 1M Tokens" size="lg" :dismissible="!saving" @update:model-value="!$event && $emit('close')">
+  <BaseModal v-model="open" title="确认同步来源价目" description="USD / 1M Tokens" size="lg" :dismissible="!saving">
     <div class="grid gap-4">
       <p class="m-0 text-cp text-cp-text-secondary">
         仅同步所选模型的来源价格，保留自定义单价和倍率
@@ -124,7 +125,7 @@ function confirm() {
       </details>
     </div>
     <template #footer>
-      <BaseButton :disabled="saving" @click="$emit('close')">
+      <BaseButton :disabled="saving" @click="open = false">
         取消
       </BaseButton><BaseButton variant="primary" :loading="saving" :disabled="!selectedChanges.length" @click="confirm">
         确认同步

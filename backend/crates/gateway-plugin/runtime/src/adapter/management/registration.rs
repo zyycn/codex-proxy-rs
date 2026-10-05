@@ -1,3 +1,5 @@
+//! 将插件管理声明编译为页面、路由与资源入口
+
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use gateway_admin::model::{
@@ -44,16 +46,6 @@ pub(crate) async fn prepare(
     let registration: ManagementRegistration = serde_json::from_slice(&reply.payload)
         .map_err(|_| AdminError::invalid("插件管理声明无效"))?;
     validation::registration(&registration)?;
-    if !registration.callbacks.is_empty()
-        && !instance
-            .grants
-            .iter()
-            .any(|grant| grant.permission == "public_endpoints")
-    {
-        return Err(AdminError::invalid(
-            "公开登录回调需要显式 public_endpoints 授权",
-        ));
-    }
     let mut resources = BTreeMap::new();
     let mut resource_views = Vec::new();
     let mut total = 0usize;
@@ -63,16 +55,6 @@ pub(crate) async fn prepare(
             .get(&resource.path)
             .filter(|value| validation::content_type(value))
             .ok_or_else(|| AdminError::invalid("管理资源未在包清单声明有效内容类型"))?;
-        if resource.public
-            && !instance
-                .grants
-                .iter()
-                .any(|grant| grant.permission == "public_endpoints")
-        {
-            return Err(AdminError::invalid(
-                "公开资源需要显式 public_endpoints 授权",
-            ));
-        }
         let bytes = package
             .resource(&resource.path)
             .ok_or_else(|| AdminError::invalid("管理资源不在已校验制品中"))?;
@@ -141,10 +123,6 @@ pub(crate) async fn prepare(
     };
     Ok(Some(ManagementEntry {
         view,
-        models_authorized: instance
-            .grants
-            .iter()
-            .any(|grant| grant.permission == "models"),
         routes,
         resources,
         session,

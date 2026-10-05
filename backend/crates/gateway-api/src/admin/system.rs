@@ -1,7 +1,7 @@
-//! 系统管理接口的查询与请求 wire contract。
+//! 系统管理接口的查询与请求 wire contract
 
 //!
-//! 这里不依赖更新服务或进程控制；应用层通过窄端口提供系统操作事实。
+//! 这里不依赖更新服务或进程控制；应用层通过窄端口提供系统操作事实
 
 use crate::auth::SessionState;
 
@@ -20,8 +20,8 @@ use axum::{
 use futures::{Stream, StreamExt};
 use gateway_admin::model::system::{
     SystemOperationAccepted, SystemOperationKind, SystemOperationState, SystemOperationStatus,
-    SystemUpdateChannel, SystemUpdateDetail, SystemUpdateEvent, SystemUpdateEventLevel,
-    SystemUpdatePolicy, SystemUpdateStatus, SystemVersion,
+    SystemRestartPlan, SystemUpdateChannel, SystemUpdateDetail, SystemUpdateEvent,
+    SystemUpdateEventLevel, SystemUpdatePolicy, SystemUpdateStatus, SystemVersion,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ use super::{
     wire::map_admin_service_error,
 };
 
-/// 更新详情查询参数。
+/// 更新详情查询参数
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDetailQuery {
@@ -44,14 +44,14 @@ impl UpdateDetailQuery {
         self.channel
     }
 
-    /// 是否强制从发布源刷新。
+    /// 是否强制从发布源刷新
     #[must_use]
     pub fn refresh(&self) -> bool {
         self.refresh.unwrap_or(false)
     }
 }
 
-/// 执行更新请求。
+/// 执行更新请求
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRequest {
@@ -60,7 +60,7 @@ pub struct UpdateRequest {
 }
 
 impl UpdateRequest {
-    /// 取出确认的目标版本原值，由更新领域负责版本规范化和校验。
+    /// 取出确认的目标版本原值，由更新领域负责版本规范化和校验
     #[must_use]
     pub fn into_target_version(self) -> String {
         self.target_version
@@ -114,6 +114,7 @@ struct SystemUpdateDetailView {
     notes: Option<String>,
     cached: bool,
     update_supported: bool,
+    restart_confirmation_supported: bool,
     unsupported_reason: Option<String>,
     warning: Option<String>,
 }
@@ -133,6 +134,7 @@ impl From<SystemUpdateDetail> for SystemUpdateDetailView {
             notes: detail.notes,
             cached: detail.cached,
             update_supported: detail.update_supported,
+            restart_confirmation_supported: true,
             unsupported_reason: detail.unsupported_reason,
             warning: detail.warning,
         }
@@ -149,11 +151,13 @@ struct SystemOperationStateView {
     message: Option<String>,
     error: Option<String>,
     started_at: Option<String>,
+    started_at_display: Option<String>,
     finished_at: Option<String>,
+    finished_at_display: Option<String>,
 }
 
-impl From<SystemOperationState> for SystemOperationStateView {
-    fn from(operation: SystemOperationState) -> Self {
+impl From<(SystemOperationState, crate::time::TimePresenter)> for SystemOperationStateView {
+    fn from((operation, time): (SystemOperationState, crate::time::TimePresenter)) -> Self {
         Self {
             operation_id: operation.operation_id,
             kind: operation.kind.map(operation_kind_name),
@@ -161,7 +165,15 @@ impl From<SystemOperationState> for SystemOperationStateView {
             target_version: operation.target_version,
             message: operation.message,
             error: operation.error,
+            started_at_display: operation
+                .started_at
+                .as_ref()
+                .map(|value| time.datetime(value)),
             started_at: operation.started_at.map(|value| value.to_rfc3339()),
+            finished_at_display: operation
+                .finished_at
+                .as_ref()
+                .map(|value| time.datetime(value)),
             finished_at: operation.finished_at.map(|value| value.to_rfc3339()),
         }
     }
@@ -176,13 +188,13 @@ struct SystemUpdateStatusView {
     operation: SystemOperationStateView,
 }
 
-impl From<SystemUpdateStatus> for SystemUpdateStatusView {
-    fn from(status: SystemUpdateStatus) -> Self {
+impl From<(SystemUpdateStatus, crate::time::TimePresenter)> for SystemUpdateStatusView {
+    fn from((status, time): (SystemUpdateStatus, crate::time::TimePresenter)) -> Self {
         Self {
             previous_version: status.previous_version,
             current_version: status.current_version,
             need_restart: status.need_restart,
-            operation: status.operation.into(),
+            operation: SystemOperationStateView::from((status.operation, time)),
         }
     }
 }
@@ -222,9 +234,10 @@ struct SystemUpdateEventView {
     terminal: bool,
     progress_percent: Option<u8>,
     at: String,
+    at_display: String,
 }
 
-/// 构造固定 GET/POST 系统管理路由。
+/// 构造固定 GET/POST 系统管理路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -239,6 +252,7 @@ where
         .route("/api/admin/system/update", post(perform_update::<S>))
         .route("/api/admin/system/update/status", get(update_status::<S>))
         .route("/api/admin/system/rollback", post(rollback::<S>))
+        .route("/api/admin/system/restart/check", get(restart_plan::<S>))
         .route("/api/admin/system/restart", post(restart::<S>))
 }
 
@@ -288,13 +302,16 @@ async fn update_event_stream<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let stream = state
         .admin_services()
         .system()
         .update_events()
-        .map(|message| {
+        .map(move |message| {
             let id = message.id.clone();
-            let data = SystemUpdateEventView::from(message).into_json().to_string();
+            let data = SystemUpdateEventView::from((message, time))
+                .into_json()
+                .to_string();
             Ok(Event::default().event("update").id(id).data(data))
         });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
@@ -344,6 +361,7 @@ async fn update_status<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let status = state
         .admin_services()
         .system()
@@ -352,7 +370,7 @@ where
         .map_err(map_system_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(SystemUpdateStatusView::from(status)),
+        AdminEnvelope::ok(SystemUpdateStatusView::from((status, time))),
     ))
 }
 
@@ -387,9 +405,32 @@ where
     ))
 }
 
-async fn restart<S>(
+async fn restart_plan<S>(
     _auth: AdminAuth,
     State(state): State<S>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let plan = state
+        .admin_services()
+        .system()
+        .restart_plan()
+        .await
+        .map_err(map_system_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(plan)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RestartRequest {
+    confirmation: Option<SystemRestartPlan>,
+}
+
+async fn restart<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    payload: Option<AdminJson<RestartRequest>>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: SessionState + Send + Sync,
@@ -397,7 +438,10 @@ where
     let result = state
         .admin_services()
         .system()
-        .restart()
+        .restart(
+            payload.and_then(|AdminJson(request)| request.confirmation),
+            &auth.context().mutation_context(),
+        )
         .await
         .map_err(map_system_error)?;
     let SystemOperationAccepted::Restart {
@@ -416,8 +460,8 @@ where
     ))
 }
 
-impl From<SystemUpdateEvent> for SystemUpdateEventView {
-    fn from(event: SystemUpdateEvent) -> Self {
+impl From<(SystemUpdateEvent, crate::time::TimePresenter)> for SystemUpdateEventView {
+    fn from((event, time): (SystemUpdateEvent, crate::time::TimePresenter)) -> Self {
         Self {
             id: event.id,
             operation_id: event.operation_id,
@@ -426,6 +470,7 @@ impl From<SystemUpdateEvent> for SystemUpdateEventView {
             message: event.message,
             terminal: event.terminal,
             progress_percent: event.progress_percent,
+            at_display: time.time(&event.occurred_at),
             at: event.occurred_at.to_rfc3339(),
         }
     }
@@ -441,7 +486,7 @@ impl SystemUpdateEventView {
             "message": self.message,
             "terminal": self.terminal,
             "progressPercent": self.progress_percent,
-            "at": self.at,
+            "at": self.at, "atDisplay": self.at_display,
         })
     }
 }

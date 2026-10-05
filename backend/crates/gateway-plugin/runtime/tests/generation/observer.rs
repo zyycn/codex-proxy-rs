@@ -1,3 +1,5 @@
+//! 验证插件观察计划的范围、顺序、去重与有界异步通知
+
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 
 use gateway_admin::{
@@ -5,7 +7,6 @@ use gateway_admin::{
         Revision,
         plugins::instances::{
             PluginCapabilityBinding, PluginFailurePolicy, PluginInstance, PluginInstanceSnapshot,
-            PluginPermissionGrant,
         },
     },
     ports::plugins::PluginPackageInspector,
@@ -15,8 +16,8 @@ use gateway_core::{
     engine::{
         ModelRequestId, ModelRequestTimings,
         observation::{
-            RequestObservation, RequestObservationOutcome, WebSocketResponseAttempt,
-            WebSocketResponseObservation,
+            RequestObservation, RequestObservationOutcome, RequestObservationScope,
+            WebSocketResponseAttempt, WebSocketResponseObservation,
         },
     },
     error::GatewayErrorKind,
@@ -31,17 +32,13 @@ use gateway_core::{
 use gateway_plugin_runtime::{
     PackageInspector, PackageLimits, PluginRuntime, PluginRuntimeConfig, RpcLimits,
 };
-use gateway_plugin_sdk::{Capability, Contributions, Permission, Stage};
+use gateway_plugin_sdk::{Capability, Contributions, Stage, call::observation::EventKind};
 
 use crate::support::store::Store;
 
-const REQUEST_LIFECYCLE_CONTRIBUTION: &str = "test.example.requestLifecycle";
-const USAGE_CONTRIBUTION: &str = "test.example.usage";
-const WEB_SOCKET_OBSERVER_CONTRIBUTION: &str = "test.example.webSocketObserver";
-
-fn binding(contribution: &str, order: i32) -> PluginCapabilityBinding {
+fn binding(event: EventKind, order: i32) -> PluginCapabilityBinding {
     PluginCapabilityBinding {
-        contribution: contribution.into(),
+        contribution: "test.example.observer".into(),
         stage: "observation".into(),
         order,
         failure_policy: PluginFailurePolicy::Observe,
@@ -49,6 +46,13 @@ fn binding(contribution: &str, order: i32) -> PluginCapabilityBinding {
         account_group_ids: vec![],
         provider_ids: vec!["openai".into()],
         models: vec!["gpt-observed".into()],
+        event: Some(
+            serde_json::to_value(event)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .into(),
+        ),
         identity_bindings: vec![],
     }
 }
@@ -56,64 +60,44 @@ fn binding(contribution: &str, order: i32) -> PluginCapabilityBinding {
 struct InstanceFixture {
     id: String,
     configuration: serde_json::Value,
-    grants: Vec<PluginPermissionGrant>,
-    bindings: Vec<PluginCapabilityBinding>,
-}
 
-fn grant(permission: Permission) -> PluginPermissionGrant {
-    PluginPermissionGrant {
-        permission: permission.as_str().to_owned(),
-    }
+    bindings: Vec<PluginCapabilityBinding>,
 }
 
 async fn setup(
     instances: Vec<(&str, serde_json::Value, Vec<PluginCapabilityBinding>)>,
     rpc_limits: RpcLimits,
 ) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
-    setup_with_permissions(
+    setup_instances(
         instances
             .into_iter()
             .map(|(id, configuration, bindings)| InstanceFixture {
                 id: id.to_owned(),
                 configuration,
-                grants: vec![],
+
                 bindings,
             })
             .collect(),
-        vec![],
         rpc_limits,
     )
     .await
 }
 
-async fn setup_with_permissions(
+async fn setup_instances(
     instances: Vec<InstanceFixture>,
-    manifest_permissions: Vec<Permission>,
+
     rpc_limits: RpcLimits,
 ) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
     let cache = tempfile::tempdir().unwrap();
-    let contributes = Contributions::from([
-        crate::support::contribution(
-            Capability::RequestLifecycle,
-            vec![Stage::Observation],
-            vec![],
-            vec![],
-        ),
-        crate::support::contribution(Capability::Usage, vec![Stage::Observation], vec![], vec![]),
-        crate::support::contribution(
-            Capability::WebSocketObserver,
-            vec![Stage::Observation],
-            vec![],
-            vec![],
-        ),
-    ]);
+    let contributes = Contributions::from([crate::support::contribution(
+        Capability::Observer,
+        vec![Stage::Observation],
+        vec![],
+        vec![],
+    )]);
     let artifact = PackageInspector::new(PackageLimits::default(), "1.0.0".parse().unwrap())
         .inspect(
-            crate::support::package_with_contributions(
-                crate::support::worker(),
-                manifest_permissions,
-                contributes,
-            ),
+            crate::support::package_with_contributions(crate::support::worker(), contributes),
             None,
         )
         .await
@@ -129,7 +113,7 @@ async fn setup_with_permissions(
             trusted_process: true,
             configuration: fixture.configuration,
             secrets: BTreeMap::new(),
-            grants: fixture.grants,
+
             bindings: fixture.bindings,
             revision: Revision::new(1).unwrap(),
         })
@@ -160,6 +144,20 @@ async fn setup_with_permissions(
 }
 
 fn observation(id: &str, outcome: RequestObservationOutcome) -> RequestObservation {
+    observation_with_scope(
+        id,
+        outcome,
+        "client-key-observed",
+        vec![AccountGroupId::new("grp_11111111111111111111111111111111").unwrap()],
+    )
+}
+
+fn observation_with_scope(
+    id: &str,
+    outcome: RequestObservationOutcome,
+    client_key_id: &str,
+    account_group_ids: Vec<AccountGroupId>,
+) -> RequestObservation {
     let send_state = if outcome == RequestObservationOutcome::Rejected {
         UpstreamSendState::NotSent
     } else {
@@ -168,6 +166,10 @@ fn observation(id: &str, outcome: RequestObservationOutcome) -> RequestObservati
     RequestObservation::new(
         ModelRequestId::new(id).unwrap(),
         ConfigRevision::new(1).unwrap(),
+        RequestObservationScope::new(
+            ClientApiKeyId::new(client_key_id).unwrap(),
+            account_group_ids,
+        ),
         OperationKind::Generate,
         outcome,
         send_state,
@@ -190,6 +192,10 @@ fn websocket_observation(
     WebSocketResponseObservation::new(
         ModelRequestId::new(id).unwrap(),
         ConfigRevision::new(1).unwrap(),
+        RequestObservationScope::new(
+            ClientApiKeyId::new("client-key-observed").unwrap(),
+            vec![AccountGroupId::new("grp_11111111111111111111111111111111").unwrap()],
+        ),
         OperationKind::Generate,
         WebSocketResponseAttempt::new(
             ProviderKind::new("openai").unwrap(),
@@ -199,10 +205,6 @@ fn websocket_observation(
         sequence,
         ProtocolWireEvent::json("openai", Some("response.output_text.delta".into()), body).unwrap(),
     )
-    .with_client_scope(
-        ClientApiKeyId::new("client-key-observed").unwrap(),
-        vec![AccountGroupId::new("grp_11111111111111111111111111111111").unwrap()],
-    )
     .with_requested_model(PublicModelId::new("gpt-observed").unwrap())
 }
 
@@ -211,7 +213,7 @@ async fn wait_for_lines(path: &std::path::Path, count: usize) -> Vec<serde_json:
         loop {
             let lines = std::fs::read_to_string(path)
                 .unwrap_or_default()
-                // 子进程先追加 JSON 再写换行；只解析已经提交完整行的记录。
+                // 子进程先追加 JSON 再写换行；只解析已经提交完整行的记录
                 .split_inclusive('\n')
                 .filter(|line| line.ends_with('\n'))
                 .map(|line| serde_json::from_str(line).unwrap())
@@ -235,14 +237,14 @@ async fn frozen_plan_applies_scope_order_and_instance_deduplication() {
             (
                 "late",
                 serde_json::json!({"observation_label":"late","observation_marker":marker}),
-                vec![binding(REQUEST_LIFECYCLE_CONTRIBUTION, 20)],
+                vec![binding(EventKind::RequestCompleted, 20)],
             ),
             (
                 "early",
                 serde_json::json!({"observation_label":"early","observation_marker":marker}),
                 vec![
-                    binding(REQUEST_LIFECYCLE_CONTRIBUTION, 10),
-                    binding(USAGE_CONTRIBUTION, 10),
+                    binding(EventKind::RequestCompleted, 10),
+                    binding(EventKind::WebSocketResponse, 10),
                 ],
             ),
         ],
@@ -265,14 +267,14 @@ async fn frozen_plan_applies_scope_order_and_instance_deduplication() {
     assert_eq!(
         lines.len(),
         2,
-        "lifecycle and usage observations on one instance share one call"
+        "one completed event carries both terminal and usage facts"
     );
     assert_eq!(lines[0]["label"], "early");
     assert!(lines[0]["observation"]["terminal"].is_object());
     assert_eq!(lines[0]["observation"]["usage"]["total_tokens"], 18);
     assert_eq!(lines[1]["label"], "late");
     assert!(lines[1]["observation"]["terminal"].is_object());
-    assert!(lines[1]["observation"].get("usage").is_none());
+    assert_eq!(lines[1]["observation"]["usage"]["total_tokens"], 18);
 
     plan.dispatch(
         generation.clone(),
@@ -292,11 +294,11 @@ async fn frozen_plan_applies_scope_order_and_instance_deduplication() {
 }
 
 #[tokio::test]
-async fn websocket_observer_preserves_order_generation_and_permission_boundaries() {
+async fn websocket_observer_preserves_order_generation_and_complete_payload() {
     let marker_directory = tempfile::tempdir().unwrap();
     let hidden = marker_directory.path().join("hidden.jsonl");
     let readable = marker_directory.path().join("readable.jsonl");
-    let (cache, _store, runtime) = setup_with_permissions(
+    let (cache, _store, runtime) = setup_instances(
         vec![
             InstanceFixture {
                 id: "hidden".into(),
@@ -304,8 +306,8 @@ async fn websocket_observer_preserves_order_generation_and_permission_boundaries
                     "observation_label":"hidden",
                     "websocket_observation_marker":hidden,
                 }),
-                grants: vec![],
-                bindings: vec![binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 1)],
+
+                bindings: vec![binding(EventKind::WebSocketResponse, 1)],
             },
             InstanceFixture {
                 id: "readable".into(),
@@ -313,11 +315,10 @@ async fn websocket_observer_preserves_order_generation_and_permission_boundaries
                     "observation_label":"readable",
                     "websocket_observation_marker":readable,
                 }),
-                grants: vec![grant(Permission::Requests)],
-                bindings: vec![binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 2)],
+
+                bindings: vec![binding(EventKind::WebSocketResponse, 2)],
             },
         ],
-        vec![Permission::Requests],
         RpcLimits::default(),
     )
     .await;
@@ -358,15 +359,10 @@ async fn websocket_observer_preserves_order_generation_and_permission_boundaries
         vec![1, 2]
     );
     assert!(hidden.iter().all(|line| {
-        line["payload_bytes"] == 0
-            && line["observation"]["payload_included"] == false
-            && line["observation"].get("event_type").is_none()
+        line["payload_bytes"].as_u64().unwrap() > 0
+            && line["observation"]["payload_included"] == true
+            && line["observation"]["event_type"] == "response.output_text.delta"
             && line["observation"]["account_id"] == "acct_observed"
-            && !line.to_string().contains("client-key-observed")
-            && !line
-                .to_string()
-                .contains("grp_11111111111111111111111111111111")
-            && !line.to_string().contains("secret")
     }));
     assert_eq!(
         readable
@@ -406,7 +402,7 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
         maximum_calls: 1,
         ..RpcLimits::default()
     };
-    let (count_cache, _count_store, count_runtime) = setup_with_permissions(
+    let (count_cache, _count_store, count_runtime) = setup_instances(
         vec![InstanceFixture {
             id: "count".into(),
             configuration: serde_json::json!({
@@ -414,10 +410,9 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
                 "websocket_observation_marker":count_completed,
                 "websocket_observation_delay_ms":150,
             }),
-            grants: vec![grant(Permission::Requests)],
-            bindings: vec![binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 1)],
+
+            bindings: vec![binding(EventKind::WebSocketResponse, 1)],
         }],
-        vec![Permission::Requests],
         limits,
     )
     .await;
@@ -467,7 +462,7 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
     let byte_started = marker_directory.path().join("byte-started.jsonl");
     let fault_completed = marker_directory.path().join("fault-completed.jsonl");
     let healthy_completed = marker_directory.path().join("healthy-completed.jsonl");
-    let (byte_cache, _byte_store, byte_runtime) = setup_with_permissions(
+    let (byte_cache, _byte_store, byte_runtime) = setup_instances(
         vec![
             InstanceFixture {
                 id: "fault".into(),
@@ -477,19 +472,18 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
                     "websocket_observation_delay_ms":150,
                     "websocket_observation_fault":true,
                 }),
-                grants: vec![grant(Permission::Requests)],
-                bindings: vec![binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 1)],
+
+                bindings: vec![binding(EventKind::WebSocketResponse, 1)],
             },
             InstanceFixture {
                 id: "healthy".into(),
                 configuration: serde_json::json!({
                     "websocket_observation_marker":healthy_completed,
                 }),
-                grants: vec![grant(Permission::Requests)],
-                bindings: vec![binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 2)],
+
+                bindings: vec![binding(EventKind::WebSocketResponse, 2)],
             },
         ],
-        vec![Permission::Requests],
         RpcLimits::default(),
     )
     .await;
@@ -548,7 +542,7 @@ async fn observer_failure_continues_the_plan_and_timeout_is_bounded() {
                     "observation_marker":completed,
                     "observation_fault":true,
                 }),
-                vec![binding(REQUEST_LIFECYCLE_CONTRIBUTION, 1)],
+                vec![binding(EventKind::RequestCompleted, 1)],
             ),
             (
                 "timeout",
@@ -558,7 +552,7 @@ async fn observer_failure_continues_the_plan_and_timeout_is_bounded() {
                     "observation_marker":completed,
                     "observation_delay_ms":2500,
                 }),
-                vec![binding(REQUEST_LIFECYCLE_CONTRIBUTION, 2)],
+                vec![binding(EventKind::RequestCompleted, 2)],
             ),
         ],
         RpcLimits::default(),
@@ -591,26 +585,36 @@ async fn observer_failure_continues_the_plan_and_timeout_is_bounded() {
 
 #[tokio::test]
 async fn invalid_observer_stage_policy_and_mixed_order_are_rejected_before_publish() {
-    let mut invalid_stage = binding(REQUEST_LIFECYCLE_CONTRIBUTION, 1);
+    let mut invalid_stage = binding(EventKind::RequestCompleted, 1);
     invalid_stage.stage = "routing".into();
-    let mut invalid_policy = binding(REQUEST_LIFECYCLE_CONTRIBUTION, 1);
+    let mut invalid_policy = binding(EventKind::RequestCompleted, 1);
     invalid_policy.failure_policy = PluginFailurePolicy::Reject;
-    let mut invalid_websocket_stage = binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 1);
+    let mut invalid_websocket_stage = binding(EventKind::WebSocketResponse, 1);
     invalid_websocket_stage.stage = "stream".into();
-    let mut invalid_websocket_policy = binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 1);
+    let mut invalid_websocket_policy = binding(EventKind::WebSocketResponse, 1);
     invalid_websocket_policy.failure_policy = PluginFailurePolicy::Delegate;
+    let mut missing_event = binding(EventKind::RequestCompleted, 1);
+    missing_event.event = None;
+    let mut unknown_event = binding(EventKind::RequestCompleted, 1);
+    unknown_event.event = Some("unknown".into());
     for bindings in [
+        vec![missing_event],
+        vec![unknown_event],
+        vec![
+            binding(EventKind::RequestCompleted, 1),
+            binding(EventKind::RequestCompleted, 1),
+        ],
         vec![invalid_stage],
         vec![invalid_policy],
         vec![invalid_websocket_stage],
         vec![invalid_websocket_policy],
         vec![
-            binding(REQUEST_LIFECYCLE_CONTRIBUTION, 1),
-            binding(USAGE_CONTRIBUTION, 2),
+            binding(EventKind::RequestCompleted, 1),
+            binding(EventKind::RequestCompleted, 2),
         ],
         vec![
-            binding(USAGE_CONTRIBUTION, 1),
-            binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 2),
+            binding(EventKind::RequestCompleted, 1),
+            binding(EventKind::WebSocketResponse, 2),
         ],
     ] {
         let (_cache, store, runtime) = setup(
@@ -633,7 +637,7 @@ async fn client_scope_filters_observations_and_exposes_only_the_key_identifier()
     let marker = marker_directory.path().join("scoped-observations.jsonl");
     let matching_group = "grp_11111111111111111111111111111111";
     let other_group = "grp_22222222222222222222222222222222";
-    let mut scoped = binding(USAGE_CONTRIBUTION, 1);
+    let mut scoped = binding(EventKind::RequestCompleted, 1);
     scoped.client_key_ids = vec!["client-key-observed".into()];
     scoped.account_group_ids = vec![matching_group.into()];
     scoped.provider_ids.clear();
@@ -656,14 +660,16 @@ async fn client_scope_filters_observations_and_exposes_only_the_key_identifier()
 
     plan.dispatch(
         generation.clone(),
-        observation("req_scope_match", RequestObservationOutcome::Rejected).with_client_scope(
-            ClientApiKeyId::new("client-key-observed").unwrap(),
+        observation_with_scope(
+            "req_scope_match",
+            RequestObservationOutcome::Rejected,
+            "client-key-observed",
             vec![AccountGroupId::new(matching_group).unwrap()],
         ),
     );
     let lines = wait_for_lines(&marker, 1).await;
     assert_eq!(lines[0]["observation"]["request_id"], "req_scope_match");
-    assert!(lines[0]["observation"].get("terminal").is_none());
+    assert_eq!(lines[0]["observation"]["terminal"]["outcome"], "rejected");
     assert_eq!(
         lines[0]["observation"]["usage"]["failure"]["outcome"],
         "rejected"
@@ -698,8 +704,7 @@ async fn client_scope_filters_observations_and_exposes_only_the_key_identifier()
     ] {
         plan.dispatch(
             generation.clone(),
-            observation(request_id, RequestObservationOutcome::Rejected)
-                .with_client_scope(ClientApiKeyId::new(key).unwrap(), groups),
+            observation_with_scope(request_id, RequestObservationOutcome::Rejected, key, groups),
         );
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -710,14 +715,14 @@ async fn client_scope_filters_observations_and_exposes_only_the_key_identifier()
 }
 
 #[tokio::test]
-async fn usage_observation_contains_final_cost_timings_and_safe_failure_only() {
+async fn completed_observation_contains_terminal_cost_timings_and_failure() {
     let marker_directory = tempfile::tempdir().unwrap();
     let marker = marker_directory.path().join("usage-observations.jsonl");
     let (cache, _store, runtime) = setup(
         vec![(
             "usage",
             serde_json::json!({"observation_label":"usage","observation_marker":marker}),
-            vec![binding(USAGE_CONTRIBUTION, 1)],
+            vec![binding(EventKind::RequestCompleted, 1)],
         )],
         RpcLimits::default(),
     )
@@ -751,7 +756,7 @@ async fn usage_observation_contains_final_cost_timings_and_safe_failure_only() {
     );
     let lines = wait_for_lines(&marker, 1).await;
     let observed = &lines[0]["observation"];
-    assert!(observed.get("terminal").is_none());
+    assert_eq!(observed["terminal"]["outcome"], "failed");
     assert_eq!(observed["usage"]["cost"]["status"], "known");
     assert_eq!(observed["usage"]["cost"]["source"], "provider_reported");
     assert_eq!(observed["usage"]["cost"]["total"]["amount"], "0.0123");
@@ -778,11 +783,11 @@ async fn usage_observation_contains_final_cost_timings_and_safe_failure_only() {
 
 #[tokio::test]
 async fn invalid_client_key_and_group_scopes_are_rejected_before_publish() {
-    let mut duplicate_keys = binding(USAGE_CONTRIBUTION, 1);
+    let mut duplicate_keys = binding(EventKind::RequestCompleted, 1);
     duplicate_keys.client_key_ids = vec!["client-key".into(), "client-key".into()];
-    let mut invalid_group = binding(USAGE_CONTRIBUTION, 1);
+    let mut invalid_group = binding(EventKind::RequestCompleted, 1);
     invalid_group.account_group_ids = vec!["not-a-group".into()];
-    let mut duplicate_groups = binding(USAGE_CONTRIBUTION, 1);
+    let mut duplicate_groups = binding(EventKind::RequestCompleted, 1);
     duplicate_groups.account_group_ids = vec![
         "grp_33333333333333333333333333333333".into(),
         "grp_33333333333333333333333333333333".into(),
@@ -824,7 +829,7 @@ async fn observer_backpressure_drops_excess_and_inflight_dispatch_keeps_generati
                 "observation_marker":completed,
                 "observation_delay_ms":200,
             }),
-            vec![binding(REQUEST_LIFECYCLE_CONTRIBUTION, 1)],
+            vec![binding(EventKind::RequestCompleted, 1)],
         )],
         limits,
     )
@@ -856,5 +861,75 @@ async fn observer_backpressure_drops_excess_and_inflight_dispatch_keeps_generati
         completed[0]["observation"]["request_id"], "req_first",
         "try-acquire backpressure must not queue a second observation"
     );
+    super::wait_until_empty(cache.path()).await;
+}
+
+#[tokio::test]
+async fn one_observer_matches_completed_and_websocket_scopes_independently() {
+    let markers = tempfile::tempdir().unwrap();
+    let completed = markers.path().join("completed.jsonl");
+    let websocket = markers.path().join("websocket.jsonl");
+    let mut completed_binding = binding(EventKind::RequestCompleted, 0);
+    completed_binding.models = vec!["gpt-completed".into()];
+    let mut websocket_binding = binding(EventKind::WebSocketResponse, 0);
+    websocket_binding.models = vec!["gpt-stream".into()];
+    let (cache, _store, runtime) = setup(
+        vec![(
+            "observer",
+            serde_json::json!({
+                "observation_marker": completed, "websocket_observation_marker": websocket,
+            }),
+            vec![completed_binding, websocket_binding],
+        )],
+        RpcLimits::default(),
+    )
+    .await;
+    let generation = gateway_core::runtime::extensions::ExtensionPreparationPort::prepare(
+        &runtime,
+        ConfigRevision::new(1).unwrap(),
+    )
+    .await
+    .unwrap();
+    let plan = runtime.observer_registry().resolve(&generation).unwrap();
+    for (id, model) in [
+        ("req_matched", "gpt-completed"),
+        ("req_missed", "gpt-stream"),
+    ] {
+        plan.dispatch(
+            generation.clone(),
+            observation(id, RequestObservationOutcome::Succeeded)
+                .with_provider(ProviderKind::new("openai").unwrap())
+                .with_requested_model(PublicModelId::new(model).unwrap()),
+        );
+    }
+    for (id, model) in [
+        ("req_matched_ws", "gpt-stream"),
+        ("req_missed_ws", "gpt-completed"),
+    ] {
+        plan.dispatch_websocket_response(
+            generation.clone(),
+            websocket_observation(id, 1, serde_json::json!({"delta":"test"}))
+                .with_requested_model(PublicModelId::new(model).unwrap()),
+        );
+    }
+    assert_eq!(
+        wait_for_lines(&completed, 1).await[0]["observation"]["request_id"],
+        "req_matched"
+    );
+    assert_eq!(
+        wait_for_lines(&websocket, 1).await[0]["observation"]["request_id"],
+        "req_matched_ws"
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(wait_for_lines(&completed, 1).await.len(), 1);
+    assert_eq!(wait_for_lines(&websocket, 1).await.len(), 1);
+    for id in ["req_matched_ws", "req_missed_ws"] {
+        plan.dispatch(
+            generation.clone(),
+            observation(id, RequestObservationOutcome::Succeeded),
+        );
+    }
+    drop(plan);
+    drop(generation);
     super::wait_until_empty(cache.path()).await;
 }

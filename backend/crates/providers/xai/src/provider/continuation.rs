@@ -1,4 +1,4 @@
-//! xAI continuation 与 reasoning replay 状态处理。
+//! xAI continuation 与 reasoning replay 状态处理
 
 use super::*;
 
@@ -121,7 +121,7 @@ pub(super) fn apply_continuation(
                 let previous = previous_session.ok_or_else(invalid_continuation)?;
                 return apply_replay(request, previous, account, current_input);
             }
-            // Grok 原生续接继承首轮指令，不允许同时提交 instructions。
+            // Grok 原生续接继承首轮指令，不允许同时提交 instructions
             request.clear_instructions();
             request.set_previous_response_id(Some(pin.upstream_response_id().as_str().to_owned()));
             Ok(())

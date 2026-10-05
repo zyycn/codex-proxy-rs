@@ -30,14 +30,17 @@
 | 账号 | `admin@cpr.local` |
 | 密码 | `039c18de2aeac46d23ead7766bb07bbbe3747233c66a128e` |
 
-预览服务运行已发布版本，展示的账号、代理与使用记录均为模拟数据，每天北京时间 `00:00` 自动生成当天数据。
+预览服务运行已发布版本，展示的账号、代理与使用记录均为模拟数据，每天北京时间 `00:00` 自动生成当天数据
+
 这是公开共享的功能预览环境，不提供真实模型调用；请勿导入真实账号、密钥或其他敏感信息
 
 ## 快速开始
 
-使用 Docker Compose 部署版本固定的发布镜像，同时启动 PostgreSQL 和 Redis。
-以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL。已有部署请先看
-[升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置
+使用 Docker Compose 部署版本固定的发布镜像，同时启动 PostgreSQL 和 Redis
+
+以下命令适用于 Linux amd64/arm64，需要 Docker Engine、Docker Compose Plugin、curl 和 OpenSSL
+
+已有部署请先看 [升级说明](deploy/README.md#镜像升级与源码构建)，不要覆盖原配置
 
 ### 一键安装
 
@@ -48,7 +51,9 @@ curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/in
 ```
 
 [安装脚本](deploy/install.sh) 默认安装到当前目录下的 `codex-proxy-rs/`，下载同一正式 Release 的部署文件，
-自动生成密码、设置目录权限并启动服务。完成后会显示访问地址和管理员密码，请保存密码，再按下方步骤
+自动生成密码、设置目录权限并启动服务
+
+完成后会显示访问地址和管理员密码，请保存密码，再按下方步骤
 [添加账号与客户端密钥](#添加账号与客户端密钥)
 
 可在执行 `bash install.sh` 时传入环境变量：
@@ -65,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/zyycn/codex-proxy-rs/main/deploy/in
 INSTALL_DIR="$HOME/services/codex-proxy-rs" bash install.sh
 ```
 
-重复运行时请使用同一安装目录。检测到 `deploy/config.yaml` 后，脚本保留现有配置和部署文件，
+重复运行时请使用同一安装目录，检测到 `deploy/config.yaml` 后，脚本保留现有配置和部署文件，
 忽略传入的管理员密码，也不执行版本升级
 
 ### 手动安装
@@ -74,9 +79,9 @@ INSTALL_DIR="$HOME/services/codex-proxy-rs" bash install.sh
 
 ### 登录管理端
 
-部署完成后，打开 `http://127.0.0.1:8080`，使用 `admin@cpr.local` 和管理员密码登录。
-API Key 持有者可在同一登录页切换登录身份，进入 `/key-usage` 查看自己的用量、趋势、请求日志、额度与健康时间线；不能访问管理员页面。
-页面右上角的「密钥配置」支持复制 Codex 配置文件和导入 CCSwitch，导入时同时启用当前 Key 的日／周额度查询，默认刷新间隔为 30 分钟
+部署完成后，打开 `http://127.0.0.1:8080`，使用 `admin@cpr.local` 和管理员密码登录
+
+API Key 持有者可在登录页切换身份，查看自己的用量与额度，并通过「密钥配置」复制 Codex 配置或导入 CCSwitch
 
 默认地址只能在服务器本机访问，从其他设备使用时，需要配置
 [HTTPS 反向代理](deploy/README.md#公网访问)
@@ -89,8 +94,9 @@ API Key 持有者可在同一登录页切换登录身份，进入 `/key-usage` �
 
 ## 客户端接入
 
-**Codex CLI / 桌面端**：在「使用密钥」中按操作系统复制配置，或通过 CCSwitch 导入。
-合并到客户端配置后重启 Codex。完整步骤、生图配置与排障见[客户端配置](deploy/README.md#客户端配置)
+**Codex CLI / 桌面端**：在「使用密钥」中按操作系统复制配置，或通过 CCSwitch 导入，合并配置后重启 Codex
+
+完整步骤、生图配置与排障见[客户端配置](deploy/README.md#客户端配置)
 
 **其他 Responses API 客户端**：填写以下信息：
 
@@ -114,7 +120,8 @@ curl http://127.0.0.1:8080/v1/models \
 | 接口集成 | [API 参考](docs/api.md) · [模型定价](docs/api.md#模型定价) |
 | 使用插件 | [安装、配置与使用](docs/plugins.md) |
 | 开发插件 | [SDK 与合同](backend/crates/gateway-plugin/sdk/README.md) · [打包工具](backend/apps/plugin-cli/README.md) |
-| 开发宿主 | [贡献与验证](CONTRIBUTING.md) · [源码联调](docs/development.md) · [系统架构](docs/architecture.md) · [管理端主题](docs/theme.md) · [数据库迁移](backend/migrations/README.md) |
+| 开发宿主 | [开发与源码联调](docs/development.md) · [系统架构](docs/architecture.md) · [管理端主题](docs/theme.md) · [数据库迁移](backend/migrations/README.md) |
+| 参与协作 | [贡献、审查与验证](CONTRIBUTING.md) |
 
 ## 社区
 

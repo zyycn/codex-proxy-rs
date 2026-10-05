@@ -30,18 +30,6 @@ pub struct LiveClose {
     pub reason: String,
 }
 
-impl LiveFrame {
-    /// 帧载荷长度；用于下游回压与体积审计。
-    #[must_use]
-    pub const fn payload_len(&self) -> usize {
-        match self {
-            Self::Text(payload) | Self::Binary(payload) => payload.len(),
-            Self::Ping(payload) | Self::Pong(payload) => payload.len(),
-            Self::Close(_) => 0,
-        }
-    }
-}
-
 /// sideband 的上游目标形态；决定钉住账号拨号使用的路径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveSidebandStyle {

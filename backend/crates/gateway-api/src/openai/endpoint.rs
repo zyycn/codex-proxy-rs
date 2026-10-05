@@ -1,4 +1,4 @@
-//! OpenAI Provider 原生非流式 JSON 端点的公共交付边界。
+//! OpenAI Provider 原生非流式 JSON 端点的公共交付边界
 
 use std::net::IpAddr;
 
@@ -16,10 +16,10 @@ use gateway_core::{
     operation::Operation,
 };
 
+use crate::middleware::headers::encode_headers;
 use crate::openai::middleware::{
-    ExpectedBody, HttpMiddlewareInput, PendingExecution, buffered_response, error_response,
-    into_http_response, invoke_http_middleware, pending_execution_response, request_headers,
-    request_parts,
+    ExpectedBody, PendingExecution, RequestInput, buffered_response, error_response,
+    into_http_response, invoke_request, pending_execution_response, request_parts,
 };
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 
@@ -29,11 +29,11 @@ use super::{
     service::OpenAiService,
 };
 
-/// Provider 自有端点也先冻结身份，再通过统一请求链进入原有执行与结算路径。
+/// Provider 自有端点也先冻结身份，再通过统一请求链进入原有执行与结算路径
 pub(super) async fn provider_endpoint_response<F>(
     service: OpenAiService,
     client: AuthenticatedClient,
-    input: HttpMiddlewareInput,
+    input: RequestInput,
     client_ip: Option<IpAddr>,
     user_agent: Option<String>,
     decode: F,
@@ -48,7 +48,7 @@ where
     };
     let request_id = prepared.request_id().clone();
     let endpoint = input.endpoint.clone();
-    let result = invoke_http_middleware(
+    let result = invoke_request(
         execution,
         prepared,
         input,
@@ -88,7 +88,7 @@ where
     }
 }
 
-/// 只收集正文，不提前 commit；外层完成响应变换与校验后才提交 Core。
+/// 只收集正文，不提前 commit；外层完成响应变换与校验后才提交 Core
 async fn collect_raw_json_response(
     started: StartedExecution,
 ) -> Result<MiddlewareResponse, MiddlewareError> {
@@ -127,7 +127,7 @@ async fn collect_raw_json_response(
     Ok(pending_execution_response(
         "openai".to_owned(),
         parts.status.as_u16(),
-        request_headers(&parts.headers),
+        encode_headers(&parts.headers),
         MiddlewareFrame::new(bytes, framing, true).with_transformed(transformed),
         execution,
     ))

@@ -1,4 +1,4 @@
-//! 价格覆盖与请求费用明细的持久化。
+//! 价格覆盖与请求费用明细的持久化
 
 use gateway_admin::model::pricing::{PricingChange, PricingSyncChanges, UpdatePricing};
 use gateway_core::{
@@ -59,7 +59,7 @@ pub(crate) fn decode_billing_snapshot(
         })
     };
     Some(CalculatedBillingBreakdown {
-        // 旧快照未记录长上下文计费事实，不根据当前价格倒推历史标识。
+        // 旧快照未记录长上下文计费事实，不根据当前价格倒推历史标识
         long_context_billing_applied: value
             .get("longContextBillingApplied")
             .and_then(serde_json::Value::as_bool)
@@ -202,7 +202,7 @@ impl PgControlPlaneRepository {
             .begin()
             .await
             .map_err(|_| postgres_unavailable("begin model pricing update"))?;
-        // 锁定当前配置再更新选中项，避免批量操作覆盖其他管理员已提交的模型。
+        // 锁定当前配置再更新选中项，避免批量操作覆盖其他管理员已提交的模型
         let (Json(mut pricing), Json(mut synced)) = sqlx::query_as::<_, (Json<PricingOverrides>, Json<PricingOverrides>)>(
             "select pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1 for update",
         )

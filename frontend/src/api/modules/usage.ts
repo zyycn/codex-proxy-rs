@@ -83,6 +83,8 @@ export interface UsageListRecord {
   accountEmail: string | null
   accountName: string | null
   accountNotes: string | null
+  accountPlanType: string | null
+  accountPlanTypeDisplay: string | null
   route: string
   model: string | null
   requestedModel: string | null
@@ -276,6 +278,8 @@ export interface OpsError {
   accountId: string | null
   accountName: string | null
   accountEmail: string | null
+  accountPlanType: string | null
+  accountPlanTypeDisplay: string | null
   route: string
   model: string | null
   requestedModel: string | null
@@ -436,6 +440,8 @@ export interface UsageInsightsOverviewResponse {
 export interface UsageDiagnosticItem {
   key: string
   name: string
+  accountPlanType: string | null
+  accountPlanTypeDisplay: string | null
   requestCount: number
   successCount: number
   errorCount: number
@@ -460,8 +466,8 @@ export interface UsageDiagnosticsResponse {
 
 // 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
 interface UsageRangeQuery {
-  startTime: string
-  endTime: string
+  period: 'today' | '7d' | '30d'
+  asOf: number
   provider?: string
   model?: string
   statusCode?: number

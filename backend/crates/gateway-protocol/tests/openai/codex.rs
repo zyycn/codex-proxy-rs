@@ -1,3 +1,5 @@
+//! 验证 Codex 会话身份优先级、轮次元数据与多代理模式解析
+
 use gateway_protocol::openai::{
     codex_responses_request_semantics, codex_session_id, codex_thread_id,
 };

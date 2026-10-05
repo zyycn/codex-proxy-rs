@@ -1,4 +1,7 @@
+//! 验证账号删除后请求、尝试与运维事件仍保留各自历史快照
+
 use chrono::{DateTime, TimeDelta, Utc};
+use gateway_admin::ports::store::ObservabilityStore as _;
 use gateway_store::postgres::{
     DiagnosticDimension, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
     ObservabilityPageSize, ObservabilityRange, ObservabilityRepository, OpsErrorFilter,
@@ -111,7 +114,8 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
             DiagnosticDimension::Account,
         )
         .await
-        .expect("load statusless usage diagnostics");
+        .expect("load statusless usage diagnostics")
+        .items;
     assert_eq!(
         (
             diagnostics[0].request_count,
@@ -515,7 +519,8 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
             DiagnosticDimension::Account,
         )
         .await
-        .expect("account diagnostics");
+        .expect("account diagnostics")
+        .items;
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(
         diagnostics
@@ -587,7 +592,8 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
             DiagnosticDimension::Account,
         )
         .await
-        .expect("account diagnostics");
+        .expect("account diagnostics")
+        .items;
     let by_key = diagnostics
         .iter()
         .map(|item| (item.key.as_str(), item.name.as_str()))
@@ -652,7 +658,8 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
             DiagnosticDimension::Account,
         )
         .await
-        .expect("account diagnostics");
+        .expect("account diagnostics")
+        .items;
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "acct_snapshot_history");
@@ -713,7 +720,8 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
             DiagnosticDimension::Failure,
         )
         .await
-        .expect("failure diagnostics");
+        .expect("failure diagnostics")
+        .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "rate_limited");
     assert_eq!(diagnostics[0].request_count, 1);
@@ -777,7 +785,8 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
             DiagnosticDimension::Model,
         )
         .await
-        .expect("model diagnostics");
+        .expect("model diagnostics")
+        .items;
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "upstream-model");
@@ -839,6 +848,137 @@ async fn tokenless_provider_endpoints_should_remain_in_health_but_not_usage_reco
 }
 
 #[tokio::test]
+async fn diagnostics_should_keep_filtered_totals_before_limiting_groups() {
+    let Some(database) = TestDatabase::create("diagnostic_totals").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_account(&database.pool, "acct_totals", "Totals", None, "oauth", now).await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    for index in 0..201 {
+        let id = format!("req_total_{index:03}");
+        let mut first_attempt = attempt(&id, 1, "acct_totals");
+        first_attempt.upstream_model_id = Some(format!("model_{:03}", index % 200));
+        store
+            .insert_model_request_with_first_attempt(new_request(&id, now), first_attempt)
+            .await
+            .expect("insert model group");
+        finalize_request(&database.pool, &id, now).await;
+    }
+    sqlx::query(
+        "update model_requests set cost_source = 'provider_reported', cost_amount = 1,
+        cost_currency = case when id = 'req_total_200' then 'EUR' else 'USD' end",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("set currency groups");
+    let repository = observability_repository(&database.pool);
+    let result = repository
+        .usage_diagnostics(
+            range_around(now),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Model,
+        )
+        .await
+        .expect("limited groups");
+    assert_eq!(
+        (
+            result.total_request_count,
+            result.items.len(),
+            result
+                .items
+                .iter()
+                .map(|item| item.request_count)
+                .sum::<u64>()
+        ),
+        (201, 100, 101)
+    );
+    assert_eq!(
+        (result.items[0].key.as_str(), result.items[0].costs.len()),
+        ("model_000", 2)
+    );
+
+    let filtered = repository
+        .usage_diagnostics(
+            range_around(now),
+            UsageRecordFilter {
+                model: Some("model_000".to_owned()),
+                ..UsageRecordFilter::default()
+            },
+            DiagnosticDimension::Model,
+        )
+        .await
+        .expect("filtered denominator");
+    assert_eq!((filtered.total_request_count, filtered.items.len()), (2, 1));
+    let empty = repository
+        .usage_diagnostics(
+            range_around(now),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Failure,
+        )
+        .await
+        .expect("empty error dimension");
+    assert_eq!((empty.total_request_count, empty.items.len()), (0, 0));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn diagnostics_should_distinguish_retry_attempts_from_retried_requests() {
+    let Some(database) = TestDatabase::create("diagnostic_retries").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_account(
+        &database.pool,
+        "acct_retries",
+        "Retries",
+        None,
+        "oauth",
+        now,
+    )
+    .await;
+    let store = PgExecutionStore::new(database.pool.clone());
+    for (index, attempts) in [0, 1, 1, 1, 1, 1, 3, 5].into_iter().enumerate() {
+        let id = format!("req_retry_{index}");
+        store
+            .insert_model_request_with_first_attempt(
+                new_request(&id, now),
+                attempt(&id, 1, "acct_retries"),
+            )
+            .await
+            .expect("insert retry request");
+        finalize_request(&database.pool, &id, now).await;
+        sqlx::query("update model_requests set attempt_count = $2 where id = $1")
+            .bind(id)
+            .bind(attempts)
+            .execute(&database.pool)
+            .await
+            .expect("set attempts");
+    }
+    let result = super::admin_observability_store(&database.pool)
+        .usage_diagnostics(
+            gateway_admin::model::observability::TimeRange::new(
+                now - TimeDelta::hours(1),
+                now + TimeDelta::hours(1),
+            )
+            .expect("range"),
+            gateway_admin::model::observability::UsageFilter::default(),
+            gateway_admin::model::observability::DiagnosticDimension::Model,
+        )
+        .await
+        .expect("retry metrics through admin adapter");
+    assert_eq!(
+        (
+            result.total_request_count,
+            result.items[0].retry_count,
+            result.items[0].retried_request_count
+        ),
+        (8, 6, 2)
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
     let Some(database) = TestDatabase::create("snapshot_api_key_dimension").await else {
         return;
@@ -886,7 +1026,8 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             DiagnosticDimension::ApiKey,
         )
         .await
-        .expect("api key diagnostics");
+        .expect("api key diagnostics")
+        .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "My Key");
@@ -904,7 +1045,8 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             DiagnosticDimension::ApiKey,
         )
         .await
-        .expect("api key diagnostics after deletion");
+        .expect("api key diagnostics after deletion")
+        .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "key_diag");

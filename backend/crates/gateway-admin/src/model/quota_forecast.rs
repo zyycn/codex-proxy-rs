@@ -1,4 +1,4 @@
-//! 账号额度的只读容量估算，不参与金额结算或账号调度。
+//! 账号额度的只读容量估算，不参与金额结算或账号调度
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -28,9 +28,6 @@ pub struct AccountQuotaForecast {
     pub incomplete_tokens: bool,
     pub estimated_tokens: Option<u64>,
     pub estimated_usd: Option<f64>,
-    /// 剩余估算始终属于源窗口，不随目标周期折算。
-    pub remaining_tokens: Option<u64>,
-    pub remaining_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,9 +40,9 @@ pub struct QuotaForecastSource {
     pub usd: Option<f64>,
 }
 
-/// 为目标周期选择唯一的预测源窗口；缺少同周期窗口时复用最短的可统计窗口。
+/// 为目标周期选择唯一的预测源窗口；缺少同周期窗口时复用最短的可统计窗口
 ///
-/// Admin 的历史查询与最终投影必须共用这里的顺序，避免查询不会进入响应的窗口。
+/// Admin 的历史查询与最终投影必须共用这里的顺序，避免查询不会进入响应的窗口
 pub(crate) fn quota_forecast_source_window(
     quota: &ProviderQuota,
     period: AccountUsagePeriod,
@@ -56,8 +53,8 @@ pub(crate) fn quota_forecast_source_window(
         .or_else(|| quota.usage_windows().min_by_key(|(_, period)| *period))
 }
 
-/// 优先预测真实的对应窗口；缺少对应周期时只给出明确标识的 7/30 天容量折算。
-/// 本地日志不能证明站外消耗或完整留存，因此即使样本充足也不声称官方额度。
+/// 优先预测真实的对应窗口；缺少对应周期时只给出明确标识的 7/30 天容量折算
+/// 本地日志不能证明站外消耗或完整留存，因此即使样本充足也不声称官方额度
 #[must_use]
 pub fn account_quota_forecasts(
     quota: &ProviderQuota,
@@ -81,8 +78,6 @@ pub fn account_quota_forecasts(
             incomplete_tokens: false,
             estimated_tokens: None,
             estimated_usd: None,
-            remaining_tokens: None,
-            remaining_usd: None,
         };
         if let Some((window, source_period)) = selected {
             forecast.project(
@@ -183,22 +178,21 @@ impl AccountQuotaForecast {
         };
         self.low_sample = sample.sampled_percent < LOW_SAMPLE_PERCENT
             || (method == QuotaForecastMethod::Incremental && sample.block_count < 2);
-        // 漏记和个别缺失只影响精度，仍按已记录数值估算，不按请求数补齐未知消耗。
-        // 预测是近似展示值；不复用为账单金额，也不把月折算当成自然月或额外余额。
-        // 已发生的用量保持本周期累计，只把近期消耗比例用于尚未使用的额度。
+        // 漏记和个别缺失只影响精度，仍按已记录数值估算，不按请求数补齐未知消耗
+        // 预测是近似展示值；不复用为账单金额，也不把月折算当成自然月或额外余额
+        // 已发生的用量保持本周期累计，只把近期消耗比例用于尚未使用的额度
         let factor = self.target_seconds as f64 / seconds as f64;
         let remaining_factor = (100.0 - percent) / sample.sampled_percent;
         let remaining_tokens = Some(sample.usage.tokens)
             .filter(|tokens| *tokens > 0)
             .and_then(|value| estimate(value as f64, remaining_factor));
-        self.remaining_tokens = remaining_tokens.and_then(|value| estimate_tokens(value, 1.0));
         self.estimated_tokens = remaining_tokens
             .and_then(|remaining| estimate_tokens(usage.tokens as f64 + remaining, factor));
-        self.remaining_usd = Some(&sample.usage)
+        let remaining_usd = Some(&sample.usage)
             .filter(|usage| usage.known_cost_count > 0 && usage.usd.is_finite() && usage.usd >= 0.0)
             .and_then(|usage| estimate(usage.usd, remaining_factor));
         self.estimated_usd = usd
-            .zip(self.remaining_usd)
+            .zip(remaining_usd)
             .and_then(|(used, remaining)| estimate(used + remaining, factor));
         self.unavailable_reason = if self.estimated_tokens.is_none() && self.estimated_usd.is_none()
         {

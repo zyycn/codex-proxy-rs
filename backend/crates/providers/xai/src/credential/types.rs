@@ -1,4 +1,4 @@
-//! xAI OAuth 账号输入、状态与明文 credential wire。
+//! xAI OAuth 账号输入、状态与明文 credential wire
 
 use std::fmt;
 
@@ -15,7 +15,7 @@ use crate::SecretValue;
 
 pub const XAI_AUTHENTICATION_KIND_OAUTH: &str = "oauth";
 
-/// 官方 xAI OAuth token pair；不接受 API Key。
+/// 官方 xAI OAuth token pair；不接受 API Key
 pub struct GrokOAuthSecret {
     pub access_token: SecretValue,
     pub refresh_token: SecretValue,
@@ -35,14 +35,14 @@ impl fmt::Debug for GrokOAuthSecret {
     }
 }
 
-/// 已由 OIDC 验证边界确认的 xAI 身份与 token 生命周期。
+/// 已由 OIDC 验证边界确认的 xAI 身份与 token 生命周期
 pub struct GrokAccountProfile {
     pub subject: String,
     pub email: Option<String>,
     pub upstream_account_id: Option<String>,
     pub plan_type: Option<String>,
     pub access_token_expires_at: DateTime<Utc>,
-    /// Provider 明确返回时才保存；普通账号导出通常不携带 RT 过期时间。
+    /// Provider 明确返回时才保存；普通账号导出通常不携带 RT 过期时间
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
 }
 
@@ -63,7 +63,7 @@ impl fmt::Debug for GrokAccountProfile {
     }
 }
 
-/// 创建一个明文 OAuth Provider account。
+/// 创建一个明文 OAuth Provider account
 pub struct CreateGrokCredential {
     pub account_id: ProviderAccountId,
     pub name: String,
@@ -89,7 +89,7 @@ impl fmt::Debug for CreateGrokCredential {
     }
 }
 
-/// 用 credential revision CAS 轮换完整 OAuth token pair。
+/// 用 credential revision CAS 轮换完整 OAuth token pair
 pub struct RotateGrokCredential {
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
@@ -97,7 +97,7 @@ pub struct RotateGrokCredential {
     pub verified_account: GrokAccountProfile,
 }
 
-/// App 已读取的当前账号与 xAI 已验证的新 OAuth 身份材料。
+/// App 已读取的当前账号与 xAI 已验证的新 OAuth 身份材料
 pub struct RotateManagedGrokCredential {
     pub current: LoadedCredential,
     pub secret: GrokOAuthSecret,
@@ -115,7 +115,7 @@ impl fmt::Debug for RotateManagedGrokCredential {
     }
 }
 
-/// xAI 验证后的管理员 rotation；App 只做 Core command 到原子事务的机械映射。
+/// xAI 验证后的管理员 rotation；App 只做 Core command 到原子事务的机械映射
 pub struct PreparedGrokCredentialRotation {
     pub profile: ProviderAccountUpdate,
     pub credential: CredentialCasUpdate,
@@ -162,7 +162,7 @@ impl PreparedGrokCredentialRotation {
         self
     }
 
-    /// 将 command 与 lease 一起交给 App；返回的 guard 必须活到 CAS 提交结束。
+    /// 将 command 与 lease 一起交给 App；返回的 guard 必须活到 CAS 提交结束
     #[must_use]
     pub fn into_parts(
         self,
@@ -179,7 +179,7 @@ impl PreparedGrokCredentialRotation {
     }
 }
 
-/// 手工刷新从 token exchange 到数据库 CAS 完成期间持有的 Redis lease。
+/// 手工刷新从 token exchange 到数据库 CAS 完成期间持有的 Redis lease
 pub struct PreparedGrokCredentialRotationGuard(Option<ProviderRefreshGuards>);
 
 impl fmt::Debug for PreparedGrokCredentialRotationGuard {
@@ -203,7 +203,7 @@ impl fmt::Debug for RotateGrokCredential {
     }
 }
 
-/// 用 credential revision fence 更新账号状态。
+/// 用 credential revision fence 更新账号状态
 #[derive(Clone, Debug)]
 pub struct UpdateGrokCredentialState {
     pub account_id: ProviderAccountId,
@@ -214,7 +214,7 @@ pub struct UpdateGrokCredentialState {
     pub observed_at: DateTime<Utc>,
 }
 
-/// 不包含 secret 的写入结果。
+/// 不包含 secret 的写入结果
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrokCredentialRecord {
     pub account_id: ProviderAccountId,

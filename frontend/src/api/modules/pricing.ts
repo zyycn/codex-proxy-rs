@@ -22,6 +22,7 @@ export interface PricingCatalog {
   synced: PricingMap
   overrides: PricingMap
   syncedAt: string | null
+  syncedAtDisplay: string | null
 }
 
 export type PricingChange

@@ -1,6 +1,7 @@
-//! Admin 认证与设置 adapter。
+//! Admin 认证与设置 adapter
 
 use super::*;
+use gateway_admin::model::audit::MutationAuditOperation;
 
 pub(crate) struct AuthStoreAdapter {
     pub(crate) security: postgres::PgAdminSecurityAuditRepository,
@@ -29,8 +30,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
     ) -> AdminStoreResult<gateway_admin::model::Revision> {
         let audit = mutation_audit(
             context,
-            "pricing.sync",
-            "model_pricing",
+            MutationAuditOperation::ModelPricingSync,
             "models.dev",
             vec!["synced".to_owned()],
         );
@@ -49,8 +49,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
     ) -> AdminStoreResult<gateway_admin::model::Revision> {
         let audit = mutation_audit(
             context,
-            "pricing.update",
-            "model_pricing",
+            MutationAuditOperation::ModelPricingUpdate,
             &command.provider,
             command.models.clone(),
         );
@@ -81,13 +80,10 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         command: ReplaceRuntimeSettings,
         context: &MutationContext,
     ) -> AdminStoreResult<AdminRuntimeSettings> {
-        let current = postgres::ControlPlaneRepository::load_control_plane(&self.control_plane)
-            .await
-            .map_err(|error| admin_store_error("runtime settings", error))?;
         let replacement = postgres::ControlPlaneReplacement {
+            expected_revision: store_revision(command.expected_revision)?,
             settings: postgres::RuntimeSettingsUpdate {
                 request_profile_updates: command.request_profile_updates,
-                admin_api_key: current.settings.admin_api_key,
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
@@ -97,6 +93,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 max_waiting_per_key: command.max_waiting_per_key,
                 max_waiting_per_account: command.max_waiting_per_account,
                 concurrency_wait_timeout_seconds: command.concurrency_wait_timeout_seconds,
+                openai_guardian_reserved_concurrency: command.openai_guardian_reserved_concurrency,
                 responses_max_decompressed_body_bytes: command
                     .responses_max_decompressed_body_bytes,
                 smart_scheduling: command.smart_scheduling,
@@ -121,8 +118,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
             },
             audit: mutation_audit(
                 context,
-                "settings.replace",
-                "runtime_settings",
+                MutationAuditOperation::RuntimeSettingsReplace,
                 "1",
                 vec![
                     "provider_request_profiles_json".to_owned(),
@@ -136,6 +132,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "max_waiting_per_key".to_owned(),
                     "max_waiting_per_account".to_owned(),
                     "concurrency_wait_timeout_seconds".to_owned(),
+                    "openai_guardian_reserved_concurrency".to_owned(),
                     "responses_max_decompressed_body_bytes".to_owned(),
                     "rotation_strategy".to_owned(),
                     "smart_scheduling_json".to_owned(),
@@ -184,12 +181,7 @@ impl AdminSettingsStoreAdapter {
             admin_api_key,
             mutation_audit(
                 context,
-                if exists {
-                    "admin_api_key.replace"
-                } else {
-                    "admin_api_key.delete"
-                },
-                "runtime_settings",
+                MutationAuditOperation::AdminApiKeyChanged { exists },
                 "1",
                 vec!["admin_api_key".to_owned()],
             ),
@@ -248,6 +240,7 @@ pub(crate) fn admin_runtime_settings(
         max_waiting_per_key: settings.max_waiting_per_key,
         max_waiting_per_account: settings.max_waiting_per_account,
         concurrency_wait_timeout_seconds: settings.concurrency_wait_timeout_seconds,
+        openai_guardian_reserved_concurrency: settings.openai_guardian_reserved_concurrency,
         responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
         smart_scheduling: settings.smart_scheduling,
         rotation_strategy,
@@ -414,21 +407,9 @@ fn auth_audit_record(event: AdminAuditModel) -> AdminStoreResult<postgres::Admin
                 "config revision is outside the supported range",
             )
         })?;
-    let actor_kind = match event.actor_kind {
-        gateway_admin::model::auth::AuditActorKind::AdminSession => {
-            postgres::AdminAuditActorKind::AdminSession
-        }
-        gateway_admin::model::auth::AuditActorKind::AdminApiKey => {
-            postgres::AdminAuditActorKind::AdminApiKey
-        }
-        gateway_admin::model::auth::AuditActorKind::System => postgres::AdminAuditActorKind::System,
-        gateway_admin::model::auth::AuditActorKind::Anonymous => {
-            postgres::AdminAuditActorKind::Anonymous
-        }
-    };
     Ok(postgres::AdminAuditEvent {
         id: event.id,
-        actor_kind,
+        actor_kind: event.actor_kind.into(),
         actor_admin_user_id: event.actor_admin_user_id,
         actor_ref: event.actor_ref,
         admin_request_id: event.request_id,

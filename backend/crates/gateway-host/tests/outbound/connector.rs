@@ -1,3 +1,5 @@
+//! 验证固定目标地址的直连和代理连接保留 Host、SNI 与证书校验
+
 use std::{sync::Arc, time::Duration};
 
 use gateway_core::{account::OutboundProxy, upstream::UpstreamSendState};

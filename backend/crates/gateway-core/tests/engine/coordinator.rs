@@ -1,4 +1,4 @@
-//! 单行 `model_requests`、账号重试与下游提交屏障测试。
+//! 单行 `model_requests`、账号重试与下游提交屏障测试
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
@@ -25,8 +25,7 @@ use gateway_core::engine::provider::{
 use gateway_core::engine::{
     AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, CommitRequirement,
     ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore, GatewayEngine,
-    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
-    ProviderAttemptOutcome, RecoveryReport,
+    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest, RecoveryReport,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
@@ -279,7 +278,7 @@ enum Script {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
     },
-    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline。
+    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline
     HangingStream {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
@@ -369,7 +368,7 @@ impl Provider for ScriptedProvider {
             .expect("operations lock")
             .push(request.operation().clone());
         self.contexts.lock().expect("contexts lock").push(context);
-        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本。
+        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本
         self.profile_generation.fetch_add(1, Ordering::SeqCst);
         let script = self
             .scripts
@@ -678,7 +677,16 @@ fn plan_with_profiles(
     ));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
-        account_selection_policy,
+        gateway_core::settings::SettingsValues::new(
+            account_selection_policy.max_concurrent_per_account().get(),
+            u64::try_from(account_selection_policy.request_interval().as_millis()).unwrap(),
+            account_selection_policy.strategy().as_str(),
+            Default::default(),
+            None,
+            None,
+        )
+        .with_smart_scheduling(account_selection_policy.smart_scheduling())
+        .with_request_location(request_location, true),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider.clone(),
@@ -688,7 +696,6 @@ fn plan_with_profiles(
         Vec::new(),
     )
     .expect("snapshot")
-    .with_request_location(Some(request_location))
     .with_account_directory(Arc::clone(&directory));
     snapshot
         .plan(
@@ -731,7 +738,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         continuation: Default::default(),
         image_generation_requested: operation.image_generation_requested(),
         started_at: SystemTime::now(),
-        deadline_at: deadline,
+        deadline_at: deadline.into(),
     }
 }
 
@@ -797,6 +804,35 @@ fn terminal_non_idempotent_failure(
 }
 
 #[test]
+fn request_without_total_deadline_can_complete_after_ten_minutes() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: complete_stream(Some(12)),
+    }]);
+    let mut request = model_request(&operation, SystemTime::now());
+    request.started_at = SystemTime::now() - Duration::from_secs(601);
+    request.deadline_at = gateway_core::lifecycle::Deadline::default();
+    let mut session = block_on(coordinator.start(
+        request,
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start long request");
+    block_on(session.collect_uncommitted()).expect("collect long response");
+    block_on(session.commit_downstream(Some(200))).expect("commit long response");
+    assert!(session.is_finalized());
+    assert_eq!(provider.contexts.lock().unwrap()[0].deadline().at(), None);
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert_eq!(state.attempts.len(), 1);
+}
+
+#[test]
 fn success_updates_one_model_request_and_persists_usage() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
@@ -830,12 +866,6 @@ fn success_updates_one_model_request_and_persists_usage() {
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
     assert!(session.is_finalized());
-    assert_eq!(
-        session.provider_attempt_outcomes(),
-        &[ProviderAttemptOutcome::Succeeded {
-            provider_kind: ProviderKind::new("openai").expect("provider"),
-        }]
-    );
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.created, 1);
     assert_eq!(state.attempts.len(), 1);
@@ -2142,13 +2172,6 @@ fn required_account_disables_account_retry_after_stream_creation() {
         error,
         gateway_core::engine::EngineError::Provider(_)
     ));
-    assert_eq!(
-        session.provider_attempt_outcomes(),
-        &[ProviderAttemptOutcome::Failed {
-            provider_kind: ProviderKind::new("openai").expect("provider"),
-            error_kind: ProviderErrorKind::Unavailable,
-        }]
-    );
     assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
     assert_eq!(provider.scripts.lock().expect("scripts lock").len(), 1);
     let state = store.state.lock().expect("store lock");
@@ -2628,7 +2651,7 @@ fn retryable_error_after_credential_recovery_switches_account_instead_of_termina
     assert_eq!(contexts.len(), 3);
     assert_eq!(contexts[1].required_account(), Some(&first));
     assert!(contexts[1].credential_recovery_attempted());
-    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号。
+    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号
     assert_eq!(contexts[2].required_account(), None);
     assert!(contexts[2].excluded_accounts().contains(&first));
     let state = store.state.lock().expect("store lock");
@@ -2731,7 +2754,7 @@ fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 1);
     assert_eq!(state.finalizations.len(), 1);
-    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent。
+    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent
     assert_eq!(state.finalizations[0].send_state, UpstreamSendState::Sent);
     assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
     assert_eq!(
@@ -3903,13 +3926,6 @@ fn structural_event_before_replay_safe_failure_should_switch_account_before_comm
     assert_eq!(first.into_provider_events().len(), 1);
     block_on(session.commit_downstream(Some(200))).expect("commit first event");
     block_on(session.next_event()).expect_err("committed stream failure must not be replayed");
-    assert_eq!(
-        session.provider_attempt_outcomes(),
-        &[ProviderAttemptOutcome::Failed {
-            provider_kind: ProviderKind::new("openai").expect("provider"),
-            error_kind: ProviderErrorKind::Transport,
-        }]
-    );
     assert_eq!(provider.contexts.lock().expect("contexts lock").len(), 1);
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.commits, 1);
@@ -3992,7 +4008,6 @@ fn no_eligible_account_before_stream_records_failure_without_fabricating_an_atte
             gateway_core::engine::EngineError::Provider(ref error)
                 if error.kind() == kind
         ));
-        assert!(session.provider_attempt_outcomes().is_empty());
         assert!(session.is_finalized());
         block_on(session.record_client_status(status)).expect("HTTP error status");
         block_on(session.cancel_and_finalize()).expect("repeated finalization");
@@ -4257,7 +4272,6 @@ fn deadline_during_preparation_records_failure_without_an_upstream_attempt() {
         block_on(session.next_event()),
         Err(EngineError::Deadline)
     ));
-    assert!(session.provider_attempt_outcomes().is_empty());
     assert!(session.is_finalized());
     assert_eq!(provider.contexts.lock().unwrap().len(), 1);
     let state = store.state.lock().unwrap();
@@ -4369,7 +4383,7 @@ fn interrupted_first_attempt_write_never_restarts_selection_or_creates_a_zero_at
             drop(next);
             assert_eq!(store.state.lock().unwrap().created, 1);
             assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
-            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建。
+            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建
             assert!(release.send(()).is_err());
             if cancel {
                 session.cancel_and_finalize().await.unwrap();
@@ -4526,7 +4540,7 @@ fn charged_terminal_write_resumes_without_replacing_success_failure_or_send_fact
 }
 
 #[test]
-fn deadline_after_commit_is_incomplete_without_provider_circuit_failure() {
+fn deadline_after_commit_is_persisted_as_incomplete() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::HangingStream {
@@ -4557,16 +4571,13 @@ fn deadline_after_commit_is_incomplete_without_provider_circuit_failure() {
     let error = block_on(session.next_event()).expect_err("deadline elapses mid-stream");
 
     assert!(matches!(error, EngineError::Deadline));
-    // 网关自身请求预算到期不是上游超时；已在交付中的长流集中到期
-    // 不得作为 provider Timeout 计入熔断。
-    assert!(session.provider_attempt_outcomes().is_empty());
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
     assert!(state.finalizations[0].committed);
 }
 
 #[test]
-fn deadline_before_first_event_records_no_provider_circuit_failure() {
+fn deadline_before_first_event_is_persisted_as_failed_attempt() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, store, _) = coordinator(vec![Script::HangingStream {
@@ -4586,7 +4597,6 @@ fn deadline_before_first_event_records_no_provider_circuit_failure() {
     let error = block_on(session.next_event()).expect_err("deadline elapses before first event");
 
     assert!(matches!(error, EngineError::Deadline));
-    assert!(session.provider_attempt_outcomes().is_empty());
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);

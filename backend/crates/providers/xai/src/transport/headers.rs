@@ -1,3 +1,5 @@
+//! 根据 Grok 会话与客户端画像生成区分敏感值的上游请求头
+
 use std::fmt;
 
 use gateway_core::engine::ModelRequestId;
@@ -8,7 +10,7 @@ use crate::{SecretValue, XaiWireProfileState};
 
 use super::SelectedGrokSession;
 
-/// 进程级 Grok Build 客户端身份；请求级身份在构造 headers 时单独生成。
+/// 进程级 Grok Build 客户端身份；请求级身份在构造 headers 时单独生成
 #[derive(Clone)]
 pub struct GrokClientIdentity(SecretValue);
 
@@ -35,17 +37,17 @@ impl fmt::Debug for GrokClientIdentity {
     }
 }
 
-/// 官方 Grok 请求头的公开或敏感取值。
+/// 官方 Grok 请求头的公开或敏感取值
 #[derive(Clone)]
 pub enum GrokHeaderValue {
-    /// 非敏感的协议元数据。
+    /// 非敏感的协议元数据
     Public(String),
-    /// 必须脱敏的 OAuth、身份或会话值。
+    /// 必须脱敏的 OAuth、身份或会话值
     Sensitive(SecretValue),
 }
 
 impl GrokHeaderValue {
-    /// 仅在注入的 HTTP transport 边界处暴露取值。
+    /// 仅在注入的 HTTP transport 边界处暴露取值
     #[must_use]
     pub fn expose(&self) -> &str {
         match self {
@@ -64,7 +66,7 @@ impl fmt::Debug for GrokHeaderValue {
     }
 }
 
-/// 一个官方 Grok CLI 代理请求头。
+/// 一个官方 Grok CLI 代理请求头
 #[derive(Debug, Clone)]
 pub struct GrokHeader {
     name: String,
@@ -72,13 +74,13 @@ pub struct GrokHeader {
 }
 
 impl GrokHeader {
-    /// 返回 header 名。
+    /// 返回 header 名
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// 返回类型化的 header 值。
+    /// 返回类型化的 header 值
     #[must_use]
     pub const fn value(&self) -> &GrokHeaderValue {
         &self.value

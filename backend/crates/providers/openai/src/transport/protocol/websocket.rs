@@ -1,3 +1,5 @@
+//! Codex WebSocket 请求帧编码、事件解析与脱敏审计投影
+
 use gateway_protocol::openai::sse::encode_sse_event;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -8,55 +10,55 @@ use crate::transport::protocol::responses::{
 
 const REDACTED_PAYLOAD_VALUE: &str = "<redacted>";
 
-/// WebSocket 握手审计快照。
+/// WebSocket 握手审计快照
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpeningAuditSnapshot {
-    /// 请求行。
+    /// 请求行
     pub request_line: String,
-    /// 请求头顺序。
+    /// 请求头顺序
     pub header_order: Vec<String>,
-    /// 脱敏后的请求头。
+    /// 脱敏后的请求头
     pub headers: Vec<OpeningAuditHeader>,
 }
 
-/// WebSocket 握手审计请求头。
+/// WebSocket 握手审计请求头
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpeningAuditHeader {
-    /// 请求头名。
+    /// 请求头名
     pub name: String,
-    /// 请求头值。
+    /// 请求头值
     pub value: String,
 }
 
-/// WebSocket payload 审计快照。
+/// WebSocket payload 审计快照
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PayloadAuditSnapshot {
-    /// 按构造顺序记录的顶层字段。
+    /// 按构造顺序记录的顶层字段
     pub top_level_keys: Vec<String>,
-    /// 脱敏后的 JSON payload。
+    /// 脱敏后的 JSON payload
     pub body: Value,
 }
 
-/// WebSocket 审计产物。
+/// WebSocket 审计产物
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WebSocketAuditArtifact {
-    /// 实际选择的传输模式。
+    /// 实际选择的传输模式
     pub transport_mode: String,
-    /// 当前请求是否允许 HTTP/SSE fallback。
+    /// 当前请求是否允许 HTTP/SSE fallback
     pub fallback_allowed: bool,
-    /// 打开握手快照。
+    /// 打开握手快照
     pub opening: Option<OpeningAuditSnapshot>,
-    /// 首个 `response.create` payload 快照。
+    /// 首个 `response.create` payload 快照
     pub payload: Option<PayloadAuditSnapshot>,
 }
 
-/// 将一条公开 WebSocket JSON 事件编码为 SSE 帧。
+/// 将一条公开 WebSocket JSON 事件编码为 SSE 帧
 pub fn websocket_event_to_sse_frame(raw: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     websocket_event_frame(&value, raw)
 }
 
-/// 复用已解析的 JSON，剥离内部帧并原样转发公开事件。
+/// 复用已解析的 JSON，剥离内部帧并原样转发公开事件
 pub(crate) fn websocket_event_frame(value: &Value, raw: &str) -> Option<String> {
     let event = websocket_event_type(value)?;
     if is_internal_websocket_event(event) || event == "response.metadata" {
@@ -73,7 +75,7 @@ fn is_internal_websocket_event(event: &str) -> bool {
     event == "codex.rate_limits"
 }
 
-/// 提取 Responses WebSocket metadata 帧中的字符串响应头。
+/// 提取 Responses WebSocket metadata 帧中的字符串响应头
 pub fn websocket_metadata_headers(value: &Value) -> Vec<(String, String)> {
     if !is_websocket_metadata_event(websocket_event_type(value)) {
         return Vec::new();
@@ -87,7 +89,7 @@ pub fn websocket_metadata_headers(value: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 从 Responses WebSocket metadata 帧中提取 `x-codex-turn-state`。
+/// 从 Responses WebSocket metadata 帧中提取 `x-codex-turn-state`
 pub fn websocket_metadata_turn_state(value: &Value) -> Option<String> {
     websocket_metadata_headers(value)
         .into_iter()
@@ -101,11 +103,11 @@ fn is_websocket_metadata_event(event: Option<&str>) -> bool {
     matches!(event, Some("response.metadata" | "codex.response.metadata"))
 }
 
-/// 上游 WebSocket 连接寿命限制错误码。
+/// 上游 WebSocket 连接寿命限制错误码
 pub(crate) const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str =
     "websocket_connection_limit_reached";
 
-/// 若首个可投递 SSE 帧是连接寿命限制错误，保留原始失败事实而不改变恢复分类。
+/// 若首个可投递 SSE 帧是连接寿命限制错误，保留原始失败事实而不改变恢复分类
 pub(crate) fn websocket_connection_limit_failure(frame: &[u8]) -> Option<ResponsesSseFailure> {
     let text = std::str::from_utf8(frame).ok()?;
     let event = gateway_protocol::openai::sse::parse_sse_events(text)
@@ -138,9 +140,9 @@ fn json_value_as_string(value: &Value) -> Option<String> {
     }
 }
 
-/// 从正常完成或官方中断终态旁路提取 response ID，供连接池记录续接能力。
+/// 从正常完成或官方中断终态旁路提取 response ID，供连接池记录续接能力
 ///
-/// 该值不参与客户端 wire 的可交付性判断；无法读取时只是不记录连接内续接状态。
+/// 该值不参与客户端 wire 的可交付性判断；无法读取时只是不记录连接内续接状态
 pub fn websocket_response_completed_id(value: &Value) -> Option<String> {
     if value.get("type").and_then(Value::as_str) != Some("response.completed")
         && !websocket_response_is_interrupted(value)
@@ -161,7 +163,7 @@ pub(crate) fn websocket_response_is_interrupted(value: &Value) -> bool {
             == Some("interrupted")
 }
 
-/// 生成 Responses WebSocket payload 审计快照。
+/// 生成 Responses WebSocket payload 审计快照
 pub fn websocket_payload_audit_snapshot(request: &CodexResponsesRequest) -> PayloadAuditSnapshot {
     let body = websocket_response_create_payload(request);
     PayloadAuditSnapshot {
@@ -170,7 +172,7 @@ pub fn websocket_payload_audit_snapshot(request: &CodexResponsesRequest) -> Payl
     }
 }
 
-/// 为单次 opening 尝试构建 WebSocket 审计 artifact。
+/// 为单次 opening 尝试构建 WebSocket 审计 artifact
 pub fn websocket_audit_artifact_from_attempt(
     request: &CodexResponsesRequest,
     opening: OpeningAuditSnapshot,
@@ -184,10 +186,10 @@ pub fn websocket_audit_artifact_from_attempt(
     }
 }
 
-/// 生成 Responses WebSocket `response.create` payload。
+/// 生成 Responses WebSocket `response.create` payload
 ///
 /// payload = `{"type": "response.create"}` 加上原始上游 body 的全部字段
-/// （保持插入顺序，含未知字段），逐字段原样透传。
+/// （保持插入顺序，含未知字段），逐字段原样透传
 pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Value {
     let mut payload = Map::new();
     payload.insert(
@@ -200,10 +202,10 @@ pub fn websocket_response_create_payload(request: &CodexResponsesRequest) -> Val
     Value::Object(payload)
 }
 
-/// 借用原始 body 序列化 `response.create` 帧，不复制字段。
+/// 借用原始 body 序列化 `response.create` 帧，不复制字段
 ///
 /// 输出与序列化 [`websocket_response_create_payload`] 的合并 Map 逐字节一致：
-/// body 自带 `type` 键时以 body 值置于首位，其余字段按插入顺序原样透传。
+/// body 自带 `type` 键时以 body 值置于首位，其余字段按插入顺序原样透传
 struct ResponseCreateFrame<'a> {
     body: &'a Map<String, Value>,
 }
@@ -226,7 +228,7 @@ impl serde::Serialize for ResponseCreateFrame<'_> {
     }
 }
 
-/// 生成 Responses WebSocket `response.create` 文本帧内容。
+/// 生成 Responses WebSocket `response.create` 文本帧内容
 pub fn websocket_response_create_payload_text(
     request: &CodexResponsesRequest,
 ) -> Result<String, serde_json::Error> {

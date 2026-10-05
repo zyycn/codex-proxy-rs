@@ -1,6 +1,6 @@
-//! 管理控制面的语义模型、用例与外部能力端口。
+//! 管理控制面的语义模型、用例与外部能力端口
 //!
-//! 本 crate 不包含 HTTP wire、数据库实现或具体 Provider 实现。
+//! 本 crate 不包含 HTTP wire、数据库实现或具体 Provider 实现
 
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 
@@ -20,6 +20,7 @@ pub mod backup;
 pub mod freeze_recovery;
 pub mod model;
 pub mod ports;
+pub mod service;
 mod use_case;
 pub use use_case::plugins::{PluginDistributionPorts, PluginManagementService, PluginsService};
 
@@ -69,7 +70,7 @@ const WEAK_ADMIN_PASSWORDS: &[&str] = &[
 const BACKUP_WORKER_OWNER: &str = "backup";
 const DEFAULT_CLIENT_SESSION_TTL_MINUTES: u64 = 24 * 60;
 
-/// 只用于首次幂等创建默认管理员的启动密码。
+/// 只用于首次幂等创建默认管理员的启动密码
 #[derive(Clone, Deserialize)]
 #[serde(transparent)]
 pub struct InitialAdminPassword(SecretString);
@@ -99,7 +100,7 @@ impl fmt::Debug for InitialAdminPassword {
     }
 }
 
-/// 管理控制面的启动配置。
+/// 管理控制面的启动配置
 #[derive(Clone, Deserialize, PartialEq, Eq)]
 pub struct AdminConfig {
     pub session_ttl_minutes: u64,
@@ -107,7 +108,7 @@ pub struct AdminConfig {
     pub default_password: InitialAdminPassword,
 }
 
-/// Client 登录域的通用启动配置。
+/// Client 登录域的通用启动配置
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ClientConfig {
     pub session_ttl_minutes: u64,
@@ -122,11 +123,11 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
-    /// 校验 Client session TTL；当前配置不含相对路径。
+    /// 校验 Client session TTL；当前配置不含相对路径
     ///
     /// # Errors
     ///
-    /// 会话有效期为零或无法安全换算时返回错误。
+    /// 会话有效期为零或无法安全换算时返回错误
     pub fn resolve_and_validate(&mut self, _source_dir: &Path) -> Result<(), AdminConfigError> {
         if self.session_ttl_minutes == 0 || i64::try_from(self.session_ttl_minutes).is_err() {
             return Err(AdminConfigError::InvalidField("client.session_ttl_minutes"));
@@ -136,11 +137,11 @@ impl ClientConfig {
 }
 
 impl AdminConfig {
-    /// 校验 Admin-owned 字段；当前配置不含相对路径。
+    /// 校验 Admin-owned 字段；当前配置不含相对路径
     ///
     /// # Errors
     ///
-    /// 用户名、会话有效期或初始密码不满足安全约束时返回错误。
+    /// 用户名、会话有效期或初始密码不满足安全约束时返回错误
     pub fn resolve_and_validate(&mut self, _source_dir: &Path) -> Result<(), AdminConfigError> {
         if self.default_username.trim().is_empty()
             || self.default_username.chars().any(char::is_control)
@@ -172,7 +173,7 @@ impl fmt::Debug for AdminConfig {
     }
 }
 
-/// Admin-owned 启动配置错误；不回显任何配置值。
+/// Admin-owned 启动配置错误；不回显任何配置值
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AdminConfigError {
     #[error("配置字段 `{0}` 不合法")]
@@ -181,11 +182,13 @@ pub enum AdminConfigError {
     WeakInitialPassword,
 }
 
-/// API 持有的管理资源能力集合。
+/// API 持有的管理资源能力集合
 ///
-/// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块。
+/// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块
 #[derive(Clone)]
 pub struct AdminServices {
+    timezone: gateway_core::time::DeploymentTimeZone,
+    public_services: Arc<service::Registry>,
     plugins: Arc<PluginsService>,
     plugin_management: Arc<PluginManagementService>,
     proxies: Arc<dyn ProxiesService>,
@@ -206,6 +209,15 @@ pub struct AdminServices {
 
 impl AdminServices {
     #[must_use]
+    pub const fn timezone(&self) -> gateway_core::time::DeploymentTimeZone {
+        self.timezone
+    }
+
+    pub fn public_services(&self) -> Arc<service::Registry> {
+        self.public_services.clone()
+    }
+
+    #[must_use]
     pub fn plugin_management(&self) -> &PluginManagementService {
         &self.plugin_management
     }
@@ -225,7 +237,7 @@ impl AdminServices {
         self.key_usage.as_ref()
     }
 
-    /// 取得账号服务的共享句柄；后台编排（冻结恢复 worker）需要持有 Arc。
+    /// 取得账号服务的共享句柄；后台编排（冻结恢复 worker）需要持有 Arc
     #[must_use]
     pub fn accounts_handle(&self) -> Arc<dyn AccountsService> {
         Arc::clone(&self.accounts)
@@ -266,7 +278,6 @@ impl AdminServices {
         self.observability.as_ref()
     }
 
-    #[must_use]
     pub fn settings(&self) -> &dyn SettingsService {
         self.settings.as_ref()
     }
@@ -281,7 +292,7 @@ impl AdminServices {
         self.credentials.as_ref()
     }
 
-    /// Runtime 只持有该窄端口的 Weak；AdminBundle 保持实际生命周期。
+    /// Runtime 只持有该窄端口的 Weak；AdminBundle 保持实际生命周期
     #[must_use]
     pub fn plugin_accounts_handle(&self) -> Arc<dyn PluginAccountAccess> {
         Arc::clone(&self.plugin_accounts)
@@ -293,7 +304,7 @@ impl AdminServices {
     }
 }
 
-/// Admin 初始化完成后的封闭能力包。
+/// Admin 初始化完成后的封闭能力包
 pub struct AdminBundle {
     services: AdminServices,
     worker_contributions: Vec<WorkerContribution>,
@@ -305,14 +316,16 @@ impl AdminBundle {
         self.services.clone()
     }
 
-    /// 取出 Admin Worker 贡献；只能调用一次，与其它 Bundle 的贡献一并交给 Host。
+    /// 取出 Admin Worker 贡献；只能调用一次，与其它 Bundle 的贡献一并交给 Host
     pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
         std::mem::take(&mut self.worker_contributions)
     }
 }
 
-/// 组合根提供给控制面的运行能力；与配置和存储端口分别传入。
+/// 组合根提供给控制面的运行能力；与配置和存储端口分别传入
 pub struct AdminRuntimePorts {
+    pub timezone: gateway_core::time::DeploymentTimeZone,
+    pub service_middleware: service::PlanSource,
     pub plugin_preparation: Arc<dyn ports::plugins::PluginPreparation>,
     pub plugin_management: Arc<dyn ports::plugin_management::PluginManagement>,
     pub published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
@@ -328,11 +341,11 @@ pub struct AdminRuntimePorts {
     pub client_key_verifier: Arc<dyn ClientKeyVerifier>,
 }
 
-/// 校验配置、接入已组装的 Provider 注册表并完成默认管理员幂等初始化。
+/// 校验配置、接入已组装的 Provider 注册表并完成默认管理员幂等初始化
 ///
 /// # Errors
 ///
-/// 配置非法或默认管理员初始化失败时返回错误。
+/// 配置非法或默认管理员初始化失败时返回错误
 pub async fn initialize(
     config: AdminConfig,
     client_config: ClientConfig,
@@ -342,7 +355,7 @@ pub async fn initialize(
     initialize_inner(config, client_config, store, runtime, None).await
 }
 
-/// 使用组合根已绑定给 Runtime 的同一账号窄端口，避免为完整 Admin 重建第二实例。
+/// 使用组合根已绑定给 Runtime 的同一账号窄端口，避免为完整 Admin 重建第二实例
 pub async fn initialize_with_plugin_accounts(
     config: AdminConfig,
     client_config: ClientConfig,
@@ -361,6 +374,8 @@ async fn initialize_inner(
     plugin_accounts: Option<Arc<dyn PluginAccountAccess>>,
 ) -> Result<AdminBundle, AdminError> {
     let AdminRuntimePorts {
+        timezone,
+        service_middleware,
         plugin_preparation,
         plugin_management,
         published_snapshot,
@@ -406,15 +421,18 @@ async fn initialize_inner(
         backup_ports.object_store(),
         store.auth(),
         snapshot.clone(),
+        timezone,
     ));
     let backup_task = backup::task::BackupTask::new(
         backup_ports.repository(),
         backup_ports.dump(),
         backup_ports.object_store(),
-    );
+    )
+    .with_timezone(timezone);
     let system_preflight = Arc::new(use_case::plugin_update::PluginSystemUpdatePreflight::new(
         store.plugins(),
         plugin_inspector.clone(),
+        snapshot.clone(),
     ));
     let system = Arc::new(DefaultSystemService::new(system, system_preflight));
     let key_usage = Arc::new(use_case::key_usage::DefaultKeyUsageService::new(
@@ -423,6 +441,7 @@ async fn initialize_inner(
         store.client_keys(),
         store.observability(),
         system.clone(),
+        timezone,
     ));
     let credentials = Arc::new(CredentialsService::new(
         registry.clone(),
@@ -435,7 +454,17 @@ async fn initialize_inner(
     });
     let import_tasks = use_case::import_tasks::DefaultImportTasksService::new(credentials.clone());
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
+    let settings = initialize_settings(
+        store.settings(),
+        snapshot.clone(),
+        registry.clone(),
+        pricing_source,
+    );
+    let mut public_services = service::Registry::new(service_middleware);
+    public_services.register_settings(&settings)?;
     let services = AdminServices {
+        timezone,
+        public_services: Arc::new(public_services),
         plugin_management: Arc::new(PluginManagementService::new(
             plugin_management,
             store.plugins(),
@@ -475,13 +504,9 @@ async fn initialize_inner(
             store.accounts(),
             store.settings(),
             registry.clone(),
+            timezone,
         )),
-        settings: Arc::new(DefaultSettingsService::new(
-            store.settings(),
-            snapshot.clone(),
-            registry,
-            pricing_source,
-        )),
+        settings,
         system,
         credentials,
         plugin_accounts,
@@ -516,7 +541,7 @@ async fn initialize_inner(
     })
 }
 
-/// CLI 只组合账号用例，不初始化管理员、管理服务或后台任务；写入仍复用同一事务与审计。
+/// CLI 只组合账号用例，不初始化管理员、管理服务或后台任务；写入仍复用同一事务与审计
 pub fn initialize_plugin_accounts(
     providers: ports::provider::ProviderAdminRegistry,
     accounts: Arc<dyn ports::store::AccountStore>,
@@ -527,7 +552,7 @@ pub fn initialize_plugin_accounts(
     ))
 }
 
-/// 为 Runtime 创建非秘密 Client Key 目录与预算重置的窄端口。
+/// 为 Runtime 创建非秘密 Client Key 目录与预算重置的窄端口
 #[must_use]
 pub fn initialize_plugin_client_keys(
     providers: ports::provider::ProviderAdminRegistry,
@@ -539,7 +564,7 @@ pub fn initialize_plugin_client_keys(
     Arc::new(use_case::plugin_client_keys::DefaultPluginClientKeyAccess::new(service))
 }
 
-/// 为 Runtime 组合实例自有资源写入；权限和归属在同一存储事务复核。
+/// 为 Runtime 组合实例自有资源写入；权限和归属在同一存储事务复核
 #[must_use]
 pub fn initialize_plugin_resources(
     store: Arc<dyn ports::plugin_resources::PluginResourceStore>,
@@ -548,7 +573,7 @@ pub fn initialize_plugin_resources(
     Arc::new(use_case::plugin_resources::DefaultPluginResourceAccess { store, snapshot })
 }
 
-/// Backup Worker 注册：单个可取消 Daemon，owner 固定为 `backup`。
+/// Backup Worker 注册：单个可取消 Daemon，owner 固定为 `backup`
 fn backup_worker_contribution(
     task: backup::task::BackupTask,
 ) -> Result<Vec<WorkerContribution>, AdminError> {
@@ -567,7 +592,7 @@ fn backup_worker_contribution(
     Ok(vec![WorkerContribution::Registration(registration)])
 }
 
-/// 冻结恢复 Worker 注册：按固定周期扫描活跃冻结，owner 固定。
+/// 冻结恢复 Worker 注册：按固定周期扫描活跃冻结，owner 固定
 fn freeze_recovery_worker_contribution(
     task: freeze_recovery::FreezeRecoveryTask,
 ) -> Result<Vec<WorkerContribution>, AdminError> {
@@ -596,4 +621,19 @@ fn freeze_recovery_worker_contribution(
     )
     .map_err(|_| AdminError::internal("冻结恢复 Worker 注册信息不合法"))?;
     Ok(vec![WorkerContribution::Registration(registration)])
+}
+
+/// 设置服务不依赖 Web 管理会话，CLI 与服务器通过同一用例执行事务和发布
+pub fn initialize_settings(
+    store: Arc<dyn ports::store::SettingsStore>,
+    snapshot: Arc<dyn SnapshotControl>,
+    providers: ProviderAdminRegistry,
+    pricing_source: Arc<dyn ports::pricing::PricingSource>,
+) -> Arc<dyn SettingsService> {
+    Arc::new(DefaultSettingsService::new(
+        store,
+        snapshot,
+        providers,
+        pricing_source,
+    ))
 }

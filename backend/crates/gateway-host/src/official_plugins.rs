@@ -1,4 +1,4 @@
-//! 随宿主发行的官方插件文件只读入口。
+//! 随宿主发行的官方插件文件只读入口
 
 use std::{
     fs,
@@ -16,7 +16,7 @@ const MANIFEST_FILE_NAME: &str = "plugin-release-manifest.json";
 const MAXIMUM_MANIFEST_BYTES: usize = 256 * 1024;
 const MAXIMUM_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
 
-/// 目录与宿主二进制一同部署和替换；`sealed` 本身不被当作密码学签名。
+/// 目录与宿主二进制一同部署和替换；`sealed` 本身不被当作密码学签名
 pub struct FileOfficialPluginRelease {
     directory: PathBuf,
 }

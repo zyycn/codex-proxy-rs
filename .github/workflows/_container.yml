@@ -1,4 +1,4 @@
-name: Reusable Container
+name: Container
 
 on:
   workflow_call:
@@ -30,30 +30,25 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Cache Cargo mounts
+      - name: Restore Cargo snapshot
         id: cargo-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/container-cargo
-          key: container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-${{ inputs.ref }}
+          # 同一平台和依赖复用快照，源码变化由 Cargo 指纹判定是否重编译
+          key: container-cargo-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml', 'deploy/Dockerfile', '.github/actions/cargo-cache/Dockerfile') }}
           restore-keys: |
-            container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-
-            container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+            container-cargo-v3-${{ runner.os }}-${{ runner.arch }}-
+            container-cargo-v2-${{ runner.os }}-${{ runner.arch }}-
 
-      # The GHA layer exporter does not persist RUN --mount=type=cache contents.
-      # Extraction runs before actions/cache saves its directories in post steps.
       - name: Restore Cargo mounts to BuildKit
-        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        id: cargo-restore
+        uses: ./.github/actions/cargo-cache
         with:
+          operation: restore
           builder: ${{ steps.buildx.outputs.name }}
-          scratch-dir: ${{ runner.temp }}/container-cache-dance
-          cache-map: |
-            {
-              "${{ runner.temp }}/container-cargo/registry": "/usr/local/cargo/registry",
-              "${{ runner.temp }}/container-cargo/git": "/usr/local/cargo/git",
-              "${{ runner.temp }}/container-cargo/target": "/app/backend/target"
-            }
-          skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
+          path: ${{ runner.temp }}/container-cargo
+          architecture: amd64
 
       - name: Build runtime image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -67,7 +62,7 @@ jobs:
             runtime-base
             runtime
           cache-from: type=gha,scope=runtime-ci
-          cache-to: type=gha,mode=max,scope=runtime-ci
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=runtime-ci' || '' }}
 
       - name: Verify runtime image
         uses: ./.github/actions/verify-container
@@ -75,3 +70,23 @@ jobs:
           image: ${{ env.CPR_IMAGE }}
           platform: linux/amd64
           artifact-name: container-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-amd64
+
+      # 构建层命中时 mount 仍可能为空，只有实际检查过内容的快照才允许保存。
+      - name: Export Cargo snapshot
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          (steps.cargo-cache.outputs.cache-hit != 'true' || steps.cargo-restore.outputs.usable != 'true')
+        id: cargo-snapshot
+        uses: ./.github/actions/cargo-cache
+        with:
+          operation: snapshot
+          builder: ${{ steps.buildx.outputs.name }}
+          path: ${{ runner.temp }}/container-cargo
+          architecture: amd64
+
+      - name: Save Cargo snapshot
+        if: steps.cargo-snapshot.outputs.usable == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/container-cargo
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

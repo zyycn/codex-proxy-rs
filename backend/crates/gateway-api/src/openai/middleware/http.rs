@@ -1,6 +1,6 @@
-//! 未提交响应的 HTTP 交付；只验证协议边界，不解释或重算 Core 的业务事实。
+//! 未提交响应的 HTTP 交付；只验证协议边界，不解释或重算 Core 的业务事实
 
-use super::request::{decode_headers, request_headers};
+use crate::middleware::headers::{decode_headers, encode_headers};
 use crate::openai::error::{
     gateway_error_from_engine, gateway_error_response, openai_error_response,
 };
@@ -18,9 +18,8 @@ use gateway_core::{
     },
     error::GatewayError,
 };
-use gateway_protocol::openai::response_header_is_forwardable;
 
-/// 只读目录/用量与协议错误共用的单帧响应；没有 Provider attempt 或计量副作用。
+/// 只读目录/用量与协议错误共用的单帧响应；没有 Provider attempt 或计量副作用
 pub(crate) async fn buffered_response(
     protocol: &str,
     response: Response,
@@ -37,7 +36,7 @@ pub(crate) async fn buffered_response(
     Ok(MiddlewareResponse::new(
         protocol.to_owned(),
         parts.status.as_u16(),
-        request_headers(&parts.headers),
+        encode_headers(&parts.headers),
         Box::new(BufferedBody(Some(MiddlewareFrame::new(
             bytes, framing, true,
         )))),
@@ -71,13 +70,13 @@ impl ExpectedBody {
                     && frame.terminal()
                     && serde_json::from_slice::<serde::de::IgnoredAny>(frame.bytes()).is_ok()
             }
-            // 上游错误正文可能不是 JSON；只限定单文档交付，不改写原始错误字节。
+            // 上游错误正文可能不是 JSON；只限定单文档交付，不改写原始错误字节
             Self::SinglePayload => {
                 frame.terminal()
                     && (frame.framing() == MiddlewareFraming::RawBytes
                         || Self::SingleJson.validate(frame).is_ok())
             }
-            // 原生超大 SSE 帧允许按原字节片段交付；插件写入边界由 Runtime 校验。
+            // 原生超大 SSE 帧允许按原字节片段交付；插件写入边界由 Runtime 校验
             Self::Sse => frame.framing() == MiddlewareFraming::SseEvent,
         };
         if valid {
@@ -88,7 +87,7 @@ impl ExpectedBody {
     }
 }
 
-/// 全部返回包装完成、首帧可读取后才提交原有 Core delivery barrier。
+/// 全部返回包装完成、首帧可读取后才提交原有 Core delivery barrier
 pub(crate) async fn into_http_response(
     response: MiddlewareResponse,
     expected: ExpectedBody,
@@ -121,7 +120,7 @@ pub(crate) async fn into_http_response(
         return fail_before_commit(body, error).await;
     }
     if let Some(frame) = &first {
-        // 短路响应没有下游 adapter 生成的头，传输类型仍由宿主按帧合同补齐。
+        // 短路响应没有下游 adapter 生成的头，传输类型仍由宿主按帧合同补齐
         headers.entry(header::CONTENT_TYPE).or_insert_with(|| {
             HeaderValue::from_static(match frame.framing() {
                 MiddlewareFraming::JsonDocument => "application/json",
@@ -157,7 +156,7 @@ pub(crate) async fn into_http_response(
     };
     let keep_alive = matches!(expected, ExpectedBody::Sse);
     let stream = Box::pin(futures::stream::try_unfold(delivery, HttpDelivery::next));
-    // 固定同一条输出流；心跳不能取消并重建正在等待的 next_frame 或结算 future。
+    // 固定同一条输出流；心跳不能取消并重建正在等待的 next_frame 或结算 future
     let stream = futures::stream::unfold(stream, move |mut stream| async move {
         let chunk = tokio::select! {
             biased;
@@ -221,29 +220,8 @@ fn response_head(
     if status.is_informational() {
         return Err(MiddlewareError::InvalidState);
     }
-    let mut result = decode_headers(headers)?;
-    let connection_options = result
-        .get_all(header::CONNECTION)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>();
-    // Content-Type 由协议 adapter 生成；其余字段在最终交付边界统一剥离认证与传输信息。
-    let blocked = result
-        .keys()
-        .filter(|name| {
-            *name != header::CONTENT_TYPE
-                && !response_header_is_forwardable(name.as_str(), &connection_options)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    for name in blocked {
-        result.remove(name);
-    }
-    Ok((status, result))
+    // 原生上游头已在协议终端处理；插件返回后的字段只做 HTTP 类型校验
+    Ok((status, decode_headers(headers)?))
 }
 
 async fn fail_before_commit(mut body: Box<dyn MiddlewareBody>, error: MiddlewareError) -> Response {
@@ -262,19 +240,23 @@ pub(crate) fn error_response(error: MiddlewareError) -> Response {
         MiddlewareError::Provider(error) => {
             gateway_error_response(&GatewayError::from_provider(&error))
         }
-        MiddlewareError::Rejected => openai_error_response(
-            StatusCode::FORBIDDEN,
-            "Request rejected by middleware",
-            "invalid_request_error",
-            "middleware_rejected",
-        )
-        .into_response(),
-        MiddlewareError::Fault | MiddlewareError::InvalidState => openai_error_response(
-            StatusCode::BAD_GATEWAY,
-            "Request middleware failed",
-            "server_error",
-            "middleware_failed",
-        )
-        .into_response(),
+        MiddlewareError::Rejected | MiddlewareError::Remote { rejected: true, .. } => {
+            openai_error_response(
+                StatusCode::FORBIDDEN,
+                "Request rejected by middleware",
+                "invalid_request_error",
+                "middleware_rejected",
+            )
+            .into_response()
+        }
+        MiddlewareError::Fault | MiddlewareError::Remote { .. } | MiddlewareError::InvalidState => {
+            openai_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Request middleware failed",
+                "server_error",
+                "middleware_failed",
+            )
+            .into_response()
+        }
     }
 }

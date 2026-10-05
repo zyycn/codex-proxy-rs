@@ -1,4 +1,4 @@
-//! 实例自有资源：稳定 resource_key 用于重试，名称只在首次创建时使用。
+//! 实例自有资源：稳定 resource_key 用于重试，名称只在首次创建时使用
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ pub struct GroupMembersChange {
 pub struct KeyEnsureRequest {
     pub resource_key: String,
     pub name: String,
-    /// 必须包含至少一个本实例分组，不能创建不受分组约束的 Key。
+    /// 必须包含至少一个本实例分组，不能创建不受分组约束的 Key
     pub group_resource_keys: Vec<String>,
     #[serde(default)]
     pub max_concurrency: u64,
@@ -41,7 +41,7 @@ pub struct KeyEnsureRequest {
     pub weekly_limit_usd: String,
 }
 
-/// 返回非秘密身份；调用模型时使用 id，密钥明文仍由管理员管理。
+/// 返回非秘密身份；调用模型时使用 id，密钥明文仍由管理员管理
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedResource {

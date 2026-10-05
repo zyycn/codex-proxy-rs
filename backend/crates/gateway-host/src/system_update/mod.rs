@@ -1,4 +1,4 @@
-//! 版本、安全自更新、回滚与进程重启的 Host-owned 实现。
+//! 版本、安全自更新、回滚与进程重启的 Host-owned 实现
 
 mod archive;
 mod download;
@@ -23,8 +23,8 @@ use gateway_admin::model::system::{
     SystemUpdateStatus, SystemVersion,
 };
 use gateway_admin::ports::system::{
-    SystemOperationError, SystemOperationErrorKind, SystemOperations, SystemUpdateCandidate,
-    SystemUpdateEventStream, SystemUpdatePreflight,
+    SystemOperationError, SystemOperationErrorKind, SystemOperations, SystemRestartPreflight,
+    SystemUpdateCandidate, SystemUpdateEventStream, SystemUpdatePreflight,
 };
 use gateway_core::lifecycle::CancellationToken;
 use serde::Deserialize;
@@ -56,7 +56,7 @@ const MAX_OFFICIAL_PLUGIN_MANIFEST_SIZE: u64 = 256 * 1024;
 
 type OperationError = SystemOperationError;
 
-/// 系统更新与重启配置；所有字段只由 Host 解释。
+/// 系统更新与重启配置；所有字段只由 Host 解释
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SystemUpdateConfig {
@@ -68,7 +68,7 @@ pub struct SystemUpdateConfig {
     pub update_repository: Option<String>,
     pub github_api_base: String,
     pub executable_path: Option<PathBuf>,
-    /// 未显式指定时，由组合根传入 API 实际使用的静态资源目录。
+    /// 未显式指定时，由组合根传入 API 实际使用的静态资源目录
     pub web_dist_dir: Option<PathBuf>,
     pub update_state_file: PathBuf,
     pub update_lock_file: PathBuf,
@@ -228,7 +228,7 @@ impl SystemUpdateConfig {
     }
 }
 
-/// gateway-admin 消费的真实进程/文件系统操作实现。
+/// gateway-admin 消费的真实进程/文件系统操作实现
 #[derive(Clone)]
 pub struct ProcessSystemOperations {
     cancellation: CancellationToken,
@@ -241,9 +241,13 @@ pub struct ProcessSystemOperations {
 
 impl ProcessSystemOperations {
     #[must_use]
-    pub fn new(cancellation: CancellationToken, config: SystemUpdateConfig) -> Self {
-        // 组合根在接收请求前创建服务，记录本次启动的发行文件，后续替换不能改写这份事实。
-        let running_files = Arc::new(ReleaseFiles::installed(&config));
+    pub fn new(cancellation: CancellationToken, mut config: SystemUpdateConfig) -> Self {
+        // 组合根在接收请求前固定安装路径和发行文件；旧程序重命名后，
+        // current_exe 可能指向备份，后续更新、回滚和重启不能再反查运行文件
+        let running_files = Arc::new(config.executable_path().and_then(|executable| {
+            config.executable_path = Some(executable);
+            ReleaseFiles::installed(&config)
+        }));
         Self {
             cancellation,
             events: Arc::new(UpdateEvents::default()),
@@ -298,7 +302,7 @@ impl ProcessSystemOperations {
             target_version: target.clone(),
         };
         let service = self.clone();
-        // 任务持有互斥锁和落盘守卫，HTTP 断开不会取消更新；Host 关闭仍会收敛终态。
+        // 任务持有互斥锁和落盘守卫，HTTP 断开不会取消更新；Host 关闭仍会收敛终态
         drop(tokio::spawn(async move {
             let _operation_lock = operation_lock;
             let result = tokio::select! {
@@ -448,14 +452,14 @@ impl ProcessSystemOperations {
         self.events.info(
             Some(operation_id),
             Some("preflight"),
-            "正在检查启用插件与目标版本的兼容性",
+            "正在校验目标发行信息",
         );
         let plugin_revision = preflight.validate(candidate).await?;
         preflight.confirm_revision(plugin_revision).await?;
         self.events.success(
             Some(operation_id),
             Some("preflight"),
-            "启用插件兼容性检查通过",
+            "目标发行信息校验通过，插件兼容性将在重启前检查",
         );
         self.events
             .info(Some(operation_id), Some("replace"), "正在替换应用文件");
@@ -493,6 +497,23 @@ impl ProcessSystemOperations {
             return Err(conflict("当前发行版本不支持此更新通道"));
         }
         Ok(channel)
+    }
+
+    fn installed_restart_candidate(&self) -> Result<Option<SystemUpdateCandidate>, OperationError> {
+        if self.config.build_type == "source" {
+            return Ok(None);
+        }
+        let release_manifest = read_release_manifest(&self.config.official_plugins_dir()?)?;
+        #[derive(Deserialize)]
+        struct ReleaseIdentity {
+            gateway_version: String,
+        }
+        let identity: ReleaseIdentity = serde_json::from_slice(&release_manifest)
+            .map_err(|_| invalid("已安装发行清单缺少目标版本"))?;
+        Ok(Some(SystemUpdateCandidate {
+            target_version: identity.gateway_version,
+            release_manifest,
+        }))
     }
 
     fn reconcile_installation(&self) -> Result<SystemUpdateStatus, OperationError> {
@@ -606,7 +627,7 @@ impl SystemOperations for ProcessSystemOperations {
         let release_manifest =
             read_release_manifest(&rollback_official_plugins_dir(&self.config)?)?;
         let plugin_revision = preflight
-            .validate(SystemUpdateCandidate {
+            .validate_rollback(SystemUpdateCandidate {
                 target_version,
                 release_manifest: Arc::clone(&release_manifest),
             })
@@ -667,15 +688,38 @@ impl SystemOperations for ProcessSystemOperations {
         })
     }
 
-    async fn restart(&self) -> Result<SystemOperationAccepted, OperationError> {
+    async fn restart_candidate(&self) -> Result<Option<SystemUpdateCandidate>, OperationError> {
+        let _operation = self
+            .operation_lock
+            .try_lock()
+            .map_err(|_| conflict("system operation is already running"))?;
+        self.installed_restart_candidate()
+    }
+
+    async fn restart(
+        &self,
+        preflight: Arc<dyn SystemRestartPreflight>,
+    ) -> Result<SystemOperationAccepted, OperationError> {
         // 与 update/rollback 互斥：更新替换文件期间触发自重启会让新进程
-        // 载入半成品产物。
+        // 载入半成品产物
         let _operation = self
             .operation_lock
             .try_lock()
             .map_err(|_| conflict("system operation is already running"))?;
         if !self.config.self_restart_enabled {
             return Err(conflict("self restart is disabled"));
+        }
+        let _file_lock = OperationFileLock::acquire(&self.config.update_lock_file)?;
+        let candidate = self.installed_restart_candidate()?;
+        let files = candidate
+            .as_ref()
+            .map(|_| ReleaseFiles::installed(&self.config))
+            .transpose()?;
+        preflight.prepare(candidate).await?;
+        if let Some(files) = files
+            && files != ReleaseFiles::installed(&self.config)?
+        {
+            return Err(conflict("重启检查期间安装文件已变化，请重新确认"));
         }
         let message = if self.config.deployment_mode == "docker" {
             "已安排进程内重启"

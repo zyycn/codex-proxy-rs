@@ -3,7 +3,6 @@ import { BaseCard, BaseEmpty, BaseSegmented } from '@codex-proxy/ui'
 
 import { Box, CheckCircle2, Monitor, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
-import { formatDateTime } from '@/utils/format'
 import { formatProviderLabel, isSupportedProvider, providerIcon } from '@/utils/providers'
 
 interface WireProfile {
@@ -20,9 +19,11 @@ interface WireProfile {
   userAgent: string
   attributes: Array<{ label: string, value: string }>
   verifiedAt?: string | null
+  verifiedAtDisplay?: string | null
   release?: {
     status?: 'unchecked' | 'aligned' | 'review_required' | 'check_failed'
     checkedAt?: string | null
+    checkedAtDisplay?: string | null
     latestVersion?: string | null
     latestBuild?: string | null
     error?: string | null
@@ -111,12 +112,12 @@ const releaseStatus = computed(() => {
 })
 
 const verifiedLabel = computed(() =>
-  profile.value?.verifiedAt ? `画像核验 ${formatDateTime(profile.value.verifiedAt)}` : undefined,
+  profile.value?.verifiedAt ? `画像核验 ${profile.value.verifiedAtDisplay}` : undefined,
 )
 
 const checkedLabel = computed(() => {
-  const checkedAt = profile.value?.release?.checkedAt
-  return checkedAt ? `发布检查 ${formatDateTime(checkedAt)}` : undefined
+  const checkedAt = profile.value?.release?.checkedAtDisplay
+  return checkedAt ? `发布检查 ${checkedAt}` : undefined
 })
 
 function toPascalCase(value: string) {

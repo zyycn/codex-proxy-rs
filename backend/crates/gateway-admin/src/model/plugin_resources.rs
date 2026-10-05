@@ -1,4 +1,4 @@
-//! 插件资源归属由宿主调用上下文给出，不能由插件参数选择实例或代次。
+//! 插件资源归属由宿主调用上下文给出，不能由插件参数选择实例或代次
 
 use super::Revision;
 
@@ -17,7 +17,7 @@ pub struct ManagedResource {
 }
 
 pub struct ResourceMutation<T> {
-    /// 没有事实变化时不递增配置 revision，也不触发发布。
+    /// 没有事实变化时不递增配置 revision，也不触发发布
     pub revision: Option<Revision>,
     pub value: T,
 }
@@ -34,7 +34,7 @@ pub struct GroupMembersChanged {
     pub removed: u64,
 }
 
-/// 插件 Key 的首次创建设置；分组始终从本实例资源键解析。
+/// 插件 Key 的首次创建设置；分组始终从本实例资源键解析
 pub struct ManagedKeyConfig {
     pub name: String,
     pub limits: gateway_core::policy::RateLimits,

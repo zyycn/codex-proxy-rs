@@ -1,4 +1,4 @@
-//! OpenAI wire adapter 到 Core 执行用例的唯一映射。
+//! OpenAI wire adapter 到 Core 执行用例的唯一映射
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 use super::auth::ClientApiKeyAuthError;
 use super::responses::{ContinuationIntent, DecodedResponsesRequest};
 
-/// OpenAI HTTP/WS adapter 共享的 Core 与连接生命周期能力。
+/// OpenAI HTTP/WS adapter 共享的 Core 与连接生命周期能力
 #[derive(Clone)]
 pub(crate) struct OpenAiService {
     execution: Arc<dyn ExecutionService>,

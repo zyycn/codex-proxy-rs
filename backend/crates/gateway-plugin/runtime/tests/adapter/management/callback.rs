@@ -1,3 +1,5 @@
+//! 验证插件授权回调状态的一次性消费、身份绑定与过期拒绝
+
 use gateway_admin::{
     PluginManagementService,
     model::{
@@ -11,6 +13,10 @@ use super::{Environment, install, registration};
 
 fn request() -> PluginManagementRequest {
     PluginManagementRequest {
+        headers: vec![gateway_core::engine::middleware::MiddlewareHeader::new(
+            "cookie",
+            "callback=fixture".into(),
+        )],
         method: "GET".into(),
         path: "oauth".into(),
         query: "code=synthetic-code".into(),
@@ -104,6 +110,9 @@ async fn public_login_callbacks_consume_bound_state_once_and_reject_wrong_owner_
     assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
     let response = one.or(two).unwrap();
     assert_eq!(response.body.as_ref(), b"callback received");
+    assert_eq!(response.headers.len(), 1);
+    assert_eq!(response.headers[0].name(), "cookie");
+    assert_eq!(response.headers[0].value().as_ref(), b"callback=fixture");
     assert!(
         service
             .callback(target, &ticket.state, request())

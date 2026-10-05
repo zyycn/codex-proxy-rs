@@ -1,4 +1,4 @@
-//! OpenAI Provider 专属能力。
+//! OpenAI Provider 专属能力
 
 mod admin;
 pub mod config;
@@ -42,14 +42,14 @@ pub use transport::{
     encode_generate_request, openai_billing_breakdown,
 };
 
-/// OpenAI 初始化后交给组装根的最小能力集。
+/// OpenAI 初始化后交给组装根的最小能力集
 pub struct ProviderBundle {
     core_provider: Arc<dyn Provider>,
     admin_provider: Arc<dyn ProviderAdmin>,
     worker_contributions: Vec<WorkerContribution>,
 }
 
-/// 构造 OpenAI 数据面、Provider-owned 后台任务与 Redis OAuth pending owner。
+/// 构造 OpenAI 数据面、Provider-owned 后台任务与 Redis OAuth pending owner
 pub async fn initialize(
     config: OpenAiConfig,
     ports: ProviderStorePorts,
@@ -179,6 +179,7 @@ pub async fn initialize(
         )
         .map_err(OpenAiInitializeError::Provider)?
         .with_session_identity(session_identity)
+        .with_timezone(config.timezone)
         .with_live_support(repository.clone()),
     );
     let token_client = Arc::new(
@@ -234,6 +235,7 @@ pub async fn initialize(
         desktop_release_status,
     ));
     let worker_contributions = provider::worker_contributions(
+        config.timezone,
         refresh,
         quota,
         catalog,
@@ -265,13 +267,13 @@ impl ProviderBundle {
         Arc::clone(&self.admin_provider)
     }
 
-    /// 一次性移交 Host 任务计划，防止同一 owner 被重复注册。
+    /// 一次性移交 Host 任务计划，防止同一 owner 被重复注册
     pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
         std::mem::take(&mut self.worker_contributions)
     }
 }
 
-/// OpenAI 初始化失败的脱敏分类。
+/// OpenAI 初始化失败的脱敏分类
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiInitializeError {
     #[error("OpenAI runtime policy is unavailable")]

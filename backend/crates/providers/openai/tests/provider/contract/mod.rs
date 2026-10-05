@@ -1,8 +1,10 @@
-//! Provider 执行、传输和恢复契约的集成验证
+//! OpenAI 执行合同测试入口，以及协议转换与发送前校验测试
 
 mod account_isolation;
 mod capacity;
+mod precommit;
 mod response_interrupt;
+mod upstream_adapter;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
@@ -50,6 +52,7 @@ use gateway_core::routing::{
     RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
 use gateway_core::runtime::extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference};
+use gateway_core::settings::SettingsValues;
 use gateway_core::upstream::UpstreamSendState;
 use provider_openai::config::DEFAULT_STREAM_MAX_RETRIES;
 use provider_openai::credential::{
@@ -303,7 +306,7 @@ async fn native_openai_claims_translated_session_affinity_before_send() {
 }
 
 #[tokio::test]
-async fn attempt_middleware_runs_once_before_native_encoding_and_fast_policy() {
+async fn attempt_middleware_overrides_resolved_settings_and_headers() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
@@ -314,14 +317,14 @@ async fn attempt_middleware_runs_once_before_native_encoding_and_fast_policy() {
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(CAPTURE_COMPLETED_SSE),
         )
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let observed = Arc::new(Mutex::new(Vec::new()));
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
             "openai",
-            json!({"model":"gpt-5.6-sol", "input":"hello", "unknown":{"preserved":true}})
+            json!({"model":"gpt-5.6-sol", "input":"hello", "service_tier":"priority", "unknown":{"preserved":true}})
                 .as_object()
                 .unwrap()
                 .clone(),
@@ -338,6 +341,10 @@ async fn attempt_middleware_runs_once_before_native_encoding_and_fast_policy() {
                     observed: Arc::clone(&observed),
                     replacement: ("service_tier".to_owned(), json!("priority")),
                     request_headers: vec![
+                        MiddlewareHeader::new(
+                            "authorization",
+                            Bytes::from_static(b"Bearer plugin-override"),
+                        ),
                         MiddlewareHeader::new(
                             "x-business-context",
                             Bytes::from_static(b"tenant-public"),
@@ -361,21 +368,26 @@ async fn attempt_middleware_runs_once_before_native_encoding_and_fast_policy() {
         let observed = observed.lock().unwrap();
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0]["input"], "hello");
+        assert_eq!(observed[0]["service_tier"], "default");
     }
     let requests = server.received_requests().await.unwrap();
     let sent = captured_request_body(&requests[0]);
-    assert_eq!(sent["service_tier"], "default");
+    assert_eq!(sent["service_tier"], "priority");
+    assert_eq!(
+        captured_header_values(&requests[0], "authorization"),
+        vec![b"Bearer plugin-override".to_vec()]
+    );
     assert_eq!(sent["unknown"]["preserved"], true);
     assert_eq!(
         captured_header_values(&requests[0], "x-business-context"),
         vec![b"tenant-public".to_vec(), b"trace-public".to_vec()],
     );
 
-    let mut conflict = provider_with_base_url(&store, server.uri())
+    let mut overridden = provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", http_generate_operation()),
             context_with_middleware(
-                "req_native_header_conflict",
+                "req_native_header_override",
                 Arc::new(RecordingMiddleware {
                     observed: Arc::default(),
                     replacement: ("service_tier".to_owned(), json!("priority")),
@@ -389,12 +401,15 @@ async fn attempt_middleware_runs_once_before_native_encoding_and_fast_policy() {
         )
         .await
         .expect("header validation remains on the cold Provider stream");
-    let Some(Err(error)) = conflict.next().await else {
-        panic!("a Provider-managed header collision must fail before send")
-    };
-    assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    while let Some(event) = overridden.next().await {
+        event.unwrap();
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        captured_header_values(&requests[1], "x-codex-routing-hint"),
+        vec![b"plugin-value".to_vec()]
+    );
 }
 
 #[tokio::test]
@@ -669,7 +684,7 @@ async fn selected_proxy_location_overrides_global_and_reloads_without_mutating_c
             .mount(proxy)
             .await;
     }
-    // 目标不可解析；收到请求证明使用的是账号代理，而非测试机默认出口。
+    // 目标不可解析；收到请求证明使用的是账号代理，而非测试机默认出口
     let provider = provider_with_base_url(&store, "http://upstream.invalid".to_owned());
     let original = json!({"model":"gpt-5.4", "input":[
         {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}], "internal_chat_message_metadata_passthrough":{"content_item_kinds":["environments.environment_context"], "create_time":1789293131.822}},
@@ -727,7 +742,7 @@ async fn replay_compatibility_should_remove_only_reasoning_status_on_both_transp
     }
     for websocket in [false, true] {
         let actual = capture_replay_compatibility_request(input.clone(), false, websocket).await;
-        // 比较序列化结果，同时保护未修改字段的顺序。
+        // 比较序列化结果，同时保护未修改字段的顺序
         assert_eq!(actual["input"].to_string(), expected.to_string());
     }
 }
@@ -1259,7 +1274,7 @@ fn planned_request_for_model(
     ));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        account_policy(),
+        gateway_core::settings::SettingsValues::new(2, 10, "smart", Default::default(), None, None),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider,
@@ -1293,7 +1308,7 @@ fn planned_provider_endpoint_request(provider_name: &str, operation: Operation) 
     ));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        account_policy(),
+        gateway_core::settings::SettingsValues::new(2, 10, "smart", Default::default(), None, None),
         vec![provider.clone()],
         Vec::new(),
         Vec::new(),
@@ -1329,6 +1344,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_continuation_prefetch",
         "acct_disabled_scheduling",
         "acct_first_event_latency",
+        "acct_guardian",
         "acct_header_new",
         "acct_header_old",
         "acct_header_same",
@@ -1395,7 +1411,7 @@ impl MiddlewarePlan for TranslationMiddleware {
         &self,
         context: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         assert!(context.account_id().is_some());
@@ -1417,7 +1433,7 @@ impl MiddlewarePlan for PassThroughMiddleware {
         &self,
         _: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         next.run(request)
     }
@@ -1435,7 +1451,7 @@ impl MiddlewarePlan for RecordingMiddleware {
         &self,
         context: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         assert_eq!(request.protocol(), "openai");
@@ -2337,7 +2353,7 @@ async fn api_websocket_precheck_and_selection_share_the_snapshot_retry_budget() 
                 count <= 6,
                 "both credential checks must share one retry budget"
             );
-            // 第 1、4 次在传输预检冲突，第 3、6 次在最终候选校验冲突。
+            // 第 1、4 次在传输预检冲突，第 3、6 次在最终候选校验冲突
             if matches!(count, 1 | 3 | 4 | 6) {
                 let account = store.account(id.as_str()).expect("account");
                 let observed_at = account
@@ -2420,7 +2436,7 @@ async fn exhausted_account_pool_returns_usage_limit_before_http_or_websocket_net
         create_account(&store, id).await;
         exhaust_account_quota(&store, id).await;
     }
-    // 范围外的可用账号不能掩盖当前 Client Key 的额度耗尽。
+    // 范围外的可用账号不能掩盖当前 Client Key 的额度耗尽
     create_account(&store, "acct_outside_scope").await;
     let server = MockServer::start().await;
     let provider = provider_with_base_url(&store, server.uri());
@@ -2764,7 +2780,7 @@ async fn image_usage_should_preserve_unknown_fields_and_explicit_zero_counts() {
 
 #[tokio::test]
 async fn image_prices_should_use_modality_rates_and_precede_delivery() {
-    // First case is the real gpt-image-2 response verified on 2026-09-08.
+    // 首个用例使用 2026-09-08 核验的真实 gpt-image-2 响应
     let cases = [
         (18, 0, 229, None, 69_600_000_u128),
         (17, 1457, 1372, None, 529_010_000),
@@ -3119,7 +3135,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         AccountWeight::new(100).expect("weight"),
     );
 
-    // 官方 Search 正文的 id 与 Responses 的 session-id 是同一个根身份。
+    // 官方 Search 正文的 id 与 Responses 的 session-id 是同一个根身份
     let search = Operation::Search(StandaloneSearchRequest::from_raw_json(
         RawJsonPayload::new(
             "openai",
@@ -3161,7 +3177,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     }
     drop(same);
 
-    // 仍由旧租约流程报告繁忙并换号，亲和不绕过并发限制。
+    // 仍由旧租约流程报告繁忙并换号，亲和不绕过并发限制
     leases
         .busy_accounts
         .lock()
@@ -3183,7 +3199,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         .await
         .expect("first event")
         .expect("successful JSON response");
-    drop(fallback); // 只消费一个事件也必须完成绑定迁移。
+    drop(fallback); // 只消费一个事件也必须完成绑定迁移
     leases.busy_accounts.lock().expect("busy accounts").clear();
     store.set_scheduling(
         first_account.as_str(),
@@ -3635,7 +3651,7 @@ async fn repeated_message_too_big_closes_keep_session_on_websocket() {
         assert!(!format!("{error:?}").contains("message too big"));
         assert!(!error.to_string().contains("message too big"));
         // 上游 close 1009 是 RFC 6455 "message too big"：必须归因为请求自身问题，
-        // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）。
+        // 而不是 provider 传输故障（否则会被熔断器和换号逻辑误伤其他请求）
         assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
         assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
         assert!(
@@ -3919,7 +3935,7 @@ async fn abrupt_websocket_disconnect_preserves_diagnosis_and_ambiguous_send_stat
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
         websocket.next().await.unwrap().unwrap();
-        // The peer disappears after receiving the payload, without sending a Close frame.
+        // 对端收到载荷后直接断开，不发送 Close 帧
     });
     let operation = Operation::Generate(generate_with_persisted_session_context(
         ACCOUNT_ID,
@@ -3972,7 +3988,7 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
             .await
             .expect("WebSocket request")
             .expect("valid WebSocket request");
-        // 真实生产观察：OpenAI 在流已开始后发送带原话的 `error` 帧再断连。
+        // 真实生产观察：OpenAI 在流已开始后发送带原话的 `error` 帧再断连
         websocket
             .send(Message::Text(
                 json!({
@@ -4013,7 +4029,7 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
             ))
             .await
             .expect("send error frame");
-        // 不发送任何终止事件，直接断开，模拟上游发完错误帧后的真实行为。
+        // 不发送任何终止事件，直接断开，模拟上游发完错误帧后的真实行为
     });
 
     let provider = provider_with_base_url(&store, base_url);
@@ -4038,13 +4054,13 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
         ProviderErrorKind::UpstreamCapacityUnavailable
     );
     assert_eq!(failure.send_state(), UpstreamSendState::Sent);
-    // 交给 Core 的失败必须保留上游原话：客户端只能靠它知道失败原因。
+    // 交给 Core 的失败必须保留上游原话：客户端只能靠它知道失败原因
     let visible = failure
         .client_visible_upstream_error()
         .expect("overload frame must carry a client-visible upstream error");
     assert_eq!(visible.code(), Some("server_is_overloaded"));
     assert_eq!(visible.message(), OVERLOAD_MESSAGE);
-    // 原始错误帧必须随失败一起交给交付边界（SSE 侧据此翻译成 response.failed）。
+    // 原始错误帧必须随失败一起交给交付边界（SSE 侧据此翻译成 response.failed）
     let atomic = failure.take_atomic_client_events();
     let error_frame = atomic
         .iter()
@@ -4181,7 +4197,7 @@ async fn websocket_pong_timeout_diagnosis_survives_ambiguous_send_wrapping() {
             }
             std::assert_matches!(websocket.next().await.unwrap().unwrap(), Message::Ping(_));
             ping_seen_tx.send(()).unwrap();
-            // 停止 poll，避免 tungstenite 自动回 Pong，复现本地保活超时。
+            // 停止 poll，避免 tungstenite 自动回 Pong，复现本地保活超时
             futures::future::pending::<()>().await;
         });
         let operation = Operation::Generate(generate_with_persisted_session_context(
@@ -5543,7 +5559,7 @@ async fn websocket_opening_account_rejection_keeps_replay_safe_without_transport
         let (mut opening, _) = listener.accept().await.unwrap();
         let request = capture_http_request(&mut opening).await;
         assert!(String::from_utf8_lossy(&request).starts_with("GET /codex/responses"));
-        // 额度耗尽拒绝通常携带小时级的 retry-after；同账号重试注定再次命中。
+        // 额度耗尽拒绝通常携带小时级的 retry-after；同账号重试注定再次命中
         let body = r#"{"error":{"message":"You have reached your usage limit.","type":"rate_limit_error"}}"#;
         opening
             .write_all(
@@ -5582,7 +5598,7 @@ async fn websocket_opening_account_rejection_keeps_replay_safe_without_transport
         "before-payload rejection is replay safe"
     );
     // 回放安全的账号级拒绝必须把换号决策留给 Core，不得钉死同账号传输重试
-    // （旧行为会携带小时级 retry-after 的同账号重试标记，请求必然超时）。
+    // （旧行为会携带小时级 retry-after 的同账号重试标记，请求必然超时）
     assert_eq!(error.pre_delivery_retry(), None);
 }
 
@@ -6177,7 +6193,7 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         }).to_string().into())).await.expect("complete response");
         body
     });
-    // 官方 Codex 在工作区包含 Unicode 时也保持内嵌 turn metadata 为 ASCII。
+    // 官方 Codex 在工作区包含 Unicode 时也保持内嵌 turn metadata 为 ASCII
     let raw = r#"{"installation_id":"client-installation","workspaces":{"C:\\Users\\\u9879\u76ee\\\ud83d\ude80":{"label":"caf\u00e9","literal":"\\u4e2d","quoted":"\"line\n"}}}"#;
     let input = json!([{"role": "user", "content": "中文正文 🚀"}]);
     let payload = ProtocolPayload::json_object(
@@ -6652,7 +6668,7 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
         .with_writer(captured.clone())
         .finish();
     // 该 integration test binary 没有其他 subscriber；全局安装可避免并行测试切换
-    // thread-local dispatcher 时重建 tracing callsite interest 所产生的竞争。
+    // thread-local dispatcher 时重建 tracing callsite interest 所产生的竞争
     tracing::subscriber::set_global_default(subscriber)
         .expect("install affinity observation log subscriber");
 
@@ -7205,7 +7221,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     );
     drop(child);
 
-    // 租约层报告 A 已满；既有子线程和首次出现的子线程都能独立选择 B。
+    // 租约层报告 A 已满；既有子线程和首次出现的子线程都能独立选择 B
     leases
         .busy_accounts
         .lock()
@@ -7810,10 +7826,10 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
         .and(path("/api/codex/usage"))
         .and(header("authorization", format!("Bearer at-{account_id}")))
         // 失败后的补查只更新观察时间，即使响应满足恢复条件，
-        // 也不能覆盖本次推理刚确认的耗尽；恢复由独立的主动刷新判断。
+        // 也不能覆盖本次推理刚确认的耗尽；恢复由独立的主动刷新判断
         .respond_with(
             ResponseTemplate::new(200)
-                // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后。
+                // 验证后台 usage 同步不能把原始的额度错误响应拖到查询完成之后
                 .set_delay(Duration::from_millis(750))
                 .set_body_json(json!({
                     "rate_limit": {
@@ -8126,7 +8142,7 @@ async fn capacity_feedback_only_counts_overload_rejections_and_excludes_diagnost
                     .await;
                 let (provider, _) =
                     provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
-                // 同时验证窗口证据已过期与尚未过期：探测不能重建峰值，也不能改写原计数。
+                // 同时验证窗口证据已过期与尚未过期：探测不能重建峰值，也不能改写原计数
                 for existing_evidence in [None, Some((4, 20))] {
                     if let Some((count, peak)) = existing_evidence {
                         for _ in 0..count {
@@ -8218,7 +8234,7 @@ async fn local_websocket_connection_cancellation_does_not_supply_capacity_eviden
         .expect("opening deadline")
         .expect("opening");
     read_http_request(&mut opening).await;
-    // 复现账号更新驱逐正在建连的连接，未收到任何上游容量拒绝。
+    // 复现账号更新驱逐正在建连的连接，未收到任何上游容量拒绝
     pool.evict_account(account_id).await;
     let error = timeout(Duration::from_secs(5), attempt)
         .await
@@ -8316,7 +8332,7 @@ async fn capacity_feedback_in_stream_only_counts_explicit_overload() {
             create_account(&store, "acct_provider_contract").await;
             let account = store.account("acct_provider_contract").expect("account");
             let cooldowns = Arc::new(MemoryCooldownPort::new());
-            // 距离冻结阈值只差一次，验证非容量错误不会把可调度账号推入冷却。
+            // 距离冻结阈值只差一次，验证非容量错误不会把可调度账号推入冷却
             for _ in 0..11 {
                 cooldowns
                     .record_capacity_failure(account.id(), Duration::from_secs(600), 20)
@@ -8564,7 +8580,7 @@ async fn ordinary_request_should_bound_structural_event_replay_grace() {
         .await
         .expect("prepare provider stream");
 
-    let first_event = timeout(Duration::from_secs(2), async {
+    let first_event = timeout(Duration::from_secs(4), async {
         loop {
             let event = stream
                 .next()
@@ -9078,10 +9094,10 @@ async fn exact_websocket_busy_then_replay_scope_relaxation_is_rejected_before_se
 }
 
 #[tokio::test]
-async fn continuation_prefetch_over_64_kib_should_commit_wire_without_protocol_failure() {
+async fn continuation_prefetch_over_128_kib_should_commit_wire_without_protocol_failure() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_prefetch_limit").await;
-    let padding = "x".repeat(64 * 1024);
+    let padding = "x".repeat(128 * 1024);
     let body = format!(
         "event: response.created\ndata: {}\n\n",
         json!({
@@ -9094,7 +9110,7 @@ async fn continuation_prefetch_over_64_kib_should_commit_wire_without_protocol_f
             }
         })
     );
-    assert!(body.len() > 64 * 1024);
+    assert!(body.len() > 128 * 1024);
     let (base_url, release, _first_chunk_sent, server) =
         paused_chunked_sse_server(body, String::new()).await;
     let mut stream = provider_with_base_url(&store, base_url)
@@ -10540,7 +10556,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
                 provider_openai::credential::ResponsesTransport::Http,
             )
             .await;
-        // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存。
+        // 后台发现不协商客户端版本；客户端目录独立请求并按实际版本缓存
         for query in [None, Some("client_version=1.0.0")] {
             Mock::given(method("GET"))
                 .and(path(format!("{prefix}/models")))
@@ -11276,7 +11292,7 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
         QuotaAccessState::Exhausted
     );
     create_account(&store, "acct_affinity_switch_b").await;
-    // 客户端重建完整历史，保留同一会话标识；选号必须跳过刚刚耗尽的原账号。
+    // 客户端重建完整历史，保留同一会话标识；选号必须跳过刚刚耗尽的原账号
     let replay = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","session_id":"quota-replay","thread_id":"turn","input":full_input}).as_object().unwrap().clone()).unwrap(),
     ));
@@ -11317,7 +11333,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
         let (socket, _) = listener.accept().await.unwrap();
         let mut websocket =
             crate::transport::accept_codex_test_websocket_with(socket, |request, response| {
-                // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定。
+                // 提示头只在首次握手发送；后续档位由各自 response.create 正文指定
                 assert_eq!(
                     request.headers()["x-codex-routing-hint"],
                     "model=gpt-5.4;tier=priority"
@@ -11382,7 +11398,7 @@ async fn fast_policy_changes_preserve_the_websocket_continuation_and_meter_each_
             GenerateRequest::from_protocol_payload(
                 ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
                     .unwrap()
-                    // 与客户端 WebSocket 一致，首轮也禁止按快路径预算降级到 HTTP。
+                    // 与客户端 WebSocket 一致，首轮也禁止按快路径预算降级到 HTTP
                     .with_context(Map::from_iter([
                         ("use_websocket".to_owned(), json!(true)),
                         (
@@ -11756,10 +11772,15 @@ async fn lost_http_response_after_payload_does_not_request_connection_replay() {
 async fn stalled_proxy_connections_share_thirty_seconds_instead_of_resetting_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy = format!("socks5h://{}", listener.local_addr().unwrap());
+    let (accepted, connected) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
+        let mut accepted = Some(accepted);
         let mut sockets = Vec::new();
         loop {
             sockets.push(listener.accept().await.unwrap().0);
+            if let Some(accepted) = accepted.take() {
+                let _ = accepted.send(());
+            }
         }
     });
     let store = Arc::new(MemoryAccountStore::default());
@@ -11770,32 +11791,62 @@ async fn stalled_proxy_connections_share_thirty_seconds_instead_of_resetting_tim
         None,
     );
     let provider = provider_with_base_url(&store, "http://upstream.invalid".to_owned());
-    let context = fallback_transport_context("req_socks_timeout");
-    let started = std::time::Instant::now();
-    timeout(Duration::from_secs(32), async {
-        for _ in 0..4 {
-            let mut stream = provider
-                .clone()
-                .execute(
-                    planned_request("openai", generate_operation()),
-                    context.clone(),
-                )
-                .await
-                .unwrap();
-            let mut failure = None;
-            while let Some(event) = stream.next().await {
-                if let Err(error) = event {
-                    failure = Some(error);
-                    break;
+    let context = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_socks_timeout").unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        )
+        .with_request_location(Some(global_request_location()))
+        .with_connection_budget(
+            gateway_core::engine::connection::ConnectionBudget::with_clock(|| {
+                tokio::time::Instant::now().into_std()
+            }),
+        ),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+    .with_transport(AttemptTransport::Fallback);
+    let started = tokio::time::Instant::now();
+    let execution_context = context.clone();
+    let execution = tokio::spawn(async move {
+        timeout(Duration::from_secs(32), async {
+            for _ in 0..4 {
+                let mut stream = provider
+                    .clone()
+                    .execute(
+                        planned_request("openai", generate_operation()),
+                        execution_context.clone(),
+                    )
+                    .await
+                    .unwrap();
+                let mut failure = None;
+                while let Some(event) = stream.next().await {
+                    if let Err(error) = event {
+                        failure = Some(error);
+                        break;
+                    }
                 }
+                let failure = failure.unwrap();
+                assert_eq!(failure.kind(), ProviderErrorKind::Timeout);
+                assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
             }
-            let failure = failure.unwrap();
-            assert_eq!(failure.kind(), ProviderErrorKind::Timeout);
-            assert_eq!(failure.send_state(), UpstreamSendState::NotSent);
-        }
-    })
-    .await
-    .expect("shared recovery window must not become four 15-second timeouts");
+        })
+        .await
+        .expect("shared recovery window must not become four 15-second timeouts");
+    });
+    timeout(Duration::from_secs(5), connected)
+        .await
+        .expect("proxy accepted the real socket")
+        .unwrap();
+    // 先确认真实连接已建立，再推进共享预算与 transport 的同一单调时钟
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(29)).await;
+    execution.await.unwrap();
     assert!(started.elapsed() >= Duration::from_secs(25));
     assert!(context.connection_budget().exhausted());
     server.abort();
@@ -11805,7 +11856,7 @@ async fn stalled_proxy_connections_share_thirty_seconds_instead_of_resetting_tim
 pub(crate) async fn assert_local_connection_capacity_is_not_an_upstream_failure() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
-    // 显式出口使 Provider 使用生产建连层，而不是测试注入的裸 reqwest client。
+    // 显式出口使 Provider 使用生产建连层，而不是测试注入的裸 reqwest client
     store.set_egress(
         "acct_provider_contract",
         Some(gateway_core::account::OutboundProxy::parse("http://127.0.0.1:9").unwrap()),
@@ -12016,8 +12067,8 @@ async fn capture_grok_request(
         .as_object()
         .expect("request object")
         .clone();
-    // 每次测试创建不同账号，账号绑定的安装标识由独立身份合同覆盖。
-    // 这里只比较下游兼容对业务正文的影响。
+    // 每次测试创建不同账号，账号绑定的安装标识由独立身份合同覆盖
+    // 这里只比较下游兼容对业务正文的影响
     sent.remove("client_metadata");
     sent
 }
@@ -12027,8 +12078,8 @@ async fn public_catalog_filters_each_api_account_before_union_without_gating_inf
     use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
     use gateway_core::engine::provider::{Provider, ProviderRegistry};
     use gateway_core::routing::snapshot::{
-        RuntimeSnapshotCompiler, SnapshotFacts, SnapshotProviderAccountFacts,
-        SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
+        RuntimeSnapshotCompiler, SnapshotFacts, SnapshotProviderAccountFacts, SnapshotStoreError,
+        SnapshotStorePort,
     };
 
     struct CatalogStore(SnapshotFacts);
@@ -12099,7 +12150,7 @@ async fn public_catalog_filters_each_api_account_before_union_without_gating_inf
         let facts = SnapshotFacts::new(
             revision,
             revision,
-            SnapshotSettingsFacts::new(
+            SettingsValues::new(
                 3,
                 0,
                 "smart",
@@ -12149,7 +12200,7 @@ async fn public_catalog_filters_each_api_account_before_union_without_gating_inf
             let model = PublicModelId::new(id).unwrap();
             assert!(!snapshot.contains_public_model_for_scope(&model, &scope));
         }
-        // 目录来源只决定展示，发现型目录仍允许把请求交给政策合规的上游判断。
+        // 目录来源只决定展示，发现型目录仍允许把请求交给政策合规的上游判断
         for id in ["kimi-k2.5", "kimi-public", "not-yet-discovered"] {
             let model = PublicModelId::new(id).unwrap();
             assert_eq!(

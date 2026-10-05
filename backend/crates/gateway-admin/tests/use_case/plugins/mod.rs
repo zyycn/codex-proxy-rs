@@ -1,3 +1,5 @@
+//! 插件管理用例的测试入口与共用端口替身
+
 use async_trait::async_trait;
 use gateway_admin::model::plugins::distribution::{
     DownloadedPlugin, GithubReleaseQuery, PluginRelease, RemotePluginLocation, SourceCredential,
@@ -107,7 +109,7 @@ impl gateway_admin::ports::proxy::ProxyStore for TestPluginPorts {
 
 #[async_trait]
 impl gateway_admin::ports::plugin_management::PluginManagement for TestPluginPorts {
-    async fn authorize_models(
+    async fn validate_target(
         &self,
         _: &gateway_core::runtime::extensions::ExtensionSetReference,
         _: &gateway_admin::model::plugins::management::PluginManagementTarget,
@@ -160,6 +162,44 @@ impl gateway_admin::ports::plugin_management::PluginManagement for TestPluginPor
     ) -> Result<gateway_admin::model::plugins::management::PluginManagementResponse, AdminError>
     {
         Err(AdminError::not_found("unused plugin fixture"))
+    }
+}
+
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginRuntimeDiagnostics for TestPluginPorts {
+    async fn runtime_diagnostics(
+        &self,
+        _: &gateway_admin::model::plugins::instances::PluginInstanceSnapshot,
+        _: Option<u64>,
+        _: Option<&gateway_core::runtime::extensions::ExtensionSetReference>,
+    ) -> Option<
+        std::collections::BTreeMap<
+            String,
+            gateway_admin::model::plugins::instances::PluginInstanceRuntime,
+        >,
+    > {
+        None
+    }
+}
+
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginStateLifecycle for TestPluginPorts {
+    async fn activate_state(
+        &self,
+        _: &gateway_core::runtime::extensions::ExtensionSetReference,
+        _: &gateway_admin::model::plugins::instances::PluginInstance,
+    ) -> Result<(), AdminError> {
+        panic!("unexpected state activation")
+    }
+    async fn quiesce_instance(&self, _: &str, _: &str, _: gateway_admin::model::Revision) {
+        panic!("unexpected instance drain")
+    }
+    async fn migrate_state(
+        &self,
+        _: &gateway_core::runtime::extensions::ExtensionSetReference,
+        _: gateway_admin::model::plugins::state::PluginStateTransition,
+    ) -> Result<(), AdminError> {
+        panic!("unexpected state migration")
     }
 }
 

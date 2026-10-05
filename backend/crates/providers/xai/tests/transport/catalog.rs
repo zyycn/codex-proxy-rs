@@ -1,3 +1,5 @@
+//! 验证 Grok 目录与额度请求的 OAuth 头部及订阅事实解析
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 

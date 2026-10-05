@@ -1,4 +1,4 @@
-//! 请求位置只描述出口的业务配置，不改变代理连接身份或服务系统时区。
+//! 请求位置只描述出口的业务配置，不改变代理连接身份或服务系统时区
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ impl RequestLocation {
             (&self.region, InvalidRequestLocation::Region),
             (&self.city, InvalidRequestLocation::City),
         ] {
-            // 先检查原始输入，避免 trim 掩盖首尾的换行和其他控制字符。
+            // 先检查原始输入，避免 trim 掩盖首尾的换行和其他控制字符
             if value.chars().any(char::is_control)
                 || value.trim().is_empty()
                 || value.trim().chars().count() > 128

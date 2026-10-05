@@ -1,3 +1,5 @@
+//! 验证官方发行目录的有界读取与符号链接拒绝
+
 use std::fs;
 
 use gateway_admin::ports::plugin_release::{

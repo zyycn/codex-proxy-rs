@@ -1,3 +1,5 @@
+//! 验证 HTTP 登录身份、会话轮换与管理员和 Key 会话的权限隔离
+
 use std::sync::atomic::Ordering;
 
 use axum::{

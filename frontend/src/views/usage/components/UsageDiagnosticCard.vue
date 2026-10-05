@@ -1,12 +1,12 @@
 <script setup lang="ts">
+import type { TableColumnSize } from '@codex-proxy/ui'
 import type { getUsageRecordInsightsDiagnostics } from '@/api'
 import { BaseCard, BaseEmpty, BaseSegmented, BaseTable, defineTableColumns } from '@codex-proxy/ui'
 
 import { CornerDownRight } from '@lucide/vue'
 import { computed } from 'vue'
-import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/format'
-
-import { formatDuration, formatPercent, formatUsd } from '../utils/format'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration, formatPercent, formatUsd } from '@/utils/format'
 
 type Diagnostics = Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>>
 
@@ -31,24 +31,43 @@ const dimensionOptions = [
   { label: '错误', value: 'failureClass' },
 ]
 
-const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
+const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
+const resultDimensionLabel = computed(
+  () => dimensionOptions.find(option => option.value === resultDimension.value)?.label ?? '维度',
+)
+
+const dimensionNameSizes: Record<string, TableColumnSize> = {
+  model: 'xl',
+  account: '2xl',
+  apiKey: 'md',
+  provider: 'lg',
+  transport: 'sm',
+  failureClass: 'xl',
+}
+
+const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayItem>([
   {
     key: 'nameDisplay',
     label: '维度',
     kind: 'custom',
-    size: 'xl',
+    size: dimensionNameSizes[resultDimension.value] ?? 'xl',
   },
+  ...(resultDimension.value === 'account'
+    ? defineTableColumns<DiagnosticDisplayItem>([
+        { key: 'accountPlanType', label: '订阅', kind: 'status', size: 'sm', fixedWidth: true },
+      ])
+    : []),
   {
     key: 'requestCount',
     label: '请求',
     kind: 'numeric',
-    size: 'sm',
+    size: 'xs',
   },
   {
     key: 'errorCount',
     label: '失败',
     kind: 'numeric',
-    size: 'sm',
+    size: 'xs',
   },
   { key: 'firstTokenP95Ms', label: '性能', kind: 'numeric', size: 'lg' },
   {
@@ -57,12 +76,7 @@ const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
     kind: 'numeric',
     size: 'sm',
   },
-])
-
-const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
-const resultDimensionLabel = computed(
-  () => dimensionOptions.find(option => option.value === resultDimension.value)?.label ?? '维度',
-)
+]))
 
 type DiagnosticDisplayItem = Diagnostics['items'][number] & {
   nameDisplay: ReturnType<typeof diagnosticNameDisplay>
@@ -98,7 +112,7 @@ function diagnosticNameDisplay(name: string) {
     as="article"
     title="热点诊断"
     :description="`按${resultDimensionLabel}聚合`"
-    class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-full lg:min-h-90 lg:max-h-105"
+    class="max-h-105 min-w-0 w-full xl:h-full"
   >
     <template #actions>
       <BaseSegmented
@@ -114,7 +128,7 @@ function diagnosticNameDisplay(name: string) {
       <BaseTable
         v-if="hasData"
         :key="resultDimension"
-        class="min-h-0 w-full xl:contain-[size]"
+        class="min-h-0 max-h-80 w-full xl:max-h-none xl:contain-[size]"
         :columns="diagnosticColumns"
         :rows="displayItems"
         density="compact"
@@ -146,6 +160,16 @@ function diagnosticNameDisplay(name: string) {
               </code>
             </span>
           </div>
+        </template>
+
+        <template #accountPlanType="{ row }">
+          <AccountPlanBadge
+            v-if="row.accountPlanType"
+            :plan-type="row.accountPlanType"
+            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType"
+            size="sm"
+          />
+          <span v-else class="text-cp-text-quaternary">—</span>
         </template>
 
         <template #requestCount="{ row }">
@@ -205,7 +229,7 @@ function diagnosticNameDisplay(name: string) {
         surface="none"
         :title="loading ? '正在加载热点诊断数据' : '暂无诊断数据'"
         description="当前范围没有可诊断的请求记录"
-        class="h-full place-content-center"
+        class="h-full min-h-40 place-content-center"
       />
     </template>
   </BaseCard>

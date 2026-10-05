@@ -56,6 +56,8 @@ export function useStablePagedQuery<Result extends PageResult>(options: {
   }
 
   function reloadFromStart(execution: { silent?: boolean } = {}) {
+    // 重新分页后旧记录不再对应当前页，失败时也不能留在新页号下。
+    items.value = []
     currentPage.value = 1
     total.value = 0
     return execute(1, execution)

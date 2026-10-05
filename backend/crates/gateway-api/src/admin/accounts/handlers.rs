@@ -1,10 +1,10 @@
-//! 账号管理路由与 HTTP handler 编排。
+//! 账号管理路由与 HTTP handler 编排
 
 use crate::auth::SessionState;
 
 use super::*;
 
-/// 构造统一账号管理路由。
+/// 构造统一账号管理路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -96,6 +96,7 @@ async fn list_accounts<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let command = query.validate().map_err(map_wire_error)?;
     let page = command.page;
     let page_size = command.page_size.get();
@@ -105,7 +106,7 @@ where
         .list(command)
         .await
         .map_err(map_service_error)?;
-    let data = account_page_data(result, page, page_size, Utc::now());
+    let data = account_page_data(result, page, page_size, Utc::now(), time);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -117,6 +118,7 @@ async fn account_detail<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = query.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -131,7 +133,7 @@ where
         .await
         .map_err(map_service_error)?;
     let data = AccountDetailData {
-        account: account_view(result, Utc::now()),
+        account: account_view(result, Utc::now(), time),
         credential_configuration: configuration.map(provider_document_value),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
@@ -145,6 +147,7 @@ async fn export_accounts<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let ids = query.into_ids().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -152,7 +155,7 @@ where
         .export(&auth.context().mutation_context(), ids)
         .await
         .map_err(map_service_error)?;
-    let data = AccountExportData::from_result(result);
+    let data = AccountExportData::from_result(result, time);
     let mut response = AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)).into_response();
     response
         .headers_mut()
@@ -313,6 +316,7 @@ async fn refresh_account<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = request.into_command().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -320,7 +324,7 @@ where
         .refresh(&auth.context().mutation_context(), account_id)
         .await
         .map_err(map_service_error)?;
-    let data = account_refresh_data(result, Utc::now());
+    let data = account_refresh_data(result, Utc::now(), time);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -332,6 +336,7 @@ async fn recover_account<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = request.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -339,7 +344,7 @@ where
         .recover(&auth.context().mutation_context(), account_id)
         .await
         .map_err(map_service_error)?;
-    let data = account_refresh_data(result, Utc::now());
+    let data = account_refresh_data(result, Utc::now(), time);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -351,6 +356,7 @@ async fn account_quota<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = query.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -359,7 +365,7 @@ where
         .await
         .map_err(map_service_error)?;
     let data = AccountQuotaData {
-        account: account_view(result, Utc::now()),
+        account: account_view(result, Utc::now(), time),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
@@ -381,7 +387,10 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountQuotaForecastData::from(result)),
+        AdminEnvelope::ok(AccountQuotaForecastData::from((
+            result,
+            crate::time::TimePresenter::new(state.admin_services().timezone()),
+        ))),
     ))
 }
 
@@ -393,6 +402,7 @@ async fn account_personal_info<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = query.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -402,7 +412,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountPersonalInfoData::from(result)),
+        AdminEnvelope::ok(AccountPersonalInfoData::from((result, time))),
     ))
 }
 
@@ -424,7 +434,7 @@ where
     Ok(profile_avatar_response(avatar))
 }
 
-/// 将 Provider 头像流投影为受保护的同源 HTTP 响应。
+/// 将 Provider 头像流投影为受保护的同源 HTTP 响应
 #[must_use]
 pub fn profile_avatar_response(avatar: ProviderProfileAvatar) -> Response {
     let ProviderProfileAvatar {
@@ -477,6 +487,7 @@ async fn refresh_account_quota<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = request.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -485,7 +496,7 @@ where
         .await
         .map_err(map_service_error)?;
     let data = AccountQuotaData {
-        account: account_view(result, Utc::now()),
+        account: account_view(result, Utc::now(), time),
     };
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
@@ -498,6 +509,7 @@ async fn account_reset_credits<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let account_id = query.into_id().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -507,7 +519,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountResetCreditsData::from(result)),
+        AdminEnvelope::ok(AccountResetCreditsData::from((result, time))),
     ))
 }
 
@@ -519,6 +531,7 @@ async fn consume_account_reset_credit<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let command = request.into_command().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -528,7 +541,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountResetCreditResultData::from(result)),
+        AdminEnvelope::ok(AccountResetCreditResultData::from((result, time))),
     ))
 }
 
@@ -597,6 +610,7 @@ async fn test_account_connection<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let (account_id, upstream_model) = query.into_command().map_err(map_wire_error)?;
     let stream = state
         .admin_services()
@@ -604,8 +618,8 @@ where
         .test_connection(account_id, upstream_model)
         .await
         .map_err(map_service_error)?
-        .map(|event| {
-            let event = AccountConnectionTestEvent::from(event);
+        .map(move |event| {
+            let event = AccountConnectionTestEvent::from((event, time));
             let data = serde_json::to_string(&event.data).unwrap_or_else(|_| "{}".to_owned());
             Ok(Event::default().data(data))
         });

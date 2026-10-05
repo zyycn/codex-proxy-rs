@@ -7,7 +7,7 @@ import { errorMessage } from '@/utils/operation'
 import { pricingProviders, pricingRows } from './model'
 
 export function usePricing() {
-  const catalog = shallowRef<PricingCatalog>({ defaults: {}, overrides: {}, synced: {}, syncedAt: null })
+  const catalog = shallowRef<PricingCatalog>({ defaults: {}, overrides: {}, synced: {}, syncedAt: null, syncedAtDisplay: null })
   const provider = ref('openai')
   const search = ref('')
   const source = ref('all')
@@ -19,6 +19,9 @@ export function usePricing() {
   const writeAction = useAsyncAction()
   const previewAction = useAsyncAction()
   const preview = shallowRef<PricingSyncPreview>()
+  const syncOpen = shallowRef(false)
+  // 确认窗口展示查询时的价格对比，保存后的列表刷新不能改变退场中的预览。
+  const syncCatalog = shallowRef(catalog.value)
   const providers = computed(() => pricingProviders(catalog.value))
   const rows = computed(() => pricingRows(catalog.value, provider.value))
   const filtered = computed(() => rows.value.filter(row => row.model.toLowerCase().includes(search.value.trim().toLowerCase())
@@ -54,15 +57,17 @@ export function usePricing() {
   async function startSync() {
     await previewAction.run(async () => {
       preview.value = await previewPricingSync()
+      syncCatalog.value = catalog.value
+      syncOpen.value = true
     })
   }
   async function confirmSync(models: Record<string, string[]>) {
-    if (!preview.value || !Object.values(models).some(items => items.length))
+    if (!syncOpen.value || !preview.value || !Object.values(models).some(items => items.length))
       return
     const approved = preview.value
     await writeAction.run(async () => {
       await syncPricing({ preview: approved, models })
-      preview.value = undefined
+      syncOpen.value = false
       toast.success('来源价目已同步，人工覆盖保持不变')
       await load()
     })
@@ -75,5 +80,5 @@ export function usePricing() {
     selected.value = checked ? [...new Set([...selected.value, ...ids])] : selected.value.filter(id => !ids.includes(id))
   }
   onMounted(load)
-  return { catalog, providers, provider, search, source, page, pageSize, selected, error, rows, filtered, visible, pagination, loading: loadAction.loading, saving: writeAction.loading, syncing: previewAction.loading, preview, load, save, startSync, confirmSync, toggle, togglePage }
+  return { catalog, providers, provider, search, source, page, pageSize, selected, error, rows, filtered, visible, pagination, loading: loadAction.loading, saving: writeAction.loading, syncing: previewAction.loading, preview, syncOpen, syncCatalog, load, save, startSync, confirmSync, toggle, togglePage }
 }

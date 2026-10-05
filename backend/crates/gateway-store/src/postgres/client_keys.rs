@@ -1,5 +1,6 @@
-//! 明文 `client_api_keys` 的 PostgreSQL owner。
+//! 明文 `client_api_keys` 的 PostgreSQL owner
 
+use gateway_admin::model::audit::MutationAuditOperation;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -507,9 +508,9 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
     }
 }
 
-/// 认证成功后按一秒窗口合并写回 API Key 最后使用时间。
+/// 认证成功后按一秒窗口合并写回 API Key 最后使用时间
 ///
-/// 该 adapter 仅记录稳定 Key ID；认证材料从不进入异步队列或日志。
+/// 该 adapter 仅记录稳定 Key ID；认证材料从不进入异步队列或日志
 #[derive(Clone)]
 pub struct PgClientApiKeyUsageSink {
     state: Arc<ClientApiKeyUsageBuffer>,
@@ -653,7 +654,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Admin 用例所需的 Client Key 事务能力。
+/// Admin 用例所需的 Client Key 事务能力
 #[derive(Clone)]
 pub struct PgAdminClientKeyStore {
     keys: PgClientApiKeyRepository,
@@ -669,7 +670,7 @@ impl PgAdminClientKeyStore {
         }
     }
 
-    /// 会话恢复只读启用状态，不加载明文凭据或其他 Key 的资料。
+    /// 会话恢复只读启用状态，不加载明文凭据或其他 Key 的资料
     pub async fn is_enabled(&self, id: &ClientApiKeyId) -> AdminStoreResult<bool> {
         sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM client_api_keys WHERE id = $1 AND enabled)",
@@ -724,11 +725,10 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                 .await
                 .map_err(|_| map_error(postgres_unavailable("begin budget limits update")))?,
             ClientKeyBudgetMutationOrigin::Plugin(owner) => {
-                super::plugins::begin_authorized_mutation(&self.keys.pool, owner, "key_budgets")
-                    .await?
+                super::plugins::begin_plugin_mutation(&self.keys.pool, owner).await?
             }
         };
-        // 保持与完整 Key 编辑相同的锁顺序；绝不读出整份配置再覆盖写回。
+        // 保持与完整 Key 编辑相同的锁顺序；绝不读出整份配置再覆盖写回
         sqlx::query("select config_revision from runtime_settings where id=1 for update")
             .execute(&mut *tx)
             .await
@@ -784,8 +784,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             &mut tx,
             mutation_audit(
                 context,
-                "update_budget_limits",
-                "client_api_key",
+                MutationAuditOperation::ClientApiKeyUpdateBudgetLimits,
                 command.id.as_str(),
                 fields,
             ),
@@ -885,8 +884,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                 },
                 mutation_audit(
                     context,
-                    "create",
-                    "client_api_key",
+                    MutationAuditOperation::ClientApiKeyCreate,
                     id.as_str(),
                     [
                         "name",
@@ -936,8 +934,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                 },
                 mutation_audit(
                     context,
-                    "update",
-                    "client_api_key",
+                    MutationAuditOperation::ClientApiKeyUpdate,
                     id.as_str(),
                     [
                         "name",
@@ -972,8 +969,9 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                 command.enabled,
                 mutation_audit(
                     context,
-                    if command.enabled { "enable" } else { "disable" },
-                    "client_api_key",
+                    MutationAuditOperation::ClientApiKeyEnabled {
+                        enabled: command.enabled,
+                    },
                     id.as_str(),
                     vec!["enabled".to_owned()],
                 ),
@@ -993,8 +991,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                 command.id.as_str(),
                 mutation_audit(
                     context,
-                    "delete",
-                    "client_api_key",
+                    MutationAuditOperation::ClientApiKeyDelete,
                     command.id.as_str(),
                     Vec::new(),
                 ),
@@ -1216,8 +1213,8 @@ async fn ensure_client_key_name_available(
     id: &str,
     name: &str,
 ) -> StoreResult<()> {
-    // 调用方已通过递增配置版本持有控制面行锁，查重与写入在同一事务内串行执行。
-    // 不回填历史重名数据；创建和保存时统一校验，更新排除当前记录。
+    // 调用方已通过递增配置版本持有控制面行锁，查重与写入在同一事务内串行执行
+    // 不回填历史重名数据；创建和保存时统一校验，更新排除当前记录
     let duplicate: bool = sqlx::query_scalar(
         "select exists(select 1 from client_api_keys
          where lower(btrim(name)) = lower($1) and id <> $2)",

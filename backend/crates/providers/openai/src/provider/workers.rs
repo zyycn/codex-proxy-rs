@@ -1,6 +1,4 @@
-//! OpenAI Provider 向 Host 贡献的后台 worker。
-
-use std::sync::Mutex;
+//! OpenAI Provider 向 Host 贡献的后台 worker
 
 use super::*;
 use crate::transport::profile::cli_release::CliReleaseService;
@@ -25,6 +23,7 @@ pub(super) const WARMUP_WORKER_OWNER: &str = "openai-account-warmup";
 pub(super) const WARMUP_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) fn worker_contributions(
+    timezone: gateway_core::time::DeploymentTimeZone,
     refresh: Arc<CodexCredentialRefreshService>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
@@ -76,7 +75,7 @@ pub(crate) fn worker_contributions(
         WorkerContribution::Registration(scheduled_registration(
             warmup_id,
             WARMUP_CHECK_INTERVAL,
-            Box::new(OpenAiWarmupTask::new(Arc::clone(&quota))),
+            Box::new(OpenAiWarmupTask::new(Arc::clone(&quota), timezone)),
         )?),
         WorkerContribution::Registration(scheduled_registration(
             catalog_id,
@@ -229,7 +228,7 @@ impl ScheduledTask for OpenAiDesktopReleaseTask {
             };
             if let Err(error) = result {
                 // 上游检查失败已经作为 Provider 观察事实保存；本周期本身正常完成，
-                // 避免 Host 的短退避持续请求固定官方 appcast。
+                // 避免 Host 的短退避持续请求固定官方 appcast
                 tracing::warn!(error = %error, "OpenAI Desktop release check failed");
             }
             Ok(())
@@ -343,16 +342,16 @@ impl ScheduledTask for OpenAiPlatformDesktopReleaseTask {
 }
 
 pub(super) struct OpenAiWarmupTask {
+    timezone: gateway_core::time::DeploymentTimeZone,
     quota: Arc<CodexCredentialQuotaService>,
-    last_slot_executed: Mutex<Option<String>>,
 }
 
 impl OpenAiWarmupTask {
-    pub(super) fn new(quota: Arc<CodexCredentialQuotaService>) -> Self {
-        Self {
-            quota,
-            last_slot_executed: Mutex::new(None),
-        }
+    pub(super) fn new(
+        quota: Arc<CodexCredentialQuotaService>,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Self {
+        Self { timezone, quota }
     }
 }
 
@@ -374,10 +373,19 @@ impl ScheduledTask for OpenAiWarmupTask {
             if !policy.enabled() {
                 return Ok(());
             }
-            use chrono::{Datelike as _, Timelike as _};
-            let china_now = chrono::Utc::now() + chrono::Duration::hours(8);
-            let hour = china_now.time().hour();
-            let minute = china_now.time().minute();
+            use chrono::Timelike as _;
+            let now = chrono::Utc::now();
+            let local_now = self.timezone.local(now);
+            // 回拨产生的第二个相同时刻不能再次执行
+            if self
+                .timezone
+                .resolve_local(local_now.naive_local())
+                .is_none_or(|first| first != now)
+            {
+                return Ok(());
+            }
+            let hour = local_now.time().hour();
+            let minute = local_now.time().minute();
             let scheduled_times = policy.scheduled_times();
             let matched = scheduled_times
                 .iter()
@@ -385,27 +393,23 @@ impl ScheduledTask for OpenAiWarmupTask {
             if !matched {
                 return Ok(());
             }
-            let slot_key = format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}",
-                china_now.date_naive().year(),
-                china_now.date_naive().month(),
-                china_now.date_naive().day(),
-                hour,
-                minute
-            );
-            {
-                let mut last = self
-                    .last_slot_executed
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if last.as_deref() == Some(&slot_key) {
-                    return Ok(());
-                }
-                *last = Some(slot_key);
-            }
             let Some(model) = policy.model() else {
                 return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
             };
+            let slot = local_now
+                .naive_local()
+                .with_second(0)
+                .and_then(|value| value.with_nanosecond(0))
+                .ok_or_else(|| WorkerTaskError::safe("invalid warmup slot"))?;
+            if !self
+                .quota
+                .runtime_policy()
+                .claim_warmup_slot(self.timezone, slot)
+                .await
+                .map_err(|_| WorkerTaskError::safe("warmup slot is unavailable"))?
+            {
+                return Ok(());
+            }
             tracing::info!(hour, minute, model, "OpenAI account warmup cycle started");
             let outcome = tokio::select! {
                 () = context.cancellation().cancelled() => return Ok(()),
@@ -423,18 +427,6 @@ impl ScheduledTask for OpenAiWarmupTask {
                 }
                 Err(error) => {
                     tracing::warn!(error = %error, "OpenAI account warmup cycle failed");
-                }
-            }
-            let china_after = chrono::Utc::now() + chrono::Duration::hours(8);
-            if china_after.date_naive() == china_now.date_naive()
-                && china_after.hour() == hour
-                && china_after.minute() == minute
-            {
-                // 持有本轮 leader lease 到时间槽结束，避免其他实例在同一分钟再次执行。
-                let hold = Duration::from_secs(u64::from(61 - china_after.second()));
-                tokio::select! {
-                    () = context.cancellation().cancelled() => return Ok(()),
-                    () = tokio::time::sleep(hold) => {}
                 }
             }
             Ok(())

@@ -28,7 +28,7 @@ use wiremock::{
 };
 
 use super::contract::{context, context_with_middleware, create_account, provider_with_base_url};
-use crate::support::{MemoryAccountStore, account_policy};
+use crate::support::MemoryAccountStore;
 
 const MODEL: &str = "gpt-live-1-codex";
 const ACCOUNT: &str = "acct_provider_contract";
@@ -64,7 +64,7 @@ fn live_request() -> ProviderRequest {
     );
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
-        account_policy(),
+        gateway_core::settings::SettingsValues::new(2, 10, "smart", BTreeMap::new(), None, None),
         vec![provider.clone()],
         Vec::new(),
         Vec::new(),
@@ -89,7 +89,7 @@ impl MiddlewarePlan for ModelMiddleware {
         &self,
         context: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.model(), Some(MODEL));
         next.run(request)
@@ -208,7 +208,7 @@ async fn live_bootstrap_rejects_missing_planned_model_before_upstream_send() {
     let provider_kind = ProviderKind::new("openai").unwrap();
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
-        account_policy(),
+        gateway_core::settings::SettingsValues::new(2, 10, "smart", BTreeMap::new(), None, None),
         vec![provider_kind.clone()],
         Vec::new(),
         Vec::new(),

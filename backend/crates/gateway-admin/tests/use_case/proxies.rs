@@ -1,3 +1,5 @@
+//! 账号出站代理管理、占用释放与探测结果的用例测试
+
 use async_trait::async_trait;
 use gateway_admin::{
     model::{MutationContext, Revision, proxies::*},
@@ -190,6 +192,7 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
     ] {
         let provider = FakeProviderAdmin::new("openai", events());
         provider.set_quota(ProviderQuota {
+            credits: None,
             plan_type: cached.map(str::to_owned),
             observed_at: None,
             refresh_token_expires_at: None,

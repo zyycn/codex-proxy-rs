@@ -1,3 +1,5 @@
+//! 插件实例配置、运行状态、版本切换与回滚的 HTTP 接口
+
 use axum::{
     Router,
     extract::{Query, State},
@@ -52,6 +54,7 @@ struct InstanceView {
     artifact_sha256: String,
     enabled: bool,
     configuration_required: bool,
+    compatibility_warning: Option<String>,
     configuration: serde_json::Value,
     secret_fields: Vec<String>,
     bindings: Vec<PluginCapabilityBinding>,
@@ -137,7 +140,6 @@ impl From<PluginInstanceView> for InstanceView {
             trusted_process: _,
             configuration,
             secrets,
-            grants: _,
             bindings,
             revision,
         } = value.instance;
@@ -147,6 +149,7 @@ impl From<PluginInstanceView> for InstanceView {
             artifact_sha256,
             enabled,
             configuration_required: value.configuration_required,
+            compatibility_warning: value.compatibility_warning,
             configuration,
             secret_fields: secrets.into_keys().collect(),
             bindings,

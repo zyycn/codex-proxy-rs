@@ -1,3 +1,5 @@
+//! 验证插件发布准备的目录冻结、声明校验与运行时关闭
+
 use gateway_admin::{
     model::{
         Revision,
@@ -189,6 +191,7 @@ async fn management_needs_no_binding_and_rejects_stale_execution_identity_config
         account_group_ids: Vec::new(),
         provider_ids: Vec::new(),
         models: Vec::new(),
+        event: None,
         identity_bindings: Vec::new(),
     }];
     assert!(
@@ -208,7 +211,7 @@ async fn management_needs_no_binding_and_rejects_stale_execution_identity_config
 async fn registration_with_a_changed_contribution_id_is_rejected() {
     let (cache, store, runtime) =
         super::setup_with_contributions(Contributions::from([crate::support::contribution(
-            Capability::Usage,
+            Capability::Observer,
             vec![Stage::Observation],
             Vec::new(),
             Vec::new(),
@@ -267,7 +270,7 @@ async fn diagnostics_distinguish_running_failed_preparation_and_draining_generat
         .await
         .unwrap();
 
-    let running = PluginPreparation::runtime_diagnostics(
+    let running = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
         &runtime,
         &snapshot,
         Some(snapshot.config_revision.get()),
@@ -293,7 +296,7 @@ async fn diagnostics_distinguish_running_failed_preparation_and_draining_generat
             .await
             .is_err()
     );
-    let diagnostics = PluginPreparation::runtime_diagnostics(
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
         &runtime,
         &failed,
         Some(snapshot.config_revision.get()),
@@ -313,7 +316,7 @@ async fn diagnostics_distinguish_running_failed_preparation_and_draining_generat
     disabled.config_revision = Revision::new(3).unwrap();
     disabled.instances[0].revision = Revision::new(3).unwrap();
     disabled.instances[0].enabled = false;
-    let diagnostics = PluginPreparation::runtime_diagnostics(
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
         &runtime,
         &disabled,
         Some(snapshot.config_revision.get()),
@@ -343,7 +346,12 @@ async fn preparing_diagnostics_never_wait_for_the_serialized_prepare_io() {
 
     let diagnostics = tokio::time::timeout(
         std::time::Duration::from_millis(100),
-        PluginPreparation::runtime_diagnostics(&runtime, &diagnostic_snapshot, None, None),
+        gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+            &runtime,
+            &diagnostic_snapshot,
+            None,
+            None,
+        ),
     )
     .await
     .expect("diagnostics must not wait for plugin startup")
@@ -374,7 +382,7 @@ async fn diagnostics_report_a_published_process_fault_without_plugin_details() {
     .await
     .expect("worker exit observed");
 
-    let diagnostics = PluginPreparation::runtime_diagnostics(
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
         &runtime,
         &snapshot,
         Some(snapshot.config_revision.get()),
@@ -435,7 +443,7 @@ async fn restart_circuit_caps_short_lived_crashes_and_a_new_revision_recovers() 
     );
     assert_eq!(startup_count(&marker), 3);
 
-    let diagnostics = PluginPreparation::runtime_diagnostics(
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
         &runtime,
         &snapshot,
         Some(snapshot.config_revision.get()),
@@ -493,7 +501,7 @@ async fn restart_circuit_resets_after_a_stable_incarnation() {
         "startup_failures":[true,true,false,true,true],
         "exit_after_ready_signals":[null,null,exit],
     });
-    // 握手前失败的有效运行时间固定为零；不能用短 sleep 假定宿主一定及时观察到退出。
+    // 握手前失败的有效运行时间固定为零；不能用短 sleep 假定宿主一定及时观察到退出
     for _ in 0..2 {
         assert!(
             PluginPreparation::prepare(&runtime, snapshot.clone())
@@ -505,7 +513,7 @@ async fn restart_circuit_resets_after_a_stable_incarnation() {
         .await
         .expect("the third incarnation starts before the circuit opens");
     assert!(active.is_ready());
-    // 明确等到稳定窗口之后才允许第三个进程退出；调度变慢不会把短命进程误变为稳定进程。
+    // 明确等到稳定窗口之后才允许第三个进程退出；调度变慢不会把短命进程误变为稳定进程
     tokio::time::sleep(restart_circuit.stability_window).await;
     tokio::fs::write(exit, b"exit").await.unwrap();
     wait_until_unready(&active).await;
@@ -544,7 +552,7 @@ async fn restart_circuit_ignores_planned_generation_shutdown() {
         .await
         .expect("first generation");
     let instance = &snapshot.instances[0];
-    PluginPreparation::quiesce_instance(
+    gateway_admin::ports::plugins::PluginStateLifecycle::quiesce_instance(
         &runtime,
         &instance.id,
         &instance.artifact_sha256,
@@ -597,9 +605,11 @@ async fn restart_circuit_counts_exit_before_the_candidate_is_indexed() {
         "open circuit must gate process spawn"
     );
 
-    let diagnostics = PluginPreparation::runtime_diagnostics(&runtime, &snapshot, None, None)
-        .await
-        .expect("runtime diagnostics");
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime, &snapshot, None, None,
+    )
+    .await
+    .expect("runtime diagnostics");
     assert_eq!(
         diagnostics["instance-one"]
             .failure
@@ -659,8 +669,8 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
     let mut snapshot = store.snapshot.lock().unwrap().clone();
     snapshot.instances[0].configuration = serde_json::json!({
         "startup_marker":marker,
-        "exit_after_ready_delays_ms":[null,15,15,15],
-        "exit_after_ready_signals":[old_exit,null,null,null],
+        "startup_failures":[false,true,true,true],
+        "exit_after_ready_signals":[old_exit],
     });
     let mut other = snapshot.instances[0].clone();
     other.id = "other-instance".into();
@@ -671,6 +681,9 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
         .await
         .expect("published generation");
     assert!(published.is_ready());
+    // 旧代次明确越过稳定窗口；新代次在握手前失败，运行时间固定为零
+    // 不依赖 15 ms 退出与注册完成的竞速，也不让调度延迟重置新失败预算
+    tokio::time::sleep(restart_circuit.stability_window).await;
 
     let mut failed_candidate = None;
     for revision in 2..=4 {
@@ -679,8 +692,8 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
         snapshot.instances[1].configuration = serde_json::json!({"revision":revision});
         let candidate = PluginPreparation::prepare(&runtime, snapshot.clone())
             .await
-            .expect("newer candidate starts before its controlled exit");
-        wait_until_unready(&candidate).await;
+            .expect("the unrelated instance starts while the newer incarnation fails");
+        assert_eq!(startup_count(&marker), revision as usize);
         drop(failed_candidate.replace(candidate));
         assert!(published.is_ready(), "the older generation remains healthy");
     }
@@ -690,9 +703,11 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
     snapshot.config_revision = Revision::new(5).unwrap();
     snapshot.instances[1].revision = Revision::new(5).unwrap();
     snapshot.instances[1].configuration = serde_json::json!({"revision":5});
-    let circuit = PluginPreparation::runtime_diagnostics(&runtime, &snapshot, None, None)
-        .await
-        .unwrap();
+    let circuit = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime, &snapshot, None, None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         circuit["instance-one"]
             .failure
@@ -703,10 +718,14 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
     let recovered = PluginPreparation::prepare(&runtime, snapshot.clone())
         .await
         .expect("an older failed instance is isolated during unrelated recovery");
-    let diagnostics =
-        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(5), Some(&recovered))
-            .await
-            .unwrap();
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(5),
+        Some(&recovered),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         diagnostics["instance-one"]
             .failure
@@ -760,14 +779,15 @@ async fn restart_circuit_restores_an_older_failure_after_candidate_shutdown() {
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            let diagnostics = PluginPreparation::runtime_diagnostics(
-                &runtime,
-                &snapshot,
-                Some(1),
-                Some(&published),
-            )
-            .await
-            .expect("runtime diagnostics");
+            let diagnostics =
+                gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+                    &runtime,
+                    &snapshot,
+                    Some(1),
+                    Some(&published),
+                )
+                .await
+                .expect("runtime diagnostics");
             if diagnostics["instance-one"]
                 .failure
                 .as_ref()
@@ -787,10 +807,14 @@ async fn restart_circuit_restores_an_older_failure_after_candidate_shutdown() {
     let recovered = PluginPreparation::prepare(&runtime, snapshot.clone())
         .await
         .expect("an older failed instance is isolated during unrelated recovery");
-    let diagnostics =
-        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(3), Some(&recovered))
-            .await
-            .unwrap();
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(3),
+        Some(&recovered),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         diagnostics["instance-one"]
             .failure
@@ -872,10 +896,14 @@ async fn restoring_a_failed_plugin_keeps_other_instances_ready_and_reports_only_
         .await
         .expect("one failed plugin must not stop restoration");
     assert!(generation.can_serve());
-    let diagnostics =
-        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(1), Some(&generation))
-            .await
-            .unwrap();
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(1),
+        Some(&generation),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         diagnostics["failed-plugin"].status,
         PluginInstanceRuntimeStatus::PreparationFailed
@@ -915,10 +943,14 @@ async fn a_published_process_crash_preserves_the_serving_snapshot_and_other_plug
     wait_until_unready(&generation).await;
     assert!(generation.can_serve());
     assert!(!generation.is_ready());
-    let diagnostics =
-        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(1), Some(&generation))
-            .await
-            .unwrap();
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(1),
+        Some(&generation),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         diagnostics["instance-one"].status,
         PluginInstanceRuntimeStatus::Running
@@ -953,10 +985,14 @@ async fn an_incompatible_host_quarantines_the_plugin_with_a_specific_version_err
         .unwrap();
     assert!(restored.can_serve());
     let snapshot = store.snapshot.lock().unwrap().clone();
-    let diagnostics =
-        PluginPreparation::runtime_diagnostics(&runtime, &snapshot, Some(1), Some(&restored))
-            .await
-            .unwrap();
+    let diagnostics = gateway_admin::ports::plugins::PluginRuntimeDiagnostics::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(1),
+        Some(&restored),
+    )
+    .await
+    .unwrap();
     let failure = diagnostics["instance-one"].failure.as_ref().unwrap();
     assert!(
         failure

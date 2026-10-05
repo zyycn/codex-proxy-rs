@@ -1,3 +1,5 @@
+//! 受管 HTTP 客户端，约束出站网络、请求时限与响应读取
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -30,6 +32,7 @@ struct ClientKey {
     addresses: Vec<std::net::SocketAddr>,
     proxy: Option<OutboundProxy>,
     scope: Option<String>,
+    websocket: bool,
 }
 
 pub struct HttpRequest {
@@ -77,7 +80,7 @@ impl HttpError {
         self.kind
     }
 
-    /// 固定诊断分类，不包含网址、请求头、正文或底层错误中的凭据。
+    /// 固定诊断分类，不包含网址、请求头、正文或底层错误中的凭据
     pub const fn reason(&self) -> &'static str {
         self.reason
     }
@@ -94,7 +97,7 @@ impl HttpError {
         self
     }
 
-    fn sent(reason: &'static str) -> Self {
+    pub(super) fn sent(reason: &'static str) -> Self {
         Self {
             reason,
             kind: HttpErrorKind::Response,
@@ -139,13 +142,13 @@ impl HttpClient {
             return client.clone();
         }
         let connector = Connector::new(key.addresses.clone(), key.proxy.clone(), self.tls.clone());
-        let connector = connector::https(connector, self.tls.as_ref().clone(), true);
+        let connector = connector::https(connector, self.tls.as_ref().clone(), !key.websocket);
         let client = Client::builder(TokioExecutor::new())
             .pool_max_idle_per_host(4)
             .http1_max_buf_size(64 * 1024)
             .retry_canceled_requests(false)
             .build(connector);
-        // 淘汰缓存不影响已借出的 Client 或在途 body。
+        // 淘汰缓存不影响已借出的 Client 或在途 body
         if clients.len() >= 64 {
             clients.clear();
         }
@@ -164,7 +167,7 @@ impl HttpClient {
             .await
     }
 
-    /// 为同一代理端点上的不同管理身份隔离连接池；scope 不得包含 secret。
+    /// 为同一代理端点上的不同管理身份隔离连接池；scope 不得包含 secret
     pub async fn open_scoped(
         &self,
         request: HttpRequest,
@@ -173,6 +176,21 @@ impl HttpClient {
         timeout: Duration,
         scope: Option<&str>,
     ) -> Result<HttpResponse, HttpError> {
+        let response = self
+            .send(request, proxy, network, timeout, scope, None)
+            .await?;
+        Ok(response.into_http())
+    }
+
+    pub(super) async fn send(
+        &self,
+        request: HttpRequest,
+        proxy: Option<&OutboundProxy>,
+        network: &NetworkPolicy,
+        timeout: Duration,
+        scope: Option<&str>,
+        websocket_key: Option<&str>,
+    ) -> Result<PendingResponse, HttpError> {
         if request.body.len() > 16 * 1024 * 1024
             || request.headers.len() > 128
             || timeout.is_zero()
@@ -241,23 +259,24 @@ impl HttpClient {
             addresses: addresses.clone(),
             proxy: proxy.cloned(),
             scope: scope.map(str::to_owned),
+            websocket: websocket_key.is_some(),
         });
         let mut uri: http::Uri = url
             .as_str()
             .parse()
             .map_err(|_| HttpError::invalid("URL"))?;
-        let authority = uri
-            .authority()
-            .ok_or_else(|| HttpError::invalid("host"))?
-            .as_str();
-        headers.insert(
-            http::header::HOST,
-            HeaderValue::from_str(authority).map_err(|_| HttpError::invalid("host"))?,
-        );
         if url.scheme() == "http"
             && let Some(proxy) = proxy.filter(|proxy| proxy.expose_url().starts_with("http"))
         {
-            // 正向代理接收数字地址的绝对 URI；Host 保留原始域名，禁止代理再次解析目标。
+            // 正向代理接收数字地址的绝对 URI；Host 保留原始域名，禁止代理再次解析目标
+            let authority = uri
+                .authority()
+                .ok_or_else(|| HttpError::invalid("host"))?
+                .as_str();
+            headers.insert(
+                http::header::HOST,
+                HeaderValue::from_str(authority).map_err(|_| HttpError::invalid("host"))?,
+            );
             let address = addresses
                 .first()
                 .ok_or_else(|| HttpError::invalid("address"))?;
@@ -278,6 +297,18 @@ impl HttpClient {
             }
         }
         let mut outgoing = http::Request::new(Full::new(Bytes::from(request.body)));
+        if let Some(key) = websocket_key {
+            headers.insert(
+                http::header::CONNECTION,
+                HeaderValue::from_static("Upgrade"),
+            );
+            headers.insert(http::header::UPGRADE, HeaderValue::from_static("websocket"));
+            headers.insert("sec-websocket-version", HeaderValue::from_static("13"));
+            headers.insert(
+                "sec-websocket-key",
+                HeaderValue::from_str(key).map_err(|_| HttpError::invalid("WebSocket key"))?,
+            );
+        }
         *outgoing.method_mut() = method;
         *outgoing.uri_mut() = uri;
         *outgoing.headers_mut() = headers;
@@ -311,17 +342,37 @@ impl HttpClient {
         {
             return Err(HttpError::sent("response headers"));
         }
-        Ok(HttpResponse {
+        Ok(PendingResponse {
             status,
             headers,
+            response,
+            permit,
+            deadline,
+        })
+    }
+}
+
+pub(super) struct PendingResponse {
+    pub(super) status: u16,
+    pub(super) headers: Vec<(String, Vec<u8>)>,
+    pub(super) response: http::Response<hyper::body::Incoming>,
+    pub(super) permit: OwnedSemaphorePermit,
+    pub(super) deadline: Instant,
+}
+
+impl PendingResponse {
+    pub(super) fn into_http(self) -> HttpResponse {
+        HttpResponse {
+            status: self.status,
+            headers: self.headers,
             body: HttpBody {
-                response: response.into_body(),
+                response: self.response.into_body(),
                 pending: Bytes::new(),
                 received: 0,
-                deadline,
-                _permit: permit,
+                deadline: self.deadline,
+                _permit: self.permit,
             },
-        })
+        }
     }
 }
 
@@ -331,7 +382,7 @@ impl HttpBody {
             return Err(HttpError::sent("read size"));
         }
         loop {
-            // 已缓冲的数据和就绪帧也受同一期限约束，慢读者不能无限续用 HTTP 资源。
+            // 已缓冲的数据和就绪帧也受同一期限约束，慢读者不能无限续用 HTTP 资源
             if Instant::now() >= self.deadline {
                 return Err(HttpError::sent("response deadline").with_kind(HttpErrorKind::Timeout));
             }

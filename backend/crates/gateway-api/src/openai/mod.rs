@@ -1,4 +1,4 @@
-//! OpenAI 客户端协议 adapter。
+//! OpenAI 客户端协议 adapter
 
 pub mod auth;
 mod endpoint;
@@ -13,7 +13,7 @@ pub mod search;
 pub(crate) mod service;
 mod usage;
 
-/// 客户端可读的 ID 必须能按现有请求记录检索；不以无关入口 ID 补位。
+/// 客户端可读的 ID 必须能按现有请求记录检索；不以无关入口 ID 补位
 pub(crate) fn with_model_request_id(
     mut response: axum::response::Response,
     request_id: &gateway_core::engine::ModelRequestId,
@@ -26,7 +26,7 @@ pub(crate) fn with_model_request_id(
     let headers = response.headers_mut();
     let usable = |value: &HeaderValue| value.to_str().is_ok_and(|id| !id.trim().is_empty());
     if !headers.get("x-request-id").is_some_and(usable) {
-        // 只有别名时沿用同一个上游值，避免外层 middleware 再填入入口 ID。
+        // 只有别名时沿用同一个上游值，避免外层 middleware 再填入入口 ID
         let client_id = headers
             .get("x-oai-request-id")
             .filter(|value| usable(value))

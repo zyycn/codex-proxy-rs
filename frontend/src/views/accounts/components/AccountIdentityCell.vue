@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { getAccounts } from '@/api'
+import type { Account } from '@/api'
+
 import { computed } from 'vue'
 
-import { stablePresetVisualToneClass } from '../utils/visualTone'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
+import { stablePresetVisualToneClass } from '@/utils/color'
 import AccountNotesPopover from './AccountNotesPopover.vue'
-import AccountPlanBadge from './AccountPlanBadge.vue'
 
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
-  & Partial<Pick<AccountRow, 'accountId' | 'notes' | 'name' | 'authenticationKind'>>
+type AccountIdentity = Pick<Account, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
+  & Partial<Pick<Account, 'accountId' | 'notes' | 'name' | 'authenticationKind'>>
 
 const props = withDefaults(
   defineProps<{

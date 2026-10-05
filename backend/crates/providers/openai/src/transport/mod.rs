@@ -1,4 +1,4 @@
-//! Codex HTTP/SSE/WebSocket 上游 transport。
+//! Codex HTTP/SSE/WebSocket 上游 transport
 
 pub mod canonical;
 pub mod catalog;
@@ -20,7 +20,6 @@ pub mod reset_credits;
 mod response_meta;
 pub(crate) mod session;
 pub mod subscription;
-mod time;
 pub(crate) use downstream::normalize_selected_codex_downstream_body;
 pub(crate) use endpoints::valid_upstream_base_url;
 pub mod tls;

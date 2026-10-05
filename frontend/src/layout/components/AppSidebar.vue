@@ -34,7 +34,7 @@ import { useAuthStore } from '@/stores/modules/auth'
 import { usePluginViewsStore } from '@/stores/modules/plugin-views'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useThemeStore } from '@/stores/modules/theme'
-import { pluginPageLocation, shortPluginInstanceId } from '@/views/plugins/utils/navigation'
+import { pluginPageLocation, shortPluginInstanceId } from '@/utils/plugin'
 
 const props = withDefaults(
   defineProps<{

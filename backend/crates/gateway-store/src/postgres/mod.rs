@@ -1,4 +1,4 @@
-//! PostgreSQL 业务表的 adapters。
+//! PostgreSQL 业务表的 adapters
 
 use async_trait::async_trait;
 use sqlx::{
@@ -53,7 +53,7 @@ pub(crate) use usage_facts::{
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
-/// 建立 PostgreSQL pool 并只执行冻结的 migration 集。
+/// 建立 PostgreSQL pool 并只执行冻结的 migration 集
 pub async fn connect_and_migrate(
     database_url: &str,
     pool_config: StorePoolConfig,
@@ -86,7 +86,7 @@ pub async fn connect_and_migrate(
     connect_pool(connect_options, pool_config, false).await
 }
 
-/// 帮助查询不执行迁移，并用连接默认只读事务阻止意外业务写入。
+/// 帮助查询不执行迁移，并用连接默认只读事务阻止意外业务写入
 pub(crate) async fn connect_read_only(
     database_url: &str,
     pool_config: StorePoolConfig,
@@ -121,7 +121,8 @@ async fn connect_pool(
                     "select set_config('statement_timeout', $1, false),
                             set_config('lock_timeout', $2, false),
                             set_config('idle_in_transaction_session_timeout', $3, false),
-                            set_config('default_transaction_read_only', $4, false)",
+                            set_config('default_transaction_read_only', $4, false),
+                            set_config('TimeZone', 'UTC', false)",
                 )
                 .bind(statement_timeout)
                 .bind(lock_timeout)
@@ -149,6 +150,7 @@ pub struct ControlPlaneSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct ControlPlaneReplacement {
+    pub expected_revision: Revision,
     pub settings: RuntimeSettingsUpdate,
     pub audit: AdminAuditEvent,
 }
@@ -162,7 +164,7 @@ pub trait ControlPlaneRepository: Send + Sync {
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot>;
 
-    /// 更新 admin_api_key 字段并推进 config revision。
+    /// 更新 admin_api_key 字段并推进 config revision
     async fn replace_admin_api_key(
         &self,
         admin_api_key: Option<String>,
@@ -225,6 +227,20 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
             .await
             .map_err(|_| postgres_unavailable("begin control plane replacement"))?;
         let result = async {
+            // 锁住所有配置写入共同使用的行，版本检查与修改不能被其他事务穿插
+            let current = sqlx::query_scalar::<_, i64>(
+                "select config_revision from runtime_settings where id = 1 for update",
+            )
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| postgres_unavailable("lock control plane revision"))?;
+            if u64::try_from(current).ok() != Some(replacement.expected_revision.get()) {
+                return Err(StoreError::Conflict {
+                    entity: "runtime settings",
+                    id: "1".to_owned(),
+                    kind: crate::ConflictKind::StaleRevision,
+                });
+            }
             let revision =
                 update_runtime_settings_in_transaction(&mut transaction, &replacement.settings)
                     .await?;

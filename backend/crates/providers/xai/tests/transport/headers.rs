@@ -1,3 +1,5 @@
+//! 验证 Grok 请求头绑定所选账号、会话与客户端身份并保持脱敏
+
 use gateway_core::account::{CredentialRevision, ProviderAccountId};
 use gateway_core::engine::ModelRequestId;
 use gateway_core::routing::UpstreamModelId;

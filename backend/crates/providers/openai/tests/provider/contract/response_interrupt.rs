@@ -1,3 +1,5 @@
+//! 验证响应中断使用当前连接并在复用前释放控制权
+
 use super::*;
 use gateway_core::engine::response_control::{ResponseControl, ResponseInterruptError};
 

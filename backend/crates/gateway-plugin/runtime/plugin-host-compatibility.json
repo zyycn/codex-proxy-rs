@@ -1,31 +1,18 @@
 {
-  "schema_version": 1,
-  "manifest_schema_versions": [1],
-  "protocol_versions": [1],
+  "schema_version": 2,
+  "manifest_schema_versions": [2],
+  "protocol_versions": [2],
   "capabilities": [
     { "capability": "frontend_authentication", "versions": [1] },
     { "capability": "scheduler", "versions": [1] },
     { "capability": "model_router", "versions": [1] },
     { "capability": "model_catalog", "versions": [1] },
     { "capability": "retry_policy", "versions": [1] },
-    { "capability": "middleware", "versions": [1, 2] },
-    { "capability": "request_lifecycle", "versions": [1] },
-    { "capability": "web_socket_observer", "versions": [1] },
-    { "capability": "usage", "versions": [1] },
+    { "capability": "middleware", "versions": [3] },
+    { "capability": "upstream_adapter", "versions": [1] },
+    { "capability": "observer", "versions": [1] },
     { "capability": "command_line", "versions": [1] },
     { "capability": "management", "versions": [1] },
     { "capability": "maintenance", "versions": [1] }
-  ],
-  "permissions": [
-    "network",
-    "models",
-    "accounts",
-    "data",
-    "requests",
-    "public_endpoints",
-    "groups",
-    "keys",
-    "key_budgets",
-    "quota_observations"
   ]
 }

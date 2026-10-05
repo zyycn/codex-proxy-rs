@@ -1,3 +1,5 @@
+//! 从构建环境与发行配置读取版本信息，注入宿主编译期元数据
+
 use std::{env, fs};
 
 const RELEASE_VERSION_FILE: &str = "../../../release/version.yaml";

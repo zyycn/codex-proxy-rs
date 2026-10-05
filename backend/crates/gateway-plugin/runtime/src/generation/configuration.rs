@@ -1,3 +1,5 @@
+//! 校验插件实例配置、敏感字段与能力绑定，生成安全的配置错误
+
 use std::collections::BTreeSet;
 
 use gateway_admin::model::{
@@ -7,13 +9,13 @@ use gateway_admin::model::{
         state::PluginStateConfiguration,
     },
 };
-use gateway_plugin_sdk::{Capability, Manifest, Permission, Stage};
+use gateway_plugin_sdk::{Capability, Manifest, Stage};
 use secrecy::ExposeSecret as _;
 
 pub(super) fn validate(
     instance: &PluginInstance,
     manifest: &Manifest,
-) -> Result<(serde_json::Value, Vec<Permission>, PluginStateConfiguration), AdminError> {
+) -> Result<(serde_json::Value, PluginStateConfiguration), AdminError> {
     if instance.enabled && !instance.trusted_process {
         return Err(AdminError::invalid("插件制品尚未接受安装"));
     }
@@ -24,15 +26,6 @@ pub(super) fn validate(
     )?;
     if instance.enabled && !ready {
         return Err(AdminError::invalid("请填写插件必填配置"));
-    }
-    let mut permissions = BTreeSet::new();
-    for grant in &instance.grants {
-        let permission: Permission =
-            serde_json::from_value(serde_json::Value::String(grant.permission.clone()))
-                .map_err(|_| AdminError::invalid("插件权限标识不合法"))?;
-        if !manifest.permissions.contains(&permission) || !permissions.insert(permission) {
-            return Err(AdminError::invalid("插件权限未声明或重复"));
-        }
     }
     let mut bindings = BTreeSet::new();
     for binding in &instance.bindings {
@@ -46,8 +39,13 @@ pub(super) fn validate(
         }
         let stage: Stage = serde_json::from_value(serde_json::Value::String(binding.stage.clone()))
             .map_err(|_| AdminError::invalid("插件调用阶段不合法"))?;
-        if !bindings.insert((capability, stage)) || !resolved.declaration.stages.contains(&stage) {
+        if (capability != Capability::Observer && !bindings.insert((capability, stage)))
+            || !resolved.declaration.stages.contains(&stage)
+        {
             return Err(AdminError::invalid("插件能力或阶段未声明，或者重复绑定"));
+        }
+        if capability != Capability::Observer && binding.event.is_some() {
+            return Err(AdminError::invalid("事件订阅只能用于观察绑定"));
         }
         let frontend_authentication = capability == Capability::FrontendAuthentication;
         if frontend_authentication
@@ -72,7 +70,6 @@ pub(super) fn validate(
     }
     Ok((
         configuration,
-        permissions.into_iter().collect(),
         crate::callback::private_state::configuration(manifest)?,
     ))
 }
@@ -111,7 +108,7 @@ fn prepare_configuration(
         return Err(AdminError::invalid("普通配置不能包含声明的敏感字段"));
     }
     let configuration = serde_json::Value::Object(configuration);
-    // 禁用网络与文件解析，配置 schema 只能引用包内同一 JSON 文档。
+    // 禁用网络与文件解析，配置 schema 只能引用包内同一 JSON 文档
     let schema = jsonschema::options()
         .offline()
         .with_pattern_options(jsonschema::PatternOptions::fancy_regex().backtrack_limit(20_000))
@@ -119,7 +116,7 @@ fn prepare_configuration(
         .map_err(|_| AdminError::invalid("插件配置 schema 无效或引用外部资源"))?;
     let mut ready = true;
     for error in schema.iter_errors(&configuration) {
-        // 待配置只代表缺少必填值，不能借停用保存类型错误或非法配置。
+        // 待配置只代表缺少必填值，不能借停用保存类型错误或非法配置
         if matches!(
             error.kind(),
             jsonschema::error::ValidationErrorKind::Required { .. }
@@ -135,7 +132,7 @@ fn prepare_configuration(
 fn configuration_error(error: &jsonschema::ValidationError<'_>) -> AdminError {
     use jsonschema::error::ValidationErrorKind;
 
-    // 校验库的 Display 会包含原值，敏感配置也参与校验，只返回字段路径和静态原因。
+    // 校验库的 Display 会包含原值，敏感配置也参与校验，只返回字段路径和静态原因
     let mut path = error.instance_path().to_string();
     let reason = match error.kind() {
         ValidationErrorKind::AdditionalProperties { unexpected } => {

@@ -1,3 +1,6 @@
+//! 插件更新来源的持久化、制品绑定与出站代理引用校验
+
+use gateway_admin::model::audit::MutationAuditOperation;
 use gateway_admin::{
     model::{
         MutationContext, Revision,
@@ -69,8 +72,7 @@ pub(super) async fn change(
         &mut tx,
         mutation_audit(
             context,
-            "change_source",
-            "plugin_source",
+            MutationAuditOperation::PluginSourceChangeSource,
             &binding.plugin_id,
             vec!["source".into(), "policy".into(), "outbound_proxy".into()],
         ),
@@ -82,7 +84,7 @@ pub(super) async fn change(
     admin_revision(revision)
 }
 
-/// 调用方先锁全局 revision，来源确认与制品写入共用同一个事务。
+/// 调用方先锁全局 revision，来源确认与制品写入共用同一个事务
 pub(super) async fn bind(
     tx: &mut Transaction<'_, Postgres>,
     plugin_id: &str,
@@ -108,7 +110,7 @@ pub(super) async fn bind(
     Ok(())
 }
 
-/// 与制品删除共用全局 revision 锁，最后一个版本删除后不保留重装限制。
+/// 与制品删除共用全局 revision 锁，最后一个版本删除后不保留重装限制
 pub(super) async fn delete_if_unused(
     tx: &mut Transaction<'_, Postgres>,
     plugin_id: &str,
@@ -128,8 +130,7 @@ pub(super) async fn delete_if_unused(
             tx,
             mutation_audit(
                 context,
-                "delete",
-                "plugin_source",
+                MutationAuditOperation::PluginSourceDelete,
                 plugin_id,
                 vec!["source".into(), "policy".into(), "outbound_proxy".into()],
             ),

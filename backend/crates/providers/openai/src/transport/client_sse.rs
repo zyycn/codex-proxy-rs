@@ -1,3 +1,5 @@
+//! Codex Responses 流式传输编排、HTTP SSE 解码与 WebSocket 连接复用
+
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext, diagnostic_json};
 
 use std::{sync::Arc, time::Instant};
@@ -50,13 +52,13 @@ impl CodexBackendClient {
         &self.profile
     }
 
-    /// 请求只持有自己的画像副本；连接池和 HTTP client 继续共享既有资源。
+    /// 请求只持有自己的画像副本；连接池和 HTTP client 继续共享既有资源
     pub fn with_request_profile(mut self, profile: super::profile::CodexWireProfile) -> Self {
         self.profile = CodexWireProfileState::new(profile);
         self
     }
 
-    /// 构造客户端。
+    /// 构造客户端
     pub fn new(
         client: Client,
         base_url: impl Into<String>,
@@ -64,6 +66,7 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            timezone: Default::default(),
             connection_budget: None,
             response_control: None,
             direct_client: client.clone(),
@@ -81,13 +84,13 @@ impl CodexBackendClient {
         }
     }
 
-    /// 为 Responses WebSocket 请求启用连接池。
+    /// 为 Responses WebSocket 请求启用连接池
     pub fn with_websocket_pool(mut self, pool: Arc<CodexWebSocketPool>) -> Self {
         self.websocket_pool = Some(pool);
         self
     }
 
-    /// 附加当前 attempt 经 Core 复核的业务请求头。
+    /// 附加当前 attempt 经 Core 复核的业务请求头
     #[must_use]
     pub(crate) fn with_middleware_headers(
         mut self,
@@ -97,14 +100,14 @@ impl CodexBackendClient {
         self
     }
 
-    /// 驱逐指定账号的 Responses WebSocket 池连接。
+    /// 驱逐指定账号的 Responses WebSocket 池连接
     pub async fn evict_websocket_account(&self, account_id: &str) {
         if let Some(pool) = &self.websocket_pool {
             pool.evict_account(account_id).await;
         }
     }
 
-    /// 发送 Responses SSE 请求并返回 live SSE 流（HTTP SSE fallback）。
+    /// 发送 Responses SSE 请求并返回 live SSE 流（HTTP SSE fallback）
     pub(crate) async fn create_response_stream_http_sse(
         &self,
         upstream_request: &CodexResponsesRequest,
@@ -112,10 +115,11 @@ impl CodexBackendClient {
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
         let headers_started_at = Instant::now();
-        // OAuth 请求遵循 Codex 压缩合同；API Key 上游使用普通 JSON。
+        // OAuth 请求遵循 Codex 压缩合同；API Key 上游使用普通 JSON
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
-        // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
-        // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
+        // 再由 API 层收集 canonical events 并返回完整 JSON
+        // 不能把下游的传输偏好
+        // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求
         let mut upstream_body = upstream_request.body().clone();
         upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         let body =
@@ -248,7 +252,7 @@ impl CodexBackendClient {
             .await
     }
 
-    /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening。
+    /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening
     #[doc(hidden)]
     pub(crate) async fn prepare_response_transport_with_pool_account(
         &self,
@@ -296,14 +300,16 @@ impl CodexBackendClient {
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         // 审计未启用时跳过 artifact 构造：payload 快照会深拷贝整个请求 body，
-        // 且位于首字节前的关键路径上。
+        // 且位于首字节前的关键路径上
         if websocket_audit_dir().is_some() {
             let artifact = websocket_audit_artifact_from_attempt(
                 &websocket_request,
                 websocket_create.connection().opening_audit_snapshot(),
                 websocket_payload_audit_snapshot(&websocket_request),
             );
-            if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
+            if let Err(error) =
+                write_websocket_audit_artifact_from_env(&artifact, self.timezone).await
+            {
                 tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
             }
         }
@@ -523,7 +529,7 @@ impl CodexBackendClient {
         Some(key)
     }
 
-    /// 客户端目录按调用方版本协商；后台目录仍使用经过核验的服务端画像版本。
+    /// 客户端目录按调用方版本协商；后台目录仍使用经过核验的服务端画像版本
     pub async fn fetch_models_with_context(
         &self,
         context: CodexRequestContext<'_>,
@@ -582,11 +588,11 @@ impl CodexBackendClient {
     }
 }
 
-/// 首个可投递帧前的交付边界结果。
+/// 首个可投递帧前的交付边界结果
 enum DeliveryBoundary {
-    /// 已越过边界，可开始向下游投递。
+    /// 已越过边界，可开始向下游投递
     Ready,
-    /// 首个可投递帧是上游连接寿命限制错误。
+    /// 首个可投递帧是上游连接寿命限制错误
     ConnectionLimitReached(Box<ResponsesSseFailure>),
 }
 

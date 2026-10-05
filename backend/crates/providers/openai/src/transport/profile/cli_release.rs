@@ -1,4 +1,4 @@
-//! CLI 稳定发布来自官方 npm 包及其平台依赖，不与 Desktop 的内嵌版本混用。
+//! CLI 稳定发布来自官方 npm 包及其平台依赖，不与 Desktop 的内嵌版本混用
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ struct NpmRelease {
     optional_dependencies: BTreeMap<String, String>,
 }
 
-/// 验证稳定标签和各平台包确实来自同一次官方发布。
+/// 验证稳定标签和各平台包确实来自同一次官方发布
 pub fn parse_cli_release(bytes: &[u8]) -> Result<String, CliReleaseError> {
     if bytes.len() > MAX_BYTES {
         return Err(CliReleaseError::Invalid);
@@ -218,7 +218,7 @@ impl CliReleaseService {
 }
 
 pub(super) fn seed_releases(state: &CodexWireProfileState) {
-    // 2026-09-18 核对官方 npm latest 及六个平台依赖；这里只提供离线启动资料。
+    // 2026-09-18 核对官方 npm latest 及六个平台依赖；这里只提供离线启动资料
     for (platform, arch, _) in TARGETS {
         state.seed_client_release(
             ClientKind::Cli,

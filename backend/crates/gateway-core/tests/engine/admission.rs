@@ -1,3 +1,5 @@
+//! 验证启动时准入恢复的精确事实、调用顺序与失败拒绝
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};

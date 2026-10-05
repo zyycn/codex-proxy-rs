@@ -1,4 +1,4 @@
-//! 请求冻结的本地价格覆盖；默认价目及模型别名继续由 Provider 拥有。
+//! 请求冻结的本地价格覆盖；默认价目及模型别名继续由 Provider 拥有
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Decimal;
 
-/// 每百万 Token 的 USD 价格，保留四位小数以对齐单 Token 的金额精度。
+/// 每百万 Token 的 USD 价格，保留四位小数以对齐单 Token 的金额精度
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct TokenPrice(Decimal);
@@ -37,7 +37,7 @@ impl From<TokenPrice> for String {
     }
 }
 
-/// 一档完整 Token 单价；零价格与未覆盖的档位有不同含义。
+/// 一档完整 Token 单价；零价格与未覆盖的档位有不同含义
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TokenPriceOverride {
@@ -47,7 +47,7 @@ pub struct TokenPriceOverride {
     pub cache_write: TokenPrice,
 }
 
-/// 一个精确模型的覆盖项；倍率使用基点，10000 表示 1 倍。
+/// 一个精确模型的覆盖项；倍率使用基点，10000 表示 1 倍
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelPriceOverride {
@@ -56,10 +56,10 @@ pub struct ModelPriceOverride {
 }
 
 impl ModelPriceOverride {
-    /// 校验存储与管理入口共用的价格约束。
+    /// 校验存储与管理入口共用的价格约束
     ///
     /// # Errors
-    /// 倍率超过 100 倍或档位不受支持时返回错误。
+    /// 倍率超过 100 倍或档位不受支持时返回错误
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.multiplier_bps > 1_000_000 {
             return Err("倍率必须在 0 至 100 倍之间");
@@ -82,10 +82,10 @@ impl ModelPriceOverride {
     }
 }
 
-/// 按 Provider、上游模型索引的不可变覆盖事实。
+/// 按 Provider、上游模型索引的不可变覆盖事实
 pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
 
-/// 按档位叠加配置；倍率仅由人工覆盖控制，同步价目不携带业务倍率。
+/// 按档位叠加配置；倍率仅由人工覆盖控制，同步价目不携带业务倍率
 pub fn merge_pricing(mut base: PricingOverrides, overrides: &PricingOverrides) -> PricingOverrides {
     for (provider, models) in overrides {
         let target = base.entry(provider.clone()).or_default();

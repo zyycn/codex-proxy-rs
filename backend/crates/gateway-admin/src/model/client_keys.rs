@@ -1,4 +1,4 @@
-//! Client API Key 的 Command、Result 与安全秘密类型。
+//! Client API Key 的 Command、Result 与安全秘密类型
 
 use std::{collections::BTreeMap, fmt, num::NonZeroU16};
 
@@ -20,16 +20,16 @@ pub type ProviderRequestProfileOverrides =
 pub type ProviderRequestProfileOverrideUpdates =
     BTreeMap<ProviderKind, Option<gateway_core::account::OpaqueProviderData>>;
 
-/// Client Key 列表保持旧 HTTP 合同允许的完整非零 `u16` 页大小。
+/// Client Key 列表保持旧 HTTP 合同允许的完整非零 `u16` 页大小
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClientKeyPageSize(NonZeroU16);
 
 impl ClientKeyPageSize {
-    /// 创建 1 至 65535 的 Client Key 页大小。
+    /// 创建 1 至 65535 的 Client Key 页大小
     ///
     /// # Errors
     ///
-    /// `value` 为零时返回 [`AdminModelError::InvalidClientKeyPageSize`]。
+    /// `value` 为零时返回 [`AdminModelError::InvalidClientKeyPageSize`]
     pub fn new(value: u16) -> Result<Self, AdminModelError> {
         NonZeroU16::new(value)
             .map(Self)
@@ -42,7 +42,7 @@ impl ClientKeyPageSize {
     }
 }
 
-/// Client Key 列表排序字段。
+/// Client Key 列表排序字段
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientKeySortField {
     Name,
@@ -51,21 +51,21 @@ pub enum ClientKeySortField {
     LastUsedAt,
 }
 
-/// Client Key 列表排序方向。
+/// Client Key 列表排序方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortDirection {
     Asc,
     Desc,
 }
 
-/// Client Key 列表排序规则。
+/// Client Key 列表排序规则
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientKeySort {
     pub field: ClientKeySortField,
     pub direction: SortDirection,
 }
 
-/// 与排序字段绑定的游标值。
+/// 与排序字段绑定的游标值
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientKeyCursorValue {
     Name(String),
@@ -74,7 +74,7 @@ pub enum ClientKeyCursorValue {
     LastUsedAt(Option<DateTime<Utc>>),
 }
 
-/// Client Key 的稳定键集游标。
+/// Client Key 的稳定键集游标
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyCursor {
     pub sort: ClientKeySort,
@@ -82,7 +82,7 @@ pub struct ClientKeyCursor {
     pub id: ClientApiKeyId,
 }
 
-/// Client Key 列表查询。
+/// Client Key 列表查询
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyListQuery {
     pub cursor: Option<ClientKeyCursor>,
@@ -91,7 +91,7 @@ pub struct ClientKeyListQuery {
     pub sort: ClientKeySort,
 }
 
-/// 不含完整明文 Key 的管理投影。
+/// 不含完整明文 Key 的管理投影
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyRecord {
     pub request_profile_overrides: ProviderRequestProfileOverrides,
@@ -109,7 +109,7 @@ pub struct ClientKeyRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Client Key 列表页。
+/// Client Key 列表页
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyPage {
     pub config_revision: Revision,
@@ -118,7 +118,7 @@ pub struct ClientKeyPage {
     pub next_cursor: Option<ClientKeyCursor>,
 }
 
-/// 仅在创建或显式读取密钥配置时返回的明文 Key；Debug 隐去明文。
+/// 仅在创建或显式读取密钥配置时返回的明文 Key；Debug 隐去明文
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientKeySecret {
     pub record: ClientKeyRecord,
@@ -150,7 +150,7 @@ impl fmt::Debug for ClientKeySecret {
     }
 }
 
-/// API 提交的 Client Key 创建命令。
+/// API 提交的 Client Key 创建命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
     pub request_profile_overrides: ProviderRequestProfileOverrides,
@@ -162,7 +162,7 @@ pub struct CreateClientKey {
     pub budget: ClientBudgetLimits,
 }
 
-/// 管理用例生成 ID 与明文后的持久化命令。
+/// 管理用例生成 ID 与明文后的持久化命令
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
     pub request_profile_overrides: ProviderRequestProfileOverrides,
@@ -187,7 +187,7 @@ impl fmt::Debug for NewClientKey {
     }
 }
 
-/// 修改 Client Key 的公开策略字段。
+/// 修改 Client Key 的公开策略字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKey {
     pub request_profile_override_updates: ProviderRequestProfileOverrideUpdates,
@@ -200,14 +200,14 @@ pub struct UpdateClientKey {
     pub weekly_limit_usd: Option<gateway_core::metering::Decimal>,
 }
 
-/// 修改 Client Key 启用状态。
+/// 修改 Client Key 启用状态
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetClientKeyEnabled {
     pub id: ClientApiKeyId,
     pub enabled: bool,
 }
 
-/// 管理员选择的金额重置范围。
+/// 管理员选择的金额重置范围
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientKeyBudgetPeriod {
     Daily,
@@ -215,14 +215,14 @@ pub enum ClientKeyBudgetPeriod {
     All,
 }
 
-/// 清零所选窗口已用金额，保留限额、到期时间与历史费用。
+/// 清零所选窗口已用金额，保留限额、到期时间与历史费用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResetClientKeyBudget {
     pub id: ClientApiKeyId,
     pub period: ClientKeyBudgetPeriod,
 }
 
-/// 仅更新指定金额上限；省略的周期保持不变，不修改已用金额或窗口。
+/// 仅更新指定金额上限；省略的周期保持不变，不修改已用金额或窗口
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKeyBudgetLimits {
     pub id: ClientApiKeyId,
@@ -230,20 +230,20 @@ pub struct UpdateClientKeyBudgetLimits {
     pub weekly_limit_usd: Option<gateway_core::metering::Decimal>,
 }
 
-/// 预算变更的调用来源；插件身份由 Runtime 给出，不能从插件请求反序列化。
+/// 预算变更的调用来源；插件身份由 Runtime 给出，不能从插件请求反序列化
 #[derive(Debug, Clone)]
 pub enum ClientKeyBudgetMutationOrigin {
     Admin,
     Plugin(PluginResourceOwner),
 }
 
-/// 删除 Client Key。
+/// 删除 Client Key
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteClientKey {
     pub id: ClientApiKeyId,
 }
 
-/// Client Key 创建结果；完整明文仅存在于该一次性结果中。
+/// Client Key 创建结果；完整明文仅存在于该一次性结果中
 pub struct CreatedClientKey {
     pub config_revision: Revision,
     pub secret: ClientKeySecret,
@@ -259,7 +259,7 @@ impl fmt::Debug for CreatedClientKey {
     }
 }
 
-/// Client Key 普通写操作结果。
+/// Client Key 普通写操作结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyMutation {
     pub config_revision: Revision,

@@ -1,3 +1,5 @@
+//! 验证 Responses 语义输出信号、传输要求与流式错误解析
+
 use gateway_protocol::openai::sse::parse_sse_events;
 use provider_openai::transport::protocol::responses::{
     CodexResponsesRequest, PreviousResponseScope, ResponsesSseFailure, TransportRequirement,
@@ -110,7 +112,7 @@ fn output_start_should_ignore_preamble_and_failure_frames() {
 #[test]
 fn output_start_should_count_structural_and_semantic_frames() {
     for body in [
-        // 结构帧无内容也算。
+        // 结构帧无内容也算
         b"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"}}\n\n".as_slice(),
         b"event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\"}}\n\n",
         b"event: response.output_text.delta\ndata: {\"delta\":\"hello\"}\n\n",

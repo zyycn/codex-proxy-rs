@@ -1,4 +1,4 @@
-//! OpenAI OAuth token exchange 与 Codex PAT 验证的 Reqwest 适配器。
+//! OpenAI OAuth token exchange 与 Codex PAT 验证的 Reqwest 适配器
 
 use super::types::CodexOAuthMetadata;
 
@@ -18,15 +18,15 @@ const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Codex Desktop 使用的官方 OAuth public client。
+/// Codex Desktop 使用的官方 OAuth public client
 pub const OFFICIAL_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-/// Codex Desktop 使用的官方 token endpoint。
+/// Codex Desktop 使用的官方 token endpoint
 pub const OFFICIAL_CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
-/// Codex Desktop loopback callback；管理员复制完整回调 URL 交回固定 complete API。
+/// Codex Desktop loopback callback；管理员复制完整回调 URL 交回固定 complete API
 pub const OFFICIAL_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const PERSONAL_ACCESS_TOKEN_WHOAMI_PATH: &str = "/api/accounts/v1/user-auth-credential/whoami";
 
-/// PAT 验证失败；不保留令牌、响应体或可能包含秘密的底层 HTTP 错误。
+/// PAT 验证失败；不保留令牌、响应体或可能包含秘密的底层 HTTP 错误
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PersonalAccessTokenError {
     #[error("Codex PAT must be a non-empty at- token without whitespace or control characters")]
@@ -41,7 +41,7 @@ pub enum PersonalAccessTokenError {
     InvalidResponse,
 }
 
-// 与 Codex personal_access_token.rs 一致：email 可缺失，其余身份字段必填。
+// 与 Codex personal_access_token.rs 一致：email 可缺失，其余身份字段必填
 #[derive(Deserialize)]
 struct PersonalAccessTokenResponse {
     email: Option<String>,
@@ -52,14 +52,14 @@ struct PersonalAccessTokenResponse {
     _chatgpt_account_is_fedramp: bool,
 }
 
-/// Token 刷新成功后得到的认证材料。
+/// Token 刷新成功后得到的认证材料
 #[derive(Clone)]
 pub struct TokenPair {
-    /// 官方刷新响应省略时由持久化调用方保留当前 access token。
+    /// 官方刷新响应省略时由持久化调用方保留当前 access token
     pub access_token: Option<String>,
-    /// 官方刷新响应省略时由持久化调用方保留当前 refresh token。
+    /// 官方刷新响应省略时由持久化调用方保留当前 refresh token
     pub refresh_token: Option<String>,
-    /// 官方刷新响应省略时由持久化调用方保留当前 ID token。
+    /// 官方刷新响应省略时由持久化调用方保留当前 ID token
     pub id_token: Option<String>,
 }
 
@@ -80,7 +80,7 @@ impl fmt::Debug for TokenPair {
     }
 }
 
-/// Codex token 刷新的稳定失败分类。
+/// Codex token 刷新的稳定失败分类
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RefreshFailure {
     #[error("refresh token is invalid or expired")]
@@ -145,9 +145,10 @@ impl RefreshFailure {
     }
 }
 
-/// 当前 OAuth 刷新请求收到的完整非成功响应。
+/// 当前 OAuth 刷新请求收到的完整非成功响应
 ///
-/// 该值不持久化；`Debug` 不输出正文。调用方仅在受控刷新失败日志中显式记录正文。
+/// 该值不持久化；`Debug` 不输出正文
+/// 调用方仅在受控刷新失败日志中显式记录正文
 #[derive(Clone, PartialEq, Eq)]
 pub struct RefreshUpstreamFailure {
     status: u16,
@@ -203,7 +204,7 @@ impl fmt::Debug for RefreshUpstreamFailure {
     }
 }
 
-/// Codex token 刷新端口。
+/// Codex token 刷新端口
 #[async_trait]
 pub trait TokenRefresher: Send + Sync + 'static {
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure>;
@@ -225,7 +226,7 @@ fn proxy_refresh_failure() -> RefreshFailure {
     }
 }
 
-/// Authorization Code + PKCE 的一次性 grant。
+/// Authorization Code + PKCE 的一次性 grant
 pub struct AuthorizationCodeGrant {
     pub code: SecretString,
     pub code_verifier: SecretString,
@@ -241,10 +242,11 @@ impl fmt::Debug for AuthorizationCodeGrant {
     }
 }
 
-/// 官方 token endpoint 返回的 token set。
+/// 官方 token endpoint 返回的 token set
 ///
 /// 与官方首次 authorization-code exchange 一致：`id_token`、`access_token` 与
-/// `refresh_token` 都是响应的必填字段。这里不检查 token 内容、签名或 claims。
+/// `refresh_token` 都是响应的必填字段
+/// 这里不检查 token 内容、签名或 claims
 pub struct AuthorizationTokenSet {
     pub secret: crate::credential::CodexOAuthSecret,
     pub id_token: SecretString,
@@ -260,7 +262,7 @@ impl fmt::Debug for AuthorizationTokenSet {
     }
 }
 
-/// Authorization Code exchange 的低基数失败。
+/// Authorization Code exchange 的低基数失败
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AuthorizationCodeExchangeError {
     #[error("authorization code was rejected")]
@@ -289,16 +291,16 @@ pub trait AuthorizationCodeExchanger: Send + Sync + 'static {
     }
 }
 
-/// OpenAI token 续期客户端配置。
+/// OpenAI token 续期客户端配置
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenClientConfig {
-    /// OpenAI 客户端 ID。
+    /// OpenAI 客户端 ID
     pub client_id: String,
-    /// Token 交换入口。
+    /// Token 交换入口
     pub token_endpoint: String,
 }
 
-/// OpenAI token 续期客户端。
+/// OpenAI token 续期客户端
 #[derive(Clone)]
 pub struct OpenAiTokenClient {
     client: Client,
@@ -306,7 +308,7 @@ pub struct OpenAiTokenClient {
     profile: CodexWireProfileState,
 }
 
-/// 官方 Codex token client 无法安全构建。
+/// 官方 Codex token client 无法安全构建
 #[derive(Debug, thiserror::Error)]
 #[error("official Codex token client could not be built")]
 pub struct TokenClientBuildError;
@@ -329,7 +331,7 @@ impl OpenAiTokenClient {
             build_reqwest_client_with_custom_ca(builder).map_err(|_| TokenClientBuildError)?;
         Ok(Self::new(client, self.config.clone(), self.profile.clone()))
     }
-    /// 共享运行时画像；刷新时取快照，授权码交换仍使用 raw auth 请求。
+    /// 共享运行时画像；刷新时取快照，授权码交换仍使用 raw auth 请求
     pub fn new(client: Client, config: TokenClientConfig, profile: CodexWireProfileState) -> Self {
         Self {
             client,
@@ -352,7 +354,7 @@ impl OpenAiTokenClient {
         {
             return Err(PersonalAccessTokenError::InvalidToken);
         }
-        // 复用固定 auth origin 及其 TLS/超时/禁止重定向策略；导入文档不能指定验证地址。
+        // 复用固定 auth origin 及其 TLS/超时/禁止重定向策略；导入文档不能指定验证地址
         let mut endpoint = reqwest::Url::parse(&self.config.token_endpoint)
             .map_err(|_| PersonalAccessTokenError::Unavailable)?;
         endpoint.set_path(PERSONAL_ACCESS_TOKEN_WHOAMI_PATH);
@@ -406,11 +408,11 @@ impl OpenAiTokenClient {
     }
 }
 
-/// 构建禁止 redirect 且无自动重试的 Codex token client。
+/// 构建禁止 redirect 且无自动重试的 Codex token client
 ///
 /// # Errors
 ///
-/// 本地 TLS/HTTP client 初始化失败时返回脱敏错误。
+/// 本地 TLS/HTTP client 初始化失败时返回脱敏错误
 pub fn openai_token_client(
     config: TokenClientConfig,
     profile: CodexWireProfileState,
@@ -633,16 +635,16 @@ fn parse_token_pair(body: &[u8]) -> Result<TokenPair, ()> {
     }
     Ok(TokenPair {
         access_token: tokens.access_token,
-        // OAuth 刷新响应可能省略未变更的 RT；缺失时由调用方保留当前值。
+        // OAuth 刷新响应可能省略未变更的 RT；缺失时由调用方保留当前值
         refresh_token: tokens.refresh_token,
-        // 官方刷新响应允许省略 ID token；缺失时由调用方保留当前值。
+        // 官方刷新响应允许省略 ID token；缺失时由调用方保留当前值
         id_token: tokens.id_token,
     })
 }
 
 fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
     // 官方刷新错误的消息与错误码分别位于 `error.message`、`error.code`；
-    // `error` 字符串与顶层 `code` 仅用于兼容官方客户端自身的错误码提取契约。
+    // `error` 字符串与顶层 `code` 仅用于兼容官方客户端自身的错误码提取契约
     let error = serde_json::from_slice::<RefreshErrorResponse>(body).ok();
     let message = error.as_ref().and_then(RefreshErrorResponse::message);
     let upstream = || {
@@ -657,14 +659,14 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
         .and_then(RefreshErrorResponse::code)
         .map(str::to_ascii_lowercase);
     // 生产策略故意与官方 Codex 的“任意 401 立即终态”不同：
-    // 显式 401 先进入有界恢复退避，避免瞬时授权故障直接失效账号。
+    // 显式 401 先进入有界恢复退避，避免瞬时授权故障直接失效账号
     if status == StatusCode::UNAUTHORIZED {
         return RefreshFailure::Transport {
             message,
             upstream: upstream(),
         };
     }
-    // 非 401 响应仍与官方一致：三个明确的 RT 原因是永久失败。
+    // 非 401 响应仍与官方一致：三个明确的 RT 原因是永久失败
     if matches!(
         normalized_code.as_deref(),
         Some("refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated")

@@ -1,0 +1,31 @@
+name: Cargo cache mounts
+description: Restore or export a validated Cargo snapshot for a BuildKit builder
+inputs:
+  operation:
+    description: Cache operation, restore or snapshot
+    required: true
+  builder:
+    description: Buildx builder name
+    required: true
+  path:
+    description: Cargo snapshot directory on the runner
+    required: true
+  architecture:
+    description: Cargo target directory architecture, amd64 or arm64
+    required: true
+outputs:
+  usable:
+    description: Whether the restored or exported snapshot contains Cargo dependencies
+    value: ${{ steps.cache.outputs.usable }}
+runs:
+  using: composite
+  steps:
+    - id: cache
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        OPERATION: ${{ inputs.operation }}
+        BUILDER: ${{ inputs.builder }}
+        CACHE_PATH: ${{ inputs.path }}
+        ARCHITECTURE: ${{ inputs.architecture }}
+      run: bash "$ACTION_PATH/cargo-cache.sh" "$OPERATION" "$BUILDER" "$CACHE_PATH" "$ARCHITECTURE"

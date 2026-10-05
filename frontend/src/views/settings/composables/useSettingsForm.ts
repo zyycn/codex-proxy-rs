@@ -1,14 +1,14 @@
 import type { rotationOptions } from '../constants'
-import type { RequestLocation, SmartSchedulingConfig } from '@/api'
+import type { SmartSchedulingConfig } from '@/api'
 import type { ProviderRequestProfiles, ProviderRequestProfileUpdates } from '@/api/modules/client-profiles'
 import { toast } from '@codex-proxy/ui'
-import { isEqual } from 'es-toolkit'
+import { cloneDeep, isEqual } from 'es-toolkit'
 
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { ApiError } from '@/api/request'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { normalizeRequestLocation, requestLocationError } from '@/utils/data'
+import { normalizeRequestLocation, requestLocationError } from '@/utils/location'
 import { errorMessage } from '@/utils/operation'
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
@@ -21,9 +21,9 @@ export function useSettingsForm() {
   const saving = saveAction.loading
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
-  const savedRequestLocation = shallowRef<RequestLocation>()
   const smartSchedulingDefaults = shallowRef<SmartSchedulingConfig>()
   const form = reactive({
+    configRevision: 0,
     smartScheduling: undefined as SmartSchedulingConfig | undefined,
     providerRequestProfiles: {} as ProviderRequestProfiles,
     requestLocationEnabled: false,
@@ -31,6 +31,7 @@ export function useSettingsForm() {
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
+    openaiGuardianReservedConcurrency: null as number | null,
     requestIntervalMs: null as number | null,
     maxWaitingPerKey: null as number | null,
     maxWaitingPerAccount: null as number | null,
@@ -57,33 +58,22 @@ export function useSettingsForm() {
   })
 
   function snapshot() {
-    return {
-      form: {
-        ...form,
-        smartScheduling: form.smartScheduling ? { ...form.smartScheduling } : undefined,
-        providerRequestProfiles: cloneProfiles(form.providerRequestProfiles),
-        requestLocation: { ...form.requestLocation },
-      },
-      mappings: mappings.value.map(row => ({ ...row })),
-    }
+    return cloneDeep({ form, mappings: mappings.value })
   }
 
   const saved = shallowRef<ReturnType<typeof snapshot>>()
-  const loaded = computed(() => saved.value !== undefined)
-  const hasChanges = computed(() => loaded.value && !isEqual(snapshot(), saved.value))
+  const hasChanges = computed(() => saved.value !== undefined
+    && !isEqual({ form, mappings: mappings.value }, saved.value))
 
   function resetSettings() {
     if (!saved.value || saving.value)
       return
-    Object.assign(form, saved.value.form, {
-      smartScheduling: saved.value.form.smartScheduling ? { ...saved.value.form.smartScheduling } : undefined,
-      providerRequestProfiles: cloneProfiles(saved.value.form.providerRequestProfiles),
-      requestLocation: { ...saved.value.form.requestLocation },
-    })
-    mappings.value = saved.value.mappings.map(row => ({ ...row }))
+    const initial = cloneDeep(saved.value)
+    Object.assign(form, initial.form)
+    mappings.value = initial.mappings
   }
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'responsesMaxDecompressedBodyMiB' | 'accountAutoFreezeThreshold' | 'accountAutoFreezeWindowSeconds' | 'accountAutoFreezeDurationSeconds') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'openaiGuardianReservedConcurrency' | 'requestIntervalMs' | 'maxWaitingPerKey' | 'maxWaitingPerAccount' | 'concurrencyWaitTimeoutSeconds' | 'responsesMaxDecompressedBodyMiB' | 'accountAutoFreezeThreshold' | 'accountAutoFreezeWindowSeconds' | 'accountAutoFreezeDurationSeconds') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -100,6 +90,7 @@ export function useSettingsForm() {
   const refreshMarginSecondsValue = numericModel('refreshMarginSeconds')
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
+  const openaiGuardianReservedConcurrencyValue = numericModel('openaiGuardianReservedConcurrency')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
   const maxWaitingPerKeyValue = numericModel('maxWaitingPerKey')
   const maxWaitingPerAccountValue = numericModel('maxWaitingPerAccount')
@@ -118,12 +109,13 @@ export function useSettingsForm() {
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
-    savedRequestLocation.value = { ...data.requestLocation }
+    form.configRevision = data.configRevision
     form.requestLocationEnabled = data.requestLocationEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
+    form.openaiGuardianReservedConcurrency = data.openaiGuardianReservedConcurrency
     form.requestIntervalMs = data.requestIntervalMs
     form.maxWaitingPerKey = data.maxWaitingPerKey
     form.maxWaitingPerAccount = data.maxWaitingPerAccount
@@ -134,7 +126,7 @@ export function useSettingsForm() {
     smartSchedulingDefaults.value = { ...data.smartSchedulingDefaults }
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
-    form.providerRequestProfiles = cloneProfiles(data.providerRequestProfiles)
+    form.providerRequestProfiles = cloneDeep(data.providerRequestProfiles)
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
@@ -149,9 +141,9 @@ export function useSettingsForm() {
     form.accountWarmupEnabled = data.accountWarmupEnabled
     form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
     form.accountWarmupModel = data.accountWarmupModel ?? ''
-    mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
+    mappings.value = Object.entries(data.modelMappings).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
-      upstreamModel: String(upstreamModel),
+      upstreamModel,
     }))
     saved.value = snapshot()
   }
@@ -207,15 +199,19 @@ export function useSettingsForm() {
     if (!smartScheduling)
       return
     const savedSettings = saved.value
-    if (saving.value || loading.value || !savedRequestLocation.value || !savedSettings)
+    if (saving.value || loading.value || !savedSettings)
       return
-    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
-    if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
+    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, openaiGuardianReservedConcurrency, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
+    if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || openaiGuardianReservedConcurrency === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
       toast.warning('请完整填写并发、队列、凭据刷新参数和调度策略')
       return
     }
     if (!Number.isInteger(maxConcurrentPerAccount) || maxConcurrentPerAccount < 0 || maxConcurrentPerAccount > 4294967295) {
       toast.warning('默认账号并发上限应为 0～4294967295 的整数，0 表示不限制')
+      return
+    }
+    if (!Number.isInteger(openaiGuardianReservedConcurrency) || openaiGuardianReservedConcurrency < 0 || openaiGuardianReservedConcurrency > 4294967295) {
+      toast.warning('自动审批预留并发应为 0～4294967295 的整数，0 表示关闭')
       return
     }
     if (responsesMaxDecompressedBodyMiB === null || !Number.isInteger(responsesMaxDecompressedBodyMiB) || responsesMaxDecompressedBodyMiB < 1
@@ -235,7 +231,7 @@ export function useSettingsForm() {
     // 关闭时保留已保存的自定义值，未完成的草稿不阻止停止覆盖。
     const requestLocation = form.requestLocationEnabled
       ? normalizeRequestLocation(form.requestLocation)
-      : savedRequestLocation.value
+      : savedSettings.form.requestLocation
     const locationError = requestLocationError(requestLocation)
     if (locationError) {
       toast.warning(locationError)
@@ -252,7 +248,7 @@ export function useSettingsForm() {
       return
     }
     const probeModel = form.accountAutoFreezeProbeModel.trim()
-    if (probeModel && (probeModel.length > 128 || probeModel !== probeModel.trim())) {
+    if (probeModel.length > 128) {
       toast.warning('探测模型名称不能超过 128 个字符')
       return
     }
@@ -273,6 +269,7 @@ export function useSettingsForm() {
     }
     await saveAction.run(async () => {
       const result = await updateSettings({
+        configRevision: savedSettings.form.configRevision,
         providerRequestProfiles: requestProfileUpdates(
           savedSettings.form.providerRequestProfiles,
           form.providerRequestProfiles,
@@ -283,6 +280,7 @@ export function useSettingsForm() {
         refreshMarginSeconds,
         refreshConcurrency,
         maxConcurrentPerAccount,
+        openaiGuardianReservedConcurrency,
         requestIntervalMs,
         maxWaitingPerKey,
         maxWaitingPerAccount,
@@ -310,7 +308,7 @@ export function useSettingsForm() {
       toast.success('设置已保存')
     }, {
       onError: (cause) => {
-        if (cause instanceof ApiError)
+        if (cause instanceof ApiError && cause.status !== 409)
           void loadSettings(true)
       },
     })
@@ -331,6 +329,7 @@ export function useSettingsForm() {
     refreshMarginSecondsValue,
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
+    openaiGuardianReservedConcurrencyValue,
     requestIntervalMsValue,
     maxWaitingPerKeyValue,
     maxWaitingPerAccountValue,
@@ -346,16 +345,12 @@ export function useSettingsForm() {
   }
 }
 
-function cloneProfiles(value: ProviderRequestProfiles): ProviderRequestProfiles {
-  return JSON.parse(JSON.stringify(value)) as ProviderRequestProfiles
-}
-
 function requestProfileUpdates(
   previous: ProviderRequestProfiles,
   current: ProviderRequestProfiles,
 ): ProviderRequestProfileUpdates {
   const updates: ProviderRequestProfileUpdates = {}
-  const clonedCurrent = cloneProfiles(current)
+  const clonedCurrent = cloneDeep(current)
   for (const provider of new Set([...Object.keys(previous), ...Object.keys(current)])) {
     if (isEqual(previous[provider], current[provider]))
       continue

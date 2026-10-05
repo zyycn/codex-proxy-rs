@@ -16,6 +16,7 @@ export interface SmartSchedulingConfig {
 }
 
 export interface RuntimeSettings {
+  configRevision: number
   smartScheduling: SmartSchedulingConfig
   smartSchedulingDefaults: SmartSchedulingConfig
   providerRequestProfiles: ProviderRequestProfiles
@@ -28,6 +29,7 @@ export interface RuntimeSettings {
   refreshMarginSeconds: number
   refreshConcurrency: number
   maxConcurrentPerAccount: number
+  openaiGuardianReservedConcurrency: number
   requestIntervalMs: number
   maxWaitingPerKey: number
   maxWaitingPerAccount: number
@@ -50,6 +52,7 @@ export interface RuntimeSettings {
   accountWarmupScheduleTime: string
   accountWarmupModel: string | null
   updatedAt: string
+  updatedAtDisplay: string
 }
 
 export type ClientArchitecture = 'x64' | 'arm64'
@@ -63,10 +66,12 @@ export interface ClientDownloadPackage {
   sizeBytes: number | null
   downloadUrl: string
   expiresAt: string | null
+  expiresAtDisplay: string | null
 }
 
 export interface CodexDesktopWindowsDownloads {
   resolvedAt: string
+  resolvedAtDisplay: string
   cached: boolean
   warning: string | null
   packages: ClientDownloadPackage[]
@@ -92,7 +97,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'smartSchedulingDefaults' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'updatedAtDisplay' | 'smartSchedulingDefaults' | 'openaiClientProfile' | 'xaiClientProfile' | 'providerRequestProfiles'> & {
   providerRequestProfiles: ProviderRequestProfileUpdates
 }
 

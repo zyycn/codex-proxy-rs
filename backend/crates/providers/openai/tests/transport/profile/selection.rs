@@ -1,3 +1,5 @@
+//! 验证客户端画像预设、版本模式与请求冻结行为
+
 use gateway_core::account::OpaqueProviderData;
 use provider_openai::transport::profile::selection::{
     CliEntry, ClientKind, ClientPlatform, ClientProfileSelection, VersionMode,

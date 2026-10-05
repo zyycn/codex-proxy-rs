@@ -1,3 +1,5 @@
+//! 插件模型路由与账号调度调用，以及请求事实的线协议投影
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -110,16 +112,8 @@ async fn route_with_entry(
 ) -> Result<ModelRouteDecision, ()> {
     let invocation = entry.invocation.as_ref().ok_or(())?;
     let projection = operation_projection(input.operation())?;
-    let payload = if entry.requests_authorized {
-        projection.body.to_bytes()?
-    } else {
-        Vec::new()
-    };
-    let headers = if entry.requests_authorized {
-        project_request_headers(input.operation(), projection.context)?
-    } else {
-        Vec::new()
-    };
+    let payload = projection.body.to_bytes()?;
+    let headers = project_request_headers(input.operation(), projection.context)?;
     let request = ModelRouteRequest {
         request_id: input.request_id().as_str().to_owned(),
         operation: input.operation().kind().as_str().to_owned(),
@@ -136,7 +130,13 @@ async fn route_with_entry(
     context.request_id = Some(input.request_id().as_str().to_owned());
     let _network_scope = invocation
         .callbacks
-        .prepare_data_plane(&context, input.execution_effects())
+        .prepare_data_plane(
+            &context,
+            Some(input.execution_effects()),
+            input.extension_scope().clone(),
+            None,
+            gateway_core::lifecycle::CancellationToken::new(),
+        )
         .map_err(|_| ())?;
     let reply = invocation
         .session
@@ -182,23 +182,13 @@ async fn schedule_with_entry(
     timeout: Duration,
 ) -> Result<AccountScheduleDecision, ()> {
     let invocation = entry.invocation.as_ref().ok_or(())?;
-    let highest_weight = input
-        .candidates()
-        .iter()
-        .map(gateway_core::engine::policy::AccountScheduleCandidate::weight)
-        .max()
-        .ok_or(())?;
-    let visible = input
-        .candidates()
-        .iter()
-        .filter(|candidate| entry.requests_authorized || candidate.weight() == highest_weight)
-        .collect::<Vec<_>>();
+    let candidates = input.candidates();
     let request = WireAccountScheduleRequest {
         request_id: input.request_id().as_str().to_owned(),
         attempt_index: input.attempt_index().get(),
         provider: input.provider().as_str().to_owned(),
         model: input.model().map(str::to_owned),
-        candidates: visible
+        candidates: candidates
             .iter()
             .map(|candidate| WireAccountScheduleCandidate {
                 account_id: candidate.account_id().as_str().to_owned(),
@@ -222,7 +212,13 @@ async fn schedule_with_entry(
     ));
     let _network_scope = invocation
         .callbacks
-        .prepare_data_plane(&context, input.execution_effects())
+        .prepare_data_plane(
+            &context,
+            Some(input.execution_effects()),
+            input.extension_scope().clone(),
+            None,
+            gateway_core::lifecycle::CancellationToken::new(),
+        )
         .map_err(|_| ())?;
     let reply = invocation
         .session
@@ -244,7 +240,7 @@ async fn schedule_with_entry(
         WireAccountScheduleDecision::Reject => Ok(AccountScheduleDecision::Reject),
         WireAccountScheduleDecision::Pick { account_id } => {
             let account_id = ProviderAccountId::new(account_id).map_err(|_| ())?;
-            if !visible
+            if !candidates
                 .iter()
                 .any(|candidate| candidate.account_id() == &account_id)
             {
@@ -350,9 +346,6 @@ fn project_provider_http_headers(headers: &[ProviderHttpHeader]) -> Result<Vec<P
         if total_bytes > MAX_HEADER_TOTAL_BYTES {
             return Err(());
         }
-        if sensitive_or_identity_header(&name) {
-            continue;
-        }
         projected.push(PolicyHeader { name, value_base64 });
     }
     Ok(projected)
@@ -389,9 +382,6 @@ fn project_headers(
         if total_bytes > MAX_HEADER_TOTAL_BYTES {
             return Err(());
         }
-        if sensitive_or_identity_header(&name) {
-            continue;
-        }
         projected.push(PolicyHeader {
             name,
             value_base64: value_base64.to_owned(),
@@ -406,32 +396,11 @@ fn normalized_header_name(name: &str) -> Result<String, ()> {
         || name.len() > MAX_HEADER_NAME_BYTES
         || !name
             .bytes()
-            // HTTP token 允许下划线等字符；合法会话别名仍由后续可见性规则隐藏。
             .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
     {
         return Err(());
     }
     Ok(name)
-}
-
-fn sensitive_or_identity_header(name: &str) -> bool {
-    name.contains("auth")
-        || name.contains("credential")
-        || name.contains("secret")
-        || name.contains("token")
-        || name.contains("cookie")
-        || name.contains("session")
-        || name.contains("conversation")
-        || name.contains("thread")
-        || name.contains("account")
-        || name.contains("organization")
-        || name.contains("project")
-        || name.contains("tenant")
-        || name.contains("principal")
-        || name.contains("identity")
-        || name.contains("user-id")
-        || name.ends_with("-key")
-        || name.ends_with("_key")
 }
 
 fn system_time_millis(value: Option<SystemTime>) -> Option<u64> {

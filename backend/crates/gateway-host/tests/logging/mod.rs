@@ -1,3 +1,5 @@
+//! 日志测试入口，以及输出开关、关闭日志与部署时区测试
+
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -10,6 +12,7 @@ use gateway_host::system_update::SystemUpdateConfig;
 mod sink;
 mod writer;
 
+const LOG_TIMEZONE_ENV: &str = "CPR_LOGGING_TEST_TIMEZONE";
 const LOG_DIRECTORY_ENV: &str = "CPR_LOGGING_TEST_DIRECTORY";
 const CHILD_PROCESS_ENV: &str = "CPR_LOGGING_TEST_CHILD";
 const REQUEST_DUMP_ENABLED_ENV: &str = "CPR_LOGGING_TEST_REQUEST_DUMP_ENABLED";
@@ -28,6 +31,7 @@ const REQUEST_DUMP_SECRET: &str = "unredacted-authorization-value";
 #[test]
 fn logging_requires_at_least_one_sink() {
     let mut config = HostConfig {
+        timezone: Default::default(),
         listen: ListenConfig {
             host: "127.0.0.1".to_owned(),
             port: 8080,
@@ -302,6 +306,10 @@ fn with_logging(config: HostConfig, write: impl FnOnce()) {
 
 fn logging_config(directory: PathBuf, request_dump: bool) -> HostConfig {
     HostConfig {
+        timezone: env::var(LOG_TIMEZONE_ENV)
+            .ok()
+            .map(|value| value.parse().unwrap())
+            .unwrap_or_default(),
         listen: ListenConfig {
             host: "127.0.0.1".to_owned(),
             port: 8080,
@@ -372,4 +380,50 @@ fn log_file_set_exists(directory: &Path, file_prefix: &str) -> bool {
 
 fn json_target_field(target: &str) -> String {
     format!(r#""target":"{target}""#)
+}
+
+#[test]
+fn deployment_timezone_controls_log_timestamp_and_file_date() {
+    for name in ["Asia/Shanghai", "UTC", "America/New_York", "Asia/Kathmandu"] {
+        let directory = tempfile::tempdir().unwrap();
+        let output = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logging::sensitive_file_logging_is_separate_and_overrides_global_log_level",
+            ])
+            .env(CHILD_PROCESS_ENV, "1")
+            .env(LOG_DIRECTORY_ENV, directory.path())
+            .env(LOG_TIMEZONE_ENV, name)
+            .env(REQUEST_DUMP_ENABLED_ENV, "true")
+            .env("RUST_LOG", "off,logging_test_application=info")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let timezone: gateway_core::time::DeploymentTimeZone = name.parse().unwrap();
+        for prefix in [
+            APPLICATION_LOG_FILE_PREFIX,
+            OAUTH_RECOVERY_LOG_FILE_PREFIX,
+            REQUEST_DUMP_LOG_FILE_PREFIX,
+        ] {
+            let body = read_log_file_set(directory.path(), prefix);
+            let record: serde_json::Value =
+                serde_json::from_str(body.lines().next().unwrap()).unwrap();
+            let timestamp =
+                chrono::DateTime::parse_from_rfc3339(record["timestamp"].as_str().unwrap())
+                    .unwrap();
+            assert_eq!(
+                timestamp.to_rfc3339(),
+                timezone.local(timestamp.to_utc()).to_rfc3339()
+            );
+            let path = directory.path().join(format!(
+                "{prefix}{}.log",
+                timezone.local(timestamp.to_utc()).date_naive()
+            ));
+            assert!(path.exists(), "{name}: {}", path.display());
+        }
+    }
 }

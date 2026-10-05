@@ -1,3 +1,5 @@
+//! OpenAI 上游 HTTP、SSE、WebSocket 与客户端画像的测试入口
+
 use std::{
     process::Command,
     sync::{

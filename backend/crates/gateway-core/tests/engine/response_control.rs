@@ -1,3 +1,5 @@
+//! 验证响应中断的当前 owner 校验及独立执行间的控制隔离
+
 use futures::FutureExt;
 use gateway_core::engine::response_control::{ResponseControl, ResponseInterruptError};
 

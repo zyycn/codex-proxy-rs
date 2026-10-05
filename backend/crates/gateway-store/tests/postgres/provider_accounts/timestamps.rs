@@ -1,3 +1,5 @@
+//! 验证账号观测与凭据写入在乱序和时钟回退时保持时间边界
+
 use super::*;
 use gateway_core::account::AccountConcurrencyLimit;
 use gateway_store::postgres::RecoverProviderAccount;
@@ -10,7 +12,7 @@ async fn cross_kind_observations_preserve_time_bounds_and_stale_observation_fenc
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let account_id = ProviderAccountId::new("acct_observation_time_bounds").expect("account id");
     let mut seed = account(account_id.as_str(), "user-observation-time-bounds");
-    // 合成应用时钟领先数据库的已有事实，避免修改宿主时钟或依赖测试执行速度。
+    // 合成应用时钟领先数据库的已有事实，避免修改宿主时钟或依赖测试执行速度
     let anchor = Utc::now() + TimeDelta::hours(1);
     seed.credential_observed_at = anchor;
     repository
@@ -144,7 +146,7 @@ async fn credential_and_admin_writes_preserve_existing_update_time_after_clock_r
         .insert_provider_account(seed)
         .await
         .expect("seed account");
-    // 账号在回拨前创建，管理恢复和重新导入也必须保留这一时间下界。
+    // 账号在回拨前创建，管理恢复和重新导入也必须保留这一时间下界
     sqlx::query("update provider_accounts set created_at = updated_at where id = $1")
         .bind(account_id.as_str())
         .execute(&database.pool)

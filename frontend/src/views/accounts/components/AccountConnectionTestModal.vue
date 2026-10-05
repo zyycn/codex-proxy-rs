@@ -3,8 +3,8 @@ import type { useAccountConnectionTest } from '../composables/useAccountConnecti
 
 import { BaseButton, BaseIconButton, BaseModal, BaseSelect } from '@codex-proxy/ui'
 import { RefreshCw } from '@lucide/vue'
+import AccountStatusBadge from './account-status-badge/index.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
-import AccountStatusBadge from './AccountStatusBadge/index.vue'
 
 type ConnectionTest = ReturnType<typeof useAccountConnectionTest>
 
@@ -58,10 +58,11 @@ function connectionLogClass(tone: string) {
           :status="account.status"
           :error-reason="account.errorReason"
           :error-message="account.errorMessage"
-          :rate-limited-until="account.quota.rateLimitedUntil"
+          :rate-limit-recovery-display="account.quota.rateLimitRecoveryDisplay"
           :rate-limit-reason="account.quota.rateLimitReason"
           :recovery-probe-required="account.quota.recoveryProbeRequired"
           :next-refresh-at="account.nextRefreshAt"
+          :next-refresh-at-display="account.nextRefreshAtDisplay"
           variant="pill"
         />
       </section>

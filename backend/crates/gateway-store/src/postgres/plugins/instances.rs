@@ -1,3 +1,6 @@
+//! 插件实例配置与版本的事务写入、绑定校验和发布状态读取
+
+use gateway_admin::model::audit::MutationAuditOperation;
 use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_admin::{
@@ -6,7 +9,7 @@ use gateway_admin::{
         plugins::{
             instances::{
                 PluginInstance, PluginInstanceMutation, PluginInstanceReplacement,
-                PluginInstanceSnapshot, PluginPermissionGrant, PluginVersionConfiguration,
+                PluginInstanceSnapshot, PluginVersionConfiguration,
             },
             state::PluginStateCommit,
         },
@@ -106,7 +109,6 @@ fn decode(row: &sqlx::postgres::PgRow) -> AdminStoreResult<PluginInstance> {
         .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at")
         .map_err(|_| unavailable())?
         .is_some();
-    let metadata = super::artifacts::decode_metadata(row)?;
     Ok(PluginInstance {
         id: id.to_string(),
         name: row.try_get("name").map_err(|_| unavailable())?,
@@ -120,15 +122,6 @@ fn decode(row: &sqlx::postgres::PgRow) -> AdminStoreResult<PluginInstance> {
             .try_get::<sqlx::types::Json<_>, _>("secrets_json")
             .map_err(|_| unavailable())?
             .0,
-        grants: if accepted {
-            metadata
-                .requested_permissions
-                .into_iter()
-                .map(|permission| PluginPermissionGrant { permission })
-                .collect()
-        } else {
-            Vec::new()
-        },
         bindings: row
             .try_get::<sqlx::types::Json<_>, _>("bindings_json")
             .map_err(|_| unavailable())?
@@ -164,20 +157,11 @@ async fn validate_artifact_acceptance(
     .await
     .map_err(|_| unavailable())?
     .ok_or_else(not_found)?;
-    let metadata = super::artifacts::decode_metadata(&row)?;
     let accepted = row
         .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at")
         .map_err(|_| unavailable())?
         .is_some();
-    let expected_grants = metadata
-        .requested_permissions
-        .into_iter()
-        .map(|permission| PluginPermissionGrant { permission })
-        .collect::<Vec<_>>();
-    if instance.trusted_process != accepted
-        || instance.grants != expected_grants
-        || (instance.enabled && !accepted)
-    {
+    if instance.trusted_process != accepted || (instance.enabled && !accepted) {
         return Err(AdminStoreError::new(
             AdminStoreErrorKind::Invalid,
             "plugin",
@@ -272,7 +256,7 @@ async fn save_inner(
     let mut tx = pool.begin().await.map_err(|_| unavailable())?;
     check_revision(&mut tx, expected).await?;
     validate_artifact_acceptance(&mut tx, &instance).await?;
-    // 停用是损坏配置的恢复路径，必须原样保留绑定；再次启用时才要求引用仍存在。
+    // 停用是损坏配置的恢复路径，必须原样保留绑定；再次启用时才要求引用仍存在
     if instance.enabled {
         validate_binding_references(&mut tx, &instance).await?;
     }
@@ -290,14 +274,14 @@ async fn save_inner(
         .collect();
     sqlx::query("insert into plugin_instance_secrets(instance_id,secrets_json) values ($1,$2) on conflict (instance_id) do update set secrets_json=excluded.secrets_json")
         .bind(id).bind(sqlx::types::Json(secrets)).execute(&mut *tx).await.map_err(|_| unavailable())?;
-    // 与当前配置及状态一同提交，准备失败或事务冲突不能污染恢复点。
-    // 停用草稿可能缺少必填参数，不能覆盖此版本最近的启用配置。
+    // 与当前配置及状态一同提交，准备失败或事务冲突不能污染恢复点
+    // 停用草稿可能缺少必填参数，不能覆盖此版本最近的启用配置
     if instance.enabled {
         sqlx::query("insert into plugin_version_configurations (instance_id,artifact_sha256,configuration_json,secrets_json,bindings_json) select i.id,i.artifact_sha256,i.configuration_json,s.secrets_json,i.bindings_json from plugin_instances i join plugin_instance_secrets s on s.instance_id=i.id where i.id=$1 on conflict (instance_id,artifact_sha256) do update set configuration_json=excluded.configuration_json,secrets_json=excluded.secrets_json,bindings_json=excluded.bindings_json")
             .bind(id).execute(&mut *tx).await.map_err(|_| unavailable())?;
     }
     let committed_revision = admin_revision(revision)?;
-    // 旧配置与新配置共享事务，任一版本检查或状态提交失败都不留下半次切换。
+    // 旧配置与新配置共享事务，任一版本检查或状态提交失败都不留下半次切换
     for replacement in replacements {
         let previous_id = uuid::Uuid::parse_str(&replacement.id).map_err(|_| conflict())?;
         if previous_id == id || !instance.enabled {
@@ -327,8 +311,7 @@ async fn save_inner(
             &mut tx,
             mutation_audit(
                 context,
-                "configure",
-                "plugin_instance",
+                MutationAuditOperation::PluginInstanceConfigure,
                 &replacement.id,
                 vec!["enabled".into()],
             ),
@@ -352,8 +335,7 @@ async fn save_inner(
         &mut tx,
         mutation_audit(
             context,
-            "configure",
-            "plugin_instance",
+            MutationAuditOperation::PluginInstanceConfigure,
             &instance.id,
             vec![
                 "artifact".into(),
@@ -404,8 +386,7 @@ pub(super) async fn delete(
         &mut tx,
         mutation_audit(
             context,
-            "delete",
-            "plugin_instance",
+            MutationAuditOperation::PluginInstanceDelete,
             id,
             vec!["instance".into()],
         ),
@@ -419,4 +400,43 @@ pub(super) async fn delete(
 
 fn revision_from_i64(value: i64) -> AdminStoreResult<Revision> {
     Revision::new(u64::try_from(value).map_err(|_| unavailable())?).map_err(|_| unavailable())
+}
+
+/// 所有停用共享全局 CAS 和审计事务，不能留下只停用一部分插件的状态
+pub(super) async fn disable(
+    pool: &PgPool,
+    ids: &[String],
+    expected: Revision,
+    context: &MutationContext,
+) -> AdminStoreResult<Revision> {
+    let mut tx = pool.begin().await.map_err(|_| unavailable())?;
+    check_revision(&mut tx, expected).await?;
+    if ids.is_empty() {
+        return Ok(expected);
+    }
+    let revision = bump_config_revision_in_transaction(&mut tx)
+        .await
+        .map_err(|e| admin_store_error("plugin", e))?;
+    let committed = admin_revision(revision)?;
+    for id in ids {
+        let uuid = uuid::Uuid::parse_str(id).map_err(|_| conflict())?;
+        let digest: String = sqlx::query_scalar("update plugin_instances set enabled=false,revision=$2 where id=$1 and enabled=true returning artifact_sha256")
+            .bind(uuid).bind(i64::try_from(revision.get()).map_err(|_| unavailable())?)
+            .fetch_optional(&mut *tx).await.map_err(|_| unavailable())?.ok_or_else(conflict)?;
+        super::state::rebind_existing_configuration(&mut tx, id, &digest, committed).await?;
+        append_admin_audit_event_in_transaction(
+            &mut tx,
+            mutation_audit(
+                context,
+                MutationAuditOperation::PluginInstanceConfigure,
+                id,
+                vec!["enabled".into()],
+            ),
+            revision,
+        )
+        .await
+        .map_err(|e| admin_store_error("plugin", e))?;
+    }
+    tx.commit().await.map_err(|_| unavailable())?;
+    Ok(committed)
 }

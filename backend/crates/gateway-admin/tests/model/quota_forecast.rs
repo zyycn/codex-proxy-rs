@@ -1,3 +1,5 @@
+//! 验证额度预测的窗口选择、容量估算与无效样本边界
+
 use chrono::{DateTime, Duration, Utc};
 use gateway_admin::model::{
     accounts::{AccountCost, AccountUsage},
@@ -56,6 +58,7 @@ fn window(key: &str, days: u64) -> ProviderQuotaWindow {
 
 fn quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(now()),
         refresh_token_expires_at: None,
@@ -114,18 +117,14 @@ fn samples(quota: &ProviderQuota) -> Vec<QuotaForecastSample> {
 }
 
 #[test]
-fn forecasts_use_actual_periods_and_do_not_extrapolate_remaining_capacity() {
+fn forecasts_use_actual_periods_and_extrapolate_total_capacity() {
     let [week, month] = forecast(&quota(vec![window("week", 7)]));
     assert_eq!(week.estimated_tokens, Some(5_000));
     assert_eq!(week.estimated_usd, Some(10.0));
-    assert_eq!(week.remaining_tokens, Some(4_000));
-    assert_eq!(week.remaining_usd, Some(8.0));
     assert!(!week.extrapolated);
     assert!(month.extrapolated);
     assert_eq!(month.estimated_tokens, Some(21_429));
     assert!((month.estimated_usd.unwrap() - 10.0 * 30.0 / 7.0).abs() < 1e-10);
-    assert_eq!(month.remaining_tokens, week.remaining_tokens);
-    assert_eq!(month.remaining_usd, week.remaining_usd);
 }
 
 #[test]
@@ -203,8 +202,8 @@ fn low_samples_warn_and_exhaustion_uses_raw_not_display_percentages() {
     source.windows[0].used_percent = Some(100.0);
     let [week, _] = forecast(&source);
     assert!(!week.low_sample);
-    assert_eq!(week.remaining_tokens, Some(0));
-    assert_eq!(week.remaining_usd, Some(0.0));
+    assert_eq!(week.estimated_tokens, Some(1_000));
+    assert_eq!(week.estimated_usd, Some(2.0));
 }
 
 #[test]
@@ -257,8 +256,7 @@ fn incremental_sample_supports_mid_cycle_accounts_and_remaining_uses_current_per
     let [week, month] =
         account_quota_forecasts(&source, now() - Duration::days(1), now(), &[sample]);
     assert_eq!(week.estimated_tokens, Some(9_000));
-    assert_eq!(week.remaining_tokens, Some(8_000));
-    assert_eq!(month.remaining_tokens, Some(8_000));
+    assert_eq!(month.estimated_tokens, Some(38_571));
     assert!(week.unavailable_reason.is_none());
     assert!(!week.low_sample);
 }
@@ -273,7 +271,6 @@ fn missing_tokens_keep_estimates_from_recorded_usage() {
     assert!(week.incomplete_tokens);
     assert!(week.unavailable_reason.is_none());
     assert_eq!(week.estimated_tokens, Some(5_000));
-    assert_eq!(week.remaining_tokens, Some(4_000));
     assert_eq!(week.estimated_usd, Some(10.0));
     assert_eq!(week.source.unwrap().tokens, Some(1_000));
 }
@@ -308,16 +305,15 @@ fn partial_costs_keep_estimates_from_known_amounts() {
         assert!(week.incomplete_cost);
         assert!(week.unavailable_reason.is_none());
         assert_eq!(week.estimated_usd, Some(10.0));
-        assert_eq!(week.remaining_usd, Some(8.0));
         assert_eq!(week.estimated_tokens, Some(5_000));
     }
 }
 
 #[test]
-fn missing_tokens_and_costs_do_not_block_recorded_capacity_or_remaining_estimates() {
+fn missing_tokens_and_costs_do_not_block_recorded_capacity_estimates() {
     let source = quota(vec![window("week", 7)]);
     let mut sample = samples(&source).remove(0);
-    // 完整请求之外混有缺少计量的成功请求，不把已有用量和费用一并作废。
+    // 完整请求之外混有缺少计量的成功请求，不把已有用量和费用一并作废
     sample.usage.request_count += 2;
     sample.usage.missing_token_count = 2;
     sample.usage.unavailable_cost_count = 2;
@@ -331,11 +327,7 @@ fn missing_tokens_and_costs_do_not_block_recorded_capacity_or_remaining_estimate
     assert!(week.unavailable_reason.is_none());
     assert_eq!(week.estimated_tokens, Some(5_000));
     assert_eq!(week.estimated_usd, Some(10.0));
-    assert_eq!(week.remaining_tokens, Some(4_000));
-    assert_eq!(week.remaining_usd, Some(8.0));
     assert_eq!(month.estimated_tokens, Some(21_429));
-    assert_eq!(month.remaining_tokens, week.remaining_tokens);
-    assert_eq!(month.remaining_usd, week.remaining_usd);
 }
 
 #[test]
@@ -352,7 +344,6 @@ fn entirely_unknown_costs_leave_only_money_estimates_unavailable() {
     assert!(week.unavailable_reason.is_none());
     assert_eq!(week.estimated_tokens, Some(5_000));
     assert_eq!(week.estimated_usd, None);
-    assert_eq!(week.remaining_usd, None);
 }
 
 #[test]
@@ -370,8 +361,6 @@ fn entirely_unknown_tokens_and_costs_do_not_invent_zero_estimates() {
     assert!(week.unavailable_reason.is_some());
     assert_eq!(week.estimated_tokens, None);
     assert_eq!(week.estimated_usd, None);
-    assert_eq!(week.remaining_tokens, None);
-    assert_eq!(week.remaining_usd, None);
 }
 
 #[test]
@@ -420,11 +409,8 @@ fn slower_recent_consumption_preserves_recorded_cycle_usage_in_total_forecast() 
         account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert_eq!(cycle.source.as_ref().unwrap().tokens, Some(1_084_786_565));
     assert_eq!(cycle.source.as_ref().unwrap().usd, Some(1_412.57957384));
-    assert_eq!(cycle.remaining_tokens, Some(66_459_719));
     assert_eq!(cycle.estimated_tokens, Some(1_151_246_284));
-    assert!((cycle.remaining_usd.unwrap() - 111.628272395294).abs() < 1e-8);
     assert!((cycle.estimated_usd.unwrap() - 1_524.207846235294).abs() < 1e-8);
-    assert_eq!(month.remaining_tokens, cycle.remaining_tokens);
     assert!(
         (month.estimated_usd.unwrap() - cycle.estimated_usd.unwrap() * 30.0 / 7.0).abs() < 1e-8
     );
@@ -445,6 +431,4 @@ fn exhausted_cycle_total_is_recorded_usage_even_when_recent_sample_is_small() {
     let [cycle, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert_eq!(cycle.estimated_tokens, Some(1_000));
     assert_eq!(cycle.estimated_usd, Some(2.0));
-    assert_eq!(cycle.remaining_tokens, Some(0));
-    assert_eq!(cycle.remaining_usd, Some(0.0));
 }

@@ -1,3 +1,5 @@
+//! 校验插件命令行注册声明并准备可执行命令
+
 use super::{PluginCommand, parameters};
 use crate::{RpcSession, callback::PluginCallbacks};
 use gateway_admin::model::{AdminError, plugins::instances::PluginInstance};

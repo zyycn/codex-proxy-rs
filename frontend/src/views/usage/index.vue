@@ -4,16 +4,17 @@ import { BaseCard, BaseIconButton, BasePageHeader, BaseSegmented, BaseSelect, Ba
 import { Eye } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import ProviderFilter from '@/components/ProviderFilter.vue'
+import { usageRecordColumns } from '@/components/usage/shared/columns'
+import UsageRecordsTable from '@/components/usage/UsageRecordsTable.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
-import UsageRecordsTable from './components/UsageRecordsTable.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
-import { usageRecordColumns, usageTimeRangeOptions } from './constants'
+import { usageTimeRangeOptions } from './constants'
 
 const recordView = shallowRef('success')
 const { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns } = useTableColumns(usageRecordColumns, 'usage-records')
@@ -30,6 +31,7 @@ const {
   providerQuery,
   usagePagination,
   loading,
+  error,
   analyticsLoading,
   records,
   summary,
@@ -122,7 +124,7 @@ watch(timeRange, () => {
               :columns="visibleColumns"
               :rows="records"
               :loading="loading"
-              empty-text="暂无使用记录"
+              :empty-text="error ? `加载失败：${error}` : '暂无使用记录'"
             >
               <template #actions="{ row }">
                 <div class="flex items-center justify-start">

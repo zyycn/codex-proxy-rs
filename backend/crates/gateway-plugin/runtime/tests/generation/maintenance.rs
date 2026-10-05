@@ -1,4 +1,6 @@
-use crate::support::environment::{Environment, account_grant, mutation};
+//! 验证插件维护任务的资源创建、重试及事务归属和幂等性
+
+use crate::support::environment::{Environment, mutation};
 use gateway_admin::{
     model::{
         account_groups::{AccountGroupColor, CreateAccountGroup},
@@ -157,7 +159,12 @@ async fn wait_done(path: &std::path::Path, after: usize) -> Value {
         }
     })
     .await
-    .expect("plugin reconciliation finished")
+    .unwrap_or_else(|error| {
+        panic!(
+            "plugin reconciliation did not finish: {error}; observations: {}",
+            std::fs::read_to_string(path).unwrap_or_default(),
+        )
+    })
 }
 
 #[tokio::test]
@@ -170,7 +177,7 @@ async fn published_reconciliation_provisions_retries_imports_and_restores_withou
     let original = environment.account_group_with_account(&account).await;
     let marker = environment.directory.path().join("maintenance.jsonl");
     let failed = environment.directory.path().join("failed-once");
-    environment.install_plugin(json!({"maintenance_fixture":true, "maintenance_marker":marker, "maintenance_fail_once":failed}), vec![account_grant("groups"), account_grant("keys"), account_grant("data")]).await;
+    environment.install_plugin(json!({"maintenance_fixture":true, "maintenance_marker":marker, "maintenance_fail_once":failed})).await;
     let (runtime, core, resources, stop, task) = start(&environment).await;
     let first = wait_done(&marker, 0).await;
     assert!(failed.exists());
@@ -232,7 +239,7 @@ async fn published_reconciliation_provisions_retries_imports_and_restores_withou
     drop(resources);
     drop(core);
     drop(runtime);
-    // 离线新增账号后重新启动真实插件子进程；稳定资源键必须复用原分组与 Key。
+    // 离线新增账号后重新启动真实插件子进程；稳定资源键必须复用原分组与 Key
     let offline = environment.account(None).await;
     std::fs::write(&marker, "").unwrap();
     let (runtime, core, resources, stop, task) = start(&environment).await;
@@ -289,12 +296,7 @@ async fn resource_transactions_enforce_ownership_current_revision_and_idempotent
     let Some(environment) = Environment::create().await else {
         return;
     };
-    environment
-        .install_plugin(
-            json!({}),
-            vec![account_grant("groups"), account_grant("keys")],
-        )
-        .await;
+    environment.install_plugin(json!({})).await;
     let (runtime, core) = environment.runtime().await;
     let resources = gateway_admin::initialize_plugin_resources(
         environment.store.admin_ports().plugin_resources(),

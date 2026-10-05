@@ -1,3 +1,5 @@
+//! 验证 SSE 编解码的多行数据、分块、BOM 与控制字段处理
+
 use gateway_protocol::openai::sse::{
     DONE_SSE_FRAME, MAX_SSE_EVENT_BUFFER_BYTES, SseError, SseEvent, SseEventDecoder,
     encode_sse_event, encode_sse_event_with_metadata, parse_sse_events,
@@ -155,7 +157,7 @@ fn incremental_decoder_should_decode_across_arbitrary_chunk_boundaries() {
 
 #[test]
 fn incremental_decoder_should_find_separators_split_at_every_byte_boundary() {
-    // CRLF 分隔符按单字节到达时必须仍被识别；帧内容跨任意多次 push 不丢失。
+    // CRLF 分隔符按单字节到达时必须仍被识别；帧内容跨任意多次 push 不丢失
     let body = b"event: one\r\ndata: first\r\n\r\nevent: two\ndata: second\n\ndata: third\r\n\r\n";
     let mut decoder = SseEventDecoder::default();
     let mut events = Vec::new();
@@ -266,16 +268,17 @@ fn incremental_decoder_should_accept_exact_limit_and_reject_one_byte_over() {
 fn raw_frame_decoder_should_stream_oversized_unfinished_frame_and_resume_observation() {
     let oversized = vec![b'x'; MAX_SSE_EVENT_BUFFER_BYTES + 1];
     let mut decoder = SseEventDecoder::default();
-    let mut raw = decoder
-        .push_frames(&oversized)
-        .into_iter()
-        .flat_map(|frame| frame.into_parts().0)
-        .collect::<Vec<_>>();
+    let mut raw = Vec::with_capacity(oversized.len() + 2);
+    for frame in decoder.push_frames(&oversized) {
+        raw.extend_from_slice(frame.raw());
+    }
 
     assert!(!raw.is_empty());
     let tail = decoder.push_frames(b"\n\n");
     assert!(tail.iter().all(|frame| frame.events().is_empty()));
-    raw.extend(tail.into_iter().flat_map(|frame| frame.into_parts().0));
+    for frame in tail {
+        raw.extend_from_slice(frame.raw());
+    }
     assert_eq!(raw.len(), oversized.len() + 2);
     assert_eq!(&raw[..oversized.len()], oversized.as_slice());
     assert_eq!(&raw[oversized.len()..], b"\n\n");
@@ -474,7 +477,9 @@ fn frame_end_should_support_lf_and_crlf_boundaries() {
             sse_frame_end(b"data: one\n\nremaining"),
             sse_frame_end(b"data: two\r\n\r\nremaining"),
             sse_frame_end(b"data: incomplete"),
+            sse_frame_end(b"data: one\n\ndata: two\r\n\r\n"),
+            sse_frame_end(b"data: one\r\n\r\ndata: two\n\n"),
         ],
-        [Some(11), Some(13), None]
+        [Some(11), Some(13), None, Some(11), Some(13)]
     );
 }

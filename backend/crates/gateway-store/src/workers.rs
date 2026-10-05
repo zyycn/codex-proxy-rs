@@ -1,4 +1,4 @@
-//! Worker 贡献、调度定义与健康探针。
+//! Worker 贡献、调度定义与健康探针
 
 use super::*;
 use gateway_core::task::DaemonTask;
@@ -11,7 +11,7 @@ pub(crate) struct CommandStoreWriters {
     pub(crate) admission_release: redis::ClientAdmissionReleaseWriter,
 }
 
-/// 短生命周期 CLI 只运行数据面必需的三个写泵，不注册恢复、保留或维护 Worker。
+/// 短生命周期 CLI 只运行数据面必需的三个写泵，不注册恢复、保留或维护 Worker
 pub struct CommandStoreDrain {
     cancellation: gateway_core::lifecycle::CancellationToken,
     tasks: Vec<tokio::task::JoinHandle<Result<(), WorkerTaskError>>>,
@@ -58,7 +58,7 @@ impl CommandStoreDrain {
     pub(crate) async fn shutdown(mut self) -> Result<(), CommandStoreDrainError> {
         let deadline = std::time::Instant::now() + COMMAND_DRAIN_TIMEOUT;
         // CLI 调用方已结束数据面会话；先让已接收的 execution 写入在正常 writer
-        // 路径完成，避免立即取消后落入更短的常驻进程关闭丢弃窗口。
+        // 路径完成，避免立即取消后落入更短的常驻进程关闭丢弃窗口
         let mut failed = !self.execution_idle.wait_until(deadline).await;
         self.cancellation.cancel();
         for mut task in self.tasks.drain(..) {
@@ -99,12 +99,9 @@ pub(crate) fn store_worker_contributions(
     execution_writer: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
     client_key_usage_writer: postgres::PgClientApiKeyUsageWriter,
     admission_release_writer: redis::ClientAdmissionReleaseWriter,
-    retention: Arc<postgres::PgRetentionRepository>,
 ) -> StoreResult<Vec<WorkerContribution>> {
     let stale_id = WorkerId::try_new(WorkerKind::StaleModelRequestRecovery, "postgres")
         .map_err(worker_definition_error)?;
-    let retention_id =
-        WorkerId::try_new(WorkerKind::Retention, "postgres").map_err(worker_definition_error)?;
     let ops_flush_id =
         WorkerId::try_new(WorkerKind::OpsFlush, "postgres").map_err(worker_definition_error)?;
     let client_key_usage_flush_id =
@@ -120,11 +117,6 @@ pub(crate) fn store_worker_contributions(
             stale_id,
             Duration::from_secs(30),
             Box::new(StaleModelRequestRecoveryTask { execution }),
-        )?),
-        WorkerContribution::Registration(scheduled_worker(
-            retention_id,
-            Duration::from_secs(60 * 60),
-            Box::new(RetentionTask { retention }),
         )?),
         WorkerContribution::Registration(
             WorkerRegistration::try_new(
@@ -211,46 +203,6 @@ impl ScheduledTask for StaleModelRequestRecoveryTask {
             .await
             .map(|_| ())
             .map_err(|_| WorkerTaskError::safe("stale request recovery failed"))
-        })
-    }
-}
-
-pub(crate) struct RetentionTask {
-    retention: Arc<postgres::PgRetentionRepository>,
-}
-
-impl ScheduledTask for RetentionTask {
-    fn run_cycle(
-        &self,
-        context: WorkerCycleContext,
-    ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async move {
-            let settings =
-                postgres::RetentionRepository::load_retention_settings(self.retention.as_ref())
-                    .await
-                    .map_err(|_| WorkerTaskError::safe("retention settings read failed"))?;
-            let started_at = std::time::Instant::now();
-            let cleanup = postgres::RetentionRepository::apply_retention(
-                self.retention.as_ref(),
-                chrono::Utc::now(),
-                settings,
-            );
-            let report = tokio::select! {
-                () = context.cancellation().cancelled() => return Ok(()),
-                result = cleanup => result
-                    .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))?,
-            };
-            tracing::info!(
-                model_requests = report.model_requests,
-                ops_events = report.ops_events,
-                admin_audit_events = report.admin_audit_events,
-                batches = report.batches,
-                budget_exhausted = report.budget_exhausted,
-                elapsed_milliseconds =
-                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-                "PostgreSQL retention cycle completed"
-            );
-            Ok(())
         })
     }
 }

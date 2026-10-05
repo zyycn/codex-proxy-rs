@@ -1,29 +1,31 @@
-//! 查询 wire 类型、校验与领域命令映射。
+//! 查询 wire 类型、校验与领域命令映射
 
 use super::*;
 
-/// 观测列表默认页大小。
+/// 观测列表默认页大小
 pub const DEFAULT_PAGE_SIZE: u16 = 50;
-/// 观测列表允许的最大页大小。
+/// 观测列表允许的最大页大小
 pub const MAX_PAGE_SIZE: u16 = 100;
 
-/// Dashboard 查询参数。
+/// Dashboard 查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DashboardQuery {
     pub kind: Option<String>,
+    pub period: Option<String>,
+    pub as_of: Option<i64>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
 }
 
 impl DashboardQuery {
-    /// 解析 dashboard 趋势类型。
+    /// 解析 dashboard 趋势类型
     pub fn trend_kind(&self) -> Result<TrendKind, WireValidationError> {
         TrendKind::parse(self.kind.as_deref())
     }
 }
 
-/// 逻辑请求列表、汇总和洞察查询参数。
+/// 逻辑请求列表、汇总和洞察查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
@@ -43,12 +45,14 @@ pub struct UsageQuery {
     pub response_id: Option<String>,
     pub upstream_request_id: Option<String>,
     pub search: Option<String>,
+    pub period: Option<String>,
+    pub as_of: Option<i64>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
 }
 
 impl UsageQuery {
-    /// 校验 Element Plus 风格的页码分页字段。
+    /// 校验 Element Plus 风格的页码分页字段
     pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
         let current_page = self.current_page.unwrap_or(1);
         if current_page == 0 {
@@ -62,7 +66,7 @@ impl UsageQuery {
     }
 }
 
-/// 详情查询参数。
+/// 详情查询参数
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DetailQuery {
@@ -70,17 +74,19 @@ pub struct DetailQuery {
 }
 
 impl DetailQuery {
-    /// 校验详情 ID，错误不回显输入值。
+    /// 校验详情 ID，错误不回显输入值
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_text(&self.id, "id")
     }
 }
 
-/// 诊断聚合查询参数。
+/// 诊断聚合查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsQuery {
     pub dimension: Option<String>,
+    pub period: Option<String>,
+    pub as_of: Option<i64>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub provider: Option<String>,
@@ -90,13 +96,13 @@ pub struct DiagnosticsQuery {
 }
 
 impl DiagnosticsQuery {
-    /// 解析诊断维度。
+    /// 解析诊断维度
     pub fn dimension(&self) -> Result<DiagnosticDimension, WireValidationError> {
         DiagnosticDimension::parse(self.dimension.as_deref())
     }
 }
 
-/// 运维错误查询参数。
+/// 运维错误查询参数
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpsQuery {
@@ -116,12 +122,14 @@ pub struct OpsQuery {
     pub response_id: Option<String>,
     pub upstream_request_id: Option<String>,
     pub search: Option<String>,
+    pub period: Option<String>,
+    pub as_of: Option<i64>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
 }
 
 impl OpsQuery {
-    /// 校验 Element Plus 风格的页码分页字段。
+    /// 校验 Element Plus 风格的页码分页字段
     pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
         let current_page = self.current_page.unwrap_or(1);
         if current_page == 0 {
@@ -135,7 +143,7 @@ impl OpsQuery {
     }
 }
 
-/// Dashboard 趋势类型。
+/// Dashboard 趋势类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrendKind {
@@ -145,7 +153,7 @@ pub enum TrendKind {
 }
 
 impl TrendKind {
-    /// 从 query 值解析趋势类型。
+    /// 从 query 值解析趋势类型
     pub fn parse(value: Option<&str>) -> Result<Self, WireValidationError> {
         match trimmed(value) {
             None | Some("usage") => Ok(Self::Usage),
@@ -156,7 +164,7 @@ impl TrendKind {
     }
 }
 
-/// 诊断聚合维度。
+/// 诊断聚合维度
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticDimension {
     Model,
@@ -169,7 +177,7 @@ pub enum DiagnosticDimension {
 }
 
 impl DiagnosticDimension {
-    /// 从 query 值解析诊断维度。
+    /// 从 query 值解析诊断维度
     pub fn parse(value: Option<&str>) -> Result<Self, WireValidationError> {
         match trimmed(value) {
             None | Some("model") => Ok(Self::Model),
@@ -183,7 +191,7 @@ impl DiagnosticDimension {
         }
     }
 
-    /// 返回终态响应中的稳定维度名称。
+    /// 返回终态响应中的稳定维度名称
     #[must_use]
     pub const fn display_name(self) -> &'static str {
         match self {
@@ -198,7 +206,7 @@ impl DiagnosticDimension {
     }
 }
 
-/// 解析 RFC3339 时间；错误不回显原始值。
+/// 解析 RFC3339 时间；错误不回显原始值
 pub fn parse_datetime(value: Option<&str>) -> Result<Option<DateTime<Utc>>, WireValidationError> {
     let Some(value) = trimmed(value) else {
         return Ok(None);
@@ -208,7 +216,7 @@ pub fn parse_datetime(value: Option<&str>) -> Result<Option<DateTime<Utc>>, Wire
         .map_err(|_| WireValidationError::new("timeRange"))
 }
 
-/// 解析 HTTP 状态码。
+/// 解析 HTTP 状态码
 pub fn parse_status(value: Option<i64>) -> Result<Option<u16>, WireValidationError> {
     value
         .map(|value| {
@@ -220,7 +228,7 @@ pub fn parse_status(value: Option<i64>) -> Result<Option<u16>, WireValidationErr
         .transpose()
 }
 
-/// 解析尝试序号。
+/// 解析尝试序号
 pub fn parse_attempt_index(value: Option<i64>) -> Result<Option<u32>, WireValidationError> {
     value
         .map(|value| {
@@ -279,19 +287,21 @@ pub(crate) fn request_outcome(
 pub(crate) fn usage_range(
     start: Option<&str>,
     end: Option<&str>,
+    period: Option<&str>,
+    as_of: Option<i64>,
+    timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<domain::TimeRange, WireValidationError> {
-    let end = parse_datetime(end)?.unwrap_or_else(Utc::now);
-    let start = parse_datetime(start)?.unwrap_or(end - Duration::days(7));
-    domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
+    crate::time::query_range(start, end, period, as_of, timezone, "7d")
 }
 
 pub(crate) fn dashboard_today_range(
     start: Option<&str>,
     end: Option<&str>,
+    period: Option<&str>,
+    as_of: Option<i64>,
+    timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<domain::TimeRange, WireValidationError> {
-    let end = parse_datetime(end)?.unwrap_or_else(Utc::now);
-    let start = parse_datetime(start)?.unwrap_or_else(|| domain::china_day_start(end));
-    domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
+    crate::time::query_range(start, end, period, as_of, timezone, "today")
 }
 
 pub(crate) fn usage_filter(query: &UsageQuery) -> Result<domain::UsageFilter, WireValidationError> {
@@ -320,19 +330,31 @@ pub(crate) fn usage_filter(query: &UsageQuery) -> Result<domain::UsageFilter, Wi
     })
 }
 
-pub(crate) fn usage_command(query: &UsageQuery) -> Result<domain::UsageQuery, WireValidationError> {
+pub(crate) fn usage_command(
+    query: &UsageQuery,
+    timezone: gateway_core::time::DeploymentTimeZone,
+) -> Result<domain::UsageQuery, WireValidationError> {
     let (current_page, page_size) = query.validate_pagination()?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     Ok(domain::UsageQuery {
-        range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
+        range: usage_range(
+            query.start_time.as_deref(),
+            query.end_time.as_deref(),
+            query.period.as_deref(),
+            query.as_of,
+            timezone,
+        )?,
         filter: usage_filter(query)?,
         current_page,
         page_size: page_size_value,
     })
 }
 
-pub(crate) fn ops_command(query: &OpsQuery) -> Result<domain::OpsErrorQuery, WireValidationError> {
+pub(crate) fn ops_command(
+    query: &OpsQuery,
+    timezone: gateway_core::time::DeploymentTimeZone,
+) -> Result<domain::OpsErrorQuery, WireValidationError> {
     let (current_page, page_size) = query.validate_pagination()?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
@@ -343,7 +365,13 @@ pub(crate) fn ops_command(query: &OpsQuery) -> Result<domain::OpsErrorQuery, Wir
             .or(query.status_code),
     )?;
     Ok(domain::OpsErrorQuery {
-        range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
+        range: usage_range(
+            query.start_time.as_deref(),
+            query.end_time.as_deref(),
+            query.period.as_deref(),
+            query.as_of,
+            timezone,
+        )?,
         filter: domain::OpsErrorFilter {
             client_api_key_ref: non_empty(query.client_api_key_id.clone()),
             request_id: non_empty(query.request_id.clone()),

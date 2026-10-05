@@ -1,3 +1,5 @@
+//! 验证插件会话的二进制传输、帧长度限制与不完整消息拒绝
+
 use std::{
     future::pending,
     num::NonZeroUsize,
@@ -19,8 +21,8 @@ use gateway_plugin_sdk::{
         MiddlewareResponseHead, MiddlewareTransport, NEXT_METHOD,
     },
     client::{
-        CallFuture, CallReply, MiddlewareCall, MiddlewarePlugin, PluginCall, PluginHandler,
-        PluginSession, ResponseStream, SessionConfig, SessionError, read_frame, write_frame,
+        CallFuture, CallReply, MiddlewarePlugin, PluginCall, PluginHandler, PluginSession,
+        RequestCall, ResponseStream, SessionConfig, SessionError, read_frame, write_frame,
     },
 };
 use serde_json::{Value, json};
@@ -130,6 +132,18 @@ impl PluginHandler for TestHandler {
         Box::pin(async move {
             match call.method.as_str() {
                 "echo" => Ok(CallReply::unary(call.params, call.payload)),
+                "key_facts" => {
+                    let result = call
+                        .host
+                        .key_facts(gateway_plugin_sdk::call::data::ClientKeyFactsQuery {
+                            client_key_id: "key_1".into(),
+                        })
+                        .await?;
+                    Ok(CallReply::unary(
+                        serde_json::to_value(result).unwrap(),
+                        vec![],
+                    ))
+                }
                 "get_budget" => {
                     let result = call
                         .host
@@ -208,6 +222,11 @@ impl PluginHandler for TestHandler {
                         .map_err(SessionError::into_plugin_fault)?;
                     Ok(CallReply::unary(reply.result, reply.payload))
                 }
+                "resource_stream" => Ok(CallReply::stream(
+                    json!({}),
+                    Vec::new(),
+                    ResponseStream::pull(Box::new(ResourceStream(Some(call.host)))),
+                )),
                 "stream" => Ok(CallReply::stream(
                     json!({"stream": true}),
                     Vec::new(),
@@ -289,12 +308,12 @@ impl PluginHandler for TestHandler {
     }
 }
 
-struct HostPeer {
-    reader: ReadHalf<DuplexStream>,
-    writer: WriteHalf<DuplexStream>,
+pub(super) struct HostPeer {
+    pub(super) reader: ReadHalf<DuplexStream>,
+    pub(super) writer: WriteHalf<DuplexStream>,
 }
 
-async fn start_session<H: PluginHandler>(
+pub(super) async fn start_session<H: PluginHandler>(
     handler: H,
 ) -> (HostPeer, JoinHandle<Result<(), SessionError>>) {
     start_session_with_capacity(handler, MAXIMUM_STREAM_CHUNK_BYTES * 2).await
@@ -350,7 +369,7 @@ fn middleware_contributions() -> Contributions {
         Capability::Middleware,
         ContributionDeclaration {
             id: "test.example.middleware".into(),
-            version: 1,
+            version: 3,
             stages: vec![Stage::Request],
             input_formats: vec!["openai".into()],
             output_formats: vec!["openai".into()],
@@ -361,8 +380,8 @@ fn middleware_contributions() -> Contributions {
 fn middleware_plugin(map_response: bool) -> impl PluginHandler {
     MiddlewarePlugin::new(
         &middleware_contributions(),
-        move |call: MiddlewareCall| async move {
-            let MiddlewareCall {
+        move |call: RequestCall| async move {
+            let RequestCall {
                 mut request, next, ..
             } = call;
             if map_response {
@@ -406,7 +425,7 @@ fn middleware_plugin_rejects_declarations_without_matching_handlers() {
         (Capability::Scheduler, declaration.clone()),
     ]));
     let mut unsupported = declaration.clone();
-    unsupported.version = 3;
+    unsupported.version = 2;
     invalid.push(Contributions::from([(Capability::Middleware, unsupported)]));
     for stages in [
         vec![],
@@ -422,7 +441,7 @@ fn middleware_plugin_rejects_declarations_without_matching_handlers() {
         )]));
     }
     for contributes in invalid {
-        let result = MiddlewarePlugin::new(&contributes, |call: MiddlewareCall| async move {
+        let result = MiddlewarePlugin::new(&contributes, |call: RequestCall| async move {
             call.next.run(call.request).await
         });
         assert!(matches!(result, Err(SessionError::Configuration)));
@@ -431,7 +450,7 @@ fn middleware_plugin_rejects_declarations_without_matching_handlers() {
     both_mounts.stages.push(Stage::Attempt);
     let contributes = Contributions::from([(Capability::Middleware, both_mounts)]);
     assert!(
-        MiddlewarePlugin::new(&contributes, |call: MiddlewareCall| async move {
+        MiddlewarePlugin::new(&contributes, |call: RequestCall| async move {
             call.next.run(call.request).await
         })
         .is_ok()
@@ -441,7 +460,7 @@ fn middleware_plugin_rejects_declarations_without_matching_handlers() {
 #[tokio::test]
 async fn middleware_plugin_registers_without_invoking_business_handler() {
     let contributes = middleware_contributions();
-    let plugin = MiddlewarePlugin::new(&contributes, |_| async {
+    let plugin = MiddlewarePlugin::new(&contributes, |_: RequestCall| async {
         panic!("registration must not invoke middleware")
     })
     .unwrap();
@@ -475,7 +494,7 @@ async fn middleware_plugin_registers_without_invoking_business_handler() {
 
 #[tokio::test]
 async fn middleware_plugin_rejects_invalid_calls_before_business_dispatch() {
-    let plugin = MiddlewarePlugin::new(&middleware_contributions(), |_| async {
+    let plugin = MiddlewarePlugin::new(&middleware_contributions(), |_: RequestCall| async {
         panic!("invalid call must not invoke middleware")
     })
     .unwrap();
@@ -542,12 +561,12 @@ fn handshake() -> Handshake {
         generation: 7,
         incarnation: "test-incarnation".into(),
         configuration: json!({}),
-        permissions: Vec::new(),
+
         contributes: Contributions::new(),
     }
 }
 
-fn context(id: u64, timeout: Duration) -> CallContext {
+pub(super) fn context(id: u64, timeout: Duration) -> CallContext {
     CallContext {
         call_id: id,
         instance_id: "test-instance".into(),
@@ -555,6 +574,7 @@ fn context(id: u64, timeout: Duration) -> CallContext {
         incarnation: "test-incarnation".into(),
         stage: Stage::Request,
         timeout_ms: timeout.as_millis() as u64,
+        resource_stream: false,
         resource_scope_id: format!("scope-{id}"),
         request_id: None,
         attempt_id: None,
@@ -571,8 +591,12 @@ fn middleware_context(id: u64) -> CallContext {
     }
 }
 
-fn middleware_request() -> MiddlewareRequestHead {
+pub(super) fn middleware_request() -> MiddlewareRequestHead {
     MiddlewareRequestHead {
+        settings_sources: serde_json::Value::Null,
+        settings: serde_json::Value::Null,
+        client_key_id: "fixture-key".into(),
+        account_group_ids: vec!["fixture-group".into()],
         request_id: "request-middleware".into(),
         mount: MiddlewareMount::Request,
         attempt_index: None,
@@ -587,11 +611,16 @@ fn middleware_request() -> MiddlewareRequestHead {
             name: "x-old".into(),
             value: b"old".to_vec(),
         }],
-        body_visible: true,
     }
 }
 
-async fn send_call(host: &mut HostPeer, id: u64, method: &str, params: Value, payload: Vec<u8>) {
+pub(super) async fn send_call(
+    host: &mut HostPeer,
+    id: u64,
+    method: &str,
+    params: Value,
+    payload: Vec<u8>,
+) {
     send_call_with_timeout(host, id, method, params, payload, Duration::from_secs(1)).await;
 }
 
@@ -625,14 +654,14 @@ async fn send_control(host: &mut HostPeer, message: Message) {
         .unwrap();
 }
 
-async fn receive(host: &mut HostPeer) -> Frame {
+pub(super) async fn receive(host: &mut HostPeer) -> Frame {
     tokio::time::timeout(Duration::from_secs(1), read_frame(&mut host.reader))
         .await
         .expect("plugin response timed out")
         .expect("plugin response frame must be valid")
 }
 
-async fn shutdown(host: &mut HostPeer, task: JoinHandle<Result<(), SessionError>>) {
+pub(super) async fn shutdown(host: &mut HostPeer, task: JoinHandle<Result<(), SessionError>>) {
     send_control(host, Message::Shutdown).await;
     tokio::time::timeout(Duration::from_secs(1), task)
         .await
@@ -753,7 +782,7 @@ async fn completed_call_does_not_discard_a_partially_read_next_frame() {
     let payload_start = encoded.len() - next.payload.len();
     for split in [2, 6, 10, payload_start + 2] {
         tokio::time::timeout(Duration::from_secs(2), async {
-            // 单字节缓冲保证前缀已经进入读取 future，而不是仍滞留在传输队列。
+            // 单字节缓冲保证前缀已经进入读取 future，而不是仍滞留在传输队列
             let (mut host, task) = start_session_with_capacity(TestHandler::default(), 1).await;
             send_call(&mut host, 1, "slow", json!("first"), Vec::new()).await;
             host.writer.write_all(&encoded[..split]).await.unwrap();
@@ -931,6 +960,7 @@ async fn middleware_next_and_body_mapping_reuse_callback_and_credit_flow() {
             message: Message::Result {
                 id: next_id,
                 result: serde_json::to_value(MiddlewareNextResponse {
+                    metadata: None,
                     response: "response-1".into(),
                     protocol: "openai".into(),
                     status: 200,
@@ -1098,6 +1128,7 @@ async fn untouched_middleware_response_transfers_opaque_body_without_reading_it(
             message: Message::Result {
                 id: next_id,
                 result: serde_json::to_value(MiddlewareNextResponse {
+                    metadata: None,
                     response: "response-1".into(),
                     protocol: "openai".into(),
                     status: 200,
@@ -1570,8 +1601,14 @@ async fn quiesce_rejects_new_calls_and_shutdown_closes_the_session() {
 }
 
 #[tokio::test]
-async fn typed_budget_and_quota_calls_keep_payloads_and_do_not_retry_failures() {
+async fn typed_key_and_quota_calls_keep_payloads_and_do_not_retry_failures() {
     for (entry, method, request, response) in [
+        (
+            "key_facts",
+            "host.data.keys.get",
+            json!({"client_key_id":"key_1"}),
+            json!({"schema_version":1,"client_key_id":"key_1","enabled":false,"group_ids":["grp_1"]}),
+        ),
         (
             "get_budget",
             "host.keys.get_budget",
@@ -1627,6 +1664,10 @@ async fn typed_budget_and_quota_calls_keep_payloads_and_do_not_retry_failures() 
                 };
                 assert_eq!(error.code, ErrorCode::Conflict);
             } else {
+                let mut response_payload = response.clone();
+                if matches!(entry, "key_facts" | "refresh_quota") {
+                    response_payload["future_fact"] = json!({"value":1});
+                }
                 write_frame(
                     &mut host.writer,
                     &Frame {
@@ -1634,7 +1675,7 @@ async fn typed_budget_and_quota_calls_keep_payloads_and_do_not_retry_failures() 
                             id,
                             result: json!({}),
                         },
-                        payload: serde_json::to_vec(&response).unwrap(),
+                        payload: serde_json::to_vec(&response_payload).unwrap(),
                     },
                 )
                 .await
@@ -1647,4 +1688,73 @@ async fn typed_budget_and_quota_calls_keep_payloads_and_do_not_retry_failures() 
             shutdown(&mut host, task).await;
         }
     }
+}
+
+struct ResourceStream(Option<gateway_plugin_sdk::client::HostClient>);
+impl gateway_plugin_sdk::client::PullResponseStream for ResourceStream {
+    fn next(&mut self) -> gateway_plugin_sdk::client::PullResponseFuture<'_> {
+        Box::pin(async move {
+            let host = self.0.take()?;
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            Some(
+                host.call("host.log", json!({}), Vec::new())
+                    .await
+                    .map(|_| b"live".to_vec())
+                    .map_err(SessionError::into_plugin_fault),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn resource_stream_keeps_callbacks_and_credit_alive_after_the_initial_deadline() {
+    let (mut host, task) = start_session(TestHandler::default()).await;
+    let mut context = context(1, Duration::from_millis(500));
+    context.resource_stream = true;
+    write_frame(
+        &mut host.writer,
+        &Frame::control(Message::Call {
+            id: 1,
+            method: "resource_stream".into(),
+            context,
+            params: json!({}),
+        }),
+    )
+    .await
+    .unwrap();
+    send_control(
+        &mut host,
+        Message::Credit {
+            id: 1,
+            bytes: 16,
+            frames: 2,
+        },
+    )
+    .await;
+    assert!(matches!(
+        receive(&mut host).await.message,
+        Message::Result { id: 1, .. }
+    ));
+    let Message::Callback {
+        id, parent_id: 1, ..
+    } = receive(&mut host).await.message
+    else {
+        panic!("stream callback must survive initial timeout");
+    };
+    send_control(
+        &mut host,
+        Message::Result {
+            id,
+            result: json!({}),
+        },
+    )
+    .await;
+    assert!(
+        matches!(receive(&mut host).await, Frame { message: Message::Stream { id: 1, sequence: 0 }, payload } if payload == b"live")
+    );
+    assert!(matches!(
+        receive(&mut host).await.message,
+        Message::End { id: 1, error: None }
+    ));
+    shutdown(&mut host, task).await;
 }

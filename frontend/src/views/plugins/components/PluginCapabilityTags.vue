@@ -2,7 +2,7 @@
 import type { PluginArtifactMetadata } from '@/api'
 import { BasePopover, BaseTag } from '@codex-proxy/ui'
 import { computed, shallowRef, useId } from 'vue'
-import { pluginCapabilityLabel, pluginContributionEntries } from '../utils/model'
+import { pluginCapabilityLabel } from '../utils/model'
 
 const props = withDefaults(defineProps<{
   metadata: PluginArtifactMetadata
@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
 
 const open = shallowRef(false)
 const contentId = useId()
-const entries = computed(() => pluginContributionEntries(props.metadata))
+const entries = computed(() => Object.entries(props.metadata.contributes))
 const visible = computed(() => entries.value.slice(0, 2))
 const hidden = computed(() => entries.value.slice(2))
 </script>

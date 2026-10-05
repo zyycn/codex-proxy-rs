@@ -1,11 +1,9 @@
 import type { BaseTableSort } from '@codex-proxy/ui'
-import { watchDebounced } from '@vueuse/core'
+import type { Account } from '@/api'
 
 import { computed, onMounted, shallowRef, watch } from 'vue'
 import { getAccounts } from '@/api'
 import { usePagedQuery } from '@/composables/usePagedQuery'
-
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
 export function useAccountsQuery() {
   const searchQuery = shallowRef('')
@@ -63,7 +61,7 @@ export function useAccountsQuery() {
     void query.execute()
   }
 
-  async function replaceAccount(updated: AccountRow) {
+  async function replaceAccount(updated: Account) {
     // 先取消旧查询并应用接口返回的账号，避免旧响应覆盖最新行数据。
     query.invalidate()
     query.items.value = query.items.value.map(account => account.id === updated.id ? updated : account)
@@ -74,14 +72,13 @@ export function useAccountsQuery() {
     return query.items.value.some(account => account.id === updated.id)
   }
 
-  watchDebounced(
-    searchQuery,
-    () => {
+  watch(searchQuery, (_value, _previous, onCleanup) => {
+    const timer = setTimeout(() => {
       query.page.value = 1
       void query.execute()
-    },
-    { debounce: 250 },
-  )
+    }, 250)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   watch([providerQuery, statusQuery, groupQuery], () => {
     query.page.value = 1

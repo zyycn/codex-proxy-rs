@@ -1,3 +1,5 @@
+//! 验证运行设置的数据库约束、升级保留与快照发布
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -12,7 +14,6 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         request_profile_updates: BTreeMap::new(),
         request_location_enabled: false,
         request_location: Default::default(),
-        admin_api_key: None,
         refresh_margin_seconds,
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,
@@ -20,6 +21,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        openai_guardian_reserved_concurrency: 0,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         smart_scheduling: gateway_core::account::SmartSchedulingConfig::default(),
         rotation_strategy: "smart".to_owned(),
@@ -58,7 +60,7 @@ async fn smart_settings_upgrade_preserves_selection_and_publishes_custom_config(
     let Some(database) = TestDatabase::create_through("smart_config", 18).await else {
         return;
     };
-    // 升级前不能用包含新列的 Repository，直接写入旧版本已有字段。
+    // 升级前不能用包含新列的 Repository，直接写入旧版本已有字段
     sqlx::query("update runtime_settings set rotation_strategy = 'sticky', refresh_margin_seconds = 3600 where id = 1")
         .execute(&database.pool).await.unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
@@ -362,23 +364,26 @@ async fn concurrency_queue_settings_round_trip_into_the_runtime_snapshot() {
         (
             before.max_waiting_per_key,
             before.max_waiting_per_account,
-            before.concurrency_wait_timeout_seconds
+            before.concurrency_wait_timeout_seconds,
+            before.openai_guardian_reserved_concurrency,
         ),
-        (0, 0, 30)
+        (0, 0, 30, 0)
     );
     let mut update = settings_with_margin(3600);
     update.max_waiting_per_key = 5;
     update.max_waiting_per_account = 7;
     update.concurrency_wait_timeout_seconds = 12;
+    update.openai_guardian_reserved_concurrency = 1;
     repository.update_runtime_settings(update).await.unwrap();
     let settings = repository.load_runtime_settings().await.unwrap();
     assert_eq!(
         (
             settings.max_waiting_per_key,
             settings.max_waiting_per_account,
-            settings.concurrency_wait_timeout_seconds
+            settings.concurrency_wait_timeout_seconds,
+            settings.openai_guardian_reserved_concurrency,
         ),
-        (5, 7, 12)
+        (5, 7, 12, 1)
     );
     let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
         .load_runtime_snapshot()
@@ -388,9 +393,10 @@ async fn concurrency_queue_settings_round_trip_into_the_runtime_snapshot() {
         (
             snapshot.settings.max_waiting_per_key,
             snapshot.settings.max_waiting_per_account,
-            snapshot.settings.concurrency_wait_timeout_seconds
+            snapshot.settings.concurrency_wait_timeout_seconds,
+            snapshot.settings.openai_guardian_reserved_concurrency,
         ),
-        (5, 7, 12)
+        (5, 7, 12, 1)
     );
     assert!(snapshot.config_revision > before.config_revision);
     database.close().await;
@@ -440,7 +446,7 @@ async fn request_location_defaults_and_updates_reach_the_runtime_snapshot() {
         .unwrap();
     assert!(!disabled_snapshot.settings.request_location_enabled);
     assert_eq!(disabled_snapshot.settings.request_location, expected);
-    // 位置开关与自动冻结共用设置写入，切换位置不能覆盖冻结参数。
+    // 位置开关与自动冻结共用设置写入，切换位置不能覆盖冻结参数
     for saved in [&settings, &disabled_settings] {
         assert!(saved.account_auto_freeze_enabled);
         assert_eq!(saved.account_auto_freeze_threshold, 17);
@@ -800,5 +806,238 @@ async fn request_profile_projection_is_revision_consistent_and_includes_key_over
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ProviderStoreErrorKind::Conflict);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn control_plane_replacement_commits_one_writer_per_revision_and_preserves_newer_settings() {
+    use gateway_store::postgres::{
+        AdminAuditActorKind, AdminAuditEvent, ControlPlaneReplacement, ControlPlaneRepository,
+        PgControlPlaneRepository,
+    };
+    use gateway_store::{ConflictKind, StoreError};
+    let Some(database) = TestDatabase::create("settings_compare_replace").await else {
+        return;
+    };
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    let revision = repository
+        .load_control_plane()
+        .await
+        .unwrap()
+        .settings
+        .config_revision;
+    let replacement = |id: &str, margin| ControlPlaneReplacement {
+        expected_revision: revision,
+        settings: settings_with_margin(margin),
+        audit: AdminAuditEvent {
+            id: id.into(),
+            actor_kind: AdminAuditActorKind::System,
+            actor_admin_user_id: None,
+            actor_ref: "system".into(),
+            admin_request_id: Some(id.into()),
+            action: "settings.replace".into(),
+            entity_kind: "runtime_settings".into(),
+            entity_ref: "1".into(),
+            config_revision: None,
+            changed_fields: vec!["refresh_margin_seconds".into()],
+            created_at: Utc::now(),
+        },
+    };
+    let (first, second) = tokio::join!(
+        repository.replace_control_plane(replacement("first", 1800)),
+        repository.replace_control_plane(replacement("second", 7200)),
+    );
+    let (saved, conflict) = match (first, second) {
+        (Ok(saved), Err(error)) | (Err(error), Ok(saved)) => (saved.settings, error),
+        other => panic!("expected exactly one successful transaction: {other:?}"),
+    };
+    assert!(matches!(
+        conflict,
+        StoreError::Conflict {
+            kind: ConflictKind::StaleRevision,
+            ..
+        }
+    ));
+    let current = repository.load_control_plane().await.unwrap().settings;
+    assert_eq!(current.config_revision.get(), revision.get() + 1);
+    assert_eq!(current.refresh_margin_seconds, saved.refresh_margin_seconds);
+    let audit_count: i64 = sqlx::query_scalar(
+        "select count(*) from admin_audit_events where action = 'settings.replace'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+    // API Key 更新也推进相同版本，旧设置快照不能复活已经替换的 Key
+    let mut key_audit = replacement("key", 3600).audit;
+    key_audit.action = "settings.admin_key".into();
+    repository
+        .replace_admin_api_key(Some("new-test-key".into()), key_audit)
+        .await
+        .unwrap();
+    let mut stale = replacement("stale", 3600);
+    stale.expected_revision = saved.config_revision;
+    assert!(matches!(
+        repository.replace_control_plane(stale).await,
+        Err(StoreError::Conflict {
+            kind: ConflictKind::StaleRevision,
+            ..
+        })
+    ));
+    let mut fresh = replacement("fresh", 3600);
+    fresh.expected_revision = repository
+        .load_control_plane()
+        .await
+        .unwrap()
+        .settings
+        .config_revision;
+    repository.replace_control_plane(fresh).await.unwrap();
+    assert_eq!(
+        repository
+            .load_control_plane()
+            .await
+            .unwrap()
+            .settings
+            .admin_api_key
+            .as_deref(),
+        Some("new-test-key")
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn warmup_cursor_survives_restart_and_settings_updates_without_rewinding() {
+    use gateway_core::{provider_ports::ProviderRuntimePolicyPort, time::DeploymentTimeZone};
+    let Some(database) = TestDatabase::create("warmup_cursor").await else {
+        return;
+    };
+    let zone = DeploymentTimeZone::default();
+    let slot = zone
+        .local(Utc::now())
+        .date_naive()
+        .and_hms_opt(8, 0, 0)
+        .unwrap();
+    let first = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let second = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = first.load_runtime_settings().await.unwrap();
+    let (a, b) = tokio::join!(
+        first.claim_warmup_slot(zone, slot),
+        second.claim_warmup_slot(zone, slot)
+    );
+    assert_ne!(a.unwrap(), b.unwrap(), "the local minute is claimed once");
+    let after = first.load_runtime_settings().await.unwrap();
+    assert_eq!(after.config_revision, before.config_revision);
+    assert_eq!(after.updated_at, before.updated_at);
+    let restarted = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(!restarted.claim_warmup_slot(zone, slot).await.unwrap());
+    assert!(
+        restarted
+            .claim_warmup_slot(zone, slot + TimeDelta::hours(5))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !restarted.claim_warmup_slot(zone, slot).await.unwrap(),
+        "another slot cannot erase prior deduplication"
+    );
+    restarted
+        .update_runtime_settings(settings_with_margin(3600))
+        .await
+        .unwrap();
+    assert!(!restarted.claim_warmup_slot(zone, slot).await.unwrap());
+    assert!(
+        !restarted
+            .claim_warmup_slot(zone, slot - TimeDelta::hours(1))
+            .await
+            .unwrap(),
+        "clock rollback cannot replay an earlier time slot"
+    );
+    assert!(
+        restarted
+            .claim_warmup_slot(zone, slot + TimeDelta::days(1))
+            .await
+            .unwrap()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn runtime_scheduling_upgrade_preserves_settings_without_a_warmup_table() {
+    let Some(database) = TestDatabase::create_through("runtime_scheduling_upgrade", 20).await
+    else {
+        return;
+    };
+    sqlx::query(
+        "update runtime_settings set rotation_strategy = 'sticky',
+         account_warmup_enabled = true, account_warmup_schedule_time = '08:00,13:00',
+         account_warmup_model = 'test-model' where id = 1",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let warmup_table: Option<String> =
+        sqlx::query_scalar("select to_regclass('account_warmup_slots')::text")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(warmup_table.is_none());
+    let cursor: Option<DateTime<Utc>> =
+        sqlx::query_scalar("select account_warmup_cursor from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(cursor.is_none());
+    let settings = PgRuntimeSettingsRepository::new(database.pool.clone())
+        .load_runtime_settings()
+        .await
+        .unwrap();
+    assert_eq!(settings.rotation_strategy, "sticky");
+    assert!(settings.account_warmup_enabled);
+    assert_eq!(settings.account_warmup_schedule_time, "08:00,13:00");
+    assert_eq!(settings.account_warmup_model.as_deref(), Some("test-model"));
+    assert_eq!(settings.openai_guardian_reserved_concurrency, 0);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn warmup_cursor_resolves_dst_and_deduplicates_across_timezones() {
+    use gateway_core::{provider_ports::ProviderRuntimePolicyPort, time::DeploymentTimeZone};
+    let Some(database) = TestDatabase::create("warmup_cursor_dst").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let zone: DeploymentTimeZone = "America/New_York".parse().unwrap();
+    let slot = chrono::NaiveDate::from_ymd_opt(2026, 11, 1)
+        .unwrap()
+        .and_hms_opt(1, 30, 0)
+        .unwrap();
+    assert!(repository.claim_warmup_slot(zone, slot).await.unwrap());
+    let cursor: DateTime<Utc> =
+        sqlx::query_scalar("select account_warmup_cursor from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        cursor,
+        "2026-11-01T05:30:00Z".parse::<DateTime<Utc>>().unwrap()
+    );
+    assert!(!repository.claim_warmup_slot(zone, slot).await.unwrap());
+    // 回拨中的重复本地时刻取较早一次，不能误挡后一分的正常调度
+    let next = slot + TimeDelta::minutes(1);
+    assert!(repository.claim_warmup_slot(zone, next).await.unwrap());
+    let utc: DeploymentTimeZone = "UTC".parse().unwrap();
+    assert!(
+        !repository
+            .claim_warmup_slot(utc, zone.resolve_local(next).unwrap().naive_utc())
+            .await
+            .unwrap(),
+        "changing the deployment timezone cannot reclaim the same instant"
+    );
+    let missing = chrono::NaiveDate::from_ymd_opt(2026, 3, 8)
+        .unwrap()
+        .and_hms_opt(2, 30, 0)
+        .unwrap();
+    assert!(repository.claim_warmup_slot(zone, missing).await.is_err());
     database.close().await;
 }

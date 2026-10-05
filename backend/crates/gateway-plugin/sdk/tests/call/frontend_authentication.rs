@@ -1,3 +1,5 @@
+//! 验证插件认证合同限制身份选择并脱敏凭据和主体
+
 use gateway_plugin_sdk::call::frontend_authentication::{
     FrontendAuthenticationRequest, FrontendAuthenticationResult,
 };

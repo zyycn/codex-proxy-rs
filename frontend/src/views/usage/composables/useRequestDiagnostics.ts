@@ -3,8 +3,8 @@ import { shallowRef, watch } from 'vue'
 import { getUsageRecordDetail } from '@/api'
 import { errorMessage } from '@/utils/operation'
 
-/** Requests can be switched while a lookup is pending; stale results never replace the active trace. */
-export function useRequestDiagnostics(requestId: () => string) {
+// 切换请求或开始退场时取消旧查询，退场期间保留最后一次诊断画面。
+export function useRequestDiagnostics(requestId: () => string, isActive: () => boolean = () => true) {
   const selectedId = shallowRef(requestId())
   const revision = shallowRef(0)
   const detail = shallowRef<UsageRecordDetail | null>(null)
@@ -12,7 +12,9 @@ export function useRequestDiagnostics(requestId: () => string) {
   const error = shallowRef('')
 
   watch(requestId, id => selectedId.value = id)
-  watch([selectedId, revision], async ([id], _previous, onCleanup) => {
+  watch([selectedId, revision, isActive], async ([id, , enabled], _previous, onCleanup) => {
+    if (!enabled)
+      return
     let active = true
     const controller = new AbortController()
     onCleanup(() => {

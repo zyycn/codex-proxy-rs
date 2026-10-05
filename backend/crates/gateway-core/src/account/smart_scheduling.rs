@@ -1,4 +1,4 @@
-//! 智能调度参数；固定十分位保证快照可精确比较，浮点数只用于 wire 与评分。
+//! 智能调度参数；固定十分位保证快照可精确比较，浮点数只用于 wire 与评分
 
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ pub enum SmartSchedulingConfigError {
 }
 
 impl SmartSchedulingConfig {
-    /// 顺序为负载、剩余额度、健康、首输出延迟、额度重置和排队压力。
+    /// 顺序为负载、剩余额度、健康、首输出延迟、额度重置和排队压力
     pub fn new(
         weights: [f64; 6],
         prefer_higher_weight: bool,
@@ -73,8 +73,8 @@ impl SmartSchedulingConfig {
     }
 
     pub(crate) fn score_tolerance(self) -> f64 {
-        // 与系数同步缩放，避免仅放大相同比例的系数就改变近似最优候选集合。
-        // 排队系数只参与入队选择，不能放大立即选号的候选容差。
+        // 与系数同步缩放，避免仅放大相同比例的系数就改变近似最优候选集合
+        // 排队系数只参与入队选择，不能放大立即选号的候选容差
         0.05 * f64::from(
             self.weights[..5]
                 .iter()

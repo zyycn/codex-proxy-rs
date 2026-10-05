@@ -28,9 +28,14 @@ const confirmationError = computed(() => submitted.value && form.confirmation !=
   ? '两次输入的新密码不一致'
   : undefined)
 
-watch(open, () => {
+function clearForm() {
   Object.assign(form, { currentPassword: '', newPassword: '', confirmation: '' })
   submitted.value = false
+}
+
+watch(open, (value) => {
+  if (value)
+    clearForm()
 })
 
 async function submit() {
@@ -48,7 +53,7 @@ async function submit() {
 </script>
 
 <template>
-  <BaseModal v-model="open" title="修改管理员密码" description="验证当前密码后，设置新的登录密码" size="sm" :dismissible="!loading">
+  <BaseModal v-model="open" title="修改管理员密码" description="验证当前密码后，设置新的登录密码" size="sm" :dismissible="!loading" @after-leave="clearForm">
     <form :id="formId" class="grid gap-5" @submit.prevent="submit">
       <FormItem label="当前密码" required>
         <BaseInput v-model="form.currentPassword" type="password" autocomplete="current-password" placeholder="输入当前密码" :disabled="loading" maxlength="4096" />

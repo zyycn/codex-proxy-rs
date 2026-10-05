@@ -1,40 +1,56 @@
+//! 验证宿主兼容性声明与静态制品检查的协议版本约束
+
 use gateway_admin::{
     model::plugins::PluginHostCompatibility, ports::plugins::PluginPackageInspector as _,
 };
 use gateway_plugin_runtime::{PackageInspector, PackageLimits};
-use gateway_plugin_sdk::{Capability, Contributions, Permission, Stage};
+use gateway_plugin_sdk::{Capability, Contributions, Stage};
 use sha2::{Digest as _, Sha256};
 
 #[test]
-fn host_compatibility_covers_every_sdk_capability_and_permission() {
+fn host_compatibility_only_advertises_known_contracts() {
     let compatibility: PluginHostCompatibility =
         serde_json::from_str(include_str!("../../plugin-host-compatibility.json"))
             .expect("compatibility JSON");
     assert!(compatibility.is_valid());
 
-    for capability in all_capabilities() {
-        assert_exhaustive_capability(capability);
-        let identifier = identifier(capability);
-        assert!(
-            compatibility.supports_capability(&identifier, 1),
-            "missing capability {identifier}"
-        );
+    assert_eq!(
+        compatibility.manifest_schema_versions,
+        [gateway_plugin_sdk::MANIFEST_VERSION]
+    );
+    assert_eq!(
+        compatibility.protocol_versions,
+        [gateway_plugin_sdk::PROTOCOL_VERSION]
+    );
+    for entry in &compatibility.capabilities {
+        let capability: Capability = serde_json::from_value(entry.capability.clone().into())
+            .expect("host capability is understood by the SDK");
+        assert_eq!(entry.capability, capability.identifier());
+        for version in &entry.versions {
+            assert!(
+                capability.contract_versions().contains(version),
+                "unknown contract {} v{version}",
+                entry.capability
+            );
+        }
     }
-    for permission in Permission::ALL {
-        assert_exhaustive_permission(permission);
-        let identifier = identifier(permission);
-        assert!(
-            compatibility.supports_permission(&identifier),
-            "missing permission {identifier}"
-        );
-    }
+}
+
+#[test]
+fn host_compatibility_requires_the_trusted_middleware_contract() {
+    let compatibility: PluginHostCompatibility =
+        serde_json::from_str(include_str!("../../plugin-host-compatibility.json"))
+            .expect("compatibility JSON");
+    assert!(!compatibility.supports_capability("middleware", 1));
+    assert!(!compatibility.supports_capability("middleware", 2));
+    assert!(compatibility.supports_capability("middleware", 3));
+    assert!(!compatibility.supports_capability("openai", 1));
 }
 
 #[tokio::test]
 async fn package_inspector_returns_static_requirements_without_starting_the_plugin() {
     let archive = crate::support::package_with_contributions(
         b"not-an-executable",
-        vec![],
         Contributions::from([crate::support::contribution(
             Capability::Middleware,
             vec![Stage::Request],
@@ -58,63 +74,5 @@ async fn package_inspector_returns_static_requirements_without_starting_the_plug
         requirements.protocol_version,
         gateway_plugin_sdk::PROTOCOL_VERSION
     );
-    assert_eq!(requirements.capabilities, vec![("middleware".into(), 1)]);
-    assert!(requirements.permissions.is_empty());
-}
-
-fn identifier(value: impl serde::Serialize) -> String {
-    serde_json::to_value(value)
-        .expect("serialize identifier")
-        .as_str()
-        .expect("string identifier")
-        .to_owned()
-}
-
-fn assert_exhaustive_capability(capability: Capability) {
-    match capability {
-        Capability::FrontendAuthentication
-        | Capability::Scheduler
-        | Capability::ModelRouter
-        | Capability::ModelCatalog
-        | Capability::RetryPolicy
-        | Capability::Middleware
-        | Capability::RequestLifecycle
-        | Capability::WebSocketObserver
-        | Capability::Usage
-        | Capability::CommandLine
-        | Capability::Management
-        | Capability::Maintenance => {}
-    }
-}
-
-fn assert_exhaustive_permission(permission: Permission) {
-    match permission {
-        Permission::Network
-        | Permission::Requests
-        | Permission::Models
-        | Permission::Accounts
-        | Permission::Data
-        | Permission::PublicEndpoints
-        | Permission::Groups
-        | Permission::Keys
-        | Permission::KeyBudgets
-        | Permission::QuotaObservations => {}
-    }
-}
-
-fn all_capabilities() -> [Capability; 12] {
-    [
-        Capability::FrontendAuthentication,
-        Capability::Scheduler,
-        Capability::ModelRouter,
-        Capability::ModelCatalog,
-        Capability::RetryPolicy,
-        Capability::Middleware,
-        Capability::RequestLifecycle,
-        Capability::WebSocketObserver,
-        Capability::Usage,
-        Capability::CommandLine,
-        Capability::Management,
-        Capability::Maintenance,
-    ]
+    assert_eq!(requirements.capabilities, vec![("middleware".into(), 3)]);
 }

@@ -1,11 +1,11 @@
-//! `PgBackupRepository` 的真实 PostgreSQL 集成测试。
+//! `PgBackupRepository` 的真实 PostgreSQL 集成测试
 
 use chrono::Utc;
 use secrecy::SecretString;
 
 use gateway_admin::model::backup::{
-    BackupRecordSeed, BackupSettings, BackupStatus, BackupTriggerKind, UpdateBackupScheduleCommand,
-    UpdateBackupStorageCommand,
+    BackupRecordSeed, BackupSettings, BackupStatus, BackupStatusTransition, BackupTriggerKind,
+    UpdateBackupScheduleCommand, UpdateBackupStorageCommand,
 };
 use gateway_admin::model::{MutationActor, MutationContext};
 use gateway_admin::ports::backup::{BackupRepository, StatusTransitionUpdate};
@@ -36,6 +36,10 @@ fn context() -> MutationContext {
     }
 }
 
+fn transition(from: BackupStatus, to: BackupStatus) -> BackupStatusTransition {
+    BackupStatusTransition::try_new(from, to).expect("legal backup status transition")
+}
+
 fn storage_command(endpoint: &str) -> UpdateBackupStorageCommand {
     UpdateBackupStorageCommand {
         endpoint: endpoint.to_owned(),
@@ -62,12 +66,13 @@ async fn enable_verified_schedule(repository: &PgBackupRepository) -> BackupSett
             UpdateBackupScheduleCommand {
                 schedule_enabled: true,
                 cron_expression: "0 2 * * *".to_owned(),
-                schedule_timezone: "Asia/Shanghai".to_owned(),
+
                 retention_days: 7,
                 retention_count: 5,
             },
             Some(Utc::now() + chrono::Duration::hours(1)),
             &context(),
+            Default::default(),
         )
         .await
         .expect("enable schedule")
@@ -187,8 +192,7 @@ async fn backup_lifecycle_transitions_through_deleting_and_hard_delete() {
     let uploading = repository
         .transition_status(
             &record.id,
-            BackupStatus::Dumping,
-            BackupStatus::Uploading,
+            transition(BackupStatus::Dumping, BackupStatus::Uploading),
             update,
             Utc::now(),
         )
@@ -201,8 +205,7 @@ async fn backup_lifecycle_transitions_through_deleting_and_hard_delete() {
     let completed = repository
         .transition_status(
             &record.id,
-            BackupStatus::Uploading,
-            BackupStatus::Completed,
+            transition(BackupStatus::Uploading, BackupStatus::Completed),
             StatusTransitionUpdate::default(),
             Utc::now(),
         )
@@ -251,7 +254,7 @@ async fn active_task_unique_index_blocks_second_queued() {
         .expect_err("second queued must conflict");
     assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
 
-    // 第一个任务完成释放名额后，第二个可以插入。
+    // 第一个任务完成释放名额后，第二个可以插入
     let claimed = repository
         .claim_next_queued(Utc::now())
         .await
@@ -260,8 +263,7 @@ async fn active_task_unique_index_blocks_second_queued() {
     repository
         .transition_status(
             &claimed.id,
-            BackupStatus::Dumping,
-            BackupStatus::Failed,
+            transition(BackupStatus::Dumping, BackupStatus::Failed),
             StatusTransitionUpdate {
                 error_code: Some("backup.pg_dump_failed".to_owned()),
                 error_message: Some("boom".to_owned()),
@@ -287,25 +289,48 @@ async fn scheduled_insert_dedupes_by_logical_time() {
     };
     let repository = PgBackupRepository::new(db.pool.clone());
 
-    let at = Utc::now();
-    let first = repository
-        .insert_scheduled_record(seed(
-            &"a".repeat(32),
-            BackupTriggerKind::Scheduled,
-            Some(at),
-        ))
-        .await
-        .expect("first scheduled");
-    assert!(first);
-    let second = repository
-        .insert_scheduled_record(seed(
-            &"b".repeat(32),
-            BackupTriggerKind::Scheduled,
-            Some(at),
-        ))
-        .await
-        .expect("dedup conflict returns false");
-    assert!(!second);
+    let settings = enable_verified_schedule(&repository).await;
+    let at = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
+    let next = Some(at + chrono::Duration::days(1));
+    assert!(
+        repository
+            .insert_scheduled_record(
+                seed(&"a".repeat(32), BackupTriggerKind::Scheduled, Some(at)),
+                next,
+                "0 2 * * *",
+                "Asia/Shanghai",
+                settings.next_run_at,
+            )
+            .await
+            .expect("first scheduled")
+    );
+    let later = Some(at + chrono::Duration::days(2));
+    assert!(
+        !repository
+            .insert_scheduled_record(
+                seed(&"b".repeat(32), BackupTriggerKind::Scheduled, Some(at)),
+                later,
+                "0 2 * * *",
+                "Asia/Shanghai",
+                next,
+            )
+            .await
+            .expect("dedup conflict returns false")
+    );
+    assert_eq!(repository.load_settings().await.unwrap().next_run_at, later);
+    assert!(
+        !repository
+            .insert_scheduled_record(
+                seed(&"c".repeat(32), BackupTriggerKind::Scheduled, Some(at)),
+                next,
+                "0 2 * * *",
+                "Asia/Shanghai",
+                settings.next_run_at,
+            )
+            .await
+            .expect("stale cursor cannot write")
+    );
+    assert_eq!(repository.load_settings().await.unwrap().next_run_at, later);
 
     db.close().await;
 }
@@ -327,7 +352,7 @@ async fn storage_identity_is_locked_once_records_exist() {
         command.endpoint = "https://two.example.com".to_owned();
         command
     };
-    // 尚无记录时允许切换 endpoint。
+    // 尚无记录时允许切换 endpoint
     repository
         .update_storage_settings(changed_endpoint, &context())
         .await
@@ -344,7 +369,7 @@ async fn storage_identity_is_locked_once_records_exist() {
         .expect_err("endpoint change must be rejected with records");
     assert_eq!(locked.kind(), AdminStoreErrorKind::Conflict);
 
-    // 只轮换凭据与修改 prefix 仍然允许。
+    // 只轮换凭据与修改 prefix 仍然允许
     let rotation = {
         let mut command = storage_command("https://two.example.com");
         command.access_key_id = "new-ak".to_owned();
@@ -367,7 +392,7 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
     };
     let repository = PgBackupRepository::new(db.pool.clone());
 
-    // 启用计划前必须先配置存储并通过连接测试（DB 约束要求）。
+    // 启用计划前必须先配置存储并通过连接测试（DB 约束要求）
     repository
         .update_storage_settings(storage_command("https://one.example.com"), &context())
         .await
@@ -383,12 +408,13 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
             UpdateBackupScheduleCommand {
                 schedule_enabled: true,
                 cron_expression: "0 2 * * *".to_owned(),
-                schedule_timezone: "Asia/Shanghai".to_owned(),
+
                 retention_days: 7,
                 retention_count: 5,
             },
             Some(Utc::now() + chrono::Duration::hours(1)),
             &context(),
+            Default::default(),
         )
         .await
         .expect("enable schedule");
@@ -400,17 +426,82 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
             UpdateBackupScheduleCommand {
                 schedule_enabled: false,
                 cron_expression: "0 2 * * *".to_owned(),
-                schedule_timezone: "Asia/Shanghai".to_owned(),
+
                 retention_days: 7,
                 retention_count: 5,
             },
             None,
             &context(),
+            Default::default(),
         )
         .await
         .expect("disable schedule");
     assert!(!disabled.schedule_enabled);
     assert!(disabled.next_run_at.is_none());
 
+    db.close().await;
+}
+
+#[tokio::test]
+async fn scheduled_insert_rejects_changed_schedule_and_stale_timezone_rebase() {
+    let Some(db) = TestDatabase::create("backup_schedule_guard").await else {
+        return;
+    };
+    let repository = PgBackupRepository::new(db.pool.clone());
+    let old = enable_verified_schedule(&repository).await;
+    let next = Utc::now() + chrono::Duration::hours(2);
+    for (mutation, expected_cursor) in [
+        (
+            "update backup_settings set cron_expression = '0 3 * * *'",
+            old.next_run_at,
+        ),
+        (
+            "update backup_settings set schedule_timezone = 'UTC'",
+            old.next_run_at,
+        ),
+        (
+            "update backup_settings set schedule_enabled = false, next_run_at = null",
+            None,
+        ),
+    ] {
+        sqlx::query("update backup_settings set schedule_enabled = true, cron_expression = '0 2 * * *', schedule_timezone = 'Asia/Shanghai', next_run_at = $1")
+            .bind(old.next_run_at).execute(&db.pool).await.unwrap();
+        sqlx::query(mutation).execute(&db.pool).await.unwrap();
+        assert!(
+            !repository
+                .insert_scheduled_record(
+                    seed(
+                        &"d".repeat(32),
+                        BackupTriggerKind::Scheduled,
+                        Some(Utc::now())
+                    ),
+                    Some(next),
+                    "0 2 * * *",
+                    "Asia/Shanghai",
+                    old.next_run_at,
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            !repository
+                .advance_schedule_cursor(
+                    next,
+                    "0 2 * * *",
+                    Some("Asia/Shanghai"),
+                    old.next_run_at,
+                    "UTC"
+                )
+                .await
+                .unwrap()
+        );
+        let current = repository.load_settings().await.unwrap();
+        assert_eq!(current.next_run_at, expected_cursor);
+    }
+    let count: i64 = sqlx::query_scalar("select count(*) from backup_records")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "obsolete schedule never queues a task");
     db.close().await;
 }

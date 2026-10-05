@@ -1,3 +1,5 @@
+//! 账号领域测试入口，以及候选账号与调度输入构造辅助
+
 mod location;
 mod model_access;
 mod proxy;
@@ -13,12 +15,13 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value};
 
 use gateway_core::account::{
-    AccountAttemptFeedback, AccountCandidate, AccountConcurrencyLimit, AccountEligibilityPolicy,
-    AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals, AccountSchedulingBlocker,
-    AccountSelectionContext, AccountSelectionPolicy, AccountSelector, AccountStatus, AccountWeight,
-    CredentialCasUpdate, CredentialRevision, CredentialState, OpaqueProviderData,
-    PlaintextCredential, PreferredAccountSelection, ProviderAccount, ProviderAccountId,
-    ProviderAccountIdentity, ProviderAccountUpdate, QuotaEvidence, QuotaState, RotationStrategy,
+    AccountAttemptFeedback, AccountCandidate, AccountConcurrency, AccountConcurrencyLimit,
+    AccountEligibilityPolicy, AccountFeedbackStats, AccountQuotaSignals, AccountRuntimeSignals,
+    AccountSchedulingBlocker, AccountSelectionContext, AccountSelectionPolicy, AccountSelector,
+    AccountStatus, AccountWeight, CredentialCasUpdate, CredentialRevision, CredentialState,
+    OpaqueProviderData, PlaintextCredential, PreferredAccountSelection, ProviderAccount,
+    ProviderAccountId, ProviderAccountIdentity, ProviderAccountUpdate, QuotaEvidence, QuotaState,
+    RotationStrategy,
 };
 use gateway_core::routing::{
     ClientRoutingScope, FrozenAccountScope, ProviderKind, RuntimeAccount, RuntimeAccountDirectory,
@@ -109,6 +112,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         round_robin_cursor: 0,
         eligibility: AccountEligibilityPolicy::Enforce,
         account_scope: None,
+        reserved_concurrency: 0,
     }
 }
 
@@ -1092,4 +1096,43 @@ fn due_probe_freeze_blocks_scheduling_and_remains_visible_as_rate_limited() {
         .select(&candidates, &selection)
         .expect("available account");
     assert_eq!(selected.candidate().account.id().as_str(), "acct_ready");
+}
+
+#[test]
+fn reserved_concurrency_only_blocks_requests_that_cannot_use_the_reserved_slots() {
+    let candidates = [candidate_with_concurrency("acct_reserved", 4, 5)];
+    let mut normal = context(RotationStrategy::Smart);
+    normal.reserved_concurrency = 1;
+    assert_eq!(normal.concurrency_limit(&candidates[0].account).get(), 4);
+    assert!(AccountSelector.select(&candidates, &normal).is_none());
+    let capacity = AccountSelector
+        .capacity_snapshot(&candidates, &normal)
+        .unwrap();
+    assert_eq!((capacity.used_slots(), capacity.total_slots()), (4, 4));
+    // 预留造成的暂满仍是可等待的容量约束，不能被当成不可用账号
+    assert_eq!(
+        AccountSelector.wait_candidates(&candidates, &normal).len(),
+        1
+    );
+
+    let prioritized = context(RotationStrategy::Smart);
+    let capacity = AccountSelector
+        .capacity_snapshot(&candidates, &prioritized)
+        .unwrap();
+    assert_eq!((capacity.used_slots(), capacity.total_slots()), (4, 5));
+    let selected = AccountSelector
+        .select(&candidates, &prioritized)
+        .expect("reserved slot available");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_reserved");
+    let full = [candidate_with_concurrency("acct_reserved", 5, 5)];
+    assert!(AccountSelector.select(&full, &prioritized).is_none());
+
+    // 预留不能让普通请求失去全部名额，也不改变不限并发
+    let mut oversized = context(RotationStrategy::Smart);
+    oversized.reserved_concurrency = 10;
+    assert_eq!(oversized.concurrency_limit(&candidates[0].account).get(), 1);
+    assert_eq!(
+        AccountConcurrency::Unlimited.excluding_reserved(2),
+        AccountConcurrency::Unlimited
+    );
 }

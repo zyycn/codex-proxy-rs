@@ -1,8 +1,7 @@
-import type { Ref } from 'vue'
-import type { AccountModelAccess, ApiKeyConfiguration, getAccounts } from '@/api'
+import type { Account, AccountModelAccess, ApiKeyConfiguration } from '@/api'
 
 import { toast } from '@codex-proxy/ui'
-import { computed, ref, shallowRef, watch } from 'vue'
+import { ref, shallowRef, watch } from 'vue'
 import { getAccountDetail, updateAccount } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useRequestState } from '@/composables/useRequestState'
@@ -10,15 +9,13 @@ import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 import { apiKeyAccountError, emptyApiKeyAccountForm, isOpenAiApiKeyAccount, isOpenAiOAuthAccount, parseApiKeyConfiguration } from '../utils/upstreamApiKey'
 
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-
 export function useAccountEditor(options: {
-  accounts: Ref<AccountRow[]>
   reloadAccounts: () => Promise<unknown>
   reloadGroups: () => Promise<unknown>
 }) {
   const showEditModal = shallowRef(false)
-  const editingAccountId = shallowRef<string | null>(null)
+  // 保存后列表可能因筛选移除该账号，编辑窗口的退场仍需保留原账号内容。
+  const editingAccount = shallowRef<Account | null>(null)
   const notes = shallowRef('')
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
@@ -67,16 +64,9 @@ export function useAccountEditor(options: {
     }
   }
 
-  const editingAccount = computed(() => {
-    const accountId = editingAccountId.value
-    return accountId
-      ? options.accounts.value.find(account => account.id === accountId) ?? null
-      : null
-  })
-
-  function open(account: AccountRow) {
+  function open(account: Account) {
     configurationRequest.invalidate()
-    editingAccountId.value = account.id
+    editingAccount.value = account
     notes.value = account.notes ?? ''
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -96,7 +86,7 @@ export function useAccountEditor(options: {
   }
 
   async function save() {
-    const accountId = editingAccountId.value
+    const accountId = editingAccount.value?.id
     if (!accountId || saving.value)
       return
     const isApiKey = isOpenAiApiKeyAccount(editingAccount.value)
@@ -155,25 +145,16 @@ export function useAccountEditor(options: {
     })
   }
 
-  watch([showEditModal, saving], ([open, isSaving]) => {
-    if (open || isSaving)
-      return
+  watch(showEditModal, (open) => {
+    if (!open)
+      configurationRequest.invalidate({ resetLoading: false })
+  })
+
+  function clearCredentials() {
     configurationRequest.invalidate()
     apiKey.value = emptyApiKeyAccountForm()
-    oauthTransport.value = 'prefer_websocket'
-    savedOAuthTransport.value = 'prefer_websocket'
     savedConfiguration.value = undefined
-    configurationReady.value = false
-    editingAccountId.value = null
-    notes.value = ''
-    proxyMode.value = 'preserve'
-    proxyId.value = ''
-    schedulingEnabled.value = true
-    concurrencyLimit.value = ''
-    weight.value = '1'
-    modelAccess.value = undefined
-    selectedGroupIds.value = []
-  })
+  }
 
   return {
     apiKey,
@@ -193,5 +174,6 @@ export function useAccountEditor(options: {
     saving,
     open,
     save,
+    clearCredentials,
   }
 }

@@ -1,4 +1,4 @@
-//! 管理端选择的唯一解析入口；持久化配置与官方发布资料分别管理。
+//! 管理端选择的唯一解析入口；持久化配置与官方发布资料分别管理
 
 use chrono::{DateTime, Utc};
 use gateway_core::account::OpaqueProviderData;
@@ -14,7 +14,7 @@ pub enum ClientKind {
     Cli,
 }
 
-/// CLI 共用官方发布版本，但不同入口提供各自的客户端标识和 UA 后缀。
+/// CLI 共用官方发布版本，但不同入口提供各自的客户端标识和 UA 后缀
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CliEntry {
@@ -71,7 +71,7 @@ pub enum VersionMode {
     Fixed,
 }
 
-/// 空的可选字段表示使用对应预设参数；Key 覆盖始终是一份完整选择。
+/// 空的可选字段表示使用对应预设参数；Key 覆盖始终是一份完整选择
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientProfileSelection {
@@ -244,8 +244,8 @@ impl ClientProfileSelection {
             verified_at: release.verified_at.unwrap_or(DateTime::UNIX_EPOCH),
         };
         if let Some(entry) = self.cli_entry {
-            // 入口后缀使用同一次解析得到的 Core 版本，避免每日更新后头部与后缀混用。
-            // originator 可单独覆盖；入口名与官方 clientInfo.name 的语义保持一致。
+            // 入口后缀使用同一次解析得到的 Core 版本，避免每日更新后头部与后缀混用
+            // originator 可单独覆盖；入口名与官方 clientInfo.name 的语义保持一致
             profile.exact_user_agent = Some(format!(
                 "{} ({}; {})",
                 profile.user_agent(),
@@ -257,7 +257,7 @@ impl ClientProfileSelection {
     }
 }
 
-/// 一个具体客户端制品的配套版本；自定义值不携带核验时间。
+/// 一个具体客户端制品的配套版本；自定义值不携带核验时间
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientRelease {

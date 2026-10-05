@@ -1,3 +1,5 @@
+//! 插件命令行能力的会话、命令查找与帮助入口
+
 mod duration;
 mod execution;
 mod parameters;
@@ -25,7 +27,7 @@ pub(crate) struct PluginCommand {
     callbacks: Arc<PluginCallbacks>,
 }
 
-/// 命令列表与执行共同保活已准备集合；这里不维护另一份当前代次。
+/// 命令列表与执行共同保活已准备集合；这里不维护另一份当前代次
 pub struct PluginCommandSession {
     _reference: ExtensionSetReference,
     commands: Vec<Arc<PluginCommand>>,
@@ -34,7 +36,7 @@ pub struct PluginCommandSession {
     limits: RpcLimits,
 }
 
-/// 输出只交付显式 CLI 调用方，不作为诊断内容。
+/// 输出只交付显式 CLI 调用方，不作为诊断内容
 pub struct PluginCommandOutput {
     pub stdout: String,
     pub stderr: String,
@@ -72,8 +74,8 @@ impl PluginCommandSession {
         }
     }
 
-    /// CLI 专属终止入口；调用方不能将该集合同时发布给运行中的 HTTP 网关。
-    /// 包括未声明命令、但为候选校验而启动的进程，全部回收后才允许退出主 Runtime。
+    /// CLI 专属终止入口；调用方不能将该集合同时发布给运行中的 HTTP 网关
+    /// 包括未声明命令、但为候选校验而启动的进程，全部回收后才允许退出主 Runtime
     pub async fn shutdown(self) {
         for session in &self.sessions {
             session.quiesce();

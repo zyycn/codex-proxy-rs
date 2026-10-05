@@ -1,4 +1,4 @@
-//! Admin query service 使用的账号运行态组合 adapter。
+//! Admin query service 使用的账号运行态组合 adapter
 
 use std::collections::BTreeMap;
 
@@ -15,7 +15,7 @@ use super::{
     RedisCredentialCooldownRepository, RedisCredentialLeaseRepository,
 };
 
-/// 只组合可丢失 Redis 事实；不持有 PostgreSQL，也不执行状态投影。
+/// 只组合可丢失 Redis 事实；不持有 PostgreSQL，也不执行状态投影
 #[derive(Clone)]
 pub struct RedisAdminAccountRuntimeStore {
     cooldowns: RedisCredentialCooldownRepository,

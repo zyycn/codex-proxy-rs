@@ -1,3 +1,5 @@
+//! 将插件 RPC 流消息桥接为有界接收流，并归还消费信用
+
 use std::sync::Arc;
 
 use tokio::{
@@ -53,12 +55,12 @@ impl StreamIngress {
     }
 }
 
-/// 消费者读取后才补充窗口；终态走独立通道，不会排在满数据队列后等待。
+/// 消费者读取后才补充窗口；终态走独立通道，不会排在满数据队列后等待
 pub struct RpcStream {
     pub initial: RpcReply,
     pub(crate) chunks: mpsc::Receiver<Vec<u8>>,
     pub(crate) terminal: Option<oneshot::Receiver<Result<(), RpcError>>>,
-    pub(crate) deadline: Instant,
+    pub(crate) deadline: Option<Instant>,
     pub(crate) id: u64,
     pub(crate) shared: Arc<Shared>,
     pub(crate) _slot: OwnedSemaphorePermit,
@@ -70,7 +72,11 @@ impl RpcStream {
         if self.terminal.is_none() {
             return Ok(None);
         }
-        match tokio::time::timeout_at(self.deadline, self.chunks.recv()).await {
+        let result = match self.deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, self.chunks.recv()).await,
+            None => Ok(self.chunks.recv().await),
+        };
+        match result {
             Ok(Some(chunk)) => {
                 self.shared
                     .release_stream_credit(self.id, chunk.len() as u32)?;

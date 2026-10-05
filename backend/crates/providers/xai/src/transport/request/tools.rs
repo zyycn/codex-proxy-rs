@@ -1,4 +1,4 @@
-//! Codex/OpenAI 工具声明与历史调用到 Grok 工具合同的归一化。
+//! Codex/OpenAI 工具声明与历史调用到 Grok 工具合同的归一化
 
 use super::response::{ToolIdentity, ToolKind, retype_tool_item_id};
 use super::*;
@@ -184,7 +184,7 @@ impl ToolNormalizer {
             "x_search" | "collections_search" | "file_search" | "code_execution"
             | "code_interpreter" => Ok(vec![Value::Object(without_defer_loading(tool))]),
             // 对未获 xAI 接受的工具做静默过滤，并在过滤后同步收敛 tool_choice；
-            // 不要把客户端可选扩展升级成整单 400。
+            // 不要把客户端可选扩展升级成整单 400
             "" | "computer_use_preview" | "image_generation" => Ok(Vec::new()),
             _ => Ok(Vec::new()),
         }
@@ -308,7 +308,7 @@ impl ToolNormalizer {
         }
         let identity = ToolIdentity::new(ToolKind::Custom, namespace, name);
         let argument_field = "input";
-        // function 不支持 custom 的 grammar 字段，必须把约束连同原说明交给模型。
+        // function 不支持 custom 的 grammar 字段，必须把约束连同原说明交给模型
         let mut description = format!(
             "This function wraps a custom tool. The original instructions below describe the \
              decoded {argument_field} string.\n{}",
@@ -981,7 +981,7 @@ impl ToolNormalizer {
         };
         let content = self.normalize_message_content(item.get("content"), role)?;
         // 透明代理合法形态：只覆盖归一化字段并剥离 Grok 注入键，未知官方
-        // 字段原样保留。
+        // 字段原样保留
         let mut converted = item.clone();
         strip_grok_internal_keys(&mut converted);
         converted.insert("type".to_owned(), Value::String("message".to_owned()));

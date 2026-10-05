@@ -1,9 +1,30 @@
-//! 类型化业务方法目录；控制参数、敏感载荷、阶段与响应流在此固定。
+//! 类型化业务方法目录；控制参数、敏感载荷、阶段与响应流在此固定
 
 use crate::{
     Capability as C, Stage as S,
-    call::{catalog, frontend_authentication as frontend, host, management, observation, policy},
+    call::{
+        catalog, frontend_authentication as frontend, host, management, observation, policy,
+        upstream_adapter,
+    },
 };
+
+pub const UPSTREAM_ADAPTER_REGISTER: Method<Empty, upstream_adapter::UpstreamAdapterRegistration> =
+    Method::new(
+        upstream_adapter::REGISTER_METHOD,
+        &[C::UpstreamAdapter],
+        &[S::Registration],
+        decode_metadata_without_payload,
+        encode_payload,
+    );
+
+pub const UPSTREAM_ADAPTER_EXECUTE: Method<upstream_adapter::UpstreamAdapterRequest, Empty> =
+    Method::new(
+        upstream_adapter::EXECUTE_METHOD,
+        &[C::UpstreamAdapter],
+        &[S::Upstream],
+        super::typed::decode_upstream,
+        super::typed::encode_stream,
+    );
 
 use super::{
     Empty, Method,
@@ -86,16 +107,9 @@ pub const SCHEDULE_ACCOUNT: Method<
     decode_metadata_without_payload,
     encode_metadata,
 );
-pub const OBSERVE_REQUEST: Method<policy::ObserveRequest, Empty> = Method::new(
-    "policy.observe_request",
-    &[C::RequestLifecycle, C::Usage],
-    &[S::Observation],
-    decode_payload,
-    encode_metadata,
-);
-pub const OBSERVE_WEBSOCKET: Method<observation::ObserveWebSocketResponse, Empty> = Method::new(
-    "websocket.response_event",
-    &[C::WebSocketObserver],
+pub const OBSERVE: Method<observation::Event, Empty> = Method::new(
+    "observer.observe",
+    &[C::Observer],
     &[S::Observation],
     decode_metadata,
     encode_metadata,
@@ -127,7 +141,7 @@ pub const STATE_MIGRATE: Method<host::StateMigrationRequest, host::StateMigratio
         encode_payload,
     );
 
-/// 启用、恢复、配置变化及周期补偿共用的幂等入口；通知不代表逐条事件。
+/// 启用、恢复、配置变化及周期补偿共用的幂等入口；通知不代表逐条事件
 pub const RECONCILE: Method<Empty, Empty> = Method::new(
     "plugin.reconcile",
     &[C::Maintenance],

@@ -1,21 +1,21 @@
+//! 验证运行时快照发布、版本对账与并发更新行为
+
 use std::collections::BTreeMap;
 mod extensions;
-use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use futures::channel::{mpsc, oneshot};
 use futures::executor::block_on;
 use futures::future::BoxFuture;
 
-use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
+use gateway_core::account::ProviderAccountId;
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::policy::{ClientApiKeyId, PlaintextClientApiKey, RateLimits};
 use gateway_core::routing::snapshot::{
     RuntimeSnapshotCompiler, SnapshotAccountGroupFacts, SnapshotAccountGroupMemberFacts,
-    SnapshotClientPolicyFacts, SnapshotFacts, SnapshotProviderAccountFacts, SnapshotSettingsFacts,
-    SnapshotStoreError, SnapshotStorePort,
+    SnapshotClientPolicyFacts, SnapshotFacts, SnapshotProviderAccountFacts, SnapshotStoreError,
+    SnapshotStorePort,
 };
 use gateway_core::routing::{
     AccountGroupId, ConfigRevision, ModelCapabilities, ProviderCatalogGeneration,
@@ -26,6 +26,7 @@ use gateway_core::runtime::{
     RuntimeSnapshotHandle, RuntimeSnapshotPublisher, SnapshotControl, SnapshotRevisionStream,
     SnapshotSubscriptionError, SnapshotSubscriptionPort, runtime_revision_needs_refresh,
 };
+use gateway_core::settings::SettingsValues;
 use gateway_core::task::{
     ScheduledTask, WorkerContribution, WorkerCycleContext, WorkerKind, WorkerRunnable,
 };
@@ -254,7 +255,7 @@ fn committed_account_change_should_preempt_inflight_catalog_reconciliation() {
             Arc::new(TestSnapshotSubscriptions::default()),
         );
 
-        // 首次提交复用目录，随后对账停在慢 Provider 查询；下一次提交仍须及时撤权。
+        // 首次提交复用目录，随后对账停在慢 Provider 查询；下一次提交仍须及时撤权
         *store.facts.lock().expect("facts lock") = Ok(scoped_facts(10, true));
         *store.current_revision.lock().expect("revision lock") = Ok(revision(10));
         publisher.publish_committed(revision(10)).await;
@@ -383,7 +384,7 @@ fn overlapping_refreshes_should_not_restore_revoked_account_scope() {
         );
         let other_publisher = publisher.clone();
 
-        // 旧刷新已读完 revision 10 的完整事实，停在目录查询；不用 sleep 碰调度概率。
+        // 旧刷新已读完 revision 10 的完整事实，停在目录查询；不用 sleep 碰调度概率
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         assert_eq!(catalog.queries.load(Ordering::SeqCst), 1);
@@ -512,7 +513,7 @@ fn subscription_refresh_should_wait_for_inflight_compile_and_reload_authoritativ
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         *store.facts.lock().expect("facts lock") = Ok(scoped_facts(11, false));
-        // 通知只是提示，即使版本过期也要在取得发布权后重新读取 Store。
+        // 通知只是提示，即使版本过期也要在取得发布权后重新读取 Store
         notifications
             .unbounded_send(Ok(revision(3)))
             .expect("notify");
@@ -550,7 +551,7 @@ fn reconciliation_should_fail_closed_on_persisted_revision_rollback_and_recover(
         task.run_cycle(context.clone()).await.expect("recover");
         assert_eq!(handle.revision(), Some(revision(7)));
 
-        // 有效的持久回退也必须发布，不能用 revision 数值单调性掩盖竞争。
+        // 有效的持久回退也必须发布，不能用 revision 数值单调性掩盖竞争
         *store.facts.lock().expect("facts lock") = Ok(facts(6, 6));
         *store.current_revision.lock().expect("revision lock") = Ok(revision(6));
         task.run_cycle(context).await.expect("publish rollback");
@@ -739,7 +740,7 @@ fn scoped_facts(value: u64, allow_removed: bool) -> SnapshotFacts {
     SnapshotFacts::new(
         revision(value),
         revision(value),
-        SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None),
+        SettingsValues::new(3, 0, "smart", BTreeMap::new(), None, None),
         vec![SnapshotClientPolicyFacts::new(
             ClientApiKeyId::new("key_audit_synthetic").expect("key ID"),
             PlaintextClientApiKey::new("sk_audit_synthetic_not_a_real_key").expect("synthetic key"),
@@ -772,7 +773,7 @@ fn facts(config_revision: u64, observed_current_revision: u64) -> SnapshotFacts 
     SnapshotFacts::new(
         revision(config_revision),
         revision(observed_current_revision),
-        SnapshotSettingsFacts::new(
+        SettingsValues::new(
             3,
             50,
             "smart",
@@ -799,11 +800,7 @@ fn compiler(store: Arc<dyn SnapshotStorePort>) -> RuntimeSnapshotCompiler {
 fn empty_snapshot(value: u64) -> RuntimeSnapshot {
     RuntimeSnapshot::new(
         revision(value),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            NonZeroU32::new(1).expect("positive concurrency"),
-            Duration::ZERO,
-        ),
+        gateway_core::settings::SettingsValues::new(1, 0, "smart", Default::default(), None, None),
         Vec::new(),
         Vec::new(),
         Vec::new(),

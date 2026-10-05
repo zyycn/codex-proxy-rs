@@ -1,3 +1,5 @@
+//! 模型列表、详情与客户端原生目录接口的投影及访问校验测试
+
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -156,10 +158,10 @@ impl ExecutionService for ModelsExecution {
         }
     }
 
-    fn public_models(&self, _: &AuthenticatedClient) -> Vec<PublicModelId> {
+    fn public_models(&self, client: &AuthenticatedClient) -> Vec<PublicModelId> {
         ["model-a", "model-b"]
             .into_iter()
-            .map(|model| PublicModelId::new(model).expect("model"))
+            .map(|model| PublicModelId::new(client.snapshot().mapped_model(model)).expect("model"))
             .collect()
     }
 
@@ -194,6 +196,40 @@ fn authorized_request(path: &str) -> Request<Body> {
         .header(AUTHORIZATION, "Bearer sk_models_test")
         .body(Body::empty())
         .expect("build models request")
+}
+
+#[tokio::test]
+async fn request_settings_reach_query_terminal_without_mutating_authenticated_baseline() {
+    let mut execution = ModelsExecution::new();
+    Arc::get_mut(&mut execution).unwrap().middleware =
+        Some(Arc::new(crate::openai::middleware::RequestMiddleware {
+            settings: Some(|settings| {
+                let mut runtime = serde_json::to_value(&settings.runtime).unwrap();
+                runtime["model_mappings"] = serde_json::json!({"model-a":"plugin-model"});
+                runtime["concurrency_wait_timeout_seconds"] = serde_json::json!(30);
+                settings.runtime = serde_json::from_value(runtime).unwrap();
+                settings.disable_fast = true;
+            }),
+            ..Default::default()
+        }));
+    let app = api_router(execution.clone()).await;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(authorized_request("/v1/models"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["data"][0]["id"], "plugin-model");
+        assert_eq!(body["data"][1]["id"], "model-b");
+        assert_eq!(
+            execution.client.snapshot().mapped_model("model-a"),
+            "model-a"
+        );
+        assert!(!execution.client.policy().account_scope().disable_fast());
+    }
 }
 
 #[tokio::test]

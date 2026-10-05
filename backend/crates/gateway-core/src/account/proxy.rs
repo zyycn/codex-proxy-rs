@@ -1,4 +1,4 @@
-//! Explicit account egress. Credentials never appear in Debug or ordinary admin projections.
+//! 账号出站代理端点与认证值，诊断及普通管理投影不暴露凭据
 
 use std::fmt;
 use url::Url;

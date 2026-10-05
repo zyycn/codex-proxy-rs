@@ -1,0 +1,82 @@
+name: Rules Guard
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: rules-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 只查询 PR 元数据，禁止检出或执行贡献分支中的代码。
+      - name: Check protected files
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const params = { owner, repo, pull_number: pr.number };
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...params,
+              per_page: 100,
+            });
+            const isProtectedRule = path => typeof path === 'string'
+              && (path === 'AGENTS.md' || path.endsWith('/AGENTS.md')
+                || path === 'CONTRIBUTING.md'
+                || path === '.agents/skills' || path.startsWith('.agents/skills/')
+                || path === '.github' || path.startsWith('.github/'));
+
+            // 同时检查重命名前后的路径，避免通过移走规则文件绕过检查。
+            if (!files.some(file => isProtectedRule(file.filename) || isProtectedRule(file.previous_filename))) {
+              core.info('No protected contribution rule changes detected.');
+              return;
+            }
+
+            // 旧事件不处理后续提交，也不重复处理已关闭的 PR。
+            const { data: current } = await github.rest.pulls.get(params);
+            if (current.state !== 'open' || current.head.sha !== pr.head.sha) {
+              core.info('Pull request state has changed; skipping this event.');
+              return;
+            }
+
+            // 通知标记保持稳定，以便复用机器人已有评论，避免重复提醒
+            const marker = '<!-- agents-md-guard -->';
+            const body = [
+              marker,
+              '佬友，我看到这个 PR 涉及受保护的协作规则文件，按仓库约定需要先关闭',
+              '',
+              '保护范围包括根目录或子目录的 `AGENTS.md`、根目录的 `CONTRIBUTING.md`，以及 `.agents/skills/` 和 `.github/` 中的所有文件，涵盖新增、修改、删除和重命名',
+              '',
+              '麻烦先撤销这些变更，再重新打开 PR；如果希望调整协作规则，可以先提个 Issue 说明原因和建议，交由维护者处理，感谢理解',
+            ].join('\n');
+
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              const notification = comments.find(comment => comment.user?.login === 'github-actions[bot]'
+                && comment.body?.includes(marker));
+              if (!notification) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+              } else if (notification.body !== body) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: notification.id, body });
+              }
+            } catch (error) {
+              core.warning(`Unable to post policy explanation: ${error.message}`);
+            }
+
+            await github.rest.pulls.update({ ...params, state: 'closed' });
+            core.setFailed('Pull requests must not change protected contribution rules (AGENTS.md, CONTRIBUTING.md, .agents/skills/, .github/).');

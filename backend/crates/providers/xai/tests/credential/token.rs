@@ -1,3 +1,5 @@
+//! 验证 xAI 令牌错误分类与令牌、主体身份脱敏
+
 use provider_xai::{
     FailureClass, OAuthHttpResponse, OAuthOperation, OAuthPrincipal, parse_oauth_error,
     parse_refresh_success,

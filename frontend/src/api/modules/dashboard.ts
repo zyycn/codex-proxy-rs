@@ -86,6 +86,7 @@ export interface DashboardCards {
 }
 
 export interface DashboardHealthTimelinePoint {
+  bucketStart: string
   time: string
   status: DashboardHealthStatus
   reliabilityDisplay: string
@@ -123,9 +124,11 @@ export interface DashboardWireProfile {
   userAgent: string
   attributes: Array<{ label: string, value: string }>
   verifiedAt?: string
+  verifiedAtDisplay?: string
   release?: {
     status: 'unchecked' | 'aligned' | 'review_required' | 'check_failed'
     checkedAt?: string
+    checkedAtDisplay?: string
     latestVersion?: string
     latestBuild?: string
     error?: string
@@ -134,6 +137,7 @@ export interface DashboardWireProfile {
 
 export interface DashboardAccountRequestBucket {
   bucketStart: string
+  label: string
   requestCount: number
 }
 
@@ -171,6 +175,8 @@ export interface DashboardCapacityInfo {
 }
 
 export interface DashboardSummaryResponse {
+  asOf: string
+  asOfDisplay: string
   cards: DashboardCards
   trend: DashboardTrendResponse
   healthTimeline: DashboardHealthTimeline
@@ -183,6 +189,8 @@ export interface DashboardSummaryResponse {
 }
 
 interface DashboardQuery {
+  period: 'today'
+  asOf: number
   kind: string
 }
 

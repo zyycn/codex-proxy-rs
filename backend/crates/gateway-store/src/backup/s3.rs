@@ -1,8 +1,9 @@
-//! S3 兼容对象存储适配器（含 Cloudflare R2）。
+//! S3 兼容对象存储适配器（含 Cloudflare R2）
 //!
 //! 单个 `BackupObjectStorePort` 实现：方法接受已经校验的存储配置，内部按
-//! `storage_revision` 缓存 SDK client。上传采用分片流式读取，内存占用有界；
-//! 取消时主动 `AbortMultipartUpload`。
+//! `storage_revision` 缓存 SDK client
+//! 上传采用分片流式读取，内存占用有界；
+//! 取消时主动 `AbortMultipartUpload`
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -34,18 +35,18 @@ use gateway_admin::model::backup::{
 };
 use gateway_admin::ports::backup::{BackupObjectStorePort, UploadObjectRequest};
 
-/// 分片大小：16 MiB。
+/// 分片大小：16 MiB
 const PART_SIZE: usize = 16 * 1024 * 1024;
-/// 并发上传分片数；最大额外内存约为 `PART_SIZE * 并发数`。
+/// 并发上传分片数；最大额外内存约为 `PART_SIZE * 并发数`
 const CONCURRENCY: usize = 4;
-/// SDK 单次请求超时。
+/// SDK 单次请求超时
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// 探针对象的固定 metadata 值。
+/// 探针对象的固定 metadata 值
 const PROBE_METADATA_KEY: &str = "probe";
 const PROBE_METADATA_VALUE: &str = "backup-connection-test";
 
-/// S3 兼容对象存储适配器。
+/// S3 兼容对象存储适配器
 pub struct S3ObjectStoreAdapter {
     clients: Mutex<HashMap<u64, S3Client>>,
 }
@@ -57,7 +58,7 @@ impl Default for S3ObjectStoreAdapter {
 }
 
 impl S3ObjectStoreAdapter {
-    /// 创建适配器；client 按 `storage_revision` 惰性构建并缓存。
+    /// 创建适配器；client 按 `storage_revision` 惰性构建并缓存
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -352,7 +353,7 @@ impl BackupObjectStorePort for S3ObjectStoreAdapter {
     }
 }
 
-/// 并发分片上传 + CompleteMultipartUpload。
+/// 并发分片上传 + CompleteMultipartUpload
 async fn upload_parts(
     client: &S3Client,
     config: &BackupStorageConfig,
@@ -456,7 +457,7 @@ async fn upload_parts(
         .map_err(map_s3_error)
 }
 
-/// 从文件中读取指定长度的完整分片。
+/// 从文件中读取指定长度的完整分片
 async fn read_part(source: &Path, offset: u64, len: usize) -> Result<Vec<u8>, BackupError> {
     let mut file = tokio::fs::File::open(source)
         .await
@@ -465,7 +466,7 @@ async fn read_part(source: &Path, offset: u64, len: usize) -> Result<Vec<u8>, Ba
         .await
         .map_err(|_| BackupError::new(code::S3_UPLOAD_FAILED, "定位暂存归档失败".to_owned()))?;
     let mut buffer = vec![0_u8; len];
-    // Tokio 默认单次文件读取最多 2 MiB；分片必须读取完整，不能把短读当作末尾分片上传。
+    // Tokio 默认单次文件读取最多 2 MiB；分片必须读取完整，不能把短读当作末尾分片上传
     file.read_exact(&mut buffer)
         .await
         .map_err(|_| BackupError::new(code::S3_UPLOAD_FAILED, "读取暂存归档失败".to_owned()))?;
@@ -487,7 +488,7 @@ async fn best_effort_delete(
         .map_err(map_s3_error)
 }
 
-/// 探测失败结果。
+/// 探测失败结果
 fn failed(
     stage: ConnectionTestStage,
     error: &SdkError<impl std::fmt::Debug + ProvideErrorMetadata, HttpResponse>,
@@ -507,7 +508,7 @@ fn failed(
     result
 }
 
-/// 稳定错误码。
+/// 稳定错误码
 fn s3_error_code<E: ProvideErrorMetadata>(error: &SdkError<E, HttpResponse>) -> &'static str {
     match status_of(error) {
         Some(401) => code::S3_AUTH_FAILED,
@@ -520,7 +521,7 @@ fn s3_error_code<E: ProvideErrorMetadata>(error: &SdkError<E, HttpResponse>) -> 
 
 fn s3_error_message<E: ProvideErrorMetadata>(error: &SdkError<E, HttpResponse>) -> String {
     // 只取稳定的 S3 错误码（如 AccessDenied / NoSuchBucket / SignatureDoesNotMatch），
-    // 不拼入原始 message，避免泄露请求细节。
+    // 不拼入原始 message，避免泄露请求细节
     let detail = error.code().unwrap_or("unknown");
     match status_of(error) {
         Some(401) => format!("当前凭据认证失败（{detail}）"),
@@ -531,7 +532,7 @@ fn s3_error_message<E: ProvideErrorMetadata>(error: &SdkError<E, HttpResponse>) 
     }
 }
 
-/// 提取 HTTP 状态码；非 ServiceError 返回 `None`。
+/// 提取 HTTP 状态码；非 ServiceError 返回 `None`
 fn status_of<E>(error: &SdkError<E, HttpResponse>) -> Option<u16> {
     match error {
         SdkError::ServiceError(service) => Some(service.raw().status().as_u16()),
@@ -539,7 +540,7 @@ fn status_of<E>(error: &SdkError<E, HttpResponse>) -> Option<u16> {
     }
 }
 
-/// 对象不存在的判定（HeadObject 的 404）。
+/// 对象不存在的判定（HeadObject 的 404）
 fn is_not_found<E>(error: &SdkError<E, HttpResponse>) -> bool {
     status_of(error) == Some(404)
 }

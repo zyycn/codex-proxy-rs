@@ -1,4 +1,4 @@
-//! Grok 客户端经 OpenAI Responses 入口访问 Codex 上游时的隔离兼容规则。
+//! Grok 客户端经 OpenAI Responses 入口访问 Codex 上游时的隔离兼容规则
 
 use reqwest::header::HeaderName;
 use serde_json::{Map, Value};
@@ -48,12 +48,12 @@ fn has_client_marker(context: &Map<String, Value>) -> bool {
                 .filter(|entry| entry.len() == 2)
                 .filter_map(|entry| entry.first().and_then(Value::as_str))
                 .filter_map(|name| HeaderName::from_bytes(name.as_bytes()).ok())
-                // 未知的扩展头只做出站过滤，不据此修改请求正文。
+                // 未知的扩展头只做出站过滤，不据此修改请求正文
                 .any(|name| is_request_marker(name.as_str()))
         })
 }
 
-// 只删除已观察到的指令开场白，保留其余文字、空白与内容块边界。
+// 只删除已观察到的指令开场白，保留其余文字、空白与内容块边界
 fn normalize_instruction_identity(content: &mut Value) {
     let text = match content {
         Value::String(text) => Some(text),

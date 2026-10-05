@@ -1,4 +1,4 @@
-//! 持久化额度的有效期与短暂并发占用共同参与选号。
+//! 持久化额度的有效期与短暂并发占用共同参与选号
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
@@ -106,6 +106,7 @@ async fn old_weekly_quota_should_outweigh_one_in_flight_title_request() {
             round_robin_cursor: cursor,
             eligibility: AccountEligibilityPolicy::Enforce,
             account_scope: None,
+            reserved_concurrency: 0,
         };
         let selected = AccountSelector
             .select(&candidates, &context)

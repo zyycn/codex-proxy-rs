@@ -1,4 +1,4 @@
-//! 外置的 OIDC verifier 契约。
+//! 外置的 OIDC verifier 契约
 
 use std::time::Duration;
 
@@ -54,7 +54,7 @@ async fn proxy_jwks_cache_evicts_idle_exits_at_the_fixed_bound() {
             .await
             .unwrap();
     }
-    // 65 个出口各取一次，最近出口命中，最旧出口被淘汰后重新获取。
+    // 65 个出口各取一次，最近出口命中，最旧出口被淘汰后重新获取
     assert_eq!(exit.received_requests().await.unwrap().len(), capacity + 2);
     assert!(origin.received_requests().await.unwrap().is_empty());
 }
@@ -71,7 +71,7 @@ async fn proxy_jwks_cache_single_flights_and_isolates_each_exit() {
     let algorithms = vec!["ES256".to_owned()];
     let access = SecretValue::new("access-token");
     let verifier = verifier(&endpoint.origin, CACHE_TTL);
-    // 同一 kid 配不同密钥：复用别的出口缓存会直接使验签失败。
+    // 同一 kid 配不同密钥：复用别的出口缓存会直接使验签失败
     for (server, proxy, seed) in [
         (&exit_a, Some(&proxy_a), 31),
         (&exit_b, Some(&proxy_b), 32),
@@ -136,7 +136,7 @@ async fn proxy_jwks_rotation_and_expired_cache_remain_fail_closed() {
             .expect(1)
             .mount(&exit)
             .await;
-        // TTL 到期或未知 kid 均不能在获取失败后借用旧缓存。
+        // TTL 到期或未知 kid 均不能在获取失败后借用旧缓存
         let rejected_key = if ttl.is_zero() { &new } else { &old };
         let token = SecretValue::new(rejected_key.sign(&valid_claims(&nonce), Algorithm::ES256));
         assert!(matches!(

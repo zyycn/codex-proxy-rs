@@ -1,3 +1,5 @@
+//! 验证执行写入队列的容量、请求内顺序与排空行为
+
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -742,7 +744,7 @@ async fn zero_attempt_dropped_finalize_is_fail_open_and_recoverable_at_deadline(
     assert!(pending.attempts.is_empty());
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("recover without queue")
             .requests,
@@ -762,14 +764,14 @@ async fn zero_attempt_dropped_finalize_is_fail_open_and_recoverable_at_deadline(
     assert!(recovered.attempts.is_empty());
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("repeat recovery")
             .requests,
         0
     );
 
-    // 已关闭队列同样不把观测失败返回客户端，也不能覆盖已经恢复的终态。
+    // 已关闭队列同样不把观测失败返回客户端，也不能覆盖已经恢复的终态
     store
         .finalize_model_request(early_failure(&request))
         .await
@@ -798,7 +800,7 @@ async fn zero_attempt_dropped_create_does_not_make_finalize_an_upsert() {
         NonZeroUsize::new(8_192).expect("byte budget"),
     );
     let mut request = accepted_request("req_zero_attempt_create_dropped");
-    // 合成大 header 只触发 Create 字节预算；Finalize 不携带 user_agent，仍可入队。
+    // 合成大 header 只触发 Create 字节预算；Finalize 不携带 user_agent，仍可入队
     request.user_agent = Some("x".repeat(16_384));
     store
         .create_model_request(request.clone())
@@ -826,7 +828,7 @@ async fn zero_attempt_dropped_create_does_not_make_finalize_an_upsert() {
     assert_eq!(count, 0);
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("nothing to recover")
             .requests,
@@ -840,7 +842,7 @@ async fn zero_attempt_postgres_write_failures_are_not_retried_and_do_not_stop_th
     let Some(database) = TestDatabase::create("zero_attempt_write_failure").await else {
         return;
     };
-    // 只在随机测试 schema 注入语句失败；序列不随语句回滚，用于核对实际写入次数。
+    // 只在随机测试 schema 注入语句失败；序列不随语句回滚，用于核对实际写入次数
     sqlx::raw_sql(
         "create sequence zero_attempt_rejected_writes;
          create function reject_zero_attempt_observation() returns trigger language plpgsql as $$
@@ -919,7 +921,7 @@ async fn zero_attempt_postgres_write_failures_are_not_retried_and_do_not_stop_th
     );
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().unwrap())
             .await
             .expect("recover only inserted unfinished row")
             .requests,

@@ -1,4 +1,4 @@
-//! BackupTask 执行链测试：驱动内存 fake 端口跑完整 dump/upload/verify/retention 流程。
+//! BackupTask 执行链测试：驱动内存 fake 端口跑完整 dump/upload/verify/retention 流程
 
 use std::sync::Arc;
 
@@ -50,7 +50,7 @@ async fn backup_task_runs_full_dump_upload_verify_pipeline() {
         Some(sha256_hex(DUMP_CONTENT).as_str())
     );
 
-    // 对象已上传且内容与本地归档一致。
+    // 对象已上传且内容与本地归档一致
     let stored = object_store
         .object(&seed.object_key)
         .expect("uploaded object exists");
@@ -85,7 +85,7 @@ async fn backup_task_marks_failed_when_dump_port_fails() {
     assert_eq!(failed.status, BackupStatus::Failed);
     assert_eq!(failed.error_code.as_deref(), Some("backup.pg_dump_failed"));
     assert!(failed.completed_at.is_some());
-    // 归档未上传，对象不存在。
+    // 归档未上传，对象不存在
     assert!(object_store.object(&seed.object_key).is_none());
 }
 
@@ -167,7 +167,7 @@ async fn retention_cleans_expired_scheduled_backups() {
     let dump = Arc::new(FakeDumpPort::new());
     let object_store = Arc::new(FakeObjectStore::new());
 
-    // 造一条旧 completed 计划备份（超过 retention_days）与一条新备份。
+    // 造一条旧 completed 计划备份（超过 retention_days）与一条新备份
     let old_seed = BackupRecordSeed {
         id: backup_id("old"),
         trigger_kind: BackupTriggerKind::Scheduled,
@@ -183,19 +183,19 @@ async fn retention_cleans_expired_scheduled_backups() {
         expires_at: None,
     };
     repository
-        .insert_scheduled_record(old_seed.clone())
+        .insert_backup_record(old_seed.clone())
         .await
         .expect("insert old");
-    // 旧备份 40 天前完成（释放活跃名额），再插入新备份。
+    // 旧备份 40 天前完成（释放活跃名额），再插入新备份
     let now = Utc::now();
     repository.set_completed(&backup_id("old"), now - Duration::days(40));
     repository
-        .insert_scheduled_record(new_seed.clone())
+        .insert_backup_record(new_seed.clone())
         .await
         .expect("insert new");
-    // 新备份 1 天前完成。
+    // 新备份 1 天前完成
     repository.set_completed(&backup_id("new"), now - Duration::days(1));
-    // 两个对象都已上传。
+    // 两个对象都已上传
     object_store
         .objects
         .lock()
@@ -207,18 +207,19 @@ async fn retention_cleans_expired_scheduled_backups() {
         .expect("objects")
         .insert(new_seed.object_key.clone(), DUMP_CONTENT.to_vec());
 
-    // 设置 retention_days = 30。
+    // 设置 retention_days = 30
     repository
         .update_schedule_settings(
             UpdateBackupScheduleCommand {
                 schedule_enabled: false,
                 cron_expression: "0 2 * * *".to_owned(),
-                schedule_timezone: "Asia/Shanghai".to_owned(),
+
                 retention_days: 30,
                 retention_count: 0,
             },
             None,
             &system_context(),
+            Default::default(),
         )
         .await
         .expect("set retention");
@@ -228,10 +229,33 @@ async fn retention_cleans_expired_scheduled_backups() {
         .await
         .expect("run cycle");
 
-    // 旧备份被硬删除，对象被删除；新备份保留。
+    // 旧备份被硬删除，对象被删除；新备份保留
     let records = repository.all_records();
     let ids: Vec<_> = records.iter().map(|record| record.id.as_str()).collect();
     assert_eq!(ids, vec![backup_id("new").as_str()]);
     assert!(object_store.object(&old_seed.object_key).is_none());
     assert!(object_store.object(&new_seed.object_key).is_some());
+}
+
+#[tokio::test]
+async fn timezone_change_rebases_future_cursor_without_running_old_due_backup() {
+    let mut settings = configured_settings();
+    settings.schedule_enabled = true;
+    settings.cron_expression = Some("0 2 * * *".to_owned());
+    settings.schedule_timezone = Some("Asia/Shanghai".to_owned());
+    settings.next_run_at = Some(Utc::now() - Duration::days(1));
+    let repository = Arc::new(FakeBackupRepository::new(settings));
+    let task = BackupTask::new(
+        repository.clone(),
+        Arc::new(FakeDumpPort::new()),
+        Arc::new(FakeObjectStore::new()),
+    )
+    .with_timezone("UTC".parse().unwrap());
+    task.run_cycle(&CancellationToken::new()).await.unwrap();
+    let settings = repository.load_settings().await.unwrap();
+    assert_eq!(settings.schedule_timezone.as_deref(), Some("UTC"));
+    assert!(settings.next_run_at.unwrap() > Utc::now());
+    assert!(repository.all_records().is_empty());
+    task.run_cycle(&CancellationToken::new()).await.unwrap();
+    assert!(repository.all_records().is_empty());
 }

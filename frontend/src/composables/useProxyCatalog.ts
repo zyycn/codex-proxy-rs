@@ -1,26 +1,34 @@
 import type { OutboundProxyRecord } from '@/api'
 import { onMounted, shallowRef } from 'vue'
 import { getProxies } from '@/api'
+import { useRequestState } from './useRequestState'
 
 export function useProxyCatalog() {
   const proxies = shallowRef<OutboundProxyRecord[]>([])
-  const loading = shallowRef(false)
+  const request = useRequestState()
+  const { loading } = request
 
   async function loadProxies() {
     if (loading.value)
       return
-    loading.value = true
+    const requestId = request.start()
+    const requestOptions = { signal: request.signal }
     try {
-      const first = await getProxies({ page: 1, pageSize: 200 })
+      const first = await getProxies({ page: 1, pageSize: 200 }, requestOptions)
+      if (!request.isCurrent(requestId))
+        return
       const items = [...first.items]
       for (let page = 2; page <= first.page.totalPages; page += 1) {
-        items.push(...(await getProxies({ page, pageSize: 200 })).items)
+        const result = await getProxies({ page, pageSize: first.page.pageSize }, requestOptions)
+        if (!request.isCurrent(requestId))
+          return
+        items.push(...result.items)
       }
       proxies.value = items
     }
     catch {}
     finally {
-      loading.value = false
+      request.finish(requestId)
     }
   }
 

@@ -1,4 +1,4 @@
-//! xAI 上游失败分类、账号反馈与恢复决策。
+//! xAI 上游失败分类、账号反馈与恢复决策
 
 use super::*;
 use gateway_core::error::ProviderDiagnostic;
@@ -341,7 +341,7 @@ pub(super) fn preflight_context(context: &AttemptContext) -> Result<(), Provider
             UpstreamSendState::NotSent,
         ));
     }
-    if remaining(context.deadline()).is_none() {
+    if context.deadline().is_elapsed() {
         return Err(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::NotSent,
@@ -357,7 +357,7 @@ pub(super) fn ensure_sent_context(context: &AttemptContext) -> Result<(), Provid
             UpstreamSendState::Sent,
         ));
     }
-    if remaining(context.deadline()).is_none() {
+    if context.deadline().is_elapsed() {
         return Err(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::Sent,
@@ -384,7 +384,7 @@ pub(super) fn map_request_error(error: GrokRequestEncodeError) -> ProviderError 
     ))
 }
 
-/// 将选择阶段失败映射为带结构化 code 与 retry_after 的 Provider 错误。
+/// 将选择阶段失败映射为带结构化 code 与 retry_after 的 Provider 错误
 pub(super) fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
     let (retry_after, message, code) = match error {
         GrokSessionSelectorError::QueueRejected(error) => {
@@ -570,11 +570,4 @@ pub(super) fn provider_error(
     send_state: UpstreamSendState,
 ) -> ProviderError {
     ProviderError::new(kind, send_state)
-}
-
-pub(super) fn remaining(deadline: SystemTime) -> Option<Duration> {
-    deadline
-        .duration_since(SystemTime::now())
-        .ok()
-        .filter(|remaining| !remaining.is_zero())
 }

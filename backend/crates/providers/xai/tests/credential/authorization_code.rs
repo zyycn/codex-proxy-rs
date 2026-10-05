@@ -1,3 +1,5 @@
+//! 验证 xAI 授权回调输入、状态恢复与敏感字段脱敏
+
 use provider_xai::{
     AuthorizationCallback, CallbackRejection, DiscoveryDocument, GrokOAuthConfig,
     PendingAuthorization, RedirectUriAllowlist,

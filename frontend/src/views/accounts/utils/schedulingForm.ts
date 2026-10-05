@@ -1,4 +1,4 @@
-export interface AccountSchedulingValues {
+interface AccountSchedulingValues {
   concurrencyLimit: number | null
   weight: number
 }

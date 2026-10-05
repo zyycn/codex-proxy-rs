@@ -1,6 +1,6 @@
-//! 下游 Client API Key 的准入策略。
+//! 下游 Client API Key 的准入策略
 //!
-//! Client API Key 冻结账号分组权限；模型名称不参与权限判断。
+//! Client API Key 冻结账号分组权限；模型名称不参与权限判断
 
 mod client_version;
 
@@ -8,22 +8,24 @@ pub use client_version::{
     ClientVersionRejection, CodexClientKind, CodexClientMinVersions, CodexClientVersion,
 };
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::account::scope::FrozenAccountScope;
+use crate::account::{OpaqueProviderData, scope::FrozenAccountScope};
+use crate::identity::ProviderKind;
 use crate::validation::{IdentifierError, PolicyError, validate_text};
 
-/// `client_api_keys.id` 的核心值对象。
+/// `client_api_keys.id` 的核心值对象
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClientApiKeyId(String);
 
 impl ClientApiKeyId {
-    /// 校验并创建 Key ID。
+    /// 校验并创建 Key ID
     ///
     /// # Errors
     ///
-    /// ID 为空、过长或包含控制字符时返回错误。
+    /// ID 为空、过长或包含控制字符时返回错误
     pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
         validate_text(&value, 128, false, None)?;
@@ -42,29 +44,29 @@ impl fmt::Display for ClientApiKeyId {
     }
 }
 
-/// RuntimeSnapshot 中用于同步认证的明文 Client API Key。
+/// RuntimeSnapshot 中用于同步认证的明文 Client API Key
 ///
-/// 数据库按产品约束明文保存；该值对象只负责阻止 `Debug`/日志意外输出。
+/// 数据库按产品约束明文保存；该值对象只负责阻止 `Debug`/日志意外输出
 #[derive(Clone, PartialEq, Eq)]
 pub struct PlaintextClientApiKey(String);
 
 impl PlaintextClientApiKey {
-    /// 校验并创建明文 Key。
+    /// 校验并创建明文 Key
     ///
     /// # Errors
     ///
-    /// Key 为空或无法作为 HTTP Bearer 值发送时返回错误。
+    /// Key 为空或无法作为 HTTP Bearer 值发送时返回错误
     pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
         Self::validate(&value)?;
         Ok(Self(value))
     }
 
-    /// 迁入的 Key 不限定前缀或长度；保持原值，仅校验 HTTP 可传输的非空可见 ASCII。
+    /// 迁入的 Key 不限定前缀或长度；保持原值，仅校验 HTTP 可传输的非空可见 ASCII
     ///
     /// # Errors
     ///
-    /// Key 为空或包含空白、控制字符、非 ASCII 字符时返回错误。
+    /// Key 为空或包含空白、控制字符、非 ASCII 字符时返回错误
     pub fn validate(value: &str) -> Result<(), IdentifierError> {
         if value.is_empty() {
             return Err(IdentifierError::Empty);
@@ -75,7 +77,7 @@ impl PlaintextClientApiKey {
         Ok(())
     }
 
-    /// 仅借给同步认证器做常量时间比较。
+    /// 仅借给同步认证器做常量时间比较
     #[must_use]
     pub fn expose_for_auth(&self) -> &str {
         &self.0
@@ -88,8 +90,9 @@ impl fmt::Debug for PlaintextClientApiKey {
     }
 }
 
-/// 零表示对应维度不额外限制。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// 零表示对应维度不额外限制
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimits {
     pub max_concurrency: u64,
     pub requests_per_minute: u64,
@@ -105,9 +108,18 @@ impl RateLimits {
     }
 }
 
-/// 从 `client_api_keys` 冻结的公开准入事实。
+/// Key 自身的设置默认值；请求派生策略保留本值，不能把宿主默认或插件覆盖写回
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientSettings {
+    pub request_profiles: BTreeMap<ProviderKind, OpaqueProviderData>,
+    pub disable_fast: bool,
+    pub limits: RateLimits,
+}
+
+/// 从 `client_api_keys` 冻结的公开准入事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientPolicy {
+    defaults: Arc<ClientSettings>,
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
     account_scope: Arc<FrozenAccountScope>,
@@ -117,7 +129,33 @@ pub struct ClientPolicy {
 
 impl ClientPolicy {
     #[must_use]
-    pub const fn new(
+    pub fn defaults(&self) -> &Arc<ClientSettings> {
+        &self.defaults
+    }
+
+    pub(crate) fn with_settings(
+        mut self,
+        profiles: &BTreeMap<ProviderKind, OpaqueProviderData>,
+        disable_fast: bool,
+        limits: RateLimits,
+    ) -> Self {
+        if self.account_scope.request_profiles() != profiles
+            || self.account_scope.disable_fast() != disable_fast
+        {
+            self.account_scope = Arc::new(
+                self.account_scope
+                    .as_ref()
+                    .clone()
+                    .with_request_profiles(profiles.clone())
+                    .with_disable_fast(disable_fast),
+            );
+        }
+        self.limits = limits;
+        self
+    }
+
+    #[must_use]
+    pub fn new(
         key_id: ClientApiKeyId,
         plaintext_key: PlaintextClientApiKey,
         account_scope: Arc<FrozenAccountScope>,
@@ -125,6 +163,11 @@ impl ClientPolicy {
         limits: RateLimits,
     ) -> Self {
         Self {
+            defaults: Arc::new(ClientSettings {
+                request_profiles: account_scope.request_profiles().clone(),
+                disable_fast: account_scope.disable_fast(),
+                limits,
+            }),
             key_id,
             plaintext_key,
             account_scope,
@@ -158,11 +201,11 @@ impl ClientPolicy {
         self.limits
     }
 
-    /// 禁用的 Key 不接受新请求。
+    /// 禁用的 Key 不接受新请求
     ///
     /// # Errors
     ///
-    /// Key 已禁用时返回稳定拒绝原因。
+    /// Key 已禁用时返回稳定拒绝原因
     pub fn authorize(&self) -> Result<(), PolicyError> {
         if self.enabled {
             Ok(())

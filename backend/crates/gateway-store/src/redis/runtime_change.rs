@@ -1,4 +1,4 @@
-//! PostgreSQL revision 提交后的可丢失 Redis Pub/Sub 通知。
+//! PostgreSQL revision 提交后的可丢失 Redis Pub/Sub 通知
 
 use std::pin::Pin;
 

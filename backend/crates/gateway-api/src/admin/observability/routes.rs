@@ -1,4 +1,4 @@
-//! 固定 `/api/admin` 观测路由与 handler。
+//! 固定 `/api/admin` 观测路由与 handler
 
 use crate::auth::SessionState;
 
@@ -39,10 +39,17 @@ pub(crate) async fn dashboard_summary<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let kind = query.trend_kind().map_err(map_wire_error)?;
-    // 概览默认按中国时区当日统计，与单独趋势接口保持同一口径。
-    let range = dashboard_today_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    // 概览与独立趋势使用同一部署日界
+    let range = dashboard_today_range(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        query.period.as_deref(),
+        query.as_of,
+        state.admin_services().timezone(),
+    )
+    .map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
@@ -51,7 +58,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(dashboard_view(result, kind)),
+        AdminEnvelope::ok(dashboard_view(result, kind, time)),
     ))
 }
 
@@ -63,9 +70,16 @@ pub(crate) async fn dashboard_trend<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let kind = query.trend_kind().map_err(map_wire_error)?;
-    let range = dashboard_today_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    let range = dashboard_today_range(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        query.period.as_deref(),
+        query.as_of,
+        state.admin_services().timezone(),
+    )
+    .map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
@@ -74,7 +88,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(trend_view(result, kind)),
+        AdminEnvelope::ok(trend_view(result, kind, time)),
     ))
 }
 
@@ -86,14 +100,16 @@ pub(crate) async fn usage_records<S>(
 where
     S: SessionState + Send + Sync,
 {
-    let command = usage_command(&query).map_err(map_wire_error)?;
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
+    let command =
+        usage_command(&query, state.admin_services().timezone()).map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
         .usage_records(command)
         .await
         .map_err(map_service_error)?;
-    let data = usage_page_view(result);
+    let data = usage_page_view(result, time);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -105,6 +121,7 @@ pub(crate) async fn usage_record_detail<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     query.validate().map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -114,7 +131,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(usage_detail_view(result)),
+        AdminEnvelope::ok(usage_detail_view(result, time)),
     ))
 }
 
@@ -126,8 +143,14 @@ pub(crate) async fn usage_records_summary<S>(
 where
     S: SessionState + Send + Sync,
 {
-    let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    let range = usage_range(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        query.period.as_deref(),
+        query.as_of,
+        state.admin_services().timezone(),
+    )
+    .map_err(map_wire_error)?;
     let filter = usage_filter(&query).map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -149,8 +172,15 @@ pub(crate) async fn usage_insights_overview<S>(
 where
     S: SessionState + Send + Sync,
 {
-    let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
+    let range = usage_range(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        query.period.as_deref(),
+        query.as_of,
+        state.admin_services().timezone(),
+    )
+    .map_err(map_wire_error)?;
     let filter = usage_filter(&query).map_err(map_wire_error)?;
     let result = state
         .admin_services()
@@ -160,7 +190,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(usage_insights_view(result)),
+        AdminEnvelope::ok(usage_insights_view(result, time)),
     ))
 }
 
@@ -173,8 +203,14 @@ where
     S: SessionState + Send + Sync,
 {
     let dimension = query.dimension().map_err(map_wire_error)?;
-    let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    let range = usage_range(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        query.period.as_deref(),
+        query.as_of,
+        state.admin_services().timezone(),
+    )
+    .map_err(map_wire_error)?;
     let filter = domain::UsageFilter {
         provider_kind: non_empty(query.provider),
         model: non_empty(query.model),
@@ -202,13 +238,14 @@ pub(crate) async fn ops_errors<S>(
 where
     S: SessionState + Send + Sync,
 {
-    let command = ops_command(&query).map_err(map_wire_error)?;
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
+    let command = ops_command(&query, state.admin_services().timezone()).map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
         .ops_errors(command)
         .await
         .map_err(map_service_error)?;
-    let data = ops_page_view(result);
+    let data = ops_page_view(result, time);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

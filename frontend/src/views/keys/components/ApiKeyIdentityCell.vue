@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import type { getApiKeys } from '@/api'
-
-type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
+import type { ApiKey } from '@/api'
 
 defineProps<{
-  apiKey: ApiKeyRow
+  apiKey: ApiKey
 }>()
 </script>
 

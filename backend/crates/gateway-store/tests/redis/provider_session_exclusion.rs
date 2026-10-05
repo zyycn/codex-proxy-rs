@@ -1,3 +1,5 @@
+//! 验证会话账号排除的有效期与按已观测状态清理
+
 use std::time::Duration;
 
 use gateway_core::account::ProviderAccountId;

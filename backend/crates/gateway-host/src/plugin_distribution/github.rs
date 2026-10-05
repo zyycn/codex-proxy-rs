@@ -1,3 +1,5 @@
+//! GitHub 插件发行查询、缓存与制品下载地址及摘要解析
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -92,9 +94,9 @@ impl HttpPluginDistribution {
                 .clone()
         };
         tokio::time::timeout(Duration::from_secs(60), async {
-            // 同一来源共用锁和结果；取消请求释放锁，下一位查询者可重新发起。
+            // 同一来源共用锁和结果；取消请求释放锁，下一位查询者可重新发起
             let mut cached = slot.lock().await;
-            // 显式查询刷新成功结果；等待同一次请求的调用者仍共享结果，失败保留短缓存限流。
+            // 显式查询刷新成功结果；等待同一次请求的调用者仍共享结果，失败保留短缓存限流
             if let Some(entry) = cached.as_ref().filter(|entry| {
                 entry.until > Instant::now()
                     && (!refresh || entry.fetched_at >= requested_at || entry.result.is_err())

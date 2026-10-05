@@ -1,3 +1,5 @@
+//! 验证插件归档摘要、资源清单、解压限制与图标绑定
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -59,7 +61,7 @@ fn package_with_icon(path: &str, content_type: &str, icon: Vec<u8>) -> std::sync
     ]);
     let resources = BTreeMap::from([(path.to_owned(), content_type.to_owned())]);
     let manifest = serde_json::json!({
-        "manifestVersion": 1,
+        "manifestVersion":2,
         "name": "icon",
         "displayName": "Icon",
         "publisher": "test",
@@ -73,7 +75,7 @@ fn package_with_icon(path: &str, content_type: &str, icon: Vec<u8>) -> std::sync
         "resources": resources,
         "icon": path,
         "package": {
-            "protocolVersion": 1,
+            "protocolVersion":2,
             "target": {
                 "os": std::env::consts::OS,
                 "architecture": std::env::consts::ARCH
@@ -278,7 +280,7 @@ fn icon_content_must_fully_decode_match_its_type_and_fit_dimensions() {
 #[test]
 fn obsolete_manifest_fields_are_rejected_without_aliases() {
     let manifest = serde_json::json!({
-        "manifestVersion": 1,
+        "manifestVersion":2,
         "name": "example",
         "displayName": "Example",
         "publisher": "test",
@@ -303,7 +305,7 @@ fn obsolete_manifest_fields_are_rejected_without_aliases() {
 #[test]
 fn source_manifest_cannot_be_installed_without_package_metadata() {
     let manifest = serde_json::json!({
-        "manifestVersion": 1,
+        "manifestVersion":2,
         "name": "example",
         "displayName": "Example",
         "publisher": "test",
@@ -330,7 +332,7 @@ fn source_manifest_cannot_be_installed_without_package_metadata() {
 #[test]
 fn duplicate_contribution_keys_are_rejected_before_map_overwrite() {
     let manifest = br#"{
-        "manifestVersion":1,
+        "manifestVersion":2,
         "name":"example",
         "displayName":"Example",
         "publisher":"test",
@@ -341,8 +343,8 @@ fn duplicate_contribution_keys_are_rejected_before_map_overwrite() {
         "main":"bin/worker",
         "runtime":"trustedProcess",
         "contributes":{
-            "middleware":{"id":"test.example.first","version":1,"stages":["request"]},
-            "middleware":{"id":"test.example.second","version":1,"stages":["request"]}
+            "middleware":{"id":"test.example.first","version":3,"stages":["request"]},
+            "middleware":{"id":"test.example.second","version":3,"stages":["request"]}
         }
     }"#;
     let archive = crate::support::archive(BTreeMap::from([(

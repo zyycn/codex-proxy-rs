@@ -1,3 +1,5 @@
+//! 客户端画像测试入口，以及 Desktop 发行解析和原子更新测试
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

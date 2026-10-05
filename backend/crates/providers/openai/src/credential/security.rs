@@ -1,4 +1,4 @@
-//! Codex 明文 credential JSON 的 schema 校验与日志脱敏边界。
+//! Codex 明文 credential JSON 的 schema 校验与日志脱敏边界
 
 use super::api_key::ApiKeyAuthentication;
 use gateway_core::account::PlaintextCredential;
@@ -15,7 +15,7 @@ const CODEX_CREDENTIAL_SCHEMA_VERSION: u32 = 1;
 const MAX_CREDENTIAL_BYTES: usize = 256 * 1024;
 const MAX_COOKIES: usize = 128;
 
-/// 已解析且只在 Provider 内可见的认证材料。
+/// 已解析且只在 Provider 内可见的认证材料
 pub struct CodexRuntimeCredential {
     pub transport: super::ResponsesTransport,
     pub authentication: CodexRuntimeAuthentication,
@@ -85,7 +85,7 @@ pub enum CodexCredentialDataError {
     TooLarge,
 }
 
-/// 不加密、不解密；只验证 Codex-owned JSON 并做运行时 secret 包装。
+/// 不加密、不解密；只验证 Codex-owned JSON 并做运行时 secret 包装
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CodexCredentialCodec;
 
@@ -106,7 +106,7 @@ impl CodexCredentialCodec {
         )
     }
 
-    /// 为尚未解析资料的 OAuth 账号编码凭据。
+    /// 为尚未解析资料的 OAuth 账号编码凭据
     pub(crate) fn encode_unresolved(
         secret: &CodexOAuthSecret,
         installation_id: String,

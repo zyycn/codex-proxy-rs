@@ -10,10 +10,10 @@ import { requestDiagnosticsBundle } from '../utils/diagnosticsBundle'
 import RequestTransportFailure from './RequestTransportFailure.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 
-const props = defineProps<{ requestId: string, metadata?: OpsErrorMetadata, errorRecord?: OpsError }>()
+const props = withDefaults(defineProps<{ requestId: string, metadata?: OpsErrorMetadata, errorRecord?: OpsError, active?: boolean }>(), { active: true })
 const { downloadJson } = useDownload()
 const { loading: exporting, run: runExport } = useAsyncAction()
-const { selectedId, detail, loading, error, refresh } = useRequestDiagnostics(() => props.requestId)
+const { selectedId, detail, loading, error, refresh } = useRequestDiagnostics(() => props.requestId, () => props.active)
 const trace = computed(() => detail.value?.trace)
 const events = computed(() => (trace.value?.events ?? []).map(event => ({
   ...event,

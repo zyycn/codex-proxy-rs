@@ -1,4 +1,4 @@
-//! 从 `model_requests`、`ops_events` 与账号公共投影读取观测事实。
+//! 从 `model_requests`、`ops_events` 与账号公共投影读取观测事实
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},

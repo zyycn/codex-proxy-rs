@@ -1,4 +1,7 @@
+//! 插件制品的 PostgreSQL 存储，以及实例、来源和凭据端口的统一适配
+
 use async_trait::async_trait;
+use gateway_admin::model::audit::MutationAuditOperation;
 use gateway_admin::model::plugins::distribution::{SourceCredential, SourceCredentialInfo};
 use gateway_admin::{
     model::{
@@ -54,13 +57,9 @@ pub(super) fn not_found() -> AdminStoreError {
 pub(super) fn decode_metadata(
     row: &sqlx::postgres::PgRow,
 ) -> AdminStoreResult<PluginArtifactMetadata> {
-    let mut metadata: serde_json::Value =
+    let metadata: sqlx::types::Json<PluginArtifactMetadata> =
         row.try_get("metadata_json").map_err(|_| unavailable())?;
-    // 兼容开发期已写入的展示说明；忽略这一旧字段，其他未知字段仍严格拒绝。
-    if let Some(metadata) = metadata.as_object_mut() {
-        metadata.remove("permissionDescriptions");
-    }
-    serde_json::from_value(metadata).map_err(|_| unavailable())
+    Ok(metadata.0)
 }
 
 fn decode(row: &sqlx::postgres::PgRow) -> AdminStoreResult<InstalledPluginArtifact> {
@@ -98,6 +97,14 @@ impl PluginStore for PgPluginStore {
     }
     async fn configuration_versions(&self, id: &str) -> AdminStoreResult<Vec<String>> {
         super::instances::configuration_versions(&self.pool, id).await
+    }
+    async fn disable_instances(
+        &self,
+        ids: &[String],
+        expected: Revision,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        super::instances::disable(&self.pool, ids, expected, context).await
     }
     async fn save_instance(
         &self,
@@ -228,8 +235,9 @@ impl PluginStore for PgPluginStore {
         .map_err(|_| unavailable())?
         {
             let artifact = decode(&row)?;
-            // 当前允许来源已由 bind 校验。同一包换用已授权的下载入口时保留首次出处，
-            // 但不能借重复安装把自定义包提升为内置包，或反向改写内置包的信任身份。
+            // 当前允许来源已由 bind 校验
+            // 同一包换用已授权的下载入口时保留首次出处，
+            // 但不能借重复安装把自定义包提升为内置包，或反向改写内置包的信任身份
             let same_trust_origin = matches!(&artifact.source, PluginSource::Builtin { .. })
                 == matches!(&source, PluginSource::Builtin { .. });
             if artifact.metadata != metadata || !same_trust_origin {
@@ -272,8 +280,7 @@ impl PluginStore for PgPluginStore {
             &mut transaction,
             mutation_audit(
                 context,
-                "install",
-                "plugin_artifact",
+                MutationAuditOperation::PluginArtifactInstall,
                 &metadata.plugin_id,
                 vec!["artifact".into(), "source".into()],
             ),
@@ -319,10 +326,9 @@ impl PluginStore for PgPluginStore {
                 &mut transaction,
                 mutation_audit(
                     context,
-                    "accept",
-                    "plugin_artifact",
+                    MutationAuditOperation::PluginArtifactAccept,
                     digest,
-                    vec!["permissions".into()],
+                    vec!["acceptedAt".into()],
                 ),
                 revision,
             )
@@ -346,7 +352,7 @@ impl PluginStore for PgPluginStore {
         let revision = bump_config_revision_in_transaction(&mut transaction)
             .await
             .map_err(|error| admin_store_error("plugin", error))?;
-        // 制品删除会级联移除下载引用，先固定本次涉及的凭据，不能清扫无关的未使用凭据。
+        // 制品删除会级联移除下载引用，先固定本次涉及的凭据，不能清扫无关的未使用凭据
         let credential_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
             "select credential_id from plugin_artifact_credentials where artifact_sha256=$1",
         )
@@ -377,8 +383,7 @@ impl PluginStore for PgPluginStore {
             &mut transaction,
             mutation_audit(
                 context,
-                "delete",
-                "plugin_artifact",
+                MutationAuditOperation::PluginArtifactDelete,
                 &id,
                 vec!["artifact".into()],
             ),

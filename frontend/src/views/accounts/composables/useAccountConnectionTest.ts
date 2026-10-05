@@ -9,7 +9,6 @@ import { getAccountModels, refreshAccountModels } from '@/api'
 import { API_BASE_URL } from '@/api/constants'
 import { useIdSet } from '@/composables/useIdSet'
 import { useRequestState } from '@/composables/useRequestState'
-import { formatDateTime, formatTime } from '@/utils/format'
 import { errorMessage, withMinimumDuration } from '@/utils/operation'
 
 interface ConnectionTestRun {
@@ -80,13 +79,16 @@ interface ConnectionTestFailureEvent {
   upstreamBody?: string | null
 }
 
-type ConnectionTestEvent
-  = | ConnectionTestStartEvent
-    | ConnectionTestRequestEvent
-    | ConnectionTestStatusEvent
-    | ConnectionTestContentEvent
-    | ConnectionTestCompleteEvent
-    | ConnectionTestFailureEvent
+interface ConnectionTestTimestamp { occurredAtDisplay: string, timeDisplay: string }
+
+type ConnectionTestEvent = ConnectionTestTimestamp & (
+  | ConnectionTestStartEvent
+  | ConnectionTestRequestEvent
+  | ConnectionTestStatusEvent
+  | ConnectionTestContentEvent
+  | ConnectionTestCompleteEvent
+  | ConnectionTestFailureEvent
+)
 
 const CONNECTION_TEST_EVENT_TYPES = new Set<ConnectionTestEvent['type']>([
   'test_start',
@@ -268,10 +270,11 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     text: string,
     tone: ConnectionTestLogTone = 'normal',
     detail?: unknown,
+    event?: ConnectionTestTimestamp,
   ): ConnectionTestLog {
     return {
       key,
-      time: formatTime(),
+      time: event?.timeDisplay ?? '',
       text,
       tone,
       detail: formatConnectionTestDetail(detail),
@@ -282,10 +285,11 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     text: string,
     tone: ConnectionTestLogTone = 'normal',
     detail?: unknown,
+    event?: ConnectionTestTimestamp,
   ) {
     connectionTestLogs.value = [
       ...connectionTestLogs.value,
-      connectionTestLogItem(`${Date.now()}-${connectionTestLogs.value.length}`, text, tone, detail),
+      connectionTestLogItem(`${Date.now()}-${connectionTestLogs.value.length}`, text, tone, detail, event),
     ]
   }
 
@@ -294,9 +298,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     text: string,
     tone: ConnectionTestLogTone = 'normal',
     detail?: unknown,
+    event?: ConnectionTestTimestamp,
   ) {
     const index = connectionTestLogs.value.findIndex(item => item.key === key)
-    const next = connectionTestLogItem(key, text, tone, detail)
+    const next = connectionTestLogItem(key, text, tone, detail, event)
     if (index === -1) {
       connectionTestLogs.value = [...connectionTestLogs.value, next]
       return
@@ -306,11 +311,11 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     )
   }
 
-  function finishConnectionTest(status: 'success' | 'error') {
+  function finishConnectionTest(status: 'success' | 'error', event?: ConnectionTestTimestamp) {
     connectionTestStatus.value = status
-    connectionTestFinishedAt.value = formatDateTime()
+    connectionTestFinishedAt.value = event?.occurredAtDisplay ?? ''
     connectionTestDurationMs.value = clamp(
-      Date.now() - connectionTestStartedAtMs,
+      performance.now() - connectionTestStartedAtMs,
       0,
       Number.POSITIVE_INFINITY,
     )
@@ -338,38 +343,40 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     label: string,
     message: string,
     detail?: unknown,
+    event?: ConnectionTestTimestamp,
   ) {
     connectionTestError.value = message
-    setConnectionTestLog(key, `${label}：${message}`, 'danger', detail)
-    finishConnectionTest('error')
+    setConnectionTestLog(key, `${label}：${message}`, 'danger', detail, event)
+    finishConnectionTest('error', event)
   }
 
   function handleConnectionTestEvent(event: ConnectionTestEvent) {
     if (event.type === 'test_start') {
+      connectionTestStartedAt.value = event.occurredAtDisplay
       connectionTestModel.value = event.model || connectionTestModel.value
-      appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '未选择模型'}`, 'info')
+      appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '未选择模型'}`, 'info', undefined, event)
       return
     }
     if (event.type === 'request') {
-      setConnectionTestLog('request', '发起请求', 'info', connectionTestRequestText(event.payload))
+      setConnectionTestLog('request', '发起请求', 'info', connectionTestRequestText(event.payload), event)
       return
     }
     if (event.type === 'status' && event.text) {
-      appendConnectionTestLog(event.text, 'info')
+      appendConnectionTestLog(event.text, 'info', undefined, event)
       return
     }
     if (event.type === 'content' && event.text) {
       connectionTestContent.value += event.text
-      setConnectionTestLog('response', '接收响应内容', 'success', connectionTestContent.value)
+      setConnectionTestLog('response', '接收响应内容', 'success', connectionTestContent.value, event)
       return
     }
     if (event.type === 'test_complete') {
       if (event.success) {
         if (!connectionTestContent.value) {
-          setConnectionTestLog('response', '响应完成', 'success', '上游已完成，没有返回文本内容')
+          setConnectionTestLog('response', '响应完成', 'success', '上游已完成，没有返回文本内容', event)
         }
-        appendConnectionTestLog('测试完成', 'success')
-        finishConnectionTest('success')
+        appendConnectionTestLog('测试完成', 'success', undefined, event)
+        finishConnectionTest('success', event)
       }
       else {
         recordConnectionTestFailure(
@@ -377,6 +384,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
           '测试失败',
           '测试连接失败',
           { error: event.error ?? null },
+          event,
         )
       }
       clearConnectionTestRun()
@@ -389,6 +397,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
         connectionTestFailureLabel(event),
         connectionTestFailureText(event),
         connectionTestFailureDiagnostics(event),
+        event,
       )
       clearConnectionTestRun()
       void options.reload()
@@ -474,8 +483,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     connectionTestError.value = ''
     connectionTestDurationMs.value = null
     connectionTestModel.value = connectionTestSelectedModel.value
-    connectionTestStartedAtMs = Date.now()
-    connectionTestStartedAt.value = formatDateTime()
+    connectionTestStartedAtMs = performance.now()
+    connectionTestStartedAt.value = ''
     connectionTestFinishedAt.value = ''
     appendConnectionTestLog('准备发送测试请求', 'info')
     testingConnections.add(account.id)
@@ -529,7 +538,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   })
 
   watch([showConnectionTestModal, () => testingAccount.value?.id], ([open]) => {
-    modelsRequest.invalidate()
+    modelsRequest.invalidate({ resetLoading: open })
     if (!open) {
       abortConnectionTest()
     }

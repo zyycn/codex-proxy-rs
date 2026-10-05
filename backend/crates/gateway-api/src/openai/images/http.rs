@@ -1,4 +1,4 @@
-//! Codex Images 非流式 HTTP adapter。
+//! Codex Images 非流式 HTTP adapter
 
 use std::net::SocketAddr;
 
@@ -16,7 +16,8 @@ use gateway_core::operation::{
 use serde_json::Value;
 
 use crate::ApiState;
-use crate::openai::middleware::{HttpMiddlewareInput, request_headers};
+use crate::middleware::headers::encode_headers;
+use crate::openai::middleware::RequestInput;
 use crate::openai::{
     auth::{authenticate_client, client_access_error_response},
     endpoint::provider_endpoint_response,
@@ -27,7 +28,7 @@ use crate::openai::{
 const OPENAI_PROTOCOL: &str = "openai";
 const IMAGE_TURN_ID_CONTEXT_KEY: &str = "image_turn_id";
 
-/// `POST /v1/images/generations`。
+/// `POST /v1/images/generations`
 pub(crate) async fn image_generations(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -45,7 +46,7 @@ pub(crate) async fn image_generations(
     .await
 }
 
-/// `POST /v1/images/edits`。
+/// `POST /v1/images/edits`
 pub(crate) async fn image_edits(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
@@ -83,13 +84,13 @@ async fn handle_image_request(
     provider_endpoint_response(
         service.clone(),
         client,
-        HttpMiddlewareInput {
+        RequestInput {
             endpoint: endpoint.to_owned(),
             protocol: OPENAI_PROTOCOL.to_owned(),
             operation: Some(OperationKind::GenerateImage),
             transport: ClientTransport::HttpJson,
             model_hint: None,
-            headers: request_headers(&headers),
+            headers: encode_headers(&headers),
             body,
         },
         client_ip,

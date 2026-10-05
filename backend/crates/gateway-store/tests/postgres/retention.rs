@@ -1,24 +1,18 @@
-use std::time::Duration;
+//! 验证历史清理仅按批次上限删除已过期记录
+
+use std::num::NonZeroU32;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use gateway_store::postgres::{
-    PgRetentionRepository, RetentionCycleBudget, RetentionRepository as _, RuntimeRetentionSettings,
+use gateway_admin::{
+    model::retention::{RetentionPolicy, RetentionTarget},
+    ports::retention::RetentionStore as _,
 };
+use gateway_store::postgres::PgRetentionRepository;
 
 use super::TestDatabase;
 
-#[test]
-fn retention_settings_preserve_independent_windows() {
-    let settings = RuntimeRetentionSettings {
-        usage_retention_days: 31,
-        ops_event_retention_days: 30,
-        audit_retention_days: 90,
-    };
-    assert_eq!(settings.audit_retention_days, 90);
-}
-
 #[tokio::test]
-async fn retention_cycle_should_stop_at_the_batch_budget() {
+async fn retention_batch_deletes_only_expired_rows_up_to_limit() {
     let Some(database) = TestDatabase::create("retention_cycle_budget").await else {
         return;
     };
@@ -29,39 +23,50 @@ async fn retention_cycle_should_stop_at_the_batch_budget() {
            changed_fields, created_at
          )
          select 'retention-' || value::text, 'system', 'retention', 'cleanup',
-                'fixture', 'fixture-' || value::text, array[]::text[], $1
-         from generate_series(1, 5) as value",
+                'fixture', 'fixture-' || value::text, array[]::text[],
+                case when value = 6 then now() else $1 end
+         from generate_series(1, 6) as value",
     )
     .bind(expired_at)
     .execute(&database.pool)
     .await
-    .expect("seed expired audit events");
+    .expect("seed expired and retained audit events");
 
-    let budget = RetentionCycleBudget::try_new(2, 3, Duration::from_secs(1), Duration::ZERO)
-        .expect("retention cycle budget");
-    let repository = PgRetentionRepository::with_cycle_budget(database.pool.clone(), budget);
-    let report = repository
-        .apply_retention(
+    let repository = PgRetentionRepository::new(database.pool.clone());
+    let deleted = repository
+        .purge_batch(
+            RetentionTarget::AdminAuditEvents,
             Utc::now(),
-            RuntimeRetentionSettings {
-                usage_retention_days: 31,
-                ops_event_retention_days: 30,
-                audit_retention_days: 90,
-            },
+            RetentionPolicy::try_new(31, 30, 90).unwrap(),
+            NonZeroU32::new(2).unwrap(),
         )
         .await
-        .expect("bounded retention cycle");
-
-    assert_eq!(report.model_requests, 0);
-    assert_eq!(report.ops_events, 0);
-    assert_eq!(report.admin_audit_events, 2);
-    assert_eq!(report.batches, 3);
-    assert!(report.budget_exhausted);
+        .expect("bounded retention batch");
+    assert_eq!(deleted, 2);
     let remaining: i64 =
         sqlx::query_scalar("select count(*) from admin_audit_events where id like 'retention-%'")
             .fetch_one(&database.pool)
             .await
             .expect("count remaining audit events");
-    assert_eq!(remaining, 3);
+    assert_eq!(remaining, 4);
+    let policy = repository.load_policy().await.expect("load valid policy");
+    assert_eq!(
+        repository
+            .purge_batch(
+                RetentionTarget::AdminAuditEvents,
+                Utc::now(),
+                policy,
+                NonZeroU32::new(10).unwrap(),
+            )
+            .await
+            .expect("finish expired audit cleanup"),
+        3,
+    );
+    let retained: Vec<String> =
+        sqlx::query_scalar("select id from admin_audit_events where id like 'retention-%'")
+            .fetch_all(&database.pool)
+            .await
+            .expect("read retained audit events");
+    assert_eq!(retained, ["retention-6"]);
     database.close().await;
 }

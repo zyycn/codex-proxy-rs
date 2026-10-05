@@ -1,3 +1,5 @@
+//! 验证文件日志队列排空与写入失败后的完整性状态
+
 use super::*;
 use gateway_core::health::HealthState;
 use std::time::Duration;
@@ -64,7 +66,9 @@ fn write_failure_marks_log_completeness_unhealthy_even_after_writes_recover() {
         assert_eq!(runtime.block_on(health.check()), HealthState::Healthy);
         let blocked = directory.join(format!(
             "{REQUEST_DUMP_LOG_FILE_PREFIX}{}.1.log",
-            chrono::Utc::now().date_naive()
+            gateway_core::time::DeploymentTimeZone::default()
+                .local(chrono::Utc::now())
+                .date_naive()
         ));
         fs::create_dir(&blocked).unwrap();
         let payload = "x".repeat(1024 * 1024);

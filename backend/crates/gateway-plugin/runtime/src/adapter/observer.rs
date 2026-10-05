@@ -1,3 +1,5 @@
+//! 编译插件观察订阅，投影请求事实并调度有界事件通知
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -18,13 +20,11 @@ use gateway_core::{
     upstream::UpstreamSendState,
 };
 use gateway_plugin_sdk::{
-    Capability, Manifest, Permission, SendState, Stage,
-    call::{
-        observation::ObserveWebSocketResponse,
-        policy::{
-            ObserveRequest, RequestCost, RequestCostSource, RequestCostStatus, RequestFailure,
-            RequestMoney, RequestOutcome, RequestTerminal, RequestTimings, RequestUsage,
-        },
+    Capability, Manifest, SendState, Stage,
+    call::observation::{
+        Event, EventKind, RequestCompleted, RequestCost, RequestCostSource, RequestCostStatus,
+        RequestFailure, RequestMoney, RequestOutcome, RequestTerminal, RequestTimings,
+        RequestUsage, WebSocketResponse,
     },
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -33,7 +33,6 @@ use crate::{RpcSession, adapter::scope::BindingScope};
 
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(2);
 const OBSERVATION_ENVELOPE_RESERVE: usize = 16 * 1024;
-const MAX_WEBSOCKET_EVENT_TYPE_BYTES: usize = 256;
 
 pub(crate) struct ObserverEntry {
     order: i32,
@@ -41,29 +40,66 @@ pub(crate) struct ObserverEntry {
     instance_id: String,
     session: Arc<RpcSession>,
     callbacks: Arc<crate::callback::PluginCallbacks>,
-    lifecycle: Option<BindingScope>,
-    usage: Option<BindingScope>,
+    completed: Option<BindingScope>,
     websocket: Option<BindingScope>,
-    requests_authorized: bool,
 }
 
 impl ObserverEntry {
-    fn subscriptions(&self, observation: &RequestObservation) -> (bool, bool) {
-        (
-            self.lifecycle
-                .as_ref()
-                .is_some_and(|scope| scope.matches_observation(observation)),
-            self.usage
-                .as_ref()
-                .is_some_and(|scope| scope.matches_observation(observation)),
-        )
+    fn matches_completed(&self, observation: &RequestObservation) -> bool {
+        self.completed
+            .as_ref()
+            .is_some_and(|scope| scope.matches_observation(observation))
+    }
+
+    async fn observe(
+        &self,
+        event: Event,
+        payload: Vec<u8>,
+        extensions: gateway_core::engine::extensions::ExtensionCallScope,
+        timeout: Duration,
+    ) {
+        let request_id = event.request_id();
+        let mut context = self.session.context(Stage::Observation, timeout);
+        context.request_id = Some(request_id.to_owned());
+        let Ok(_scope) = self.callbacks.prepare_observation(&context, extensions) else {
+            return;
+        };
+        let Ok(params) = serde_json::to_value(&event) else {
+            tracing::warn!(
+                plugin_id = self.plugin_id,
+                request_id,
+                "插件观察事件编码失败"
+            );
+            return;
+        };
+        match self
+            .session
+            .call("observer.observe", context, params, payload)
+            .await
+        {
+            Ok(reply)
+                if reply.payload.is_empty()
+                    && (reply.result.is_null()
+                        || reply
+                            .result
+                            .as_object()
+                            .is_some_and(serde_json::Map::is_empty)) => {}
+            Ok(_) => tracing::warn!(
+                plugin_id = self.plugin_id,
+                instance_id = self.instance_id,
+                request_id,
+                "插件观察返回了无效结果"
+            ),
+            Err(error) => {
+                tracing::warn!(plugin_id = self.plugin_id, instance_id = self.instance_id, request_id, %error, "插件观察失败")
+            }
+        }
     }
 }
 
 struct CompiledBindings {
     order: i32,
-    lifecycle: Option<BindingScope>,
-    usage: Option<BindingScope>,
+    completed: Option<BindingScope>,
     websocket: Option<BindingScope>,
 }
 
@@ -71,43 +107,38 @@ fn compile_bindings(
     manifest: &Manifest,
     bindings: &[PluginCapabilityBinding],
 ) -> Result<Option<CompiledBindings>, AdminError> {
-    let mut lifecycle = None;
-    let mut usage = None;
+    let mut completed = None;
     let mut websocket = None;
     let mut order = None;
     for binding in bindings {
         let capability = crate::contribution::resolve(manifest, binding)?.capability;
-        if !matches!(
-            capability,
-            Capability::RequestLifecycle | Capability::Usage | Capability::WebSocketObserver
-        ) {
+        if capability != Capability::Observer {
             continue;
         }
         let stage: Stage = serde_json::from_value(serde_json::Value::String(binding.stage.clone()))
             .map_err(|_| AdminError::invalid("插件观察阶段无效"))?;
         if stage != Stage::Observation || binding.failure_policy != PluginFailurePolicy::Observe {
-            return Err(AdminError::invalid(
-                "请求生命周期、用量与 WebSocket 观察绑定必须使用 observation/observe",
-            ));
+            return Err(AdminError::invalid("观察绑定必须使用 observation/observe"));
         }
         if order.is_some_and(|existing| existing != binding.order) {
-            return Err(AdminError::invalid(
-                "同一实例的请求生命周期、用量与 WebSocket 观察绑定必须使用相同顺序",
-            ));
+            return Err(AdminError::invalid("同一实例的观察绑定必须使用相同顺序"));
         }
         order = Some(binding.order);
-        let scope = BindingScope::compile(binding)?;
-        match capability {
-            Capability::RequestLifecycle => lifecycle = Some(scope),
-            Capability::Usage => usage = Some(scope),
-            Capability::WebSocketObserver => websocket = Some(scope),
-            _ => unreachable!("capability was filtered above"),
+        let event = binding.event.as_ref().and_then(|event| {
+            serde_json::from_value::<EventKind>(serde_json::Value::String(event.clone())).ok()
+        });
+        let target = match event {
+            Some(EventKind::RequestCompleted) => &mut completed,
+            Some(EventKind::WebSocketResponse) => &mut websocket,
+            None => return Err(AdminError::invalid("观察绑定必须选择有效事件类型")),
+        };
+        if target.replace(BindingScope::compile(binding)?).is_some() {
+            return Err(AdminError::invalid("同一观察事件不能重复绑定"));
         }
     }
     Ok(order.map(|order| CompiledBindings {
         order,
-        lifecycle,
-        usage,
+        completed,
         websocket,
     }))
 }
@@ -124,7 +155,6 @@ pub(crate) fn compile_entry(
     plugin_id: &str,
     instance_id: &str,
     bindings: &[PluginCapabilityBinding],
-    permissions: &[Permission],
     session: Arc<RpcSession>,
     callbacks: Arc<crate::callback::PluginCallbacks>,
 ) -> Result<Option<ObserverEntry>, AdminError> {
@@ -135,10 +165,8 @@ pub(crate) fn compile_entry(
             instance_id: instance_id.to_owned(),
             session,
             callbacks,
-            lifecycle: compiled.lifecycle,
-            usage: compiled.usage,
+            completed: compiled.completed,
             websocket: compiled.websocket,
-            requests_authorized: permissions.contains(&Permission::Requests),
         }),
     )
 }
@@ -223,23 +251,16 @@ impl RequestObserverPlan for PluginObserverPlan {
         if entry_indexes.is_empty() {
             return;
         }
-        let include_payload = entry_indexes
-            .iter()
-            .any(|index| self.entries[*index].requests_authorized);
-        let payload = if include_payload {
-            match websocket_payload(&observation) {
-                Ok(payload) => payload,
-                Err(()) => {
-                    tracing::warn!(
-                        request_id = observation.request_id().as_str(),
-                        sequence = observation.sequence(),
-                        "插件 WebSocket 响应观察编码失败，已丢弃"
-                    );
-                    return;
-                }
+        let payload = match websocket_payload(&observation) {
+            Ok(payload) => payload,
+            Err(()) => {
+                tracing::warn!(
+                    request_id = observation.request_id().as_str(),
+                    sequence = observation.sequence(),
+                    "插件 WebSocket 响应观察编码失败，已丢弃"
+                );
+                return;
             }
-        } else {
-            Vec::new()
         };
         if payload.len() > self.maximum_websocket_payload_bytes {
             tracing::warn!(
@@ -299,7 +320,7 @@ impl RequestObserverPlan for PluginObserverPlan {
         self.close_websocket_queue(observation.request_id().as_str());
         if !self.entries.iter().any(|entry| {
             !observation.suppresses_plugin(&entry.instance_id)
-                && entry.subscriptions(&observation) != (false, false)
+                && entry.matches_completed(&observation)
         }) {
             return;
         }
@@ -326,59 +347,17 @@ impl RequestObserverPlan for PluginObserverPlan {
                 if observation.suppresses_plugin(&entry.instance_id) {
                     continue;
                 }
-                let (lifecycle, usage) = entry.subscriptions(&observation);
-                if !lifecycle && !usage {
+                if !entry.matches_completed(&observation) {
                     continue;
                 }
-                let request = wire_observation(&observation, lifecycle, usage);
-                let Ok(payload) = serde_json::to_vec(&request) else {
-                    tracing::warn!(
-                        plugin_id = entry.plugin_id,
-                        instance_id = entry.instance_id,
-                        request_id = observation.request_id().as_str(),
-                        "插件终态观察编码失败"
-                    );
-                    continue;
-                };
-                let mut context = entry.session.context(Stage::Observation, timeout);
-                context.request_id = Some(observation.request_id().as_str().to_owned());
-                let Ok(_scope) = entry
-                    .callbacks
-                    .prepare_observation(&context, observation.extension_scope().clone())
-                else {
-                    continue;
-                };
-                match entry
-                    .session
-                    .call(
-                        "policy.observe_request",
-                        context,
-                        serde_json::json!({}),
-                        payload,
+                entry
+                    .observe(
+                        Event::RequestCompleted(Box::new(wire_observation(&observation))),
+                        Vec::new(),
+                        observation.extension_scope().clone(),
+                        timeout,
                     )
-                    .await
-                {
-                    Ok(reply)
-                        if reply.payload.is_empty()
-                            && (reply.result.is_null()
-                                || reply
-                                    .result
-                                    .as_object()
-                                    .is_some_and(serde_json::Map::is_empty)) => {}
-                    Ok(_) => tracing::warn!(
-                        plugin_id = entry.plugin_id,
-                        instance_id = entry.instance_id,
-                        request_id = observation.request_id().as_str(),
-                        "插件终态观察返回了无效结果"
-                    ),
-                    Err(error) => tracing::warn!(
-                        plugin_id = entry.plugin_id,
-                        instance_id = entry.instance_id,
-                        request_id = observation.request_id().as_str(),
-                        %error,
-                        "插件终态观察失败"
-                    ),
-                }
+                    .await;
             }
         });
     }
@@ -430,8 +409,8 @@ async fn dispatch_websocket_queue(
     while let Some(queued) = receiver.recv().await {
         for index in queued.entry_indexes.iter().copied() {
             let entry = &entries[index];
-            let include_payload = entry.requests_authorized && !queued.payload.is_empty();
-            let request = ObserveWebSocketResponse {
+            let include_payload = !queued.payload.is_empty();
+            let request = WebSocketResponse {
                 event_id: queued.observation.event_id().to_owned(),
                 request_id: queued.observation.request_id().as_str().to_owned(),
                 config_revision: queued.observation.config_revision().get(),
@@ -449,63 +428,16 @@ async fn dispatch_websocket_queue(
                 event_type: include_payload
                     .then(|| queued.observation.wire().event_type())
                     .flatten()
-                    .filter(|event_type| safe_websocket_event_type(event_type))
                     .map(str::to_owned),
             };
-            let mut context = entry.session.context(Stage::Observation, timeout);
-            context.request_id = Some(queued.observation.request_id().as_str().to_owned());
-            let Ok(_scope) = entry
-                .callbacks
-                .prepare_observation(&context, queued.observation.extension_scope().clone())
-            else {
-                continue;
-            };
-            let result = entry
-                .session
-                .call(
-                    "websocket.response_event",
-                    context,
-                    match serde_json::to_value(request) {
-                        Ok(request) => request,
-                        Err(_) => {
-                            tracing::warn!(
-                                plugin_id = entry.plugin_id,
-                                instance_id = entry.instance_id,
-                                request_id = queued.observation.request_id().as_str(),
-                                "插件 WebSocket 响应观察元数据编码失败"
-                            );
-                            continue;
-                        }
-                    },
-                    if include_payload {
-                        queued.payload.to_vec()
-                    } else {
-                        Vec::new()
-                    },
+            entry
+                .observe(
+                    Event::WebSocketResponse(Box::new(request)),
+                    queued.payload.to_vec(),
+                    queued.observation.extension_scope().clone(),
+                    timeout,
                 )
                 .await;
-            match result {
-                Ok(reply)
-                    if reply.payload.is_empty()
-                        && (reply.result.is_null()
-                            || reply
-                                .result
-                                .as_object()
-                                .is_some_and(serde_json::Map::is_empty)) => {}
-                Ok(_) => tracing::warn!(
-                    plugin_id = entry.plugin_id,
-                    instance_id = entry.instance_id,
-                    request_id = queued.observation.request_id().as_str(),
-                    "插件 WebSocket 响应观察返回了无效结果"
-                ),
-                Err(error) => tracing::warn!(
-                    plugin_id = entry.plugin_id,
-                    instance_id = entry.instance_id,
-                    request_id = queued.observation.request_id().as_str(),
-                    %error,
-                    "插件 WebSocket 响应观察失败"
-                ),
-            }
         }
     }
 }
@@ -520,25 +452,13 @@ fn websocket_payload(observation: &WebSocketResponseObservation) -> Result<Vec<u
     Ok(Vec::new())
 }
 
-fn safe_websocket_event_type(event_type: &str) -> bool {
-    !event_type.is_empty()
-        && event_type.len() <= MAX_WEBSOCKET_EVENT_TYPE_BYTES
-        && !event_type.chars().any(char::is_control)
-}
-
-fn wire_observation(
-    observation: &RequestObservation,
-    include_lifecycle: bool,
-    include_usage: bool,
-) -> ObserveRequest {
-    ObserveRequest {
+fn wire_observation(observation: &RequestObservation) -> RequestCompleted {
+    RequestCompleted {
         event_id: observation.event_id().to_owned(),
         request_id: observation.request_id().as_str().to_owned(),
         config_revision: observation.config_revision().get(),
         operation: observation.operation().as_str().to_owned(),
-        client_key_id: observation
-            .client_key_id()
-            .map(|key| key.as_str().to_owned()),
+        client_key_id: Some(observation.client_key_id().as_str().to_owned()),
         account_id: observation
             .account_id()
             .map(|account| account.as_str().to_owned()),
@@ -554,7 +474,7 @@ fn wire_observation(
             .provider()
             .map(|provider| provider.as_str().to_owned()),
         completed_at_ms: millis_since_epoch(observation.completed_at()),
-        terminal: include_lifecycle.then(|| RequestTerminal {
+        terminal: RequestTerminal {
             outcome: wire_outcome(observation.outcome()),
             send_state: wire_send_state(observation.send_state()),
             attempt_count: observation.attempt_count(),
@@ -562,8 +482,8 @@ fn wire_observation(
             error_code: observation
                 .error_kind()
                 .map(|error| error.as_str().to_owned()),
-        }),
-        usage: include_usage.then(|| {
+        },
+        usage: {
             let usage = observation.usage();
             RequestUsage {
                 input_tokens: usage.input_tokens,
@@ -578,7 +498,7 @@ fn wire_observation(
                 timings: Some(wire_timings(observation)),
                 failure: wire_failure(observation),
             }
-        }),
+        },
     }
 }
 

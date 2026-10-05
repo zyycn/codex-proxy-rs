@@ -1,3 +1,5 @@
+//! 验证各平台发行缓存的独立更新、失败保留与回退拒绝
+
 use futures::future::BoxFuture;
 use gateway_core::provider_ports::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,

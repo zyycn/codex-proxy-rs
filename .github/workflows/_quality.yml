@@ -1,4 +1,4 @@
-name: Reusable Quality
+name: Quality
 
 on:
   workflow_call:
@@ -7,11 +7,6 @@ on:
         description: Exact commit SHA to validate
         required: true
         type: string
-      upload_frontend:
-        description: Upload the built frontend for release jobs
-        required: false
-        default: false
-        type: boolean
       run_backend:
         description: Run backend quality checks
         required: false
@@ -111,6 +106,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: backend -> target
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Rust format
         working-directory: backend
@@ -119,6 +115,19 @@ jobs:
       - name: Rust clippy
         working-directory: backend
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Setup nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-nextest@0.9.143
+          fallback: none
+
+      - name: Build Rust tests once
+        working-directory: backend
+        run: |
+          cargo metadata --format-version 1 --locked > "$RUNNER_TEMP/nextest-cargo-metadata.json"
+          cargo nextest list --test main --locked --list-type binaries-only --message-format json \
+            > "$RUNNER_TEMP/nextest-binaries.json"
 
       - name: Configure PostgreSQL and Redis test authentication
         shell: bash
@@ -144,7 +153,11 @@ jobs:
 
       - name: Rust tests
         working-directory: backend
-        run: cargo test --test main --locked
+        run: |
+          cargo nextest run \
+            --cargo-metadata "$RUNNER_TEMP/nextest-cargo-metadata.json" \
+            --binaries-metadata "$RUNNER_TEMP/nextest-binaries.json" \
+            --no-tests fail
 
       - name: Store tests with Redis ACL authentication
         working-directory: backend
@@ -159,7 +172,11 @@ jobs:
           docker exec --env REDISCLI_AUTH="$redis_acl_password" "${{ job.services.redis.id }}" \
             redis-cli -e --user cpr_acl ACL SETUSER default off >/dev/null
           export CPR_TEST_REDIS_URL="redis://cpr_acl:${redis_acl_password}@127.0.0.1:6379"
-          cargo test -p gateway-store --test main --locked
+          # 从同一份构建清单选择 Redis 测试，保留 workspace 特性图且不重复运行 PostgreSQL
+          cargo nextest run \
+            --cargo-metadata "$RUNNER_TEMP/nextest-cargo-metadata.json" \
+            --binaries-metadata "$RUNNER_TEMP/nextest-binaries.json" \
+            --no-tests fail -E 'package(=gateway-store) & test(/^redis::/)'
 
   frontend:
     if: inputs.run_frontend
@@ -173,35 +190,8 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          package_json_file: frontend/package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Install frontend dependencies
-        run: pnpm --dir frontend install --frozen-lockfile
-
-      - name: Frontend format
-        run: pnpm --dir frontend format:check
-
-      - name: Frontend build
-        run: pnpm --dir frontend build
-
-      - name: Upload frontend artifact
-        if: inputs.upload_frontend
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: frontend-dist
-          path: frontend/dist
-          if-no-files-found: error
-          retention-days: 1
+      - name: Validate and build frontend
+        uses: ./.github/actions/build-frontend
 
   workflow-lint:
     runs-on: ubuntu-latest
@@ -221,5 +211,8 @@ jobs:
           -color
           .github/workflows/*.yml
 
-      - name: Check release script syntax
-        run: bash -n release/publish
+      - name: Check workflow script syntax
+        run: |
+          bash -n release/publish
+          shopt -s globstar nullglob
+          for script in .github/**/*.sh; do bash -n "$script"; done

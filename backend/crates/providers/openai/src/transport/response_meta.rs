@@ -1,4 +1,4 @@
-//! 上游响应元数据提取辅助。
+//! 上游响应元数据提取辅助
 
 use std::fmt;
 
@@ -8,16 +8,16 @@ use reqwest::header::{HeaderMap, SET_COOKIE};
 
 use super::diagnostics::CodexUpstreamDiagnostics;
 
-/// Codex Responses 上游响应元数据。
+/// Codex Responses 上游响应元数据
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct CodexResponseMetadata {
-    /// 上游实际选用的模型。
+    /// 上游实际选用的模型
     pub effective_model: Option<String>,
-    /// 模型目录版本。
+    /// 模型目录版本
     pub models_etag: Option<String>,
-    /// 上游是否声明响应包含 reasoning。
+    /// 上游是否声明响应包含 reasoning
     pub reasoning_included: bool,
-    /// 允许交给 Core 的普通响应头；名称和值保持 transport 观察到的顺序与字节。
+    /// 允许交给 Core 的普通响应头；名称和值保持 transport 观察到的顺序与字节
     pub client_headers: Vec<(String, Bytes)>,
 }
 
@@ -72,10 +72,10 @@ pub(super) fn response_metadata(headers: &HeaderMap) -> CodexResponseMetadata {
     response_metadata_from_client_headers(client_headers(headers))
 }
 
-/// 提取响应中可交给客户端 adapter 的普通头。
+/// 提取响应中可交给客户端 adapter 的普通头
 ///
 /// 账号身份、凭据、cookie、逐跳头和已经由 adapter 重建的 framing 在进入 Core 前剔除；
-/// 其余名称和值保持 HeaderMap 的多值顺序和原始字节。
+/// 其余名称和值保持 HeaderMap 的多值顺序和原始字节
 pub(super) fn client_headers(headers: &HeaderMap) -> Vec<(String, Bytes)> {
     filter_client_headers(headers.iter().map(|(name, value)| {
         (
@@ -129,7 +129,7 @@ fn observe_typed_response_header(metadata: &mut CodexResponseMetadata, name: &st
     }
 }
 
-/// 与官方 Codex 一致，优先读取 response.headers，再读取 WS metadata 的顶层 headers。
+/// 与官方 Codex 一致，优先读取 response.headers，再读取 WS metadata 的顶层 headers
 pub(super) fn reported_model_from_event(value: &serde_json::Value) -> Option<&str> {
     [value.pointer("/response/headers"), value.get("headers")]
         .into_iter()
@@ -185,7 +185,7 @@ fn client_response_header_is_forwardable(name: &str, connection_options: &[Strin
 
     !matches!(
         name.as_str(),
-        // 逐跳和 framing 由下游 adapter 针对实际 JSON/SSE/WebSocket 载体重建。
+        // 逐跳和 framing 由下游 adapter 针对实际 JSON/SSE/WebSocket 载体重建
         "connection"
             | "keep-alive"
             | "proxy-connection"
@@ -196,7 +196,7 @@ fn client_response_header_is_forwardable(name: &str, connection_options: &[Strin
             | "content-length"
             | "content-type"
             | "content-encoding"
-            // 上游账号、凭据和 cookie 不能跨越换号边界。
+            // 上游账号、凭据和 cookie 不能跨越换号边界
             | "authorization"
             | "x-api-key"
             | "www-authenticate"

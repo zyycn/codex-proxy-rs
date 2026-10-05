@@ -1,3 +1,5 @@
+//! 验证插件清单的默认值、路径安全、平台与能力版本约束
+
 use gateway_plugin_sdk::{
     Capability, ContributionDeclaration, Engines, Handshake, MANIFEST_VERSION, Manifest,
     ManifestError, PROTOCOL_VERSION, Package, PackageTarget, PluginIcon, PluginIconVariants, Stage,
@@ -7,7 +9,7 @@ use serde_json::json;
 
 fn source_manifest() -> Manifest {
     serde_json::from_value(json!({
-        "manifestVersion": 1,
+        "manifestVersion":2,
         "name": "request-tags",
         "displayName": "请求标签",
         "publisher": "9acme",
@@ -21,7 +23,7 @@ fn source_manifest() -> Manifest {
         "contributes": {
             "middleware": {
                 "id": "9acme.request-tags.tagRequest",
-                "version": 1,
+                "version": 3,
                 "stages": ["request"],
                 "inputFormats": ["openai"],
                 "outputFormats": ["openai"]
@@ -94,7 +96,7 @@ fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
         "main": "bin/worker",
         "runtime": "trustedProcess",
         "contributes": {
-            "middleware": {"stages": ["attempt"]},
+            "middleware": {"version": 3, "stages": ["attempt"]},
             "management": {}
         }
     });
@@ -103,7 +105,7 @@ fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
     let management = &manifest.contributes[&Capability::Management];
 
     assert_eq!(middleware.id, "9acme.request-tags.middleware");
-    assert_eq!(middleware.version, 1);
+    assert_eq!(middleware.version, 3);
     assert_eq!(middleware.stages, [Stage::Attempt]);
     assert_eq!(management.id, "9acme.request-tags.management");
     assert_eq!(management.version, 1);
@@ -119,10 +121,37 @@ fn installation_checks_protocol_engine_and_target() {
         manifest.package_for(&host, "windows", "aarch64"),
         Err(ManifestError::Platform)
     );
-    manifest.package.as_mut().unwrap().protocol_version = 2;
+    manifest.package.as_mut().unwrap().protocol_version = PROTOCOL_VERSION + 1;
     assert_eq!(manifest.validate(), Err(ManifestError::Incompatible));
     manifest.package.as_mut().unwrap().protocol_version = PROTOCOL_VERSION;
     manifest.engines.codex_proxy_rs = "*".parse().unwrap();
+    assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
+}
+
+#[test]
+fn capability_contract_versions_are_checked_independently_of_rpc_version() {
+    let mut manifest = packaged_manifest();
+    assert!(manifest.validate().is_ok());
+    for version in [0, 1, 2, 4, u32::MAX] {
+        manifest
+            .contributes
+            .get_mut(&Capability::Middleware)
+            .unwrap()
+            .version = version;
+        assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
+    }
+
+    manifest.contributes.clear();
+    manifest.contributes.insert(
+        Capability::Management,
+        ContributionDeclaration {
+            id: "9acme.request-tags.management".into(),
+            version: 2,
+            stages: vec![Stage::Management],
+            input_formats: vec![],
+            output_formats: vec![],
+        },
+    );
     assert_eq!(manifest.validate(), Err(ManifestError::Invalid));
 }
 
@@ -334,12 +363,12 @@ fn public_manifest_fields_use_only_the_v3_camel_case_shape() {
 #[test]
 fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
     let declaration = r#"{
-        "id":"test.example.middleware","version":1,"stages":["request"],
+        "id":"test.example.middleware","version":3,"stages":["request"],
         "inputFormats":["openai"],"outputFormats":["openai"]
     }"#;
     let manifest = format!(
         r#"{{
-            "manifestVersion":1,"name":"example","displayName":"Example","publisher":"test",
+            "manifestVersion":2,"name":"example","displayName":"Example","publisher":"test",
             "version":"1.0.0","description":"Example","license":"MIT",
             "engines":{{"codex-proxy-rs":"*"}},"main":"bin/worker","runtime":"trustedProcess",
             "contributes":{{"middleware":{declaration},"middleware":{declaration}}}
@@ -355,7 +384,7 @@ fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
         r#"{{
             "protocol_version":4,"artifact_sha256":"digest","plugin_id":"test.example",
             "instance_id":"instance","generation":1,"incarnation":"incarnation",
-            "configuration":{{}},"permissions":[],
+            "configuration":{{}},
             "contributes":{{"middleware":{declaration},"middleware":{declaration}}}
         }}"#
     );
@@ -370,7 +399,7 @@ fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
 fn contribution_declaration_uses_camel_case_description_fields() {
     let declaration = ContributionDeclaration {
         id: "test.example.middleware".into(),
-        version: 1,
+        version: 3,
         stages: vec![Stage::Request],
         input_formats: vec!["openai".into()],
         output_formats: vec!["openai".into()],
@@ -379,7 +408,7 @@ fn contribution_declaration_uses_camel_case_description_fields() {
         serde_json::to_value(declaration).unwrap(),
         json!({
             "id":"test.example.middleware",
-            "version":1,
+            "version":3,
             "stages":["request"],
             "inputFormats":["openai"],
             "outputFormats":["openai"]

@@ -1,3 +1,5 @@
+//! 验证 Provider 制品画像缓存的有效期、版本回退与冲突拒绝
+
 use std::time::{Duration, SystemTime};
 
 use gateway_core::account::OpaqueProviderData;

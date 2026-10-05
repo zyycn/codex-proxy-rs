@@ -5,13 +5,14 @@ import type { OpsError } from '@/api'
 import { BaseIconButton, BaseInput, BaseTable, BaseTableColumnSettings, BaseTablePagination, useTableColumns } from '@codex-proxy/ui'
 import { Eye, RefreshCw, Search } from '@lucide/vue'
 import { shallowRef, toRef } from 'vue'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { usageUserAgent } from '@/components/usage/shared/presenter'
+import UsageClientIpCell from '@/components/usage/UsageClientIpCell.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
 import { opsErrorSummary } from '../utils/opsErrorPresentation'
-import { usageUserAgent } from '../utils/records'
 import OpsErrorDetailModal from './OpsErrorDetailModal.vue'
-import UsageClientIpCell from './UsageClientIpCell.vue'
 
 const props = defineProps<{
   timeRangeParams: UsageTimeRangeParams
@@ -151,6 +152,15 @@ function upstreamSendStateText(value: string | null | undefined) {
             :provider="String(row.provider || '')"
             :authentication-kind="row.authenticationKind"
           />
+        </template>
+        <template #accountPlanType="{ row }">
+          <AccountPlanBadge
+            v-if="row.accountPlanType"
+            :plan-type="row.accountPlanType"
+            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType"
+            size="sm"
+          />
+          <span v-else class="text-cp-text-quaternary">—</span>
         </template>
         <template #message="{ row }">
           <div class="min-w-0 py-0.5" :title="row.message || opsErrorSummary(row)">

@@ -35,6 +35,20 @@ needless_collect = { level = "deny", priority = 7 }
 [profile.dev]
 debug = true
 
+# 测试保留真实密码参数和压缩数据量，优化热点依赖以减少 fixture 的计算开销。
+# test 继承 dev；workspace 代码仍保留默认调试与溢出检查。
+[profile.dev.package.argon2]
+opt-level = 2
+
+[profile.dev.package.blake2]
+opt-level = 2
+
+[profile.dev.package."sha2@0.11.0"]
+opt-level = 2
+
+[profile.dev.package."miniz_oxide@0.9.1"]
+opt-level = 2
+
 [profile.release]
 debug = false
 strip = "symbols"

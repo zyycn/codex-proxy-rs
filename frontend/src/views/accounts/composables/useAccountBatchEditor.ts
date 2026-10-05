@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { AccountModelAccess, getAccounts } from '@/api'
+import type { Account, AccountModelAccess } from '@/api'
 
 import { toast } from '@codex-proxy/ui'
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -8,16 +8,15 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
-type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-
 export function useAccountBatchEditor(options: {
-  accounts: Ref<AccountRow[]>
+  accounts: Ref<Account[]>
   selectedIds: Ref<Set<string>>
   reloadAccounts: () => Promise<unknown>
   reloadGroups: () => Promise<unknown>
 }) {
-  const selectedAccountsById = new Map<string, AccountRow>()
+  const selectedAccountsById = new Map<string, Account>()
   const showBatchEditModal = shallowRef(false)
+  const editingCount = shallowRef(0)
   const schedulingEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -47,6 +46,7 @@ export function useAccountBatchEditor(options: {
     if (accounts.length === 0)
       return
 
+    editingCount.value = accounts.length
     modelAccess.value = undefined
     editedFields.value.clear()
     catalogAccountId.value = accounts[0]?.id
@@ -123,19 +123,9 @@ export function useAccountBatchEditor(options: {
     { immediate: true, flush: 'sync' },
   )
 
-  watch([showBatchEditModal, saving], ([open, isSaving]) => {
-    if (open || isSaving)
-      return
-    schedulingEnabled.value = true
-    proxyMode.value = 'preserve'
-    proxyId.value = ''
-    concurrencyLimit.value = ''
-    weight.value = '1'
-    selectedGroupIds.value = []
-  })
-
   return {
     showBatchEditModal,
+    editingCount,
     schedulingEnabled,
     concurrencyLimit,
     weight,
@@ -151,19 +141,19 @@ export function useAccountBatchEditor(options: {
   }
 }
 
-function sharedConcurrencyLimit(accounts: AccountRow[]) {
+function sharedConcurrencyLimit(accounts: Account[]) {
   const first = accounts[0]?.concurrencyLimit ?? null
   return accounts.every(account => account.concurrencyLimit === first)
     ? concurrencyLimitInput(first)
     : ''
 }
 
-function sharedWeight(accounts: AccountRow[]) {
+function sharedWeight(accounts: Account[]) {
   const first = accounts[0]?.weight ?? 1
   return accounts.every(account => account.weight === first) ? String(first) : '1'
 }
 
-function sharedGroupIds(accounts: AccountRow[]) {
+function sharedGroupIds(accounts: Account[]) {
   const [first, ...rest] = accounts
   if (!first)
     return []

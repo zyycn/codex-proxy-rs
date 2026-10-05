@@ -1,4 +1,4 @@
-//! OpenAI 额度事实边界与展示快照回归。
+//! OpenAI 额度事实边界与展示快照回归
 
 mod capacity_freeze;
 mod recovery;
@@ -208,7 +208,7 @@ async fn passive_quota_updates_keep_core_and_model_specific_buckets_independent(
 
     let spark_headers = vec![
         // 生产响应会把当前具名桶同时复制到旧版 `x-codex-*` 默认头；这个
-        // 兼容别名不能覆盖已有的账号 core 桶。
+        // 兼容别名不能覆盖已有的账号 core 桶
         ("x-codex-active-limit".to_owned(), "codex".to_owned()),
         ("x-codex-primary-used-percent".to_owned(), "1".to_owned()),
         (
@@ -524,7 +524,7 @@ async fn passive_plan_observations_update_account_without_replaying_stale_plan()
     );
     let state = exhausted_quota(None);
     persist_quota_state(&store, &original, state).await;
-    // 仅有套餐的新观察不能清除既有额度耗尽结论。
+    // 仅有套餐的新观察不能清除既有额度耗尽结论
     service
         .synchronize_passive_headers(
             &original,
@@ -535,7 +535,7 @@ async fn passive_plan_observations_update_account_without_replaying_stale_plan()
     let changed = store.account("acct_passive_plan").unwrap();
     assert_eq!(changed.plan_type(), Some("plus"));
     assert_eq!(changed.quota(), state);
-    // 后台 RT 刷新拿着旧账号快照返回时，仍要提交新 token 并保留刚观测的套餐。
+    // 后台 RT 刷新拿着旧账号快照返回时，仍要提交新 token 并保留刚观测的套餐
     store
         .repository()
         .rotate_refreshed_oauth_secret(
@@ -710,7 +710,7 @@ async fn quota_endpoint_rejection_preserves_details_without_changing_account_fac
         }
         other => panic!("expected upstream rejection, got {other:?}"),
     }
-    // 额度查询诊断不能进入凭据快照，否则会干扰在途 OAuth 刷新的终态提交。
+    // 额度查询诊断不能进入凭据快照，否则会干扰在途 OAuth 刷新的终态提交
     let current = store.account(account_id).expect("account after refresh");
     assert_eq!(current, before);
     store
@@ -790,4 +790,41 @@ async fn quota_refresh_preserves_disabled_and_credential_error_facts() {
         current.status_projection(SystemTime::now(), None).status,
         AccountStatus::Disabled
     );
+}
+
+#[tokio::test]
+async fn passive_credit_updates_replace_balance_without_changing_quota_access() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_passive_credits").await;
+    let account = store.account("acct_passive_credits").unwrap();
+    let service = quota_service(&store);
+    let initial = parse_rate_limits_event(&json!({
+        "type": "codex.rate_limits",
+        "rate_limits": {"primary": {"used_percent": 28, "window_minutes": 300}},
+        "credits": {"has_credits": true, "unlimited": false, "balance": "62500"}
+    }))
+    .unwrap();
+    service
+        .synchronize_passive_rate_limits(&account, &[initial])
+        .await
+        .unwrap();
+    for (wire, expected) in [
+        (
+            json!({"has_credits": false, "unlimited": false, "balance": "0"}),
+            Some("0"),
+        ),
+        (json!({"has_credits": true, "unlimited": false}), None),
+    ] {
+        let update =
+            parse_rate_limits_event(&json!({"type": "codex.rate_limits", "credits": wire}))
+                .unwrap();
+        service
+            .synchronize_passive_rate_limits(&account, &[update])
+            .await
+            .unwrap();
+        let snapshot = service.read_account(account.id()).await.unwrap().unwrap();
+        assert_eq!(snapshot.credits().unwrap().balance.as_deref(), expected);
+        assert_eq!(snapshot.windows()[0].used_percent(), Some(28.0));
+        assert_eq!(snapshot.quota().access(), QuotaAccessState::Allowed);
+    }
 }

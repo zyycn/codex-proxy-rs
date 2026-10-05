@@ -1,22 +1,45 @@
-//! 备份领域模型（model/backup）的纯逻辑测试。
+//! 备份领域模型（model/backup）的纯逻辑测试
 
 use chrono::{TimeZone as _, Utc};
 use secrecy::SecretString;
 
 use gateway_admin::model::backup::{
-    BackupSettings, BackupStatus, BackupStorageConfig, BackupTriggerKind, build_object_key,
+    BackupSettings, BackupStatus, BackupStatusTransition, BackupStorageConfig, BackupTriggerKind,
+    build_object_key,
 };
 
 #[test]
-fn status_machine_rejects_invalid_transitions() {
-    assert!(BackupStatus::Queued.allows_transition_to(BackupStatus::Dumping));
-    assert!(BackupStatus::Dumping.allows_transition_to(BackupStatus::Uploading));
-    assert!(BackupStatus::Uploading.allows_transition_to(BackupStatus::Completed));
-    assert!(BackupStatus::Completed.allows_transition_to(BackupStatus::Deleting));
-    assert!(!BackupStatus::Queued.allows_transition_to(BackupStatus::Completed));
-    assert!(!BackupStatus::Completed.allows_transition_to(BackupStatus::Dumping));
-    assert!(!BackupStatus::Deleting.allows_transition_to(BackupStatus::Failed));
-    assert!(!BackupStatus::Deleting.allows_transition_to(BackupStatus::Completed));
+fn status_transition_accepts_every_legal_edge() {
+    let transitions = [
+        (BackupStatus::Queued, BackupStatus::Dumping),
+        (BackupStatus::Queued, BackupStatus::Failed),
+        (BackupStatus::Dumping, BackupStatus::Uploading),
+        (BackupStatus::Dumping, BackupStatus::Failed),
+        (BackupStatus::Uploading, BackupStatus::Completed),
+        (BackupStatus::Uploading, BackupStatus::Failed),
+        (BackupStatus::Completed, BackupStatus::Deleting),
+        (BackupStatus::Failed, BackupStatus::Deleting),
+    ];
+    assert!(
+        transitions
+            .into_iter()
+            .all(|(from, to)| { BackupStatusTransition::try_new(from, to).is_some() })
+    );
+}
+
+#[test]
+fn status_transition_rejects_invalid_edges() {
+    let transitions = [
+        (BackupStatus::Queued, BackupStatus::Completed),
+        (BackupStatus::Completed, BackupStatus::Dumping),
+        (BackupStatus::Deleting, BackupStatus::Failed),
+        (BackupStatus::Deleting, BackupStatus::Completed),
+    ];
+    assert!(
+        transitions
+            .into_iter()
+            .all(|(from, to)| { BackupStatusTransition::try_new(from, to).is_none() })
+    );
 }
 
 #[test]

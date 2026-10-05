@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, shallowRef, watch } from 'vue'
+import { computed, onScopeDispose, shallowRef } from 'vue'
 import { getKeyUsageConfig } from '@/api/modules/key-usage'
 import { useCopyText } from '@/composables/useCopyText'
 import { useRequestState } from '@/composables/useRequestState'
@@ -35,10 +35,6 @@ export function useKeyConfig() {
   }
 
   // 明文只随弹窗保存在内存中，不进入登录状态或浏览器持久化存储。
-  watch(showConfig, (open) => {
-    if (!open)
-      configKey.value = null
-  })
   onScopeDispose(() => {
     configKey.value = null
   })

@@ -1,17 +1,17 @@
-//! 常驻后台的 WebSocket 泵（对齐官方 Codex CLI 的连接管理）。
+//! 常驻后台的 WebSocket 泵（对齐官方 Codex CLI 的连接管理）
 //!
 //! 每条上游 WebSocket 连接都由一个后台 pump 任务独占：
-//!   - 持续读取 socket：一旦观察到 `Close` / EOF / 传输错误，立即把连接标记为 `closed`。
-//!   - 自动回应上游 `Ping`，并按 `ping_interval` 主动 `Ping`；收到任意入站帧即解除本次心跳 deadline。
-//!   - 可选 `liveness_timeout`：长时间无任何入站活动时判定连接失活并退出。
+//! - 持续读取 socket：一旦观察到 `Close` / EOF / 传输错误，立即把连接标记为 `closed`
+//! - 自动回应上游 `Ping`，并按 `ping_interval` 主动 `Ping`；收到任意入站帧即解除本次心跳 deadline
+//! - 可选 `liveness_timeout`：长时间无任何入站活动时判定连接失活并退出
 //!
 //! 因此空闲连接的“死没死”在后台被实时感知；复用方只需零成本读取 [`PumpedWebSocket::is_closed`]，
-//! 无需在请求路径上做同步探活 ping（消除“复用到静默死连接才卡住超时”的长尾）。
+//! 无需在请求路径上做同步探活 ping（消除“复用到静默死连接才卡住超时”的长尾）
 //!
 //! 收发都通过 channel 与 pump 任务交互：
-//!   - 发送：`send` 走 command channel，等待 pump 回执。
-//!   - 接收：`next` 从 message channel 取出 pump 转发的入站帧（`Ping`/`Pong` 已被 pump 吞掉）。
-//!   - 入站缓冲满时暂停读取 socket 和主动探活，仅继续处理发送/关闭命令；消费恢复后按原顺序继续转发。
+//! - 发送：`send` 走 command channel，等待 pump 回执
+//! - 接收：`next` 从 message channel 取出 pump 转发的入站帧（`Ping`/`Pong` 已被 pump 吞掉）
+//! - 入站缓冲满时暂停读取 socket 和主动探活，仅继续处理发送/关闭命令；消费恢复后按原顺序继续转发
 
 use std::sync::{
     Arc, Mutex,
@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use super::CodexWebSocketCloseError;
 
-/// 底层 tungstenite WebSocket 流。
+/// 底层 tungstenite WebSocket 流
 pub(crate) trait WebSocketIo:
     Stream<Item = Result<Message, tungstenite::Error>>
     + Sink<Message, Error = tungstenite::Error>
@@ -51,7 +51,7 @@ pub(crate) type RawWsStream = Box<dyn WebSocketIo>;
 
 const PUMP_COMMAND_BUFFER: usize = 32;
 
-/// pump 日志的账号级关联上下文；空闲连接被上游重置等场景用于回溯归属。
+/// pump 日志的账号级关联上下文；空闲连接被上游重置等场景用于回溯归属
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PumpLogContext {
     pub(crate) account_id: Option<String>,
@@ -67,19 +67,19 @@ impl PumpLogContext {
     }
 }
 
-/// pump 保活策略。
+/// pump 保活策略
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PumpKeepalive {
-    /// 主动 `Ping` 间隔；`None` 表示 pump 不主动 ping（仅被动读取 + 回应上游 ping）。
+    /// 主动 `Ping` 间隔；`None` 表示 pump 不主动 ping（仅被动读取 + 回应上游 ping）
     pub(crate) ping_interval: Option<Duration>,
-    /// 主动 `Ping` 发出后等待任意入站帧的 deadline；`None` 表示不校验响应。
+    /// 主动 `Ping` 发出后等待任意入站帧的 deadline；`None` 表示不校验响应
     pub(crate) ping_timeout: Option<Duration>,
-    /// 无入站活动多久后判定失活；`None` 表示只靠显式 close/传输错误发现死亡。
+    /// 无入站活动多久后判定失活；`None` 表示只靠显式 close/传输错误发现死亡
     pub(crate) liveness_timeout: Option<Duration>,
 }
 
 impl PumpKeepalive {
-    /// 不做主动保活（用于即用即弃的非池化连接）。
+    /// 不做主动保活（用于即用即弃的非池化连接）
     pub(crate) fn disabled() -> Self {
         Self {
             ping_interval: None,
@@ -280,7 +280,7 @@ impl PumpLifecycleState {
     }
 }
 
-/// 由后台 pump 任务托管的 WebSocket 连接句柄。
+/// 由后台 pump 任务托管的 WebSocket 连接句柄
 pub(crate) struct PumpedWebSocket {
     connection_id: Uuid,
     tx_command: mpsc::Sender<PumpCommand>,
@@ -300,7 +300,7 @@ impl std::fmt::Debug for PumpedWebSocket {
 }
 
 impl PumpedWebSocket {
-    /// 用底层流启动一个 pump 任务并返回句柄。
+    /// 用底层流启动一个 pump 任务并返回句柄
     pub(crate) fn new(
         inner: RawWsStream,
         keepalive: PumpKeepalive,
@@ -342,7 +342,7 @@ impl PumpedWebSocket {
         }
     }
 
-    /// 通过 pump 发送一帧，返回底层 `send` 的结果。
+    /// 通过 pump 发送一帧，返回底层 `send` 的结果
     pub(crate) async fn send(&self, message: Message) -> Result<(), tungstenite::Error> {
         let (ack, rx_ack) = oneshot::channel();
         if self
@@ -358,14 +358,15 @@ impl PumpedWebSocket {
             .unwrap_or(Err(tungstenite::Error::ConnectionClosed))
     }
 
-    /// 取出下一帧入站消息（`Ping`/`Pong` 已被 pump 处理，不会到达这里）。
+    /// 取出下一帧入站消息（`Ping`/`Pong` 已被 pump 处理，不会到达这里）
     ///
-    /// 返回 `None` 表示连接已结束（pump 已退出且缓冲已排空）。
+    /// 返回 `None` 表示连接已结束（pump 已退出且缓冲已排空）
     pub(crate) async fn next(&mut self) -> Option<Result<Message, tungstenite::Error>> {
         self.rx_message.recv().await
     }
 
-    /// 连接是否已被后台 pump 判定关闭/失活。零成本，用于复用前探活。
+    /// 连接是否已被后台 pump 判定关闭/失活
+    /// 零成本，用于复用前探活
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire) || self.tx_command.is_closed()
     }
@@ -389,7 +390,7 @@ impl PumpedWebSocket {
             .observation(self.connection_id, Instant::now())
     }
 
-    /// 主动关闭连接（best-effort 发送 Close 帧）。
+    /// 主动关闭连接（best-effort 发送 Close 帧）
     pub(crate) async fn close(&self) {
         if !self.is_closed() {
             let _ = self.send(Message::Close(None)).await;
@@ -428,7 +429,7 @@ async fn pump_loop(
     let liveness_timeout = keepalive.liveness_timeout.filter(|d| !d.is_zero());
     let mut ping_ticker = ping_interval.map(|d| {
         // 首个 tick 推迟一整个间隔：tokio::time::interval 默认会让首个 tick 立即就绪，
-        // 否则连接一建立就会立刻发一帧 Ping，与首个请求 Text 抢跑、打乱帧序。
+        // 否则连接一建立就会立刻发一帧 Ping，与首个请求 Text 抢跑、打乱帧序
         let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + d, d);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         ticker
@@ -453,7 +454,7 @@ async fn pump_loop(
                     if let Some(reason) = pending.exit_reason {
                         break 'pump reason;
                     }
-                    // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默。
+                    // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默
                     last_activity = Instant::now();
                     record_activity(&lifecycle, last_activity);
                 }
@@ -649,7 +650,7 @@ fn observe_inbound(connection_id: Uuid, pending_ping: &mut Option<PendingPing>, 
             "Responses WebSocket pump received a non-matching Pong"
         );
     }
-    // 匹配 Pong 是探针的直接回执；其他入站帧同样证明上游链路仍可达。
+    // 匹配 Pong 是探针的直接回执；其他入站帧同样证明上游链路仍可达
     *pending_ping = None;
 }
 
@@ -670,7 +671,7 @@ pub(crate) fn transport_metric_reason(error: &tungstenite::Error) -> &'static st
             std::io::ErrorKind::TimedOut => "transport_timeout",
             _ => "transport_error",
         },
-        // 未收到关闭握手只能证明连接异常结束，不能据此认定收到 TCP RST。
+        // 未收到关闭握手只能证明连接异常结束，不能据此认定收到 TCP RST
         tungstenite::Error::Protocol(
             tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
         ) => "reset_without_closing_handshake",
@@ -761,7 +762,7 @@ fn log_pump_exit(
     }
 }
 
-/// 等待 ping ticker；`None` 时永远挂起，让 `select!` 分支实际禁用。
+/// 等待 ping ticker；`None` 时永远挂起，让 `select!` 分支实际禁用
 async fn tick(ticker: &mut Option<tokio::time::Interval>) {
     match ticker {
         Some(ticker) => {
@@ -771,7 +772,7 @@ async fn tick(ticker: &mut Option<tokio::time::Interval>) {
     }
 }
 
-/// 等待可选 deadline；`None` 时永远挂起，让 `select!` 分支实际禁用。
+/// 等待可选 deadline；`None` 时永远挂起，让 `select!` 分支实际禁用
 async fn wait_until(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,

@@ -1,4 +1,4 @@
-//! OpenAI Provider 行为回归入口
+//! OpenAI Provider 执行合同与失败处理的测试入口
 
 mod contract;
 mod failure;

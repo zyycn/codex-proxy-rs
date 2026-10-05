@@ -1,4 +1,4 @@
-//! 管理端 JSON 与 Query extractor 的稳定 rejection 映射。
+//! 管理端 JSON 与 Query extractor 的稳定 rejection 映射
 
 use axum::{
     Json,
@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 
 use super::AdminError;
 
-/// 将 Axum JSON rejection 收口为管理端错误信封。
+/// 将 Axum JSON rejection 收口为管理端错误信封
 pub struct AdminJson<T>(pub T);
 
 impl<T, S> FromRequest<S> for AdminJson<T>
@@ -45,7 +45,7 @@ where
     }
 }
 
-/// 将 Axum Query rejection 收口为管理端错误信封。
+/// 将 Axum Query rejection 收口为管理端错误信封
 pub struct AdminQuery<T>(pub T);
 
 impl<T, S> FromRequestParts<S> for AdminQuery<T>

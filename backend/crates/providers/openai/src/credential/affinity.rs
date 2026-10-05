@@ -1,4 +1,4 @@
-//! OpenAI 会话及子线程到 Store 不透明账号亲和键及诊断上下文的单向派生。
+//! OpenAI 会话及子线程到 Store 不透明账号亲和键及诊断上下文的单向派生
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use crate::transport::request::derive_conversation_anchor;
 const AFFINITY_KEY_HASH_LENGTH: usize = 12;
 pub(crate) const CODEX_ROOT_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// 一次请求派生出的账号亲和键及其结构化日志上下文。
+/// 一次请求派生出的账号亲和键及其结构化日志上下文
 pub(crate) struct CodexSessionAffinity {
     key: ProviderSessionAffinityKey,
     root_key: Option<ProviderSessionAffinityKey>,
@@ -34,7 +34,7 @@ impl CodexSessionAffinity {
         self.root_key.as_ref()
     }
 
-    /// 子线程首次选号继承根会话偏好，之后仅更新自己的绑定。
+    /// 子线程首次选号继承根会话偏好，之后仅更新自己的绑定
     fn with_thread(mut self, thread_id: Option<&str>) -> Option<Self> {
         if let Some(thread_id) = non_empty(thread_id)
             && self
@@ -59,7 +59,7 @@ impl CodexSessionAffinity {
         &self.key_hash
     }
 
-    /// 返回可持久化的客户端作用域不透明会话关联值。
+    /// 返回可持久化的客户端作用域不透明会话关联值
     #[must_use]
     pub(crate) fn persistence_hash(&self) -> &str {
         self.key.expose_to_store()
@@ -91,7 +91,7 @@ impl CodexSessionAffinity {
     }
 }
 
-/// 将原始 response ID 投影为客户端作用域的不可逆关联值。
+/// 将原始 response ID 投影为客户端作用域的不可逆关联值
 #[must_use]
 pub(crate) fn derive_previous_response_id_hash(
     previous_response_id: &str,
@@ -115,8 +115,9 @@ pub(crate) fn derive_codex_session_affinity(
         .with_thread(request.client_thread_id.as_deref())
 }
 
-/// 原始 JSON 端点只读取会话身份，发送时仍保留原始字节。Search 的 `id` 是官方
-/// 根 session_id，必须与 Responses 共用命名空间，不能另建一份账号亲和。
+/// 原始 JSON 端点只读取会话身份，发送时仍保留原始字节
+/// Search 的 `id` 是官方
+/// 根 session_id，必须与 Responses 共用命名空间，不能另建一份账号亲和
 pub(crate) fn derive_codex_endpoint_session_affinity(
     payload: &RawJsonPayload,
     client_api_key_id: &ClientApiKeyId,
@@ -163,14 +164,14 @@ fn session_affinity(
 }
 
 fn short_key_hash(key: &ProviderSessionAffinityKey) -> String {
-    // 亲和键本身已经是 SHA-256；日志沿用 WebSocket 诊断的 12 位短哈希长度。
+    // 亲和键本身已经是 SHA-256；日志沿用 WebSocket 诊断的 12 位短哈希长度
     key.expose_to_store()
         .chars()
         .take(AFFINITY_KEY_HASH_LENGTH)
         .collect()
 }
 
-/// 先确定根会话锚点，显式子线程在此基础上派生自己的绑定。
+/// 先确定根会话锚点，显式子线程在此基础上派生自己的绑定
 fn derive_account_affinity_anchor(
     request: &CodexResponsesRequest,
 ) -> Option<(&'static str, String)> {
@@ -204,10 +205,10 @@ fn opaque_affinity_key(domain: &str, value: &str) -> Option<ProviderSessionAffin
     ProviderSessionAffinityKey::try_new(hex::encode(hasher.finalize())).ok()
 }
 
-/// 恢复旧版 `cyber_policy` 的会话隔离键。
+/// 恢复旧版 `cyber_policy` 的会话隔离键
 ///
 /// 它只接受显式 session/conversation 或客户端明确给出的 prompt cache key，避免将
-/// 请求内容哈希误当成长会话；`previous_response_id` 续写不参与该策略。
+/// 请求内容哈希误当成长会话；`previous_response_id` 续写不参与该策略
 pub(crate) fn derive_codex_cyber_policy_session_key(
     request: &CodexResponsesRequest,
     client_api_key_id: &ClientApiKeyId,

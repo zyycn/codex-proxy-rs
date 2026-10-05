@@ -1,4 +1,4 @@
-//! Core `ProviderAccountStore` 端口适配与 core 投影映射。
+//! Core `ProviderAccountStore` 端口适配与 core 投影映射
 
 use super::*;
 

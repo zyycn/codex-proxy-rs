@@ -1,4 +1,4 @@
-//! Worker leader lease 通过 StoreBundle 的中立能力进行集成验证。
+//! Worker leader lease 通过 StoreBundle 的中立能力进行集成验证
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -40,11 +40,7 @@ async fn store_bundle_worker_plan_and_leader_lease_are_single_use_and_fenced() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         kinds,
-        BTreeSet::from([
-            WorkerKind::StaleModelRequestRecovery,
-            WorkerKind::Retention,
-            WorkerKind::OpsFlush,
-        ])
+        BTreeSet::from([WorkerKind::StaleModelRequestRecovery, WorkerKind::OpsFlush,])
     );
     assert!(first.take_worker_contributions().is_empty());
 

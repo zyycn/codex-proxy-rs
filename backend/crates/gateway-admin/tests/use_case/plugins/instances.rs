@@ -1,3 +1,5 @@
+//! 插件实例配置、版本变更与私有状态迁移的用例测试
+
 use std::{
     collections::BTreeMap,
     sync::{
@@ -20,8 +22,7 @@ use gateway_admin::{
                 ConfigurePluginInstance, PluginCapabilityBinding, PluginFailurePolicy,
                 PluginInstance, PluginInstanceMutation, PluginInstanceReplacement,
                 PluginInstanceRuntime, PluginInstanceRuntimeFailure, PluginInstanceRuntimeStatus,
-                PluginInstanceSnapshot, PluginPermissionGrant, PluginVersionConfiguration,
-                RollbackPluginInstance,
+                PluginInstanceSnapshot, PluginVersionConfiguration, RollbackPluginInstance,
             },
             state::{
                 ApplyPluginStateMigration, DeletePluginState, PluginStateCommit,
@@ -60,6 +61,28 @@ enum MigrationBehavior {
     ConcurrentChangeThenFail,
 }
 
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginPackageInspector for LifecycleFixture {
+    async fn inspect(
+        &self,
+        archive: Arc<[u8]>,
+        digest: Option<String>,
+    ) -> Result<InspectedPluginArtifact, AdminError> {
+        let data = self.data.lock().unwrap();
+        if let Some(kind) = data.inspection_error {
+            return Err(AdminError::new(kind, "插件与当前宿主不兼容"));
+        }
+        let metadata = data
+            .artifacts
+            .iter()
+            .find(|item| Some(&item.metadata.sha256) == digest.as_ref())
+            .unwrap()
+            .metadata
+            .clone();
+        Ok(InspectedPluginArtifact { metadata, archive })
+    }
+}
+
 struct SavedInstance {
     artifact_sha256: String,
     enabled: bool,
@@ -70,6 +93,8 @@ struct FixtureData {
     snapshot: PluginInstanceSnapshot,
     artifacts: Vec<InstalledPluginArtifact>,
     artifact_reads: usize,
+    archive_reads: usize,
+    inspection_error: Option<AdminErrorKind>,
     change_during_artifact_read: bool,
     fail_preparation: bool,
     configuration_ready: bool,
@@ -103,7 +128,7 @@ impl LifecycleFixture {
                         trusted_process: true,
                         configuration: json!({}),
                         secrets: Default::default(),
-                        grants: vec![],
+
                         bindings: vec![],
                         revision: revision(10),
                     }],
@@ -113,6 +138,8 @@ impl LifecycleFixture {
                     artifact(NEW_ARTIFACT, "test.lifecycle", "1.0.0"),
                 ],
                 artifact_reads: 0,
+                archive_reads: 0,
+                inspection_error: None,
                 change_during_artifact_read: false,
                 fail_preparation: false,
                 configuration_ready: true,
@@ -243,7 +270,10 @@ impl PluginPreparation for LifecycleFixture {
             Arc::new(Lease),
         ))
     }
+}
 
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginRuntimeDiagnostics for LifecycleFixture {
     async fn runtime_diagnostics(
         &self,
         _: &PluginInstanceSnapshot,
@@ -252,7 +282,10 @@ impl PluginPreparation for LifecycleFixture {
     ) -> Option<BTreeMap<String, PluginInstanceRuntime>> {
         self.data.lock().unwrap().diagnostics.clone()
     }
+}
 
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginStateLifecycle for LifecycleFixture {
     async fn activate_state(
         &self,
         _: &ExtensionSetReference,
@@ -507,8 +540,20 @@ impl PluginStore for LifecycleFixture {
         Ok(data.artifacts.clone())
     }
 
-    async fn load_artifact(&self, _: &str) -> AdminStoreResult<InspectedPluginArtifact> {
-        Err(admin_error(AdminStoreErrorKind::Unavailable))
+    async fn load_artifact(&self, digest: &str) -> AdminStoreResult<InspectedPluginArtifact> {
+        let mut data = self.data.lock().unwrap();
+        data.archive_reads += 1;
+        let metadata = data
+            .artifacts
+            .iter()
+            .find(|item| item.metadata.sha256 == digest)
+            .unwrap()
+            .metadata
+            .clone();
+        Ok(InspectedPluginArtifact {
+            metadata,
+            archive: Arc::from([1_u8]),
+        })
     }
 
     async fn install_artifact(
@@ -548,7 +593,7 @@ impl SnapshotControl for Published {
 fn service(fixture: Arc<LifecycleFixture>, published: Arc<Published>) -> PluginsService {
     PluginsService::new(
         fixture.clone(),
-        Arc::new(TestPluginPorts),
+        fixture.clone(),
         PluginDistributionPorts::new(Arc::new(TestPluginPorts), Arc::new(TestPluginPorts)),
         published,
         fixture.clone(),
@@ -599,7 +644,7 @@ fn artifact(digest: &str, plugin_id: &str, version: &str) -> InstalledPluginArti
                     output_formats: Vec::new(),
                 },
             )]),
-            requested_permissions: vec![],
+
             configuration_schema: json!({"type":"object"}),
             secret_fields: vec![],
             state_namespaces: vec![],
@@ -632,7 +677,7 @@ fn input() -> ConfigurePluginInstance {
 }
 
 #[tokio::test]
-async fn instance_list_loads_metadata_once_for_shared_artifacts_without_loading_archives() {
+async fn instance_list_checks_shared_artifact_compatibility_once() {
     let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
     let mut second = fixture.snapshot().instances[0].clone();
     second.id = "00000000-0000-7000-8000-000000000002".into();
@@ -806,7 +851,7 @@ async fn configuration_retry_reuses_creation_id_and_rejects_changed_draft() {
     let request = || {
         let mut value = input();
         value.creation_id = Some(creation_id.into());
-        // 此用例验证创建重试，使用不需要私有状态迁移的固定版本。
+        // 此用例验证创建重试，使用不需要私有状态迁移的固定版本
         value.artifact_sha256 = OLD_ARTIFACT.into();
         value.enabled = false;
         value
@@ -998,13 +1043,12 @@ async fn failed_state_migration_never_overwrites_a_concurrent_configuration_chan
 }
 
 #[tokio::test]
-async fn rollback_restores_target_configuration_secrets_and_bindings_and_derives_permissions() {
+async fn rollback_restores_target_configuration_secrets_and_bindings() {
     use secrecy::ExposeSecret as _;
 
     let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
     {
         let mut data = fixture.data.lock().unwrap();
-        data.artifacts[1].metadata.requested_permissions = vec!["network".into()];
         let instance = &mut data.snapshot.instances[0];
         instance.configuration = json!({"label":"retained"});
         instance
@@ -1019,6 +1063,7 @@ async fn rollback_restores_target_configuration_secrets_and_bindings_and_derives
             account_group_ids: Vec::new(),
             provider_ids: Vec::new(),
             models: Vec::new(),
+            event: None,
             identity_bindings: Vec::new(),
         });
     }
@@ -1031,12 +1076,6 @@ async fn rollback_restores_target_configuration_secrets_and_bindings_and_derives
     assert_eq!(result.instance.name, before.name);
     assert_eq!(result.instance.enabled, before.enabled);
     assert_eq!(result.instance.configuration, json!({"oldVersion": true}));
-    assert_eq!(
-        result.instance.grants,
-        [PluginPermissionGrant {
-            permission: "network".into()
-        }]
-    );
     assert!(result.instance.bindings.is_empty());
     assert_eq!(
         result.instance.secrets["token"].expose_secret(),
@@ -1275,6 +1314,7 @@ async fn version_plan_keeps_explicit_values_adds_defaults_and_remaps_bindings_wi
             account_group_ids: vec![],
             provider_ids: vec![],
             models: vec!["test-model".into()],
+            event: None,
             identity_bindings: vec![],
         }];
     }
@@ -1398,4 +1438,102 @@ async fn switching_versions_uses_saved_settings_and_rejects_stale_retry() {
         .unwrap();
     assert_eq!(error.kind(), AdminErrorKind::Conflict);
     assert_eq!(fixture.snapshot().config_revision, revision);
+}
+
+#[tokio::test]
+async fn version_plan_preserves_observer_event_scopes_and_disabled_subscriptions() {
+    for include_websocket in [false, true] {
+        let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+        {
+            let mut data = fixture.data.lock().unwrap();
+            data.history.clear();
+            for (index, artifact) in data.artifacts.iter_mut().enumerate() {
+                artifact.metadata.contributes.clear();
+                artifact.metadata.contributes.insert(
+                    "observer".into(),
+                    PluginContribution {
+                        id: format!("observer-{index}"),
+                        version: 1,
+                        stages: vec!["observation".into()],
+                        input_formats: vec![],
+                        output_formats: vec![],
+                    },
+                );
+            }
+            data.snapshot.instances[0].bindings = ["request_completed", "websocket_response"]
+                .into_iter()
+                .take(if include_websocket { 2 } else { 1 })
+                .map(|event| PluginCapabilityBinding {
+                    contribution: "observer-0".into(),
+                    stage: "observation".into(),
+                    event: Some(event.into()),
+                    order: 7,
+                    failure_policy: PluginFailurePolicy::Observe,
+                    client_key_ids: vec![],
+                    account_group_ids: vec![],
+                    provider_ids: vec![],
+                    models: vec![format!("model-{event}")],
+                    identity_bindings: vec![],
+                })
+                .collect();
+        }
+        let before = fixture.snapshot();
+        let plan = service(fixture.clone(), Arc::new(Published::default()))
+            .version_plan(&before.instances[0].id, NEW_ARTIFACT)
+            .await
+            .unwrap();
+        assert_eq!(plan.bindings.len(), before.instances[0].bindings.len());
+        for (binding, previous) in plan.bindings.iter().zip(&before.instances[0].bindings) {
+            assert_eq!(binding.contribution, "observer-1");
+            assert_eq!(binding.event, previous.event);
+            assert_eq!(binding.models, previous.models);
+            assert_eq!(binding.order, previous.order);
+        }
+        assert!(fixture.data.lock().unwrap().saves.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn incompatible_disabled_plugin_has_warning_and_cannot_be_enabled() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    {
+        let mut data = fixture.data.lock().unwrap();
+        data.snapshot.instances[0].enabled = false;
+        data.inspection_error = Some(AdminErrorKind::Invalid);
+    }
+    let service = service(fixture.clone(), Arc::new(Published::default()));
+    let view = service.instances().await.unwrap().remove(0);
+    assert!(view.compatibility_warning.is_some());
+    assert!(!view.instance.enabled);
+    let mut request = input();
+    request.artifact_sha256 = OLD_ARTIFACT.into();
+    let error = service
+        .configure_instance(Some(&view.instance.id), request, &context())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminErrorKind::Invalid);
+    assert!(fixture.data.lock().unwrap().saves.is_empty());
+    assert_eq!(
+        fixture.data.lock().unwrap().archive_reads,
+        1,
+        "固定摘要的静态检查结论可复用"
+    );
+    service.instances().await.unwrap();
+    assert_eq!(fixture.data.lock().unwrap().archive_reads, 1);
+}
+
+#[tokio::test]
+async fn transient_compatibility_check_failure_can_be_retried() {
+    let fixture = LifecycleFixture::new(MigrationBehavior::Succeed);
+    fixture.data.lock().unwrap().inspection_error = Some(AdminErrorKind::Unavailable);
+    let service = service(fixture.clone(), Arc::new(Published::default()));
+    assert!(service.instances().await.is_err());
+    fixture.data.lock().unwrap().inspection_error = None;
+    assert!(
+        service.instances().await.unwrap()[0]
+            .compatibility_warning
+            .is_none()
+    );
+    assert_eq!(fixture.data.lock().unwrap().archive_reads, 2);
 }

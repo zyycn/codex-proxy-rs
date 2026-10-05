@@ -1,3 +1,5 @@
+//! 验证 Grok 会话绑定拒绝保留值并隐藏诊断中的会话标识
+
 use provider_xai::{GrokSessionBinding, GrokSessionDataError};
 
 #[test]

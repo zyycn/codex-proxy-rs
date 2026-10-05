@@ -8,6 +8,8 @@
 schema_version: 1
 
 host:
+  # 统一展示、查询日期、限额重置和定时任务的 IANA 时区，修改后重启生效。
+  timezone: 'Asia/Shanghai'
   listen:
     # 本地 cargo run 使用；Docker 内由 CPR_SERVER_HOST/PORT 覆盖。
     host: '127.0.0.1'
@@ -29,6 +31,12 @@ host:
       directory: '../.runtime/logs'
       retention_days: 7
       max_file_size_mb: 20
+  # 二进制部署需要管理端自重启时，取消以下注释；可选路径改为实际程序绝对路径。
+  # Compose 已通过环境变量开启，保持本段注释即可；详情见 deploy/README.md。
+  # system_update:
+  #   deployment_mode: 'binary'
+  #   self_restart_enabled: true
+  #   executable_path: '/opt/codex-proxy-rs/codex-proxy-rs' # 可选：覆盖启动时解析的程序路径。
   drain_timeout_seconds: 30
   worker_shutdown_timeout_seconds: 30
 
@@ -68,8 +76,15 @@ openai:
   # 数据驻留约束；省略或 null 不指定地域约束，与管理端客户端身份无关。
   residency: us
 
-# Compose 凭据桥接区；密码仍只维护在 store 中。
+# Compose 启动桥接区；密码仍只维护在 store 中。
 services:
+  app-runtime:
+    environment:
+      # 默认空值；小内存机器可改为下列值，更积极回收空闲内存，但可能增加 CPU 开销。
+      # 'glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072'
+      # 由 Compose 在进程启动前传入，修改后需重建应用容器，详见 deploy/README.md#小内存优化。
+      GLIBC_TUNABLES: ''
+
   postgres-credentials:
     environment:
       POSTGRES_PASSWORD: *postgres_password

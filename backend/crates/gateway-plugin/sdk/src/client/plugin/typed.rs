@@ -1,3 +1,5 @@
+//! 插件方法的类型化调用与响应编解码，以及调用阶段校验
+
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -6,7 +8,7 @@ use crate::{CallContext, Capability, ErrorCode, PluginFault, Stage};
 
 use super::super::{CallCancellation, CallReply, HostClient, PluginCall, ResponseStream};
 
-/// RPC 的空控制对象，不使用会编码为 `null` 的 Rust 单元类型。
+/// RPC 的空控制对象，不使用会编码为 `null` 的 Rust 单元类型
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
@@ -14,7 +16,7 @@ pub struct Empty {}
 pub(super) type Decoder<P> = fn(PluginCall, &'static [Stage]) -> Result<TypedCall<P>, PluginFault>;
 pub(super) type Encoder<R> = fn(TypedReply<R>) -> Result<CallReply, PluginFault>;
 
-/// SDK 方法标识与请求／响应类型；只能使用 [`super::methods`] 中的合同常量。
+/// SDK 方法标识与请求／响应类型；只能使用 [`super::methods`] 中的合同常量
 pub struct Method<P, R> {
     pub(super) name: &'static str,
     pub(super) capabilities: &'static [Capability],
@@ -51,17 +53,17 @@ impl<P, R> Method<P, R> {
     }
 }
 
-/// 业务请求、宿主上下文与当前父调用内的服务句柄；不实现内容型 `Debug`。
+/// 业务请求、宿主上下文与当前父调用内的服务句柄；不实现内容型 `Debug`
 pub struct TypedCall<P> {
     pub request: P,
-    /// 只有合同明确保留原始正文的方法才会在此提供字节。
+    /// 只有合同明确保留原始正文的方法才会在此提供字节
     pub payload: Vec<u8>,
     pub context: CallContext,
     pub host: HostClient,
     pub cancellation: CallCancellation,
 }
 
-/// 类型化结果，可复用现有有界响应流；敏感 JSON 按方法合同写入二进制载荷。
+/// 类型化结果，可复用现有有界响应流；敏感 JSON 按方法合同写入二进制载荷
 pub struct TypedReply<R> {
     pub result: R,
     pub payload: Vec<u8>,
@@ -126,6 +128,21 @@ pub(super) fn decode_payload<P: DeserializeOwned>(
     Ok(typed_call(call, request, false))
 }
 
+pub(super) fn decode_upstream(
+    mut call: PluginCall,
+    stages: &'static [Stage],
+) -> Result<TypedCall<crate::call::upstream_adapter::UpstreamAdapterRequest>, PluginFault> {
+    validate_stage(&call, stages)?;
+    if !empty_object(&call.params) {
+        return Err(invalid_input());
+    }
+    let (request, body) =
+        crate::call::upstream_adapter::UpstreamAdapterRequest::decode(&call.payload)
+            .map_err(|_| invalid_input())?;
+    call.payload = body;
+    Ok(typed_call(call, request, true))
+}
+
 pub(super) fn encode_metadata<R: Serialize>(
     reply: TypedReply<R>,
 ) -> Result<CallReply, PluginFault> {
@@ -139,6 +156,22 @@ pub(super) fn encode_metadata<R: Serialize>(
     }
     let result = serde_json::to_value(result).map_err(|_| invalid_input())?;
     Ok(CallReply::unary(result, Vec::new()))
+}
+
+pub(super) fn encode_stream<R: Serialize>(reply: TypedReply<R>) -> Result<CallReply, PluginFault> {
+    let TypedReply {
+        result,
+        payload,
+        stream,
+    } = reply;
+    if !payload.is_empty() {
+        return Err(invalid_input());
+    }
+    Ok(CallReply::stream(
+        serde_json::to_value(result).map_err(|_| invalid_input())?,
+        payload,
+        stream.ok_or_else(invalid_input)?,
+    ))
 }
 
 pub(super) fn encode_metadata_with_payload<R: Serialize>(

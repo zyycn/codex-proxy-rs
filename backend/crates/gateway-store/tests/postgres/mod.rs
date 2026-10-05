@@ -1,3 +1,5 @@
+//! PostgreSQL 适配测试入口，以及迁移应用和事务归属测试
+
 use std::{str::FromStr, time::Duration};
 
 use gateway_store::postgres::{
@@ -65,29 +67,23 @@ impl TestDatabase {
     pub(super) async fn create_through(label: &str, migration_version: i64) -> Option<Self> {
         let database_url = crate::support::test_env("CPR_TEST_DATABASE_URL")?;
         let schema = format!("cpr_store_{label}_{}", Uuid::new_v4().simple());
+        // 临时 schema 验证事务可见性与回滚，不模拟 PostgreSQL 掉电恢复
+        // 仅这些测试连接异步刷 WAL，保持服务端配置和生产连接行为不变
+        let options = PgConnectOptions::from_str(&database_url)
+            .expect("parse test PostgreSQL URL")
+            .options([("synchronous_commit", "off")]);
         let admin = PgPoolOptions::new()
             .max_connections(1)
-            .connect(&database_url)
+            .connect_with(options.clone())
             .await
             .expect("connect test PostgreSQL");
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!("create schema \"{schema}\"")))
             .execute(&admin)
             .await
             .expect("create test schema");
-        let search_path = schema.clone();
         let pool = PgPoolOptions::new()
             .max_connections(2)
-            .after_connect(move |connection, _metadata| {
-                let search_path = search_path.clone();
-                Box::pin(async move {
-                    sqlx::query("select set_config('search_path', $1, false)")
-                        .bind(search_path)
-                        .execute(connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect(&database_url)
+            .connect_with(options.options([("search_path", schema.as_str())]))
             .await
             .expect("connect isolated test schema");
         TEST_MIGRATOR
@@ -152,6 +148,14 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     .fetch_one(&first)
     .await
     .expect("load runtime PostgreSQL session settings");
+    let timezone: String = sqlx::query_scalar("show time zone")
+        .fetch_one(&first)
+        .await
+        .unwrap();
+    assert_eq!(
+        timezone, "UTC",
+        "runtime sessions use an explicit technical time basis"
+    );
     let first_tables = sqlx::query_scalar::<_, String>(
         "select table_name
          from information_schema.tables

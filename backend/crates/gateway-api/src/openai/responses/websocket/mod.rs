@@ -1,4 +1,4 @@
-//! OpenAI Responses WebSocket 的升级、连接与串行 session 编排。
+//! OpenAI Responses WebSocket 的升级、连接与串行 session 编排
 
 pub mod connection;
 mod forward;
@@ -23,18 +23,16 @@ use gateway_core::{
     diagnostics::{TraceContext, diagnostic_json},
     engine::{
         execution::{AuthenticatedClient, ClientTransport},
-        middleware::MiddlewareError,
+        middleware::{FrozenMiddlewarePlan, MiddlewareError},
     },
     lifecycle::{ConnectionGuard, ConnectionLifecycle},
     operation::OperationKind,
 };
 
+use crate::middleware::headers::encode_headers;
 use crate::{
     ApiState,
-    openai::middleware::{
-        HttpMiddlewareInput, invoke_http_middleware, request_headers as middleware_request_headers,
-        request_parts,
-    },
+    openai::middleware::{RequestInput, invoke_request, request_parts},
     openai::{
         auth::{authenticate_client, client_access_error_response},
         error::runtime_unavailable_response,
@@ -57,10 +55,12 @@ pub use protocol::{ResponseCreateFrameError, decode_response_create_with_context
 const TEXT_FRAMES_ONLY: &str = "Responses WebSocket accepts text frames only";
 const CONNECTION_LIMIT_CLOSE_REASON: &str = "Responses websocket connection limit reached";
 
-/// 将已认证的 `GET /v1/responses` 升级为 Responses WebSocket。
+/// 将已认证的 `GET /v1/responses` 升级为 Responses WebSocket
 pub(crate) async fn responses_websocket(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
+    middleware: Option<Extension<FrozenMiddlewarePlan>>,
+    lifetime: Option<Extension<Arc<crate::middleware::CallLifetime>>>,
     headers: HeaderMap,
     websocket: WebSocketUpgrade,
 ) -> Response {
@@ -81,22 +81,25 @@ pub(crate) async fn responses_websocket(
         user_agent,
         request_headers,
         headers,
+        middleware.map(|Extension(plan)| plan),
+        lifetime.map(|Extension(lifetime)| lifetime),
     )
 }
 
-/// 已鉴权 Responses WebSocket 升级边界。
+/// 已鉴权 Responses WebSocket 升级边界
 #[derive(Clone)]
 pub(crate) struct ResponsesWebSocketAdapter {
     service: OpenAiService,
 }
 
 impl ResponsesWebSocketAdapter {
-    /// 绑定应用提供的唯一 OpenAI 客户端服务端口。
+    /// 绑定应用提供的唯一 OpenAI 客户端服务端口
     #[must_use]
     pub const fn new(service: OpenAiService) -> Self {
         Self { service }
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn upgrade_with_client_context(
         &self,
         websocket: WebSocketUpgrade,
@@ -105,6 +108,8 @@ impl ResponsesWebSocketAdapter {
         user_agent: Option<String>,
         request_headers: OpenAiRequestHeaders,
         raw_headers: HeaderMap,
+        middleware: Option<FrozenMiddlewarePlan>,
+        lifetime: Option<Arc<crate::middleware::CallLifetime>>,
     ) -> Response {
         let connection_guard = match self.service.try_register_connection() {
             Ok(guard) => guard,
@@ -128,14 +133,17 @@ impl ResponsesWebSocketAdapter {
             raw_headers,
             lifecycle: self.service.lifecycle(),
             connection_guard,
+            middleware,
         };
+        let origin = crate::middleware::current();
         websocket
-            // 覆盖 axum/tungstenite 的私有 64 MiB message 与 16 MiB frame 默认值。
-            // Responses JSON 的协议可接受性由上游决定，代理不另设 wire 长度上限。
+            // 覆盖 axum/tungstenite 的私有 64 MiB message 与 16 MiB frame 默认值
+            // Responses JSON 的协议可接受性由上游决定，代理不另设 wire 长度上限
             .max_message_size(usize::MAX)
             .max_frame_size(usize::MAX)
             .on_upgrade(move |socket| async move {
-                serve_responses_websocket(socket, session).await;
+                let _lifetime = lifetime;
+                crate::middleware::scope(origin, serve_responses_websocket(socket, session)).await;
             })
     }
 }
@@ -150,6 +158,7 @@ struct ResponsesWebSocketSession {
     raw_headers: HeaderMap,
     lifecycle: Arc<dyn ConnectionLifecycle>,
     connection_guard: Box<dyn ConnectionGuard>,
+    middleware: Option<FrozenMiddlewarePlan>,
 }
 
 async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocketSession) {
@@ -163,6 +172,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         raw_headers,
         lifecycle,
         connection_guard,
+        middleware,
     } = session;
     tracing::info!(
         websocket_connection_id = %connection_id,
@@ -172,7 +182,13 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
     let cancellation = lifecycle.cancellation();
     let request_headers =
         request_headers.with_downstream_websocket_connection_id(connection_id.clone());
-    let mut connection = ResponsesWebSocketConnection::new(socket, connection_id, cancellation);
+    let mut connection = ResponsesWebSocketConnection::new(
+        socket,
+        connection_id,
+        cancellation,
+        middleware,
+        encode_headers(&raw_headers).into(),
+    );
     let mut request_count = 0_u64;
     let mut replay = ConnectionReplaySnapshot::default();
 
@@ -222,7 +238,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
                 continue;
             }
         };
-        // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口。
+        // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口
         if connection.is_expired() {
             trace_rejected_request(
                 &correlation_id,
@@ -235,7 +251,27 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             break;
         }
         let execution = service.execution();
-        let prepared = match execution.prepare_execution(client.clone()).await {
+        let preparation = async {
+            // 握手的显式改写可继承，Key 策略与宿主设置仍在每轮执行前刷新
+            let mut client = client.clone();
+            if let Some(settings) = client.request_settings() {
+                let current = execution.request_settings().ok_or_else(|| {
+                    gateway_core::error::GatewayError::new(
+                        gateway_core::error::GatewayErrorKind::Internal,
+                        "runtime snapshot is unavailable",
+                    )
+                })?;
+                let rebased = settings.rebase(current.snapshot()).map_err(|_| {
+                    gateway_core::error::GatewayError::new(
+                        gateway_core::error::GatewayErrorKind::InvalidRequest,
+                        "request settings are invalid",
+                    )
+                })?;
+                client = client.with_request_settings(rebased);
+            }
+            execution.prepare_execution(client).await
+        };
+        let prepared = match preparation.await {
             Ok(prepared) => prepared,
             Err(error) => {
                 trace_rejected_request(
@@ -257,13 +293,13 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         let response_control = prepared.response_control();
         let capture = new_replay_capture();
         let validation = ResponseValidationFacts::default();
-        let input = HttpMiddlewareInput {
+        let input = RequestInput {
             endpoint: crate::openai::router::RESPONSES_PATH.to_owned(),
             protocol: "openai".to_owned(),
             operation: Some(OperationKind::Generate),
             transport: ClientTransport::WebSocket,
             model_hint: Some(decoded.metadata().requested_model().to_owned()),
-            headers: middleware_request_headers(&raw_headers),
+            headers: encode_headers(&raw_headers),
             body: Bytes::from(payload.clone()),
         };
         let service_for_terminal = service.clone();
@@ -273,7 +309,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         let request_id_for_terminal = Arc::clone(&request_id);
         let capture_for_terminal = Arc::clone(&capture);
         let validation_for_terminal = validation.clone();
-        let invoke = invoke_http_middleware(
+        let invoke = invoke_request(
             execution,
             prepared,
             input,
@@ -360,7 +396,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
     connection.log_summary(request_count);
 }
 
-// 尚未建立模型请求的拒绝也保留原文入口，用返回给客户端的 correlation ID 检索。
+// 尚未建立模型请求的拒绝也保留原文入口，用返回给客户端的 correlation ID 检索
 fn trace_rejected_request(
     correlation_id: &str,
     connection_id: &str,

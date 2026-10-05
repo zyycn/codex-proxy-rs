@@ -1,3 +1,5 @@
+//! 验证 OpenAI 事件的模型、用量、额度与重试信息提取
+
 use gateway_protocol::openai::events::{
     RateLimitKeySource, RateLimitWindow, TokenUsage, billable_usage_is_complete, extract_sse_usage,
     extract_usage, is_codex_quota_header_name, is_rate_limit_header_name, parse_rate_limit_headers,

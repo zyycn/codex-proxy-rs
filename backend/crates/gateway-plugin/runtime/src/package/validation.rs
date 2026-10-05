@@ -1,3 +1,5 @@
+//! 有界解码插件归档，校验清单、资源路径与内容摘要
+
 use std::{collections::BTreeMap, io::Read, sync::Arc};
 
 use flate2::read::MultiGzDecoder;
@@ -39,7 +41,7 @@ pub enum PackageError {
     Cache,
 }
 
-/// 校验后的不可变字节；无需先把未可信压缩包解压到宿主文件系统。
+/// 校验后的不可变字节；无需先把未可信压缩包解压到宿主文件系统
 #[derive(Clone)]
 pub struct ValidatedPackage {
     pub(super) manifest: Manifest,
@@ -49,7 +51,7 @@ pub struct ValidatedPackage {
 }
 
 impl ValidatedPackage {
-    /// 仅供已冻结资源声明读取校验后的字节，不暴露缓存路径或任意文件读取。
+    /// 仅供已冻结资源声明读取校验后的字节，不暴露缓存路径或任意文件读取
     pub(crate) fn resource(&self, path: &str) -> Option<&[u8]> {
         self.manifest
             .resources
@@ -71,7 +73,7 @@ impl ValidatedPackage {
             return Err(PackageError::Digest);
         }
 
-        // 先限制整个解压字节流，连 PAX 元数据、目录、padding 和尾部数据也纳入预算。
+        // 先限制整个解压字节流，连 PAX 元数据、目录、padding 和尾部数据也纳入预算
         let expanded_limit =
             u64::try_from(limits.expanded_bytes).map_err(|_| PackageError::Limit)?;
         let mut expanded = Vec::new();
@@ -120,7 +122,7 @@ impl ValidatedPackage {
         let manifest: Manifest =
             serde_json::from_slice(&manifest_bytes).map_err(|_| PackageError::Archive)?;
         manifest.validate()?;
-        // 源清单可以省略 package，但归档安装入口必须只接受构建后的单平台包。
+        // 源清单可以省略 package，但归档安装入口必须只接受构建后的单平台包
         let package = manifest.package.as_ref().ok_or(ManifestError::Invalid)?;
         if files.len() != package.files.len() || files.len() > limits.file_count {
             return Err(PackageError::Archive);

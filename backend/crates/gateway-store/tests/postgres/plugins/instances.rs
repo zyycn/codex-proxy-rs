@@ -1,3 +1,5 @@
+//! 验证插件实例的精确授权、版本替换与配置和敏感值原子提交
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -36,7 +38,7 @@ fn instance(digest: String) -> PluginInstance {
         trusted_process: true,
         configuration: serde_json::json!({"baseUrl":"https://example.com"}),
         secrets: BTreeMap::from([("token".into(), "sensitive-fixture".into())]),
-        grants: vec![],
+
         bindings: vec![],
         revision: Revision::new(1).unwrap(),
     }
@@ -73,7 +75,7 @@ async fn management_authorization_checks_exact_target_without_loading_secrets() 
         artifact_sha256: saved.instance.artifact_sha256.clone(),
         revision: saved.instance.revision.get(),
     };
-    // 故意留下不能解码为密钥映射的测试数据，授权查询不得读取或解释它。
+    // 故意留下不能解码为密钥映射的测试数据，授权查询不得读取或解释它
     sqlx::query("update plugin_instance_secrets set secrets_json=$2 where instance_id=$1")
         .bind(uuid::Uuid::parse_str(&target.instance_id).unwrap())
         .bind(serde_json::json!({"token": false}))
@@ -149,6 +151,7 @@ fn usage_binding(client_key_id: &str, account_group_id: &str) -> PluginCapabilit
         account_group_ids: vec![account_group_id.into()],
         provider_ids: vec![],
         models: vec![],
+        event: None,
         identity_bindings: vec![],
     }
 }
@@ -166,6 +169,7 @@ fn frontend_authentication_binding(
         account_group_ids: vec![],
         provider_ids: vec![],
         models: vec![],
+        event: None,
         identity_bindings: vec![PluginFrontendIdentityBinding {
             principal: principal.into(),
             client_key_id: client_key_id.into(),
@@ -315,8 +319,7 @@ async fn instance_save_rejects_unaccepted_enablement_and_forged_acceptance_facts
     };
     initialize_revision(&database).await;
     let store = PgPluginStore::new(database.pool.clone());
-    let mut package = artifact('d', &["linux-x86_64"]);
-    package.metadata.requested_permissions = vec!["network".into()];
+    let package = artifact('d', &["linux-x86_64"]);
     let installed = store
         .install_artifact(package, PluginSource::Upload, &context())
         .await
@@ -350,16 +353,14 @@ async fn instance_save_rejects_unaccepted_enablement_and_forged_acceptance_facts
         .accept_artifact(&installed.artifact.metadata.sha256, &context())
         .await
         .unwrap();
-    let missing_grant = instance(installed.artifact.metadata.sha256);
-    assert_eq!(
-        store
-            .save_instance(missing_grant, accepted.config_revision, &context())
-            .await
-            .err()
-            .expect("accepted artifact grants cannot be forged")
-            .kind(),
-        AdminStoreErrorKind::Invalid
-    );
+    let mut enabled = instance(installed.artifact.metadata.sha256);
+    enabled.enabled = true;
+    let saved = store
+        .save_instance(enabled, accepted.config_revision, &context())
+        .await
+        .expect("accepted artifact can be enabled without permission grants");
+    assert!(saved.instance.enabled);
+    assert!(saved.instance.trusted_process);
     database.close().await;
 }
 
@@ -785,5 +786,88 @@ async fn version_settings_survive_upgrade_and_disabled_edits_and_share_the_trans
         .await
         .unwrap();
     assert!(store.configuration_versions(&id).await.unwrap().is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn confirmed_disable_is_atomic_and_preserves_plugin_data() {
+    let Some(database) = TestDatabase::create("confirmed_disable").await else {
+        return;
+    };
+    initialize_revision(&database).await;
+    let store = PgPluginStore::new(database.pool.clone());
+    let installed = store
+        .install_artifact(
+            artifact('a', &["linux-x86_64"]),
+            PluginSource::Upload,
+            &context(),
+        )
+        .await
+        .unwrap();
+    let accepted = store
+        .accept_artifact(&installed.artifact.metadata.sha256, &context())
+        .await
+        .unwrap();
+    let mut expected = accepted.config_revision;
+    let mut ids = Vec::new();
+    for name in ["First", "Second", "Compatible"] {
+        let mut candidate = instance(installed.artifact.metadata.sha256.clone());
+        candidate.name = name.into();
+        candidate.enabled = true;
+        let saved = store
+            .save_instance(candidate, expected, &context())
+            .await
+            .unwrap();
+        expected = saved.config_revision;
+        ids.push(saved.instance.id);
+    }
+    let original = store.load_instances().await.unwrap();
+    for (targets, revision) in [
+        (
+            vec![ids[0].clone(), uuid::Uuid::now_v7().to_string()],
+            expected,
+        ),
+        (
+            ids[..2].to_vec(),
+            Revision::new(expected.get() - 1).unwrap(),
+        ),
+    ] {
+        assert!(
+            store
+                .disable_instances(&targets, revision, &context())
+                .await
+                .is_err()
+        );
+        let unchanged = store.load_instances().await.unwrap();
+        assert_eq!(unchanged.config_revision, expected);
+        assert!(unchanged.instances.iter().all(|item| item.enabled));
+    }
+    let committed = store
+        .disable_instances(&ids[..2], expected, &context())
+        .await
+        .unwrap();
+    assert_eq!(committed.get(), expected.get() + 1);
+    let current = store.load_instances().await.unwrap();
+    for instance in current.instances {
+        let before = original
+            .instances
+            .iter()
+            .find(|item| item.id == instance.id)
+            .unwrap();
+        assert_eq!(instance.enabled, instance.id == ids[2]);
+        assert_eq!(instance.configuration, before.configuration);
+        assert_eq!(instance.bindings, before.bindings);
+        assert_eq!(
+            instance.secrets["token"].expose_secret(),
+            before.secrets["token"].expose_secret()
+        );
+        assert!(
+            store
+                .load_version_configuration(&instance.id, &instance.artifact_sha256)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
     database.close().await;
 }

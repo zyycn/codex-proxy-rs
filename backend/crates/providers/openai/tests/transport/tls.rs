@@ -1,11 +1,13 @@
+//! 验证 HTTP 与 WebSocket 的 TLS 握手特征
+
 use std::collections::BTreeMap;
 
 use bytes::{Buf as _, Bytes};
 
 use super::*;
 
-// 2026-09-19 从 Desktop 26.915.31945 / Core 0.155.0-alpha.9.2 各重复抓取三次。
-// HTTP/native-tls 的扩展顺序固定；WebSocket/rustls 会随机化扩展顺序和临时密钥。
+// 2026-09-19 从 Desktop 26.915.31945 / Core 0.155.0-alpha.9.2 各重复抓取三次
+// HTTP/native-tls 的扩展顺序固定；WebSocket/rustls 会随机化扩展顺序和临时密钥
 #[derive(Debug, PartialEq, Eq)]
 struct ClientHello {
     cipher_suites: Vec<u16>,
@@ -50,7 +52,7 @@ fn http_client_hello_should_match_official_native_tls_transport() {
     }
 
     // Cargo 运行测试时可能注入 SSL_CERT_FILE，生产代码会把它视作自定义 CA 并切到 rustls；
-    // 因此在清理相关环境变量的子进程里验证默认路径。
+    // 因此在清理相关环境变量的子进程里验证默认路径
     let current_exe = std::env::current_exe().expect("current test binary path");
     let output = Command::new(current_exe)
         .arg("--exact")
@@ -149,7 +151,7 @@ async fn read_client_hello(listener: TcpListener) -> ClientHello {
 
     let mut hello = Bytes::from(record);
     assert_eq!(hello.get_u8(), 1, "ClientHello message");
-    hello.advance(3 + 2 + 32); // Message length, legacy version, random.
+    hello.advance(3 + 2 + 32); // 消息长度、旧版协议版本与随机数
     let session_id_len = usize::from(hello.get_u8());
     hello.advance(session_id_len);
     let cipher_suites = u16_values(take_vector(&mut hello));

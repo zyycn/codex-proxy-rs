@@ -1,4 +1,4 @@
-//! WebSocket exchange 共用接收边界。
+//! WebSocket exchange 共用接收边界
 
 use std::time::Duration;
 

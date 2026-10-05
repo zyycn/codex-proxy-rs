@@ -37,9 +37,12 @@ export interface OutboundProxyRecord {
   revision: number
   accountCount: number
   lastTestAt: string | null
+  lastTestAtDisplay: string | null
   lastTest: OutboundProxyTest | null
   createdAt: string
+  createdAtDisplay: string
   updatedAt: string
+  updatedAtDisplay: string
 }
 
 interface ProxyPage {

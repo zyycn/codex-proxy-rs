@@ -1,3 +1,5 @@
+//! 验证代理探测的双栈地址、认证、证书与失败边界
+
 use gateway_admin::ports::proxy::ProxyProbe;
 use gateway_core::account::OutboundProxy;
 use gateway_host::proxy_probe::HttpProxyProbe;

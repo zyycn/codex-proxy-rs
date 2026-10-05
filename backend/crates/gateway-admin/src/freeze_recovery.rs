@@ -1,8 +1,9 @@
-//! 容量熔断冻结的恢复编排：到期探测、失败顺延与自适应并发下调。
+//! 容量熔断冻结的恢复编排：到期探测、失败顺延与自适应并发下调
 //!
 //! 冻结事实保存在可丢失的 Redis 冷却中，本服务只组合 Admin 端口：
 //! 观测（`AccountRuntimeStore`）、探测（`AccountsService`）与写回
-//! （原子降低并发 / 按冻结代次结束探测）。旧观测不会覆盖管理员操作。
+//! （原子降低并发 / 按冻结代次结束探测）
+//! 旧观测不会覆盖管理员操作
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -22,21 +23,21 @@ use crate::model::{MutationActor, MutationContext};
 use crate::ports::store::{AccountRuntimeStore, AccountStore, SettingsStore};
 use crate::use_case::accounts::AccountsService;
 
-/// 自适应并发下调保留系数：下调到观测在途峰值的 80%。
+/// 自适应并发下调保留系数：下调到观测在途峰值的 80%
 const ADAPTIVE_CONCURRENCY_FACTOR: f64 = 0.8;
-/// 自适应并发下限：过低的并发让账号几乎不可用，宁可保持冻结。
+/// 自适应并发下限：过低的并发让账号几乎不可用，宁可保持冻结
 const ADAPTIVE_CONCURRENCY_FLOOR: u32 = 2;
-/// worker 周期；冷却观测与探测都依赖该节奏。
+/// worker 周期；冷却观测与探测都依赖该节奏
 pub const FREEZE_RECOVERY_INTERVAL: Duration = Duration::from_secs(30);
 pub const FREEZE_RECOVERY_WORKER_OWNER: &str = "account-freeze-recovery";
 pub const WORKER_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 pub const WORKER_MAXIMUM_BACKOFF: Duration = Duration::from_secs(60);
 pub const WORKER_LEASE_TTL: Duration = Duration::from_secs(15 * 60);
 pub const WORKER_LEASE_RENEWAL: Duration = Duration::from_secs(5 * 60);
-/// 系统审计上下文的固定请求 ID；账号并发更新审计由此溯源到自动冻结编排。
+/// 系统审计上下文的固定请求 ID；账号并发更新审计由此溯源到自动冻结编排
 const SYSTEM_REQUEST_ID: &str = "account-freeze-recovery";
 
-/// 冻结恢复所需的管理端口组合。
+/// 冻结恢复所需的管理端口组合
 #[derive(Clone)]
 pub struct FreezeRecoveryDeps {
     pub accounts: Arc<dyn AccountsService>,
@@ -61,7 +62,7 @@ impl FreezeRecoveryTask {
         }
     }
 
-    /// 读取冻结策略；读取或校验失败跳过本轮，不能把未知配置当作允许解冻。
+    /// 读取冻结策略；读取或校验失败跳过本轮，不能把未知配置当作允许解冻
     async fn freeze_policy(&self) -> Option<gateway_core::provider_ports::ProviderFreezePolicy> {
         let settings = self.deps.settings.load_runtime_settings().await.ok()?;
         gateway_core::provider_ports::ProviderFreezePolicy::try_new(
@@ -95,7 +96,7 @@ impl FreezeRecoveryTask {
     }
 
     /// 对冻结中的账号执行自适应并发下调：目标为观测在途峰值的 80%（下限 2），
-    /// 只降不升；未观测到峰值证据的账号保持现状。
+    /// 只降不升；未观测到峰值证据的账号保持现状
     async fn adapt_concurrency_limits(
         &self,
         freezes: &BTreeMap<String, AccountFreeze>,
@@ -146,7 +147,7 @@ impl FreezeRecoveryTask {
             .ok()
     }
 
-    /// 到达探测时间后才恢复；关闭自动冻结或探测时，已有冻结仍等待原冷却结束。
+    /// 到达探测时间后才恢复；关闭自动冻结或探测时，已有冻结仍等待原冷却结束
     async fn recover_due_freezes(
         &self,
         freezes: &BTreeMap<String, AccountFreeze>,
@@ -179,14 +180,14 @@ impl FreezeRecoveryTask {
             return;
         };
         if !item.account.enabled {
-            // 停用账号没有自动恢复意义；解冻交给管理员手动恢复。
+            // 停用账号没有自动恢复意义；解冻交给管理员手动恢复
             return;
         }
         let Ok(account) = ProviderAccountId::new(account_id.to_owned()) else {
             return;
         };
         let Some(model) = self.resolve_probe_model(&account, policy).await else {
-            // 没有可用探测模型时按失败处理，顺延冻结等待下一轮。
+            // 没有可用探测模型时按失败处理，顺延冻结等待下一轮
             self.postpone(&account, freeze, policy).await;
             return;
         };
@@ -218,7 +219,7 @@ impl FreezeRecoveryTask {
         }
     }
 
-    /// 探测失败只顺延本次仍存在的冻结，旧探测不能重新冻结已手动恢复的账号。
+    /// 探测失败只顺延本次仍存在的冻结，旧探测不能重新冻结已手动恢复的账号
     async fn postpone(
         &self,
         account: &ProviderAccountId,
@@ -281,7 +282,7 @@ impl ScheduledTask for FreezeRecoveryTask {
     }
 }
 
-/// 自适应目标并发：观测峰值 × 0.8 向下取整，下限 2；无证据（峰值为 0）不调整。
+/// 自适应目标并发：观测峰值 × 0.8 向下取整，下限 2；无证据（峰值为 0）不调整
 fn adaptive_target(peak_in_flight: u32) -> Option<u32> {
     if peak_in_flight == 0 {
         return None;
@@ -290,7 +291,7 @@ fn adaptive_target(peak_in_flight: u32) -> Option<u32> {
     Some(scaled.max(ADAPTIVE_CONCURRENCY_FLOOR))
 }
 
-/// 消耗连接测试事件流并返回是否以 `Completed` 终止。
+/// 消耗连接测试事件流并返回是否以 `Completed` 终止
 async fn drain_probe(mut events: crate::model::accounts::AccountConnectionTestEventStream) -> bool {
     let mut completed = false;
     while let Some(event) = events.next().await {

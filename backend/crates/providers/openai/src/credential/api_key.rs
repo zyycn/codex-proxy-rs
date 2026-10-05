@@ -1,4 +1,4 @@
-//! API Key 账号的凭据合同；地址与传输策略随凭据 revision 一起更新。
+//! API Key 账号的凭据合同；地址与传输策略随凭据 revision 一起更新
 
 use std::fmt;
 
@@ -9,7 +9,7 @@ pub const CODEX_AUTHENTICATION_KIND_API_KEY: &str = "api_key";
 
 use super::types::ResponsesTransport;
 
-/// 可在管理端展示的上游设置，不包含密钥。
+/// 可在管理端展示的上游设置，不包含密钥
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyConfiguration {

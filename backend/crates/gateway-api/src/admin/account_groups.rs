@@ -1,4 +1,4 @@
-//! Account group HTTP wire and fixed routes.
+//! 账号分组管理的 HTTP 数据合同与固定路由
 
 use crate::auth::SessionState;
 
@@ -111,7 +111,9 @@ struct AccountGroupView {
     capacity: AccountGroupCapacityView,
     usage: AccountGroupUsageView,
     created_at: DateTime<Utc>,
+    created_at_display: String,
     updated_at: DateTime<Utc>,
+    updated_at_display: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,8 +138,8 @@ struct AccountGroupUsageView {
     retained_total_usd: String,
 }
 
-impl From<AccountGroupRecord> for AccountGroupView {
-    fn from(record: AccountGroupRecord) -> Self {
+impl From<(AccountGroupRecord, crate::time::TimePresenter)> for AccountGroupView {
+    fn from((record, time): (AccountGroupRecord, crate::time::TimePresenter)) -> Self {
         Self {
             id: record.id.to_string(),
             name: record.name,
@@ -151,7 +153,9 @@ impl From<AccountGroupRecord> for AccountGroupView {
             account_summary: account_summary_view(record.account_summary),
             capacity: capacity_view(record.capacity),
             usage: usage_view(record.usage),
+            created_at_display: time.datetime(&record.created_at),
             created_at: record.created_at,
+            updated_at_display: time.datetime(&record.updated_at),
             updated_at: record.updated_at,
         }
     }
@@ -187,15 +191,19 @@ struct AccountGroupPageData {
     config_revision: u64,
 }
 
-impl From<AccountGroupPage> for AccountGroupPageData {
-    fn from(page: AccountGroupPage) -> Self {
+impl From<(AccountGroupPage, crate::time::TimePresenter)> for AccountGroupPageData {
+    fn from((page, time): (AccountGroupPage, crate::time::TimePresenter)) -> Self {
         let total_pages = if page.total == 0 {
             0
         } else {
             page.total.div_ceil(u64::from(page.page_size))
         };
         Self {
-            items: page.items.into_iter().map(Into::into).collect(),
+            items: page
+                .items
+                .into_iter()
+                .map(|value| AccountGroupView::from((value, time)))
+                .collect(),
             page: PageMeta::new(
                 page.page,
                 u32::from(page.page_size),
@@ -215,17 +223,19 @@ struct AccountGroupMutationData {
     config_revision: u64,
 }
 
-impl From<AccountGroupMutation> for AccountGroupMutationData {
-    fn from(mutation: AccountGroupMutation) -> Self {
+impl From<(AccountGroupMutation, crate::time::TimePresenter)> for AccountGroupMutationData {
+    fn from((mutation, time): (AccountGroupMutation, crate::time::TimePresenter)) -> Self {
         Self {
             id: mutation.id.to_string(),
-            record: mutation.record.map(Into::into),
+            record: mutation
+                .record
+                .map(|value| AccountGroupView::from((value, time))),
             config_revision: mutation.config_revision.get(),
         }
     }
 }
 
-/// Construct all fixed account-group management routes.
+/// 构造账号分组管理的固定路由
 pub fn router<S>() -> Router<S>
 where
     S: SessionState + Clone + Send + Sync + 'static,
@@ -247,6 +257,7 @@ async fn list<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let result = state
         .admin_services()
         .account_groups()
@@ -255,7 +266,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(AccountGroupPageData::from(result)),
+        AdminEnvelope::ok(AccountGroupPageData::from((result, time))),
     ))
 }
 
@@ -283,6 +294,7 @@ where
                 },
             )
             .await,
+        crate::time::TimePresenter::new(state.admin_services().timezone()),
     )
 }
 
@@ -311,6 +323,7 @@ where
                 },
             )
             .await,
+        crate::time::TimePresenter::new(state.admin_services().timezone()),
     )
 }
 
@@ -358,6 +371,7 @@ where
                 },
             )
             .await,
+        crate::time::TimePresenter::new(state.admin_services().timezone()),
     )
 }
 
@@ -381,17 +395,19 @@ where
                 },
             )
             .await,
+        crate::time::TimePresenter::new(state.admin_services().timezone()),
     )
 }
 
 fn mutation_response(
     status: StatusCode,
     result: Result<AccountGroupMutation, gateway_admin::model::AdminError>,
+    time: crate::time::TimePresenter,
 ) -> Result<AdminResponse<AdminEnvelope<AccountGroupMutationData>>, AdminError> {
     let result = result.map_err(map_service_error)?;
     Ok(AdminResponse::new(
         status,
-        AdminEnvelope::ok(AccountGroupMutationData::from(result)),
+        AdminEnvelope::ok(AccountGroupMutationData::from((result, time))),
     ))
 }
 

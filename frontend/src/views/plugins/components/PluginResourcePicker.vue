@@ -5,7 +5,7 @@ import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccountGroups, getApiKeys } from '@/api'
 import { errorMessage } from '@/utils/operation'
 
-const props = withDefaults(defineProps<{ kind: 'keys' | 'groups', disabled?: boolean, maxCollapseTags?: number }>(), { maxCollapseTags: 1 })
+const props = withDefaults(defineProps<{ kind: 'keys' | 'groups', disabled?: boolean, active?: boolean, maxCollapseTags?: number }>(), { active: true, maxCollapseTags: 1 })
 const selected = defineModel<string[]>({ required: true })
 const options = shallowRef<{ id: string, label: string, disabled: boolean }[]>([])
 const loading = shallowRef(false)
@@ -66,7 +66,12 @@ async function load() {
       loading.value = false
   }
 }
-watch(() => props.kind, load, { immediate: true })
+watch([() => props.kind, () => props.active], ([, active]) => {
+  controller?.abort()
+  controller = undefined
+  if (active)
+    void load()
+}, { immediate: true, flush: 'sync' })
 onScopeDispose(() => controller?.abort())
 </script>
 

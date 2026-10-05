@@ -1,4 +1,4 @@
-//! Responses WebSocket 入站请求与下行事件的纯协议映射。
+//! Responses WebSocket 入站请求与下行事件的纯协议映射
 
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use gateway_core::engine::EngineError;
@@ -16,14 +16,14 @@ use super::super::{
     request::{OpenAiRequestHeaders, RequestDecodeSource},
 };
 
-/// 使用连接级请求头和 Provider 上下文解码官方 `response.create` 文本帧。
+/// 使用连接级请求头和 Provider 上下文解码官方 `response.create` 文本帧
 ///
-/// 缺省 `stream` 等价于 WebSocket 固有的流式语义；显式 `false` 会被拒绝。
+/// 缺省 `stream` 等价于 WebSocket 固有的流式语义；显式 `false` 会被拒绝
 ///
 /// # Errors
 ///
 /// 帧不是合法 JSON object、消息类型错误、显式关闭 stream，或 Responses 请求
-/// 无法映射到 canonical operation 时返回不包含正文内容的稳定错误。
+/// 无法映射到 canonical operation 时返回不包含正文内容的稳定错误
 pub fn decode_response_create_with_context(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,
@@ -31,7 +31,7 @@ pub fn decode_response_create_with_context(
     decode_response_create_inner(payload, request_headers)
 }
 
-/// 中断只引用活动响应；普通创建帧仍交给原有解码与串行准入路径。
+/// 中断只引用活动响应；普通创建帧仍交给原有解码与串行准入路径
 pub(super) fn decode_response_interrupt(
     payload: &str,
 ) -> Result<Option<String>, ResponseCreateFrameError> {
@@ -40,8 +40,8 @@ pub(super) fn decode_response_interrupt(
         #[serde(rename = "type")]
         message_type: Option<String>,
     }
-    // 非控制帧仍在原来的串行请求边界校验，不能抢先拒绝排队的普通请求。
-    // 只投影类型，避免为排队的大型 response.create 再构造完整 JSON 树。
+    // 非控制帧仍在原来的串行请求边界校验，不能抢先拒绝排队的普通请求
+    // 只投影类型，避免为排队的大型 response.create 再构造完整 JSON 树
     let Ok(frame) = serde_json::from_str::<FrameType>(payload) else {
         return Ok(None);
     };
@@ -93,22 +93,22 @@ fn decode_response_create_inner(
     .map_err(ResponseCreateFrameError::Request)
 }
 
-/// `response.create` 帧的稳定安全错误。
+/// `response.create` 帧的稳定安全错误
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ResponseCreateFrameError {
-    /// 文本不是合法 JSON。
+    /// 文本不是合法 JSON
     #[error("response.create frame must be valid JSON")]
     InvalidJson,
-    /// 顶层不是 object。
+    /// 顶层不是 object
     #[error("response.create frame must be a JSON object")]
     ExpectedObject,
-    /// `type` 缺失或不是 `response.create`。
+    /// `type` 缺失或不是 `response.create`
     #[error("unsupported Responses WebSocket message type")]
     UnsupportedType,
-    /// WebSocket 请求显式声明 `stream=false`。
+    /// WebSocket 请求显式声明 `stream=false`
     #[error("Responses WebSocket requests require stream=true")]
     StreamingRequired,
-    /// 内层 Responses 请求无法映射到 canonical operation。
+    /// 内层 Responses 请求无法映射到 canonical operation
     #[error(transparent)]
     Request(RequestDecodeError),
 }
@@ -167,7 +167,7 @@ fn response_event_headers(response_headers: &[ProviderResponseHeader]) -> Map<St
         {
             continue;
         }
-        // 官方 WS 事件使用 string map，无法表达同名多值；后值保持既有覆盖语义。
+        // 官方 WS 事件使用 string map，无法表达同名多值；后值保持既有覆盖语义
         headers.insert(name.as_str().to_owned(), Value::String(value.to_owned()));
     }
     headers
@@ -185,11 +185,11 @@ pub(super) fn initial_engine_error_event(
         _ => None,
     };
     let upstream = provider.and_then(|error| error.client_visible_upstream_response());
-    // 最终失败响应优先于会话快照，避免混入先前 attempt 或 opening 的关联头。
+    // 最终失败响应优先于会话快照，避免混入先前 attempt 或 opening 的关联头
     let mut headers =
         response_event_headers(upstream.map_or(response_headers, |response| response.headers()));
     if upstream.is_none() {
-        // 会话 opening 身份不证明当前失败属于该请求；仅保留其他允许的会话头。
+        // 会话 opening 身份不证明当前失败属于该请求；仅保留其他允许的会话头
         headers.remove("x-request-id");
         headers.remove("x-oai-request-id");
     }
@@ -205,7 +205,7 @@ pub(super) fn initial_engine_error_event(
             .filter(|value| !value.is_success() && !value.is_informational())
             .unwrap_or(default_status)
     };
-    // 无原响应关联头时使用 Provider 的失败事实；不能让旧会话 ID 遮住当前失败。
+    // 无原响应关联头时使用 Provider 的失败事实；不能让旧会话 ID 遮住当前失败
     if !has_request_id(&headers)
         && let Some(request_id) = provider.and_then(|error| error.upstream_request_id())
         && let Ok(value) = HeaderValue::from_str(request_id.as_str())
@@ -214,7 +214,7 @@ pub(super) fn initial_engine_error_event(
     {
         headers.insert("x-request-id".to_owned(), Value::String(value.to_owned()));
     }
-    // 只桥接 Provider 已提取的结构化错误；原始 HTML/文本正文不成为安全 fallback 的 message。
+    // 只桥接 Provider 已提取的结构化错误；原始 HTML/文本正文不成为安全 fallback 的 message
     error_event(
         status,
         gateway.client_error_type().unwrap_or(default_type),
@@ -251,8 +251,8 @@ pub(super) fn error_event(
     event.insert("status".to_owned(), Value::Number(status.as_u16().into()));
     event.insert("error".to_owned(), Value::Object(error));
     if let Some(request_id) = request_id {
-        // Codex 从本 error 事件的 headers 读 ID，独立 metadata 和顶层 request_id 不能替代。
-        // 网关身份独立保存；有上游关联头时不冒充或覆盖上游身份。
+        // Codex 从本 error 事件的 headers 读 ID，独立 metadata 和顶层 request_id 不能替代
+        // 网关身份独立保存；有上游关联头时不冒充或覆盖上游身份
         if !has_request_id(&headers) {
             headers.insert(
                 "x-request-id".to_owned(),

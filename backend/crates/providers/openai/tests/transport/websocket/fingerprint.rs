@@ -1,3 +1,5 @@
+//! 验证 Codex WebSocket 线协议指纹
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flate2::{Decompress, FlushDecompress};
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
@@ -108,7 +110,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
         opening.lines().next(),
         Some("GET /backend-api/codex/responses HTTP/1.1")
     );
-    // 官方 Codex Core 0.154.0（Desktop 26.908.40834）的原始 opening 抓包顺序。
+    // 官方 Codex Core 0.154.0（Desktop 26.908.40834）的原始 opening 抓包顺序
     assert_eq!(
         read_header_names(&opening),
         vec![

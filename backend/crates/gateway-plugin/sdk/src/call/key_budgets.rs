@@ -1,4 +1,4 @@
-//! Client Key 预算查询、上限更新与用量重置。
+//! Client Key 预算查询、上限更新与用量重置
 
 use serde::{Deserialize, Serialize};
 

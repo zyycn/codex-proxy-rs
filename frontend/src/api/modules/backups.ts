@@ -13,12 +13,14 @@ export interface BackupSettingsView {
   verified: boolean
   scheduleEnabled: boolean
   cronExpression: string | null
-  scheduleTimezone: string | null
   retentionDays: number
   retentionCount: number
   nextRunAt: string | null
+  nextRunAtDisplay: string | null
   lastVerifiedAt: string | null
+  lastVerifiedAtDisplay: string | null
   updatedAt: string
+  updatedAtDisplay: string
 }
 
 export interface UpdateBackupStoragePayload {
@@ -34,7 +36,6 @@ export interface UpdateBackupStoragePayload {
 export interface UpdateBackupSchedulePayload {
   scheduleEnabled: boolean
   cronExpression: string
-  scheduleTimezone: string
   retentionDays: number
   retentionCount: number
 }
@@ -60,6 +61,7 @@ export interface BackupRecord {
   triggerKind: BackupTriggerKind
   status: BackupStatus
   scheduledAt: string | null
+  scheduledAtDisplay: string | null
   objectKey: string
   sizeBytes: number | null
   sha256: string | null
@@ -67,10 +69,15 @@ export interface BackupRecord {
   errorCode: string | null
   errorMessage: string | null
   startedAt: string | null
+  startedAtDisplay: string | null
   completedAt: string | null
+  completedAtDisplay: string | null
   expiresAt: string | null
+  expiresAtDisplay: string | null
   createdAt: string
+  createdAtDisplay: string
   updatedAt: string
+  updatedAtDisplay: string
 }
 
 export interface BackupRecordPage {

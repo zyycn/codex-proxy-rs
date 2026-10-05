@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { JsonSchema } from '../utils/model'
-
 import { BaseEmpty, BaseFormItem, BaseInput, BaseTag } from '@codex-proxy/ui'
 
 import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
-import SchemaForm from '@/components/SchemaForm/index.vue'
-import { jsonObjectError, parseJsonObject } from '@/utils/data'
+
+import SchemaForm from '@/components/schema-form/index.vue'
+import { parseJsonObject } from '@/utils/data'
+import { PLUGIN_CONFIGURATION_MAX_BYTES } from '../constants'
 import PluginHelpPopover from './PluginHelpPopover.vue'
 
 const props = withDefaults(defineProps<{
@@ -29,7 +30,8 @@ const secrets = defineModel<Record<string, string>>('secrets', { required: true 
 const configurationText = shallowRef('{}')
 const schemaForm = useTemplateRef<{ focusField: (key?: string) => Promise<boolean> }>('schemaForm')
 const secretFieldsRoot = useTemplateRef<HTMLElement>('secretFieldsRoot')
-const configurationError = computed(() => jsonObjectError(configurationText.value, 48 * 1024))
+const parsedConfiguration = computed(() => parseJsonObject(configurationText.value, PLUGIN_CONFIGURATION_MAX_BYTES))
+const configurationError = computed(() => parsedConfiguration.value.error)
 const configurationSchema = computed(() => {
   const schema = { ...props.schema } as JsonSchema
   if (schema.properties) {
@@ -118,9 +120,9 @@ watch(
   { immediate: true },
 )
 
-watch(configurationText, (text) => {
-  if (!jsonObjectError(text, 48 * 1024))
-    configuration.value = parseJsonObject(text, 48 * 1024)
+watch(parsedConfiguration, ({ value }) => {
+  if (value)
+    configuration.value = value
 })
 
 async function focusInvalid() {
@@ -165,7 +167,7 @@ defineExpose({ focusInvalid, validationMessage })
       v-model="configurationText"
       :schema="configurationSchema"
       :disabled="disabled"
-      :maximum-bytes="48 * 1024"
+      :maximum-bytes="PLUGIN_CONFIGURATION_MAX_BYTES"
       :field-errors="configurationFieldErrors"
     />
 

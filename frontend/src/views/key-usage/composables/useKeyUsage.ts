@@ -1,14 +1,12 @@
 import type { KeyUsageOverview, KeyUsageRecordKind } from '@/api/modules/key-usage'
 import { refDebounced, useDocumentVisibility, useTimeoutPoll } from '@vueuse/core'
-import dayjs from 'dayjs'
 import { computed, shallowRef, watch } from 'vue'
 import { getKeyUsageOverview, getKeyUsageRecords } from '@/api/modules/key-usage'
 import { useRequestState } from '@/composables/useRequestState'
 import { useStablePagedQuery } from '@/composables/useStablePagedQuery'
-import { KEY_USAGE_TIME_ZONE } from '../utils/format'
 
 export function useKeyUsage() {
-  const period = shallowRef('today')
+  const period = shallowRef<'today' | '7d' | '30d'>('today')
   const model = shallowRef('')
   const selectedModel = refDebounced(model, 300)
   const kind = shallowRef<KeyUsageRecordKind>('success')
@@ -18,12 +16,11 @@ export function useKeyUsage() {
   const recordsStale = shallowRef(false)
   const overviewRequest = useRequestState()
   let queryGeneration = 0
-  const rangeEnd = shallowRef(dayjs())
+  const rangeEnd = shallowRef(Date.now())
   const query = computed(() => {
-    const days = period.value === '7d' ? 6 : period.value === '30d' ? 29 : 0
     return {
-      startTime: rangeEnd.value.tz(KEY_USAGE_TIME_ZONE).subtract(days, 'day').startOf('day').toISOString(),
-      endTime: rangeEnd.value.toISOString(),
+      period: period.value,
+      asOf: rangeEnd.value,
       model: selectedModel.value.trim() || undefined,
     }
   })
@@ -56,7 +53,7 @@ export function useKeyUsage() {
       return
     refreshing.value = true
     const generation = queryGeneration
-    rangeEnd.value = dayjs()
+    rangeEnd.value = Date.now()
     try {
       const [, recordsOk] = await Promise.all([loadOverview(), records.execute(undefined, { silent: true })])
       // 轮询被新筛选或翻页取代时，不把取消结果标成刷新失败。
@@ -70,16 +67,14 @@ export function useKeyUsage() {
 
   watch([period, selectedModel], () => {
     queryGeneration += 1
-    rangeEnd.value = dayjs()
+    rangeEnd.value = Date.now()
     overview.value = undefined
-    records.items.value = []
     void loadOverview()
     void records.reloadFromStart()
   }, { immediate: true })
 
   watch(kind, () => {
     queryGeneration += 1
-    records.items.value = []
     void records.reloadFromStart()
   })
 

@@ -1,3 +1,5 @@
+//! 验证插件管理调用的身份持有、版本绑定与权限撤销
+
 mod callback;
 mod registration;
 
@@ -19,7 +21,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::support::{
     self,
-    environment::{Environment, account_grant, mutation},
+    environment::{Environment, mutation},
 };
 
 fn registration() -> Value {
@@ -51,11 +53,10 @@ async fn install(environment: &Environment, config: Value) -> PluginInstance {
         .map(|(name, bytes)| (name.clone(), hex::encode(Sha256::digest(bytes))))
         .collect();
     let manifest = json!({
-        "manifestVersion":1,"name":"example","displayName":"管理示例","publisher":"management","version":"1.0.0",
+        "manifestVersion":2,"name":"example","displayName":"管理示例","publisher":"management","version":"1.0.0",
         "engines":{"codex-proxy-rs":">=1.0.0, <2.0.0"},"main":"bin/worker","author":"test","description":"管理测试","license":"MIT",
         "runtime":"trustedProcess","resources":{"ui/index.html":"text/html","ui/app.js":"text/javascript","ui/public.svg":"image/svg+xml"},
         "contributes":{"management":{"id":"management.example.management","version":1,"stages":["management"],"inputFormats":[],"outputFormats":[]}},
-        "permissions":["public_endpoints"],
         "package":{"protocolVersion":gateway_plugin_sdk::PROTOCOL_VERSION,"target":{"os":std::env::consts::OS,"architecture":std::env::consts::ARCH},"files":digests},
     });
     files.insert("plugin.json".into(), serde_json::to_vec(&manifest).unwrap());
@@ -81,7 +82,7 @@ async fn install(environment: &Environment, config: Value) -> PluginInstance {
         configuration: config,
         secrets: BTreeMap::new(),
         bindings: vec![],
-        grants: vec![serde_json::from_value(json!({"permission":"public_endpoints"})).unwrap()],
+
         revision: Revision::new(1).unwrap(),
     };
     store
@@ -93,6 +94,7 @@ async fn install(environment: &Environment, config: Value) -> PluginInstance {
 
 fn request() -> PluginManagementRequest {
     PluginManagementRequest {
+        headers: Vec::new(),
         method: "POST".into(),
         path: "echo".into(),
         query: "unicode=%E4%B8%AD".into(),
@@ -123,9 +125,6 @@ async fn management_model_stream_retains_selected_identity_until_completion_and_
         .directory
         .path()
         .join("management-unbound-model.jsonl");
-    let model_grant = account_grant("models");
-    let bound_credentials = account_grant("accounts");
-    let unbound_credentials = account_grant("accounts");
     let nested_request = json!({
         "stream":true,
         "request":{
@@ -156,7 +155,7 @@ async fn management_model_stream_retains_selected_identity_until_completion_and_
                 "nested_stream_trace_marker":environment.directory.path().join("management-stream.jsonl"),
                 "management_marker":bound_calls,
             }),
-            vec![model_grant.clone(), bound_credentials],
+
         )
         .await;
     let mut denied_request = nested_request;
@@ -167,15 +166,12 @@ async fn management_model_stream_retains_selected_identity_until_completion_and_
         .remove("client_key_id");
     denied_request["expect_error"] = json!(true);
     environment
-        .install_plugin(
-            json!({
-                "plugin_id":"test.management-unbound",
-                "management_registration":model_route,
-                "management_nested_model_fixture":denied_request,
-                "management_nested_model_marker":unbound_nested,
-            }),
-            vec![model_grant, unbound_credentials],
-        )
+        .install_plugin(json!({
+            "plugin_id":"test.management-unbound",
+            "management_registration":model_route,
+            "management_nested_model_fixture":denied_request,
+            "management_nested_model_marker":unbound_nested,
+        }))
         .await;
     let (runtime, core) = environment.runtime().await;
     let service = PluginManagementService::new(
@@ -295,7 +291,7 @@ async fn management_resources_and_raw_calls_are_version_bound_and_revocation_rem
     let marker = environment.directory.path().join("management-calls.jsonl");
     install(
         &environment,
-        json!({"management_registration":registration(),"management_marker":marker}),
+        json!({"management_registration":registration(),"management_marker":marker,"management_echo_headers":true}),
     )
     .await;
     let (runtime, core) = environment.runtime().await;
@@ -346,9 +342,33 @@ async fn management_resources_and_raw_calls_are_version_bound_and_revocation_rem
         assert!(service.resource(target, path, false).await.is_err());
     }
     assert!(!marker.exists(), "静态资源读取不能执行插件 handler");
-    let response = service.handle(target, request()).await.unwrap();
+    let mut raw_request = request();
+    raw_request.headers = vec![
+        gateway_core::engine::middleware::MiddlewareHeader::new(
+            "authorization",
+            "Bearer fixture".into(),
+        ),
+        gateway_core::engine::middleware::MiddlewareHeader::new("set-cookie", "first=1".into()),
+        gateway_core::engine::middleware::MiddlewareHeader::new(
+            "set-cookie",
+            bytes::Bytes::from_static(&[0xff]),
+        ),
+    ];
+    let response = service.handle(target, raw_request).await.unwrap();
     assert_eq!(response.status, 200);
     assert_eq!(response.body.as_ref(), &[0, 255, 128, 10]);
+    assert_eq!(
+        response
+            .headers
+            .iter()
+            .map(|header| (header.name(), header.value().as_ref()))
+            .collect::<Vec<_>>(),
+        [
+            ("authorization", b"Bearer fixture".as_slice()),
+            ("set-cookie", b"first=1".as_slice()),
+            ("set-cookie", [0xff].as_slice()),
+        ]
+    );
     let mut invalid = request();
     invalid.content_type = Some("text/html".into());
     assert!(service.handle(target, invalid).await.is_err());
@@ -364,7 +384,7 @@ async fn management_resources_and_raw_calls_are_version_bound_and_revocation_rem
         .save_instance(instance, snapshot.config_revision, &mutation())
         .await
         .unwrap();
-    // 模拟持久撤销已提交但旧发布视图仍存在；页面与资源都不能继续使用旧权限。
+    // 模拟持久撤销已提交但旧发布视图仍存在；页面与资源都不能继续使用旧权限
     assert!(service.views().await.unwrap().is_empty());
     assert!(service.handle(target, request()).await.is_err());
     assert!(

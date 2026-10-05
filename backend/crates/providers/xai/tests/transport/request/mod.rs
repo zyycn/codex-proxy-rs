@@ -1,3 +1,5 @@
+//! Grok 请求转换测试入口，以及工具、历史与未知字段处理测试
+
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use serde_json::{Map, Value, json};
@@ -1130,14 +1132,14 @@ fn history_sanitizer_should_only_strip_known_grok_injection_sites() {
         .expect("history normalization");
     let body = Value::Object(encoded.body().clone());
 
-    // 工具 schema 里恰好叫 phase 的属性与语义 null 不再被误删。
+    // 工具 schema 里恰好叫 phase 的属性与语义 null 不再被误删
     assert_eq!(
         body.pointer("/input/0/tools/0/input_schema/properties/phase"),
         Some(&json!({"type": "string"}))
     );
     assert_eq!(body.pointer("/input/1/output/result"), Some(&Value::Null));
     assert_eq!(body.pointer("/input/1/output/phase"), Some(&json!("keep")));
-    // shell_call action 是已知注入点：内部键与 null 占位字段仍被剥离。
+    // shell_call action 是已知注入点：内部键与 null 占位字段仍被剥离
     assert_eq!(
         body.pointer("/input/2/action/commands/0"),
         Some(&json!("pwd"))

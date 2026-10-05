@@ -1,5 +1,6 @@
-//! 按 Key 串行检查限额，并幂等累计已取得的 USD 费用。
+//! 按 Key 串行检查限额，并幂等累计已取得的 USD 费用
 
+use gateway_admin::model::audit::MutationAuditOperation;
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use chrono::{DateTime, Utc};
@@ -36,7 +37,7 @@ pub(super) async fn reset_client_key_budget(
             )
         })?,
         ClientKeyBudgetMutationOrigin::Plugin(owner) => {
-            super::plugins::begin_authorized_mutation(pool, owner, "key_budgets").await?
+            super::plugins::begin_plugin_mutation(pool, owner).await?
         }
     };
     reset_client_key_budget_in_transaction(&mut tx, &command, context)
@@ -55,7 +56,7 @@ async fn reset_client_key_budget_in_transaction(
     command: &ResetClientKeyBudget,
     context: &MutationContext,
 ) -> StoreResult<()> {
-    // 与准入、结算共用 Key 行锁，重置边界必须在取得锁之后确定。
+    // 与准入、结算共用 Key 行锁，重置边界必须在取得锁之后确定
     let exists =
         sqlx::query_scalar::<_, String>("select id from client_api_keys where id = $1 for update")
             .bind(command.id.as_str())
@@ -77,13 +78,15 @@ async fn reset_client_key_budget_in_transaction(
         ClientKeyBudgetPeriod::Weekly | ClientKeyBudgetPeriod::All
     );
     let reset_at = Utc::now();
-    // 推进计费起点，避免重置前完成、稍后落盘的费用重新扣额；未使用的 Key 不开启窗口。
+    // 起止时间收拢到重置边界，窗口保持未开启，同时排除重置前完成的迟到费用
     sqlx::query(
         "update client_key_budget_windows set
         daily_used_usd = case when $2 then 0 else daily_used_usd end,
-        daily_start = case when $2 and daily_end > $4 then $4 else daily_start end,
+        daily_start = case when $2 then $4 else daily_start end,
+        daily_end = case when $2 then $4 else daily_end end,
         weekly_used_usd = case when $3 then 0 else weekly_used_usd end,
-        weekly_start = case when $3 and weekly_end > $4 then $4 else weekly_start end
+        weekly_start = case when $3 then $4 else weekly_start end,
+        weekly_end = case when $3 then $4 else weekly_end end
         where client_api_key_id = $1",
     )
     .bind(command.id.as_str())
@@ -95,17 +98,24 @@ async fn reset_client_key_budget_in_transaction(
     .map_err(|_| postgres_unavailable("reset client budget"))?;
     let mut fields = Vec::new();
     if daily {
-        fields.extend(["daily_used_usd".to_owned(), "daily_start".to_owned()]);
+        fields.extend([
+            "daily_used_usd".to_owned(),
+            "daily_start".to_owned(),
+            "daily_end".to_owned(),
+        ]);
     }
     if weekly {
-        fields.extend(["weekly_used_usd".to_owned(), "weekly_start".to_owned()]);
+        fields.extend([
+            "weekly_used_usd".to_owned(),
+            "weekly_start".to_owned(),
+            "weekly_end".to_owned(),
+        ]);
     }
     super::append_admin_audit_event_in_transaction(
         tx,
         mutation_audit(
             context,
-            "reset_budget",
-            "client_api_key",
+            MutationAuditOperation::ClientApiKeyResetBudget,
             command.id.as_str(),
             fields,
         ),
@@ -116,6 +126,7 @@ async fn reset_client_key_budget_in_transaction(
 }
 
 pub struct PgClientBudgetStore {
+    timezone: gateway_core::time::DeploymentTimeZone,
     pool: PgPool,
     retry: Mutex<BTreeMap<String, ClientBudgetCharge>>,
 }
@@ -124,13 +135,20 @@ impl PgClientBudgetStore {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {
+            timezone: Default::default(),
             pool,
             retry: Mutex::new(BTreeMap::new()),
         }
     }
 
+    #[must_use]
+    pub fn with_timezone(mut self, timezone: gateway_core::time::DeploymentTimeZone) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
     async fn admit_inner(&self, key_id: ClientApiKeyId) -> Result<(), GatewayError> {
-        // 短暂存储故障后按原金额重试；进程退出丢失的费用不转成人工核账或阻断 Key。
+        // 短暂存储故障后按原金额重试；进程退出丢失的费用不转成人工核账或阻断 Key
         let retries = self
             .retry
             .lock()
@@ -174,7 +192,7 @@ impl PgClientBudgetStore {
                 .map_err(|_| unavailable())?,
         };
         let now = Utc::now();
-        advance_windows(&mut tx, key_id.as_str(), now)
+        advance_windows(&mut tx, key_id.as_str(), now, now, self.timezone)
             .await
             .map_err(|_| unavailable())?;
         if limits.is_limited() {
@@ -222,7 +240,7 @@ impl PgClientBudgetStore {
 
     async fn settle_inner(&self, charge: &ClientBudgetCharge) -> Result<(), ClientBudgetError> {
         let mut tx = self.pool.begin().await.map_err(|_| ClientBudgetError)?;
-        // 与准入统一先锁 Key，再写窗口和费用，串行化同一 Key 的并发结算。
+        // 与准入统一先锁 Key，再写窗口和费用，串行化同一 Key 的并发结算
         let key = sqlx::query_scalar::<_, String>(
             "select id from client_api_keys where id = $1 for update",
         )
@@ -230,8 +248,8 @@ impl PgClientBudgetStore {
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ClientBudgetError)?;
-        let Some(key) = key else { return Ok(()) }; // 删除 Key 时也会删除其费用记录。
-        settle_in_transaction(&mut tx, &key, charge)
+        let Some(key) = key else { return Ok(()) }; // 删除 Key 时也会删除其费用记录
+        settle_in_transaction(&mut tx, &key, charge, self.timezone)
             .await
             .map_err(|_| ClientBudgetError)?;
         tx.commit().await.map_err(|_| ClientBudgetError)
@@ -242,9 +260,10 @@ async fn settle_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
     charge: &ClientBudgetCharge,
+    timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<(), sqlx::Error> {
-    advance_windows(tx, key, Utc::now()).await?;
-    // 仅在请求结束时写入费用；请求 ID 冲突时不重复累计。
+    let completed_at = DateTime::<Utc>::from(charge.completed_at);
+    // 仅在请求结束时写入费用；请求 ID 冲突时不重复累计
     let changed = sqlx::query(
         "insert into client_key_charge_events (request_id, client_api_key_id, amount_usd, completed_at)
             values ($1, $2, $3::text::numeric, $4)
@@ -253,16 +272,17 @@ async fn settle_in_transaction(
     .bind(charge.request_id.as_str())
     .bind(key)
     .bind(charge.amount_usd.canonical())
-    .bind(DateTime::<Utc>::from(charge.completed_at))
+    .bind(completed_at)
     .execute(&mut **tx)
     .await?
     .rows_affected();
     if changed == 1 {
+        advance_windows(tx, key, Utc::now(), completed_at, timezone).await?;
         sqlx::query("update client_key_budget_windows set
                 daily_used_usd = daily_used_usd + case when $3 >= daily_start and $3 < daily_end then $2::text::numeric else 0 end,
                 weekly_used_usd = weekly_used_usd + case when $3 >= weekly_start and $3 < weekly_end then $2::text::numeric else 0 end
                 where client_api_key_id = $1")
-                .bind(key).bind(charge.amount_usd.canonical()).bind(DateTime::<Utc>::from(charge.completed_at))
+                .bind(key).bind(charge.amount_usd.canonical()).bind(completed_at)
                 .execute(&mut **tx).await?;
     }
     Ok(())
@@ -291,19 +311,30 @@ async fn advance_windows(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
     now: DateTime<Utc>,
+    used_at: DateTime<Utc>,
+    timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<(), sqlx::Error> {
+    // 已打开窗口不因部署时区变化清零；续接起点不能早于旧窗口末端或人工重置边界
+    let day = timezone
+        .day_start(now)
+        .ok_or_else(|| sqlx::Error::Protocol("invalid budget day".to_owned()))?;
+    let daily_end = timezone
+        .days_after(now, 1)
+        .ok_or_else(|| sqlx::Error::Protocol("invalid budget day end".to_owned()))?;
+    let weekly_end = timezone
+        .days_after(now, 7)
+        .ok_or_else(|| sqlx::Error::Protocol("invalid budget week end".to_owned()))?;
     sqlx::query("insert into client_key_budget_windows
         (client_api_key_id, daily_start, daily_end, weekly_start, weekly_end)
-        select $1, day, day + interval '24 hours', day, day + interval '168 hours'
-        from (select date_trunc('day', $2::timestamptz at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai' as day) d
+        select $1, $4, $5, $4, $6
         on conflict (client_api_key_id) do update set
-            daily_start = case when client_key_budget_windows.daily_end <= $2 then excluded.daily_start else client_key_budget_windows.daily_start end,
-            daily_end = case when client_key_budget_windows.daily_end <= $2 then excluded.daily_end else client_key_budget_windows.daily_end end,
-            daily_used_usd = case when client_key_budget_windows.daily_end <= $2 then 0 else client_key_budget_windows.daily_used_usd end,
-            weekly_start = case when client_key_budget_windows.weekly_end <= $2 then excluded.weekly_start else client_key_budget_windows.weekly_start end,
-            weekly_end = case when client_key_budget_windows.weekly_end <= $2 then excluded.weekly_end else client_key_budget_windows.weekly_end end,
-            weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 then 0 else client_key_budget_windows.weekly_used_usd end")
-        .bind(key).bind(now).execute(&mut **tx).await?;
+            daily_start = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then greatest(excluded.daily_start, client_key_budget_windows.daily_end, client_key_budget_windows.daily_start) else client_key_budget_windows.daily_start end,
+            daily_end = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then excluded.daily_end else client_key_budget_windows.daily_end end,
+            daily_used_usd = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then 0 else client_key_budget_windows.daily_used_usd end,
+            weekly_start = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_key_budget_windows.weekly_end, client_key_budget_windows.weekly_start) else client_key_budget_windows.weekly_start end,
+            weekly_end = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then excluded.weekly_end else client_key_budget_windows.weekly_end end,
+            weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then 0 else client_key_budget_windows.weekly_used_usd end")
+        .bind(key).bind(now).bind(used_at).bind(day).bind(daily_end).bind(weekly_end).execute(&mut **tx).await?;
     Ok(())
 }
 

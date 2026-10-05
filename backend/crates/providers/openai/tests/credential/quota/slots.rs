@@ -1,4 +1,4 @@
-//! 各额度槽独立恢复，跨刷新保留未解除的限制。
+//! 各额度槽独立恢复，跨刷新保留未解除的限制
 
 use super::*;
 
@@ -255,7 +255,7 @@ async fn worker_detects_early_resets_without_unlocking_other_exhausted_windows()
             "{name}"
         );
 
-        // 未恢复的周窗口仍在未来，也必须保留复核节流；恢复后则退出定时复核。
+        // 未恢复的周窗口仍在未来，也必须保留复核节流；恢复后则退出定时复核
         service.synchronize().await.expect("next worker cycle");
         assert_eq!(
             server.received_requests().await.expect("requests").len(),
@@ -565,8 +565,9 @@ async fn an_unknown_slot_establishes_a_baseline_before_it_can_recover() {
 #[tokio::test]
 async fn weekly_usage_falling_back_within_the_same_window_recovers_after_two_observations() {
     // 滑动周窗口的用量可以在同一窗口内回落：reset 不滚动、用量从 100% 降到
-    // 正常水平。此时"reset 前进 + 低用量"永远不会成立，解除依赖连续两次
-    // 观测都未触顶；单次观测无法排除耗尽后立刻拉到的旧快照，保持锁定。
+    // 正常水平
+    // 此时"reset 前进 + 低用量"永远不会成立，解除依赖连续两次
+    // 观测都未触顶；单次观测无法排除耗尽后立刻拉到的旧快照，保持锁定
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_weekly_fallout").await;
     let account = store.account("acct_weekly_fallout").expect("account");
@@ -581,7 +582,7 @@ async fn weekly_usage_falling_back_within_the_same_window_recovers_after_two_obs
         .await
         .expect("seed exhausted quota");
 
-    // 5h 窗口滚动前进，周窗口 reset 不变但用量回落到正常水平：只标记候选。
+    // 5h 窗口滚动前进，周窗口 reset 不变但用量回落到正常水平：只标记候选
     let mut first_observation = usage((0, SHORT_RESET + 18_000), (18, WEEK_RESET));
     first_observation["rate_limit"]["allowed"] = json!(true);
     mount_usage(&server, first_observation).await;
@@ -591,7 +592,7 @@ async fn weekly_usage_falling_back_within_the_same_window_recovers_after_two_obs
         .expect("first fallout observation");
     assert!(first.quota().is_exhausted());
 
-    // 第二次连续观测仍未触顶：解除周窗口。
+    // 第二次连续观测仍未触顶：解除周窗口
     let mut second_observation = usage((9, SHORT_RESET + 36_000), (18, WEEK_RESET));
     second_observation["rate_limit"]["allowed"] = json!(true);
     mount_usage(&server, second_observation).await;
@@ -604,7 +605,7 @@ async fn weekly_usage_falling_back_within_the_same_window_recovers_after_two_obs
 
 #[tokio::test]
 async fn a_single_same_window_fallout_observation_cannot_break_the_reset_baseline() {
-    // 连续性中断（观测到重新触顶）后必须重新积累两次未触顶证据。
+    // 连续性中断（观测到重新触顶）后必须重新积累两次未触顶证据
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_weekly_fallout_gap").await;
     let account = store.account("acct_weekly_fallout_gap").expect("account");
@@ -627,7 +628,7 @@ async fn a_single_same_window_fallout_observation_cannot_break_the_reset_baselin
             .quota()
             .is_exhausted()
     );
-    // 观测到重新触顶，候选证据清零。
+    // 观测到重新触顶，候选证据清零
     mount_usage(&server, usage((0, SHORT_RESET + 36_000), (100, WEEK_RESET))).await;
     assert!(
         service

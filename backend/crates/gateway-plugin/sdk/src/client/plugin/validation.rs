@@ -1,3 +1,5 @@
+//! 校验插件清单中的能力声明与实际注册处理器是否一致
+
 use std::collections::BTreeMap;
 
 use crate::{Capability as C, Manifest};
@@ -18,12 +20,15 @@ pub(super) fn validate(
         match capability {
             C::Maintenance => required(methods::RECONCILE.name)?,
             C::Middleware => required(crate::call::middleware::HANDLE_METHOD)?,
+            C::UpstreamAdapter => {
+                required(methods::UPSTREAM_ADAPTER_REGISTER.name)?;
+                required(methods::UPSTREAM_ADAPTER_EXECUTE.name)?;
+            }
             C::ModelRouter => required(methods::ROUTE_MODEL.name)?,
             C::ModelCatalog => required(methods::MODEL_CATALOG_REGISTER.name)?,
             C::RetryPolicy => required(methods::RETRY_DECISION.name)?,
             C::Scheduler => required(methods::SCHEDULE_ACCOUNT.name)?,
-            C::RequestLifecycle | C::Usage => required(methods::OBSERVE_REQUEST.name)?,
-            C::WebSocketObserver => required(methods::OBSERVE_WEBSOCKET.name)?,
+            C::Observer => required(methods::OBSERVE.name)?,
             C::Management => {
                 required(methods::MANAGEMENT_REGISTER.name)?;
                 required(methods::MANAGEMENT_HANDLE.name)?;

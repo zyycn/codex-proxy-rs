@@ -1,4 +1,4 @@
-//! 插件资源写入在同一事务中验证当前实例、访问域与资源归属。
+//! 插件资源写入在同一事务中验证当前实例、访问域与资源归属
 
 use super::super::{
     account_groups::insert_account_group_in_transaction,
@@ -8,6 +8,7 @@ use super::super::{
 use super::PgPluginStore;
 use crate::{admin_revision, admin_store_error, mutation_audit};
 use async_trait::async_trait;
+use gateway_admin::model::audit::MutationAuditOperation;
 use gateway_admin::{
     model::{
         MutationContext,
@@ -65,7 +66,7 @@ fn validate_resource_key(key: &str) -> AdminStoreResult<()> {
 async fn finish<T>(
     mut tx: Transaction<'_, Postgres>,
     context: &MutationContext,
-    kind: &str,
+    kind: MutationAuditOperation,
     id: &str,
     changed: bool,
     value: T,
@@ -74,13 +75,7 @@ async fn finish<T>(
         let revision = bump_config_revision_in_transaction(&mut tx)
             .await
             .map_err(|e| admin_store_error("plugin resource", e))?;
-        let audit = mutation_audit(
-            context,
-            "plugin_reconcile",
-            kind,
-            id,
-            vec!["plugin_owned_resource".to_owned()],
-        );
+        let audit = mutation_audit(context, kind, id, vec!["plugin_owned_resource".to_owned()]);
         append_admin_audit_event_in_transaction(&mut tx, audit, revision)
             .await
             .map_err(|e| admin_store_error("plugin resource", e))?;
@@ -110,7 +105,7 @@ impl PluginResourceStore for PgPluginStore {
         context: &MutationContext,
     ) -> AdminStoreResult<ResourceMutation<ManagedResource>> {
         validate_resource_key(&resource_key)?;
-        let mut tx = super::begin_authorized_mutation(&self.pool, owner, "groups").await?;
+        let mut tx = super::begin_plugin_mutation(&self.pool, owner).await?;
         let instance = uuid::Uuid::parse_str(&owner.instance_id).map_err(|_| denied())?;
         if let Some(row) = sqlx::query(
             "select g.id,g.name,g.enabled from plugin_group_resources r
@@ -123,7 +118,15 @@ impl PluginResourceStore for PgPluginStore {
         .await
         .map_err(|_| unavailable())?
         {
-            return finish(tx, context, "account_group", "", false, resource(&row)?).await;
+            return finish(
+                tx,
+                context,
+                MutationAuditOperation::AccountGroupPluginReconcile,
+                "",
+                false,
+                resource(&row)?,
+            )
+            .await;
         }
         insert_account_group_in_transaction(&mut tx, &command)
             .await
@@ -142,7 +145,7 @@ impl PluginResourceStore for PgPluginStore {
         finish(
             tx,
             context,
-            "account_group",
+            MutationAuditOperation::AccountGroupPluginReconcile,
             command.id.as_str(),
             true,
             value,
@@ -168,7 +171,7 @@ impl PluginResourceStore for PgPluginStore {
         for group in &groups {
             validate_resource_key(group)?;
         }
-        let mut tx = super::begin_authorized_mutation(&self.pool, owner, "keys").await?;
+        let mut tx = super::begin_plugin_mutation(&self.pool, owner).await?;
         let instance = uuid::Uuid::parse_str(&owner.instance_id).map_err(|_| denied())?;
         if let Some(row) = sqlx::query(
             "select k.id,k.name,k.enabled from plugin_key_resources r
@@ -181,7 +184,15 @@ impl PluginResourceStore for PgPluginStore {
         .await
         .map_err(|_| unavailable())?
         {
-            return finish(tx, context, "client_api_key", "", false, resource(&row)?).await;
+            return finish(
+                tx,
+                context,
+                MutationAuditOperation::ClientApiKeyPluginReconcile,
+                "",
+                false,
+                resource(&row)?,
+            )
+            .await;
         }
         let group_ids: Vec<String> = sqlx::query_scalar("select group_id from plugin_group_resources where instance_id=$1 and resource_key=any($2::text[])")
             .bind(instance)
@@ -219,7 +230,15 @@ impl PluginResourceStore for PgPluginStore {
             name: key.name.trim().to_owned(),
             enabled: true,
         };
-        finish(tx, context, "client_api_key", &key.id, true, value).await
+        finish(
+            tx,
+            context,
+            MutationAuditOperation::ClientApiKeyPluginReconcile,
+            &key.id,
+            true,
+            value,
+        )
+        .await
     }
 
     async fn change_members(
@@ -238,7 +257,7 @@ impl PluginResourceStore for PgPluginStore {
         {
             return Err(invalid());
         }
-        let mut tx = super::begin_authorized_mutation(&self.pool, owner, "groups").await?;
+        let mut tx = super::begin_plugin_mutation(&self.pool, owner).await?;
         let instance = uuid::Uuid::parse_str(&owner.instance_id).map_err(|_| denied())?;
         let group: String = sqlx::query_scalar(
             "select group_id from plugin_group_resources where instance_id=$1 and resource_key=$2",
@@ -249,7 +268,7 @@ impl PluginResourceStore for PgPluginStore {
         .await
         .map_err(|_| unavailable())?
         .ok_or_else(denied)?;
-        // 已删除账号自然不再需要加入；外键负责与并发账号删除保持一致。
+        // 已删除账号自然不再需要加入；外键负责与并发账号删除保持一致
         let added = sqlx::query(
             "insert into account_group_accounts(account_group_id,provider_account_id,created_at)
              select $1,id,now() from provider_accounts where id=any($2::text[])
@@ -274,7 +293,7 @@ impl PluginResourceStore for PgPluginStore {
         finish(
             tx,
             context,
-            "account_group",
+            MutationAuditOperation::AccountGroupPluginReconcile,
             &group,
             added + removed > 0,
             GroupMembersChanged { added, removed },

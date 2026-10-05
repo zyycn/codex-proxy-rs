@@ -1,3 +1,5 @@
+//! 受管出站连接器，建立直连或代理隧道并完成 TLS 连接
+
 use std::{
     net::SocketAddr,
     pin::Pin,

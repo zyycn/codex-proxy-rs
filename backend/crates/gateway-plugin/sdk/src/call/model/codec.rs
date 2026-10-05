@@ -1,8 +1,10 @@
+//! 模型执行事件的元数据与原始载荷分离编码及有界解码
+
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{ExecutionEvent, WirePayload};
 
-/// 宿主与插件还会施加更低的帧、队列及可用信用上限。
+/// 宿主与插件还会施加更低的帧、队列及可用信用上限
 pub const MAX_EXECUTION_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -10,17 +12,36 @@ pub const MAX_EXECUTION_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 pub struct ExecutionEncodingError;
 
 pub(super) fn encode_event(mut event: ExecutionEvent) -> Result<Vec<u8>, ExecutionEncodingError> {
-    let wire = raw_wire(&mut event).map(std::mem::take).unwrap_or_default();
-    pack(*b"GPE1", &event, [wire])
+    let wire = raw_wire(event.wire.as_mut())
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let origin = raw_wire(
+        event
+            .host
+            .as_mut()
+            .and_then(|host| host.middleware_origin_wire.as_mut()),
+    )
+    .map(std::mem::take)
+    .unwrap_or_default();
+    pack(*b"GPE2", &event, [wire, origin])
 }
 
 pub(super) fn decode_event(bytes: &[u8]) -> Result<ExecutionEvent, ExecutionEncodingError> {
-    let (mut event, [wire]) = unpack(*b"GPE1", bytes)?;
-    attach(raw_wire(&mut event), wire)?;
+    let (mut event, [wire, origin]): (ExecutionEvent, _) = unpack(*b"GPE2", bytes)?;
+    attach(raw_wire(event.wire.as_mut()), wire)?;
+    attach(
+        raw_wire(
+            event
+                .host
+                .as_mut()
+                .and_then(|host| host.middleware_origin_wire.as_mut()),
+        ),
+        origin,
+    )?;
     Ok(event)
 }
 
-fn pack<T: Serialize, const N: usize>(
+pub(in crate::call) fn pack<T: Serialize, const N: usize>(
     prefix: [u8; 4],
     metadata: &T,
     payloads: [Vec<u8>; N],
@@ -55,7 +76,7 @@ fn pack<T: Serialize, const N: usize>(
     Ok(result)
 }
 
-fn unpack<T: DeserializeOwned, const N: usize>(
+pub(in crate::call) fn unpack<T: DeserializeOwned, const N: usize>(
     prefix: [u8; 4],
     bytes: &[u8],
 ) -> Result<(T, [&[u8]; N]), ExecutionEncodingError> {
@@ -69,7 +90,7 @@ fn unpack<T: DeserializeOwned, const N: usize>(
     let mut cursor = header_bytes;
     let mut metadata = &[][..];
     let mut payloads = [&[][..]; N];
-    // 先验证全部分段边界，不能根据对端的长度声明直接分配。
+    // 先验证全部分段边界，不能根据对端的长度声明直接分配
     for (chunk, target) in bytes[4..header_bytes]
         .chunks_exact(4)
         .zip(std::iter::once(&mut metadata).chain(payloads.iter_mut()))
@@ -98,8 +119,8 @@ fn attach(target: Option<&mut Vec<u8>>, bytes: &[u8]) -> Result<(), ExecutionEnc
     Ok(())
 }
 
-fn raw_wire(event: &mut ExecutionEvent) -> Option<&mut Vec<u8>> {
-    match &mut event.wire.as_mut()?.payload {
+fn raw_wire(wire: Option<&mut super::WireEvent>) -> Option<&mut Vec<u8>> {
+    match &mut wire?.payload {
         WirePayload::Json { raw_sse, .. } => raw_sse.as_mut(),
         WirePayload::RawSse { frame } => Some(frame),
         WirePayload::RawJson { body } | WirePayload::RawBody { body } => Some(body),

@@ -1,3 +1,5 @@
+//! 验证 xAI 原生执行的协议转换、账号选择与交付状态隔离
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -257,7 +259,6 @@ async fn native_response_translation_keeps_raw_xai_and_delivery_state_independen
         )
         .await
         .expect("native response stream");
-    assert!(stream.has_native_response_translator());
 
     let mut added_was_deferred = false;
     let mut done_expanded = false;
@@ -332,7 +333,6 @@ async fn pass_through_middleware_projects_native_response_once() {
         )
         .await
         .expect("native response stream");
-    assert!(!stream.has_native_response_translator());
 
     let mut client_events = 0;
     while let Some(event) = stream.next().await {
@@ -401,27 +401,35 @@ async fn attempt_middleware_runs_once_before_native_encoding() {
         );
     }
 
-    let conflict_transport = StubInferenceTransport::success();
-    let conflict_provider = provider(StubSelector::success(), conflict_transport.clone()).await;
-    let mut conflict = conflict_provider
+    let overridden_transport = StubInferenceTransport::success();
+    let overridden_provider = provider(StubSelector::success(), overridden_transport.clone()).await;
+    let mut overridden = overridden_provider
         .execute(
             provider_request("xai"),
             context_with_middleware(Arc::new(RecordingMiddleware {
                 observed: Arc::default(),
                 replacement: None,
                 request_headers: vec![MiddlewareHeader::new(
-                    "x-grok-client-version",
-                    Bytes::from_static(b"plugin-value"),
+                    "Authorization",
+                    Bytes::from_static(b"Bearer plugin-value"),
                 )],
             })),
         )
         .await
         .expect("header validation remains on the cold Provider stream");
-    let error = next_provider_error(&mut conflict).await;
-    assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
-    assert_eq!(conflict_transport.calls.load(Ordering::SeqCst), 0);
-    assert!(conflict_transport.requests.lock().unwrap().is_empty());
+    while let Some(event) = overridden.next().await {
+        event.unwrap();
+    }
+    assert_eq!(overridden_transport.calls.load(Ordering::SeqCst), 1);
+    let requests = overridden_transport.requests.lock().unwrap();
+    let values = requests[0]
+        .headers()
+        .iter()
+        .filter(|header| header.name().eq_ignore_ascii_case("authorization"))
+        .map(|header| header.value().expose())
+        .collect::<Vec<_>>();
+    assert_eq!(values, ["Bearer plugin-value"]);
+    assert!(!format!("{:?}", requests[0].headers()).contains("Bearer plugin-value"));
 }
 
 #[tokio::test]
@@ -1483,7 +1491,7 @@ fn provider_request_with_model_capabilities(
     ));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        selection_policy(),
+        gateway_core::settings::SettingsValues::new(2, 0, "smart", Default::default(), None, None),
         vec![provider],
         vec![provider_model],
         vec![],
@@ -1519,7 +1527,7 @@ impl MiddlewarePlan for TranslationMiddleware {
         &self,
         context: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         assert!(context.account_id().is_some());
@@ -1541,7 +1549,7 @@ impl MiddlewarePlan for PassThroughMiddleware {
         &self,
         _: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         next.run(request)
     }
@@ -1561,7 +1569,7 @@ impl MiddlewarePlan for RecordingMiddleware {
         &self,
         context: MiddlewareContext,
         request: MiddlewareRequest,
-        next: Box<dyn MiddlewareNext>,
+        next: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         let (protocol, mut headers, bytes) = request.into_parts();
@@ -1685,7 +1693,7 @@ async fn execute_successfully(provider: &Arc<GrokBuildProvider>, operation: Oper
     assert!(events.iter().all(Result::is_ok));
 }
 
-/// 与 Postgres 调度列表一致：常规选择不返回停用账号，只有诊断能取回。
+/// 与 Postgres 调度列表一致：常规选择不返回停用账号，只有诊断能取回
 struct DiagnosticLeasePort;
 
 impl ProviderLeasePort for DiagnosticLeasePort {
@@ -3907,7 +3915,6 @@ async fn cancellation_before_poll_never_calls_transport() {
         )
         .await
         .expect("prepared stream");
-    assert!(!stream.has_native_response_translator());
     cancellation.cancel();
     let error = stream
         .next()
@@ -4149,4 +4156,142 @@ async fn configured_request_profile_reaches_inference_headers() {
     assert_eq!(header("x-grok-client-identifier"), "profile-contract");
     assert_eq!(header("x-grok-client-mode"), "headless");
     assert_eq!(header("user-agent"), "grok-shell/9.8.7 (windows; aarch64)");
+}
+
+#[derive(Debug)]
+struct AdapterProbe {
+    polls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl gateway_core::engine::upstream_adapter::UpstreamAdapterPlan for AdapterProbe {
+    fn select(
+        &self,
+        _: &AttemptContext,
+        provider: &ProviderKind,
+        _: &UpstreamModelId,
+    ) -> Result<
+        Option<Arc<dyn gateway_core::engine::upstream_adapter::UpstreamAdapter>>,
+        gateway_core::error::ProviderError,
+    > {
+        assert_eq!(provider.as_str(), "xai");
+        Ok(Some(Arc::new(Self {
+            polls: self.polls.clone(),
+        })))
+    }
+}
+
+impl gateway_core::engine::upstream_adapter::UpstreamAdapter for AdapterProbe {
+    fn transport(&self) -> &str {
+        "http_sse"
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        invocation: gateway_core::engine::upstream_adapter::UpstreamAdapterInvocation,
+    ) -> gateway_core::engine::provider::EventStream {
+        Box::pin(futures::stream::once(async move {
+            self.polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(invocation.account.account_id().as_str(), "acct_provider");
+            assert_eq!(
+                invocation.metadata.provider_account_id(),
+                invocation.account.account_id()
+            );
+            assert_eq!(invocation.account.authentication_kind(), "oauth");
+            let headers = invocation.account.authorization().unwrap();
+            let header = |name: &str| {
+                headers
+                    .iter()
+                    .find(|h| h.name() == name)
+                    .map(|h| h.value().to_vec())
+            };
+            assert_eq!(
+                header("authorization"),
+                Some("Bearer oauth-access".as_bytes().to_vec())
+            );
+            assert_eq!(
+                header("x-grok-user-id"),
+                Some("verified-user".as_bytes().to_vec())
+            );
+            assert!(header("cookie").is_none());
+            assert!(
+                invocation
+                    .headers
+                    .iter()
+                    .any(|h| h.name() == "x-adapter-onion")
+            );
+            assert!(
+                invocation
+                    .account
+                    .calculate_cost(
+                        None,
+                        &gateway_core::metering::Usage {
+                            input_tokens: Some(7),
+                            output_tokens: Some(2),
+                            ..Default::default()
+                        }
+                    )
+                    .is_some()
+            );
+            Err(gateway_core::error::ProviderError::new(
+                ProviderErrorKind::Cancelled,
+                UpstreamSendState::NotSent,
+            ))
+        }))
+    }
+}
+
+#[tokio::test]
+async fn upstream_adapter_reuses_selected_native_account_inside_attempt_onion_and_stays_cold() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::success();
+    let provider = provider(selector.clone(), transport.clone()).await;
+    let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let lease = ExtensionSetReference::new(
+        ExtensionSetId::new("adapter-native-test".to_owned()).unwrap(),
+        Arc::new(TestExtensionLease),
+    );
+    let middleware = Arc::new(RecordingMiddleware {
+        observed: Default::default(),
+        replacement: Some(("input".into(), json!("rewritten"))),
+        request_headers: vec![MiddlewareHeader::new(
+            "x-adapter-onion",
+            Bytes::from_static(b"present"),
+        )],
+    });
+    let context = AttemptContext::new(
+        gateway_core::engine::RequestAttemptContext::new(
+            ModelRequestId::new("req_adapter_native").unwrap(),
+            ClientApiKeyId::new("key_xai_contract").unwrap(),
+        )
+        .with_upstream_adapters(Some(
+            gateway_core::engine::upstream_adapter::FrozenUpstreamAdapterPlan::new(
+                Arc::new(AdapterProbe {
+                    polls: polls.clone(),
+                }),
+                lease.clone(),
+            ),
+        ))
+        .with_middleware(
+            Some(FrozenMiddlewarePlan::new(middleware, lease)),
+            Arc::from([]),
+            "/v1/responses".to_owned(),
+            ClientTransport::HttpSse,
+        ),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(5),
+        selection_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None),
+        None,
+        CancellationToken::new(),
+    );
+    let mut stream = provider
+        .execute(provider_request("xai"), context)
+        .await
+        .unwrap();
+    assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(error.kind(), ProviderErrorKind::Cancelled);
+    assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
 }

@@ -3,10 +3,10 @@ import type { OutboundProxyAccount, OutboundProxyRecord } from '@/api'
 import { BaseConfirmModal, BaseIconButton, BaseInput, BaseModal, BaseTable, BaseTablePagination, defineTableColumns } from '@codex-proxy/ui'
 import { Search, Unlink } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
+import AccountPlanBadge from '@/components/account/AccountPlanBadge.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
-import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
-import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
+import { stablePresetVisualToneClass } from '@/utils/color'
 import { useProxyAccounts } from '../composables/useProxyAccounts'
 
 const props = defineProps<{
@@ -15,13 +15,8 @@ const props = defineProps<{
 const emit = defineEmits<{ removed: [] }>()
 const open = defineModel<boolean>({ required: true })
 const pendingRemove = shallowRef<OutboundProxyAccount | null>(null)
-const showRemove = computed({
-  get: () => pendingRemove.value !== null,
-  set: (value: boolean) => {
-    if (!value)
-      pendingRemove.value = null
-  },
-})
+const showRemove = shallowRef(false)
+const removeProxyName = shallowRef('')
 const { accounts, loading, error, pagination, search, setPage, setPageSize, removing, removeAccount } = useProxyAccounts({
   isOpen: () => open.value,
   proxyId: () => props.proxy?.id,
@@ -30,7 +25,7 @@ const { accounts, loading, error, pagination, search, setPage, setPageSize, remo
 const columns = defineTableColumns<OutboundProxyAccount>([
   { key: 'identity', label: '账号', kind: 'identity', size: '3xl' },
   { key: 'provider', label: '平台/类型', kind: 'custom', size: 'md', align: 'center' },
-  { key: 'plan', label: '套餐', kind: 'custom', size: 'sm', align: 'center' },
+  { key: 'plan', label: '订阅', kind: 'custom', size: 'sm', align: 'center' },
   { key: 'groups', label: '分组', kind: 'custom', size: 'lg', align: 'center' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'xs', align: 'center' },
 ])
@@ -57,12 +52,18 @@ const tableHeight = computed(() => {
 
 async function confirmRemove() {
   const account = pendingRemove.value
-  if (account && await removeAccount(account.id))
-    pendingRemove.value = null
+  if (showRemove.value && account && await removeAccount(account.id))
+    showRemove.value = false
+}
+
+function requestRemove(account: OutboundProxyAccount) {
+  pendingRemove.value = account
+  removeProxyName.value = props.proxy?.name ?? ''
+  showRemove.value = true
 }
 
 watch([open, () => props.proxy?.id], () => {
-  pendingRemove.value = null
+  showRemove.value = false
 })
 </script>
 
@@ -108,7 +109,7 @@ watch([open, () => props.proxy?.id], () => {
             label="从当前代理移除账号"
             :disabled="removing"
             :loading="removing && pendingRemove?.id === row.id"
-            @click="pendingRemove = row"
+            @click="requestRemove(row)"
           >
             <Unlink class="size-3.5 text-cp-error" />
           </BaseIconButton>
@@ -118,8 +119,8 @@ watch([open, () => props.proxy?.id], () => {
     </div>
   </BaseModal>
   <BaseConfirmModal v-model="showRemove" title="移除关联账号" confirm-text="移除" :loading="removing" @confirm="confirmRemove">
-    <p class="m-0 break-words">
-      将“{{ pendingRemove?.name }}”从“{{ proxy?.name }}”移除后，该账号将改为直连
+    <p class="m-0 wrap-break-word">
+      将“{{ pendingRemove?.name }}”从“{{ removeProxyName }}”移除后，该账号将改为直连
     </p>
   </BaseConfirmModal>
 </template>

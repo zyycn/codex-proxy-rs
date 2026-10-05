@@ -1,15 +1,20 @@
+//! 编译插件请求策略与中间件绑定，组合为请求级执行计划
+
+mod http;
 mod middleware;
 mod retry;
 mod route_schedule;
+mod service;
+mod websocket;
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use gateway_admin::model::{
     AdminError,
     plugins::instances::{PluginCapabilityBinding, PluginFailurePolicy, PluginInstance},
 };
 use gateway_core::engine::middleware::MiddlewareMount;
-use gateway_plugin_sdk::{Capability, Manifest, Permission, Stage};
+use gateway_plugin_sdk::{Capability, Manifest, Stage};
 
 use crate::{RpcSession, adapter::scope::BindingScope, callback::PluginCallbacks};
 
@@ -43,7 +48,6 @@ pub(crate) struct ModelRouterEntry {
     invocation: Option<PolicyInvocation>,
     scope: BindingScope,
     failure_policy: PluginFailurePolicy,
-    requests_authorized: bool,
 }
 
 pub(crate) struct AccountSchedulerEntry {
@@ -52,11 +56,9 @@ pub(crate) struct AccountSchedulerEntry {
     invocation: Option<PolicyInvocation>,
     scope: BindingScope,
     failure_policy: PluginFailurePolicy,
-    requests_authorized: bool,
 }
 
 pub(crate) struct MiddlewareEntry {
-    capability_version: u32,
     order: i32,
     plugin_id: String,
     instance_id: String,
@@ -64,7 +66,6 @@ pub(crate) struct MiddlewareEntry {
     invocation: Option<PolicyInvocation>,
     scope: BindingScope,
     failure_policy: PluginFailurePolicy,
-    requests_authorized: bool,
 }
 
 pub(crate) fn validate_bindings(
@@ -120,15 +121,31 @@ pub(crate) fn validate_bindings(
                 }
             }
             Capability::Middleware => {
-                if !matches!(stage, Stage::Request | Stage::Attempt)
-                    || !middleware_stages.insert(stage)
+                if !matches!(
+                    stage,
+                    Stage::Http
+                        | Stage::WebSocket
+                        | Stage::Service
+                        | Stage::Request
+                        | Stage::Attempt
+                ) || !middleware_stages.insert(stage)
                 {
                     return Err(AdminError::invalid(
-                        "同一插件实例的中间件只能在 request/attempt 各绑定一次",
+                        "同一插件实例的中间件只能在 http/websocket/service/request/attempt 各绑定一次",
                     ));
                 }
             }
             _ => unreachable!("capability was filtered above"),
+        }
+        if matches!(stage, Stage::Http | Stage::WebSocket | Stage::Service)
+            && (!binding.client_key_ids.is_empty()
+                || !binding.account_group_ids.is_empty()
+                || !binding.provider_ids.is_empty()
+                || !binding.models.is_empty())
+        {
+            return Err(AdminError::invalid(
+                "入口和公开服务不保证具有模型执行身份，不能绑定 Key、分组、Provider 或模型条件",
+            ));
         }
         let scope = BindingScope::compile(binding)?;
         if (capability == Capability::ModelRouter
@@ -147,7 +164,6 @@ pub(crate) fn compile_entries(
     manifest: &Manifest,
     instance_id: &str,
     bindings: &[PluginCapabilityBinding],
-    permissions: &[Permission],
     session: Arc<RpcSession>,
     callbacks: Arc<PluginCallbacks>,
 ) -> Result<Vec<PolicyEntry>, AdminError> {
@@ -176,16 +192,14 @@ pub(crate) fn compile_entries(
                     instance_id,
                     binding,
                     capability,
-                    manifest.contributes[&capability].version,
                     Some(invocation.clone()),
-                    permissions.contains(&Permission::Requests),
                 )
             })
         })
         .collect()
 }
 
-/// 已保存绑定的阶段是宿主合同；进程不可用时仍保留相同范围和故障策略。
+/// 已保存绑定的阶段是宿主合同；进程不可用时仍保留相同范围和故障策略
 pub(crate) fn unavailable_entries(
     instance: &PluginInstance,
 ) -> Result<Vec<PolicyEntry>, AdminError> {
@@ -197,7 +211,7 @@ pub(crate) fn unavailable_entries(
                 "routing" => Capability::ModelRouter,
                 "scheduling" => Capability::Scheduler,
                 "retry" => Capability::RetryPolicy,
-                "request" | "attempt" => Capability::Middleware,
+                "http" | "websocket" | "service" | "request" | "attempt" => Capability::Middleware,
                 _ => return None,
             };
             Some(compile_entry(
@@ -208,9 +222,7 @@ pub(crate) fn unavailable_entries(
                 &instance.id,
                 binding,
                 capability,
-                1,
                 None,
-                false,
             ))
         })
         .collect()
@@ -221,9 +233,7 @@ fn compile_entry(
     instance_id: &str,
     binding: &PluginCapabilityBinding,
     capability: Capability,
-    capability_version: u32,
     invocation: Option<PolicyInvocation>,
-    requests_authorized: bool,
 ) -> Result<PolicyEntry, AdminError> {
     let scope = BindingScope::compile(binding)?;
     Ok(match capability {
@@ -241,7 +251,6 @@ fn compile_entry(
             invocation,
             scope,
             failure_policy: binding.failure_policy.clone(),
-            requests_authorized,
         }),
         Capability::Scheduler => PolicyEntry::Scheduler(AccountSchedulerEntry {
             plugin_id: plugin_id.to_owned(),
@@ -249,14 +258,15 @@ fn compile_entry(
             invocation,
             scope,
             failure_policy: binding.failure_policy.clone(),
-            requests_authorized,
         }),
         Capability::Middleware => PolicyEntry::Middleware(MiddlewareEntry {
-            capability_version,
             order: binding.order,
             plugin_id: plugin_id.to_owned(),
             instance_id: instance_id.to_owned(),
             mount: match binding.stage.as_str() {
+                "http" => MiddlewareMount::Http,
+                "service" => MiddlewareMount::Service,
+                "websocket" => MiddlewareMount::WebSocket,
                 "request" => MiddlewareMount::Request,
                 "attempt" => MiddlewareMount::Attempt,
                 _ => return Err(AdminError::invalid("插件中间件阶段无效")),
@@ -264,7 +274,6 @@ fn compile_entry(
             invocation,
             scope,
             failure_policy: binding.failure_policy.clone(),
-            requests_authorized,
         }),
         _ => return Err(AdminError::invalid("插件请求策略能力无效")),
     })
@@ -274,7 +283,7 @@ pub(crate) struct PluginRequestPolicyPlan {
     routers: Arc<[ModelRouterEntry]>,
     schedulers: Arc<[AccountSchedulerEntry]>,
     retries: Arc<[RetryEntry]>,
-    middleware: Arc<[MiddlewareEntry]>,
+    middleware: BTreeMap<MiddlewareMount, Box<[Arc<MiddlewareEntry>]>>,
     policy_timeout: Duration,
     middleware_timeout: Duration,
 }
@@ -286,7 +295,14 @@ impl fmt::Debug for PluginRequestPolicyPlan {
             .field("router_count", &self.routers.len())
             .field("scheduler_count", &self.schedulers.len())
             .field("retry_count", &self.retries.len())
-            .field("middleware_count", &self.middleware.len())
+            .field(
+                "middleware_count",
+                &self
+                    .middleware
+                    .values()
+                    .map(|entries| entries.len())
+                    .sum::<usize>(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -338,24 +354,28 @@ impl PluginRequestPolicyPlan {
             }
         }
         middleware.sort_by(|left, right| {
-            (
-                mount_order(left.mount),
-                left.order,
-                &left.plugin_id,
-                &left.instance_id,
-            )
-                .cmp(&(
-                    mount_order(right.mount),
-                    right.order,
-                    &right.plugin_id,
-                    &right.instance_id,
-                ))
+            (left.order, &left.plugin_id, &left.instance_id).cmp(&(
+                right.order,
+                &right.plugin_id,
+                &right.instance_id,
+            ))
         });
+        // 发布时固定各挂载位置的有序候选，消息处理不再扫描其他边界的绑定
+        let mut by_mount = BTreeMap::<_, Vec<_>>::new();
+        for entry in middleware {
+            by_mount
+                .entry(entry.mount)
+                .or_default()
+                .push(Arc::new(entry));
+        }
         Ok(Some(Arc::new(Self {
             routers: routers.into(),
             schedulers: schedulers.into(),
             retries: retries.into(),
-            middleware: middleware.into(),
+            middleware: by_mount
+                .into_iter()
+                .map(|(mount, entries)| (mount, entries.into_boxed_slice()))
+                .collect(),
             policy_timeout: maximum_call_timeout.min(POLICY_TIMEOUT),
             middleware_timeout: maximum_call_timeout,
         })))
@@ -369,12 +389,5 @@ impl PluginRequestPolicyPlan {
     #[must_use]
     pub(crate) fn has_middleware(&self) -> bool {
         !self.middleware.is_empty()
-    }
-}
-
-const fn mount_order(mount: MiddlewareMount) -> u8 {
-    match mount {
-        MiddlewareMount::Request => 0,
-        MiddlewareMount::Attempt => 1,
     }
 }

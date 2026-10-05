@@ -1,4 +1,4 @@
-//! 外置的 reqwest 网络策略契约。
+//! 外置的 reqwest 网络策略契约
 
 use std::cell::Cell;
 use std::net::IpAddr;
@@ -47,7 +47,7 @@ async fn official_inference_tls_should_advertise_grok_cli_alpn() {
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             .await
             .unwrap();
-        // 只读取公开的 ClientHello 后关闭连接，不发送证书，也不接收认证和模型请求。
+        // 只读取公开的 ClientHello 后关闭连接，不发送证书，也不接收认证和模型请求
         let mut handshake = Vec::new();
         loop {
             assert_eq!(socket.read_u8().await.unwrap(), 22);
@@ -98,10 +98,10 @@ fn client_hello_alpn(mut hello: &[u8]) -> Vec<Vec<u8>> {
             .fold(0_usize, |len, byte| len * 256 + usize::from(*byte));
         take(input, len)
     }
-    take(&mut hello, 34); // 跳过版本号与随机值。
-    vector(&mut hello, 1); // 跳过会话 ID。
-    vector(&mut hello, 2); // 跳过密码套件列表。
-    vector(&mut hello, 1); // 跳过压缩方法列表。
+    take(&mut hello, 34); // 跳过版本号与随机值
+    vector(&mut hello, 1); // 跳过会话 ID
+    vector(&mut hello, 2); // 跳过密码套件列表
+    vector(&mut hello, 1); // 跳过压缩方法列表
     let mut extensions = vector(&mut hello, 2);
     while !extensions.is_empty() {
         let kind = u16::from_be_bytes(take(&mut extensions, 2).try_into().unwrap());
@@ -349,7 +349,7 @@ async fn inference_proxy_client_is_built_once_for_concurrent_same_binding() {
     for task in tasks {
         assert!(task.await.unwrap().iter().all(Result::is_ok));
     }
-    // 启动时的直连 client + 一个代理 client；不再先构建并丢弃另一个直连 client。
+    // 启动时的直连 client + 一个代理 client；不再先构建并丢弃另一个直连 client
     assert_eq!(builds.load(Ordering::SeqCst), 2);
     assert!(origin_server.received_requests().await.unwrap().is_empty());
 }

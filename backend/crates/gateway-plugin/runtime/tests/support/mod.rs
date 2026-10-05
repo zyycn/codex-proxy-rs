@@ -1,7 +1,9 @@
+//! 插件运行时测试共用的制品、实例与端口构造辅助
+
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     io::Write as _,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, OnceLock},
 };
 
 use flate2::{Compression, write::GzEncoder};
@@ -45,9 +47,8 @@ pub fn contribution_for_id(
         Capability::ModelCatalog => "modelCatalog",
         Capability::RetryPolicy => "retryPolicy",
         Capability::Middleware => "middleware",
-        Capability::RequestLifecycle => "requestLifecycle",
-        Capability::WebSocketObserver => "webSocketObserver",
-        Capability::Usage => "usage",
+        Capability::UpstreamAdapter => "upstreamAdapter",
+        Capability::Observer => "observer",
         Capability::CommandLine => "commandLine",
         Capability::Management => "management",
         Capability::Maintenance => "maintenance",
@@ -56,7 +57,11 @@ pub fn contribution_for_id(
         capability,
         ContributionDeclaration {
             id: format!("{plugin_id}.{local_id}"),
-            version: 1,
+            version: if capability == Capability::Middleware {
+                3
+            } else {
+                1
+            },
             stages,
             input_formats,
             output_formats,
@@ -84,46 +89,35 @@ pub fn worker() -> &'static [u8] {
 }
 
 pub fn package(worker: &[u8]) -> Arc<[u8]> {
-    package_with_permissions(worker, Vec::new())
+    package_with_contributions(worker, Contributions::new())
 }
 
-pub fn package_with_permissions(
-    worker: &[u8],
-    permissions: Vec<gateway_plugin_sdk::Permission>,
-) -> Arc<[u8]> {
-    package_with_contributions(worker, permissions, Contributions::new())
-}
-
-pub fn package_with_contributions(
-    worker: &[u8],
-    permissions: Vec<gateway_plugin_sdk::Permission>,
-    contributes: Contributions,
-) -> Arc<[u8]> {
-    package_with_contributions_and_state(worker, permissions, contributes, vec![])
+pub fn package_with_contributions(worker: &[u8], contributes: Contributions) -> Arc<[u8]> {
+    package_with_contributions_and_state(worker, contributes, vec![])
 }
 
 pub fn package_with_contributions_for_id(
     worker: &[u8],
     plugin_id: &str,
-    permissions: Vec<gateway_plugin_sdk::Permission>,
+
     contributes: Contributions,
 ) -> Arc<[u8]> {
-    package_with_identity_and_state(worker, plugin_id, permissions, contributes, vec![])
+    package_with_identity_and_state(worker, plugin_id, contributes, vec![])
 }
 
 pub fn package_with_contributions_and_state(
     worker: &[u8],
-    permissions: Vec<gateway_plugin_sdk::Permission>,
+
     contributes: Contributions,
     state: Vec<gateway_plugin_sdk::StateNamespace>,
 ) -> Arc<[u8]> {
-    package_with_identity_and_state(worker, DEFAULT_PLUGIN_ID, permissions, contributes, state)
+    package_with_identity_and_state(worker, DEFAULT_PLUGIN_ID, contributes, state)
 }
 
 fn package_with_identity_and_state(
     worker: &[u8],
     plugin_id: &str,
-    permissions: Vec<gateway_plugin_sdk::Permission>,
+
     contributes: Contributions,
     state: Vec<gateway_plugin_sdk::StateNamespace>,
 ) -> Arc<[u8]> {
@@ -151,7 +145,7 @@ fn package_with_identity_and_state(
         main: "bin/worker".to_owned(),
         runtime: RuntimeKind::TrustedProcess,
         contributes,
-        permissions: permissions.into_iter().collect::<BTreeSet<_>>(),
+
         configuration_schema: serde_json::json!({}),
         secret_fields: BTreeSet::new(),
         resources: BTreeMap::new(),
@@ -167,26 +161,33 @@ fn package_with_identity_and_state(
         }),
     };
     let manifest = serde_json::to_vec(&manifest).unwrap();
-    let key: [u8; 32] = Sha256::digest(&manifest).into();
-    type PackageCache = VecDeque<([u8; 32], Arc<[u8]>)>;
-    static PACKAGES: Mutex<PackageCache> = Mutex::new(VecDeque::new());
-    // 缓存的只是不可变制品；各用例仍独立校验、解包、启动进程和创建数据库 schema。
-    // 同时保留至多 8 个制品，避免复杂清单用例累积常驻内存。
-    let mut packages = PACKAGES.lock().unwrap();
-    if let Some(index) = packages.iter().position(|(existing, _)| *existing == key) {
-        let entry = packages.remove(index).unwrap();
-        let package = entry.1.clone();
-        packages.push_back(entry);
-        return package;
+    let key = hex::encode(Sha256::digest(&manifest));
+    // nextest 的用例分属独立进程；清单含 worker 摘要，只共享不可变归档
+    // 私有解包目录、会话、进程及 Store 仍由每个用例独立创建
+    let cache = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-packages-v1");
+    std::fs::create_dir_all(&cache).unwrap();
+    let path = cache.join(format!("{key}.tar.gz"));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(cache.join(format!("{key}.lock")))
+        .unwrap();
+    lock.lock().unwrap();
+    match std::fs::read(&path) {
+        Ok(bytes) => return bytes.into(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("read test plugin archive: {error}"),
     }
     let package = archive(BTreeMap::from([
         ("plugin.json".into(), manifest),
         ("bin/worker".into(), worker.to_vec()),
     ]));
-    if packages.len() == 8 {
-        packages.pop_front();
-    }
-    packages.push_back((key, package.clone()));
+    // 原子发布避免构建中断后其他进程读到不完整的压缩包，文件锁随进程退出释放
+    let mut temporary = tempfile::NamedTempFile::new_in(cache).unwrap();
+    temporary.write_all(&package).unwrap();
+    temporary.persist(path).unwrap();
     package
 }
 

@@ -1,3 +1,5 @@
+//! 验证健康接口按基础设施与关键 Worker 状态判定可用性
+
 use std::sync::Arc;
 
 use axum::{

@@ -1,3 +1,5 @@
+//! 插件管理页面模型调用的认证、执行与响应交付测试
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -120,10 +122,19 @@ impl MiddlewarePlan for ModelMiddleware {
         &self,
         _: MiddlewareContext,
         request: MiddlewareRequest,
-        _: Box<dyn MiddlewareNext>,
+        _: MiddlewareNext,
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
-        for header in request.headers() {
-            assert!(!["cookie", "authorization", "x-api-key"].contains(&header.name()));
+        for (name, value) in [
+            ("cookie", "cpr_session=management-session".to_owned()),
+            ("authorization", "Bearer admin-fixture".to_owned()),
+            ("x-api-key", format!("admin-{}", "a".repeat(64))),
+        ] {
+            assert!(
+                request
+                    .headers()
+                    .iter()
+                    .any(|header| { header.name() == name && header.value() == value.as_bytes() })
+            );
         }
         assert!(
             request
@@ -158,6 +169,7 @@ impl MiddlewarePlan for ModelMiddleware {
                 vec![
                     MiddlewareHeader::new("set-cookie", "fixture=value".into()),
                     MiddlewareHeader::new("www-authenticate", "Bearer".into()),
+                    MiddlewareHeader::new("x-plugin-response", "complete".into()),
                 ],
                 Box::new(ModelBody {
                     frame: Some(MiddlewareFrame::new(bytes.into(), framing, terminal)),
@@ -204,7 +216,61 @@ fn model_request(stream: bool) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn model_bridge_executes_and_protects_request_and_response_headers() {
+async fn management_calls_and_callbacks_preserve_headers_and_override_defaults() {
+    let fixture = published_fixture().await;
+    let target = format!("plugin-instance-diagnostic/{}/7", "a".repeat(64));
+    for uri in [
+        format!("/api/admin/plugins/extensions/{target}/api/echo"),
+        format!("/plugins/callbacks/{target}/oauth?state=nonce"),
+    ] {
+        let response = crate::openai::api_router_with_admin_and_execution(
+            fixture.services.clone(),
+            ModelExecution::new(ModelReply::Complete),
+        )
+        .oneshot(
+            Request::get(uri)
+                .header("cookie", "cpr_session=management-session")
+                .header("authorization", "Bearer management-fixture")
+                .header(
+                    "x-plugin-binary",
+                    axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+                )
+                .header("set-cookie", "first=1")
+                .header("set-cookie", "second=2")
+                .header("content-security-policy", "default-src 'self'")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["cookie"],
+            "cpr_session=management-session"
+        );
+        assert_eq!(
+            response.headers()["authorization"],
+            "Bearer management-fixture"
+        );
+        assert_eq!(response.headers()["x-plugin-binary"].as_bytes(), &[0xff]);
+        assert_eq!(
+            response
+                .headers()
+                .get_all("set-cookie")
+                .iter()
+                .map(|value| value.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["first=1", "second=2"]
+        );
+        assert_eq!(
+            response.headers()["content-security-policy"],
+            "default-src 'self'"
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_bridge_preserves_complete_request_and_response_headers() {
     let fixture = published_fixture().await;
     let execution = ModelExecution::new(ModelReply::Complete);
     let response = crate::openai::api_router_with_admin_and_execution(fixture.services, execution)
@@ -212,10 +278,9 @@ async fn model_bridge_executes_and_protects_request_and_response_headers() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(!response.headers().contains_key("set-cookie"));
-    assert!(!response.headers().contains_key("www-authenticate"));
-    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
-    assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(response.headers()["set-cookie"], "fixture=value");
+    assert_eq!(response.headers()["www-authenticate"], "Bearer");
+    assert_eq!(response.headers()["x-plugin-response"], "complete");
     assert_eq!(response.headers()["cache-control"], "no-store");
     let body = axum::body::to_bytes(response.into_body(), 4096)
         .await
@@ -290,6 +355,7 @@ pub(super) fn resource_fixture(
     path: &str,
 ) -> gateway_admin::model::plugins::management::PluginManagementResponse {
     gateway_admin::model::plugins::management::PluginManagementResponse {
+        headers: Vec::new(),
         status: if path == "missing" { 404 } else { 200 },
         content_type: if path.ends_with(".css") {
             "text/css"
@@ -303,11 +369,10 @@ pub(super) fn resource_fixture(
 
 async fn published_fixture() -> AdminTestFixture {
     use gateway_core::{
-        account::{AccountSelectionPolicy, RotationStrategy},
         routing::{ConfigRevision, RuntimeSnapshot},
         runtime::extensions::{ExtensionSetId, ExtensionSetLease, ExtensionSetReference},
     };
-    use std::{num::NonZeroU32, sync::Arc, time::Duration};
+    use std::sync::Arc;
     struct Lease;
     impl ExtensionSetLease for Lease {
         fn is_ready(&self) -> bool {
@@ -322,10 +387,13 @@ async fn published_fixture() -> AdminTestFixture {
     fixture.published_snapshot.publish(
         RuntimeSnapshot::new(
             ConfigRevision::new(7).unwrap(),
-            AccountSelectionPolicy::new(
-                RotationStrategy::Smart,
-                NonZeroU32::new(1).unwrap(),
-                Duration::ZERO,
+            gateway_core::settings::SettingsValues::new(
+                1,
+                0,
+                "smart",
+                Default::default(),
+                None,
+                None,
             ),
             vec![],
             vec![],
@@ -510,6 +578,8 @@ async fn model_responses_requires_the_exact_authorized_target_before_execution()
                 "/api/admin/plugins/extensions/{target}/models/responses?{query}"
             ))
             .header("cookie", "cpr_session=management-session")
+            .header("authorization", "Bearer admin-fixture")
+            .header("x-api-key", format!("admin-{}", "a".repeat(64)))
             .header("content-type", "application/json")
             .header("x-request-id", "management-model-request")
             .body(Body::from(
@@ -659,7 +729,7 @@ async fn public_callback_rejects_head_missing_duplicate_state_and_body_before_di
         ("GET", "state=one&state=two", "", StatusCode::BAD_REQUEST),
         ("GET", "state=one&%73tate=two", "", StatusCode::BAD_REQUEST),
         ("GET", "state=one", "body", StatusCode::BAD_REQUEST),
-        // 合法 GET 没有管理 Cookie 仍进入服务；当前测试未发布视图，返回 503 而不是 401。
+        // 合法 GET 没有管理 Cookie 仍进入服务；当前测试未发布视图，返回 503 而不是 401
         ("GET", "state=one", "", StatusCode::SERVICE_UNAVAILABLE),
     ] {
         let response = crate::openai::api_router_with_admin_and_execution(

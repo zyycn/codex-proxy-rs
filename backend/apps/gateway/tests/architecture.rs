@@ -1,4 +1,4 @@
-//! docs/architecture.md 依赖 DAG 与生产源码纪律的 workspace 级机器校验。
+//! docs/architecture.md 依赖 DAG 与生产源码纪律的 workspace 级机器校验
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,7 +8,7 @@ use std::{
 
 use syn::{Item, visit::Visit};
 
-/// workspace 成员冻结清单;新增 crate 必须同步扩展本文件的依赖规则。
+/// workspace 成员冻结清单;新增 crate 必须同步扩展本文件的依赖规则
 pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
     "apps/gateway",
     "apps/plugin-cli",
@@ -76,7 +76,12 @@ fn core_value_owners_do_not_depend_on_execution_or_routing() {
             "account/selection.rs" => Some(&["account", "concurrency", "identity", "validation"]),
             "concurrency.rs" => Some(&["error"]),
             "account/store.rs" => Some(&["account", "error", "identity", "validation"]),
-            path if path.starts_with("policy/") => Some(&["account", "policy", "validation"]),
+            path if path.starts_with("policy/") => {
+                Some(&["account", "identity", "policy", "validation"])
+            }
+            "settings/values.rs" | "settings/compiled.rs" => {
+                Some(&["account", "concurrency", "identity", "metering", "policy"])
+            }
             path if path.starts_with("account/") => Some(&["account", "identity", "validation"]),
             _ => None,
         };
@@ -173,7 +178,7 @@ fn gateway_admin_stays_free_of_infrastructure_dependencies() {
     );
 }
 
-/// workspace 包名到冻结成员路径的映射。
+/// workspace 包名到冻结成员路径的映射
 const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("codex-proxy-rs", "apps/gateway"),
     ("codex-proxy-plugin-cli", "apps/plugin-cli"),
@@ -189,7 +194,7 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("provider-xai", "crates/providers/xai"),
 ];
 
-/// SDK 与 Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计。
+/// SDK 与 Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计
 const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/gateway-plugin/sdk", &["call", "client"]),
     ("crates/gateway-plugin/runtime", &[]),
@@ -205,6 +210,7 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
             "plugin_distribution",
             "process",
             "proxy_probe",
+            "retention",
             "serve",
             "system_update",
             "workers",
@@ -218,13 +224,13 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
     ("crates/providers/xai", &["credential", "transport"]),
 ];
 
-/// 不对应单一生产模块、而是校验 crate/workspace 整体契约的根级测试场景。
+/// 不对应单一生产模块、而是校验 crate/workspace 整体契约的根级测试场景
 const ROOT_TEST_SCENARIOS: &[(&str, &[&str])] = &[
     ("apps/gateway", &["architecture"]),
     ("crates/gateway-api", &["architecture"]),
 ];
 
-/// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表。
+/// 冻结的 workspace 内部运行时依赖边；新增/删除任何边都必须同步本表
 const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("codex-proxy-plugin-cli", "gateway-plugin-sdk"),
     ("codex-proxy-rs", "gateway-admin"),
@@ -378,7 +384,9 @@ fn workspace_modules_follow_conventional_file_layout() {
     let targets = test_source_roots();
     for member in WORKSPACE_MEMBERS {
         let member_root = backend_root().join(member);
-        assert_module_tree(&member_root.join("src"), &["lib.rs", "main.rs"]);
+        let src = member_root.join("src");
+        assert_module_tree(&src, &["lib.rs", "main.rs"]);
+        assert_directory_modules_have_children(&src, &["lib.rs", "main.rs"]);
 
         let tests = member_root.join("tests");
         if tests.is_dir() {
@@ -388,6 +396,29 @@ fn workspace_modules_follow_conventional_file_layout() {
                 &roots.iter().map(String::as_str).collect::<Vec<_>>(),
             );
         }
+    }
+}
+
+fn assert_directory_modules_have_children(root: &Path, crate_roots: &[&str]) {
+    let files = super::rust_files(root);
+    for relative in &files {
+        if crate_roots
+            .iter()
+            .any(|candidate| relative == Path::new(candidate))
+            || relative.file_name().and_then(|value| value.to_str()) != Some("mod.rs")
+        {
+            continue;
+        }
+
+        let directory = relative.parent().expect("mod.rs parent");
+        assert!(
+            files
+                .iter()
+                .any(|candidate| candidate != relative && candidate.starts_with(directory)),
+            "{} is a leaf module and must use {}",
+            root.join(relative).display(),
+            root.join(directory).with_extension("rs").display(),
+        );
     }
 }
 
@@ -444,7 +475,7 @@ fn integration_tests_mirror_production_module_tree() {
     }
 }
 
-/// Rust 子进程 fixture 是 Cargo 的独立 crate 根，不能要求它由测试模块再次声明。
+/// Rust 子进程 fixture 是 Cargo 的独立 crate 根，不能要求它由测试模块再次声明
 fn test_source_roots() -> BTreeMap<PathBuf, Vec<String>> {
     let metadata = cargo_metadata_json();
     let mut roots = BTreeMap::<PathBuf, Vec<String>>::new();
@@ -498,6 +529,8 @@ fn root_test_scenario_allowed(member: &str, module: &Path) -> bool {
 
 fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
     let files = super::rust_files(root);
+    // 同一父模块的所有子文件复用一次语法解析，计数仍保留重复声明检查
+    let mut declarations = BTreeMap::<PathBuf, BTreeMap<String, usize>>::new();
     for relative in &files {
         if crate_roots
             .iter()
@@ -560,7 +593,14 @@ fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
         };
         let declaration_count = declaration_parents
             .iter()
-            .map(|path| external_module_declaration_count(path, module_name))
+            .map(|path| {
+                declarations
+                    .entry(path.clone())
+                    .or_insert_with(|| external_module_declarations(path))
+                    .get(module_name)
+                    .copied()
+                    .unwrap_or_default()
+            })
             .sum::<usize>();
         assert_eq!(
             declaration_count,
@@ -571,23 +611,21 @@ fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
     }
 }
 
-fn external_module_declaration_count(path: &Path, module_name: &str) -> usize {
+fn external_module_declarations(path: &Path) -> BTreeMap<String, usize> {
     if !path.is_file() {
-        return 0;
+        return BTreeMap::new();
     }
     let source = fs::read_to_string(path).expect("read parent module source");
     let syntax = syn::parse_file(&source).expect("parse parent module source");
-    syntax
-        .items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item,
-                Item::Mod(module)
-                    if module.content.is_none() && module.ident == module_name
-            )
-        })
-        .count()
+    let mut declarations = BTreeMap::new();
+    for item in syntax.items {
+        if let Item::Mod(module) = item
+            && module.content.is_none()
+        {
+            *declarations.entry(module.ident.to_string()).or_default() += 1;
+        }
+    }
+    declarations
 }
 
 pub(super) fn backend_root() -> PathBuf {
@@ -611,7 +649,7 @@ fn cargo_metadata_json() -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("parse cargo metadata")
 }
 
-/// 提取成员 `[dependencies]` 段内声明的依赖名;段落以下一个 `[` 表头结束。
+/// 提取成员 `[dependencies]` 段内声明的依赖名;段落以下一个 `[` 表头结束
 fn dependency_names(member: &str) -> Vec<String> {
     let manifest = fs::read_to_string(backend_root().join(member).join("Cargo.toml"))
         .expect("read member manifest");

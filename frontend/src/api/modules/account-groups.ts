@@ -34,7 +34,9 @@ export interface AccountGroup extends AccountGroupRef {
   capacity: AccountGroupCapacity
   usage: AccountGroupUsage
   createdAt: string
+  createdAtDisplay: string
   updatedAt: string
+  updatedAtDisplay: string
 }
 
 export interface AccountGroupPageMeta {

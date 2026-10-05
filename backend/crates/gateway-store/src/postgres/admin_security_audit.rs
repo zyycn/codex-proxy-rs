@@ -1,4 +1,4 @@
-//! `admin_users` 与 `admin_audit_events` 的唯一 PostgreSQL owner。
+//! `admin_users` 与 `admin_audit_events` 的唯一 PostgreSQL owner
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -24,6 +24,18 @@ impl AdminAuditActorKind {
             Self::AdminApiKey => "admin_api_key",
             Self::System => "system",
             Self::Anonymous => "anonymous",
+        }
+    }
+}
+
+impl From<gateway_admin::model::auth::AuditActorKind> for AdminAuditActorKind {
+    fn from(value: gateway_admin::model::auth::AuditActorKind) -> Self {
+        use gateway_admin::model::auth::AuditActorKind;
+        match value {
+            AuditActorKind::AdminSession => Self::AdminSession,
+            AuditActorKind::AdminApiKey => Self::AdminApiKey,
+            AuditActorKind::System => Self::System,
+            AuditActorKind::Anonymous => Self::Anonymous,
         }
     }
 }

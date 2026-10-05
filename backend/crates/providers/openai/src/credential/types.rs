@@ -1,4 +1,4 @@
-//! Codex credential 的 Provider-owned 明文结构与安全运行时值对象。
+//! Codex credential 的 Provider-owned 明文结构与安全运行时值对象
 
 use std::fmt;
 
@@ -8,7 +8,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
-/// OAuth AT/RT/ID Token；`Debug` 永不输出明文。
+/// OAuth AT/RT/ID Token；`Debug` 永不输出明文
 #[derive(Clone)]
 pub struct CodexOAuthSecret {
     pub access_token: SecretString,
@@ -30,7 +30,7 @@ impl fmt::Debug for CodexOAuthSecret {
     }
 }
 
-/// OAuth credential 持久化时使用的账号投影。
+/// OAuth credential 持久化时使用的账号投影
 #[derive(Clone)]
 pub struct CodexAccountProfile {
     pub email: Option<String>,
@@ -42,9 +42,9 @@ pub struct CodexAccountProfile {
     pub access_token_expires_at: Option<DateTime<Utc>>,
 }
 
-/// 从 ChatGPT OAuth JWT payload 尽力提取的账号资料。
+/// 从 ChatGPT OAuth JWT payload 尽力提取的账号资料
 ///
-/// 这只是与官方客户端一致的 base64 JSON 读取，不校验 JWT 签名或 claims。
+/// 这只是与官方客户端一致的 base64 JSON 读取，不校验 JWT 签名或 claims
 #[derive(Clone, Default)]
 pub(crate) struct CodexOAuthMetadata {
     pub(crate) email: Option<String>,
@@ -71,11 +71,12 @@ impl fmt::Debug for CodexOAuthMetadata {
     }
 }
 
-/// 按官方 `token_data.rs::parse_chatgpt_jwt_claims` 的字段优先级读取 JWT payload。
+/// 按官方 `token_data.rs::parse_chatgpt_jwt_claims` 的字段优先级读取 JWT payload
 ///
-/// 官方对 ID token 和外部 ChatGPT access token 复用同一解析逻辑。JWT 外形、
-/// payload base64 或 JSON 无法解析时返回错误；这不是签名或 claims 验证。
-/// 各账号字段本身仍全部可缺失。
+/// 官方对 ID token 和外部 ChatGPT access token 复用同一解析逻辑
+/// JWT 外形、
+/// payload base64 或 JSON 无法解析时返回错误；这不是签名或 claims 验证
+/// 各账号字段本身仍全部可缺失
 pub(crate) fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<CodexOAuthMetadata, ()> {
     let claims = decode_jwt_payload::<IdClaims>(jwt)?;
     let email = claims
@@ -95,10 +96,11 @@ pub(crate) fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<CodexOAuthMetadata, 
     })
 }
 
-/// 按官方 Codex 的方式，从 access token JWT payload 读取调度所需的过期时刻。
+/// 按官方 Codex 的方式，从 access token JWT payload 读取调度所需的过期时刻
 ///
-/// 此处只投影未验证的 `exp`，不把它当作身份或签名验证结果。无法解析或缺少
-/// `exp` 的直接导入仍可保留为没有已知过期时刻的 OAuth 凭据。
+/// 此处只投影未验证的 `exp`，不把它当作身份或签名验证结果
+/// 无法解析或缺少
+/// `exp` 的直接导入仍可保留为没有已知过期时刻的 OAuth 凭据
 pub(crate) fn parse_access_token_expiration(jwt: &str) -> Option<DateTime<Utc>> {
     let claims = decode_jwt_payload::<StandardJwtClaims>(jwt).ok()?;
     claims
@@ -142,7 +144,7 @@ struct AuthClaims {
     _chatgpt_account_is_fedramp: bool,
 }
 
-/// 与官方 `codex_protocol::auth::PlanType` 同构的 claims 反序列化类型。
+/// 与官方 `codex_protocol::auth::PlanType` 同构的 claims 反序列化类型
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ChatgptPlanType {
@@ -159,7 +161,7 @@ impl ChatgptPlanType {
     }
 }
 
-/// 与官方 `codex_protocol::auth::KnownPlan` 的 wire 名称和 aliases 保持一致。
+/// 与官方 `codex_protocol::auth::KnownPlan` 的 wire 名称和 aliases 保持一致
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum KnownChatgptPlan {
@@ -234,7 +236,7 @@ impl fmt::Debug for CodexAccountProfile {
     }
 }
 
-/// 持久化在 Provider credential JSON 中的签名认证主体。
+/// 持久化在 Provider credential JSON 中的签名认证主体
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CodexCredentialPrincipal {
@@ -252,7 +254,7 @@ impl fmt::Debug for CodexCredentialPrincipal {
     }
 }
 
-/// 存在 `provider_credentials_json` 内的 Cookie。
+/// 存在 `provider_credentials_json` 内的 Cookie
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexCookie {
     pub name: String,
@@ -299,11 +301,11 @@ impl ResponsesTransport {
 
 pub const CODEX_AUTHENTICATION_KIND_OAUTH: &str = "oauth";
 
-/// Codex OAuth 对 `provider_credentials_json` 的完整明文 schema。
+/// Codex OAuth 对 `provider_credentials_json` 的完整明文 schema
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CodexOAuthCredentialData {
-    // 默认值不扩展旧凭据 JSON，恢复 WS 优先后仍可由旧版本读取。
+    // 默认值不扩展旧凭据 JSON，恢复 WS 优先后仍可由旧版本读取
     #[serde(
         default = "ResponsesTransport::oauth_default",
         skip_serializing_if = "ResponsesTransport::is_oauth_default"
@@ -346,7 +348,7 @@ impl fmt::Debug for CodexOAuthCredentialData {
     }
 }
 
-/// OpenAI Provider 的规范化凭据形态。
+/// OpenAI Provider 的规范化凭据形态
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CodexCredentialData {
@@ -417,7 +419,7 @@ impl fmt::Debug for CodexCredentialData {
     }
 }
 
-/// 运行时使用的 Cookie；值受 `secrecy` 保护。
+/// 运行时使用的 Cookie；值受 `secrecy` 保护
 pub struct RuntimeCodexCookie {
     pub name: String,
     pub value: SecretString,
@@ -443,14 +445,14 @@ impl fmt::Debug for RuntimeCodexCookie {
     }
 }
 
-/// 一批 `Set-Cookie` CAS 写回的结果。
+/// 一批 `Set-Cookie` CAS 写回的结果
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodexCookieCaptureOutcome {
     pub credential_revision: Option<u64>,
     pub rejected: usize,
 }
 
-/// 单个已验证 Cookie 的 Provider JSON CAS 输入。
+/// 单个已验证 Cookie 的 Provider JSON CAS 输入
 pub struct UpsertCodexCookie {
     pub account_id: String,
     pub expected_credential_revision: u64,

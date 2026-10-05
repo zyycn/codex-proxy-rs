@@ -1,4 +1,4 @@
-//! `runtime_settings` 单例与 config revision 的 PostgreSQL owner。
+//! `runtime_settings` 单例与 config revision 的 PostgreSQL owner
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -30,6 +30,7 @@ pub struct RuntimeSettings {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub openai_guardian_reserved_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub smart_scheduling: gateway_core::account::SmartSchedulingConfig,
     pub rotation_strategy: String,
@@ -125,7 +126,6 @@ pub struct RuntimeSettingsUpdate {
         gateway_core::routing::ProviderKind,
         Option<gateway_core::account::OpaqueProviderData>,
     >,
-    pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -133,6 +133,7 @@ pub struct RuntimeSettingsUpdate {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub openai_guardian_reserved_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub smart_scheduling: gateway_core::account::SmartSchedulingConfig,
     pub rotation_strategy: String,
@@ -160,10 +161,6 @@ impl fmt::Debug for RuntimeSettingsUpdate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeSettingsUpdate")
-            .field(
-                "admin_api_key",
-                &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
-            )
             .field("rotation_strategy", &self.rotation_strategy)
             .field("request_location_enabled", &self.request_location_enabled)
             .field("request_location", &self.request_location)
@@ -267,7 +264,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
+                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency,
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
@@ -286,6 +283,29 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn claim_warmup_slot<'a>(
+        &'a self,
+        timezone: gateway_core::time::DeploymentTimeZone,
+        slot: chrono::NaiveDateTime,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let slot = timezone.resolve_local(slot).ok_or_else(|| {
+                ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, "resolve warmup slot")
+            })?;
+            // 执行游标只向前推进；设置保存不覆盖它，领取也不发布新的配置版本
+            let claimed = sqlx::query(
+                "update runtime_settings set account_warmup_cursor = $1
+                 where id = 1 and (account_warmup_cursor is null or account_warmup_cursor < $1)",
+            )
+            .bind(slot)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| provider_unavailable("claim warmup slot"))?
+            .rows_affected()
+                == 1;
+            Ok(claimed)
+        })
+    }
     fn initialize_request_profile<'a>(
         &'a self,
         provider: &'a gateway_core::routing::ProviderKind,
@@ -320,7 +340,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
     > {
         Box::pin(async move {
             // 单条语句共享一个 MVCC 快照：先核对候选 revision，再只投影配置对象；
-            // Client Key 明文与其它策略字段不会进入插件准备边界。
+            // Client Key 明文与其它策略字段不会进入插件准备边界
             let rows = sqlx::query_as::<_, (i64, Option<sqlx::types::Json<serde_json::Value>>)>(
                 "select settings.config_revision, profiles.profile
                  from runtime_settings settings
@@ -419,7 +439,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, smart_scheduling_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
+                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, openai_guardian_reserved_concurrency,
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
@@ -465,41 +485,40 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     let next = sqlx::query_scalar::<_, i64>(
         "update runtime_settings
              set config_revision = config_revision + 1,
-	                 admin_api_key = $1,
-	                 refresh_margin_seconds = $2,
-	                 refresh_concurrency = $3,
-	                 max_concurrent_per_account = $4,
-	                 request_interval_ms = $5,
-	                 rotation_strategy = $6,
-	                 model_mappings_json = $7,
-	                 usage_retention_days = $8,
-	                 ops_event_retention_days = $9,
-	                 audit_retention_days = $10,
-	                 min_codex_desktop_version = $11,
-	                 min_codex_cli_version = $12,
-                     max_waiting_per_key = $13,
-                     max_waiting_per_account = $14,
-                     concurrency_wait_timeout_seconds = $15,
-                     account_auto_freeze_enabled = $16,
-                     account_auto_freeze_threshold = $17,
-                     account_auto_freeze_window_seconds = $18,
-                     account_auto_freeze_duration_seconds = $19,
-                     account_auto_freeze_probe_enabled = $20,
-                     account_auto_freeze_probe_model = $21,
-                     account_auto_freeze_adaptive_concurrency = $22,
-                     request_location_json = $23,
-                     request_location_enabled = $24,
-                     responses_max_decompressed_body_bytes = $25,
-	                 provider_request_profiles_json = (provider_request_profiles_json - $26::text[]) || $27::jsonb,
-                     account_warmup_enabled = $28,
-                     account_warmup_schedule_time = $29,
-                     account_warmup_model = $30,
-                     smart_scheduling_json = $31,
+	                 refresh_margin_seconds = $1,
+	                 refresh_concurrency = $2,
+	                 max_concurrent_per_account = $3,
+	                 request_interval_ms = $4,
+	                 rotation_strategy = $5,
+	                 model_mappings_json = $6,
+	                 usage_retention_days = $7,
+	                 ops_event_retention_days = $8,
+	                 audit_retention_days = $9,
+	                 min_codex_desktop_version = $10,
+	                 min_codex_cli_version = $11,
+                     max_waiting_per_key = $12,
+                     max_waiting_per_account = $13,
+                     concurrency_wait_timeout_seconds = $14,
+                     account_auto_freeze_enabled = $15,
+                     account_auto_freeze_threshold = $16,
+                     account_auto_freeze_window_seconds = $17,
+                     account_auto_freeze_duration_seconds = $18,
+                     account_auto_freeze_probe_enabled = $19,
+                     account_auto_freeze_probe_model = $20,
+                     account_auto_freeze_adaptive_concurrency = $21,
+                     request_location_json = $22,
+                     request_location_enabled = $23,
+                     responses_max_decompressed_body_bytes = $24,
+	                 provider_request_profiles_json = (provider_request_profiles_json - $25::text[]) || $26::jsonb,
+                     account_warmup_enabled = $27,
+                     account_warmup_schedule_time = $28,
+                     account_warmup_model = $29,
+                     smart_scheduling_json = $30,
+                     openai_guardian_reserved_concurrency = $31,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
     )
-    .bind(update.admin_api_key.as_deref())
     .bind(refresh_margin_seconds)
     .bind(i64::from(update.refresh_concurrency))
     .bind(i64::from(update.max_concurrent_per_account))
@@ -542,6 +561,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(&update.account_warmup_schedule_time)
     .bind(update.account_warmup_model.as_deref())
     .bind(sqlx::types::Json(update.smart_scheduling))
+    .bind(i64::from(update.openai_guardian_reserved_concurrency))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -571,7 +591,7 @@ pub(crate) async fn bump_config_revision_in_transaction(
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
 }
 
-/// 更新 admin_api_key 字段，config revision 由调用方 bump。
+/// 更新 admin_api_key 字段，config revision 由调用方 bump
 pub(crate) async fn update_admin_api_key_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     admin_api_key: Option<String>,
@@ -614,6 +634,7 @@ struct RuntimeSettingsRow {
     max_waiting_per_key: i64,
     max_waiting_per_account: i64,
     concurrency_wait_timeout_seconds: i64,
+    openai_guardian_reserved_concurrency: i64,
     responses_max_decompressed_body_bytes: i64,
     account_auto_freeze_enabled: bool,
     account_auto_freeze_threshold: i64,
@@ -667,6 +688,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         max_waiting_per_key: to_u32(row.max_waiting_per_key)?,
         max_waiting_per_account: to_u32(row.max_waiting_per_account)?,
         concurrency_wait_timeout_seconds: to_u32(row.concurrency_wait_timeout_seconds)?,
+        openai_guardian_reserved_concurrency: to_u32(row.openai_guardian_reserved_concurrency)?,
         responses_max_decompressed_body_bytes: to_u64(row.responses_max_decompressed_body_bytes)?,
         account_auto_freeze_enabled: row.account_auto_freeze_enabled,
         account_auto_freeze_threshold: to_u32(row.account_auto_freeze_threshold)?,

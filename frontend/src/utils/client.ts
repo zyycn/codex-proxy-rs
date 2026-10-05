@@ -1,9 +1,9 @@
 import { API_BASE_URL } from '@/api/constants'
 
-export const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra'
+const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra'
 export const CODEX_WEBSOCKET_ENABLED_BY_DEFAULT = false
 
-export interface CodexConfigInput {
+interface CodexConfigInput {
   apiKey: string
   baseUrl: string
   websocketEnabled?: boolean
@@ -45,7 +45,7 @@ goals = true`
   }
 }
 
-export interface CodexCcSwitchImportInput {
+interface CodexCcSwitchImportInput {
   apiKey: string
   baseUrl: string
   providerName: string
@@ -86,11 +86,7 @@ function buildUsageScript(apiKey: string, baseUrl: string) {
 }
 
 export function buildCodexCcSwitchImportDeeplink(input: CodexCcSwitchImportInput): string {
-  const configFiles = buildCodexConfigFiles({
-    apiKey: input.apiKey,
-    baseUrl: input.baseUrl,
-    websocketEnabled: input.websocketEnabled ?? CODEX_WEBSOCKET_ENABLED_BY_DEFAULT,
-  })
+  const configFiles = buildCodexConfigFiles(input)
   // 与界面共用原生生图配置；保留 auth 载荷和独立字段，兼容旧版 CCSwitch。
   const config = encodeBase64(JSON.stringify({
     auth: configFiles.auth,

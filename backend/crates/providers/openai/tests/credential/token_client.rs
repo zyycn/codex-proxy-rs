@@ -1,3 +1,5 @@
+//! 验证 OAuth 令牌请求的代理、客户端画像与响应解析边界
+
 use provider_openai::credential::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OpenAiTokenClient, RefreshFailure, TokenClientConfig, TokenRefresher,

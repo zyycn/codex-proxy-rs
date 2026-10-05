@@ -1,6 +1,6 @@
 import type { BarSeriesOption, EChartsOption, LineSeriesOption } from 'echarts'
 import type { Ref } from 'vue'
-import type { dashboardTrendView, normalizeDashboardTrendKind } from './useDashboard'
+import type { dashboardTrendView, normalizeDashboardTrendKind } from '../presenter'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 
@@ -78,9 +78,9 @@ export function useRequestTrendChart(options: {
   )
 
   const chartOption = computed<EChartsOption>(() => {
-    const times = points.value.map(point => point.time)
+    const buckets = points.value.map(point => point.bucket)
     return {
-      ...getCoordinateSystem(times),
+      ...getCoordinateSystem(buckets),
       series: getSeries(),
       animationDuration: preferredMotion.value === 'reduce' ? 0 : 420,
       animationDurationUpdate: preferredMotion.value === 'reduce' ? 0 : 220,
@@ -99,7 +99,7 @@ export function useRequestTrendChart(options: {
     }
   })
 
-  function getCoordinateSystem(times: string[]) {
+  function getCoordinateSystem(buckets: string[]) {
     const muted = palette.value.textMuted
     const gridLine = palette.value.divider
     const axisLine = palette.value.border
@@ -114,7 +114,7 @@ export function useRequestTrendChart(options: {
       },
       xAxis: {
         type: 'category' as const,
-        data: times,
+        data: buckets,
         boundaryGap: activeKind.value === 'errors',
         axisLine: { show: true, lineStyle: { color: axisLine } },
         axisTick: { show: false },
@@ -123,7 +123,7 @@ export function useRequestTrendChart(options: {
           fontSize: 10,
           fontFamily: 'JetBrains Mono Variable, JetBrains Mono',
           hideOverlap: true,
-          interval: showTwoHourLabel,
+          formatter: (_value: string, index: number) => points.value[index]?.time ?? '',
         },
       },
       yAxis: [
@@ -183,8 +183,8 @@ export function useRequestTrendChart(options: {
 
   function formatTooltip(params: unknown) {
     const rows = Array.isArray(params) ? params : [params]
-    const title = tooltipValue(rows[0], 'axisValueLabel')
     const point = points.value[tooltipIndex(rows[0])]
+    const title = point?.label ?? ''
 
     if (activeKind.value === 'usage') {
       return [
@@ -487,11 +487,6 @@ function formatLatency(value: number | null | undefined, fallback: string) {
   if (value < 60_000)
     return `${formatAxisNumber(value / 1_000)} s`
   return `${formatAxisNumber(value / 60_000)} min`
-}
-
-function showTwoHourLabel(_index: number, value: string) {
-  const [hour, minute] = value.split(':').map(Number)
-  return minute === 0 && hour % 2 === 0
 }
 
 function tooltipItem(label: string, value: string | undefined, color: string) {

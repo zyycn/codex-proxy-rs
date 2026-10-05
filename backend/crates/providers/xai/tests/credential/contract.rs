@@ -1,3 +1,5 @@
+//! 验证 xAI 凭据持久化、主体身份与版本比较更新
+
 use std::sync::Arc;
 
 use chrono::Utc;

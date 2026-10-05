@@ -1,3 +1,5 @@
+//! 验证 Redis 认证会话的固定有效期、敏感键保护与原子限流
+
 use std::time::Duration;
 
 use chrono::Utc;
@@ -275,7 +277,7 @@ async fn unified_session_rejects_invalid_identities_and_loads_legacy_admin_paylo
         assert!(repository.load_session(token).await.is_err());
     }
 
-    // 旧版会话仍能解码，空指纹交由认证服务判定失效，避免升级后返回存储故障。
+    // 旧版会话仍能解码，空指纹交由认证服务判定失效，避免升级后返回存储故障
     let legacy = serde_json::json!({
         "subject": {"type": "admin", "admin_user_id": "admin"},
         "expires_at": (Utc::now() + chrono::Duration::seconds(60)).to_rfc3339(),

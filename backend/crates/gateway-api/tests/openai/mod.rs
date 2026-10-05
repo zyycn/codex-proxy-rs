@@ -1,3 +1,5 @@
+//! OpenAI 协议 HTTP 与 WebSocket 接口的测试入口
+
 mod auth;
 mod endpoint;
 mod error;
@@ -11,13 +13,12 @@ mod search;
 mod usage;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
+use gateway_core::account::ProviderAccountId;
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
     ClientAdmissionRequest, ClientAdmissionRestoreResult,
@@ -99,6 +100,13 @@ pub(super) fn api_router_with_config(
     admin: gateway_admin::AdminServices,
     config: gateway_api::ApiConfig,
 ) -> axum::Router {
+    api_bundle(admin, config).router()
+}
+
+pub(super) fn api_bundle(
+    admin: gateway_admin::AdminServices,
+    config: gateway_api::ApiConfig,
+) -> gateway_api::ApiBundle {
     let execution = Arc::new(DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot("unused-client-route-key", "openai")),
         Arc::new(UnusedExecutionStore),
@@ -107,7 +115,15 @@ pub(super) fn api_router_with_config(
         Arc::new(UnusedContinuation),
         Arc::new(IgnoredClientApiKeyUsage),
     ));
-    api_router_with_config_and_execution(admin, config, execution)
+    gateway_api::initialize(
+        config,
+        execution,
+        admin,
+        Vec::new(),
+        Arc::new(EmptyWorkerHealth),
+        Arc::new(TestLifecycle::default()),
+    )
+    .unwrap()
 }
 
 fn api_router_with_config_and_execution(
@@ -185,8 +201,12 @@ pub(super) fn authenticated_client_for_provider_with_limit(
     provider_name: &str,
     bytes: usize,
 ) -> AuthenticatedClient {
-    let snapshot = snapshot(plaintext, provider_name)
-        .with_responses_max_decompressed_body_bytes(std::num::NonZeroUsize::new(bytes).unwrap());
+    let snapshot = snapshot(plaintext, provider_name);
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_responses_max_decompressed_body_bytes(bytes as u64);
+    let snapshot = snapshot.with_settings(&settings).unwrap();
     let source = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot),
         Arc::new(UnusedExecutionStore),
@@ -205,11 +225,18 @@ pub(super) fn authenticated_client_with_min_versions(
     desktop: Option<&str>,
     cli: Option<&str>,
 ) -> AuthenticatedClient {
-    let snapshot =
-        snapshot(plaintext, "openai").with_min_codex_client_versions(CodexClientMinVersions::new(
-            desktop.map(|version| CodexClientVersion::parse(version).expect("Desktop min version")),
-            cli.map(|version| CodexClientVersion::parse(version).expect("CLI min version")),
-        ));
+    let snapshot = snapshot(plaintext, "openai");
+    let settings =
+        snapshot
+            .settings()
+            .clone()
+            .with_min_codex_client_versions(CodexClientMinVersions::new(
+                desktop.map(|version| {
+                    CodexClientVersion::parse(version).expect("Desktop min version")
+                }),
+                cli.map(|version| CodexClientVersion::parse(version).expect("CLI min version")),
+            ));
+    let snapshot = snapshot.with_settings(&settings).unwrap();
     let source = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot),
         Arc::new(UnusedExecutionStore),
@@ -249,11 +276,7 @@ fn snapshot_with_client_key(
     );
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            NonZeroU32::new(2).expect("concurrency"),
-            Duration::from_millis(1),
-        ),
+        gateway_core::settings::SettingsValues::new(2, 1, "smart", Default::default(), None, None),
         vec![provider.clone()],
         ["model-a", "model-b"]
             .into_iter()

@@ -1,6 +1,6 @@
-//! 快照聚合、窗口滚动和调度信号回归。
+//! 快照聚合、窗口滚动和调度信号回归
 //!
-//! 覆盖 raw JSON 解析、`limit_reached` 快照级聚合与窗口投影。
+//! 覆盖 raw JSON 解析、`limit_reached` 快照级聚合与窗口投影
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -62,7 +62,7 @@ fn parser_keeps_full_percent_as_display_without_provider_exhaustion_signal() {
     }))
     .expect("valid full-percent quota");
 
-    // 百分比只负责展示；额度访问结论由规范化 QuotaState 承载。
+    // 百分比只负责展示；额度访问结论由规范化 QuotaState 承载
     assert_eq!(fact.remaining_percent(), Some(0));
 }
 
@@ -462,7 +462,7 @@ async fn code_review_limit_projects_as_one_snapshot_per_limit_id() {
         .expect("quota snapshot");
 
     // spend_control 不生成窗口（只作 exhaustion 信号）；官方 map 协议中同一个
-    // limit_id 只能保留一个快照，顶层 code_review 事实优先于重复 additional。
+    // limit_id 只能保留一个快照，顶层 code_review 事实优先于重复 additional
     let review = snapshot
         .windows()
         .iter()

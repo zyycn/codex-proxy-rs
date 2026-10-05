@@ -1,3 +1,5 @@
+//! 验证 OAuth 待授权状态按 Provider 与所属身份隔离
+
 use std::{sync::Arc, time::Duration};
 
 use gateway_core::{

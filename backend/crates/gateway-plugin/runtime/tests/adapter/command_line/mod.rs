@@ -1,3 +1,5 @@
+//! 验证插件命令帮助、调用授权、输出与失败取消后的进程回收
+
 mod execution;
 mod parameters;
 
@@ -32,7 +34,6 @@ async fn setup_with_limits(
     let directory = tempfile::tempdir().unwrap();
     let archive = crate::support::package_with_contributions(
         crate::support::worker(),
-        vec![],
         Contributions::from([crate::support::contribution(
             Capability::CommandLine,
             vec![Stage::CommandLine],
@@ -52,7 +53,7 @@ async fn setup_with_limits(
         trusted_process: true,
         configuration,
         secrets: BTreeMap::new(),
-        grants: vec![],
+
         bindings: vec![],
         revision: Revision::new(1).unwrap(),
     };
@@ -168,7 +169,7 @@ async fn failed_or_cancelled_commands_are_not_replayed_and_children_are_reaped()
                 if failure == "cancel" {
                     cancellation.cancel();
                 } else {
-                    // 正常完成注册并确认命令已进入子进程后，只推进执行期限。
+                    // 正常完成注册并确认命令已进入子进程后，只推进执行期限
                     tokio::time::pause();
                     tokio::time::advance(limits.maximum_call_timeout + Duration::from_millis(1))
                         .await;

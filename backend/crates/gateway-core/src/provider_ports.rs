@@ -1,0 +1,1500 @@
+//! Provider 运行时所需的中立存储能力
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use futures::future::BoxFuture;
+
+use crate::account::{
+    AccountConcurrency, AccountFeedbackStats, AccountRuntimeSignals, CredentialRevision,
+    CredentialState, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
+};
+use crate::identity::ProviderKind;
+use crate::policy::ClientApiKeyId;
+use crate::routing::{ConfigRevision, UpstreamModelId};
+use crate::validation::{IdentifierError, validate_text};
+
+const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Provider 可据此决定是否重试，但看不到 SQL、Redis 或秘密原文
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderStoreErrorKind {
+    Unavailable,
+    InvalidData,
+    Conflict,
+}
+
+/// Provider 存储端口的脱敏错误
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("provider store {operation} failed: {kind:?}")]
+pub struct ProviderStoreError {
+    kind: ProviderStoreErrorKind,
+    operation: &'static str,
+}
+
+impl ProviderStoreError {
+    #[must_use]
+    pub const fn new(kind: ProviderStoreErrorKind, operation: &'static str) -> Self {
+        Self { kind, operation }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ProviderStoreErrorKind {
+        self.kind
+    }
+}
+
+/// 一个 Provider 的完整可重建调度状态
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSchedulingState {
+    signals: BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
+    round_robin_cursor: u64,
+}
+
+impl ProviderSchedulingState {
+    #[must_use]
+    pub const fn new(
+        signals: BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
+        round_robin_cursor: u64,
+    ) -> Self {
+        Self {
+            signals,
+            round_robin_cursor,
+        }
+    }
+
+    #[must_use]
+    pub const fn signals(&self) -> &BTreeMap<ProviderAccountId, AccountRuntimeSignals> {
+        &self.signals
+    }
+
+    #[must_use]
+    pub const fn round_robin_cursor(&self) -> u64 {
+        self.round_robin_cursor
+    }
+}
+
+/// 请求级账号 lease 的全部中立事实
+#[derive(Debug, Clone)]
+pub struct ProviderSchedulingLeaseRequest {
+    provider_kind: ProviderKind,
+    account_id: ProviderAccountId,
+    credential_revision: CredentialRevision,
+    max_concurrent: AccountConcurrency,
+    request_interval: Duration,
+    deadline: crate::lifecycle::Deadline,
+    cancellation: crate::lifecycle::CancellationToken,
+}
+
+impl ProviderSchedulingLeaseRequest {
+    #[must_use]
+    pub fn new(
+        provider_kind: ProviderKind,
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+        max_concurrent: impl Into<AccountConcurrency>,
+        request_interval: Duration,
+        deadline: impl Into<crate::lifecycle::Deadline>,
+    ) -> Self {
+        Self {
+            provider_kind,
+            account_id,
+            credential_revision,
+            max_concurrent: max_concurrent.into(),
+            request_interval,
+            deadline: deadline.into(),
+            cancellation: crate::lifecycle::CancellationToken::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: crate::lifecycle::CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    #[must_use]
+    pub fn cancellation(&self) -> crate::lifecycle::CancellationToken {
+        self.cancellation.clone()
+    }
+
+    #[must_use]
+    pub const fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        self.credential_revision
+    }
+
+    #[must_use]
+    pub const fn max_concurrent(&self) -> AccountConcurrency {
+        self.max_concurrent
+    }
+
+    #[must_use]
+    pub const fn request_interval(&self) -> Duration {
+        self.request_interval
+    }
+
+    #[must_use]
+    pub const fn deadline(&self) -> crate::lifecycle::Deadline {
+        self.deadline
+    }
+}
+
+/// Lease 生命周期由具体 Store guard 管理，Provider 只能持有
+pub trait ProviderLeaseGuard: Send + Sync + 'static {}
+
+impl<T> ProviderLeaseGuard for T where T: Send + Sync + 'static {}
+
+pub enum ProviderLeaseAcquisition {
+    Acquired(Box<dyn ProviderLeaseGuard>),
+    Busy { retry_after: Option<Duration> },
+}
+
+impl fmt::Debug for ProviderLeaseAcquisition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Acquired(_) => formatter.write_str("Acquired([LEASE])"),
+            Self::Busy { retry_after } => formatter
+                .debug_struct("Busy")
+                .field("retry_after", retry_after)
+                .finish(),
+        }
+    }
+}
+
+/// Provider 运行时会持有的三类 lease；刷新必须同时持有全局容量与账号互斥 lease
+#[derive(Debug, Clone)]
+pub enum ProviderLeaseRequest {
+    Scheduling(ProviderSchedulingLeaseRequest),
+    RefreshCapacity(ProviderRefreshCapacityRequest),
+    Refresh(ProviderRefreshLeaseRequest),
+}
+
+pub trait ProviderLeasePort: Send + Sync {
+    fn load_state<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>>;
+
+    fn try_acquire(
+        &self,
+        request: ProviderLeaseRequest,
+    ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>>;
+
+    /// 读取指定账号当前的在途请求数；只用于容量熔断的峰值证据，
+    /// 支持租约信号的存储实现覆盖，否则视为不可观测（空映射）
+    fn account_in_flight<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>> {
+        let _ = account_ids;
+        Box::pin(async move { Ok(BTreeMap::new()) })
+    }
+}
+
+/// Provider 从原始会话锚点派生的不可逆亲和键
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderSessionAffinityKey(String);
+
+impl ProviderSessionAffinityKey {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, ProviderStoreError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 128
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+        {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate provider session affinity key",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn expose_to_store(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ProviderSessionAffinityKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProviderSessionAffinityKey([OPAQUE])")
+    }
+}
+
+/// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键
+pub trait ProviderSessionAffinityPort: Send + Sync {
+    fn load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderAccountId>, ProviderStoreError>>;
+
+    fn bind<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
+
+    /// 仅在亲和键尚未绑定时写入候选账号，并返回原子操作后的实际绑定
+    ///
+    /// 已存在的绑定绝不会被候选账号覆盖；同一根会话的并发首次请求据此收敛到
+    /// 单一账号
+    /// TTL 只在首次写入时设置，已有绑定由成功反馈负责刷新
+    fn claim_or_load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        candidate_account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>>;
+
+    /// 仅当当前绑定等于 `expected_account_id`（或键已过期）时写入新账号，
+    /// 并返回原子操作后的实际绑定
+    ///
+    /// Provider 用它迁移不可用账号，以及在成功后以 `expected == replacement`
+    /// 刷新 TTL；迟到的旧账号成功不能覆盖较新的会话 winner
+    fn compare_and_bind<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected_account_id: &'a ProviderAccountId,
+        replacement_account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>>;
+
+    fn clear<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+}
+
+/// Provider 会话内已失败账号的可丢失排除集
+///
+/// Provider 自行派生会话键并决定何时写入或清理；Core 只承载调度所需的账号 ID
+/// 与 compare-and-swap revision，不解释任一 Provider 协议字段
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSessionExclusions {
+    excluded_accounts: BTreeSet<ProviderAccountId>,
+    revision: String,
+}
+
+impl ProviderSessionExclusions {
+    #[must_use]
+    pub const fn new(excluded_accounts: BTreeSet<ProviderAccountId>, revision: String) -> Self {
+        Self {
+            excluded_accounts,
+            revision,
+        }
+    }
+
+    #[must_use]
+    pub const fn excluded_accounts(&self) -> &BTreeSet<ProviderAccountId> {
+        &self.excluded_accounts
+    }
+
+    #[must_use]
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+}
+
+/// 可丢失的 Provider 会话级账号排除状态
+///
+/// 该端口不接收协议正文；Provider 只能以不可逆会话键、账号 ID 和固定 TTL 操作
+pub trait ProviderSessionExclusionPort: Send + Sync {
+    fn load<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionExclusions>, ProviderStoreError>>;
+
+    fn record_failure<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderSessionExclusions, ProviderStoreError>>;
+
+    fn clear<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected_revision: &'a str,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+}
+
+/// 所有 Provider 共享的 OAuth refresh 并发容量
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRefreshCapacityRequest {
+    max_concurrent: NonZeroU32,
+}
+
+impl ProviderRefreshCapacityRequest {
+    #[must_use]
+    pub const fn new(max_concurrent: NonZeroU32) -> Self {
+        Self { max_concurrent }
+    }
+
+    #[must_use]
+    pub const fn max_concurrent(self) -> NonZeroU32 {
+        self.max_concurrent
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRefreshLeaseRequest {
+    account_id: ProviderAccountId,
+    credential_revision: CredentialRevision,
+}
+
+impl ProviderRefreshLeaseRequest {
+    #[must_use]
+    pub const fn new(
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+    ) -> Self {
+        Self {
+            account_id,
+            credential_revision,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        self.credential_revision
+    }
+}
+
+/// Provider 定义的 catalog cache 作用域
+///
+/// Core 不解释其值；例如 Provider 可以使用套餐、区域或产品线作为共享目录边界
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderCatalogScope(String);
+
+impl ProviderCatalogScope {
+    /// 创建一个稳定且可用于 Redis 隔离键的 Provider-owned 作用域
+    ///
+    /// # Errors
+    ///
+    /// 空值、过长文本或控制字符会被拒绝
+    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        validate_text(&value, 128, false, None)?;
+        Ok(Self(value))
+    }
+
+    /// 返回 Provider-owned 作用域文本
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Opaque catalog cache 的 Provider 与 Provider-owned 作用域
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCatalogCacheKey {
+    provider_kind: ProviderKind,
+    scope: ProviderCatalogScope,
+}
+
+impl ProviderCatalogCacheKey {
+    #[must_use]
+    pub const fn new(provider_kind: ProviderKind, scope: ProviderCatalogScope) -> Self {
+        Self {
+            provider_kind,
+            scope,
+        }
+    }
+
+    #[must_use]
+    pub const fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
+    }
+
+    #[must_use]
+    pub const fn scope(&self) -> &ProviderCatalogScope {
+        &self.scope
+    }
+}
+
+pub trait ProviderCatalogCachePort: Send + Sync {
+    fn replace<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+        catalog: &'a OpaqueProviderData,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
+
+    fn read<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>;
+}
+
+/// Provider 从官方制品核验出的可重建请求画像
+///
+/// Core 只用单调制品序号约束覆盖顺序；具体版本字段由对应 Provider 放在
+/// `profile` 中解释
+/// 每个 Provider 的各制品分别保留一份最新画像
+#[derive(Clone, PartialEq)]
+pub struct ProviderArtifactProfile {
+    provider_kind: ProviderKind,
+    artifact_key: String,
+    artifact_sequence: u64,
+    verified_at: SystemTime,
+    profile: OpaqueProviderData,
+}
+
+impl ProviderArtifactProfile {
+    #[must_use]
+    pub const fn new(
+        provider_kind: ProviderKind,
+        artifact_key: String,
+        artifact_sequence: u64,
+        verified_at: SystemTime,
+        profile: OpaqueProviderData,
+    ) -> Self {
+        Self {
+            provider_kind,
+            artifact_key,
+            artifact_sequence,
+            verified_at,
+            profile,
+        }
+    }
+
+    #[must_use]
+    pub const fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
+    }
+
+    #[must_use]
+    pub fn artifact_key(&self) -> &str {
+        &self.artifact_key
+    }
+
+    #[must_use]
+    pub const fn artifact_sequence(&self) -> u64 {
+        self.artifact_sequence
+    }
+
+    #[must_use]
+    pub const fn verified_at(&self) -> SystemTime {
+        self.verified_at
+    }
+
+    #[must_use]
+    pub const fn profile(&self) -> &OpaqueProviderData {
+        &self.profile
+    }
+}
+
+impl fmt::Debug for ProviderArtifactProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderArtifactProfile")
+            .field("provider_kind", &self.provider_kind)
+            .field("artifact_sequence", &self.artifact_sequence)
+            .field("verified_at", &self.verified_at)
+            .field("profile", &"[PROVIDER-OWNED]")
+            .finish()
+    }
+}
+
+pub trait ProviderArtifactProfileCachePort: Send + Sync {
+    /// 覆盖同一 Provider、同一制品的固定 cache key
+    ///
+    /// 返回 `false` 表示 Store 已持有更高的制品序号；相同序号但内容不同必须返回
+    /// [`ProviderStoreErrorKind::Conflict`]，不能静默改写已核验画像
+    fn replace_if_newer(
+        &self,
+        profile: ProviderArtifactProfile,
+        ttl: Duration,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>>;
+
+    fn read<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        artifact_key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>>;
+}
+
+/// Redis 中可重建的账号状态投影
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCredentialState {
+    account_id: ProviderAccountId,
+    credential_revision: CredentialRevision,
+    enabled: bool,
+    credential_state: CredentialState,
+    observed_at: SystemTime,
+}
+
+impl ProviderCredentialState {
+    #[must_use]
+    pub const fn new(
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+        enabled: bool,
+        credential_state: CredentialState,
+        observed_at: SystemTime,
+    ) -> Self {
+        Self {
+            account_id,
+            credential_revision,
+            enabled,
+            credential_state,
+            observed_at,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        self.credential_revision
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub const fn credential_state(&self) -> CredentialState {
+        self.credential_state
+    }
+
+    #[must_use]
+    pub const fn observed_at(&self) -> SystemTime {
+        self.observed_at
+    }
+}
+
+pub trait ProviderCredentialStatePort: Send + Sync {
+    fn replace(
+        &self,
+        state: ProviderCredentialState,
+    ) -> BoxFuture<'_, Result<(), ProviderStoreError>>;
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCredentialState>, ProviderStoreError>>;
+
+    fn clear<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    /// 记录一次瞬态刷新失败并返回窗口内累计失败次数；每次失败刷新 TTL
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        window: Duration,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>>;
+
+    /// 凭据完整成功轮换后清零失败计数，退避窗口重新从 base 起步
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
+}
+
+/// 账号级 cooldown 的来源类别；调度状态统一按 `rate_limited` 处理
+pub use crate::account::AccountCooldownKind as ProviderCooldownKind;
+
+/// 可丢失的账号冷却事实，不进入持久状态；探测冻结到期后仍需确认恢复
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCooldown {
+    account_id: ProviderAccountId,
+    credential_revision: CredentialRevision,
+    until: SystemTime,
+    kind: ProviderCooldownKind,
+}
+
+impl ProviderCooldown {
+    #[must_use]
+    pub const fn new(
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+        until: SystemTime,
+    ) -> Self {
+        Self::new_with_kind(
+            account_id,
+            credential_revision,
+            until,
+            ProviderCooldownKind::RateLimit,
+        )
+    }
+
+    #[must_use]
+    pub const fn new_with_kind(
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+        until: SystemTime,
+        kind: ProviderCooldownKind,
+    ) -> Self {
+        Self {
+            account_id,
+            credential_revision,
+            until,
+            kind,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        self.credential_revision
+    }
+
+    #[must_use]
+    pub const fn until(&self) -> SystemTime {
+        self.until
+    }
+
+    #[must_use]
+    pub const fn scheduling_state(&self) -> crate::account::AccountCooldown {
+        crate::account::AccountCooldown {
+            until: self.until,
+            kind: self.kind,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ProviderCooldownKind {
+        self.kind
+    }
+}
+
+/// 可丢失 cooldown 的细粒度作用域
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProviderCooldownScope {
+    /// 只阻止同一账号调用指定上游模型
+    UpstreamModel(UpstreamModelId),
+}
+
+impl ProviderCooldownScope {
+    #[must_use]
+    pub const fn upstream_model(model: UpstreamModelId) -> Self {
+        Self::UpstreamModel(model)
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::UpstreamModel(_) => "model",
+        }
+    }
+
+    #[must_use]
+    pub fn value(&self) -> &str {
+        match self {
+            Self::UpstreamModel(model) => model.as_str(),
+        }
+    }
+}
+
+/// 不进入账号持久状态的账号+作用域 cooldown
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderScopedCooldown {
+    account_id: ProviderAccountId,
+    credential_revision: CredentialRevision,
+    scope: ProviderCooldownScope,
+    until: SystemTime,
+}
+
+impl ProviderScopedCooldown {
+    #[must_use]
+    pub const fn new(
+        account_id: ProviderAccountId,
+        credential_revision: CredentialRevision,
+        scope: ProviderCooldownScope,
+        until: SystemTime,
+    ) -> Self {
+        Self {
+            account_id,
+            credential_revision,
+            scope,
+            until,
+        }
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        self.credential_revision
+    }
+
+    #[must_use]
+    pub const fn scope(&self) -> &ProviderCooldownScope {
+        &self.scope
+    }
+
+    #[must_use]
+    pub const fn until(&self) -> SystemTime {
+        self.until
+    }
+}
+
+pub trait ProviderCooldownPort: Send + Sync {
+    fn put_if_later(
+        &self,
+        cooldown: ProviderCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>>;
+
+    fn read<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>>;
+
+    fn clear<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    fn put_scoped_if_later(
+        &self,
+        cooldown: ProviderScopedCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>>;
+
+    fn read_scoped<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>>;
+
+    fn clear_scoped<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
+        through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    /// 删除账号时清除该账号全部 account/model scope cooldown key
+    /// 生命周期与 credential revision 无关；不要求调用方持有 revision
+    fn clear_all<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
+    /// 记录一次容量类失败并返回滑动窗口内的累计次数，同时把观测到的账号
+    /// 在途并发并入窗口峰值（`in_flight` 为 0 表示本次未观测，跳过峰值更新）
+    /// 只服务容量熔断触发器；调用频率受失败频率约束，不需要批量接口
+    fn record_capacity_failure<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        window: Duration,
+        in_flight: u32,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>>;
+
+    /// 普通请求成功后原子清除临时限流及失败证据；必须保留任何容量冻结
+    fn clear_after_success<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
+
+    /// 读取窗口内观测到的在途并发峰值；无证据时返回 `None`
+    fn capacity_peak_in_flight<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<u32>, ProviderStoreError>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRefreshPolicy {
+    margin: Duration,
+    concurrency: NonZeroU32,
+}
+
+impl ProviderRefreshPolicy {
+    pub fn try_new(margin: Duration, concurrency: NonZeroU32) -> Result<Self, ProviderStoreError> {
+        if margin.is_zero() {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate refresh policy",
+            ));
+        }
+        Ok(Self {
+            margin,
+            concurrency,
+        })
+    }
+
+    #[must_use]
+    pub const fn margin(self) -> Duration {
+        self.margin
+    }
+
+    #[must_use]
+    pub const fn concurrency(self) -> NonZeroU32 {
+        self.concurrency
+    }
+
+    /// 判断 AT 是否已经进入当前配置的提前刷新窗口
+    ///
+    /// `margin` 是运行时策略，不投影为账号的持久化时间字段；已过期 AT 也需要
+    /// 尝试用 RT 恢复，因此视为到期
+    #[must_use]
+    pub fn is_refresh_due(
+        self,
+        access_token_expires_at: SystemTime,
+        observed_at: SystemTime,
+    ) -> bool {
+        match access_token_expires_at.duration_since(observed_at) {
+            Ok(remaining) => remaining <= self.margin,
+            Err(_) => true,
+        }
+    }
+}
+
+/// 指数退避基准延迟；attempt=1 即为该值
+const REFRESH_BACKOFF_BASE_DELAY: Duration = Duration::from_secs(5);
+/// 每多一次连续失败，基准延迟乘以该因子
+const REFRESH_BACKOFF_FACTOR: u32 = 3;
+/// 退避延迟上限，避免连续失败时无限增长
+const REFRESH_BACKOFF_CAP: Duration = Duration::from_secs(300);
+
+/// 基于连续失败计数的指数退避重试时刻；复用 `provider_refresh_retry_at` 的稳定扰动
+///
+/// `attempt` 为窗口内累计失败次数（0 与 1 等价，均取基准延迟）
+/// 延迟按
+/// `base * factor^(attempt-1)` 增长并封顶到 `REFRESH_BACKOFF_CAP`
+pub fn provider_refresh_backoff_at(
+    account_id: &ProviderAccountId,
+    observed_at: SystemTime,
+    attempt: u32,
+    reason: &'static str,
+) -> Result<SystemTime, ProviderStoreError> {
+    let exponent = attempt.saturating_sub(1);
+    let multiplier = REFRESH_BACKOFF_FACTOR.saturating_pow(exponent);
+    let scaled_seconds = REFRESH_BACKOFF_BASE_DELAY
+        .as_secs()
+        .saturating_mul(u64::from(multiplier))
+        .min(REFRESH_BACKOFF_CAP.as_secs());
+    let base_delay = Duration::from_secs(scaled_seconds);
+    provider_refresh_retry_at(account_id, observed_at, base_delay, reason)
+}
+
+/// 临时失败后的持久重试时刻；稳定扰动避免多实例同频重试
+pub fn provider_refresh_retry_at(
+    account_id: &ProviderAccountId,
+    observed_at: SystemTime,
+    base_delay: Duration,
+    reason: &'static str,
+) -> Result<SystemTime, ProviderStoreError> {
+    if base_delay.is_zero() {
+        return Err(invalid_refresh_policy("schedule refresh retry"));
+    }
+    let factor = stable_factor(account_id.as_str(), reason, 800, 1_200);
+    let millis = u64::try_from(base_delay.as_millis())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(u64::from(factor))
+        .saturating_add(500)
+        / 1_000;
+    observed_at
+        .checked_add(Duration::from_millis(millis.max(1)))
+        .ok_or_else(|| invalid_refresh_policy("schedule refresh retry"))
+}
+
+fn stable_factor(value: &str, salt: &str, minimum: u32, maximum: u32) -> u32 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.bytes().chain([0]).chain(salt.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let width = u64::from(maximum - minimum) + 1;
+    minimum + u32::try_from(hash % width).unwrap_or_default()
+}
+
+fn invalid_refresh_policy(operation: &'static str) -> ProviderStoreError {
+    ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
+}
+
+pub trait ProviderRuntimePolicyPort: Send + Sync {
+    /// 原子推进预热执行游标，重启或时钟回拨后不重复领取已消费的时刻
+    fn claim_warmup_slot<'a>(
+        &'a self,
+        _timezone: crate::time::DeploymentTimeZone,
+        _slot: chrono::NaiveDateTime,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "claim warmup slot",
+            ))
+        })
+    }
+    /// 仅首次启动写入该 Provider 的默认选择；已保存的管理配置始终优先
+    fn initialize_request_profile<'a>(
+        &'a self,
+        _provider: &'a ProviderKind,
+        initial: OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<OpaqueProviderData, ProviderStoreError>> {
+        Box::pin(async move { Ok(initial) })
+    }
+
+    /// 读取候选配置版本实际引用的全局与 Client Key 画像配置
+    ///
+    /// 实现必须在同一数据库快照内核对 revision，且只返回画像投影，不能读取 Key
+    /// 明文
+    /// Provider 代次据此在发布前拒绝已失效的选择
+    fn load_request_profile_configurations<'a>(
+        &'a self,
+        _revision: ConfigRevision,
+        _provider: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Vec<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn load_refresh_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>>;
+
+    /// 读取账号容量熔断策略；默认关闭，只有实现运行时设置的存储需要覆盖
+    fn load_freeze_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderFreezePolicy, ProviderStoreError>> {
+        Box::pin(async move { Ok(ProviderFreezePolicy::disabled()) })
+    }
+
+    /// 读取账号模型预激活策略；默认关闭，只有实现运行时设置的存储需要覆盖
+    fn load_warmup_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
+        Box::pin(async move { Ok(ProviderWarmupPolicy::disabled()) })
+    }
+}
+
+/// 账号容量熔断（自动冻结）策略；来源于 `runtime_settings`，
+/// 由 Provider 触发路径与恢复 worker 共享同一份配置事实
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFreezePolicy {
+    enabled: bool,
+    threshold: u32,
+    window: Duration,
+    freeze_duration: Duration,
+    probe_enabled: bool,
+    probe_model: Option<String>,
+    adaptive_concurrency: bool,
+}
+
+impl ProviderFreezePolicy {
+    /// 边界与迁移 `0010_account_auto_freeze.sql` 的 check 约束一致；
+    /// store 层写入前已校验，这里兜底防御越界配置
+    pub fn try_new(
+        enabled: bool,
+        threshold: u32,
+        window_seconds: u64,
+        freeze_duration_seconds: u64,
+        probe_enabled: bool,
+        probe_model: Option<String>,
+        adaptive_concurrency: bool,
+    ) -> Result<Self, ProviderStoreError> {
+        if !(2..=1_000).contains(&threshold)
+            || !(60..=3_600).contains(&window_seconds)
+            || !(300..=604_800).contains(&freeze_duration_seconds)
+            || probe_model.as_deref().is_some_and(|model| {
+                model.is_empty()
+                    || model.len() > 128
+                    || model != model.trim()
+                    || model.bytes().any(|byte| byte.is_ascii_control())
+            })
+        {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate freeze policy",
+            ));
+        }
+        Ok(Self {
+            enabled,
+            threshold,
+            window: Duration::from_secs(window_seconds),
+            freeze_duration: Duration::from_secs(freeze_duration_seconds),
+            probe_enabled,
+            probe_model,
+            adaptive_concurrency,
+        })
+    }
+
+    /// 功能关闭时的全零策略；触发路径与 worker 都以此短路
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            threshold: 2,
+            window: Duration::from_secs(60),
+            freeze_duration: Duration::from_secs(300),
+            probe_enabled: false,
+            probe_model: None,
+            adaptive_concurrency: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// 窗口内触发冻结的请求级失败次数阈值
+    #[must_use]
+    pub const fn threshold(&self) -> u32 {
+        self.threshold
+    }
+
+    /// 失败计数滑动窗口；每次失败都会顺延窗口
+    #[must_use]
+    pub const fn window(&self) -> Duration {
+        self.window
+    }
+
+    /// 冻结时长；探测失败后的顺延也使用该值
+    #[must_use]
+    pub const fn freeze_duration(&self) -> Duration {
+        self.freeze_duration
+    }
+
+    #[must_use]
+    pub const fn probe_enabled(&self) -> bool {
+        self.probe_enabled
+    }
+
+    /// 探测模型；`None` 表示由 worker 选择账号可用的第一个模型
+    #[must_use]
+    pub fn probe_model(&self) -> Option<&str> {
+        self.probe_model.as_deref()
+    }
+
+    #[must_use]
+    pub const fn adaptive_concurrency(&self) -> bool {
+        self.adaptive_concurrency
+    }
+}
+
+/// 校验每日预激活时间格式，如 "08:00" 或 "08:00,13:00"
+#[must_use]
+pub fn valid_warmup_schedule_time(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 255
+        || value != value.trim()
+        || value.chars().any(char::is_control)
+    {
+        return false;
+    }
+    for part in value.split(',') {
+        let bytes = part.as_bytes();
+        if bytes.len() != 5 || bytes[2] != b':' {
+            return false;
+        }
+        let Ok(hour) = part[0..2].parse::<u32>() else {
+            return false;
+        };
+        let Ok(minute) = part[3..5].parse::<u32>() else {
+            return false;
+        };
+        if hour > 23 || minute > 59 {
+            return false;
+        }
+    }
+    true
+}
+
+/// 账号模型预激活（预热）策略；来源于 `runtime_settings`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWarmupPolicy {
+    enabled: bool,
+    schedule_time: String,
+    model: Option<String>,
+}
+
+impl ProviderWarmupPolicy {
+    pub fn try_new(
+        enabled: bool,
+        schedule_time: String,
+        model: Option<String>,
+    ) -> Result<Self, ProviderStoreError> {
+        if !valid_warmup_schedule_time(&schedule_time)
+            || (enabled && model.is_none())
+            || model.as_deref().is_some_and(|m| {
+                m.is_empty()
+                    || m.len() > 128
+                    || m != m.trim()
+                    || m.bytes().any(|byte| byte.is_ascii_control())
+            })
+        {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate warmup policy",
+            ));
+        }
+        Ok(Self {
+            enabled,
+            schedule_time,
+            model,
+        })
+    }
+
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            schedule_time: String::new(),
+            model: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn schedule_time(&self) -> &str {
+        &self.schedule_time
+    }
+
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// 解析每日时间列表，返回如 `vec![(8, 0)]`
+    #[must_use]
+    pub fn scheduled_times(&self) -> Vec<(u32, u32)> {
+        self.schedule_time
+            .split(',')
+            .filter_map(|part| {
+                let part = part.trim();
+                let mut iter = part.split(':');
+                let hour = iter.next()?.parse::<u32>().ok()?;
+                let minute = iter.next()?.parse::<u32>().ok()?;
+                Some((hour, minute))
+            })
+            .collect()
+    }
+}
+
+/// OAuth pending flow 的原始绑定只在 Provider 与 Store 边界内短暂存在
+#[derive(Clone, PartialEq, Eq)]
+pub struct OAuthPendingBinding(String);
+
+impl OAuthPendingBinding {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, ProviderStoreError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > 512 {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate OAuth pending binding",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn expose_to_store(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for OAuthPendingBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OAuthPendingBinding([REDACTED])")
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct NewOAuthPendingFlow {
+    provider_kind: ProviderKind,
+    flow: OAuthPendingBinding,
+    owner: OAuthPendingBinding,
+    ttl: Duration,
+    payload: OpaqueProviderData,
+}
+
+impl NewOAuthPendingFlow {
+    pub fn try_new(
+        provider_kind: ProviderKind,
+        flow: OAuthPendingBinding,
+        owner: OAuthPendingBinding,
+        ttl: Duration,
+        payload: OpaqueProviderData,
+    ) -> Result<Self, ProviderStoreError> {
+        if ttl.is_zero() || ttl > MAX_PENDING_FLOW_TTL {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate OAuth pending TTL",
+            ));
+        }
+        Ok(Self {
+            provider_kind,
+            flow,
+            owner,
+            ttl,
+            payload,
+        })
+    }
+
+    #[must_use]
+    pub const fn provider_kind(&self) -> &ProviderKind {
+        &self.provider_kind
+    }
+
+    #[must_use]
+    pub const fn flow(&self) -> &OAuthPendingBinding {
+        &self.flow
+    }
+
+    #[must_use]
+    pub const fn owner(&self) -> &OAuthPendingBinding {
+        &self.owner
+    }
+
+    #[must_use]
+    pub const fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    #[must_use]
+    pub const fn payload(&self) -> &OpaqueProviderData {
+        &self.payload
+    }
+}
+
+impl fmt::Debug for NewOAuthPendingFlow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewOAuthPendingFlow")
+            .field("provider_kind", &self.provider_kind)
+            .field("flow", &self.flow)
+            .field("owner", &self.owner)
+            .field("ttl", &self.ttl)
+            .field("payload", &"[PROVIDER-OWNED]")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthPendingPutOutcome {
+    Stored,
+    AlreadyExists,
+}
+
+/// OAuth 回调处理取得临时 flow 的独占权结果
+///
+/// 与一次性消费不同，Provider 在上游换取令牌失败时可以释放 claim，让同一 flow
+/// 使用新的回调地址重试；只有完整校验成功后才会消费 flow
+#[derive(Clone, PartialEq)]
+pub enum OAuthPendingClaimOutcome {
+    Claimed(OpaqueProviderData),
+    NotFound,
+    OwnerMismatch,
+    InProgress,
+}
+
+impl fmt::Debug for OAuthPendingClaimOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Claimed(_) => formatter.write_str("Claimed([PROVIDER-OWNED])"),
+            Self::NotFound => formatter.write_str("NotFound"),
+            Self::OwnerMismatch => formatter.write_str("OwnerMismatch"),
+            Self::InProgress => formatter.write_str("InProgress"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthPendingReleaseOutcome {
+    Released,
+    NotFound,
+    OwnerMismatch,
+    ClaimMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthPendingConsumeOutcome {
+    Consumed,
+    NotFound,
+    OwnerMismatch,
+    ClaimMismatch,
+}
+
+pub trait OAuthPendingFlowPort: Send + Sync {
+    fn put_if_absent(
+        &self,
+        flow: NewOAuthPendingFlow,
+    ) -> BoxFuture<'_, Result<OAuthPendingPutOutcome, ProviderStoreError>>;
+
+    fn claim_if_owner<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+        claim_ttl: Duration,
+    ) -> BoxFuture<'a, Result<OAuthPendingClaimOutcome, ProviderStoreError>>;
+
+    fn release_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingReleaseOutcome, ProviderStoreError>>;
+
+    fn consume_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a OAuthPendingBinding,
+        owner: &'a OAuthPendingBinding,
+        claim: &'a OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingConsumeOutcome, ProviderStoreError>>;
+}
+
+/// Provider 只能按能力取用端口，无法取得 Redis client 或 repository 集合
+#[derive(Clone)]
+pub struct ProviderStorePorts {
+    accounts: Arc<dyn ProviderAccountStore>,
+    leases: Arc<dyn ProviderLeasePort>,
+    session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+    session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
+    account_feedback: Arc<AccountFeedbackStats>,
+    catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+    artifact_profiles: Arc<dyn ProviderArtifactProfileCachePort>,
+    credential_state: Arc<dyn ProviderCredentialStatePort>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
+    runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    oauth_pending: Arc<dyn OAuthPendingFlowPort>,
+}
+
+impl ProviderStorePorts {
+    #[must_use]
+    // 每个参数代表独立能力端口；合并为单一配置对象会隐藏 Provider 能力边界
+    #[expect(clippy::too_many_arguments)]
+    pub fn new(
+        accounts: Arc<dyn ProviderAccountStore>,
+        leases: Arc<dyn ProviderLeasePort>,
+        session_affinity: Arc<dyn ProviderSessionAffinityPort>,
+        session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
+        catalog_cache: Arc<dyn ProviderCatalogCachePort>,
+        artifact_profiles: Arc<dyn ProviderArtifactProfileCachePort>,
+        credential_state: Arc<dyn ProviderCredentialStatePort>,
+        cooldowns: Arc<dyn ProviderCooldownPort>,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+        oauth_pending: Arc<dyn OAuthPendingFlowPort>,
+    ) -> Self {
+        Self {
+            accounts,
+            leases,
+            session_affinity,
+            session_exclusions,
+            account_feedback: Arc::new(AccountFeedbackStats::default()),
+            catalog_cache,
+            artifact_profiles,
+            credential_state,
+            cooldowns,
+            runtime_policy,
+            oauth_pending,
+        }
+    }
+
+    #[must_use]
+    pub fn accounts(&self) -> Arc<dyn ProviderAccountStore> {
+        Arc::clone(&self.accounts)
+    }
+
+    #[must_use]
+    pub fn leases(&self) -> Arc<dyn ProviderLeasePort> {
+        Arc::clone(&self.leases)
+    }
+
+    #[must_use]
+    pub fn session_affinity(&self) -> Arc<dyn ProviderSessionAffinityPort> {
+        Arc::clone(&self.session_affinity)
+    }
+
+    #[must_use]
+    pub fn session_exclusions(&self) -> Arc<dyn ProviderSessionExclusionPort> {
+        Arc::clone(&self.session_exclusions)
+    }
+
+    #[must_use]
+    pub fn account_feedback(&self) -> Arc<AccountFeedbackStats> {
+        Arc::clone(&self.account_feedback)
+    }
+
+    #[must_use]
+    pub fn catalog_cache(&self) -> Arc<dyn ProviderCatalogCachePort> {
+        Arc::clone(&self.catalog_cache)
+    }
+
+    #[must_use]
+    pub fn artifact_profiles(&self) -> Arc<dyn ProviderArtifactProfileCachePort> {
+        Arc::clone(&self.artifact_profiles)
+    }
+
+    #[must_use]
+    pub fn credential_state(&self) -> Arc<dyn ProviderCredentialStatePort> {
+        Arc::clone(&self.credential_state)
+    }
+
+    #[must_use]
+    pub fn cooldowns(&self) -> Arc<dyn ProviderCooldownPort> {
+        Arc::clone(&self.cooldowns)
+    }
+
+    #[must_use]
+    pub fn runtime_policy(&self) -> Arc<dyn ProviderRuntimePolicyPort> {
+        Arc::clone(&self.runtime_policy)
+    }
+
+    #[must_use]
+    pub fn oauth_pending(&self) -> Arc<dyn OAuthPendingFlowPort> {
+        Arc::clone(&self.oauth_pending)
+    }
+}
+
+impl fmt::Debug for ProviderStorePorts {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProviderStorePorts([CAPABILITIES])")
+    }
+}

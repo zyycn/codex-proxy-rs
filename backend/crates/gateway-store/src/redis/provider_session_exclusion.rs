@@ -1,7 +1,7 @@
-//! Provider 会话级账号排除的可丢失 Redis 状态。
+//! Provider 会话级账号排除的可丢失 Redis 状态
 //!
 //! Redis 只保存 Provider 派生的不可逆会话键对应的账号 ID 集合及 revision；
-//! 不读取或保存任何 Provider 协议正文。
+//! 不读取或保存任何 Provider 协议正文
 
 use std::collections::BTreeSet;
 use std::time::Duration;

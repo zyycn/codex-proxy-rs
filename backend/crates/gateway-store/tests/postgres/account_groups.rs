@@ -1,3 +1,5 @@
+//! 验证账号分组聚合、Key 绑定与分组策略的持久化
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -89,7 +91,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
             .await
             .expect("create scoped client key");
     }
-    // 多分组 Key 的请求费用只计入实际承接账号所属的分组，Key 绑定的其他分组不重复计费。
+    // 多分组 Key 的请求费用只计入实际承接账号所属的分组，Key 绑定的其他分组不重复计费
     seed_group_cost_snapshot(
         &database.pool,
         "req_dual_group_key",
@@ -98,7 +100,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         "1.5",
     )
     .await;
-    // 归属跟随完成请求的账号，而不是 Client Key 绑定的分组快照。
+    // 归属跟随完成请求的账号，而不是 Client Key 绑定的分组快照
     seed_group_cost_snapshot(
         &database.pool,
         "req_account_attribution",
@@ -142,7 +144,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
         BTreeMap::from([("openai".to_owned(), 1), ("xai".to_owned(), 1)])
     );
     assert_eq!(mixed.client_key_count, 2);
-    // PostgreSQL 返回持久页与 member facts；实时状态/容量由 Admin query service 投影。
+    // PostgreSQL 返回持久页与 member facts；实时状态/容量由 Admin query service 投影
     assert_eq!(mixed.account_summary.available, 0);
     assert_eq!(mixed.account_summary.limited, 0);
     assert_eq!(mixed.account_summary.total, 0);

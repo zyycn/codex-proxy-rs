@@ -1,3 +1,5 @@
+//! 验证 Grok 事件转换的模型、用量、首个输出与完成语义
+
 use gateway_core::error::ProviderError;
 use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
@@ -304,7 +306,7 @@ fn zero_provider_cost_should_remain_an_authoritative_zero() {
 
 #[test]
 fn billing_should_price_grok_46_cache_and_priority_at_the_context_boundary() {
-    // 短、长上下文分别检查普通输入、缓存、输出的单价，Priority 只采用已确认档位。
+    // 短、长上下文分别检查普通输入、缓存、输出的单价，Priority 只采用已确认档位
     for (input, tier, expected) in [
         (199_999, None, ["2", "0.5", "6"]),
         (200_000, None, ["4", "1", "12"]),
@@ -460,7 +462,7 @@ fn billing_should_require_provider_totals_for_server_tools() {
     }
     let request =
         tool_request(serde_json::json!({"input": "查资料", "tools": [{"type": "web_search"}]}));
-    // 工具结果可能被上游省略，允许调用收费工具时不能仅靠空 output 认定没有附加费。
+    // 工具结果可能被上游省略，允许调用收费工具时不能仅靠空 output 认定没有附加费
     let mut response =
         serde_json::json!({"output": [], "usage": {"input_tokens": 100, "output_tokens": 1}});
     assert_eq!(
@@ -564,8 +566,8 @@ fn decoder_should_fail_closed_for_non_integer_provider_cost() {
 
 #[test]
 fn decoder_should_tolerate_content_field_error_without_breaking_stream() {
-    // 内容事件的字段校验失败（此处空 delta）不应打断已开始的客户端流。
-    // 旧行为在此断整条流；修复后跳过该事件的 canonical 提取、wire 原样转发，并继续解出终态。
+    // 内容事件的字段校验失败（此处空 delta）不应打断已开始的客户端流
+    // 旧行为在此断整条流；修复后跳过该事件的 canonical 提取、wire 原样转发，并继续解出终态
     let body = concat!(
         "event: response.created\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a3\",\"model\":\"grok-code-test\"}}\n\n",
@@ -577,14 +579,14 @@ fn decoder_should_tolerate_content_field_error_without_breaking_stream() {
     let events = GrokCanonicalDecoder::new("fallback")
         .push(body.as_bytes())
         .expect("content field error must not break the stream");
-    // 空 delta 的 wire 帧仍原样转发给客户端（透明）。
+    // 空 delta 的 wire 帧仍原样转发给客户端（透明）
     assert!(
         wire_events(&events)
             .iter()
             .any(|wire| wire.data().get("delta") == Some(&serde_json::json!(""))),
         "malformed delta wire frame should still be forwarded to the client"
     );
-    // 终态仍被解出。
+    // 终态仍被解出
     let canonical: Vec<GatewayEvent> = events
         .into_iter()
         .flat_map(|event| event.into_parts().0)
@@ -880,7 +882,7 @@ fn decoder_should_reject_custom_arguments_beyond_the_buffer_limit() {
         }).to_string(),
     );
     decoder.push(added.as_bytes()).expect("custom item added");
-    // 分帧累计也必须受限，不能只限制单个 SSE frame。
+    // 分帧累计也必须受限，不能只限制单个 SSE frame
     for size in [1 << 20, 1] {
         let delta = encode_sse_event(
             "response.function_call_arguments.delta",

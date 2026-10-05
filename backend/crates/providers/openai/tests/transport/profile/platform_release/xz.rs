@@ -1,3 +1,5 @@
+//! 验证 XZ 索引读取的定位、跨块访问与无关块跳过
+
 use provider_openai::transport::profile::platform_release::xz::IndexedXz;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
@@ -48,7 +50,7 @@ fn indexed_xz_reads_across_blocks_and_can_skip_a_corrupt_unused_block() {
     let mut actual = [0; 40];
     reader.read_exact(&mut actual).unwrap();
     assert_eq!(actual, bytes[49_990..50_030]);
-    // 未访问的块不会下载、解压；访问它时仍须拒绝校验和错误。
+    // 未访问的块不会下载、解压；访问它时仍须拒绝校验和错误
     compressed[first_block_end - 1] ^= 1;
     let mut reader = IndexedXz::new(Cursor::new(&compressed), 0, compressed.len() as u64).unwrap();
     reader.seek(SeekFrom::Start(80_000)).unwrap();

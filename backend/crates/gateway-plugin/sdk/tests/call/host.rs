@@ -1,3 +1,5 @@
+//! 验证宿主回调的状态、账号、模型与二进制载荷合同
+
 use gateway_plugin_sdk::call::host::{
     AffinityLookupRequest, AuthCredential, AuthListRequest, AuthSaveRequest, LogLevel, LogRequest,
     LogResult, ModelEventBatch, ModelExecuteRequest, ModelOperation, StateDeleteRequest,
@@ -176,6 +178,7 @@ fn model_and_affinity_callbacks_keep_targets_explicit_and_closed() {
 fn model_event_batch_preserves_binary_wire_and_rejects_trailing_data() {
     let batch = ModelEventBatch {
         events: vec![ExecutionEvent {
+            host: None,
             facts: vec![CanonicalEvent::TextDelta {
                 index: 0,
                 text: "hello".to_owned(),
@@ -200,4 +203,39 @@ fn model_event_batch_preserves_binary_wire_and_rejects_trailing_data() {
     let mut trailing = encoded;
     trailing.push(0);
     assert!(ModelEventBatch::decode(&trailing).is_err());
+}
+
+#[test]
+fn execution_facts_preserve_both_binary_sources_and_do_not_become_output_authority() {
+    use gateway_plugin_sdk::call::{middleware::MiddlewareBodyFrame, model::facts::ExecutionFacts};
+    let wire = |body| WireEvent {
+        protocol: "openai".into(),
+        payload: WirePayload::RawBody { body },
+    };
+    let event = ExecutionEvent {
+        facts: vec![],
+        wire: Some(wire(vec![0, 255, 1])),
+        host: Some(Box::new(ExecutionFacts {
+            middleware_origin_wire: Some(wire(vec![128, 0, 3])),
+            middleware_transformed: true,
+            ..Default::default()
+        })),
+    };
+    let encoded = event.clone().encode().unwrap();
+    let decoded = ExecutionEvent::decode(&encoded).unwrap();
+    assert!(decoded == event);
+    let mut output = MiddlewareBodyFrame::new(b"changed".to_vec(), false);
+    output.facts = Some(Box::new(decoded));
+    let output = MiddlewareBodyFrame::decode(&output.encode()).unwrap();
+    assert_eq!(output.payload, b"changed");
+    assert!(
+        output.facts.is_none(),
+        "snapshots are observations, not a second billing source"
+    );
+    let mut truncated = encoded.clone();
+    truncated.pop();
+    assert!(ExecutionEvent::decode(&truncated).is_err());
+    let mut wrong_version = encoded;
+    wrong_version[3] = b'1';
+    assert!(ExecutionEvent::decode(&wrong_version).is_err());
 }

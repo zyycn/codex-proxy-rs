@@ -1,7 +1,9 @@
+//! 插件 RPC 帧的异步读写循环与入站消息分派
+
 use std::sync::Arc;
 
 use gateway_plugin_sdk::{
-    ErrorCode, Frame, Message, Permission, PluginFault, Stage,
+    ErrorCode, Frame, Message, PluginFault,
     client::{read_frame, validate_frame, write_frame},
 };
 use tokio::{
@@ -18,13 +20,12 @@ pub(super) fn start<W, R>(
     control: mpsc::Receiver<Frame>,
     shared: Arc<Shared>,
     callbacks: Arc<dyn CallbackHandler>,
-    permissions: Vec<Permission>,
 ) where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(write_loop(writer, data, control, Arc::clone(&shared)));
-    tokio::spawn(read_loop(reader, shared, callbacks, permissions));
+    tokio::spawn(read_loop(reader, shared, callbacks));
 }
 
 async fn write_loop<W: AsyncWrite + Unpin>(
@@ -48,7 +49,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             shared.fail(RpcError::Closed);
             return;
         };
-        // 撤销尚未发送的调用时丢弃排队帧；已开始写入的 Call 必须先于 Cancel。
+        // 撤销尚未发送的调用时丢弃排队帧；已开始写入的 Call 必须先于 Cancel
         if let Message::Call { id, .. } = &frame.message {
             if !shared.mark_transmitted(*id) {
                 continue;
@@ -74,7 +75,6 @@ async fn read_loop<R: AsyncRead + Unpin>(
     mut reader: R,
     shared: Arc<Shared>,
     callbacks: Arc<dyn CallbackHandler>,
-    permissions: Vec<Permission>,
 ) {
     let mut stopped = shared.stopped.subscribe();
     let mut last_callback = 0;
@@ -117,20 +117,12 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     Err(RpcError::Protocol)
                 } else if let Some(context) = shared.context(parent_id) {
                     last_callback = id;
-                    if !callback_allowed(&method, context.stage, &permissions) {
-                        shared.send_control(Frame::control(Message::Error {
-                            id,
-                            error: PluginFault::new(
-                                ErrorCode::PermissionDenied,
-                                "callback is not authorized in this stage",
-                            ),
-                        }));
-                    } else if let Some(permit) = shared.try_callback_slot() {
+                    if let Some(permit) = shared.try_callback_slot() {
                         let handler = Arc::clone(&callbacks);
                         let response = Arc::clone(&shared);
                         let (ready, started) = oneshot::channel();
                         let task = tokio::spawn(async move {
-                            // 先把任务归属登记到父调用，再允许执行宿主操作。
+                            // 先把任务归属登记到父调用，再允许执行宿主操作
                             if started.await.is_err() {
                                 return;
                             }
@@ -145,7 +137,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                                 },
                                 Err(error) => Frame::control(Message::Error { id, error }),
                             };
-                            // 宿主回调的局部编码错误只能结束该调用，不能关闭共享写通道。
+                            // 宿主回调的局部编码错误只能结束该调用，不能关闭共享写通道
                             if validate_frame(&reply).is_err() {
                                 reply = Frame::control(Message::Error {
                                     id,
@@ -189,123 +181,4 @@ async fn read_loop<R: AsyncRead + Unpin>(
             return;
         }
     }
-}
-
-fn callback_allowed(method: &str, stage: Stage, permissions: &[Permission]) -> bool {
-    // 未登录端点只服务声明的公开内容，不能借宿主回调取得管理资源。
-    if stage == Stage::PublicManagement {
-        return false;
-    }
-    if method == "host.log" {
-        return true;
-    }
-    if matches!(stage, Stage::Registration | Stage::Configuration) {
-        return false;
-    }
-    if matches!(
-        method,
-        "host.state.get" | "host.state.put" | "host.state.delete"
-    ) {
-        return true;
-    }
-    // 失败后的策略不得产生额外出站调用或读取账号凭据。
-    if stage == Stage::Retry {
-        return false;
-    }
-    if matches!(
-        method,
-        gateway_plugin_sdk::call::middleware::NEXT_METHOD
-            | gateway_plugin_sdk::call::middleware::BODY_READ_METHOD
-            | gateway_plugin_sdk::call::middleware::BODY_CLOSE_METHOD
-    ) {
-        return matches!(stage, Stage::Request | Stage::Attempt);
-    }
-    if stage == Stage::Maintenance
-        && !matches!(
-            method,
-            "host.data.accounts.list"
-                | "host.data.quota.get"
-                | "host.quota_observations.refresh"
-                | "host.groups.ensure"
-                | "host.groups.change_members"
-                | "host.keys.ensure"
-                | "host.keys.list"
-                | "host.keys.reset_budget"
-                | "host.keys.get_budget"
-                | "host.keys.update_budget_limits"
-        )
-    {
-        return false;
-    }
-    if method == "host.data.quota.get" {
-        return matches!(
-            stage,
-            Stage::Management | Stage::CommandLine | Stage::Maintenance
-        ) && (permissions.contains(&Permission::Data)
-            || permissions.contains(&Permission::QuotaObservations));
-    }
-    if method == "host.keys.list" {
-        return (stage != Stage::Maintenance && permissions.contains(&Permission::Models))
-            || (matches!(
-                stage,
-                Stage::Management | Stage::CommandLine | Stage::Maintenance
-            ) && permissions.contains(&Permission::KeyBudgets));
-    }
-    let permission = match method {
-        "host.http.do"
-        | "host.http.do_stream"
-        | "host.http.stream_read"
-        | "host.http.stream_close" => Permission::Network,
-        "host.model.execute"
-        | "host.model.execute_stream"
-        | "host.model.stream_read"
-        | "host.model.stream_close"
-        | "host.models.list" => Permission::Models,
-        "host.auth.list" | "host.auth.get_runtime" | "host.auth.get" | "host.auth.save" => {
-            Permission::Accounts
-        }
-        "host.affinity.lookup" => Permission::Requests,
-        "host.data.accounts.list"
-            if matches!(
-                stage,
-                Stage::Management | Stage::CommandLine | Stage::Maintenance
-            ) =>
-        {
-            Permission::Data
-        }
-        "host.quota_observations.refresh"
-            if matches!(
-                stage,
-                Stage::Management | Stage::CommandLine | Stage::Maintenance
-            ) =>
-        {
-            Permission::QuotaObservations
-        }
-        "host.groups.ensure" | "host.groups.change_members"
-            if matches!(
-                stage,
-                Stage::Management | Stage::CommandLine | Stage::Maintenance
-            ) =>
-        {
-            Permission::Groups
-        }
-        "host.keys.ensure"
-            if matches!(
-                stage,
-                Stage::Management | Stage::CommandLine | Stage::Maintenance
-            ) =>
-        {
-            Permission::Keys
-        }
-        "host.keys.reset_budget" | "host.keys.get_budget" | "host.keys.update_budget_limits"
-            if matches!(
-                stage,
-                Stage::Management | Stage::CommandLine | Stage::Maintenance
-            ) =>
-        {
-            Permission::KeyBudgets
-        }
-        _ => return false,
-    };
-    permissions.contains(&permission)
 }

@@ -1,3 +1,5 @@
+//! xAI OAuth 令牌响应解析、主体身份与已验证令牌值对象
+
 use std::fmt;
 use std::time::Duration;
 
@@ -12,7 +14,7 @@ use crate::{
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_TOKEN_LIFETIME_SECONDS: u64 = 366 * 24 * 60 * 60;
 
-/// refresh 请求可选携带的 team principal 字段。
+/// refresh 请求可选携带的 team principal 字段
 #[derive(Clone, PartialEq, Eq)]
 pub struct OAuthPrincipal {
     principal_type: String,
@@ -30,12 +32,12 @@ impl fmt::Debug for OAuthPrincipal {
 }
 
 impl OAuthPrincipal {
-    /// 创建校验过的 principal 元数据。
+    /// 创建校验过的 principal 元数据
     ///
     /// # Errors
     ///
     /// 值为空、超长或含控制字符时返回
-    /// [`ConfigError::InvalidPrincipal`]。
+    /// [`ConfigError::InvalidPrincipal`]
     pub fn new(
         principal_type: impl Into<String>,
         principal_id: impl Into<String>,
@@ -52,27 +54,27 @@ impl OAuthPrincipal {
         })
     }
 
-    /// 返回官方 principal 类型值。
+    /// 返回官方 principal 类型值
     #[must_use]
     pub fn principal_type(&self) -> &str {
         &self.principal_type
     }
 
-    /// 返回官方 principal 标识。
+    /// 返回官方 principal 标识
     #[must_use]
     pub fn principal_id(&self) -> &str {
         &self.principal_id
     }
 }
 
-/// 单次 refresh token 交换的输入。
+/// 单次 refresh token 交换的输入
 #[derive(Clone)]
 pub struct RefreshTokenGrant {
     refresh_token: SecretValue,
 }
 
 impl RefreshTokenGrant {
-    /// 为已验证的现有凭据创建 refresh grant。
+    /// 为已验证的现有凭据创建 refresh grant
     #[must_use]
     pub fn new(refresh_token: SecretValue) -> Self {
         Self { refresh_token }
@@ -92,7 +94,7 @@ impl fmt::Debug for RefreshTokenGrant {
     }
 }
 
-/// 已通过强制验证边界的初始 token set。
+/// 已通过强制验证边界的初始 token set
 #[derive(Clone)]
 pub struct VerifiedTokenSet {
     access_token: SecretValue,
@@ -119,37 +121,37 @@ impl VerifiedTokenSet {
         }
     }
 
-    /// 返回已验证的 access token。
+    /// 返回已验证的 access token
     #[must_use]
     pub fn access_token(&self) -> &SecretValue {
         &self.access_token
     }
 
-    /// 返回可选的 refresh token。
+    /// 返回可选的 refresh token
     #[must_use]
     pub fn refresh_token(&self) -> Option<&SecretValue> {
         self.refresh_token.as_ref()
     }
 
-    /// 返回验证边界保留的签名 ID token；某些官方流程可能不返回。
+    /// 返回验证边界保留的签名 ID token；某些官方流程可能不返回
     #[must_use]
     pub fn id_token(&self) -> Option<&SecretValue> {
         self.id_token.as_ref()
     }
 
-    /// 返回该 token set 实际绑定的 OAuth scope 字符串。
+    /// 返回该 token set 实际绑定的 OAuth scope 字符串
     #[must_use]
     pub fn scope(&self) -> &str {
         &self.scope
     }
 
-    /// 返回服务端下发的有效期。
+    /// 返回服务端下发的有效期
     #[must_use]
     pub const fn expires_in(&self) -> Option<Duration> {
         self.expires_in
     }
 
-    /// 返回可信身份验证证据。
+    /// 返回可信身份验证证据
     #[must_use]
     pub const fn evidence(&self) -> &VerificationEvidence {
         &self.evidence
@@ -173,8 +175,9 @@ impl fmt::Debug for VerifiedTokenSet {
     }
 }
 
-/// 刷新已验证凭据的结果。未返回 refresh token 时，调用方须在 revision CAS 下
-/// 保留原有 refresh token。
+/// 刷新已验证凭据的结果
+/// 未返回 refresh token 时，调用方须在 revision CAS 下
+/// 保留原有 refresh token
 #[derive(Clone)]
 pub struct RefreshedTokenSet {
     access_token: SecretValue,
@@ -183,19 +186,19 @@ pub struct RefreshedTokenSet {
 }
 
 impl RefreshedTokenSet {
-    /// 返回替换后的 access token。
+    /// 返回替换后的 access token
     #[must_use]
     pub fn access_token(&self) -> &SecretValue {
         &self.access_token
     }
 
-    /// 服务端下发轮换 refresh token 时返回它。
+    /// 服务端下发轮换 refresh token 时返回它
     #[must_use]
     pub fn rotated_refresh_token(&self) -> Option<&SecretValue> {
         self.rotated_refresh_token.as_ref()
     }
 
-    /// 返回替换后 access token 的有效期。
+    /// 返回替换后 access token 的有效期
     #[must_use]
     pub const fn expires_in(&self) -> Option<Duration> {
         self.expires_in

@@ -1,3 +1,5 @@
+//! 执行服务的准入、预算、请求记录与终结行为测试
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -132,6 +134,47 @@ fn request(service: &DefaultExecutionService, transport: ClientTransport) -> Sta
             previous_response_id: None,
         },
     }
+}
+
+#[test]
+fn default_request_has_no_total_deadline_and_explicit_timeout_can_be_cleared() {
+    block_on(async {
+        let service = service(Arc::default(), Arc::default());
+        let client = request(&service, ClientTransport::HttpSse).client;
+        let mut prepared = service.prepare_execution(client).await.unwrap();
+        assert_eq!(prepared.deadline_at().at(), None);
+        let baseline = prepared.request_settings();
+        let mut values = baseline.execution_values().unwrap();
+        assert_eq!(values.timeout_ms, None);
+        values.timeout_ms = Some(1_800_000);
+        let limited = baseline
+            .replace_execution(&values, "timeout-plugin")
+            .unwrap();
+        prepared.apply_settings(&limited).unwrap();
+        assert_eq!(
+            prepared.deadline_at().at().unwrap(),
+            prepared.started_at() + Duration::from_secs(1_800)
+        );
+        values.timeout_ms = None;
+        prepared
+            .apply_settings(
+                &limited
+                    .replace_execution(&values, "timeout-plugin")
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.deadline_at().at(), None);
+        values.timeout_ms = Some(0);
+        prepared
+            .apply_settings(
+                &limited
+                    .replace_execution(&values, "timeout-plugin")
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(prepared.deadline_at().at(), Some(prepared.started_at()));
+        assert!(prepared.deadline_at().is_elapsed());
+    });
 }
 
 #[test]
@@ -679,7 +722,7 @@ fn detached_early_failure_resumes_cancelled_store_write_and_settles_once_for_all
                     store.finalizes.load(Ordering::SeqCst),
                     usize::from(!suspend_create)
                 );
-                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号。
+                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号
                 complete_write
                     .send(())
                     .expect("detached cleanup retains the original store write");
@@ -791,7 +834,7 @@ impl Provider for RetryTestProvider {
         );
         Ok(ProviderStream::new(
             metadata,
-            futures::stream::iter([Err(self.error.clone())]),
+            futures::stream::iter([Err(self.error.stable_snapshot())]),
             (),
         ))
     }
@@ -1065,11 +1108,7 @@ fn request_policy_snapshot(
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
     RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            std::num::NonZeroU32::new(2).unwrap(),
-            Duration::from_millis(1),
-        ),
+        gateway_core::settings::SettingsValues::new(2, 1, "smart", Default::default(), None, None),
         providers.to_vec(),
         providers
             .iter()
@@ -1791,10 +1830,13 @@ fn model_routing_cannot_expand_the_frozen_key_model_scope() {
             ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
         let snapshot = RuntimeSnapshot::new(
             ConfigRevision::new(1).unwrap(),
-            AccountSelectionPolicy::new(
-                RotationStrategy::Smart,
-                std::num::NonZeroU32::new(2).unwrap(),
-                Duration::from_millis(1),
+            gateway_core::settings::SettingsValues::new(
+                2,
+                1,
+                "smart",
+                Default::default(),
+                None,
+                None,
             ),
             vec![kind.clone()],
             ["gpt-start", "gpt-blocked"]
@@ -1922,6 +1964,7 @@ impl Provider for PolicySelectingProvider {
             round_robin_cursor: 0,
             eligibility: AccountEligibilityPolicy::Enforce,
             account_scope: attempt.account_scope().cloned(),
+            reserved_concurrency: 0,
         };
         match attempt
             .select_account(
@@ -2169,11 +2212,7 @@ fn fallback_observation_snapshot(reference: ExtensionSetReference) -> RuntimeSna
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
     RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            std::num::NonZeroU32::new(2).unwrap(),
-            Duration::from_millis(1),
-        ),
+        gateway_core::settings::SettingsValues::new(2, 1, "smart", Default::default(), None, None),
         providers.to_vec(),
         providers
             .iter()
@@ -2462,10 +2501,7 @@ fn final_observation_is_emitted_once_for_success_rejection_and_detached_cancella
 }
 
 fn assert_observation_scope(observation: &RequestObservation) {
-    assert_eq!(
-        observation.client_key_id().map(ClientApiKeyId::as_str),
-        Some("key_start_test")
-    );
+    assert_eq!(observation.client_key_id().as_str(), "key_start_test");
     assert_eq!(
         observation
             .account_group_ids()
@@ -2797,7 +2833,7 @@ fn settlement_failure_keeps_provider_error_and_releases_concurrency_once() {
             ));
             assert!(started.session.is_finalized());
             started.session.detach_finalize().await;
-            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算。
+            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算
             assert_cleanup_completed(&admissions, &budget, &started.request_id);
         }
     });
@@ -2808,9 +2844,8 @@ use bytes::Bytes;
 use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
 use gateway_core::account::{
     AccountCandidate, AccountEligibilityPolicy, AccountModelAccess, AccountModelAccessMode,
-    AccountRuntimeSignals, AccountSelectionContext, AccountSelectionPolicy, AccountWeight,
-    CredentialRevision, CredentialState, ProviderAccount, ProviderAccountId, QuotaState,
-    RotationStrategy,
+    AccountRuntimeSignals, AccountSelectionContext, AccountWeight, CredentialRevision,
+    CredentialState, ProviderAccount, ProviderAccountId, QuotaState,
 };
 use gateway_core::engine::admission::{
     ClientAdmissionDecision, ClientAdmissionError, ClientAdmissionPort, ClientAdmissionRecovery,
@@ -3124,11 +3159,17 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
         }
     }
     for fail in [false, true] {
-        let snapshot = start_snapshot()
+        let snapshot = start_snapshot();
+        let settings = snapshot
+            .settings()
+            .clone()
             .with_model_mappings(BTreeMap::from([
                 ("alias".to_owned(), "gpt-start".to_owned()),
                 ("missing-alias".to_owned(), "unavailable-model".to_owned()),
-            ]))
+            ]));
+        let snapshot = snapshot
+            .with_settings(&settings)
+            .unwrap()
             .with_extensions(Some(ExtensionSetReference::new(
                 gateway_core::runtime::extensions::ExtensionSetId::new("catalog-aliases".into())
                     .unwrap(),
@@ -3807,11 +3848,7 @@ fn probe_snapshot() -> RuntimeSnapshot {
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            std::num::NonZeroU32::new(1).expect("concurrency"),
-            Duration::from_millis(1),
-        ),
+        gateway_core::settings::SettingsValues::new(1, 1, "smart", Default::default(), None, None),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider,
@@ -3827,11 +3864,7 @@ fn client_snapshot() -> RuntimeSnapshot {
     let provider = ProviderKind::new("openai").expect("provider kind");
     RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("config revision"),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            std::num::NonZeroU32::new(1).expect("concurrency"),
-            Duration::from_millis(1),
-        ),
+        gateway_core::settings::SettingsValues::new(1, 1, "smart", Default::default(), None, None),
         vec![provider.clone()],
         Vec::new(),
         vec![ClientPolicy::new(
@@ -3860,11 +3893,7 @@ fn start_snapshot_with_policy(
         ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
     RuntimeSnapshot::new(
         ConfigRevision::new(revision).expect("config revision"),
-        AccountSelectionPolicy::new(
-            RotationStrategy::Smart,
-            std::num::NonZeroU32::new(1).expect("concurrency"),
-            Duration::from_millis(1),
-        ),
+        gateway_core::settings::SettingsValues::new(1, 1, "smart", Default::default(), None, None),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider.clone(),
@@ -3953,7 +3982,7 @@ impl Provider for QueuedAccountProvider {
                 max_waiting: 1,
                 timeout: Duration::from_secs(5),
             },
-            context.deadline(),
+            context.deadline().at(),
             context.concurrency_wait_budget(),
         );
         loop {
@@ -3977,11 +4006,9 @@ fn account_wait_inherits_the_budget_spent_during_client_admission() {
                 requests_per_minute: 0,
             },
             false,
-        )
-        .with_client_queue_policy(gateway_core::concurrency::ConcurrencyQueuePolicy {
-            max_waiting: 1,
-            timeout: Duration::from_secs(1),
-        });
+        );
+        let settings = snapshot.settings().clone().with_concurrency_queues(1, 0, 1);
+        let snapshot = snapshot.with_settings(&settings).unwrap();
         let service = DefaultExecutionService::new(
             RuntimeSnapshotHandle::new(snapshot),
             Arc::new(TrackingExecutionStore::default()),
@@ -4087,11 +4114,13 @@ fn queue_service(
             requests_per_minute: 0,
         },
         false,
-    )
-    .with_client_queue_policy(gateway_core::concurrency::ConcurrencyQueuePolicy {
+    );
+    let settings = snapshot.settings().clone().with_concurrency_queues(
         max_waiting,
-        timeout,
-    });
+        0,
+        u32::try_from(timeout.as_secs()).unwrap(),
+    );
+    let snapshot = snapshot.with_settings(&settings).unwrap();
     let service = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot),
         Arc::new(TrackingExecutionStore::default()),
@@ -4176,7 +4205,7 @@ fn cancelled_waiter_releases_its_place_and_new_requests_do_not_overtake_fifo() {
 #[test]
 fn queue_timeout_and_rpm_rejection_leave_no_new_admission() {
     block_on(async {
-        let (service, admissions) = queue_service(1, 1, Duration::from_millis(20));
+        let (service, admissions) = queue_service(1, 1, Duration::from_secs(1));
         let running = service
             .start(request(&service, ClientTransport::HttpJson))
             .await
@@ -4242,6 +4271,186 @@ fn reused_websocket_client_gets_group_fast_policy_from_each_new_request_snapshot
 }
 
 #[test]
+fn request_settings_recompute_routing_and_admission_without_changing_sibling_or_published_snapshot()
+{
+    block_on(async {
+        let limits = RateLimits {
+            max_concurrency: 3,
+            requests_per_minute: 9,
+        };
+        let snapshot = start_snapshot_with_policy(1, true, limits, true);
+        let settings = snapshot
+            .settings()
+            .clone()
+            .with_concurrency_queues(0, 0, 30);
+        let snapshot = snapshot.with_settings(&settings).unwrap();
+        let snapshots = RuntimeSnapshotHandle::new(snapshot);
+        let admissions = Arc::new(Admissions::default());
+        let provider = Arc::new(ChargedProvider::default());
+        let service = DefaultExecutionService::new(
+            snapshots.clone(),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).unwrap(),
+            admissions.clone(),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let client = service.authenticate("sk_start_test").unwrap();
+        let mut modified = service.prepare_verified_execution(client.clone()).unwrap();
+        let sibling = service.prepare_verified_execution(client).unwrap();
+        let baseline = sibling.request_settings().execution_values().unwrap();
+        let mut settings =
+            serde_json::to_value(modified.request_settings().execution_values().unwrap()).unwrap();
+        settings["runtime"]["model_mappings"] = json!({"request-alias":"gpt-start"});
+        settings["runtime"]["request_interval_ms"] = json!(0);
+        settings["runtime"]["request_profiles"] = json!({"openai":{"identity":"request-local"}});
+        settings["disable_fast"] = json!(false);
+        settings["client_limits"] = json!({"max_concurrency":0,"requests_per_minute":0});
+        settings["timeout_ms"] = json!(120_000);
+        let settings = modified
+            .request_settings()
+            .replace_execution(
+                &serde_json::from_value(settings).unwrap(),
+                "settings-plugin",
+            )
+            .unwrap();
+        modified.apply_settings(&settings).unwrap();
+        assert_eq!(
+            modified
+                .deadline_at()
+                .at()
+                .unwrap()
+                .duration_since(modified.started_at())
+                .unwrap(),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            modified.client().snapshot().mapped_model("request-alias"),
+            "gpt-start"
+        );
+        assert_eq!(
+            sibling.request_settings().execution_values().unwrap(),
+            baseline
+        );
+        assert_eq!(
+            serde_json::to_value(
+                modified
+                    .client()
+                    .policy()
+                    .account_scope()
+                    .request_profiles()
+            )
+            .unwrap(),
+            json!({"openai":{"identity":"request-local"}})
+        );
+        assert!(
+            sibling
+                .client()
+                .policy()
+                .account_scope()
+                .request_profiles()
+                .is_empty()
+        );
+        assert_eq!(
+            sibling.client().snapshot().mapped_model("request-alias"),
+            "request-alias"
+        );
+        assert_eq!(
+            snapshots.acquire().unwrap().mapped_model("request-alias"),
+            "request-alias"
+        );
+        assert_eq!(
+            modified.client().snapshot().revision(),
+            sibling.client().snapshot().revision()
+        );
+        for (prepared, model) in [(modified, "request-alias"), (sibling, "gpt-start")] {
+            let input = request(&service, ClientTransport::HttpJson);
+            let mut started = service
+                .start_prepared(
+                    prepared,
+                    gateway_core::engine::execution::PreparedExecutionRequest {
+                        public_model: PublicModelId::new(model).unwrap(),
+                        operation: input.operation,
+                        metadata: input.metadata,
+                    },
+                )
+                .await
+                .unwrap();
+            started.session.collect_uncommitted().await.unwrap();
+            started.session.detach_finalize().await;
+        }
+        assert_eq!(*provider.policies.lock().unwrap(), vec![false, true]);
+        assert_eq!(
+            *admissions.limits.lock().unwrap(),
+            vec![RateLimits::unlimited(), limits]
+        );
+    });
+}
+
+#[test]
+fn invalid_request_settings_leave_the_prepared_execution_unchanged() {
+    let service = service(Arc::new(Admissions::default()), Arc::new(Budget::default()));
+    let client = service.authenticate("sk_start_test").unwrap();
+    let prepared = service.prepare_verified_execution(client).unwrap();
+    let baseline = prepared.request_settings().execution_values().unwrap();
+    let mut invalid = serde_json::to_value(&baseline).unwrap();
+    invalid["runtime"]["responses_max_decompressed_body_bytes"] = json!(0);
+    invalid["disable_fast"] = json!(true);
+    assert!(
+        prepared
+            .request_settings()
+            .replace_execution(&serde_json::from_value(invalid).unwrap(), "settings-plugin")
+            .is_err()
+    );
+    assert_eq!(
+        prepared.request_settings().execution_values().unwrap(),
+        baseline
+    );
+}
+
+#[test]
+fn execution_settings_must_match_the_prepared_key() {
+    use gateway_core::settings::RequestSettings;
+
+    let service = service(Arc::new(Admissions::default()), Arc::new(Budget::default()));
+    let client = service.authenticate("sk_start_test").unwrap();
+    let mut prepared = service.prepare_verified_execution(client).unwrap();
+    let baseline = prepared.request_settings().execution_values().unwrap();
+    let snapshot = prepared.client().snapshot().clone();
+    let settings = RequestSettings::new(snapshot.clone())
+        .replace(
+            baseline
+                .runtime
+                .clone()
+                .with_responses_max_decompressed_body_bytes(1024),
+            "settings-plugin",
+        )
+        .unwrap();
+    let other_key = ClientApiKeyId::new("other-key").unwrap();
+    for settings in [
+        settings.clone(),
+        settings.with_execution(
+            &ClientPolicy::new(
+                other_key,
+                prepared.client().policy().plaintext_key().clone(),
+                prepared.client().policy().account_scope().clone(),
+                true,
+                RateLimits::unlimited(),
+            ),
+            baseline.timeout_ms,
+        ),
+    ] {
+        assert!(prepared.apply_settings(&settings).is_err());
+        assert!(Arc::ptr_eq(prepared.client().snapshot(), &snapshot));
+        assert_eq!(
+            prepared.request_settings().execution_values().unwrap(),
+            baseline
+        );
+        assert!(prepared.client().request_settings().is_none());
+    }
+}
+
+#[test]
 fn repeated_connection_failures_never_block_later_requests_for_the_provider() {
     let store = Arc::new(TrackingExecutionStore::default());
     let service = DefaultExecutionService::new(
@@ -4290,4 +4499,315 @@ fn repeated_connection_failures_never_block_later_requests_for_the_provider() {
     }
     assert_eq!(store.requests.lock().unwrap().len(), 5);
     assert!(store.entry_rejections.lock().unwrap().is_empty());
+}
+
+#[test]
+fn entry_settings_freeze_authentication_and_rebase_only_explicit_overrides() {
+    block_on(async {
+        use gateway_core::settings::RequestSettings;
+        let snapshots = RuntimeSnapshotHandle::new(start_snapshot());
+        let service = DefaultExecutionService::new(
+            snapshots.clone(),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::default(),
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let baseline = service.request_settings().unwrap();
+        let mut values = serde_json::to_value(baseline.values()).unwrap();
+        values["responses_max_decompressed_body_bytes"] = json!(1024);
+        values["request_interval_ms"] = json!(0);
+        let first = baseline
+            .replace(serde_json::from_value(values).unwrap(), "first")
+            .unwrap();
+        let mut values = serde_json::to_value(first.values()).unwrap();
+        values["responses_max_decompressed_body_bytes"] = json!(2048);
+        values["min_codex_cli_version"] = json!("0.40.0");
+        let second = first
+            .replace(serde_json::from_value(values).unwrap(), "second")
+            .unwrap();
+        let mut values = serde_json::to_value(second.values()).unwrap();
+        values["min_codex_cli_version"] = Value::Null;
+        let second = second
+            .replace(serde_json::from_value(values).unwrap(), "second")
+            .unwrap();
+        let source = second.inspect();
+        assert_eq!(
+            source["overrides"]["request_interval_ms"]["instance_id"],
+            "first"
+        );
+        assert_eq!(
+            source["overrides"]["responses_max_decompressed_body_bytes"]["instance_id"],
+            "second"
+        );
+        assert!(source["overrides"]["min_codex_cli_version"]["value"].is_null());
+        assert_eq!(
+            first.snapshot().responses_max_decompressed_body_bytes(),
+            1024
+        );
+        assert_eq!(
+            baseline.snapshot().responses_max_decompressed_body_bytes(),
+            64 * 1024 * 1024
+        );
+        let request = ClientAuthenticationRequest::bearer("sk_start_test")
+            .unwrap()
+            .with_settings(second.clone());
+        let client = service.authenticate_request(request).await.unwrap();
+        snapshots.publish(start_snapshot_with_policy(
+            2,
+            true,
+            RateLimits {
+                max_concurrency: 7,
+                requests_per_minute: 17,
+            },
+            true,
+        ));
+        let prepared = service.prepare_execution(client.clone()).await.unwrap();
+        assert_eq!(prepared.client().snapshot().revision().get(), 1);
+        assert_eq!(
+            prepared
+                .request_settings()
+                .execution_values()
+                .unwrap()
+                .runtime,
+            second.values().clone()
+        );
+        let fresh = second
+            .rebase(service.request_settings().unwrap().snapshot())
+            .unwrap();
+        let prepared = service
+            .prepare_execution(client.with_request_settings(fresh))
+            .await
+            .unwrap();
+        assert_eq!(prepared.client().snapshot().revision().get(), 2);
+        assert_eq!(
+            prepared
+                .request_settings()
+                .execution_values()
+                .unwrap()
+                .client_limits
+                .max_concurrency,
+            7
+        );
+        assert!(
+            prepared
+                .request_settings()
+                .execution_values()
+                .unwrap()
+                .disable_fast
+        );
+        assert_eq!(
+            prepared
+                .client()
+                .snapshot()
+                .responses_max_decompressed_body_bytes(),
+            2048
+        );
+        let original = RequestSettings::new(snapshots.acquire().unwrap());
+        assert_eq!(
+            original.snapshot().responses_max_decompressed_body_bytes(),
+            64 * 1024 * 1024
+        );
+    });
+}
+
+#[test]
+fn unchanged_and_precompiled_request_settings_reuse_the_frozen_snapshot() {
+    use gateway_core::settings::RequestSettings;
+
+    let snapshot = Arc::new(start_snapshot());
+    let baseline = RequestSettings::new(snapshot.clone());
+    let unchanged = baseline
+        .replace(baseline.values().clone(), "pass-through")
+        .unwrap();
+    assert!(Arc::ptr_eq(&snapshot, &unchanged.snapshot()));
+    assert!(
+        unchanged.inspect()["overrides"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+
+    let fresh = Arc::new(start_snapshot_with_policy(
+        2,
+        true,
+        RateLimits::unlimited(),
+        true,
+    ));
+    let rebased = unchanged.rebase(fresh.clone()).unwrap();
+    assert!(Arc::ptr_eq(&fresh, &rebased.snapshot()));
+    let values = rebased
+        .values()
+        .clone()
+        .with_responses_max_decompressed_body_bytes(1024);
+    let changed = rebased.replace(values, "settings-plugin").unwrap();
+    assert!(Arc::ptr_eq(
+        &changed.snapshot(),
+        &changed.rebase(fresh).unwrap().snapshot()
+    ));
+
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot()),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service.authenticate("sk_start_test").unwrap();
+    let mut prepared = service.prepare_verified_execution(client).unwrap();
+    let mut settings = prepared.request_settings().execution_values().unwrap();
+    let original = prepared.request_settings();
+    let policy_scope = prepared.client().policy().account_scope().clone();
+    let deadline = prepared.deadline_at();
+    prepared.apply_settings(&original).unwrap();
+    assert!(Arc::ptr_eq(
+        prepared.client().snapshot(),
+        &original.snapshot()
+    ));
+    assert!(Arc::ptr_eq(
+        prepared.client().policy().account_scope(),
+        &policy_scope
+    ));
+    assert_eq!(prepared.deadline_at(), deadline);
+    settings.runtime = settings
+        .runtime
+        .with_responses_max_decompressed_body_bytes(1024);
+    let changed = original
+        .replace_execution(&settings, "settings-plugin")
+        .unwrap();
+    prepared.apply_settings(&changed).unwrap();
+    assert!(Arc::ptr_eq(
+        prepared.client().snapshot(),
+        &changed.snapshot()
+    ));
+    assert_eq!(
+        prepared.request_settings().execution_values().unwrap(),
+        settings
+    );
+}
+
+#[test]
+fn child_settings_recompute_key_scope_without_inheriting_parent_defaults() {
+    block_on(async {
+        use gateway_core::{account::OpaqueProviderData, settings::RequestSettings};
+        let provider = ProviderKind::new("openai").unwrap();
+        let profiles = |name: &str| {
+            BTreeMap::from([(
+                provider.clone(),
+                OpaqueProviderData::new(json!({"identity":name}).as_object().unwrap().clone()),
+            )])
+        };
+        let original = start_snapshot();
+        let parent_key = ClientApiKeyId::new("parent").unwrap();
+        let child_key = ClientApiKeyId::new("child").unwrap();
+        let policies = [
+            (&parent_key, "sk_parent", "parent-default", 3),
+            (&child_key, "sk_child", "child-default", 9),
+        ]
+        .into_iter()
+        .map(|(key, token, name, max_concurrency)| {
+            ClientPolicy::new(
+                key.clone(),
+                PlaintextClientApiKey::new(token).unwrap(),
+                Arc::new(
+                    account_scope(&provider, "acct_start")
+                        .as_ref()
+                        .clone()
+                        .with_disable_fast(true)
+                        .with_request_profiles(profiles(name)),
+                ),
+                true,
+                RateLimits {
+                    max_concurrency,
+                    requests_per_minute: 10,
+                },
+            )
+        })
+        .collect();
+        let snapshot = RuntimeSnapshot::new(
+            ConfigRevision::new(1).unwrap(),
+            gateway_core::settings::SettingsValues::new(
+                1,
+                0,
+                "smart",
+                Default::default(),
+                None,
+                None,
+            ),
+            vec![provider],
+            vec![],
+            policies,
+        )
+        .unwrap()
+        .with_settings(original.settings())
+        .unwrap();
+        let snapshots = RuntimeSnapshotHandle::new(snapshot);
+        let service = DefaultExecutionService::new(
+            snapshots.clone(),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::default(),
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let parent = service
+            .prepare_execution(service.authenticate("sk_parent").unwrap())
+            .await
+            .unwrap();
+        let previous = parent.request_settings().execution_values().unwrap();
+        let configuration = RequestSettings::new(snapshots.acquire().unwrap())
+            .with_execution(parent.client().policy(), previous.timeout_ms);
+        let mut values = previous.clone();
+        values.disable_fast = false;
+        values.client_limits = RateLimits::unlimited();
+        values.timeout_ms = Some(90_000);
+        let mut runtime = serde_json::to_value(&values.runtime).unwrap();
+        runtime["model_mappings"] = json!({"child-alias":"model"});
+        values.runtime = serde_json::from_value(runtime).unwrap();
+        let changed = configuration
+            .replace_execution(&values, "settings-plugin")
+            .unwrap();
+        for (token, expected_limit, expected_fast, expected_timeout, profile) in [
+            ("sk_parent", 0, false, Some(90_000), "parent-default"),
+            ("sk_child", 9, true, None, "child-default"),
+        ] {
+            let request = ClientAuthenticationRequest::bearer(token)
+                .unwrap()
+                .with_settings(changed.clone());
+            let client = service.authenticate_request(request).await.unwrap();
+            let mut prepared = service.prepare_execution(client).await.unwrap();
+            let settings = prepared.request_settings();
+            let compiled = settings.snapshot();
+            prepared.apply_settings(&settings).unwrap();
+            assert!(Arc::ptr_eq(prepared.client().snapshot(), &compiled));
+            let actual = prepared.request_settings().execution_values().unwrap();
+            assert_eq!(
+                prepared.request_settings().execution_values(),
+                Some(actual.clone())
+            );
+            assert_eq!(actual.client_limits.max_concurrency, expected_limit);
+            assert_eq!(actual.disable_fast, expected_fast);
+            assert_eq!(actual.timeout_ms, expected_timeout);
+            let facts = serde_json::to_value(actual.runtime).unwrap();
+            assert_eq!(facts["request_profiles"]["openai"]["identity"], profile);
+            assert_eq!(facts["model_mappings"]["child-alias"], "model");
+        }
+        assert!(
+            changed.inspect()["overrides"]
+                .get("request_profiles")
+                .is_none()
+        );
+        assert_eq!(
+            changed.inspect()["execution"]["client_limits"]["value"]["max_concurrency"],
+            0
+        );
+        assert!(
+            configuration.inspect()["overrides"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+    });
 }

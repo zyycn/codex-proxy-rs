@@ -1,4 +1,75 @@
+//! 验证管理账号查询的容量投影、分页筛选与授权提交
+
 use super::*;
+
+#[tokio::test]
+async fn account_capacity_should_resolve_limits_for_list_and_detail() {
+    let Some(database) = TestDatabase::create("account_capacity").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let store = admin_account_store(&database.pool);
+    let mut limited = account("acct_override", "user-override");
+    limited.concurrency_limit = gateway_core::account::AccountConcurrencyLimit::new(3);
+    for record in [account("acct_inherited", "user-inherited"), limited] {
+        repository.insert_provider_account(record).await.unwrap();
+    }
+    for default_limit in [10_i64, 0] {
+        sqlx::query("update runtime_settings set max_concurrent_per_account = $1 where id = 1")
+            .bind(default_limit)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        for counts in [
+            None,
+            Some(BTreeMap::from([("acct_override".to_owned(), 2)])),
+        ] {
+            let runtime = AccountRuntimeSnapshot {
+                in_flight: counts,
+                ..Default::default()
+            };
+            let page = store
+                .list_accounts(
+                    AccountListQuery {
+                        page: 1,
+                        page_size: PageSize::new(20).unwrap(),
+                        provider_kind: None,
+                        group_filter: None,
+                        search: None,
+                        status: None,
+                        sort: None,
+                    },
+                    runtime.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(page.items.len(), 2);
+            for item in page.items {
+                let inherited = item.account.id == "acct_inherited";
+                let expected_limit = if inherited {
+                    (default_limit > 0).then_some(10)
+                } else {
+                    Some(3)
+                };
+                assert_eq!(item.capacity.total_slots, expected_limit);
+                assert_eq!(
+                    item.capacity.used_slots,
+                    runtime
+                        .in_flight
+                        .as_ref()
+                        .map(|_| if inherited { 0 } else { 2 })
+                );
+                let detail = store
+                    .load_account(&item.account.id, runtime.clone())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(detail.capacity, item.capacity);
+            }
+        }
+    }
+    database.close().await;
+}
 
 #[tokio::test]
 async fn provider_filter_applies_before_pagination_even_on_an_empty_page() {
@@ -116,7 +187,7 @@ async fn plugin_account_provider_filter_is_optional_and_applied_before_cursor_pa
         Some("acct_plugin_b")
     );
 
-    // 未指定 Provider 时按全局账号 ID 跨 Provider 分页，Provider 归属来自持久记录。
+    // 未指定 Provider 时按全局账号 ID 跨 Provider 分页，Provider 归属来自持久记录
     let all = store
         .list_plugin_accounts(PluginAccountListQuery {
             provider_kind: None,

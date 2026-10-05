@@ -1,3 +1,5 @@
+//! 验证复用 WebSocket 时响应元数据按每次交换隔离
+
 use super::*;
 
 #[tokio::test]

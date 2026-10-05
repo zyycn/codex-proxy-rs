@@ -165,12 +165,64 @@ jobs:
           puts "build_type=#{version.split("+", 2).first.include?("-exp.") ? "experimental" : "release"}"
           RUBY
 
+      - name: Seal plugin release manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GIT_SHA: ${{ steps.version.outputs.git_sha }}
+        run: |
+          ruby <<'RUBY'
+          require "fileutils"
+          require "json"
+
+          host_path = "backend/crates/gateway-plugin/runtime/plugin-host-compatibility.json"
+          host = JSON.parse(File.read(host_path))
+          abort "Invalid plugin host compatibility declaration: #{host_path}" unless host["schema_version"] == 2
+          # 保留旧更新器可解析的传输格式，实际支持范围仍取自当前宿主合同。
+          host = host.merge("schema_version" => 1, "permissions" => [])
+          # 清单只依赖版本与兼容声明，平台归档和镜像消费同一份封口结果。
+          manifest = {
+            "schema_version" => 1,
+            "sealed" => true,
+            "gateway_version" => ENV.fetch("VERSION"),
+            "gateway_git_sha" => ENV.fetch("GIT_SHA"),
+            "plugin_host" => host,
+            "plugins" => [],
+          }
+          FileUtils.mkdir_p("dist/plugin-release-assets")
+          File.write("dist/plugin-release-assets/plugin-release-manifest.json", JSON.pretty_generate(manifest) + "\n")
+          RUBY
+
+      - name: Upload sealed plugin assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-release-assets
+          path: dist/plugin-release-assets
+          if-no-files-found: error
+          retention-days: 1
+
   quality:
     needs: [release-info]
     uses: ./.github/workflows/_quality.yml
     with:
       ref: ${{ needs.release-info.outputs.git_sha }}
-      upload_frontend: true
+      run_frontend: false
+
+  frontend:
+    needs: release-info
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Validate and build frontend
+        uses: ./.github/actions/build-frontend
+        with:
+          upload-artifact: 'true'
 
   build-docker-binary:
     name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
@@ -194,10 +246,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}-${{ needs.release-info.outputs.git_sha }}
+          # 按目标、工具链和依赖保存，不为每个发行提交复制整个 target
+          key: cargo-v3-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml', '.github/workflows/release.yml') }}
           restore-keys: |
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
+            cargo-v3-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build binary
         shell: bash
@@ -260,10 +312,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}-${{ needs.release-info.outputs.git_sha }}
+          key: cargo-v3-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml', '.github/workflows/release.yml') }}
           restore-keys: |
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
+            cargo-v3-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build binary
         shell: bash
@@ -287,7 +338,7 @@ jobs:
           retention-days: 1
 
   package-assets:
-    needs: [release-info, quality, build-docker-binary, build-binary]
+    needs: [release-info, frontend, build-docker-binary, build-binary]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -313,12 +364,17 @@ jobs:
           pattern: codex-proxy-rs-*
           path: dist/binaries
 
+      - name: Download sealed plugin assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: plugin-release-assets
+          path: dist/plugin-release-assets
+
       - name: Package release assets
         shell: bash
         env:
           VERSION: ${{ needs.release-info.outputs.version }}
           DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
-          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
         run: |
           set -euo pipefail
           ruby <<'RUBY' > release-platforms.json
@@ -393,21 +449,8 @@ jobs:
                   raise SystemExit(f"Unsupported archive format: {platform['archive']}")
               release_packages.append((platform, package_root, archive_path))
 
-          plugin_host_path = pathlib.Path("backend/crates/gateway-plugin/runtime/plugin-host-compatibility.json")
-          plugin_host = json.loads(plugin_host_path.read_text())
-          if plugin_host.get("schema_version") != 1:
-              raise SystemExit(f"Invalid plugin host compatibility declaration: {plugin_host_path}")
-
           plugin_manifest_path = release_dir / "plugin-release-manifest.json"
-          plugin_manifest_path.write_text(json.dumps({
-              "schema_version": 1,
-              "sealed": True,
-              "gateway_version": version,
-              "gateway_git_sha": os.environ["GIT_SHA"],
-              "plugin_host": plugin_host,
-              # 示例独立发版；当前不内置插件，仍保留更新与回滚所需的封口清单。
-              "plugins": [],
-          }, indent=2, sort_keys=True) + "\n")
+          shutil.copy2("dist/plugin-release-assets/plugin-release-manifest.json", plugin_manifest_path)
           assets.append(plugin_manifest_path)
 
           # 保留运行时清单目录合同，宿主包不再携带教学示例。
@@ -440,10 +483,12 @@ jobs:
           path: dist/release
           if-no-files-found: error
           retention-days: 1
+          # tar.gz 已压缩，Actions 只负责传递原始发行字节。
+          compression-level: 0
 
   build-docker-image:
     name: build-docker-image (${{ matrix.dockerPlatform }})
-    needs: [release-info, quality, build-docker-binary, package-assets]
+    needs: [release-info, frontend, build-docker-binary]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
@@ -476,11 +521,11 @@ jobs:
           name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/docker-artifacts/codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
 
-      - name: Download sealed release assets
+      - name: Download sealed plugin assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-assets
-          path: dist/release-assets
+          name: plugin-release-assets
+          path: dist/plugin-release-assets
 
       - name: Prepare Docker prebuilt assets
         shell: bash
@@ -508,7 +553,7 @@ jobs:
           shutil.copy2(binary_src, binary_dest)
           binary_dest.chmod(0o755)
 
-          release_dir = pathlib.Path("dist/release-assets")
+          release_dir = pathlib.Path("dist/plugin-release-assets")
           manifest_path = release_dir / "plugin-release-manifest.json"
           manifest = json.loads(manifest_path.read_text())
           if manifest.get("schema_version") != 1 or manifest.get("sealed") is not True:
@@ -601,7 +646,8 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: [release-info, package-assets, build-docker-image]
+    # 产物准备可与测试重叠，版本标签和 GitHub Release 必须等全部质量与镜像验证通过
+    needs: [release-info, quality, package-assets, build-docker-image]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

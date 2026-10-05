@@ -1,4 +1,4 @@
-//! Provider 账号用量查询族。
+//! Provider 账号用量查询族
 
 use super::super::*;
 
@@ -139,8 +139,8 @@ pub(crate) async fn provider_account_usage(
         .iter()
         .map(|item| item.account_id.clone())
         .collect::<Vec<_>>();
-    let mut request_buckets = if query.include_hourly_request_buckets {
-        provider_account_request_buckets(pool, query.range, &account_ids).await?
+    let mut request_buckets = if let Some(range) = query.request_bucket_range {
+        provider_account_request_buckets(pool, range, &account_ids).await?
     } else {
         HashMap::new()
     };
@@ -201,24 +201,21 @@ pub(crate) async fn provider_account_request_buckets(
             );
     }
 
-    let step = TimeDelta::hours(1);
     let mut timelines = HashMap::with_capacity(account_ids.len());
     for account_id in account_ids {
         let mut account_observed = observed.remove(account_id).unwrap_or_default();
-        let mut bucket_start = range.start;
-        let mut bucket_index = 0_u64;
         let mut buckets = Vec::new();
-        while bucket_start < range.end {
+        for bucket_index in 0..ACCOUNT_USAGE_TIMELINE_HOURS {
+            let bucket_start = range
+                .start
+                .checked_add_signed(TimeDelta::hours(bucket_index))
+                .ok_or_else(|| invalid("account request timeline exceeds supported timestamps"))?;
             buckets.push(ProviderAccountRequestBucket {
                 bucket_start,
-                request_count: account_observed.remove(&bucket_index).unwrap_or_default(),
+                request_count: account_observed
+                    .remove(&(bucket_index as u64))
+                    .unwrap_or_default(),
             });
-            bucket_start = bucket_start
-                .checked_add_signed(step)
-                .ok_or_else(|| invalid("account request timeline exceeds supported timestamps"))?;
-            bucket_index = bucket_index
-                .checked_add(1)
-                .ok_or_else(|| invalid("account request timeline exceeds supported buckets"))?;
         }
         timelines.insert(account_id.clone(), buckets);
     }

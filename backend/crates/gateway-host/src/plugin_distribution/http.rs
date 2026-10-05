@@ -1,3 +1,5 @@
+//! 插件制品下载的来源校验、凭据匹配与限流错误处理
+
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -104,7 +106,7 @@ impl Downloads {
                 .map_err(|_| source_error())?;
             if let Some(delay) = rate_delay(response.status, &response.headers) {
                 let mut rates = self.rate_limits.lock().await;
-                // 限流项有界；超出时拒绝新查询，不淘汰仍然有效的退避。
+                // 限流项有界；超出时拒绝新查询，不淘汰仍然有效的退避
                 if rates.len() < 256 || rates.contains_key(&scope) {
                     rates.insert(scope, Instant::now() + delay);
                 }
@@ -124,11 +126,12 @@ impl Downloads {
                 if url.scheme() == "https" && next.scheme() != "https" {
                     return Err(source_error());
                 }
-                // 不继承上一次请求的头；下一跳从授权列表重新匹配，包括同域的路径变化。
+                // 不继承上一次请求的头；下一跳从授权列表重新匹配，包括同域的路径变化
                 url = next;
                 continue;
             }
             if !(200..300).contains(&response.status) {
+                tracing::warn!(status = response.status, "插件来源返回非成功状态");
                 return Err(source_error());
             }
             if header(&response.headers, "content-length")

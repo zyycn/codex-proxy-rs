@@ -1,3 +1,5 @@
+//! 验证 Client Key 登录、会话有效期与失效 Key 的会话撤销
+
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr},

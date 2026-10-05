@@ -1,3 +1,5 @@
+//! 执行插件命令行调用，传递取消信号并映射 RPC 结果
+
 use gateway_admin::model::AdminError;
 use gateway_core::lifecycle::CancellationToken;
 use gateway_plugin_sdk::{Stage, call::management::CommandResult};
@@ -56,7 +58,7 @@ impl PluginCommandSession {
         };
         match result {
             Ok(Ok(output)) => Ok(output),
-            // 一旦执行已开始，账号/私有状态回调也可能提交；仅 HTTP 未发送不能证明无副作用。
+            // 一旦执行已开始，账号/私有状态回调也可能提交；仅 HTTP 未发送不能证明无副作用
             Ok(Err(reason)) => Err(PluginCommandError::Incomplete {
                 saved_accounts,
                 reason,

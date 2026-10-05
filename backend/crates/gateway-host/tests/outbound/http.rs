@@ -1,3 +1,5 @@
+//! 验证受管 HTTP 的协议、网络约束、时限与正文资源回收
+
 use std::time::Duration;
 
 use gateway_core::{account::OutboundProxy, upstream::UpstreamSendState};
@@ -15,6 +17,37 @@ fn request(url: String) -> HttpRequest {
 
 fn local_network() -> NetworkPolicy {
     NetworkPolicy::new(&["127.0.0.0/8".into(), "::1/128".into()]).unwrap()
+}
+
+#[tokio::test]
+async fn managed_https_http2_uses_authority_without_an_extra_host_header() {
+    use std::sync::Arc;
+
+    use crate::support::network::{FixedDns, Mode, ROOT, Server};
+
+    let mut server = Server::start(Mode::Http2Origin, true, "127.0.0.1:0").await;
+    let url = format!("https://upstream.test:{}/query", server.address.port());
+    let client = HttpClient::with_root_certificates(vec![ROOT.to_vec()])
+        .unwrap()
+        .with_resolver(Arc::new(FixedDns(server.address.ip())));
+    let mut response = client
+        .open(
+            request(url.clone()),
+            None,
+            &local_network(),
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body.read(64).await.unwrap().unwrap(), "secured");
+    let observation = server.next().await;
+    assert!(
+        observation
+            .head
+            .starts_with(&format!("GET {url} HTTP/2.0\r\n"))
+    );
+    assert_eq!(observation.sni.as_deref(), Some("upstream.test"));
 }
 
 #[tokio::test]
@@ -181,7 +214,7 @@ async fn buffered_body_cannot_extend_the_request_deadline() {
         response.body.read(1).await.unwrap().unwrap().as_ref(),
         &[42]
     );
-    // 上游已返回整块数据，插件延迟读取也不能绕过调用期限。
+    // 上游已返回整块数据，插件延迟读取也不能绕过调用期限
     tokio::time::sleep(Duration::from_millis(320)).await;
     let error = response.body.read(1).await.unwrap_err();
     assert_eq!(error.send_state, UpstreamSendState::Sent);
@@ -209,7 +242,7 @@ async fn cancelling_dns_releases_the_request_slot_without_starting_http() {
     let client = HttpClient::new()
         .unwrap()
         .with_resolver(Arc::new(PendingDns));
-    // 超过总并发容量，逐次取消仍不能积累占用。
+    // 超过总并发容量，逐次取消仍不能积累占用
     for _ in 0..129 {
         assert!(
             tokio::time::timeout(

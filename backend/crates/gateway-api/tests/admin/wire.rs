@@ -1,3 +1,5 @@
+//! 验证管理响应封装、分页结构与公开错误码保持稳定
+
 mod common {
     use gateway_api::admin::PageMeta;
     use serde_json::json;

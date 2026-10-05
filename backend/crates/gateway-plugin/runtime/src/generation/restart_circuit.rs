@@ -1,3 +1,5 @@
+//! 按插件实例身份累计重启失败，管理熔断窗口与尝试生命周期
+
 use std::{
     collections::BTreeMap,
     num::NonZeroUsize,
@@ -9,7 +11,7 @@ use crate::rpc::RpcSessionLifecycle;
 
 const MAXIMUM_TRACKED_IDENTITIES: usize = 256;
 
-/// 原生插件重启熔断的保守初始参数；数值可调，但不代表已完成性能定标。
+/// 原生插件重启熔断的保守初始参数；数值可调，但不代表已完成性能定标
 #[derive(Debug, Clone, Copy)]
 pub struct PluginRestartCircuitConfig {
     pub maximum_failures: NonZeroUsize,
@@ -192,11 +194,11 @@ impl RestartCircuits {
             latest_attempt: 0,
             touched,
         });
-        // 监督事实只向前推进；旧代次迟到故障不能清掉或重复累加更新代次的预算。
+        // 监督事实只向前推进；旧代次迟到故障不能清掉或重复累加更新代次的预算
         if attempt <= entry.latest_attempt {
             return;
         }
-        // 稳定运行过的 incarnation 先清掉旧预算，本次退出作为新周期的第一次故障。
+        // 稳定运行过的 incarnation 先清掉旧预算，本次退出作为新周期的第一次故障
         if failure.uptime >= self.config.stability_window {
             entry.failures = 0;
         }

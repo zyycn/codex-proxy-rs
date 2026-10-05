@@ -1,3 +1,5 @@
+//! 验证 xAI 目录缓存、并发合并与指定账号刷新
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -137,7 +139,7 @@ impl GrokBillingTransport for QueueBillingTransport {
     }
 }
 
-/// 每次读取都返回同一份无法解码的 catalog 文档的存储端口。
+/// 每次读取都返回同一份无法解码的 catalog 文档的存储端口
 struct CorruptCatalogCachePort;
 
 impl ProviderCatalogCachePort for CorruptCatalogCachePort {
@@ -568,7 +570,7 @@ async fn failed_plan_scope_is_skipped_and_surviving_plans_still_cache() {
     let store = MemoryProviderAccountStore::shared();
     let account_store: Arc<dyn ProviderAccountStore> = store.clone();
     let repository = GrokCredentialRepository::new(account_store);
-    // "plan:pro" 按 scope 排序在 "plan:standard" 之前，先消费失败响应。
+    // "plan:pro" 按 scope 排序在 "plan:standard" 之前，先消费失败响应
     let mut pro = create_input("plan-pro", "subject-pro");
     pro.account.plan_type = Some("pro".to_owned());
     seed_input(&store, &pro).await.expect("create pro account");

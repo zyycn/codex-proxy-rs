@@ -1,3 +1,5 @@
+//! OpenAI 凭据合同测试入口，以及凭据编码、持久化与选号约束测试
+
 mod capacity;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1326,7 +1328,7 @@ fn rate_limited_failure_does_not_consult_stale_quota_snapshot() {
             .credential_state(),
         CredentialState::Ready
     );
-    // 429 临时限流写入 Redis 冷却，不读写 quota JSON。
+    // 429 临时限流写入 Redis 冷却，不读写 quota JSON
     assert_eq!(store.quota_reads(), 0);
     let cooldown = block_on(cooldowns.read(account.id())).expect("read cooldown");
     assert!(

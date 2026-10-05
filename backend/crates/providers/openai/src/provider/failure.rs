@@ -1,12 +1,13 @@
-//! OpenAI 上游失败分类、恢复决策与稳定错误投影。
+//! OpenAI 上游失败分类、恢复决策与稳定错误投影
 
 use super::*;
+use gateway_core::diagnostics::TraceContext;
 
-/// OpenAI 失败对 Smart 账号分数的结构化 reason 闭集。
+/// OpenAI 失败对 Smart 账号分数的结构化 reason 闭集
 ///
-/// 已归一的上游 code 优先；code 缺失时才读取结构化客户端错误的 code/type。
-/// 新增错误、裸 HTTP 状态和内部错误 kind 默认都不会进入该闭集。
-/// 容量拒绝影响短期调度健康度，但不证明账号凭据或额度失效。
+/// 已归一的上游 code 优先；code 缺失时才读取结构化客户端错误的 code/type
+/// 新增错误、裸 HTTP 状态和内部错误 kind 默认都不会进入该闭集
+/// 容量拒绝影响短期调度健康度，但不证明账号凭据或额度失效
 const OPENAI_ACCOUNT_SCORE_FAILURE_REASONS: &[&str] = &[
     "server_is_overloaded",
     "slow_down",
@@ -31,7 +32,7 @@ fn openai_account_score_failure_reason(error: &ProviderError) -> Option<&str> {
     upstream.code().or_else(|| upstream.error_type())
 }
 
-/// 返回该 OpenAI 失败是否属于 Smart 账号计分闭集。
+/// 返回该 OpenAI 失败是否属于 Smart 账号计分闭集
 #[doc(hidden)]
 pub fn openai_failure_affects_account_score(error: &ProviderError) -> bool {
     openai_account_score_failure_reason(error).is_some_and(is_openai_account_score_failure_reason)
@@ -41,7 +42,7 @@ pub(super) struct MappedProviderFailure {
     pub(super) error: ProviderError,
     pub(super) websocket_transport_retryable: bool,
     pub(super) account_failure: Option<CodexAccountFailure>,
-    /// 原始上游错误描述，仅在凭据错误状态下持久化。
+    /// 原始上游错误描述，仅在凭据错误状态下持久化
     pub(super) error_message: Option<String>,
     pub(super) cyber_policy_failure: bool,
     pub(super) upstream_capacity_failure: bool,
@@ -81,25 +82,39 @@ pub(super) async fn wait_for_replay_grace(deadline: Option<Instant>) {
     }
 }
 
-/// 提交边界前的上游事件预取。
+/// 提交边界前的上游事件预取
 ///
-/// 原始 chunk 计数而不是重编码后的 event 大小。时间与 64 KiB 共同限定无感换号
+/// 原始 chunk 计数而不是重编码后的 event 大小
+/// 时间与字节阈值共同限定无感换号
 /// 窗口；任一边界到达都会提交已缓存 wire，不能因网关私有资源规则伪造上游协议
-/// 失败。一旦提交，后续事件不再具备无痕重放资格。
+/// 失败
+/// 一旦提交，后续事件不再具备无痕重放资格
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
-    replay_grace_deadline: Option<Instant>,
+    replay_grace_started_at: Option<Instant>,
     committed: bool,
+    trace: TraceContext,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PreCommitReleaseReason {
+    SemanticOutput,
+    Terminal,
+    ByteLimit,
+    GraceTimeout,
+    Eof,
 }
 
 impl PreCommitClientEvents {
-    pub(super) const fn new() -> Self {
+    pub(super) const fn new(trace: TraceContext) -> Self {
         Self {
             pending: Vec::new(),
             prefetched_bytes: 0,
-            replay_grace_deadline: None,
+            replay_grace_started_at: None,
             committed: false,
+            trace,
         }
     }
 
@@ -120,14 +135,17 @@ impl PreCommitClientEvents {
         }
         let starts_replay_grace = incoming.iter().any(ProviderEvent::has_client_event);
         self.pending.extend(incoming);
-        if timing_signals.semantic_output
-            || completed
-            || self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES
-        {
-            return self.commit_pending();
+        if timing_signals.semantic_output {
+            return self.commit_pending(PreCommitReleaseReason::SemanticOutput);
         }
-        if starts_replay_grace && self.replay_grace_deadline.is_none() {
-            self.replay_grace_deadline = Instant::now().checked_add(STREAM_REPLAY_GRACE);
+        if completed {
+            return self.commit_pending(PreCommitReleaseReason::Terminal);
+        }
+        if self.prefetched_bytes > MAX_STREAM_PREFETCH_BYTES {
+            return self.commit_pending(PreCommitReleaseReason::ByteLimit);
+        }
+        if starts_replay_grace && self.replay_grace_started_at.is_none() {
+            self.replay_grace_started_at = Some(Instant::now());
         }
         Vec::new()
     }
@@ -142,7 +160,7 @@ impl PreCommitClientEvents {
         if self.committed {
             events
         } else {
-            self.commit_pending()
+            self.commit_pending(PreCommitReleaseReason::Eof)
         }
     }
 
@@ -151,28 +169,38 @@ impl PreCommitClientEvents {
             return incoming;
         }
         self.pending.extend(incoming);
-        self.commit_pending()
+        // 此入口只在同批次已出现语义输出、随后失败时释放原始事件
+        self.commit_pending(PreCommitReleaseReason::SemanticOutput)
     }
 
     pub(super) fn take_for_failure(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         self.pending.extend(incoming);
         self.prefetched_bytes = 0;
-        self.replay_grace_deadline = None;
+        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
 
-    pub(super) const fn replay_grace_deadline(&self) -> Option<Instant> {
-        self.replay_grace_deadline
+    pub(super) fn replay_grace_deadline(&self) -> Option<Instant> {
+        self.replay_grace_started_at
+            .and_then(|started| started.checked_add(STREAM_REPLAY_GRACE))
     }
 
     pub(super) const fn is_committed(&self) -> bool {
         self.committed
     }
 
-    pub(super) fn commit_pending(&mut self) -> Vec<ProviderEvent> {
+    pub(super) fn commit_pending(&mut self, reason: PreCommitReleaseReason) -> Vec<ProviderEvent> {
+        // Provider 只记录释放缓存的原因；实际下游提交仍由 Core 记录和裁决
+        if self.trace.is_enabled() {
+            self.trace.record("provider.precommit.released", json!({
+                "reason": reason,
+                "prefetchedBytes": self.prefetched_bytes,
+                "waitMs": self.replay_grace_started_at.map_or(0, |started| started.elapsed().as_millis()),
+            }));
+        }
         self.committed = true;
         self.prefetched_bytes = 0;
-        self.replay_grace_deadline = None;
+        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
 }
@@ -404,7 +432,7 @@ pub(super) async fn apply_failure(
             "Failed to persist OpenAI response cookies"
         );
     }
-    // 探测只验证恢复，不能把探测自身的单请求并发当作业务负载证据。
+    // 探测只验证恢复，不能把探测自身的单请求并发当作业务负载证据
     if context.allows_capacity_feedback && failure.upstream_capacity_failure {
         context
             .quota
@@ -417,9 +445,9 @@ pub(super) fn schedule_authoritative_quota_refresh_after_failure(
     quota: &Arc<CodexCredentialQuotaService>,
     account: &ProviderAccount,
 ) {
-    // 限额错误可以确认账号状态，但 Responses 事件中的 used_percent 可能仍停在上一结算点。
-    // usage 快照在后台补齐展示基线，不得撤销同一轮真实失败，也不能阻塞原始响应。
-    // 先等待 2 秒让上游结算，再查询；5 秒仅限制实际查询自身。
+    // 限额错误可以确认账号状态，但 Responses 事件中的 used_percent 可能仍停在上一结算点
+    // usage 快照在后台补齐展示基线，不得撤销同一轮真实失败，也不能阻塞原始响应
+    // 先等待 2 秒让上游结算，再查询；5 秒仅限制实际查询自身
     let quota = Arc::clone(quota);
     let account_id = account.id().clone();
     drop(tokio::spawn(async move {
@@ -517,7 +545,7 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
-    // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算。
+    // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算
     if failure.error.replay_is_safe()
         && (failure.account_failure.is_some()
             || matches!(
@@ -541,7 +569,7 @@ pub(super) fn apply_websocket_recovery_policy(
         );
         return;
     }
-    // close 1009 只拒绝当前请求，不代表会话的 WS 传输不可用。
+    // close 1009 只拒绝当前请求，不代表会话的 WS 传输不可用
     let session_budget_exhausted = failure.error.kind() != ProviderErrorKind::MessageTooBig
         && context.session_affinity_key.is_some_and(|key| {
             context
@@ -583,7 +611,7 @@ pub(super) fn apply_websocket_recovery_policy(
     }
 
     // 传输恢复必须保持原账号可调度；最终 HTTP attempt 若仍失败，再按真实 HTTP
-    // 结果更新账号健康度，避免中间 WS 错误把同账号钉选提前冷却掉。
+    // 结果更新账号健康度，避免中间 WS 错误把同账号钉选提前冷却掉
     failure.account_failure = None;
     let fallback_now = context.policy == WebSocketFailurePolicy::ImmediateFallback
         || context.retry_count >= context.max_retries
@@ -682,8 +710,8 @@ pub(super) fn continuation_replay_required_error(reason: &'static str) -> Provid
     .with_client_visible_upstream_error(continuation_replay_error_detail())
 }
 
-/// 额度拒绝使当前账号无法继续原生历史，由客户端携带完整输入创建新链。
-/// 只投影客户端响应；真实上游分类、发送状态和错误正文继续用于隔离与记账。
+/// 额度拒绝使当前账号无法继续原生历史，由客户端携带完整输入创建新链
+/// 只投影客户端响应；真实上游分类、发送状态和错误正文继续用于隔离与记账
 pub(super) fn quota_continuation_replay_error(
     mut error: ProviderError,
     request: &CodexResponsesRequest,
@@ -704,13 +732,13 @@ pub(super) fn quota_continuation_replay_error(
             response
                 .headers()
                 .iter()
-                // 额度窗口的等待时间不适用于客户端重建历史。
+                // 额度窗口的等待时间不适用于客户端重建历史
                 .filter(|header| !header.name().eq_ignore_ascii_case("retry-after"))
                 .cloned()
                 .collect()
         })
         .unwrap_or_default();
-    // 流内拒绝没有原始 HTTP 失败响应，仍需把该次失败的关联 ID 交给 HTTP 客户端。
+    // 流内拒绝没有原始 HTTP 失败响应，仍需把该次失败的关联 ID 交给 HTTP 客户端
     if !headers.iter().any(|header| {
         header.name().eq_ignore_ascii_case("x-request-id")
             || header.name().eq_ignore_ascii_case("x-oai-request-id")
@@ -728,7 +756,8 @@ pub(super) fn quota_continuation_replay_error(
         "type": detail.error_type(),
     }});
     // 未交付的 response.created 与额度错误帧必须一起丢弃，否则原错误帧会
-    // 覆盖恢复投影。该拒绝发生在语义输出和 commit 之前，不能带走已交付事件。
+    // 覆盖恢复投影
+    // 该拒绝发生在语义输出和 commit 之前，不能带走已交付事件
     drop(error.take_atomic_client_events());
     error
         .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
@@ -871,7 +900,6 @@ pub(super) fn map_client_error(
         )),
         CodexClientError::InvalidHeaderName(_)
         | CodexClientError::InvalidHeaderValue(_)
-        | CodexClientError::MiddlewareHeaderConflict
         | CodexClientError::WebSocketEncode(_)
         | CodexClientError::RequestBodyEncode(_)
         | CodexClientError::RequestCompression(_)
@@ -894,7 +922,7 @@ pub(super) fn map_client_error(
             diagnostics,
             ..
         } => {
-            // 已知响应头只补充观测事实；不将残缺响应重新分类成可换号重放的上游拒绝。
+            // 已知响应头只补充观测事实；不将残缺响应重新分类成可换号重放的上游拒绝
             let mut error = provider_error(
                 if source.is_timeout() {
                     ProviderErrorKind::Timeout
@@ -1011,7 +1039,7 @@ pub(super) fn map_client_error(
     failure
 }
 
-/// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
+/// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display
 fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
         CodexClientError::ConnectionBudgetExhausted => (
@@ -1072,11 +1100,6 @@ fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
             "prepare",
             "invalid_header_value",
             "OpenAI request header value is invalid".to_owned(),
-        ),
-        CodexClientError::MiddlewareHeaderConflict => (
-            "prepare",
-            "middleware_header_conflict",
-            "OpenAI middleware header conflicts with a provider-managed header".to_owned(),
         ),
         CodexClientError::WebSocketEncode(_) | CodexClientError::RequestBodyEncode(_) => (
             "prepare",
@@ -1290,7 +1313,7 @@ pub(super) fn websocket_client_visible_error(
             },
             str::to_owned,
         );
-    // RFC 6455 close 1009 是请求过大，客户端需收到可行动的错误码。
+    // RFC 6455 close 1009 是请求过大，客户端需收到可行动的错误码
     let (code, error_type) = if message_too_big {
         (Some("message_too_big".to_owned()), "invalid_request_error")
     } else {
@@ -1413,7 +1436,7 @@ pub(super) fn map_upstream_failure(
         ),
         error_message: failure.client_message,
         cyber_policy_failure,
-        // 普通 5xx 与未知流内错误不足以证明容量拒绝，不能用于冻结账号。
+        // 普通 5xx 与未知流内错误不足以证明容量拒绝，不能用于冻结账号
         upstream_capacity_failure: capacity_unavailable,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,
@@ -1560,7 +1583,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         | CodexWebSocketExchangeError::ReusedConnectionDiedBeforeFirstEvent { .. } => {
             ProviderErrorKind::Transport
         }
-        // live 流可能包在 PostSendAmbiguous 中；RFC 6455 close 1009 是请求过大。
+        // live 流可能包在 PostSendAmbiguous 中；RFC 6455 close 1009 是请求过大
         CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. } => {
             if error
@@ -1585,14 +1608,7 @@ pub(super) fn provider_error(
     ProviderError::new(kind, send_state)
 }
 
-pub(super) fn remaining(deadline: SystemTime) -> Option<Duration> {
-    deadline
-        .duration_since(SystemTime::now())
-        .ok()
-        .filter(|remaining| !remaining.is_zero())
-}
-
-/// 只恢复明确未发送的 HTTP 建连失败；已知 TLS/配置错误不反复尝试同一路径。
+/// 只恢复明确未发送的 HTTP 建连失败；已知 TLS/配置错误不反复尝试同一路径
 fn transient_http_connect(error: &reqwest::Error) -> bool {
     if !error.is_connect() || error.is_builder() {
         return false;

@@ -1,4 +1,4 @@
-//! WebSocket opening 与 payload 审计输出。
+//! WebSocket opening 与 payload 审计输出
 
 use std::{
     io,
@@ -12,17 +12,17 @@ use uuid::Uuid;
 use crate::transport::protocol::websocket::{
     OpeningAuditHeader, OpeningAuditSnapshot, WebSocketAuditArtifact,
 };
-use crate::transport::time::china_filename_timestamp_millis;
+use gateway_core::time::DeploymentTimeZone;
 
 use super::model::CodexWebSocketConnection;
 
 const REDACTED_HEADER_VALUE: &str = "<redacted>";
-/// WebSocket audit artifact 输出目录环境变量。
+/// WebSocket audit artifact 输出目录环境变量
 pub const WS_AUDIT_DIR_ENV: &str = "CODEX_PROXY_WS_AUDIT_DIR";
 
 static WS_AUDIT_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// 返回进程级审计输出目录；未配置时调用方应整体跳过 artifact 构造。
+/// 返回进程级审计输出目录；未配置时调用方应整体跳过 artifact 构造
 pub fn websocket_audit_dir() -> Option<&'static Path> {
     WS_AUDIT_DIR
         .get_or_init(|| {
@@ -33,31 +33,33 @@ pub fn websocket_audit_dir() -> Option<&'static Path> {
         .as_deref()
 }
 
-/// 显式写入 WebSocket audit artifact。
+/// 显式写入 WebSocket audit artifact
 pub async fn write_websocket_audit_artifact_for_dir(
     dir: Option<&Path>,
     artifact: &WebSocketAuditArtifact,
+    timezone: DeploymentTimeZone,
 ) -> io::Result<Option<PathBuf>> {
     let Some(dir) = dir.filter(|dir| !dir.as_os_str().is_empty()) else {
         return Ok(None);
     };
 
     tokio::fs::create_dir_all(dir).await?;
-    let path = dir.join(websocket_audit_file_name());
+    let path = dir.join(websocket_audit_file_name(timezone));
     let body = serde_json::to_vec_pretty(artifact).map_err(io::Error::other)?;
     tokio::fs::write(&path, body).await?;
     Ok(Some(path))
 }
 
-/// 按环境变量配置写入 WebSocket audit artifact。
+/// 按环境变量配置写入 WebSocket audit artifact
 pub async fn write_websocket_audit_artifact_from_env(
     artifact: &WebSocketAuditArtifact,
+    timezone: DeploymentTimeZone,
 ) -> io::Result<Option<PathBuf>> {
-    write_websocket_audit_artifact_for_dir(websocket_audit_dir(), artifact).await
+    write_websocket_audit_artifact_for_dir(websocket_audit_dir(), artifact, timezone).await
 }
 
 impl CodexWebSocketConnection {
-    /// 生成打开握手审计快照。
+    /// 生成打开握手审计快照
     pub fn opening_audit_snapshot(&self) -> OpeningAuditSnapshot {
         OpeningAuditSnapshot {
             request_line: request_line_for_endpoint(&self.endpoint),
@@ -116,7 +118,7 @@ fn is_sensitive_opening_header(name: &str) -> bool {
     )
 }
 
-fn websocket_audit_file_name() -> String {
-    let timestamp = china_filename_timestamp_millis(&Utc::now());
+fn websocket_audit_file_name(timezone: DeploymentTimeZone) -> String {
+    let timestamp = timezone.local(Utc::now()).format("%Y%m%dT%H%M%S%.3f%z");
     format!("codex-ws-audit-{timestamp}-{}.json", Uuid::new_v4())
 }

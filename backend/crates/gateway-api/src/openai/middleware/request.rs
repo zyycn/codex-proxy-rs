@@ -1,10 +1,9 @@
-//! 请求身份冻结、单次 next 与调用代次保活；HTTP 编码在 http 子模块中完成。
+//! 请求身份冻结、单次 next 与调用代次保活；HTTP 编码在 http 子模块中完成
+
+use crate::middleware::headers::{decode_headers, encode_headers};
 
 use crate::openai::error::gateway_error_response;
-use axum::{
-    http::{HeaderMap, HeaderName, HeaderValue},
-    response::Response,
-};
+use axum::{http::HeaderMap, response::Response};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use gateway_core::{
@@ -12,11 +11,10 @@ use gateway_core::{
         execution::{
             AuthenticatedClient, ClientTransport, ExecutionService, PreparedRootExecution,
         },
-        extensions::ExtensionCallScope,
         middleware::{
             FrozenMiddlewarePlan, MiddlewareBody, MiddlewareError, MiddlewareFrame,
-            MiddlewareHeader, MiddlewareMount, MiddlewareNext, MiddlewareRequest,
-            MiddlewareResponse, MiddlewareTarget,
+            MiddlewareHeader, MiddlewareMount, MiddlewareRequest, MiddlewareResponse,
+            MiddlewareTarget,
         },
     },
     lifecycle::CancellationToken,
@@ -26,7 +24,7 @@ use std::{future::Future, sync::Arc};
 
 use super::http::{ExpectedBody, buffered_response, error_response, into_http_response};
 
-pub(crate) struct HttpMiddlewareInput {
+pub(crate) struct RequestInput {
     pub endpoint: String,
     pub protocol: String,
     pub operation: Option<OperationKind>,
@@ -36,7 +34,7 @@ pub(crate) struct HttpMiddlewareInput {
     pub body: Bytes,
 }
 
-impl HttpMiddlewareInput {
+impl RequestInput {
     pub(crate) fn query(endpoint: String, model_hint: Option<String>, headers: &HeaderMap) -> Self {
         Self {
             endpoint,
@@ -44,17 +42,17 @@ impl HttpMiddlewareInput {
             operation: None,
             transport: ClientTransport::HttpJson,
             model_hint,
-            headers: request_headers(headers),
+            headers: encode_headers(headers),
             body: Bytes::new(),
         }
     }
 }
 
-/// 已鉴权只读查询共用入口；不重新鉴权、计量或创建 Provider attempt。
+/// 已鉴权只读查询共用入口；不重新鉴权、计量或创建 Provider attempt
 pub(crate) async fn query_response<F, Fut>(
     execution: Arc<dyn ExecutionService>,
     client: AuthenticatedClient,
-    input: HttpMiddlewareInput,
+    input: RequestInput,
     terminal: F,
 ) -> Response
 where
@@ -66,7 +64,7 @@ where
         Err(error) => return gateway_error_response(&error),
     };
     let protocol = input.protocol.clone();
-    let result = invoke_http_middleware(
+    let result = invoke_request(
         execution,
         prepared,
         input,
@@ -86,7 +84,7 @@ where
     }
 }
 
-pub(crate) type HttpMiddlewareTerminal = Box<
+pub(crate) type RequestTerminal = Box<
     dyn FnOnce(
             PreparedRootExecution,
             MiddlewareRequest,
@@ -94,13 +92,19 @@ pub(crate) type HttpMiddlewareTerminal = Box<
         + Send,
 >;
 
-pub(crate) async fn invoke_http_middleware(
+pub(crate) async fn invoke_request(
     execution: Arc<dyn ExecutionService>,
-    prepared: PreparedRootExecution,
-    input: HttpMiddlewareInput,
-    terminal: HttpMiddlewareTerminal,
+    mut prepared: PreparedRootExecution,
+    input: RequestInput,
+    terminal: RequestTerminal,
 ) -> Result<MiddlewareResponse, MiddlewareError> {
-    let plan = execution.middleware_plan(&prepared);
+    let origin = crate::middleware::current();
+    if let Some(origin) = &origin {
+        prepared = prepared.with_extension_scope(origin.extensions.clone());
+    }
+    let plan = origin
+        .and_then(|origin| origin.plan)
+        .or_else(|| execution.middleware_plan(&prepared));
     let lifetime = RequestLifetime {
         cancellation: prepared.cancellation(),
         _plan: plan.clone(),
@@ -117,10 +121,22 @@ pub(crate) async fn invoke_http_middleware(
             model: input.model_hint,
             account_id: None,
         },
-        ExtensionCallScope::default(),
+        prepared.extension_scope(),
     );
-    let request = MiddlewareRequest::new(input.protocol, input.headers, input.body);
-    let next = Box::new(HttpNext { prepared, terminal });
+    let mut request = MiddlewareRequest::new(input.protocol, input.headers, input.body);
+    if plan.is_some() {
+        request = request.with_settings(prepared.request_settings());
+    }
+    let next = gateway_core::middleware::compose(Vec::new(), move |request: MiddlewareRequest| {
+        Box::pin(async move {
+            if let Some(settings) = request.settings() {
+                prepared
+                    .apply_settings(settings)
+                    .map_err(MiddlewareError::Gateway)?;
+            }
+            terminal(prepared, request).await
+        })
+    });
     let response = match plan {
         Some(plan) => plan.handle(context, request, next).await?,
         None => next.run(request).await?,
@@ -138,20 +154,6 @@ pub(crate) async fn invoke_http_middleware(
     Ok(response)
 }
 
-struct HttpNext {
-    prepared: PreparedRootExecution,
-    terminal: HttpMiddlewareTerminal,
-}
-
-impl MiddlewareNext for HttpNext {
-    fn run(
-        self: Box<Self>,
-        request: MiddlewareRequest,
-    ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
-        (self.terminal)(self.prepared, request)
-    }
-}
-
 struct RequestLifetime {
     cancellation: CancellationToken,
     _plan: Option<FrozenMiddlewarePlan>,
@@ -159,7 +161,7 @@ struct RequestLifetime {
 
 impl Drop for RequestLifetime {
     fn drop(&mut self) {
-        // 包括还在 next 中等待、客户端断开和提前关流；不启动第二份账本终结逻辑。
+        // 包括还在 next 中等待、客户端断开和提前关流；不启动第二份账本终结逻辑
         self.cancellation.cancel();
     }
 }
@@ -198,32 +200,10 @@ impl MiddlewareBody for RequestBody {
     }
 }
 
-/// 保留多值与非 UTF-8 header；是否向插件公开由 Runtime 按授权投影。
-pub(crate) fn request_headers(headers: &HeaderMap) -> Vec<MiddlewareHeader> {
-    headers
-        .iter()
-        .map(|(name, value)| {
-            MiddlewareHeader::new(name.as_str(), Bytes::copy_from_slice(value.as_bytes()))
-        })
-        .collect()
-}
-
-/// 终点重新解码插件改写的请求；冻结认证身份不从这些 header 再次取得。
+/// 终点重新解码插件改写的请求；冻结认证身份不从这些 header 再次取得
 pub(crate) fn request_parts(
     request: MiddlewareRequest,
 ) -> Result<(String, HeaderMap, Bytes), MiddlewareError> {
     let (protocol, headers, body) = request.into_parts();
     Ok((protocol, decode_headers(headers)?, body))
-}
-
-pub(super) fn decode_headers(headers: Vec<MiddlewareHeader>) -> Result<HeaderMap, MiddlewareError> {
-    let mut result = HeaderMap::new();
-    for header in headers {
-        let name = HeaderName::from_bytes(header.name().as_bytes())
-            .map_err(|_| MiddlewareError::InvalidState)?;
-        let value =
-            HeaderValue::from_bytes(header.value()).map_err(|_| MiddlewareError::InvalidState)?;
-        result.append(name, value);
-    }
-    Ok(result)
 }

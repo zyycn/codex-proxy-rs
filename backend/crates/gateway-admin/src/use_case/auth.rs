@@ -1,4 +1,4 @@
-//! 控制面登录、会话恢复与身份校验的唯一 owner。
+//! 控制面登录、会话恢复与身份校验的唯一 owner
 
 use std::{net::IpAddr, sync::Arc, time::Duration as StdDuration};
 
@@ -25,7 +25,7 @@ use crate::{
 
 use super::map_store_error;
 
-/// 所有控制面接口消费同一个会话服务，权限由服务端身份决定。
+/// 所有控制面接口消费同一个会话服务，权限由服务端身份决定
 #[async_trait]
 pub trait AuthService: Send + Sync {
     async fn change_password(
@@ -208,7 +208,7 @@ impl AuthService for DefaultAuthService {
         {
             return Err(AdminError::conflict("密码已变更，请重新登录"));
         }
-        // 密码事务提交后旧指纹不再匹配，会话撤销不依赖 Redis 删除成功。
+        // 密码事务提交后旧指纹不再匹配，会话撤销不依赖 Redis 删除成功
         Ok(())
     }
 
@@ -344,7 +344,7 @@ impl AuthService for DefaultAuthService {
             let _ = self.store.delete_session(&session_id).await;
             return Err(LoginError::Unavailable);
         }
-        // 新身份验证成功后才撤销旧会话；撤销失败时不向浏览器提交新会话。
+        // 新身份验证成功后才撤销旧会话；撤销失败时不向浏览器提交新会话
         if let Some(previous) = previous_session_id.filter(|value| !value.is_empty())
             && self.logout(previous).await.is_err()
         {
@@ -425,7 +425,7 @@ fn valid_admin_api_key_shape(value: &str) -> bool {
         && value[6..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-// 指纹只绑定已加盐的密码哈希，不把密码或原始哈希复制到 Redis 会话。
+// 指纹只绑定已加盐的密码哈希，不把密码或原始哈希复制到 Redis 会话
 fn password_fingerprint(password_hash: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(password_hash.as_bytes()))
 }

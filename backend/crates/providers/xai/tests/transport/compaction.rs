@@ -1,3 +1,5 @@
+//! 验证 Grok 压缩请求的历史顺序、约束与终态触发处理
+
 use gateway_core::event::{
     GatewayEvent, ProtocolWireEvent, ProviderEvent, ReasoningDelta, TextDelta, ToolCallDelta,
 };

@@ -1,3 +1,5 @@
+//! 验证账号授权回执的并发幂等、事务回滚与过期清理
+
 use gateway_admin::model::provider_credentials::{
     AuthorizationReceiptKey, PreparedCredentialRotationFacts,
 };
@@ -35,7 +37,7 @@ async fn concurrent_authorization_retries_share_one_account_write_and_one_receip
         actor: MutationActor::AdminApiKey,
         request_id: "different-owner".into(),
     };
-    // 相同 flow 的另一身份不能读取账号结果，也不能另行提交同一个授权。
+    // 相同 flow 的另一身份不能读取账号结果，也不能另行提交同一个授权
     let (mut foreign, _) = command(credential("acct_foreign", "foreign-user"));
     foreign.key = key.clone();
     assert!(

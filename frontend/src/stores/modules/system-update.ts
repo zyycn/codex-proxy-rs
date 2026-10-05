@@ -1,4 +1,4 @@
-import type { SystemUpdateChannel, SystemUpdatePolicy, SystemUpdateStatus } from '@/api'
+import type { SystemRestartPlan, SystemUpdateChannel, SystemUpdatePolicy, SystemUpdateStatus } from '@/api'
 import { until, useEventSource, useTimeoutPoll } from '@vueuse/core'
 import { delay } from 'es-toolkit'
 import { defineStore } from 'pinia'
@@ -29,6 +29,7 @@ interface SystemUpdateEvent {
   level: string
   message: string
   at: string
+  atDisplay: string
   step?: string
   terminal?: boolean
 }
@@ -60,7 +61,6 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
   const updateError = shallowRef('')
   const statusAvailable = shallowRef(false)
   const policy = shallowRef<SystemUpdatePolicy | null>(null)
-  const loadedOnce = shallowRef(false)
   const updateLogs = ref<SystemUpdateEvent[]>([])
   const updateStreaming = shallowRef(false)
   const updateStreamError = shallowRef('')
@@ -282,7 +282,6 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
       return
     updateInfo.value = detail
     policy.value = detail.policy
-    loadedOnce.value = true
     if (!version.value)
       await loadVersion()
     if (generation !== detailGeneration)
@@ -453,7 +452,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     setPhase({ kind: 'failed' })
   }
 
-  async function restartNow() {
+  async function restartNow(confirmation?: SystemRestartPlan) {
     if (restarting.value)
       return
 
@@ -472,7 +471,7 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
 
     try {
       // 进程可能在返回响应前退出，由下面的目标版本探测判定是否完成。
-      await restartSystem({ silent: true })
+      await restartSystem(confirmation, { silent: true })
     }
     catch (error: unknown) {
       if (error instanceof ApiError && error.status > 0) {
@@ -501,7 +500,6 @@ export const useSystemUpdateStore = defineStore('system-update', () => {
     updateError,
     lastFailedOperation,
     needRestart,
-    loadedOnce,
     updateLogs,
     updateStreaming,
     updateStreamError,

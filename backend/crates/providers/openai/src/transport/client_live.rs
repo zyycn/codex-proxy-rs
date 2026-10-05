@@ -1,6 +1,6 @@
 //! Codex Live / Realtime 语音通话的账号级上游透明传输。
 //!
-//! 语音通话 SDP 引导与 hangup 都是 JSON 进 JSON 出的一次性账号级 POST；
+//! 语音通话 SDP 引导与 hangup 都是一次性账号级 POST；
 //! 正文与响应头（`Location` 携带 call id）均不经过 serde 往返，保持上游原始字节。
 
 use std::time::Instant;
@@ -38,15 +38,8 @@ impl CodexBackendClient {
             url.push('?');
             url.push_str(query);
         }
-        self.send_live_request(
-            url,
-            content_type,
-            extra_protocol_headers,
-            body,
-            context,
-            "POST",
-        )
-        .await
+        self.send_live_request(url, content_type, extra_protocol_headers, body, context)
+            .await
     }
 
     /// 向显式上游 URL（hangup 位于 api.openai.com）发送账号级 POST。
@@ -58,15 +51,8 @@ impl CodexBackendClient {
         body: Bytes,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexLiveCallResponse> {
-        self.send_live_request(
-            url,
-            content_type,
-            extra_protocol_headers,
-            body,
-            context,
-            "POST",
-        )
-        .await
+        self.send_live_request(url, content_type, extra_protocol_headers, body, context)
+            .await
     }
 
     async fn send_live_request(
@@ -76,7 +62,6 @@ impl CodexBackendClient {
         extra_protocol_headers: &[(String, String)],
         body: Bytes,
         context: CodexRequestContext<'_>,
-        method: &'static str,
     ) -> CodexClientResult<CodexLiveCallResponse> {
         let profile = self.profile.snapshot();
         let mut headers = self.model_request_headers(&profile, context)?;
@@ -99,7 +84,7 @@ impl CodexBackendClient {
         trace.headers(
             "upstream.request.headers",
             serde_json::json!({
-                "method": method, "endpoint": url,
+                "method": "POST", "endpoint": url,
             }),
             headers
                 .iter()
@@ -230,7 +215,7 @@ fn live_forwarded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
 pub struct CodexLiveCallResponse {
     /// 上游 2xx 状态码。
     pub status: u16,
-    /// 上游原始正文（SDP answer JSON）。
+    /// 上游原始正文（引导成功时为 SDP answer）。
     pub body: Bytes,
     /// `Location` 响应头；成功引导响应携带 call id 的唯一来源。
     pub location: Option<String>,

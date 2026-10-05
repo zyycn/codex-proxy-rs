@@ -1,3 +1,5 @@
+//! 验证 WebSocket 连接池的会话隔离、续接复用与失效回收
+
 use super::*;
 use provider_openai::transport::websocket::PreviousResponseUnavailableReason;
 
@@ -268,9 +270,9 @@ async fn exact_continuation_reuses_owning_socket_after_connection_profile_update
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
 }
 
-/// idle 连接被上游静默关闭后，后台 pump 会实时把它标记为 closed。
+/// idle 连接被上游静默关闭后，后台 pump 会实时把它标记为 closed
 /// 复用前的零成本 `is_closed` 检查应直接丢弃它并新建连接，不经过
-/// “发请求 → 等首帧超时 → stale-reuse 重试” 的长尾（无需任何 maintenance sweep）。
+/// “发请求 → 等首帧超时 → stale-reuse 重试” 的长尾（无需任何 maintenance sweep）
 #[tokio::test]
 async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocket_died_silently() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -279,7 +281,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
     let accepted_connections_for_server = Arc::clone(&accepted_connections);
     let (first_closed_tx, first_closed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
-        // 第一条连接：完成一次响应后由服务端主动关闭（模拟 idle 期间被上游/中间盒断开）。
+        // 第一条连接：完成一次响应后由服务端主动关闭（模拟 idle 期间被上游/中间盒断开）
         let (first_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
         let mut first_websocket = accept_codex_test_websocket(first_stream).await;
@@ -294,7 +296,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
         let _ = first_websocket.next().await;
         first_closed_tx.send(()).unwrap();
 
-        // 第二条连接：证明复用被跳过、直接新建。
+        // 第二条连接：证明复用被跳过、直接新建
         let (second_stream, _) = listener.accept().await.unwrap();
         accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
         let mut second_websocket = accept_codex_test_websocket(second_stream).await;
@@ -307,7 +309,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
             .unwrap();
         second_websocket.close(None).await.unwrap();
     });
-    // 无 maintenance、无主动 ping：完全依赖 pump 后台读取感知连接死亡。
+    // 无 maintenance、无主动 ping：完全依赖 pump 后台读取感知连接死亡
     let pool = Arc::new(CodexWebSocketPool::with_config(
         websocket_pool_config_for_tests(None, None, None),
     ));
@@ -348,7 +350,7 @@ async fn codex_backend_client_should_open_fresh_socket_when_idle_pooled_websocke
 
     assert!(first.body.contains("resp_silent_first"));
     assert!(second.body.contains("resp_silent_second"));
-    // 死连接在 acquire 处被零成本识别 → 直接新建，而非 stale-reuse 重试。
+    // 死连接在 acquire 处被零成本识别 → 直接新建，而非 stale-reuse 重试
     assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
     assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
@@ -830,8 +832,8 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        // 第一个连接：发一帧后保持沉默（模拟上游不再发帧、也不发 terminal）。
-        // slot 只能靠客户端断开来释放，隔离验证 tx.closed() 机制。
+        // 第一个连接：发一帧后保持沉默（模拟上游不再发帧、也不发 terminal）
+        // slot 只能靠客户端断开来释放，隔离验证 tx.closed() 机制
         let (first_stream, _) = listener.accept().await.unwrap();
         let mut first_websocket = accept_codex_test_websocket(first_stream).await;
         let _first_message = first_websocket.next().await.unwrap().unwrap();
@@ -847,7 +849,7 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
             .await
             .unwrap();
 
-        // 第二个连接：客户端断开释放 slot 后，同 key 请求应新建连接。
+        // 第二个连接：客户端断开释放 slot 后，同 key 请求应新建连接
         let (second_stream, _) = listener.accept().await.unwrap();
         let mut second_websocket = accept_codex_test_websocket(second_stream).await;
         let _second_message = second_websocket.next().await.unwrap().unwrap();
@@ -869,7 +871,7 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-drop");
 
-    // 起流式请求：slot 变 Busy。
+    // 起流式请求：slot 变 Busy
     let mut stream = backend
         .create_response_stream(
             &request,
@@ -890,11 +892,11 @@ async fn websocket_pool_should_release_slot_when_client_drops_stream() {
     );
 
     // 客户端断开：drop stream → rx 被 drop → tx.closed() 完成 →
-    // 代理丢弃上游连接并释放 slot（不再等 idle 超时）。
+    // 代理丢弃上游连接并释放 slot（不再等 idle 超时）
     drop(stream);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // 同 key 的后续请求：slot 已释放 → 新建连接（new），而非 bypass(busy)。
+    // 同 key 的后续请求：slot 已释放 → 新建连接（new），而非 bypass(busy)
     let second = backend
         .create_response(
             &request,
@@ -1152,7 +1154,7 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
     const PONG_TIMEOUT: Duration = Duration::from_secs(30);
 
     // 服务端读取 Ping 后暂不继续 poll，避免 tungstenite 自动回 Pong；pump 必须在独立
-    // deadline 到期时主动关闭连接，acquire 随后只读 closed 状态并直接新建连接。
+    // deadline 到期时主动关闭连接，acquire 随后只读 closed 状态并直接新建连接
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let accepted_connections = Arc::new(AtomicUsize::new(0));
@@ -1459,7 +1461,7 @@ async fn codex_backend_client_should_keep_idle_pooled_websocket_alive_across_rep
             .unwrap();
 
         // pump 会在 idle 期间反复发送 keepalive ping；服务端计数并回 pong，
-        // 直到下一个业务请求（response.create）到达为止。
+        // 直到下一个业务请求（response.create）到达为止
         let mut previous_ping = None;
         let mut pings_observed_tx = Some(pings_observed_tx);
         loop {

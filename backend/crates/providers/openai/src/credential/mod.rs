@@ -1,4 +1,4 @@
-//! Codex credential 领域导出。
+//! Codex credential 领域导出
 
 mod admin;
 mod affinity;

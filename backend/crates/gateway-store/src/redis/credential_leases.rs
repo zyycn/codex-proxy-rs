@@ -1,14 +1,15 @@
-//! Provider、账号与 OAuth refresh 的 Redis lease/fencing。
+//! Provider、账号与 OAuth refresh 的 Redis lease/fencing
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use gateway_core::account::{AccountRuntimeSignals, ProviderAccountId};
+use gateway_core::lifecycle::REQUEST_LEASE_TTL;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
@@ -24,7 +25,6 @@ use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonemp
 use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
 
 const SIGNAL_TTL_MILLIS: u64 = 24 * 60 * 60 * 1_000;
-const PROVIDER_ACCOUNT_LEASE_TTL: Duration = Duration::from_secs(10 * 60);
 const OAUTH_REFRESH_LEASE_TTL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_CAPACITY_RESOURCE: &str = "oauth-refresh-global";
 
@@ -162,7 +162,7 @@ impl CredentialLeaseRequest {
     }
 }
 
-/// 对任意明确资源施加并发数和启动间隔约束的计数 lease。
+/// 对任意明确资源施加并发数和启动间隔约束的计数 lease
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialBoundedLeaseRequest {
     pub scope: CredentialLeaseScope,
@@ -202,7 +202,7 @@ pub struct CredentialLeaseGrant {
     pub expires_at: DateTime<Utc>,
 }
 
-/// Redis 可丢失的账号调度信号。
+/// Redis 可丢失的账号调度信号
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialRuntimeSignal {
     pub resource_id: String,
@@ -227,7 +227,7 @@ impl fmt::Debug for CredentialBoundedLeaseAcquisition {
     }
 }
 
-/// Drop 时在当前 Tokio runtime 上尽力释放；进程崩溃由 Redis TTL 回收。
+/// Drop 时在当前 Tokio runtime 上尽力释放；进程崩溃由 Redis TTL 回收
 pub struct CredentialLeaseGuard {
     repository: RedisCredentialLeaseRepository,
     request: CredentialLeaseRequest,
@@ -235,6 +235,40 @@ pub struct CredentialLeaseGuard {
 }
 
 impl CredentialLeaseGuard {
+    /// 自动续期仅属于返回 guard；丢失租约会取消依赖该槽位的请求
+    pub fn maintain(
+        self,
+        deadline: gateway_core::lifecycle::Deadline,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> StoreResult<impl gateway_core::provider_ports::ProviderLeaseGuard> {
+        let repository = self.repository.clone();
+        let lease_request = self.request.clone();
+        let grant = self
+            .grant
+            .clone()
+            .ok_or_else(|| crate::StoreError::InvalidData {
+                entity: "credential lease",
+                message: "lease has already been released".to_owned(),
+            })?;
+        let renewal =
+            crate::lease_renewal::LeaseRenewal::spawn(deadline, Some(cancellation), move |ttl| {
+                let repository = repository.clone();
+                let mut lease_request = lease_request.clone();
+                lease_request.ttl = ttl;
+                let grant = grant.clone();
+                Box::pin(async move {
+                    repository
+                        .renew_credential_lease(&lease_request, &grant)
+                        .await
+                        .map(|grant| grant.is_some())
+                })
+            });
+        Ok(RenewingSchedulingLease {
+            _renewal: renewal,
+            _guard: self,
+        })
+    }
+
     #[must_use]
     pub fn grant(&self) -> Option<&CredentialLeaseGrant> {
         self.grant.as_ref()
@@ -248,6 +282,12 @@ impl CredentialLeaseGuard {
             .release_credential_lease(&self.request, &grant)
             .await
     }
+}
+
+struct RenewingSchedulingLease {
+    // 先停止续期再释放 Redis 成员，防止释放与续期交错
+    _renewal: crate::lease_renewal::LeaseRenewal,
+    _guard: CredentialLeaseGuard,
 }
 
 impl fmt::Debug for CredentialLeaseGuard {
@@ -317,7 +357,7 @@ impl RedisCredentialLeaseRepository {
         })
     }
 
-    /// 获取带 Drop 释放语义的通用 lease guard，供 Provider refresh/task 组合器使用。
+    /// 获取带 Drop 释放语义的通用 lease guard，供 Provider refresh/task 组合器使用
     pub async fn try_acquire_guard(
         &self,
         request: CredentialLeaseRequest,
@@ -330,7 +370,7 @@ impl RedisCredentialLeaseRepository {
         }))
     }
 
-    /// 原子推进跨进程共享、按 Client Key 与 Provider 隔离的调度游标。
+    /// 原子推进跨进程共享、按 Client Key 与 Provider 隔离的调度游标
     pub async fn advance_scheduling_cursor(
         &self,
         client_api_key_id: &ClientApiKeyId,
@@ -462,7 +502,7 @@ impl RedisCredentialLeaseRepository {
     }
 }
 
-/// Store-owned 的通用 Provider lease 能力；具体 Provider 不感知 Redis。
+/// Store-owned 的通用 Provider lease 能力；具体 Provider 不感知 Redis
 pub(crate) struct RedisProviderLeaseCoordinator {
     repository: RedisCredentialLeaseRepository,
     process_id: String,
@@ -537,18 +577,10 @@ impl RedisProviderLeaseCoordinator {
         &self,
         request: &ProviderSchedulingLeaseRequest,
     ) -> Result<ProviderLeaseAcquisition, ProviderStoreError> {
-        let ttl = request
-            .deadline()
-            .duration_since(SystemTime::now())
-            .ok()
-            .filter(|remaining| !remaining.is_zero())
-            .map(|remaining| remaining.min(PROVIDER_ACCOUNT_LEASE_TTL))
-            .ok_or_else(|| {
-                ProviderStoreError::new(
-                    ProviderStoreErrorKind::Unavailable,
-                    "acquire expired scheduling lease",
-                )
-            })?;
+        let ttl = request.deadline().bounded(REQUEST_LEASE_TTL);
+        if ttl.is_zero() {
+            return Err(provider_unavailable("acquire expired scheduling lease"));
+        }
         let acquisition = self
             .repository
             .try_acquire_bounded_lease(&CredentialBoundedLeaseRequest {
@@ -563,7 +595,11 @@ impl RedisProviderLeaseCoordinator {
             .map_err(|_| provider_unavailable("acquire scheduling lease"))?;
         Ok(match acquisition {
             CredentialBoundedLeaseAcquisition::Acquired(guard) => {
-                ProviderLeaseAcquisition::Acquired(Box::new(guard))
+                ProviderLeaseAcquisition::Acquired(Box::new(
+                    guard
+                        .maintain(request.deadline(), request.cancellation())
+                        .map_err(|_| provider_unavailable("maintain scheduling lease"))?,
+                ))
             }
             CredentialBoundedLeaseAcquisition::Busy { retry_after } => {
                 ProviderLeaseAcquisition::Busy { retry_after }

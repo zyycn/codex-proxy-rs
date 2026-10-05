@@ -1,3 +1,5 @@
+//! 插件管理页面、资源访问与授权回调的运行时端口
+
 use async_trait::async_trait;
 use gateway_core::runtime::extensions::ExtensionSetReference;
 
@@ -9,11 +11,11 @@ use crate::model::{
     },
 };
 
-/// 仅按 Admin 固定的发布引用分派；Runtime 不自行选择当前代次，也不拥有管理员身份。
+/// 仅按 Admin 固定的发布引用分派；Runtime 不自行选择当前代次，也不拥有管理员身份
 #[async_trait]
 pub trait PluginManagement: Send + Sync {
-    /// 复核固定发布代次中的模型访问域；调用方已校验持久实例仍为当前目标。
-    async fn authorize_models(
+    /// 复核固定发布代次中的可用目标；调用方已校验持久实例仍为当前版本
+    async fn validate_target(
         &self,
         published: &ExtensionSetReference,
         target: &PluginManagementTarget,

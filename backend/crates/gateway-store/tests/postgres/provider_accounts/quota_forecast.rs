@@ -1,3 +1,5 @@
+//! 验证额度预测查询的请求筛选、配对采样与文档读取限制
+
 use super::*;
 use gateway_admin::model::quota_forecast_sampling::MAX_FORECAST_HISTORY_POINTS;
 use gateway_store::postgres::{
@@ -17,7 +19,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     let start = Utc::now() - TimeDelta::minutes(30);
     let end = start + TimeDelta::minutes(20);
     for (id, minute, tokens) in [("normal", 1, 100), ("review", 2, 200), ("prewarm", 3, 400)] {
-        // 普通成功推理也可以只有输入 Token，不能用 output_tokens = 0 判定预热。
+        // 普通成功推理也可以只有输入 Token，不能用 output_tokens = 0 判定预热
         seed_model_request(
             &database.pool,
             ModelRequestSeed {
@@ -62,7 +64,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(history.usage.usd, 2.0);
     assert_eq!(history.usage.excluded_request_count, 1);
     assert_eq!(history.pending_request_count, 0);
-    // 预热响应携带的额度观测仍可配对，但它不增加累计推理用量。
+    // 预热响应携带的额度观测仍可配对，但它不增加累计推理用量
     assert_eq!(history.points.len(), 1);
     assert_eq!(history.points[0].usage, history.usage);
 
@@ -95,7 +97,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(dashboard.totals.request_count, 3);
     assert_eq!(dashboard.totals.total_tokens, 300);
 
-    // 真正推理的未知费用仍必须阻止费用外推，不能靠放宽覆盖门槛掩盖缺失。
+    // 真正推理的未知费用仍必须阻止费用外推，不能靠放宽覆盖门槛掩盖缺失
     sqlx::query(
         "update model_requests set cost_source = 'unavailable', cost_amount = null,
           cost_currency = null, service_tier = 'auto' where id = 'review'",

@@ -1,4 +1,4 @@
-//! Bearer Key 的只读额度查询，与自助页面共用当前预算账本。
+//! Bearer Key 的只读额度查询，与自助页面共用当前预算账本
 
 use std::time::SystemTime;
 
@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::{
     ApiState,
     auth::SessionState as _,
-    openai::middleware::{self as plugin_middleware, HttpMiddlewareInput},
+    openai::middleware::{self as plugin_middleware, RequestInput},
 };
 
 use super::{
@@ -48,7 +48,7 @@ async fn usage(
     plugin_middleware::query_response(
         state.openai().execution(),
         client,
-        HttpMiddlewareInput::query(super::router::USAGE_PATH.to_owned(), None, &headers),
+        RequestInput::query(super::router::USAGE_PATH.to_owned(), None, &headers),
         move |client| usage_response(state, client, uri),
     )
     .await
@@ -59,7 +59,7 @@ async fn usage_response(
     client: AuthenticatedClient,
     uri: axum::http::Uri,
 ) -> Response {
-    // 范围只能来自宿主认证后的身份，不接受插件或调用者指定 Key、账号或时间窗口。
+    // 范围只能来自宿主认证后的身份，不接受插件或调用者指定 Key、账号或时间窗口
     if Query::<UsageQuery>::try_from_uri(&uri).is_err() {
         return openai_error_response(
             StatusCode::BAD_REQUEST,

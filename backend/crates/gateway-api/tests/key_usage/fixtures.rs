@@ -1,3 +1,5 @@
+//! Key 用量查询测试共用的请求、费用与错误记录样本
+
 use crate::{admin::AdminTestFixture, support::key_fixture};
 use chrono::{Duration, Utc};
 use gateway_admin::model::{
@@ -100,6 +102,8 @@ fn usage_record() -> UsageListRecord {
         provider_account_name: Some("private-sentinel".to_owned()),
         provider_account_email: Some("private-sentinel".to_owned()),
         provider_account_notes: Some("private-sentinel".to_owned()),
+        provider_account_plan_type: Some("private-sentinel".to_owned()),
+        provider_account_plan_type_display: Some("private-sentinel".to_owned()),
         provider_account_authentication_kind: Some("private-sentinel".to_owned()),
         upstream_model_id: Some("private-sentinel".to_owned()),
         upstream_transport: Some("websocket".to_owned()),
@@ -166,6 +170,8 @@ fn error_record() -> OpsError {
         provider_account_name: Some("private-sentinel".to_owned()),
         provider_account_email: Some("private-sentinel".to_owned()),
         provider_account_authentication_kind: Some("private-sentinel".to_owned()),
+        provider_account_plan_type: Some("private-sentinel".to_owned()),
+        provider_account_plan_type_display: Some("private-sentinel".to_owned()),
         upstream_model_id: Some("private-sentinel".to_owned()),
         upstream_transport: Some("websocket".to_owned()),
         failure_kind: "private-sentinel".to_owned(),

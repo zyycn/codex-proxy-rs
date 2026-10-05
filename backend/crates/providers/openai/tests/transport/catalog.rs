@@ -1,3 +1,5 @@
+//! 验证原生模型目录保留未知字段并生成安全能力投影
+
 use chrono::{TimeZone, Utc};
 use gateway_core::routing::ModelServiceTier;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};

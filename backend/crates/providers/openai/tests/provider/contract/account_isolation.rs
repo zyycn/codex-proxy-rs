@@ -1,3 +1,5 @@
+//! 验证 HTTP 与 WebSocket 的账号头部隔离及中间件覆盖
+
 use super::*;
 
 const SELECTED_ACCOUNT: &str = "acct_scope_same";
@@ -196,43 +198,86 @@ async fn websocket_isolates_account_headers_and_only_scopes_guardian_parent_refe
 }
 
 #[tokio::test]
-async fn middleware_cannot_reintroduce_account_headers_before_http_send_or_websocket_open() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, SELECTED_ACCOUNT).await;
-    let server = MockServer::start().await;
-    for operation in [http_generate_operation(), generate_operation()] {
-        for name in [
+async fn middleware_can_override_account_headers_on_http_and_websocket() {
+    for websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, SELECTED_ACCOUNT).await;
+        let (base_url, capture): (
+            String,
+            futures::future::BoxFuture<'static, reqwest::header::HeaderMap>,
+        ) = if websocket {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut headers = None;
+                let mut socket =
+                    crate::transport::accept_codex_test_websocket_with(socket, |request, _| {
+                        headers = Some(request.headers().clone());
+                    })
+                    .await;
+                socket.next().await.unwrap().unwrap();
+                socket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp_plugin_headers","model":"gpt-5.4","status":"completed","output":[]}}).to_string().into())).await.unwrap();
+                headers.unwrap()
+            });
+            (base_url, Box::pin(async { task.await.unwrap() }))
+        } else {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/codex/responses"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(CAPTURE_COMPLETED_SSE),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            (
+                server.uri(),
+                Box::pin(
+                    async move { server.received_requests().await.unwrap()[0].headers.clone() },
+                ),
+            )
+        };
+        let names = [
             "x-openai-account-routing-override",
             "x-openai-fedramp",
             "x-codex-installation-id",
-        ] {
-            let result = provider_with_base_url(&store, server.uri())
-                .execute(
-                    planned_request("openai", operation.clone()),
-                    context_with_middleware(
-                        "req_managed_account_header",
-                        Arc::new(RecordingMiddleware {
-                            observed: Arc::default(),
-                            replacement: ("service_tier".to_owned(), json!("default")),
-                            request_headers: vec![MiddlewareHeader::new(
-                                name,
-                                Bytes::from_static(b"downstream-value"),
-                            )],
-                        }),
-                        false,
-                    ),
-                )
-                .await;
-            let error = match result {
-                Err(error) => error,
-                Ok(mut stream) => match stream.next().await {
-                    Some(Err(error)) => error,
-                    _ => panic!("managed account header must fail before send: {name}"),
-                },
-            };
-            assert_eq!(error.kind(), ProviderErrorKind::Protocol);
-            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        ];
+        let mut stream = provider_with_base_url(&store, base_url)
+            .execute(
+                planned_request(
+                    "openai",
+                    if websocket {
+                        generate_operation()
+                    } else {
+                        http_generate_operation()
+                    },
+                ),
+                context_with_middleware(
+                    "req_plugin_account_header",
+                    Arc::new(RecordingMiddleware {
+                        observed: Arc::default(),
+                        replacement: ("service_tier".into(), json!("default")),
+                        request_headers: names
+                            .iter()
+                            .map(|name| {
+                                MiddlewareHeader::new(*name, Bytes::from_static(b"plugin-value"))
+                            })
+                            .collect(),
+                    }),
+                    false,
+                ),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let headers = capture.await;
+        for name in names {
+            assert_eq!(headers[name], "plugin-value");
         }
     }
-    assert!(server.received_requests().await.unwrap().is_empty());
 }

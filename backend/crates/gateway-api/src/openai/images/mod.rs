@@ -1,4 +1,4 @@
-//! OpenAI/Codex Images JSON 透明 adapter。
+//! OpenAI/Codex Images JSON 透明 adapter
 
 mod http;
 

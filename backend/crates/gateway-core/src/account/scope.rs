@@ -1,4 +1,4 @@
-//! 请求认证时冻结的账号范围与目录，不依赖路由选择器。
+//! 请求认证时冻结的账号范围与目录，不依赖路由选择器
 
 use super::ProviderAccountId;
 use crate::identity::ProviderKind;
@@ -9,12 +9,12 @@ use std::{
     sync::Arc,
 };
 
-/// `account_groups.id` 的核心值对象。
+/// `account_groups.id` 的核心值对象
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AccountGroupId(String);
 
 impl AccountGroupId {
-    /// 校验并创建账号分组 ID。
+    /// 校验并创建账号分组 ID
     pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
         let Some(suffix) = value.strip_prefix("grp_") else {
@@ -42,7 +42,7 @@ impl fmt::Display for AccountGroupId {
     }
 }
 
-/// 快照中一个账号的 Provider 与分组归属。
+/// 快照中一个账号的 Provider 与分组归属
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAccount {
     provider_kind: ProviderKind,
@@ -82,7 +82,7 @@ impl RuntimeAccount {
     }
 }
 
-/// 全快照共享的账号、Provider 与分组反向索引。
+/// 全快照共享的账号、Provider 与分组反向索引
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeAccountDirectory {
     accounts: BTreeMap<ProviderAccountId, RuntimeAccount>,
@@ -135,7 +135,7 @@ impl RuntimeAccountDirectory {
     }
 }
 
-/// 历史请求保存的账号范围种类。
+/// 历史请求保存的账号范围种类
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountRoutingScopeKind {
     All,
@@ -152,7 +152,7 @@ impl AccountRoutingScopeKind {
     }
 }
 
-/// 请求开始时冻结的分组 ID 与名称。
+/// 请求开始时冻结的分组 ID 与名称
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingGroupSnapshot {
     id: AccountGroupId,
@@ -176,7 +176,7 @@ impl RoutingGroupSnapshot {
     }
 }
 
-/// 请求历史所需的完整、稳定账号范围快照。
+/// 请求历史所需的完整、稳定账号范围快照
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRoutingSnapshot {
     kind: AccountRoutingScopeKind,
@@ -211,7 +211,7 @@ impl AccountRoutingSnapshot {
     }
 }
 
-/// Key 持久 binding 编译出的账号权限。
+/// Key 持久 binding 编译出的账号权限
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientRoutingScope {
     AllAccounts,
@@ -244,7 +244,7 @@ impl ClientRoutingScope {
     }
 }
 
-/// 一次认证随 RuntimeSnapshot 冻结的账号目录与 Key 权限。
+/// 一次认证随 RuntimeSnapshot 冻结的账号目录与 Key 权限
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
     disable_fast: bool,
@@ -257,7 +257,7 @@ pub struct FrozenAccountScope {
 }
 
 impl FrozenAccountScope {
-    /// 与 Key 授权范围一同冻结；具体字段只由对应 Provider 解释。
+    /// 与 Key 授权范围一同冻结；具体字段只由对应 Provider 解释
     #[must_use]
     pub fn with_request_profiles(
         mut self,
@@ -272,7 +272,12 @@ impl FrozenAccountScope {
         self.request_profiles.get(provider)
     }
 
-    /// Key 绑定分组的冻结 Fast 限制，与账号成员资格无关。
+    #[must_use]
+    pub fn request_profiles(&self) -> &BTreeMap<ProviderKind, super::OpaqueProviderData> {
+        &self.request_profiles
+    }
+
+    /// Key 绑定分组的冻结 Fast 限制，与账号成员资格无关
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
         self.disable_fast = disable_fast;
@@ -301,10 +306,10 @@ impl FrozenAccountScope {
         }
     }
 
-    /// 在已经冻结的 Key 范围内施加一次请求局部的 Provider/账号交集。
+    /// 在已经冻结的 Key 范围内施加一次请求局部的 Provider/账号交集
     ///
     /// 空集合表示该维度不额外收窄；非空集合即使没有有效交集也保持为空，
-    /// 不能回退为父请求的完整范围。
+    /// 不能回退为父请求的完整范围
     #[must_use]
     pub fn restricted_to(
         &self,
@@ -335,7 +340,7 @@ impl FrozenAccountScope {
         restricted
     }
 
-    /// 排除父 attempt 当前已经持有的账号，避免嵌套调用形成账号 lease 自等待。
+    /// 排除父 attempt 当前已经持有的账号，避免嵌套调用形成账号 lease 自等待
     #[must_use]
     pub fn excluding_account(&self, account: ProviderAccountId) -> Self {
         let mut restricted = self.clone();
@@ -379,7 +384,7 @@ impl FrozenAccountScope {
                 .is_some_and(|account| account.model_access.allows(upstream_model))
     }
 
-    /// 目录按整个授权账号池过滤，不能只看用于获取元数据的账号政策。
+    /// 目录按整个授权账号池过滤，不能只看用于获取元数据的账号政策
     #[must_use]
     pub fn allows_provider_model(&self, provider: &ProviderKind, upstream_model: &str) -> bool {
         self.provider_kinds.contains(provider)
@@ -393,7 +398,7 @@ impl FrozenAccountScope {
         &self.provider_kinds
     }
 
-    /// 返回冻结目录中账号所属 Provider；调用方仍须另行检查 [`Self::allows`]。
+    /// 返回冻结目录中账号所属 Provider；调用方仍须另行检查 [`Self::allows`]
     #[must_use]
     pub fn account_provider(&self, account_id: &ProviderAccountId) -> Option<&ProviderKind> {
         self.directory

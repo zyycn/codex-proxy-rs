@@ -6,12 +6,12 @@ import { BaseCard, BaseEmpty, BaseSegmented } from '@codex-proxy/ui'
 import { computed, shallowRef } from 'vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { requestActivityByBucket, zeroInactiveValues } from '@/components/charts/timeSeriesGap'
+import { tooltipIndex, tooltipRows } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
-import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/format'
+import { formatLocalizedCompactNumber as formatCompactNumber, formatDuration, formatPercent } from '@/utils/format'
 
 import {
-  tooltipIndex,
-  tooltipRows,
+  formatDurationAxis,
   usageCategoryAxis,
   usageGapAwareLineSeries,
   usageLegend,
@@ -20,7 +20,6 @@ import {
   usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
-import { formatDuration, formatDurationAxis, formatPercent } from '../utils/format'
 
 type Performance = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['performance']
 type PerformancePoint = Performance['points'][number]

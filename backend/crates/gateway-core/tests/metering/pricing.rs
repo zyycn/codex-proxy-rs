@@ -1,3 +1,5 @@
+//! 验证价格精度、人工覆盖与费用倍率的计算和快照保留
+
 use gateway_core::metering::{ModelPriceOverride, PricingOverrides, TokenPrice, merge_pricing};
 use serde_json::json;
 

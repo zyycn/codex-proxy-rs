@@ -1,3 +1,5 @@
+//! 验证插件包准备使用独立目录，并在释放后回收缓存
+
 use std::sync::Arc;
 
 use gateway_plugin_runtime::{PackageLimits, ValidatedPackage};

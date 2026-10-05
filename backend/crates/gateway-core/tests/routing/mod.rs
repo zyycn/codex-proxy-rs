@@ -1,10 +1,10 @@
+//! 路由领域测试入口，以及版本、账号范围与 Key 策略约束测试
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::Bytes;
-use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
+use gateway_core::account::ProviderAccountId;
 use gateway_core::operation::{
     CapabilityRequirements, Feature, GenerateRequest, ImageRequest, ImageRequestKind, Operation,
     OperationKind, ProtocolPayload, ProviderHttpMethod, ProviderHttpRequest, RawHttpPayload,
@@ -20,12 +20,8 @@ use gateway_core::routing::{
 
 mod snapshot;
 
-fn scheduling() -> AccountSelectionPolicy {
-    AccountSelectionPolicy::new(
-        RotationStrategy::Smart,
-        NonZeroU32::new(3).expect("positive"),
-        Duration::from_millis(50),
-    )
+fn settings() -> gateway_core::settings::SettingsValues {
+    gateway_core::settings::SettingsValues::new(3, 50, "smart", BTreeMap::new(), None, None)
 }
 
 fn capabilities() -> ModelCapabilities {
@@ -100,9 +96,9 @@ fn client_policy(id: &str, plaintext: &str, enabled: bool) -> ClientPolicy {
 }
 
 fn snapshot() -> RuntimeSnapshot {
-    RuntimeSnapshot::new(
+    let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![
             ProviderKind::new("openai").expect("provider"),
             ProviderKind::new("xai").expect("provider"),
@@ -114,11 +110,15 @@ fn snapshot() -> RuntimeSnapshot {
         Vec::new(),
     )
     .expect("snapshot")
-    .with_account_directory(account_directory())
-    .with_model_mappings(BTreeMap::from([
-        ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
-        ("grok-latest".to_owned(), "grok-4.5".to_owned()),
-    ]))
+    .with_account_directory(account_directory());
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_model_mappings(BTreeMap::from([
+            ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
+            ("grok-latest".to_owned(), "grok-4.5".to_owned()),
+        ]));
+    snapshot.with_settings(&settings).unwrap()
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn restricted_scope_with_no_enabled_group_should_fail_closed() {
 fn snapshot_should_publish_only_enabled_plaintext_client_policies() {
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![ProviderKind::new("openai").expect("provider")],
         Vec::new(),
         vec![
@@ -241,7 +241,7 @@ fn snapshot_should_publish_only_enabled_plaintext_client_policies() {
 fn snapshot_should_reject_model_for_missing_provider() {
     let result = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         Vec::new(),
         vec![model("missing", "gpt-5.5", capabilities())],
         Vec::new(),
@@ -254,7 +254,7 @@ fn snapshot_should_reject_model_for_missing_provider() {
 fn snapshot_should_reject_duplicate_provider_model() {
     let result = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![ProviderKind::new("openai").expect("provider")],
         vec![
             model("openai", "gpt-5.5", capabilities()),
@@ -294,20 +294,30 @@ fn selected_provider_should_use_global_model_mapping() {
 
 #[test]
 fn model_mapping_should_follow_a_bounded_alias_chain() {
-    let snapshot = snapshot().with_model_mappings(BTreeMap::from([
-        ("public-model".to_owned(), "compat-model".to_owned()),
-        ("compat-model".to_owned(), "gpt-5.5".to_owned()),
-    ]));
+    let snapshot = snapshot();
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_model_mappings(BTreeMap::from([
+            ("public-model".to_owned(), "compat-model".to_owned()),
+            ("compat-model".to_owned(), "gpt-5.5".to_owned()),
+        ]));
+    let snapshot = snapshot.with_settings(&settings).unwrap();
 
     assert_eq!(snapshot.mapped_model("public-model"), "gpt-5.5");
 }
 
 #[test]
 fn cyclic_model_mapping_should_fall_back_to_the_original_name() {
-    let snapshot = snapshot().with_model_mappings(BTreeMap::from([
-        ("first".to_owned(), "second".to_owned()),
-        ("second".to_owned(), "first".to_owned()),
-    ]));
+    let snapshot = snapshot();
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_model_mappings(BTreeMap::from([
+            ("first".to_owned(), "second".to_owned()),
+            ("second".to_owned(), "first".to_owned()),
+        ]));
+    let snapshot = snapshot.with_settings(&settings).unwrap();
 
     assert_eq!(snapshot.mapped_model("first"), "first");
 }
@@ -397,7 +407,7 @@ fn blocked_model_provider_should_not_be_misreported_as_model_not_found() {
 fn blocked_unknown_catalog_should_not_prove_model_absence() {
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![
             ProviderKind::new("openai").expect("provider"),
             ProviderKind::new("xai").expect("provider"),
@@ -544,7 +554,7 @@ fn token_count_endpoint_should_require_exact_model_capability_and_scope() {
     );
     let capable = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![provider.clone()],
         vec![ProviderModel::new(
             provider.clone(),
@@ -598,7 +608,7 @@ fn provider_http_endpoint_should_carry_the_model_into_account_permissions() {
     );
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![provider.clone()],
         Vec::new(),
         Vec::new(),
@@ -648,7 +658,7 @@ fn provider_http_endpoint_should_carry_the_model_into_account_permissions() {
 fn unmapped_model_should_pass_through_unchanged() {
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![ProviderKind::new("openai").expect("provider")],
         Vec::new(),
         Vec::new(),
@@ -685,10 +695,15 @@ fn unmapped_model_should_pass_through_unchanged() {
 
 #[test]
 fn model_mapping_should_use_exact_client_keys() {
-    let snapshot = snapshot().with_model_mappings(BTreeMap::from([(
-        "  exact-alias  ".to_owned(),
-        "gpt-5.5".to_owned(),
-    )]));
+    let snapshot = snapshot();
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_model_mappings(BTreeMap::from([(
+            "  exact-alias  ".to_owned(),
+            "gpt-5.5".to_owned(),
+        )]));
+    let snapshot = snapshot.with_settings(&settings).unwrap();
 
     assert_eq!(snapshot.mapped_model("  exact-alias  "), "gpt-5.5");
     assert_eq!(snapshot.mapped_model("exact-alias"), "exact-alias");
@@ -719,7 +734,7 @@ fn blocked_provider_should_be_filtered() {
 fn known_unsupported_operation_should_not_be_bypassed() {
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
-        scheduling(),
+        settings(),
         vec![ProviderKind::new("openai").expect("provider")],
         vec![model(
             "openai",

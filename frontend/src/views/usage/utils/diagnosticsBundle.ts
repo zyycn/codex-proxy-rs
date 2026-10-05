@@ -15,7 +15,6 @@ export function requestDiagnosticsBundle(
 
   return {
     schemaVersion: 2,
-    exportedAt: new Date().toISOString(),
     source: 'usage.request_diagnostics',
     exportPolicy: 'allowlisted_fields_without_payloads',
     request: {

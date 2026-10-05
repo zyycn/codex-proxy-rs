@@ -1,4 +1,4 @@
-//! Provider-owned 凭据请求、命令转换与敏感材料校验。
+//! Provider-owned 凭据请求、命令转换与敏感材料校验
 
 use super::*;
 
@@ -18,7 +18,7 @@ fn parse_provider(value: &str) -> Result<ProviderKind, WireValidationError> {
     ProviderKind::new(value.trim().to_owned()).map_err(|_| WireValidationError::new("provider"))
 }
 
-/// 导入统一设置，复用编辑账号的备注、调度和分组约束。
+/// 导入统一设置，复用编辑账号的备注、调度和分组约束
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
@@ -54,7 +54,7 @@ impl AccountImportSettingsRequest {
     }
 }
 
-/// Provider-owned 账号导入请求；公共 API 不解释 `data` 内部字段。
+/// Provider-owned 账号导入请求；公共 API 不解释 `data` 内部字段
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
@@ -259,7 +259,7 @@ impl UpdateAccountRequest {
     }
 }
 
-/// 编辑 OpenAI 账号的连接设置；OAuth 仅接受传输方式。
+/// 编辑 OpenAI 账号的连接设置；OAuth 仅接受传输方式
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountConnectionUpdateRequest {

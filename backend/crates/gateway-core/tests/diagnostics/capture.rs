@@ -1,3 +1,5 @@
+//! 验证诊断采集的敏感信息过滤与结构、大小边界
+
 use gateway_core::diagnostics::{body_fingerprint, diagnostic_headers, diagnostic_json};
 use serde_json::{Value, json};
 

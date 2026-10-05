@@ -1,3 +1,5 @@
+//! 验证 xAI 凭据导入的刷新、身份验证、来源与 scope 约束
+
 use std::future::ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -317,14 +319,14 @@ fn duplicate_refresh_token_entries_should_collapse_to_the_first() {
         .push(duplicate);
 
     // 同一 refresh token 重复出现时解析层去重，避免逐条 RT exchange
-    // 让先完成的轮换被后续重复条目作废。
+    // 让先完成的轮换被后续重复条目作废
     let parsed = GrokOAuthImportDocument::parse_json(
         &serde_json::to_vec(&document).expect("serialize fixture"),
     )
     .expect("duplicate refresh tokens collapse at parse");
     assert_eq!(parsed.into_entries().len(), 1);
 
-    // 不同 refresh token 的同名条目不受影响，重复检测仍归上游身份验证。
+    // 不同 refresh token 的同名条目不受影响，重复检测仍归上游身份验证
     let mut document: serde_json::Value =
         serde_json::from_slice(&oauth_account_document()).expect("fixture JSON");
     let mut distinct = document["accounts"][0].clone();

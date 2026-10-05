@@ -1,8 +1,9 @@
-//! Codex 本地会话锚点的稳定派生。
+//! Codex 本地会话锚点的稳定派生
 //!
 //! 旧版 Redis 会话亲和与 WebSocket 复用以运行数据目录下的 `identity_hmac_secret`
-//! 生成的 `lc_` 值为键。该密钥是持久运行数据，不是账号凭据；保留它可避免
-//! 架构迁移后同一客户端会话全部换键。
+//! 生成的 `lc_` 值为键
+//! 该密钥是持久运行数据，不是账号凭据；保留它可避免
+//! 架构迁移后同一客户端会话全部换键
 
 use std::fs;
 use std::io::Write as _;
@@ -14,7 +15,7 @@ use sha2::{Digest, Sha256};
 use super::protocol::responses::CodexResponsesRequest;
 use super::request::derive_conversation_anchor;
 
-/// OpenAI Provider 的持久会话锚点密钥。
+/// OpenAI Provider 的持久会话锚点密钥
 #[derive(Clone)]
 pub(crate) struct CodexSessionIdentity {
     secret: [u8; 32],
@@ -58,7 +59,7 @@ impl CodexSessionIdentity {
         }
     }
 
-    /// 在账号选择前固定一次旧版 `lc_` 会话键。
+    /// 在账号选择前固定一次旧版 `lc_` 会话键
     pub(crate) fn prepare_local_conversation(&self, request: &mut CodexResponsesRequest) {
         if request.local_conversation_id.is_some() {
             return;

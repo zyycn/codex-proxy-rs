@@ -1,4 +1,4 @@
-//! Responses WebSocket pre-send/post-send 与 pool/breaker 编排。
+//! Responses WebSocket pre-send/post-send 与 pool/breaker 编排
 
 use std::{
     future::Future,
@@ -35,15 +35,16 @@ use super::{
 
 pub(crate) const WEBSOCKET_FAST_PATH_BUDGET: Duration = Duration::from_millis(800);
 
-/// WebSocket 快路径的控制流结果；预算未命中不代表连接失败。
+/// WebSocket 快路径的控制流结果；预算未命中不代表连接失败
 pub(crate) enum WebSocketFastPath<T> {
-    /// 在前台预算内获得结果。
+    /// 在前台预算内获得结果
     Ready(T),
-    /// 前台停止等待；池化 opening 可以继续在后台完成。
+    /// 前台停止等待；池化 opening 可以继续在后台完成
     Missed,
 }
 
-/// 尚未发送 `response.create` 的 WebSocket。只有该类型可以安全切换到 HTTP。
+/// 尚未发送 `response.create` 的 WebSocket
+/// 只有该类型可以安全切换到 HTTP
 pub(crate) struct PreparedWebSocket {
     connection: PooledWebSocketConnection,
     binding: PoolBinding,
@@ -109,7 +110,7 @@ impl PreparedWebSocket {
     }
 }
 
-/// 只建立或租用 WebSocket，不发送 payload。
+/// 只建立或租用 WebSocket，不发送 payload
 pub(crate) async fn prepare_response_create_request_with_pool(
     request: &CodexWebSocketRequest,
     pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
@@ -400,7 +401,7 @@ fn start_pooled_websocket_connect(
             Err(error) => {
                 let connection_exit_reason = opening_failure_reason(&error);
                 let error_message = error.to_string();
-                // 先交付 opening 原始错误，避免连接池清理侵占前台 fast-path 预算。
+                // 先交付 opening 原始错误，避免连接池清理侵占前台 fast-path 预算
                 let foreground_waiting = sender.send(Err(error)).is_ok();
                 connect_lease.failed().await;
                 tracing::warn!(
@@ -443,7 +444,7 @@ fn duration_millis_u64(duration: Duration) -> u64 {
         .max(1)
 }
 
-/// 非池化建连的 pump 日志上下文：从业务头提取账号归属（会话 hash 只有池 key 才有）。
+/// 非池化建连的 pump 日志上下文：从业务头提取账号归属（会话 hash 只有池 key 才有）
 fn pump_log_context_from_connection(connection: &CodexWebSocketConnection) -> PumpLogContext {
     let account_id = connection
         .headers()
@@ -525,7 +526,7 @@ fn finish_breaker_attempt(
             Err(error)
         }
         Err(CodexWebSocketExchangeError::Upstream(upstream)) if upstream.status_code < 500 => {
-            // 账号或请求级 opening 响应证明 origin 可达，不得污染 transport 熔断器。
+            // 账号或请求级 opening 响应证明 origin 可达，不得污染 transport 熔断器
             permit.succeed();
             Err(CodexWebSocketExchangeError::Upstream(upstream))
         }
@@ -543,7 +544,7 @@ async fn wait_for_shared_connect(
     wait_for_fast_path(waiter.started_at(), fast_path_budget, waiter.wait()).await
 }
 
-// 同一次 opening 的所有等待者共享截止时间；后来的请求不会重置 800ms 预算。
+// 同一次 opening 的所有等待者共享截止时间；后来的请求不会重置 800ms 预算
 async fn wait_for_fast_path<F: Future>(
     started_at: TokioInstant,
     budget: Option<Duration>,

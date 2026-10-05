@@ -1,3 +1,5 @@
+//! 验证 Windows 与 Linux 制品的版本、架构和归档完整性
+
 use super::xz::compress as xz;
 use provider_openai::transport::profile::platform_release::{
     artifact::{read_linux, read_windows},

@@ -1,23 +1,24 @@
-//! 成功取得 OAuth token 后写入独立恢复日志的记录。
+//! 成功取得 OAuth token 后写入独立恢复日志的记录
 //!
 //! 此日志会刻意保存原始 AT/RT，避免后续数据库写入或校验失败时，已成功
-//! 交换的账号无法恢复。Host 在 oauth_recovery 配置开启时独立落盘，沿用文件日志的滚动和清理策略。
+//! 交换的账号无法恢复
+//! Host 在 oauth_recovery 配置开启时独立落盘，沿用文件日志的滚动和清理策略
 
 const OAUTH_RECOVERY_LOG_TARGET: &str = "oauth_recovery";
 const OAUTH_RECOVERY_PROVIDER: &str = "openai";
 
-/// 产生可恢复 token 组的 OAuth 操作。
+/// 产生可恢复 token 组的 OAuth 操作
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CodexOAuthRecoveryOperation {
-    /// 直接提供 AT/RT 的导入。
+    /// 直接提供 AT/RT 的导入
     ImportDirect,
-    /// 仅提供 RT 的导入，先交换得到 AT。
+    /// 仅提供 RT 的导入，先交换得到 AT
     ImportRefreshToken,
-    /// 管理员手动触发的 RT 交换。
+    /// 管理员手动触发的 RT 交换
     ManualRefresh,
-    /// 调度器触发的 RT 交换。
+    /// 调度器触发的 RT 交换
     ScheduledRefresh,
-    /// 授权码加 PKCE 的 token 交换。
+    /// 授权码加 PKCE 的 token 交换
     AuthorizationCode,
 }
 
@@ -33,11 +34,12 @@ impl CodexOAuthRecoveryOperation {
     }
 }
 
-/// 将已取得的 AT/RT 写入独立恢复结构化日志。
+/// 将已取得的 AT/RT 写入独立恢复结构化日志
 ///
-/// 调用方必须在任何可能拒绝响应的本地校验、画像补全或数据库写入之前调用。
-/// 此处只发出结构化事件，不返回业务错误。Host 的 oauth_recovery 配置控制落盘，
-/// 并负责文件分割、清理和写入队列背压。
+/// 调用方必须在任何可能拒绝响应的本地校验、画像补全或数据库写入之前调用
+/// 此处只发出结构化事件，不返回业务错误
+/// Host 的 oauth_recovery 配置控制落盘，
+/// 并负责文件分割、清理和写入队列背压
 pub(crate) fn record_oauth_recovery(
     operation: CodexOAuthRecoveryOperation,
     account_id: Option<&str>,

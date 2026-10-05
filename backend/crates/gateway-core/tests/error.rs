@@ -1,3 +1,5 @@
+//! 验证执行错误的敏感信息脱敏、稳定快照与请求局部数据边界
+
 use bytes::Bytes;
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, GatewayError, OpaqueUpstreamValue,
@@ -27,15 +29,15 @@ fn provider_error_debug_should_not_print_classified_upstream_values() {
 }
 
 #[test]
-fn classified_provider_diagnostic_survives_clone_without_entering_debug() {
+fn classified_provider_diagnostic_survives_stable_snapshot_without_entering_debug() {
     let message = "OpenAI WebSocket closed before terminal response (close code 1000)";
     let error = ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
         .with_diagnostic(
             ProviderDiagnostic::new(message)
                 .with_classification("receive", "closed_before_terminal"),
         );
-    let cloned = error.clone();
-    let gateway = GatewayError::from_provider(&cloned);
+    let snapshot = error.stable_snapshot();
+    let gateway = GatewayError::from_provider(&snapshot);
 
     assert_eq!(
         gateway.diagnostic().map(ProviderDiagnostic::as_str),
@@ -54,14 +56,14 @@ fn classified_provider_diagnostic_survives_clone_without_entering_debug() {
 }
 
 #[test]
-fn raw_upstream_error_survives_clone_without_entering_debug() {
+fn raw_upstream_error_survives_stable_snapshot_without_entering_debug() {
     let raw = r#"{"error":{"message":"verbatim upstream marker"}}"#;
     let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
         .with_raw_upstream_error(RawUpstreamError::new(raw));
-    let cloned = error.clone();
+    let snapshot = error.stable_snapshot();
 
     assert_eq!(
-        cloned.raw_upstream_error().map(RawUpstreamError::as_str),
+        snapshot.raw_upstream_error().map(RawUpstreamError::as_str),
         Some(raw)
     );
     assert!(!format!("{error:?}").contains("verbatim upstream marker"));
@@ -112,7 +114,7 @@ fn provider_error_atomic_client_events_should_be_take_only_and_debug_redacted() 
 }
 
 #[test]
-fn provider_error_clone_should_drop_request_local_upstream_response() {
+fn provider_error_stable_snapshot_should_drop_request_local_upstream_response() {
     let marker = Bytes::from_static(b"raw-client-response-only");
     let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
         .with_client_visible_upstream_response(
@@ -127,7 +129,7 @@ fn provider_error_clone_should_drop_request_local_upstream_response() {
             )]),
         );
 
-    let cloned = error.clone();
+    let snapshot = error.stable_snapshot();
 
     assert_eq!(
         error
@@ -135,13 +137,13 @@ fn provider_error_clone_should_drop_request_local_upstream_response() {
             .map(ClientVisibleUpstreamResponse::body),
         Some(&marker)
     );
-    assert!(cloned.client_visible_upstream_response().is_none());
+    assert!(snapshot.client_visible_upstream_response().is_none());
     assert!(!format!("{error:?}").contains("raw-client-response-only"));
     assert!(!format!("{error:?}").contains("opaque-header-value"));
 }
 
 #[test]
-fn provider_error_clone_should_drop_atomic_client_events() {
+fn provider_error_stable_snapshot_should_drop_atomic_client_events() {
     let event = ProviderEvent::wire(
         ProtocolWireEvent::json(
             "openai",
@@ -152,10 +154,10 @@ fn provider_error_clone_should_drop_atomic_client_events() {
     );
     let error = ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
         .with_atomic_client_events(vec![event]);
-    let cloned = error.clone();
+    let snapshot = error.stable_snapshot();
 
     assert!(error.has_atomic_client_events());
-    assert!(!cloned.has_atomic_client_events());
+    assert!(!snapshot.has_atomic_client_events());
 }
 
 #[test]

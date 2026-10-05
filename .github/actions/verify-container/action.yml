@@ -117,8 +117,9 @@ runs:
         compose=(docker compose --project-name "$COMPOSE_PROJECT_NAME" \
           -f deploy/compose.yaml)
         "${compose[@]}" up -d --no-build --wait postgres redis
+        # 基础设施使用 UTC，业务展示和调度时区由应用配置独立控制。
         test "$("${compose[@]}" exec -T -e PGPASSWORD="$CI_POSTGRES_PASSWORD" postgres \
-          psql -At -U codex_proxy -d codex_proxy -c "SHOW TimeZone;" | tr -d '\r')" = Asia/Shanghai
+          psql -At -U codex_proxy -d codex_proxy -c "SHOW TimeZone;" | tr -d '\r')" = UTC
         "${compose[@]}" exec -T -e PGPASSWORD="$CI_POSTGRES_PASSWORD" postgres \
           psql -v ON_ERROR_STOP=1 -U codex_proxy -d codex_proxy -c \
           "CREATE TABLE cpr_ci_persistence_probe (value text PRIMARY KEY); INSERT INTO cpr_ci_persistence_probe VALUES ('persisted');"
@@ -148,8 +149,8 @@ runs:
         test "$status" = 204
         test "$("${compose[@]}" exec -T codex-proxy-rs id -u | tr -d '\r')" = 10001
         test "$("${compose[@]}" exec -T codex-proxy-rs id -g | tr -d '\r')" = 10001
-        test "$("${compose[@]}" exec -T codex-proxy-rs date +%z | tr -d '\r')" = +0800
-        test "$("${compose[@]}" exec -T codex-proxy-rs cat /etc/timezone | tr -d '\r')" = Asia/Shanghai
+        test "$("${compose[@]}" exec -T codex-proxy-rs date +%z | tr -d '\r')" = +0000
+        test "$("${compose[@]}" exec -T codex-proxy-rs cat /etc/timezone | tr -d '\r')" = UTC
         "${compose[@]}" exec -T codex-proxy-rs sh -c \
           'touch /app/.runtime/data/.ci-write /app/.runtime/logs/.ci-write && rm /app/.runtime/data/.ci-write /app/.runtime/logs/.ci-write'
 

@@ -1,3 +1,5 @@
+//! 插件私有状态迁移的开始、撤销与存储错误映射
+
 use std::sync::Arc;
 
 use crate::{

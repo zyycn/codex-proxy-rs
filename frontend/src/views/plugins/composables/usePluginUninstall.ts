@@ -2,8 +2,9 @@ import type { InstalledPlugin } from '../utils/catalog'
 import { toast } from '@codex-proxy/ui'
 import { shallowRef } from 'vue'
 import { deletePluginArtifact, deletePluginInstance, disablePluginInstance, getPluginArtifacts, getPluginInstances } from '@/api'
+import { notifyPluginError } from '../utils/actions'
 
-export function usePluginUninstall(refresh: () => Promise<void>, notifyError: (title: string, cause: unknown) => void) {
+export function usePluginUninstall(refresh: () => Promise<void>) {
   const open = shallowRef(false)
   const pending = shallowRef<InstalledPlugin | null>(null)
   const acknowledged = shallowRef(false)
@@ -57,11 +58,12 @@ export function usePluginUninstall(refresh: () => Promise<void>, notifyError: (t
     catch (cause) {
       // 卸载不是跨请求事务，刷新已完成的步骤后提示失败原因，可从剩余部分重试。
       await refresh()
-      notifyError('卸载尚未完成，可重试剩余步骤', cause)
+      notifyPluginError('卸载尚未完成，可重试剩余步骤', cause)
     }
     finally {
       busy.value = false
-      progress.value = ''
+      if (open.value)
+        progress.value = ''
     }
   }
   return { open, pending, acknowledged, busy, progress, request, confirm }

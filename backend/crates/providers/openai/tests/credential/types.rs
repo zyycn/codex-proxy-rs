@@ -1,3 +1,5 @@
+//! 验证 OpenAI 凭据类型的脱敏、Cookie 往返与字段约束
+
 use chrono::Utc;
 use provider_openai::credential::{
     CodexAccountProfile, CodexCookie, CodexCredentialData, CodexCredentialPrincipal,

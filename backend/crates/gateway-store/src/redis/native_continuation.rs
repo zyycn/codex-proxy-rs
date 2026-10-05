@@ -1,9 +1,10 @@
-//! Responses continuation 的 Redis 会话亲和记录。
+//! Responses continuation 的 Redis 会话亲和记录
 //!
 //! 该存储只保存可丢失的 response → Provider/account pin；PostgreSQL 审计记录
-//! 不是 continuation 的可用性前提。键只含 response ID 的不可逆指纹；Client Key
-//! 所有权写入 payload 并在读取时严格校验，使跨 Key 复用能够 fail closed。
-//! Provider 私有状态作为不透明 JSON 保存，Store 不解释其内容。
+//! 不是 continuation 的可用性前提
+//! 键只含 response ID 的不可逆指纹；Client Key
+//! 所有权写入 payload 并在读取时严格校验，使跨 Key 复用能够 fail closed
+//! Provider 私有状态作为不透明 JSON 保存，Store 不解释其内容
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -66,7 +67,7 @@ end
 return 1
 "#;
 
-/// 基于 Redis 的 best-effort 原生响应 continuation 亲和。
+/// 基于 Redis 的 best-effort 原生响应 continuation 亲和
 #[derive(Clone)]
 pub struct RedisNativeContinuationRepository {
     connection: ConnectionManager,

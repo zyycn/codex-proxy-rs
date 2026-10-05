@@ -1,3 +1,5 @@
+//! 插件集成测试使用的原生 Provider 与执行事件替身
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
@@ -73,12 +75,31 @@ impl Provider for NativeProvider {
         let model = candidate.upstream_model().cloned().ok_or_else(|| {
             ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
         })?;
+        let adapter = context.upstream_adapter(candidate.provider(), &model)?;
         let metadata = ProviderCallMetadata::new(
             candidate.provider().clone(),
             model,
             account,
-            UpstreamTransport::new("http_sse").unwrap(),
+            UpstreamTransport::new(
+                adapter
+                    .as_ref()
+                    .map_or("http_sse", |adapter| adapter.transport()),
+            )
+            .unwrap(),
         );
+        if let Some(adapter) = adapter {
+            let account = Arc::new(FixtureConnection(metadata.provider_account_id().clone()));
+            let events = adapter.execute(
+                gateway_core::engine::upstream_adapter::UpstreamAdapterInvocation {
+                    operation: request.operation().clone(),
+                    headers: vec![],
+                    context,
+                    metadata: metadata.clone(),
+                    account,
+                },
+            );
+            return Ok(ProviderStream::new(metadata, events, ()));
+        }
         let response = ResponseMeta::new("fixture-response", MODEL);
         let event = |name: &str, fact| {
             ProviderEvent::canonical_with_wire(
@@ -105,6 +126,47 @@ impl Provider for NativeProvider {
             ])),
             (),
         ))
+    }
+}
+
+// 仅测试 Core / Runtime / Store 组合；真实 Provider 的凭据解释由各自合同测试验证
+struct FixtureConnection(ProviderAccountId);
+
+impl gateway_core::engine::upstream_adapter::UpstreamAccountConnection for FixtureConnection {
+    fn account_id(&self) -> &ProviderAccountId {
+        &self.0
+    }
+    fn credential_revision(&self) -> gateway_core::account::CredentialRevision {
+        gateway_core::account::CredentialRevision::new(1).unwrap()
+    }
+    fn authentication_kind(&self) -> &str {
+        "oauth"
+    }
+    fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
+        None
+    }
+    fn authorization(
+        &self,
+    ) -> Result<Vec<gateway_core::engine::middleware::MiddlewareHeader>, ProviderError> {
+        Ok(vec![
+            gateway_core::engine::middleware::MiddlewareHeader::new(
+                "authorization",
+                bytes::Bytes::from_static(b"Bearer fixture-native-token"),
+            ),
+        ])
+    }
+    fn calculate_cost(
+        &self,
+        _: Option<&str>,
+        _: &gateway_core::metering::Usage,
+    ) -> Option<gateway_core::metering::CalculatedCost> {
+        gateway_core::metering::CalculatedCost::from_usd_ticks(123).ok()
+    }
+    fn record_failure(
+        &self,
+        error: ProviderError,
+    ) -> futures::future::BoxFuture<'_, ProviderError> {
+        Box::pin(async move { error })
     }
 }
 

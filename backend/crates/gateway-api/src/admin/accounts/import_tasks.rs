@@ -1,4 +1,4 @@
-//! 后台导入任务的有界请求与安全结果投影。
+//! 后台导入任务的有界请求与安全结果投影
 
 use axum::extract::DefaultBodyLimit;
 use gateway_admin::model::import_tasks::{
@@ -41,7 +41,9 @@ struct TaskId {
 struct SummaryView {
     task_id: String,
     created_at: String,
+    created_at_display: String,
     finished_at: Option<String>,
+    finished_at_display: Option<String>,
     stop_requested: bool,
     total: usize,
     counts: CountsView,
@@ -59,12 +61,16 @@ struct CountsView {
     imported_accounts: usize,
 }
 
-impl From<ImportTaskSummary> for SummaryView {
-    fn from(task: ImportTaskSummary) -> Self {
+impl From<(ImportTaskSummary, crate::time::TimePresenter)> for SummaryView {
+    fn from((task, time): (ImportTaskSummary, crate::time::TimePresenter)) -> Self {
         let counts = task.counts;
         Self {
             task_id: task.task_id.to_string(),
+            created_at_display: time.label(task.created_at, "%m-%d %H:%M:%S"),
             created_at: task.created_at.to_rfc3339(),
+            finished_at_display: task
+                .finished_at
+                .map(|value| time.label(value, "%m-%d %H:%M:%S")),
             finished_at: task.finished_at.map(|at| at.to_rfc3339()),
             stop_requested: task.stop_requested,
             total: task.total,
@@ -98,10 +104,10 @@ struct ItemView {
     message: Option<String>,
 }
 
-impl From<ImportTaskDetail> for DetailView {
-    fn from(task: ImportTaskDetail) -> Self {
+impl From<(ImportTaskDetail, crate::time::TimePresenter)> for DetailView {
+    fn from((task, time): (ImportTaskDetail, crate::time::TimePresenter)) -> Self {
         Self {
-            summary: task.summary.into(),
+            summary: SummaryView::from((task.summary, time)),
             items: task
                 .items
                 .into_iter()
@@ -134,6 +140,7 @@ async fn submit<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let submission_id = Uuid::parse_str(&request.submission_id)
         .map_err(|_| map_wire_error(WireValidationError::new("submissionId")))?;
     if submission_id.is_nil() {
@@ -168,7 +175,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::ACCEPTED,
-        AdminEnvelope::ok(SummaryView::from(task)),
+        AdminEnvelope::ok(SummaryView::from((task, time))),
     ))
 }
 
@@ -176,12 +183,13 @@ async fn list<S>(auth: AdminAuth, State(state): State<S>) -> impl IntoResponse
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let items = state
         .admin_services()
         .import_tasks()
         .list(&auth.context().mutation_context())
         .into_iter()
-        .map(SummaryView::from)
+        .map(|value| SummaryView::from((value, time)))
         .collect();
     AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(ListView { items }))
 }
@@ -194,6 +202,7 @@ async fn detail<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let task = state
         .admin_services()
         .import_tasks()
@@ -204,7 +213,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(DetailView::from(task)),
+        AdminEnvelope::ok(DetailView::from((task, time))),
     ))
 }
 
@@ -216,6 +225,7 @@ async fn stop<S>(
 where
     S: SessionState + Send + Sync,
 {
+    let time = crate::time::TimePresenter::new(state.admin_services().timezone());
     let task = state
         .admin_services()
         .import_tasks()
@@ -226,7 +236,7 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(DetailView::from(task)),
+        AdminEnvelope::ok(DetailView::from((task, time))),
     ))
 }
 

@@ -1,4 +1,4 @@
-//! 复用选号时的输入，保留有界的候选评分与阻断原因。
+//! 复用选号时的输入，保留有界的候选评分与阻断原因
 
 use serde_json::json;
 
@@ -8,11 +8,11 @@ use crate::account::{
     smart_score,
 };
 
-// 单个 trace 事件最多 4 KiB；优先保留实际选中的账号。
+// 单个 trace 事件最多 4 KiB；优先保留实际选中的账号
 const MAX_CANDIDATES: usize = 6;
 
 impl TraceContext {
-    /// 记录实际选号输入与结果；只复用评分规则，不参与调度决策。
+    /// 记录实际选号输入与结果；只复用评分规则，不参与调度决策
     pub fn account_selection(
         &self,
         candidates: &[AccountCandidate],
@@ -63,6 +63,7 @@ impl TraceContext {
                 "preferredAccountId": context.preferred_account.as_ref().map(|id| id.as_str()),
                 "preferredResult": selection.as_ref().map(|s| format!("{:?}", s.preferred())),
                 "roundRobinCursor": context.round_robin_cursor,
+                "reservedConcurrency": context.reserved_concurrency,
                 "smartScoreTolerance": smart.then(|| context.policy.smart_scheduling().score_tolerance()),
                 "candidateCount": candidates.len(),
                 "omittedCandidates": candidates.len().saturating_sub(observations.len()),

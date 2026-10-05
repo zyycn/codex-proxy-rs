@@ -1,4 +1,4 @@
-//! Provider 自有操作的稳定 HTTP adapter。
+//! Provider 自有操作的稳定 HTTP adapter
 
 use std::net::SocketAddr;
 
@@ -46,7 +46,7 @@ pub(crate) fn router() -> Router<ApiState> {
             "/v1/providers/{provider}/models/{model}/count_tokens",
             post(count_tokens),
         )
-        // `get()` 会隐式接受 HEAD；这里必须只匹配明确声明的 GET/POST。
+        // `get()` 会隐式接受 HEAD；这里必须只匹配明确声明的 GET/POST
         .route(
             "/v1/providers/{provider}/http/{endpoint}",
             on(MethodFilter::GET.or(MethodFilter::POST), provider_http).head(provider_http_head),

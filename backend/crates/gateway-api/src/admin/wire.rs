@@ -1,4 +1,4 @@
-//! 管理端公共 wire、响应信封与脱敏错误。
+//! 管理端公共 wire、响应信封与脱敏错误
 
 use std::fmt;
 
@@ -9,33 +9,33 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-/// 管理端 wire 字段校验错误；只携带稳定字段名，不回显输入值。
+/// 管理端 wire 字段校验错误；只携带稳定字段名，不回显输入值
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireValidationError {
     field: &'static str,
 }
 
 impl WireValidationError {
-    /// 构造字段校验错误。
+    /// 构造字段校验错误
     #[must_use]
     pub const fn new(field: &'static str) -> Self {
         Self { field }
     }
 
-    /// 返回未通过校验的字段名。
+    /// 返回未通过校验的字段名
     #[must_use]
     pub const fn field(self) -> &'static str {
         self.field
     }
 }
 
-/// 成功响应的稳定业务码。
+/// 成功响应的稳定业务码
 pub const ADMIN_OK_CODE: u32 = 200;
 
-/// 成功响应的稳定消息。
+/// 成功响应的稳定消息
 pub const ADMIN_OK_MESSAGE: &str = "OK";
 
-/// 页码分页元数据。
+/// 页码分页元数据
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageMeta {
@@ -46,7 +46,7 @@ pub struct PageMeta {
 }
 
 impl PageMeta {
-    /// 由分页 owner 已经校验并计算的事实构造 wire metadata。
+    /// 由分页 owner 已经校验并计算的事实构造 wire metadata
     #[must_use]
     pub const fn new(page: u32, page_size: u32, total: u64, total_pages: u32) -> Self {
         Self {
@@ -57,82 +57,82 @@ impl PageMeta {
         }
     }
 
-    /// 当前页，从 1 开始。
+    /// 当前页，从 1 开始
     #[must_use]
     pub const fn page(self) -> u32 {
         self.page
     }
 
-    /// 每页数量。
+    /// 每页数量
     #[must_use]
     pub const fn page_size(self) -> u32 {
         self.page_size
     }
 
-    /// 全部记录数量。
+    /// 全部记录数量
     #[must_use]
     pub const fn total(self) -> u64 {
         self.total
     }
 
-    /// 总页数。
+    /// 总页数
     #[must_use]
     pub const fn total_pages(self) -> u32 {
         self.total_pages
     }
 }
 
-/// 管理端稳定业务错误码。
+/// 管理端稳定业务错误码
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AdminErrorCode(u32);
 
 impl AdminErrorCode {
-    /// JSON 解析失败。
+    /// JSON 解析失败
     pub const MALFORMED_JSON: Self = Self(40000);
-    /// 请求参数或状态不合法。
+    /// 请求参数或状态不合法
     pub const BAD_REQUEST: Self = Self(40001);
-    /// 时间范围不合法。
+    /// 时间范围不合法
     pub const INVALID_TIME_RANGE: Self = Self(40002);
-    /// 模型来源不合法。
+    /// 模型来源不合法
     pub const INVALID_MODEL_SOURCE: Self = Self(40003);
-    /// 缺少登录会话。
+    /// 缺少登录会话
     pub const SESSION_REQUIRED: Self = Self(40101);
-    /// 登录凭据错误。
+    /// 登录凭据错误
     pub const INVALID_CREDENTIALS: Self = Self(40102);
-    /// 管理 API Key 错误。
+    /// 管理 API Key 错误
     pub const INVALID_API_KEY: Self = Self(40103);
-    /// 当前会话无权访问。
+    /// 当前会话无权访问
     pub const FORBIDDEN: Self = Self(40301);
-    /// 资源不存在。
+    /// 资源不存在
     pub const NOT_FOUND: Self = Self(40401);
-    /// 配置 revision 或资源状态冲突。
+    /// 配置 revision 或资源状态冲突
     pub const CONFLICT: Self = Self(40901);
-    /// 登录尝试过多。
+    /// 登录尝试过多
     pub const TOO_MANY_LOGIN_ATTEMPTS: Self = Self(42901);
-    /// 管理操作请求过于频繁。
+    /// 管理操作请求过于频繁
     pub const RATE_LIMITED: Self = Self(42902);
-    /// 设置持久化失败。
+    /// 设置持久化失败
     pub const SETTINGS_PERSIST: Self = Self(50000);
-    /// 未分类内部错误。
+    /// 未分类内部错误
     pub const INTERNAL: Self = Self(50001);
-    /// 用量记录的账号投影失败。
+    /// 用量记录的账号投影失败
     pub const USAGE_RECORD_ACCOUNTS: Self = Self(50002);
-    /// 上游网关失败。
+    /// 上游网关失败
     pub const BAD_GATEWAY: Self = Self(50201);
-    /// 不可逆上游操作的执行结果未知。
+    /// 不可逆上游操作的执行结果未知
     pub const UPSTREAM_RESULT_UNKNOWN: Self = Self(50202);
-    /// 依赖的服务暂不可用。
+    /// 依赖的服务暂不可用
     pub const SERVICE_UNAVAILABLE: Self = Self(50301);
 
-    /// 返回用于 JSON wire contract 的数值。
+    /// 返回用于 JSON wire contract 的数值
     #[must_use]
     pub const fn value(self) -> u32 {
         self.0
     }
 }
 
-/// 管理端错误响应正文。
+/// 管理端错误响应正文
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminErrorBody {
@@ -142,7 +142,7 @@ pub struct AdminErrorBody {
 }
 
 impl AdminErrorBody {
-    /// 构造不携带业务数据的管理端错误正文。
+    /// 构造不携带业务数据的管理端错误正文
     #[must_use]
     pub fn new(code: AdminErrorCode, message: impl Into<String>) -> Self {
         Self {
@@ -152,20 +152,20 @@ impl AdminErrorBody {
         }
     }
 
-    /// 稳定业务错误码。
+    /// 稳定业务错误码
     #[must_use]
     pub const fn code(&self) -> AdminErrorCode {
         self.code
     }
 
-    /// 安全的客户端错误消息。
+    /// 安全的客户端错误消息
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
 
-/// 管理端 HTTP 错误。
+/// 管理端 HTTP 错误
 pub struct AdminError {
     status: StatusCode,
     body: AdminErrorBody,
@@ -352,7 +352,7 @@ impl AdminError {
     }
 }
 
-/// 把管理用例的稳定错误分类映射到既有 HTTP 错误 contract。
+/// 把管理用例的稳定错误分类映射到既有 HTTP 错误 contract
 pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     use gateway_admin::model::AdminErrorKind;
 
@@ -368,8 +368,8 @@ pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -
         AdminErrorKind::Unavailable => AdminError::service_unavailable(),
         AdminErrorKind::Internal => AdminError::internal(),
     };
-    // Admin owner 已负责公开文案，不能在 HTTP 边界再次丢掉安全的业务原因。
-    // 认证与未知内部异常仍使用固定提示，不放行底层诊断或任意 500 消息。
+    // Admin owner 已负责公开文案，不能在 HTTP 边界再次丢掉安全的业务原因
+    // 认证与未知内部异常仍使用固定提示，不放行底层诊断或任意 500 消息
     if matches!(
         error.kind(),
         AdminErrorKind::RateLimited
@@ -403,7 +403,7 @@ impl fmt::Display for AdminError {
     }
 }
 
-/// 带独立 HTTP 状态的管理端响应。
+/// 带独立 HTTP 状态的管理端响应
 pub struct AdminResponse<T: Serialize> {
     status: StatusCode,
     body: T,
@@ -422,7 +422,7 @@ impl<T: Serialize> IntoResponse for AdminResponse<T> {
     }
 }
 
-/// 管理端响应信封。
+/// 管理端响应信封
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminEnvelope<T> {
@@ -432,7 +432,7 @@ pub struct AdminEnvelope<T> {
 }
 
 impl<T> AdminEnvelope<T> {
-    /// 构造稳定的成功响应。
+    /// 构造稳定的成功响应
     #[must_use]
     pub fn ok(data: T) -> Self {
         Self {
@@ -442,32 +442,32 @@ impl<T> AdminEnvelope<T> {
         }
     }
 
-    /// 稳定业务码。
+    /// 稳定业务码
     #[must_use]
     pub const fn code(&self) -> u32 {
         self.code
     }
 
-    /// 稳定业务消息。
+    /// 稳定业务消息
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 
-    /// 响应数据。
+    /// 响应数据
     #[must_use]
     pub const fn data(&self) -> &T {
         &self.data
     }
 
-    /// 取出响应数据。
+    /// 取出响应数据
     #[must_use]
     pub fn into_data(self) -> T {
         self.data
     }
 }
 
-/// 页码分页响应数据。
+/// 页码分页响应数据
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminPageData<T> {
@@ -476,25 +476,25 @@ pub struct AdminPageData<T> {
 }
 
 impl<T> AdminPageData<T> {
-    /// 组合查询 owner 返回的当前页数据与分页事实。
+    /// 组合查询 owner 返回的当前页数据与分页事实
     #[must_use]
     pub const fn new(items: Vec<T>, page: PageMeta) -> Self {
         Self { items, page }
     }
 
-    /// 当前页记录。
+    /// 当前页记录
     #[must_use]
     pub fn items(&self) -> &[T] {
         &self.items
     }
 
-    /// 分页元数据。
+    /// 分页元数据
     #[must_use]
     pub const fn page(&self) -> PageMeta {
         self.page
     }
 
-    /// 拆分分页数据。
+    /// 拆分分页数据
     #[must_use]
     pub fn into_parts(self) -> (Vec<T>, PageMeta) {
         (self.items, self.page)

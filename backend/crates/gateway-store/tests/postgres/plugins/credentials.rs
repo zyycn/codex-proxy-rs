@@ -1,3 +1,5 @@
+//! 验证插件下载凭据的保护、引用清理与事务回滚
+
 use gateway_admin::{
     model::plugins::{
         PluginSource,

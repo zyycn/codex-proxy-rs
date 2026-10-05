@@ -3,8 +3,10 @@ import type { PluginArtifact, PluginInstance } from '@/api'
 import { BaseIconButton, BaseTag } from '@codex-proxy/ui'
 import { ArrowDownToLine, ChevronDown, CircleAlert, Play, Trash2 } from '@lucide/vue'
 import { computed, shallowRef, useId } from 'vue'
-import { configurationStatus, PLUGIN_STATUS_LABELS, pluginStatusType } from '../utils/catalog'
+import { PLUGIN_STATUS_LABELS } from '../constants'
+import { configurationStatus, pluginStatusType } from '../utils/catalog'
 import { shortDigest, sourceDetail, sourceLabel } from '../utils/model'
+import PluginCompatibilityWarning from './PluginCompatibilityWarning.vue'
 
 const props = defineProps<{
   artifact: PluginArtifact
@@ -28,7 +30,8 @@ const detailsId = useId()
     <div v-if="isCurrent && current" class="flex flex-wrap items-center gap-2">
       <strong class="min-w-0 flex-1 wrap-break-word text-cp-sm">当前版本</strong>
       <BaseTag>{{ artifact.metadata.version }}</BaseTag>
-      <BaseTag :type="pluginStatusType(configurationStatus(current))">
+      <PluginCompatibilityWarning v-if="current.compatibilityWarning" :instance="current" />
+      <BaseTag v-else :type="pluginStatusType(configurationStatus(current))">
         <CircleAlert v-if="configurationStatus(current) === 'failed'" class="mr-1 size-3.5" />
         {{ PLUGIN_STATUS_LABELS[configurationStatus(current)] }}
       </BaseTag>

@@ -1,4 +1,4 @@
-//! 容量熔断触发：高频容量类失败按滑动窗口计数冻结账号，成功调用清空证据。
+//! 容量熔断触发：高频容量类失败按滑动窗口计数冻结账号，成功调用清空证据
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -150,7 +150,7 @@ async fn successful_inference_clears_capacity_evidence() {
     assert!(cooldowns.capacity_evidence(account.id()).is_none());
 }
 
-/// 阈值与窗口边界使用与迁移 check 约束一致的构造校验。
+/// 阈值与窗口边界使用与迁移 check 约束一致的构造校验
 #[test]
 fn freeze_policy_rejects_out_of_range_configuration() {
     for (threshold, window, duration) in [(1, 600, 7_200), (12, 59, 7_200), (12, 600, 299)] {

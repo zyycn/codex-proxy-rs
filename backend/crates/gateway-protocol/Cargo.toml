@@ -12,6 +12,7 @@ name = "main"
 path = "tests/main.rs"
 
 [dependencies]
+memchr = "2.8.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
 thiserror = "2.0.18"

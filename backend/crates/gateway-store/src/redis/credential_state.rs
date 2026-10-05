@@ -1,4 +1,4 @@
-//! Provider credential state 的可重建 Redis cache fence。
+//! Provider credential state 的可重建 Redis cache fence
 
 use std::time::Duration;
 
@@ -76,7 +76,8 @@ pub trait CredentialStateRepository: Send + Sync {
     async fn clear_credential_state(&self, provider_account_id: &str) -> StoreResult<bool>;
 }
 
-/// Provider 目录 cache 的隔离键。具体作用域由对应 Provider 决定。
+/// Provider 目录 cache 的隔离键
+/// 具体作用域由对应 Provider 决定
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedisProviderCatalogCacheKey {
     pub provider_kind: String,

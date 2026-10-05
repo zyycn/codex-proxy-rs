@@ -36,11 +36,15 @@ export function useAccountAuthorization(onComplete: () => Promise<void>) {
     expiryTimer = undefined
   }
 
-  function reset() {
+  function cancel() {
     controller?.abort()
     controller = undefined
     clearTimers()
     context = undefined
+  }
+
+  function reset() {
+    cancel()
     flow.value = null
     status.value = 'idle'
     error.value = ''
@@ -111,5 +115,5 @@ export function useAccountAuthorization(onComplete: () => Promise<void>) {
   }
 
   onScopeDispose(reset)
-  return { view, callback, busy, start, complete, reset }
+  return { view, callback, busy, start, complete, cancel, reset }
 }

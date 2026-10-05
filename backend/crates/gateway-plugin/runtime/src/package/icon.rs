@@ -1,3 +1,5 @@
+//! 校验插件图标路径、格式、尺寸与动画帧资源限制
+
 use std::{collections::BTreeMap, io::Cursor};
 
 use gateway_admin::model::plugins::PluginIconTheme;
@@ -53,7 +55,7 @@ fn validate_path(
     if manifest.resources.get(path).map(String::as_str) == Some("image/svg+xml") {
         return validate_svg(bytes);
     }
-    // 扩展名与 MIME 的对应关系由 SDK 清单校验拥有，这里只核对实际编码与解码预算。
+    // 扩展名与 MIME 的对应关系由 SDK 清单校验拥有，这里只核对实际编码与解码预算
     let expected = ImageFormat::from_path(path).map_err(|_| PackageError::Archive)?;
     let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -65,7 +67,7 @@ fn validate_path(
     header.limits(icon_limits());
     let (width, height) = header.into_dimensions().map_err(map_image_error)?;
     validate_dimensions(width, height)?;
-    // 动画逐帧检查但不收集帧，避免为了验证小图标保留整段动画的解码内存。
+    // 动画逐帧检查但不收集帧，避免为了验证小图标保留整段动画的解码内存
     match expected {
         ImageFormat::Png => {
             let decoder = PngDecoder::with_limits(Cursor::new(bytes), icon_limits())
@@ -97,7 +99,7 @@ fn validate_path(
 
 fn validate_svg(bytes: &[u8]) -> Result<(), PackageError> {
     let text = std::str::from_utf8(bytes).map_err(|_| PackageError::Archive)?;
-    // 不解析 DTD 或外部实体；保留正常 SVG 样式与矢量内容，由图像上下文和接口 CSP 隔离主动内容。
+    // 不解析 DTD 或外部实体；保留正常 SVG 样式与矢量内容，由图像上下文和接口 CSP 隔离主动内容
     let document = roxmltree::Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {

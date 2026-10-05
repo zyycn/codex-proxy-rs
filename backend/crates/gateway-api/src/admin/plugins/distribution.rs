@@ -1,3 +1,5 @@
+//! 插件更新来源、下载凭据与远程发行安装的 HTTP 接口
+
 use axum::{
     Router,
     extract::State,
@@ -149,10 +151,7 @@ async fn verify<S: SessionState + Send + Sync>(
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(VerifiedArtifactView::new(
-            result,
-            state.admin_services().plugins(),
-        )),
+        AdminEnvelope::ok(VerifiedArtifactView::new(result)),
     ))
 }
 
@@ -169,10 +168,7 @@ async fn install<S: SessionState + Send + Sync>(
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::CREATED,
-        AdminEnvelope::ok(InstallResultView::new(
-            result,
-            state.admin_services().plugins(),
-        )),
+        AdminEnvelope::ok(InstallResultView::new(result)),
     ))
 }
 

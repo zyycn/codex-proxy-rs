@@ -1,3 +1,5 @@
+//! 验证传输头部分类，以及响应中的连接级和身份字段过滤
+
 use gateway_protocol::openai::{
     is_transport_managed_request_header, response_header_is_forwardable,
 };

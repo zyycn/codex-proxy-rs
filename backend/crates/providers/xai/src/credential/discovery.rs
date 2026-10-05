@@ -1,3 +1,5 @@
+//! 解析并校验 xAI OIDC 发现文档及其端点与签名算法
+
 use serde::Deserialize;
 use url::Url;
 
@@ -5,7 +7,7 @@ use crate::{GrokOAuthConfig, OAuthError, OAuthOperation, ProtocolViolation};
 
 pub(crate) const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
 
-/// issuer 与端点均已通过官方 Grok Build origin 策略校验的发现文档。
+/// issuer 与端点均已通过官方 Grok Build origin 策略校验的发现文档
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryDocument {
     issuer: Url,
@@ -69,37 +71,37 @@ impl DiscoveryDocument {
         })
     }
 
-    /// 返回发现文档中已校验的 issuer。
+    /// 返回发现文档中已校验的 issuer
     #[must_use]
     pub fn issuer(&self) -> &Url {
         &self.issuer
     }
 
-    /// 返回已校验的 authorization 端点。
+    /// 返回已校验的 authorization 端点
     #[must_use]
     pub fn authorization_endpoint(&self) -> &Url {
         &self.authorization_endpoint
     }
 
-    /// 返回已校验的 token 端点。
+    /// 返回已校验的 token 端点
     #[must_use]
     pub fn token_endpoint(&self) -> &Url {
         &self.token_endpoint
     }
 
-    /// 返回 ID token 校验器所需的已校验 JWKS 端点。
+    /// 返回 ID token 校验器所需的已校验 JWKS 端点
     #[must_use]
     pub fn jwks_uri(&self) -> &Url {
         &self.jwks_uri
     }
 
-    /// 返回已校验的权威 user-info 端点。
+    /// 返回已校验的权威 user-info 端点
     #[must_use]
     pub fn userinfo_endpoint(&self) -> &Url {
         &self.userinfo_endpoint
     }
 
-    /// 返回发现文档声明的算法；校验器仍须强制自身的密码学 allowlist。
+    /// 返回发现文档声明的算法；校验器仍须强制自身的密码学 allowlist
     #[must_use]
     pub fn signing_algorithms(&self) -> &[String] {
         &self.signing_algorithms

@@ -1,3 +1,6 @@
+//! 插件下载凭据的加密持久化、读取与引用清理
+
+use gateway_admin::model::audit::MutationAuditOperation;
 use gateway_admin::{
     model::{
         MutationContext, Revision,
@@ -46,7 +49,7 @@ pub(super) async fn save(
     context: &MutationContext,
 ) -> AdminStoreResult<Revision> {
     let id = uuid::Uuid::parse_str(&credential.info.id).map_err(|_| unavailable())?;
-    // 只有持久化边界显式展开 secret，不给敏感领域类型实现通用 Serialize。
+    // 只有持久化边界显式展开 secret，不给敏感领域类型实现通用 Serialize
     let secret = match &credential.authentication {
         SourceAuthentication::Github { token } => {
             serde_json::json!({"kind":"github", "token":token.expose_secret()})
@@ -78,8 +81,7 @@ pub(super) async fn save(
         &mut tx,
         mutation_audit(
             context,
-            "create",
-            "plugin_source_credential",
+            MutationAuditOperation::PluginSourceCredentialCreate,
             &credential.info.id,
             vec!["credential".into()],
         ),
@@ -91,7 +93,7 @@ pub(super) async fn save(
     admin_revision(revision)
 }
 
-/// 只回收本次删除制品使用过且已无引用的凭据，保留其他插件共享的下载认证。
+/// 只回收本次删除制品使用过且已无引用的凭据，保留其他插件共享的下载认证
 pub(super) async fn delete_unused(
     tx: &mut Transaction<'_, Postgres>,
     ids: &[uuid::Uuid],
@@ -112,8 +114,7 @@ pub(super) async fn delete_unused(
             tx,
             mutation_audit(
                 context,
-                "delete",
-                "plugin_source_credential",
+                MutationAuditOperation::PluginSourceCredentialDelete,
                 &id.to_string(),
                 vec!["credential".into()],
             ),
@@ -155,8 +156,7 @@ pub(super) async fn delete(
         &mut tx,
         mutation_audit(
             context,
-            "delete",
-            "plugin_source_credential",
+            MutationAuditOperation::PluginSourceCredentialDelete,
             id,
             vec!["credential".into()],
         ),

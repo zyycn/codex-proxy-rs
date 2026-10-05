@@ -1,4 +1,4 @@
-//! 将同一 ETag 的有界 HTTP Range 暴露为归档库需要的 Read + Seek。
+//! 将同一 ETag 的有界 HTTP Range 暴露为归档库需要的 Read + Seek
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant};
@@ -61,7 +61,7 @@ impl Read for RemoteFile {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         if self.cancel.is_cancelled() || Instant::now() >= self.deadline {
             // 取消和预算耗尽是终态；Interrupted 会被 read_exact/read_to_end
-            // 自动重试，导致 blocking 线程空转并阻止 Tokio runtime 退出。
+            // 自动重试，导致 blocking 线程空转并阻止 Tokio runtime 退出
             return Err(io::Error::other("Desktop 制品读取已取消或超时"));
         }
         if output.is_empty() || self.position >= self.identity.size {

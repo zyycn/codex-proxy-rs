@@ -1,3 +1,5 @@
+//! xAI OAuth 发现、授权码交换、凭据导入验证与令牌刷新编排
+
 use std::sync::Arc;
 
 use crate::credential::token::{parse_oauth_error, parse_refresh_success, parse_token_success};
@@ -9,7 +11,7 @@ use crate::{
     VerificationMethod, VerifiedTokenSet,
 };
 
-/// 与 transport 无关的官方 Grok Build OAuth 协议客户端。
+/// 与 transport 无关的官方 Grok Build OAuth 协议客户端
 #[derive(Clone)]
 pub struct GrokOAuthClient {
     config: GrokOAuthConfig,
@@ -20,7 +22,7 @@ pub struct GrokOAuthClient {
 }
 
 impl GrokOAuthClient {
-    /// 创建客户端，显式注入 HTTP 与 token 验证两个信任端口。
+    /// 创建客户端，显式注入 HTTP 与 token 验证两个信任端口
     #[must_use]
     pub fn new(
         config: GrokOAuthConfig,
@@ -37,7 +39,7 @@ impl GrokOAuthClient {
         }
     }
 
-    /// 返回不可变的官方 provider 配置。
+    /// 返回不可变的官方 provider 配置
     #[must_use]
     pub const fn config(&self) -> &GrokOAuthConfig {
         &self.config
@@ -50,12 +52,12 @@ impl GrokOAuthClient {
         client
     }
 
-    /// 拉取并校验官方同源 OIDC 发现文档。
+    /// 拉取并校验官方同源 OIDC 发现文档
     ///
     /// # Errors
     ///
     /// transport 失败、非成功状态、JSON 非法、issuer 不匹配、端点跨 origin、
-    /// 缺少 JWKS 或算法不安全时返回错误。
+    /// 缺少 JWKS 或算法不安全时返回错误
     pub async fn discover(&self) -> Result<DiscoveryDocument, OAuthError> {
         let response = self
             .execute(
@@ -72,11 +74,11 @@ impl GrokOAuthClient {
         DiscoveryDocument::parse(&self.config, response.body())
     }
 
-    /// 启动 Authorization Code + PKCE，不产生网络 I/O。
+    /// 启动 Authorization Code + PKCE，不产生网络 I/O
     ///
     /// # Errors
     ///
-    /// 安全随机 state、nonce 或 verifier 生成失败时返回熵不可用错误。
+    /// 安全随机 state、nonce 或 verifier 生成失败时返回熵不可用错误
     pub fn start_authorization_code(
         &self,
         discovery: &DiscoveryDocument,
@@ -87,12 +89,13 @@ impl GrokOAuthClient {
     }
 
     /// 对已校验 state 的授权 grant 只做一次交换，返回凭据前强制通过
-    /// nonce 绑定的 ID token 验证。
+    /// nonce 绑定的 ID token 验证
     ///
     /// # Errors
     ///
     /// transport/协议错误、缺少 ID token、验证失败或任何非成功 OAuth 响应时
-    /// 返回错误。不做自动重试。
+    /// 返回错误
+    /// 不做自动重试
     pub async fn exchange_authorization_code(
         &self,
         discovery: &DiscoveryDocument,
@@ -156,12 +159,13 @@ impl GrokOAuthClient {
         ))
     }
 
-    /// 验证已归一化的已有 OAuth credential。有效 AT 由官方 user-info 确认；
-    /// 过期 AT 先用 RT 换取新 AT，再由同一官方端点确认。
+    /// 验证已归一化的已有 OAuth credential
+    /// 有效 AT 由官方 user-info 确认；
+    /// 过期 AT 先用 RT 换取新 AT，再由同一官方端点确认
     ///
     /// # Errors
     ///
-    /// 导入 metadata、token wire、刷新、OIDC claim 或 user-info 任一失败时拒绝。
+    /// 导入 metadata、token wire、刷新、OIDC claim 或 user-info 任一失败时拒绝
     pub async fn verify_imported_credential(
         &self,
         discovery: &DiscoveryDocument,
@@ -233,13 +237,15 @@ impl GrokOAuthClient {
         Ok(VerifiedTokenSet::new(tokens, evidence, scope))
     }
 
-    /// 执行一次 refresh token 交换。调用方须串行化刷新，并通过 credential
-    /// revision CAS 持久化轮换后的 token。
+    /// 执行一次 refresh token 交换
+    /// 调用方须串行化刷新，并通过 credential
+    /// revision CAS 持久化轮换后的 token
     ///
     /// # Errors
     ///
-    /// 返回已分类的 OAuth 错误。refresh token 可能已轮换，Ambiguous 类
-    /// transport 失败不在本次 exchange 内重试，后续交由 refresh scheduler 退避协调。
+    /// 返回已分类的 OAuth 错误
+    /// refresh token 可能已轮换，Ambiguous 类
+    /// transport 失败不在本次 exchange 内重试，后续交由 refresh scheduler 退避协调
     pub async fn refresh(
         &self,
         discovery: &DiscoveryDocument,

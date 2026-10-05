@@ -1,3 +1,5 @@
+//! 插件日志回调的输入校验、输出限额与宿主日志写入
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -12,7 +14,7 @@ use tokio::{sync::Semaphore, time::Instant};
 
 use crate::RpcReply;
 
-// 这是保护宿主的有界默认值，不是吞吐保证；预算按实例 incarnation 隔离。
+// 这是保护宿主的有界默认值，不是吞吐保证；预算按实例 incarnation 隔离
 const WINDOW: Duration = Duration::from_secs(1);
 const MAXIMUM_EVENTS: u32 = 64;
 const MAXIMUM_INPUT_BYTES: usize = 8 * 1024;
@@ -93,16 +95,17 @@ impl PluginLog {
             budget.recorded += 1;
             (std::mem::take(&mut budget.suppressed), slot)
         };
-        // 使用现有诊断 owner；未知键名、正文和嵌套敏感字段不会原样进入普通日志。
+        // 使用现有诊断 owner；未知键名、正文和嵌套敏感字段不会原样进入普通日志
         let fields =
             diagnostic_json(&serde_json::to_value(request.fields).map_err(|_| super::invalid())?);
-        // 标识的字符形状不能证明内容安全；事件名也只保留摘要。
+        // 标识的字符形状不能证明内容安全；事件名也只保留摘要
         let event = body_fingerprint(request.event.as_bytes());
         let plugin_id = self.plugin_id.clone();
         let plugin_version = self.plugin_version.clone();
         let context = context.clone();
-        // tracing 后端可能同步阻塞。任务容量跨实例与代次共享，并由写入任务持有到完成，
-        // 父调用取消不能释放容量后继续无限排队；已受理日志可在父调用结束后落盘。
+        // tracing 后端可能同步阻塞
+        // 任务容量跨实例与代次共享，并由写入任务持有到完成，
+        // 父调用取消不能释放容量后继续无限排队；已受理日志可在父调用结束后落盘
         tokio::task::spawn_blocking(move || {
             let _slot = slot;
             macro_rules! record {

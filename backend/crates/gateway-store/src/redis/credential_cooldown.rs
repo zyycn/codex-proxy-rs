@@ -1,4 +1,4 @@
-//! 请求调度用的可丢失 Provider 级 cooldown Redis 存储。
+//! 请求调度用的可丢失 Provider 级 cooldown Redis 存储
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -65,7 +65,7 @@ if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[2]) end
 return 1
 "#;
 
-// 普通推理成功只能清除临时限流和未形成冻结的证据，判断与删除必须原子执行。
+// 普通推理成功只能清除临时限流和未形成冻结的证据，判断与删除必须原子执行
 const SUCCESS_SCRIPT: &str = r#"
 local current = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')
 local kind = redis.call('HGET', KEYS[1], 'kind') or 'rate_limit'
@@ -75,7 +75,7 @@ redis.call('ZREM', KEYS[2], ARGV[2])
 return 1
 "#;
 
-// 探测结果只能修改读到的这一代冻结；删除后重建同 revision 的冻结也不匹配。
+// 探测结果只能修改读到的这一代冻结；删除后重建同 revision 的冻结也不匹配
 const FINISH_FREEZE_SCRIPT: &str = r#"
 if redis.call('HGET', KEYS[1], 'generation') ~= ARGV[2]
   or redis.call('HGET', KEYS[1], 'revision') ~= ARGV[1] then return 0 end
@@ -100,7 +100,7 @@ return 1
 "#;
 
 // 每次容量失败都顺延窗口 TTL（与刷新退避计数同语义），并把本次观测到的
-// 在途并发并入峰值证据；峰值与计数共享同一窗口生命周期。
+// 在途并发并入峰值证据；峰值与计数共享同一窗口生命周期
 const RECORD_CAPACITY_FAILURE_SCRIPT: &str = r#"
 local count = redis.call('INCR', KEYS[1])
 local ttl_ms = tonumber(ARGV[1])
@@ -137,7 +137,7 @@ pub trait CredentialCooldownRepository: Send + Sync {
         provider_account_id: &str,
         through_revision: Revision,
     ) -> StoreResult<bool>;
-    /// 删除账号时清除该账号全部 account/model scope cooldown key。
+    /// 删除账号时清除该账号全部 account/model scope cooldown key
     async fn delete_account_cooldowns(&self, provider_account_id: &str) -> StoreResult<bool>;
 }
 
@@ -335,7 +335,7 @@ impl RedisCredentialCooldownRepository {
         })
     }
 
-    /// 包含已到探测时间但尚未确认恢复的冻结；到期不能从 worker 工作集中移除。
+    /// 包含已到探测时间但尚未确认恢复的冻结；到期不能从 worker 工作集中移除
     pub(crate) async fn active_freezes(
         &self,
     ) -> StoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
@@ -388,7 +388,7 @@ impl RedisCredentialCooldownRepository {
         Ok(changed == 1)
     }
 
-    /// 读取窗口内观测到的在途并发峰值；key 随窗口 TTL 过期，无需额外清理。
+    /// 读取窗口内观测到的在途并发峰值；key 随窗口 TTL 过期，无需额外清理
     pub(crate) async fn read_capacity_peak(
         &self,
         provider_account_id: &str,
@@ -470,8 +470,8 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             "provider_account_id",
             provider_account_id,
         )?;
-        // 账号删除：清除该账号的 account key 与全部 model-scoped key。
-        // 用 SCAN 精确匹配命名空间内该账号前缀，避免 KEYS 阻塞。
+        // 账号删除：清除该账号的 account key 与全部 model-scoped key
+        // 用 SCAN 精确匹配命名空间内该账号前缀，避免 KEYS 阻塞
         let mut connection = self.connection.clone();
         let mut keys = vec![
             self.key(provider_account_id)?,
@@ -500,7 +500,7 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
                 break;
             }
         }
-        // 删除与索引移除同属一个原子边界；否则新冻结可能在两步之间写入后丢失索引。
+        // 删除与索引移除同属一个原子边界；否则新冻结可能在两步之间写入后丢失索引
         let removed: i64 = Script::new(
             r#"
             local removed = 0

@@ -1,4 +1,4 @@
-//! 预设与完整自定义 UA 的统一解析边界，身份配套头由 Provider 所有。
+//! 预设与完整自定义 UA 的统一解析边界，身份配套头由 Provider 所有
 
 use chrono::DateTime;
 use gateway_core::account::OpaqueProviderData;
@@ -10,7 +10,7 @@ use super::selection::{
 };
 use super::{CodexWireProfile, CodexWireProfileState};
 
-/// 已解析的配置；没有 mode 的预设配置复用官方版本与平台合同。
+/// 已解析的配置；没有 mode 的预设配置复用官方版本与平台合同
 #[derive(Debug, Clone)]
 pub struct RequestProfileSelection(ParsedSelection);
 

@@ -1,59 +1,3 @@
-import type { ConfigType } from 'dayjs'
-import dayjs from 'dayjs'
-import timezone from 'dayjs/plugin/timezone'
-import utc from 'dayjs/plugin/utc'
-
-dayjs.extend(utc)
-dayjs.extend(timezone)
-
-const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
-const TIME_FORMAT = 'HH:mm:ss'
-
-export function formatDateTime(value: ConfigType = new Date(), fallback = '—', timeZone?: string): string {
-  const timestamp = normalizedDate(value)
-  if (!timestamp.isValid())
-    return fallback
-  // 显式指定时区只影响展示，现有调用继续使用浏览器本地时区。
-  return (timeZone ? timestamp.tz(timeZone) : timestamp).format(DATE_TIME_FORMAT)
-}
-
-export function formatTime(value: ConfigType = new Date(), fallback = '—'): string {
-  const timestamp = normalizedDate(value)
-  return timestamp.isValid() ? timestamp.format(TIME_FORMAT) : fallback
-}
-
-export function parseTimestamp(value: ConfigType): number | null {
-  const timestamp = normalizedDate(value)
-  return timestamp.isValid() ? timestamp.valueOf() : null
-}
-
-export function formatRelativeTime(
-  value: ConfigType,
-  now: ConfigType = new Date(),
-): string {
-  const timestamp = normalizedDate(value)
-  if (!timestamp.isValid())
-    return '—'
-
-  const elapsedSeconds = Math.max(0, dayjs(now).diff(timestamp, 'second'))
-  if (elapsedSeconds < 60)
-    return '刚刚'
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60)
-  if (elapsedMinutes < 60)
-    return `${elapsedMinutes} 分钟前`
-
-  const elapsedHours = Math.floor(elapsedMinutes / 60)
-  if (elapsedHours < 24)
-    return `${elapsedHours} 小时前`
-
-  return `${Math.floor(elapsedHours / 24)} 天前`
-}
-
-function normalizedDate(value: ConfigType) {
-  return dayjs(typeof value === 'string' ? value.replace(' ', 'T') : value)
-}
-
 const integerFormatter = new Intl.NumberFormat('zh-CN')
 
 const localizedCompactFormatter = new Intl.NumberFormat('zh-CN', {
@@ -92,4 +36,45 @@ export function formatCompactNumber(value: number) {
   }
 
   return formatInteger(normalized)
+}
+
+const percentFormatter = new Intl.NumberFormat('zh-CN', {
+  style: 'percent',
+  maximumFractionDigits: 1,
+})
+
+export function formatPercent(value?: number | null) {
+  return value == null || !Number.isFinite(value) ? '—' : percentFormatter.format(value)
+}
+
+export function formatDuration(value?: number | null) {
+  if (value == null || !Number.isFinite(value) || value < 0)
+    return '—'
+  if (value < 1_000)
+    return `${Math.round(value)} ms`
+  if (value < 60_000) {
+    const seconds = value / 1_000
+    return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.0+$|(?<=\.\d)0$/, '')} s`
+  }
+  return `${(value / 60_000).toFixed(1).replace(/\.0$/, '')} min`
+}
+
+export function decimalDisplayNumber(value?: string | number | null) {
+  if (value == null)
+    return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export function formatUsd(value?: string | number | null, precise = false) {
+  const parsed = decimalDisplayNumber(value)
+  if (parsed == null)
+    return '—'
+  const fractionDigits = precise || (Math.abs(parsed) > 0 && Math.abs(parsed) < 0.01) ? 4 : 2
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(parsed)
 }

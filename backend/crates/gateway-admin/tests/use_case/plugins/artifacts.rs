@@ -1,3 +1,5 @@
+//! 插件制品安装、接受、默认实例与发布行为的用例测试
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -70,7 +72,7 @@ impl Fixture {
         let unused = Arc::new(TestPluginPorts);
         PluginsService::new(
             self.clone(),
-            unused.clone(),
+            self.clone(),
             PluginDistributionPorts::new(unused.clone(), unused.clone()),
             self.clone(),
             self.clone(),
@@ -87,11 +89,63 @@ impl SnapshotControl for Fixture {
     }
 }
 
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginPackageInspector for Fixture {
+    async fn inspect(
+        &self,
+        archive: Arc<[u8]>,
+        _: Option<String>,
+    ) -> Result<InspectedPluginArtifact, AdminError> {
+        Ok(InspectedPluginArtifact {
+            metadata: self.data.lock().unwrap().artifact.metadata.clone(),
+            archive,
+        })
+    }
+}
+
 struct Lease;
 
 impl ExtensionSetLease for Lease {
     fn is_ready(&self) -> bool {
         true
+    }
+}
+
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginRuntimeDiagnostics for Fixture {
+    async fn runtime_diagnostics(
+        &self,
+        _: &gateway_admin::model::plugins::instances::PluginInstanceSnapshot,
+        _: Option<u64>,
+        _: Option<&gateway_core::runtime::extensions::ExtensionSetReference>,
+    ) -> Option<
+        std::collections::BTreeMap<
+            String,
+            gateway_admin::model::plugins::instances::PluginInstanceRuntime,
+        >,
+    > {
+        None
+    }
+}
+
+#[async_trait]
+impl gateway_admin::ports::plugins::PluginStateLifecycle for Fixture {
+    async fn activate_state(
+        &self,
+        _: &gateway_core::runtime::extensions::ExtensionSetReference,
+        _: &gateway_admin::model::plugins::instances::PluginInstance,
+    ) -> Result<(), AdminError> {
+        Ok(())
+    }
+    async fn quiesce_instance(&self, _: &str, _: &str, _: gateway_admin::model::Revision) {
+        panic!("unexpected instance drain")
+    }
+    async fn migrate_state(
+        &self,
+        _: &gateway_core::runtime::extensions::ExtensionSetReference,
+        _: gateway_admin::model::plugins::state::PluginStateTransition,
+    ) -> Result<(), AdminError> {
+        panic!("unexpected state migration")
     }
 }
 
@@ -222,7 +276,10 @@ impl PluginStore for Fixture {
     }
 
     async fn load_artifact(&self, _: &str) -> AdminStoreResult<InspectedPluginArtifact> {
-        Err(store_error(AdminStoreErrorKind::Unavailable))
+        Ok(InspectedPluginArtifact {
+            metadata: self.data.lock().unwrap().artifact.metadata.clone(),
+            archive: Arc::from([1_u8]),
+        })
     }
 
     async fn install_artifact(
@@ -337,7 +394,7 @@ async fn existing_plugin_instance_prevents_an_extra_default_instance() {
         trusted_process: false,
         configuration: json!({}),
         secrets: BTreeMap::new(),
-        grants: Vec::new(),
+
         bindings: Vec::new(),
         revision: revision(1),
     };
@@ -389,7 +446,7 @@ fn metadata(with_required_default: bool) -> PluginArtifactMetadata {
                 contribution("test.example.middleware", &["observation", "request"]),
             ),
         ]),
-        requested_permissions: vec!["network".into()],
+
         configuration_schema: json!({
             "type":"object",
             "properties": {

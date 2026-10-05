@@ -1,3 +1,5 @@
+//! 验证 PostgreSQL 健康探测区分短暂与持续连接池饱和
+
 use std::time::Duration;
 
 use gateway_core::health::{HealthProbe as _, HealthState};

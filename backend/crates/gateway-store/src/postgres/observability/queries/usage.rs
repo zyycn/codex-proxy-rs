@@ -1,4 +1,4 @@
-//! Usage 明细、诊断与过滤查询族。
+//! Usage 明细、诊断与过滤查询族
 
 use super::super::*;
 use serde_json::Value;
@@ -129,6 +129,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             mr.provider_account_name_snapshot as provider_account_name,
             mr.provider_account_email_snapshot as provider_account_email,
             account.notes as provider_account_notes,
+            account.plan_type as provider_account_plan_type,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.upstream_response_model, mr.service_tier,
@@ -384,7 +385,7 @@ pub(crate) async fn usage_diagnostics(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     dimension: DiagnosticDimension,
-) -> StoreResult<Vec<DiagnosticObservation>> {
+) -> StoreResult<DiagnosticsObservation> {
     filter.validate()?;
     let dimension_sql = diagnostic_dimension_sql(dimension);
     let completed_usage = completed_usage_fact_predicate("mr");
@@ -424,6 +425,7 @@ pub(crate) async fn usage_diagnostics(
                   count(*) filter (where outcome in ('cancelled', 'incomplete'))::bigint
                     as non_completion_count,
                   coalesce(sum(greatest(attempt_count - 1, 0)), 0)::bigint as retry_count,
+                  count(*) filter (where attempt_count > 1)::bigint as retried_request_count,
                   count(*) filter (
                     where is_completed_usage and cost_source = 'provider_reported'
                   )::bigint
@@ -443,6 +445,7 @@ pub(crate) async fn usage_diagnostics(
             group by dimension_name, grouping sets ((), (cost_currency))
          ), selected_dimensions as (
            select dimension_name,
+                  sum(request_count) over ()::bigint as total_request_count,
                   row_number() over (order by request_count desc, dimension_name)
                     as sort_position
              from aggregated
@@ -452,16 +455,25 @@ pub(crate) async fn usage_diagnostics(
     statement.push_bind(DIAGNOSTIC_LIMIT);
     statement.push(
         ")
-         select aggregated.*
+         select aggregated.*, selected.total_request_count,
+                account.provider_kind as account_provider_kind, account.plan_type as account_plan_type
            from aggregated
            join selected_dimensions selected using (dimension_name)
-          order by selected.sort_position, currency_grouping desc, cost_currency nulls last",
+           left join provider_accounts account on account.id = aggregated.dimension_name and ",
     );
+    statement.push_bind(dimension == DiagnosticDimension::Account);
+    statement
+        .push(" order by selected.sort_position, currency_grouping desc, cost_currency nulls last");
     let rows = statement
         .build()
         .fetch_all(pool)
         .await
         .map_err(|_| postgres_unavailable("load usage diagnostics"))?;
+    let total_request_count = rows
+        .first()
+        .map(|row| unsigned(row, "total_request_count"))
+        .transpose()?
+        .unwrap_or_default();
     let mut observations = Vec::with_capacity(DIAGNOSTIC_LIMIT as usize);
     let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
     for row in &rows {
@@ -469,6 +481,8 @@ pub(crate) async fn usage_diagnostics(
             1 => observations.push(DiagnosticObservation {
                 key: get(row, "dimension_name")?,
                 name: get(row, "dimension_name")?,
+                account_provider_kind: get(row, "account_provider_kind")?,
+                account_plan_type: get(row, "account_plan_type")?,
                 request_count: unsigned(row, "request_count")?,
                 success_count: unsigned(row, "success_count")?,
                 failure_count: unsigned(row, "failure_count")?,
@@ -479,6 +493,7 @@ pub(crate) async fn usage_diagnostics(
                 first_token_p95_ms: optional_unsigned(row, "first_token_p95_ms")?,
                 non_completion_count: unsigned(row, "non_completion_count")?,
                 retry_count: unsigned(row, "retry_count")?,
+                retried_request_count: unsigned(row, "retried_request_count")?,
                 cost_coverage: coverage_from_row(row)?,
                 costs: Vec::new(),
             }),
@@ -523,7 +538,10 @@ pub(crate) async fn usage_diagnostics(
         }
         observation.costs = costs.remove(&observation.key).unwrap_or_default();
     }
-    Ok(observations)
+    Ok(DiagnosticsObservation {
+        total_request_count,
+        items: observations,
+    })
 }
 
 pub(crate) async fn diagnostic_account_display_names(

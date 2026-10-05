@@ -18,6 +18,9 @@ bytes = "1.11.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 flate2 = "1.1.9"
 futures = "0.3.32"
+http = "1.5.0"
+http-body = "1.0.1"
+http-body-util = "0.1.5"
 gateway-admin = { path = "../gateway-admin" }
 gateway-core = { path = "../gateway-core" }
 gateway-protocol = { path = "../gateway-protocol" }
@@ -28,6 +31,7 @@ serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve
 sha2 = "0.11.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt", "sync", "time"] }
+tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.0", features = ["cors", "fs", "request-id", "timeout", "trace"] }
 tracing = "0.1.44"
 url = "2.5.8"
@@ -39,7 +43,6 @@ async-trait = "0.1.89"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "net", "rt-multi-thread", "test-util"] }
 tokio-tungstenite = "0.29.0"
-tower = { version = "0.5.3", features = ["util"] }
 
 [lints]
 workspace = true

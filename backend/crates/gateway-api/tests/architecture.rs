@@ -1,4 +1,4 @@
-//! API 依赖边界、源码与测试目录约束
+//! 检查 API 层依赖、源码与测试模块边界，以及管理路由约定
 
 use std::{fs, path::Path};
 
@@ -68,6 +68,9 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/key_usage/query.rs",
         "src/key_usage/presenter.rs",
         "src/lib.rs",
+        "src/middleware/headers.rs",
+        "src/middleware/mod.rs",
+        "src/middleware/websocket.rs",
         "src/openai/middleware/http.rs",
         "src/openai/middleware/mod.rs",
         "src/openai/middleware/request.rs",
@@ -88,7 +91,8 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/responses/request.rs",
         "src/openai/responses/response.rs",
         "src/openai/responses/validation.rs",
-        "src/openai/responses/websocket/connection.rs",
+        "src/openai/responses/websocket/connection/mod.rs",
+        "src/openai/responses/websocket/connection/middleware.rs",
         "src/openai/responses/websocket/forward.rs",
         "src/openai/responses/websocket/mod.rs",
         "src/openai/responses/websocket/protocol.rs",
@@ -99,6 +103,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/usage.rs",
         "src/provider.rs",
         "src/session_cookie.rs",
+        "src/time.rs",
     ];
     expected.sort_unstable();
 
@@ -136,6 +141,8 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/key_usage/mod.rs",
         "tests/key_usage/fixtures.rs",
         "tests/main.rs",
+        "tests/middleware/mod.rs",
+        "tests/middleware/websocket.rs",
         "tests/openai/middleware/mod.rs",
         "tests/openai/auth.rs",
         "tests/openai/error.rs",
@@ -146,7 +153,8 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/responses/http.rs",
         "tests/openai/responses/mod.rs",
         "tests/openai/responses/request.rs",
-        "tests/openai/responses/websocket/connection.rs",
+        "tests/openai/responses/websocket/connection/mod.rs",
+        "tests/openai/responses/websocket/connection/middleware.rs",
         "tests/openai/responses/websocket/forward.rs",
         "tests/openai/responses/websocket/interrupt.rs",
         "tests/openai/responses/websocket/mod.rs",

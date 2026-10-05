@@ -1,3 +1,5 @@
+//! 验证 CLI 发行信息的平台依赖一致性与请求画像同步更新
+
 use provider_openai::transport::profile::cli_release::parse_cli_release;
 use serde_json::json;
 
@@ -75,7 +77,7 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     ))
     .unwrap();
 
-    // 复用官方版本服务的恢复入口，模拟每日检查已核验并写入的下一份发布资料。
+    // 复用官方版本服务的恢复入口，模拟每日检查已核验并写入的下一份发布资料
     cache
         .replace_if_newer(
             ProviderArtifactProfile::new(

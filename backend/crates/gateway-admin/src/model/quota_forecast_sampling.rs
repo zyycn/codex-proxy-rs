@@ -1,10 +1,10 @@
-//! 预测专用的配对采样；不改变完整交付用量或费用账本的统计口径。
+//! 预测专用的配对采样；不改变完整交付用量或费用账本的统计口径
 
 use chrono::{DateTime, Utc};
 
 use super::provider_credentials::ProviderDocument;
 
-/// 限制带 Provider 文档的历史点数量；累计用量仍覆盖整个查询区间。
+/// 限制带 Provider 文档的历史点数量；累计用量仍覆盖整个查询区间
 pub const MAX_FORECAST_HISTORY_POINTS: usize = 128;
 const MIN_BLOCK_PERCENT: f64 = 5.0;
 const RECENT_BLOCKS: usize = 3;
@@ -24,7 +24,7 @@ pub struct QuotaForecastUsage {
 }
 
 impl QuotaForecastUsage {
-    /// 累计计数倒退表示不能配对，不用饱和减法掩盖数据断点。
+    /// 累计计数倒退表示不能配对，不用饱和减法掩盖数据断点
     fn difference(&self, baseline: &Self) -> Option<Self> {
         let usd = self.usd - baseline.usd;
         if !usd.is_finite() || usd < -1e-9 {
@@ -68,7 +68,7 @@ pub struct QuotaForecastHistory {
     pub pending_request_count: u64,
 }
 
-/// 具体 Provider 从自己的历史文档解释出的额度事实。
+/// 具体 Provider 从自己的历史文档解释出的额度事实
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaForecastObservation {
     pub used_percent: f64,
@@ -101,13 +101,13 @@ pub struct QuotaForecastSample {
     pub observation_count: usize,
     pub pending_request_count: u64,
     pub discontinuous: bool,
-    /// 本周期已记录用量；近期采样仅用于预测剩余量，不能覆盖这份累计值。
+    /// 本周期已记录用量；近期采样仅用于预测剩余量，不能覆盖这份累计值
     pub cycle_usage: QuotaForecastUsage,
     pub usage: QuotaForecastUsage,
 }
 
-/// 对同一额度段的累计点形成至少 5 个百分点的连续块，使用最近三个完整块及尾部。
-/// 不平均逐请求比值；重复百分比不增加块数，5/10 个百分点仅是量化噪声门槛。
+/// 对同一额度段的累计点形成至少 5 个百分点的连续块，使用最近三个完整块及尾部
+/// 不平均逐请求比值；重复百分比不增加块数，5/10 个百分点仅是量化噪声门槛
 #[must_use]
 pub fn select_forecast_sample(
     key: String,
@@ -139,7 +139,7 @@ pub fn select_forecast_sample(
         usage: current.usage.clone(),
     };
     history.push(current);
-    // 重置边界不在查询起点时，从首个新观测重新计数，避免把旧周期累计带入总量。
+    // 重置边界不在查询起点时，从首个新观测重新计数，避免把旧周期累计带入总量
     let mut cycle_baseline = interrupted.then(|| &history[0]);
     let mut anchors: Vec<&QuotaForecastPoint> = Vec::new();
     let mut high_water: Option<&QuotaForecastPoint> = None;
@@ -149,7 +149,7 @@ pub fn select_forecast_sample(
                 continue;
             }
             if point.used_percent < previous.used_percent {
-                // 一个百分点内的回落可能是量化/并发乱序；更大的回落不能跨越。
+                // 一个百分点内的回落可能是量化/并发乱序；更大的回落不能跨越
                 if previous.used_percent - point.used_percent <= 1.0 {
                     continue;
                 }
@@ -198,7 +198,7 @@ pub fn select_forecast_sample(
     sample.sampled_percent = progress;
     sample.block_count = anchors.len() - baseline_index - 1;
     sample.usage = usage;
-    // 断点后的新基线已有足够进度时，只消费新段；旧段从不参与本次估算。
+    // 断点后的新基线已有足够进度时，只消费新段；旧段从不参与本次估算
     sample.discontinuous = false;
     sample
 }

@@ -1,4 +1,4 @@
-//! Grok Build 的账号隔离 reasoning replay。
+//! Grok Build 的账号隔离 reasoning replay
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};

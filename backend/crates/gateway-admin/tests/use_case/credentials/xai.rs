@@ -1,3 +1,5 @@
+//! 验证 xAI 凭据提交与初始额度刷新的顺序及失败隔离
+
 use std::sync::Arc;
 
 use gateway_core::account::ProviderAccountId;

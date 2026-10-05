@@ -1,14 +1,22 @@
-//! 编译期 Provider 身份；账号与路由共同使用，不依赖路由计划。
+//! 编译期 Provider 身份；账号与路由共同使用，不依赖路由计划
 
 use crate::validation::{IdentifierError, validate_text};
 use std::fmt;
 
-/// 编译进二进制的 Provider adapter slug。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// 编译进二进制的 Provider adapter slug
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(transparent)]
 pub struct ProviderKind(String);
 
+impl<'de> serde::Deserialize<'de> for ProviderKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(<String as serde::Deserialize>::deserialize(deserializer)?)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 impl ProviderKind {
-    /// 校验 Provider slug。
+    /// 校验 Provider slug
     pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
         let value = value.into();
         validate_text(&value, 64, true, None)?;

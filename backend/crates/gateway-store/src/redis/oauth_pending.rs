@@ -1,4 +1,4 @@
-//! OAuth 授权临时状态的 Redis 原子持久化。
+//! OAuth 授权临时状态的 Redis 原子持久化
 
 use std::time::Duration;
 
@@ -128,7 +128,7 @@ redis.call('DEL', KEYS[1])
 return 1
 "#;
 
-/// OAuth pending flow 的 Redis 原子持久化能力。
+/// OAuth pending flow 的 Redis 原子持久化能力
 #[derive(Clone)]
 pub struct RedisOAuthPendingFlowRepository {
     connection: ConnectionManager,

@@ -1,4 +1,4 @@
-//! OpenAI Responses 的透明 wire adapter 与 Core canonical facts 投影。
+//! OpenAI Responses 的透明 wire adapter 与 Core canonical facts 投影
 
 mod error;
 mod http;

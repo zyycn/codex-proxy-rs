@@ -24,12 +24,6 @@ export interface PluginContribution {
 
 export type PluginIconAsset = string | { light: string, dark: string }
 
-export interface PluginPermissionDescription {
-  permission: string
-  label: string
-  description: string
-}
-
 export interface PluginArtifactMetadata {
   pluginId: string
   version: string
@@ -43,8 +37,6 @@ export interface PluginArtifactMetadata {
   sha256: string
   platforms: string[]
   contributes: Record<string, PluginContribution>
-  requestedPermissions: string[]
-  permissionDescriptions: PluginPermissionDescription[]
   configurationSchema: Record<string, unknown>
   secretFields: string[]
   stateNamespaces: {
@@ -180,7 +172,10 @@ export interface PluginFrontendIdentityBinding {
   clientKeyId: string
 }
 
+export type PluginObserverEvent = 'request_completed' | 'websocket_response'
+
 export interface PluginCapabilityBinding {
+  event?: PluginObserverEvent | null
   contribution: string
   stage: string
   order: number
@@ -221,6 +216,7 @@ export interface PluginInstance {
   artifactSha256: string
   enabled: boolean
   configurationRequired: boolean
+  compatibilityWarning: string | null
   configuration: Record<string, unknown>
   secretFields: string[]
   bindings: PluginCapabilityBinding[]
@@ -405,15 +401,6 @@ export function getPluginInstances(options: RequestOptions = {}) {
   return request<PluginInstance[]>({
     url: '/api/admin/plugins/instances',
     method: 'GET',
-    ...options,
-  })
-}
-
-export function createPluginInstance(data: ConfigurePluginInstanceRequest, options: RequestOptions = {}) {
-  return request<PluginInstanceMutationResponse>({
-    url: '/api/admin/plugins/instances',
-    method: 'POST',
-    data,
     ...options,
   })
 }
