@@ -10,6 +10,7 @@ import UsageBillingCell from '@/components/usage/UsageBillingCell.vue'
 import UsageClientIpCell from '@/components/usage/UsageClientIpCell.vue'
 import UsageLatencyCell from '@/components/usage/UsageLatencyCell.vue'
 import UsageModelCell from '@/components/usage/UsageModelCell.vue'
+import UsagePerformanceCell from '@/components/usage/UsagePerformanceCell.vue'
 import UsageReasoningEffortCell from '@/components/usage/UsageReasoningEffortCell.vue'
 import UsageTokenCell from '@/components/usage/UsageTokenCell.vue'
 import UsageTransportBadge from '@/components/usage/UsageTransportBadge.vue'
@@ -132,6 +133,10 @@ withDefaults(
 
     <template #latency="{ row }">
       <UsageLatencyCell :record="row" />
+    </template>
+
+    <template #performance="{ row }">
+      <UsagePerformanceCell :record="row" />
     </template>
 
     <template v-if="$slots.actions" #actions="scope">

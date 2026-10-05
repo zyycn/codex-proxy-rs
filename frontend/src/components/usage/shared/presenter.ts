@@ -1,8 +1,13 @@
 import type { UsageListRecord, UsageRecordDetail } from '@/api'
-import { formatDuration } from '@/utils/format'
+import { formatCompactNumber, formatDuration } from '@/utils/format'
 
 // 列表与详情使用独立读模型，展示函数只依赖两者的公共字段。
 type UsageCommonRecord = UsageListRecord | UsageRecordDetail
+type UsageLatencyRecord = Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'>
+
+export type UsagePerformanceRecord = UsageLatencyRecord & {
+  tokenDetails: Pick<UsageListRecord['tokenDetails'], 'outputTokens'> | null
+}
 
 export function usageTransportType(transport?: string | null) {
   if (transport === 'websocket')
@@ -78,11 +83,25 @@ export function usageModelDisplay(record: UsageCommonRecord) {
   return { primary, secondary, routes }
 }
 
-export function usageLatencyDetails(record: Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'>) {
+export function usagePerformanceDetails(record: UsagePerformanceRecord) {
+  const firstTokenMs = usageFirstTokenMs(record)
+  const totalMs = durationValue(record.latencyMs)
+  const outputTokens = record.tokenDetails?.outputTokens
+  // 与性能统计使用同一吞吐口径，首个生命周期事件不能代替首字
+  const throughput = typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens > 0
+    && firstTokenMs !== null && totalMs !== null && totalMs > firstTokenMs
+    ? outputTokens * 1000 / (totalMs - firstTokenMs)
+    : null
+
+  return {
+    throughputDisplay: throughput === null ? '—' : `${formatCompactNumber(throughput)} tok/s`,
+    firstTokenDisplay: formatDuration(firstTokenMs),
+  }
+}
+
+export function usageLatencyDetails(record: UsageLatencyRecord) {
   const latencyDetails = record.latencyDetails
-  const firstTokenMs = durationValue(
-    record.firstTokenLatencyMs ?? latencyDetails?.firstTokenMs,
-  )
+  const firstTokenMs = usageFirstTokenMs(record)
   const firstEventMs = durationValue(latencyDetails?.firstEventMs)
   const totalMs = durationValue(record.latencyMs)
   const firstReasoningMs = durationValue(latencyDetails?.firstReasoningMs)
@@ -151,4 +170,8 @@ export function usageBillingText(record: Pick<UsageCommonRecord, 'billing'>) {
 
 function durationValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function usageFirstTokenMs(record: UsageLatencyRecord) {
+  return durationValue(record.firstTokenLatencyMs ?? record.latencyDetails?.firstTokenMs)
 }

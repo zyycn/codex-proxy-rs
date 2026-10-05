@@ -28,6 +28,7 @@ export const usageRecordColumns = defineTableColumns<UsageListRecord>([
   { key: 'tokenDetails', label: 'TOKEN', kind: 'numeric', size: 'xl' },
   { key: 'billing', label: '费用', kind: 'numeric', size: 'xl' },
   { key: 'latency', label: '延迟', kind: 'numeric', size: 'xl' },
+  { key: 'performance', label: '性能', kind: 'numeric', size: 'lg' },
   { key: 'createdAtDisplay', label: '时间', kind: 'datetime' },
   { key: 'clientIp', label: 'IP', kind: 'custom', size: '3xl' },
   { key: 'userAgent', label: 'User-Agent', kind: 'custom', size: '4xl' },

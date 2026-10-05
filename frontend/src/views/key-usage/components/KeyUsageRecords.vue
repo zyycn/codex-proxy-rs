@@ -6,6 +6,7 @@ import { computed } from 'vue'
 import UsageBillingCell from '@/components/usage/UsageBillingCell.vue'
 import UsageClientIpCell from '@/components/usage/UsageClientIpCell.vue'
 import UsageLatencyCell from '@/components/usage/UsageLatencyCell.vue'
+import UsagePerformanceCell from '@/components/usage/UsagePerformanceCell.vue'
 import UsageTokenCell from '@/components/usage/UsageTokenCell.vue'
 import UsageTransportBadge from '@/components/usage/UsageTransportBadge.vue'
 
@@ -21,6 +22,7 @@ const columns = computed(() => defineTableColumns<KeyUsageRecord>([
   { key: 'tokenDetails', label: 'TOKEN', kind: 'numeric', size: 'xl' },
   { key: 'billing', label: '费用', kind: 'numeric', size: 'xl' },
   { key: 'latency', label: '延迟', kind: 'numeric', size: 'xl' },
+  { key: 'performance', label: '性能', kind: 'numeric', size: 'lg' },
   ...(kind.value === 'error' ? [{ key: 'statusCode', label: '状态', kind: 'status' as const }] : []),
   { key: 'createdAt', label: '时间', kind: 'datetime' },
   { key: 'clientIp', label: 'IP', kind: 'custom', size: '3xl' },
@@ -59,6 +61,9 @@ const columns = computed(() => defineTableColumns<KeyUsageRecord>([
         </template>
         <template #latency="{ row }">
           <UsageLatencyCell :record="row" />
+        </template>
+        <template #performance="{ row }">
+          <UsagePerformanceCell :record="row" />
         </template>
         <template #statusCode="{ row }">
           <span class="font-mono text-cp-sm font-bold text-cp-error-text">{{ row.statusCode ?? '错误' }}</span>

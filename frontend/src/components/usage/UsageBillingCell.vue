@@ -63,7 +63,16 @@ function itemValueClass(tone?: string, accent?: boolean) {
       {{ usageBillingText(record) }}
     </span>
 
-    <div v-if="billing" class="flex flex-col items-center gap-1">
+    <div v-if="billing" class="flex items-center gap-1">
+      <span
+        v-if="billing.serviceTierDisplay === 'Fast'"
+        class="inline-flex size-4 items-center justify-center rounded-full bg-cp-warning-container text-cp-warning-on-container"
+        title="Fast 模式"
+        role="img"
+        aria-label="Fast 模式"
+      >
+        <Zap class="size-3" stroke-width="2.2" aria-hidden="true" />
+      </span>
       <UsageDetailPopover
         :title="billing.longContextBillingApplied ? '长上下文计费明细' : '计费明细'"
         :trigger-label="billing.longContextBillingApplied ? '查看长上下文计费明细' : '查看费用明细'"
@@ -86,15 +95,6 @@ function itemValueClass(tone?: string, accent?: boolean) {
           </div>
         </div>
       </UsageDetailPopover>
-      <span
-        v-if="billing.serviceTierDisplay === 'Fast'"
-        class="inline-flex size-4 items-center justify-center rounded-full bg-cp-warning-container text-cp-warning-on-container"
-        title="Fast 加速"
-        role="img"
-        aria-label="Fast 加速"
-      >
-        <Zap class="size-3" stroke-width="2.2" aria-hidden="true" />
-      </span>
     </div>
   </div>
 </template>
